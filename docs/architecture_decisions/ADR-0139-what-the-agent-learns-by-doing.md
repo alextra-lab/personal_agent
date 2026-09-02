@@ -1,7 +1,7 @@
 # ADR-0139: What the Agent Learns by Doing — Result-Level Admissibility, a First-Person Observation Tier, and a Denominator for the Compliance Metric
 
-**Status:** Proposed — **partially withdrawn 2026-09-02** (review round 6, FRE-1357). **D1 and D4
-stand and are the live decisions.** **D2, D3 and D7 are withdrawn**, and **D6 is retired**, under
+**Status:** Proposed — **partially withdrawn 2026-09-02** (review round 6, FRE-1357). **Live: D1
+(as amended), D4, D5 and the new D8.** **D2, D3 and D7 are withdrawn**, and **D6 is retired**, under
 [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md). **The revision table below is the
 single authority on what is live**; this line is a summary and loses to it on any disagreement. The
 premise: the model is not a security boundary,
@@ -27,6 +27,7 @@ lapses with D2.
 | **D4** — attachments are first-person observation | **Stands.** Untouched by all six round-6 findings | An attachment is caller-supplied; the model did not author the bytes. Admissible at the capability layer |
 | **D5** — generative tools stay excluded | **Stands**, and is now the general rule rather than an exception |
 | **D6** — the declared threat model | **Retired.** Superseded by [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md) | A program-level premise cannot live inside one consumer; and its axis (careless vs adversarial) was the wrong axis |
+| **D8** — the replacement path: typed retrieval, provisioned on demand | **Live**, added by this revision | It is what D2 and D3 are replaced *by*. Its premise is ADR-0140 T4; the application — which tools, in what order — is stated here because it is a question about this problem |
 | **D7** — near-miss markers | **Withdrawn except its first row.** A near-miss scores `UNRESOLVED` rather than `UNCITED`; the resolver, rows 2–3 and `MALFORMED_CITATION` are dropped | Row 1 needs no resolution and grants no admissibility, so it is a pure observability gain. The rest was unreachable (`_identifier_for` short-circuits at `verification.py:309` before any of it) and non-discriminating |
 
 **The replacement path is D8, below.** The measured defect D2 was written to close — 2 of 222 spans
@@ -169,9 +170,13 @@ whole of `CheckOutcome`.
 > dimension**, since the resolver is withdrawn. The paragraphs below are retained because their
 > *reasoning* — that entitlement and compose-capability are different questions, and that a metric
 > keyed on one is blind to the other — is why ADR-0140 T4 keys the boundary on the schema rather than
-> on the tier. **FRE-1332 merged these fields on 2026-09-02 before this revision**; pruning the two
-> that lapsed is a follow-up on that ticket's chain, not a bounce — an emitted field with no
-> population misleads, it does not break.
+> on the tier. **FRE-1332 merged these fields on 2026-09-02 (`c4660d8c`), before this revision**, so
+> the emitter exists: `invocation_checked_span_outcomes` is populated at
+> `orchestrator/executor.py:2036` and will now always be empty, since nothing sets
+> `invocation_check_required`. Pruning it is a **follow-up on that ticket's chain, not a bounce** — an
+> emitted field with no population misleads a reader, it does not break a consumer. `near_miss_markers`
+> already ships as a single `unresolved` count (`:2043`) rather than a D7-resolution split, so no
+> change is owed there.
 
 **The two span-outcome fields are keyed on different properties, and collapsing them into one is the
 defect round 5 was called to fix.** Round 3 established that entitlement answers *how far do we trust
@@ -222,6 +227,15 @@ pass while measuring nothing. That is exactly the failure FRE-1328 names: tradin
 honest 0% for an unmeasurable 100%. The rate is retained because it remains a genuine sentinel for
 the *next* tool that lands unclassified — a failure that is silent today — but the evidence that D2
 delivered is the two span-outcome fields.
+
+> **LAPSED WITH D2, 2026-09-02 (FRE-1357).** The paragraph below is written for two fields and two
+> polarities of a check that no longer exists. `invocation_covered` is not a reachable outcome, so
+> `invocation_checked_span_outcomes` has no population and the three-state distinction below collapses
+> to two. **`observed_span_outcomes`, narrowed to D4 attachments, is the one signal that must not go
+> structurally to zero**, and the vacuous-implementation argument below survives for it unchanged:
+> an implementation that registers image sources and never checks them shows `passed` at 100% with
+> `not_contained` at zero across the seeded probe set. The signal table above still lists the lapsed
+> field; it is retained as record and is not an emission obligation.
 
 **Those two fields are the signals that must never go structurally to zero.** They are measured on
 spans, after both polarities of D2's check have run, so together they distinguish the three states
@@ -1341,8 +1355,15 @@ any change is made: 2 of 222 non-exempt spans passed (0.9%); 13 of 15 asserting 
 >   near-miss prevents an otherwise compliant span from passing; **or** if `UNRESOLVED` stays at 0
 >   while near-misses are counted. **Reaching this at all requires the span to bind the near-miss**,
 >   which `parse_citations` does not do today — `_verify_span` short-circuits to `UNCITED` at
->   `verification.py:309` — so the implementing ticket owns that binding change and the marker-stripping
->   that must accompany it, or the criterion cannot be met.
+>   `verification.py:309`. **The binding rule is not left to the implementer**, because an
+>   under-specified binder is either special-cased to FRE-1327's fixture or over-broad: a near-miss
+>   binds by **exactly the rule a valid marker binds by** — the contiguous text from the end of the
+>   previous marker (valid or near-miss) up to its own opening bracket, whitespace trimmed
+>   (`citations.py`'s stated binding rule) — and its own characters are **stripped from the span text
+>   before `claim_unit` sees them**, on the same ground that marker characters are protocol rather than
+>   content. Without that strip the marker mints its own required tokens: measured, `S` folds to the
+>   unit synonym `second`. · *Additionally fails if* the near-miss changes the binding of any
+>   **other** span in the same output, which is how an over-broad binder shows itself.
 
 > **Adjudication:** on the umbrella, **FRE-1328**, once the implementation chain has landed and
 > deployed. No seam ticket (ADR-0130 superseded 2026-08-18).

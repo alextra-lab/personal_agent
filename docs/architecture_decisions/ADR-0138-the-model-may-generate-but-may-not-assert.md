@@ -231,7 +231,13 @@ carrying a silent exception.
 > The widening paragraphs below are retained as record and are not normative. One change does follow
 > for this contract: `mcp_esql`'s single parameter is a model-authored query language, so under
 > ADR-0140 T4's classification test it is **compose-capable and inadmissible** — the case ADR-0139's
-> withdrawn check was covering.
+> withdrawn check was covering. **And one narrowing reaches D2's own text above:** its worked example
+> *"for a database query, the returned rows are a source and the SQL is not"* no longer holds as
+> written, because SQL is a query language and `SELECT 'Paris has 9 million residents'` composes. A
+> tool taking model-authored SQL is compose-capable whatever it returns; the citable form is a typed
+> query tool whose parameters name an index, filters and fields, with the query built by the harness.
+> That example is **superseded**, and it is called out here rather than left for a reader to
+> reconcile against ADR-0140.
 
 D2 acquired **two independent amendments, drafted without reference to each other**. ADR-0098
 Amendment A §A6 obliges this record explicitly ("this amends ADR-0138 D2, and must be recorded

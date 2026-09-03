@@ -10,8 +10,9 @@
 ## Context
 
 Owner-directed 2026-09-03: *"Uniformity in making LLM calls. One code path — DSPy may remain the
-outlier for now — but everything else goes through litellm."* This closes ADR-0031's Alternative C,
-deferred since March 2026, and supersedes ADR-0121's "Vocabulary by dispatch path" rule.
+outlier for now — but everything else goes through litellm."* On acceptance, this closes
+ADR-0031's Alternative C, deferred since March 2026, and supersedes ADR-0121's "Vocabulary by
+dispatch path" rule.
 
 ### The finding that forced this
 
@@ -75,7 +76,7 @@ All LLM calls — local and cloud — dispatch through `LiteLLMClient` /
 one constructor. The direct `LocalLLMClient()` constructor census (repo-wide, not `src/`-only):
 four production sites (`captains_log/reflection.py:367`, `memory/service.py:271`,
 `second_brain/session_summary.py:649`, `second_brain/entity_extraction.py:1190`), one executable
-migration script (`scripts/migrate_fre865_entity_class_backfill.py:482`), three DSPy prototype
+migration script (`scripts/migrate_fre865_entity_class_backfill.py:484`), three DSPy prototype
 scripts (`experiments/dspy_prototype/test_case_{a,b,c}_*.py`), and two docstring examples. All
 move to the factory or are rewritten; the big-bang deletion must not leave a broken repository
 entry point outside `src/`. `LocalLLMClient` and its raw-httpx transport are **deleted, not
@@ -83,13 +84,26 @@ shimmed** (owner-confirmed big-bang, 2026-09-03) — a retained-but-unused class
 of second door FRE-1343 documents.
 
 Local deployments dispatch as litellm's OpenAI-compatible provider against the declared
-`endpoint`. Non-standard parameters travel via the SDK's `extra_body` mechanism, which **flattens
-them into the top-level request JSON** — the behaviour whose absence caused the finding. Their
-arrival is asserted by AC-1, not assumed from the SDK contract.
+`endpoint`. Two provider names must not be conflated here: the **catalog/telemetry provider stays
+`slm_local`** (concurrency keying, telemetry fields, ADR-0121 semantics all keep it), while the
+**litellm dispatch string is `openai/{model_id}` with `api_base` set to the deployment endpoint**
+— litellm 1.98.0 does not recognise `slm_local/` as a provider prefix and fails with "LLM Provider
+NOT provided" before any transport. The unified client owns this mapping; nothing outside it sees
+the `openai/` prefix. Non-standard parameters travel via the SDK's `extra_body` mechanism, which
+**flattens them into the top-level request JSON** — the behaviour whose absence caused the
+finding. Their arrival is asserted by AC-1, not assumed from the SDK contract.
 
 **Out of scope by owner direction:** DSPy (`dspy_adapter.py`, `dspy_gate.py`) already uses litellm
 internally and stays as it is. The `ui/` CLI's sync client to our own backend remains out of scope
 as in ADR-0132.
+
+**Undeclared outliers found at review and brought in scope:** two eval scripts call
+`litellm.acompletion()` directly (`scripts/eval/fre630_extraction_quality/relabel_v2_{rels,types}.py`,
+with `adr0109_boundary_probe.py` reusing the latter and documenting the bypass). "One dispatch
+path" that quietly excepts executable scripts is the census failure this ADR keeps correcting, so
+they **migrate to the factory** (`get_llm_client_for_key`) in the implementation chain — which
+also puts them behind the egress guard and the cost gate they currently bypass. Any future direct
+`litellm.acompletion()` outside `llm_client/` is forbidden by the AC-6 boundary.
 
 **FRE-1343 dissolves by construction** (per ticket AC-6): it exists because `LocalLLMClient()`
 takes no model key — every caller gets whatever the catalog resolves. The unified client is
@@ -117,15 +131,23 @@ Decision (owner-confirmed 2026-09-03):
    that handler's `event_hooks` parameter, or whatever hook point the route verifiably honours.
    The route-by-route verification is an implementation obligation, and the point of clause 2 is
    that no route's claim is taken on faith.
-2. **The durable guarantee is not the mechanism — it is the seeded negative, per placement.**
-   litellm rearranges its transport internals routinely (FRE-1324 just upgraded it); an injection
-   point that silently detaches on the next upgrade would read as configured while guarding
-   nothing — the FRE-1007 failure class again. CI tests dispatch a request to a **blocklisted URL
-   through the actual litellm dispatch path** — one test per placement class (the local
-   OpenAI-compatible route, and at least one cloud provider route) — and assert
-   `EgressBlockedError` is raised before any connection is attempted. If a litellm upgrade
-   detaches an injection, that placement's test — not an incident — fails. The injection
-   mechanisms are thereby replaceable; the tests are the contract.
+2. **The durable guarantee is not the mechanism — it is the seeded negative, per distinct
+   injection mechanism in use.** litellm rearranges its transport internals routinely (FRE-1324
+   just upgraded it); an injection point that silently detaches on the next upgrade would read as
+   configured while guarding nothing — the FRE-1007 failure class again. CI tests dispatch a
+   request to a **blocklisted URL through the actual litellm dispatch path**, one test per
+   materially distinct route mechanism the catalog's providers actually use — at cutover that is
+   the OpenAI-SDK route (local `openai/` dispatch; also `openai` cloud) **and** the
+   `AsyncHTTPHandler` route (`anthropic`); a provider whose route introduces a third mechanism
+   adds a third test. A passing negative on one mechanism proves nothing about the other. Two
+   things are asserted per test: no transport is ever invoked (a sentinel transport that fails
+   the test if reached), and the caller sees `EgressBlockedError`. On the shape of that error:
+   the OpenAI SDK catches request-hook exceptions and wraps them in `APIConnectionError`
+   (verified against openai 2.24.0, `_base_client.py`), and `LiteLLMClient` today wraps provider
+   errors as `LLMClientError` — so the unified client **must unwrap the causal chain and
+   re-raise `EgressBlockedError`** to preserve the ADR-0132 exception contract for callers. If a
+   litellm upgrade detaches an injection, that mechanism's test — not an incident — fails. The
+   injection mechanisms are thereby replaceable; the tests are the contract.
 3. `litellm.aclient_session` (module-global client injection) is **rejected** as the mechanism —
    for partial coverage, not total inertness: verified against litellm 1.98.0, the modern OpenAI
    path *does* honour it (`llms/openai/common_utils.py` returns it into `AsyncOpenAI`), but
@@ -141,11 +163,19 @@ status update recorded as a Backlog item.
 
 The `InferenceConcurrencyController` (ADR-0029; provider-keyed by FRE-916) leaves
 `LocalLLMClient` and becomes a process-level singleton acquired inside the unified client's
-`respond()` for **every** provider. This delivers what ADR-0121 promised and FRE-917 did not:
-the declared cloud ceilings (`openai`/`anthropic`/`voyage`/`ovh`/`ovhcloud`, all 50) become live. Because 50
-is a safety valve, not a throttle, no behavioural change appears at cutover; the local GPU ceiling
-(`slm_local`, per-deployment `max_concurrency: 1`) carries over unchanged, including the
-priority-tier semantics (`InferencePriority`) and slot-wait telemetry. litellm's own Router
+`respond()` for every provider **that dispatches through it** — the chat-completion providers:
+`slm_local`, `anthropic`, `openai`, `ovhcloud`. Their declared cloud ceilings (50) become live,
+delivering that part of what ADR-0121 promised and FRE-917 did not. Because 50 is a safety valve,
+not a throttle, no behavioural change appears at cutover; the local GPU ceiling (`slm_local`,
+per-deployment `max_concurrency: 1`) carries over unchanged, including the priority-tier
+semantics (`InferencePriority`) and slot-wait telemetry.
+
+Stated honestly rather than by omission: the `voyage` (reranker) and `ovh` (embedder) ceilings do
+**not** become live here — those deployments dispatch through `memory/embeddings.py`'s direct SDK
+and `memory/reranker.py`'s HTTP path, which never enter `respond()` and never acquired the
+controller before either. Their ceilings remain declared-but-inert, status quo; wiring those two
+non-chat paths into the controller is out of this ADR's scope and is recorded as such (an earlier
+draft claimed all cloud ceilings go live — that was an overclaim). litellm's own Router
 rate-limiting is not used (see Alternatives).
 
 ### D4 — The four newly-live parameters, individually (ticket AC-2)
@@ -180,8 +210,10 @@ their *answers* truncated because thinking ate the cap. Decision:
    Any future cap is a deliberate catalog edit, never a constructor default.
 2. **A config-guard arithmetic invariant** (extends FRE-1007's check): a local deployment
    declaring both fields with `max_tokens <= thinking_budget_tokens` is a finding (severity:
-   safety) — that arithmetic can never produce a complete answer. The guard's own test seeds the
-   negative (a violating fixture must produce the finding).
+   safety). Precisely stated: the budget is a ceiling, not guaranteed consumption, so such a
+   configuration is not *impossible* — it is a no-guaranteed-answer-headroom configuration, which
+   this guard rejects as policy. The guard's own test seeds the negative (a violating fixture
+   must produce the finding).
 
 ### D6 — Delivery is verified at the behaviour, not the declaration (ticket AC-4)
 
@@ -224,10 +256,10 @@ classes at CI/boot. What un-vacuates it is a **behavioural canary** on the deplo
 | GPU-aware concurrency + priority tiers | Controller inside `LocalLLMClient` | **Re-homed** | D3: process singleton acquired in unified `respond()`, all providers |
 | Four sampler/thinking params | Built into inert `extra_body` | **Preserved — and delivered for the first time** | D4: litellm `extra_body` → SDK flattening → top-level; AC-1 wire assertion |
 | `cache_prompt: true` (within-turn KV reuse) | Sent top-level by hand | **Preserved** | Same flattening path; delivery proven by the D6.3 wire assertion, corroborated by `cache_read_tokens` telemetry (D6.4). Cross-turn KV reuse stays server-side (slot config, ADR-0081/FRE-433) — unaffected by client choice |
-| Reasoning-content preservation (`<think>` / `reasoning_content` → `reasoning_trace`) | Extracted by the local response adapter (`adapters.py:373`) | **Preserved — requires new work** | `LiteLLMClient` today returns `reasoning_trace=None` unconditionally; the unified client must map the provider's `reasoning_content` through to `LLMResponse`, or every downstream reasoning read (telemetry, the D6.1 canary, FRE-432-style measurement) silently loses its instrument |
+| Reasoning-content preservation (`<think>` / `reasoning_content` → `reasoning_trace`) | Extracted by the local response adapter (`adapters.py:373`): inline `<think>…</think>` is stripped from visible content into `reasoning_trace`, with the dedicated `reasoning_content` field as fallback — **both shapes** | **Preserved — requires new work, both shapes** | `LiteLLMClient` today returns `reasoning_trace=None` unconditionally; the unified client must carry over the same two-shape extraction. Mapping only the dedicated field would leak `<think>` text into answers and blind the D6.1 positive control; asserted by AC-9 |
 | Streaming (SSE, CF-524 avoidance) | `stream=True` + manual SSE aggregation | **Preserved** | litellm `stream=True` + `stream_options: {include_usage: true}`; aggregation via litellm's chunk builder. The CF-524 rationale (bytes keep the proxy alive) carries over unchanged |
 | Text tool-call parser (`parse_text_tool_calls`) | **Unconditional** fallback in `adapters.py` response adaptation — it fires whenever structured tool calls are absent, regardless of declared strategy, so even the `"native"` primary exercises it when the model emits a textual call | **Preserved with the same semantics** | Same unconditional fallback, applied to the unified response. Gating it on `tool_calling_strategy: "text"` would silently remove an existing recovery path for native-strategy models |
-| Telemetry (`model_call_started/completed` with provider+role, model-call spans, prompt identity) | Emitted in `client.py` | **Preserved** | `LiteLLMClient` already emits the canonical pair with provider/role and carries `prompt_identity`; local calls inherit it. Parity asserted by AC-6's census |
+| Telemetry (`model_call_started/completed` with provider+role, model-call spans, prompt identity) | Emitted in `client.py` | **Preserved** | `LiteLLMClient` already emits the canonical pair with provider/role and carries `prompt_identity`; local calls inherit it, with provider reported as `slm_local` (the catalog name, not the `openai/` dispatch prefix — D1). Parity asserted by AC-9 |
 | Trace propagation headers | Injected per request: W3C `traceparent`, `X-Trace-Id`, `X-Span-Id`, and `X-Session-Id` when available — all four, not two | **Preserved** | Injected via litellm `extra_headers` per call, same four fields (slm_server still reads the legacy pair) |
 | Per-role timeouts (600s primary) | Role-timeout map + httpx timeout config | **Preserved** | Role timeout passed as litellm `timeout` per call; litellm `num_retries` receives our retry budget so the two retry layers do not multiply |
 | History sanitiser (FRE-237) | Called before dispatch | **Preserved** | Already called on both paths today; one call site after unification |
@@ -371,7 +403,7 @@ are what make any mechanism trustworthy.
 |------|----------|------------|
 | litellm upgrade silently detaches the injected guarded client | High | D2 seeded-negative CI test — the contract is the test, not the mechanism |
 | litellm upgrade changes how `extra_body` flattens for OpenAI-compatible endpoints | High | D6.3 wire-shape assertion pins top-level arrival and absence of the literal key |
-| `top_k: 20` going live shifts primary output quality | Medium | It is the evidenced preset (EVAL-2026-05-11) finally applying; A/B re-baselines immediately after cutover (FRE-1363 is sequenced behind this chain) |
+| `top_k: 20` going live shifts primary output quality | Medium | It is the model-card preset finally applying; A/B re-baselines immediately after cutover (FRE-1363 is sequenced behind this chain) |
 | `thinking_budget` turns out enforced and interacts badly with long turns | Low | 32768 exceeds typical turn thinking; D6.2 probe quantifies before the A/B leans on it |
 | Streaming aggregation differences (usage block, tool-call deltas) between our SSE code and litellm's | Medium | Cutover ticket asserts usage + tool-call parity on recorded streams before the switch |
 | Cost gate accidentally engages for local calls (latency + spurious ledger rows) | Medium | AC-7 asserts zero cloud-spend booking for local provider post-cutover |
@@ -405,7 +437,9 @@ are what make any mechanism trustworthy.
      production call-site moves
   3. Concurrency re-homing: process singleton, all providers, cloud ceilings live (D3)
   4. Delete `LocalLLMClient` across the full D1 census — `src/`, `scripts/`, `experiments/` —
-     + ast-grep tombstone + docs/AGENTS.md rewrite (D1)
+     migrate the two direct `litellm.acompletion()` eval scripts to the factory, extend the
+     confinement rules (direct `acompletion()` outside `llm_client/` forbidden, AC-6) + ast-grep
+     tombstone + docs/AGENTS.md rewrite (D1)
   5. Canary + probes: SLM-health thinking canary, wire-shape CI assertion, config-guard
      arithmetic invariant, cutover budget probe (D5, D6)
   6. *(post-FRE-1363, Urgent)* Adaptive thinking budget from the gateway complexity signal (D8)
@@ -432,29 +466,38 @@ deployed — not at merge of this ADR.
   returns zero; probe red is visible in the existing health surface. · *Fails if* either arm is
   missing, the endpoint's launch flag already disables thinking (the 8503 case — zero reasoning
   there proves nothing), or the canary asserts only HTTP status or declaration presence.
-- **AC-3 — A blocklisted URL cannot escape through the litellm path.** · **Check:** seeded-negative
-  CI test dispatches to a guard-blocklisted URL via the unified client and asserts
-  `EgressBlockedError` before connection. · *Fails if* the request reaches a transport, or the
-  test stubs the layer the guard hangs on.
-- **AC-4 — Cloud concurrency ceilings are enforced, not just declared.** · **Check:** test
-  registers a provider with ceiling N through the re-homed singleton, issues N+1 concurrent unified
-  calls, asserts the N+1th blocks until a slot frees; local priority semantics asserted unchanged
-  by the existing controller tests. · *Fails if* cloud calls bypass `request_slot`, or only the
-  local provider is exercised.
+- **AC-3 — A blocklisted URL cannot escape through any litellm route in use.** · **Check:**
+  seeded-negative CI tests, **one per distinct route mechanism the catalog's providers use** (at
+  cutover: the OpenAI-SDK route and the `AsyncHTTPHandler` route — D2.2), each dispatching to a
+  guard-blocklisted URL via the unified client and asserting both that a sentinel transport is
+  never reached and that the caller receives `EgressBlockedError` (unwrapped by the unified client
+  from the SDK's `APIConnectionError` wrapping — D2.2). · *Fails if* any in-use mechanism lacks
+  its own test, the request reaches a transport, the error surfaces only inside a generic
+  wrapper's causal chain, or the test stubs the layer the guard hangs on.
+- **AC-4 — Chat-provider concurrency ceilings are enforced, not just declared.** · **Check:** test
+  registers a cloud chat provider with ceiling N through the re-homed singleton, issues N+1
+  concurrent unified calls, asserts the N+1th blocks until a slot frees; local priority semantics
+  asserted unchanged by the existing controller tests. Scope is D3's, stated: `voyage`/`ovh`
+  (reranker/embedder) never dispatch through `respond()` and are explicitly out of scope — a green
+  here claims nothing about them. · *Fails if* cloud chat calls bypass `request_slot`, only the
+  local provider is exercised, or the ADR text anywhere claims the non-chat ceilings went live.
 - **AC-5 — The primary's completion stays unbounded and the guard can prove the arithmetic.** ·
   **Check:** wire capture for the primary asserts no `max_tokens` key when the catalog declares
   none; config-guard test seeds a local deployment with `max_tokens <= thinking_budget_tokens` and
   asserts the finding fires. · *Fails if* the 8192 constructor default reaches a local wire
   payload, or the guard check passes on the seeded violation.
-- **AC-6 — The dispatch boundary is enforced, not just the class deleted.** · **Check:**
-  repo-wide (not `src/`-only — the census in D1 includes `scripts/` and `experiments/`) zero
-  `LocalLLMClient` references, **and** the static boundary rules make a *replacement* raw-httpx
-  dispatch impossible to land silently: the ADR-0132 ast-grep rule set (raw
-  `httpx.Client`/`AsyncClient` construction outside the factory) plus the FRE-1262 SDK-confinement
-  guard remain enforced in CI, with a **seeded negative** — a fixture constructing a raw-httpx LLM
-  dispatch outside `llm_client/` must trip the rules. · *Fails if* any reference survives anywhere
-  in the repo, the seeded negative passes the rules, or the check is only the existence-scan (a
-  renamed raw-httpx client would satisfy a tombstone alone).
+- **AC-6 — The dispatch boundary is enforced, not just the class deleted.** · **Check:** zero
+  `LocalLLMClient` references in **executable code** — `src/`, `scripts/`, `experiments/`, `tests/`
+  — (documentation, including this ADR, necessarily keeps the name; a repo-wide text count is
+  unsatisfiable and proves nothing), **and** the static boundary makes a *replacement* dispatch
+  impossible to land silently: the ADR-0132 ast-grep rule set (raw `httpx.Client`/`AsyncClient`
+  construction outside the factory) and the FRE-1262 SDK-confinement guard remain enforced, and
+  the confinement is extended to **direct `litellm.acompletion()`/`litellm.completion()` calls
+  outside `llm_client/`** — which also catches the two eval-script bypasses D1 migrates. Each rule
+  carries a **seeded negative**: fixtures constructing a raw-httpx LLM dispatch and a direct
+  `acompletion()` call outside `llm_client/` must trip. · *Fails if* any executable reference
+  survives, either seeded negative passes, or the check is only the existence-scan (a renamed
+  raw-httpx client or a direct litellm call would satisfy a tombstone alone).
 - **AC-7 — Local calls neither book cloud spend nor touch the gate.** · **Check:** unit test
   asserts a local-placement `respond()` performs no `gate.reserve()` call at all (call-level
   assert — the "no Postgres round-trip on the hot path" obligation of D7, not just clean
@@ -476,16 +519,22 @@ deployed — not at merge of this ADR.
   `LLMRateLimit`, `LLMServerError` respectively; (c) header capture asserts all four propagation
   headers (`traceparent`, `X-Trace-Id`, `X-Span-Id`, `X-Session-Id`); (d) role-timeout test
   asserts the primary's 600s reaches the transport config; (e) the history sanitiser is invoked on
-  the unified path (call assert). · *Fails if* any leg is missing or stubbed at the layer it
-  claims to test.
+  the unified path (call assert); (f) telemetry parity: `model_call_completed` for a local call
+  carries provider `slm_local`, role, and prompt-identity fields matching the canonical shape
+  (field asserts on the emitted event); (g) text tool-call fallback: a response carrying a textual
+  tool call and no structured `tool_calls` yields parsed tool calls through the unified path —
+  today's `LiteLLMClient` reads only structured calls, so this leg fails until the fallback is
+  ported; (h) reasoning preservation, both shapes: an inline `<think>…</think>` response and a
+  `reasoning_content`-field response each populate `reasoning_trace` with visible content clean of
+  think-tags. · *Fails if* any leg is missing or stubbed at the layer it claims to test.
 
 ---
 
 ## References
 
 - [FRE-1362](https://linear.app/frenchforest/issue/FRE-1362) — umbrella ticket; the 2026-09-03 live measurement lives in its description
-- ADR-0031 — Model Configuration Consolidation; its Alternative C (litellm as the unified abstraction, Deferred) is closed by this ADR
-- ADR-0121 — Model Catalog and Selection Layer; "Vocabulary by dispatch path" and the FRE-917 inert-ceilings note superseded here (status updates added by this ADR's PR)
+- ADR-0031 — Model Configuration Consolidation; its Alternative C (litellm as the unified abstraction, Deferred) closes on this ADR's acceptance
+- ADR-0121 — Model Catalog and Selection Layer; the FRE-917 inert-ceilings note is factually corrected now, and "Vocabulary by dispatch path" is superseded on this ADR's acceptance (status updates added by this ADR's PR)
 - ADR-0132 — Outbound Authenticated Egress; D2's guard obligation extended to the unified path (D2 here); its recorded litellm scope gap closes
 - ADR-0029 — Inference Concurrency Control; the controller re-homed by D3
 - ADR-0081 / [FRE-433](https://linear.app/frenchforest/issue/FRE-433) — cross-turn KV reuse (server-side; unaffected, noted in D7)

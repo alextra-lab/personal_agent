@@ -1243,7 +1243,10 @@ correction takes effect immediately; the supersession becomes effective when ADR
    when "step 2 (FRE-917) unifies the two resolution paths." FRE-917 (Done 2026-07-20) unified
    *resolution* — which key, which budget lane — not *dispatch*: the concurrency controller
    remained instantiated only by `LocalLLMClient`, so the cloud ceilings
-   (`openai`/`anthropic`/`voyage`/`ovh`/`ovhcloud`) stayed declared-but-inert. ADR-0141 D3 is
-   what proposes to deliver them, by re-homing the controller as a process-wide singleton acquired
-   for every provider. Discovered while drafting ADR-0141 (FRE-1362); the related local "second
-   door" (FRE-1343) dissolves under ADR-0141 D1.
+   (`openai`/`anthropic`/`voyage`/`ovh`/`ovhcloud`) stayed declared-but-inert. ADR-0141 D3
+   proposes to deliver the **chat-provider** ceilings (`openai`/`anthropic`/`ovhcloud`) by
+   re-homing the controller as a process-wide singleton acquired in the unified client's
+   `respond()`; the `voyage` (reranker) and `ovh` (embedder) ceilings stay declared-but-inert even
+   then — those deployments dispatch through `memory/embeddings.py` / `memory/reranker.py`, which
+   never enter `respond()` (stated explicitly in ADR-0141 D3). Discovered while drafting ADR-0141
+   (FRE-1362); the related local "second door" (FRE-1343) dissolves under ADR-0141 D1.

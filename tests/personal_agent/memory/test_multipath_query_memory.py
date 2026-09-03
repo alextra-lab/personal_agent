@@ -53,7 +53,12 @@ class _FakeSession:
         if "MATCH (t:Turn" in query:
             return _FakeValuesResult(self._turn_rows)
         if "MATCH (e:Entity" in query:
-            return _FakeValuesResult(self._entity_rows)
+            # FRE-1347: the real query now also RETURNs source_referents (a SOURCED_FROM
+            # join). Callers here still hand [eid, node] pairs -- their assertions are
+            # about resolution/visibility/limits, not provenance -- so pad the row here,
+            # once, rather than touching every fixture call site.
+            padded = [row if len(row) >= 3 else [*row, []] for row in self._entity_rows]
+            return _FakeValuesResult(padded)
         raise AssertionError(f"unexpected query shape: {query}")
 
     async def __aenter__(self) -> "_FakeSession":

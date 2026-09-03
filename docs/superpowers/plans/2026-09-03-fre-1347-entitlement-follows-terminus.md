@@ -28,9 +28,14 @@ narrowing is *written*, not yet *implemented*. This ticket implements it.
   either.
 - `multipath_recall_enabled` defaults `False` (`config/settings.py:685`) and is unset in this
   worktree's `.env` — the multipath entity paths (`_multipath_query_memory`,
-  `_resolve_fused_turns`, `_multipath_broad_entities`) are **not live**. Scoped out below,
-  deliberately, with a follow-up note (they fail closed in the meantime: no `provenance_state` field
-  read defaults to `Entitlement.AGENT_DERIVED`, never a false `EXTERNAL`).
+  `_resolve_fused_turns`, `_multipath_broad_entities`) were **initially scoped out on this
+  premise, and shipped that way. The premise was WRONG: master's gate bounce (PR #1028) verified
+  the flag is `true` in `.env` line 681 (deliberate, flipped 2026-07-07) and on the running
+  gateway container — i.e. it is the production default, not the worktree/repo default. Since
+  `query_memory` early-returns into `_multipath_query_memory` whenever `query_text` is set and
+  the flag is on (`memory/service.py:4206`), and `search_memory_executor` always passes
+  `query_text`, the multipath path IS the production entity-match path, not a dormant one. Fixed
+  in the same PR after the bounce — see the second self-review section below.**
 - `verify_turn` already rejects `Entitlement.AGENT_DERIVED` only (`grounding/verification.py:374`) —
   AC-2 needs no verification-layer change, only correct entitlement classification upstream.
 
@@ -59,13 +64,12 @@ most-restrictive fold ordering (any `AGENT_DERIVED` → `AGENT_DERIVED`; else an
    post-fix it only shrinks (calls with a `none`-terminus entity now correctly downgrade). Full
    correctness here needs per-item entitlement, which ADR-0098 Amendment A6 itself defers
    explicitly ("FRE-1302's deferred architecture"). Left as a documented follow-up, not fixed here.
-3. **Not blocking, corrected the claim** — "multipath paths fail closed" was imprecise. Because
-   `_entity_node_from_record` is shared, giving it `provenance_state`/`extractor_model` reads makes
-   multipath entities (`_resolve_fused_turns`) entitlement-*correct* automatically (better than
-   today, where `entities` isn't inspected by the classifier at all on any path). What multipath does
-   **not** get from this plan is referent enrichment (`source_referents` stays empty there) — so an
-   `EXTERNAL`-entitled multipath citation would still be a bare name, not a real address. Documented
-   as a follow-up; not blocking since `multipath_recall_enabled` is off by default and unset here.
+3. **Turned out to matter — see "Master gate bounce" below.** At plan time this disposition read
+   "not blocking... `multipath_recall_enabled` is off by default and unset here", treating the
+   remaining referent-enrichment gap as low-priority precisely because the flag was assumed
+   dormant. That assumption was never checked against `.env`/production and was wrong — the
+   master gate bounce (documented below) found the flag `true` in production, making this the
+   *live* entity-match path, not a dormant one. Fixed in the same PR post-bounce.
 4. **Test strategy widened**: add a `store_fact`-shaped entity case (`provenance_state='none'`,
    `extractor_model=None`) to the AC-1 suite; add one test that drives the full path through
    `search_memory_executor` rather than only hand-built JSON; before editing `query_memory`, grep
@@ -175,8 +179,48 @@ three more gaps a second review pass found (entity_types-only fallback, the `ses
 path, and `query_memory_broad`'s Cypher aggregation correctness — all previously verified only by
 reading the code, not by a test). Full quality gate sequence re-run clean after the fix.
 
-Deliberately not fixed here, documented as follow-up: `_multipath_broad_entities`
-(`memory/service.py`, the `multipath_recall_enabled` path) still hand-selects a narrow field list
-that omits `provenance_state`/`extractor_model` — dormant since that flag defaults `False` and is
-unset in this worktree, and fails closed (denies citation) rather than over-admitting, so it is not
-a correctness regression, only an incompleteness one, to close before that flag is ever enabled.
+At this point the PR still deferred `_multipath_broad_entities`/`_resolve_fused_turns` as
+"dormant" on the strength of the flag's *default*. That premise was never verified against what
+actually runs — see "Master gate bounce" immediately below, which caught it and required the fix.
+
+## Master gate bounce — the "dormant" premise was false in production
+
+Master's gate on PR #1028 bounced with a verified finding: `.env` line 681 sets
+`AGENT_MULTIPATH_RECALL_ENABLED=true` (comment: "flipped 2026-07-07, deliberate, live p50
+watch"), and the running gateway container carries the same. `multipath_recall_enabled`'s
+`False` default (`config/settings.py:685`) is not what's deployed. Three verified consequences:
+
+1. `query_memory` (`memory/service.py:4206`) early-returns into `_multipath_query_memory`
+   whenever `query_text` is set and the flag is on.
+2. `search_memory_executor` (`tools/memory_search.py:186`) always passes `query_text` to
+   `query_memory`.
+3. So in production, `search_memory`'s entity-match calls never reach the legacy Cypher this PR
+   fixed first — they resolve entities through `_resolve_fused_turns`, whose `EntityNode`s
+   (before this fix) defaulted to `provenance_state="none"`, `extractor_model=None`,
+   `source_referents=[]`. `_multipath_broad_entities` didn't even read `provenance_state`/
+   `extractor_model` off its raw dicts.
+
+Net effect: AC-3(a) (real referent, not a bare name) still failed in production, and — since
+every entity classified `AGENT_DERIVED` regardless of real provenance — AC-3(b) (recall stays
+usable, not severed) regressed too. Both halves of AC-3 are explicitly required.
+
+**Fixed**: threaded `provenance_state`/`extractor_model`/`source_referents` through
+`_multipath_broad_entities`'s two Cypher blocks (same `count(DISTINCT mt)` /
+`collect(DISTINCT src.referent)` pattern as the legacy blocks) and through
+`_resolve_fused_turns`'s entity Cypher (`provenance_state`/`extractor_model` came "for free" via
+the shared `_entity_node_from_record` helper already; only `source_referents` needed a new
+`OPTIONAL MATCH (e)-[:SOURCED_FROM]->(src:Source)` join). Added
+`tests/personal_agent/memory/test_multipath_entity_provenance.py`, which sets
+`multipath_recall_enabled = True` and drives `query_memory`/`query_memory_broad` for real
+(patching only `_multipath_fused_recall`, the arms/RRF machinery already covered elsewhere) — the
+durable regression guard master asked for, so a future reader can't rediscover this by reading
+the default alone. Fixing the row shape broke `test_multipath_query_memory.py` (a pre-existing
+unit test for `_resolve_fused_turns` my original grep for `.query_memory(` missed entirely,
+because it calls `_multipath_query_memory` directly) — its fixture rows gained a third column;
+fixed once at the fake session's `run()` rather than at each of the file's 7 call sites, since
+none of them assert on referents. Also corrected `EntityNode.extractor_model`'s comment, which
+still described the absence-check design the sentinel fix (above) replaced.
+
+Not touched, per master's explicit instruction: the legacy-backfill question (97% of production
+`:Entity` nodes lack `provenance_state`) is FRE-1348's owner-sequencing decision, not a defect in
+this diff.

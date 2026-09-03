@@ -5378,8 +5378,12 @@ class MemoryService:
                         UNWIND $ids AS eid
                         MATCH (e:Entity) WHERE elementId(e) = eid AND {vis_e}
                         OPTIONAL MATCH (e)<-[:DISCUSSES]-(mt:Turn)
+                        OPTIONAL MATCH (e)-[:SOURCED_FROM]->(src:Source)
                         RETURN eid AS id, e.name AS name, e.entity_type AS type,
-                               e.description AS description, count(mt) AS mentions
+                               e.description AS description, count(DISTINCT mt) AS mentions,
+                               e.provenance_state AS provenance_state,
+                               e.extractor_model AS extractor_model,
+                               collect(DISTINCT src.referent) AS source_referents
                         """,
                         ids=entity_ids,
                         **vis_params,
@@ -5390,6 +5394,9 @@ class MemoryService:
                             "type": row["type"],
                             "description": row["description"],
                             "mentions": row["mentions"],
+                            "provenance_state": row["provenance_state"],
+                            "extractor_model": row["extractor_model"],
+                            "source_referents": [ref for ref in row["source_referents"] if ref],
                         }
                 if turn_ids:
                     r = await session.run(
@@ -5398,8 +5405,12 @@ class MemoryService:
                         MATCH (t:Turn {{turn_id: tid}})-[:DISCUSSES]->(e:Entity)
                         WHERE {vis_e}
                         OPTIONAL MATCH (e)<-[:DISCUSSES]-(mt:Turn)
+                        OPTIONAL MATCH (e)-[:SOURCED_FROM]->(src:Source)
                         RETURN tid AS id, e.name AS name, e.entity_type AS type,
-                               e.description AS description, count(mt) AS mentions
+                               e.description AS description, count(DISTINCT mt) AS mentions,
+                               e.provenance_state AS provenance_state,
+                               e.extractor_model AS extractor_model,
+                               collect(DISTINCT src.referent) AS source_referents
                         """,
                         ids=turn_ids,
                         **vis_params,
@@ -5411,6 +5422,9 @@ class MemoryService:
                                 "type": row["type"],
                                 "description": row["description"],
                                 "mentions": row["mentions"],
+                                "provenance_state": row["provenance_state"],
+                                "extractor_model": row["extractor_model"],
+                                "source_referents": [ref for ref in row["source_referents"] if ref],
                             }
                         )
         except Exception as exc:
@@ -5639,15 +5653,20 @@ class MemoryService:
                         f"""
                         UNWIND $ids AS eid
                         MATCH (e:Entity) WHERE elementId(e) = eid AND {vis_e}
-                        RETURN eid AS eid, e
+                        OPTIONAL MATCH (e)-[:SOURCED_FROM]->(src:Source)
+                        WITH eid, e, collect(DISTINCT src.referent) AS source_referents
+                        RETURN eid AS eid, e, source_referents
                         """,
                         ids=entity_ids,
                         **vis_params_e,
                     )
                     for row in await r.values():
-                        eid, node_raw = row[0], row[1]
+                        eid, node_raw, referents = row[0], row[1], row[2]
                         if node_raw:
-                            by_entity[eid] = _entity_node_from_record(node_raw)
+                            by_entity[eid] = _entity_node_from_record(
+                                node_raw,
+                                source_referents=[ref for ref in (referents or []) if ref],
+                            )
         except Exception as exc:
             log.warning(
                 "multipath_resolve_turns_failed",

@@ -263,9 +263,14 @@ class EntityNode(BaseModel):
     # The distinct referents (URLs/document ids) of every :Source this entity is SOURCED_FROM,
     # when provenance_state == 'provenanced'. Empty when not threaded or not provenanced.
     source_referents: list[str] = Field(default_factory=list)
-    # None on a well-formed read distinguishes gateway store_fact (user-provided, no
-    # extraction) from LLM extraction (a model identifier) -- ADR-0098 A6's owner-statement
-    # terminus for entities, mirrored from create_entity's existing extractor_model param.
+    # create_entity stamps USER_STATED_EXTRACTOR_SENTINEL here for a gateway store_fact
+    # write (user-provided, no extraction); every other write path stamps a real model
+    # identifier or a different sentinel. The entitlement gate (_entity_entitlement_of)
+    # matches the sentinel exactly -- None (this field's default, and what a legacy or
+    # not-yet-threaded read looks like) denies, it does not grant USER_STATED. Neo4j has
+    # no persisted null, so "never set" and "explicitly None" are indistinguishable on
+    # read, which is exactly why the check is a positive sentinel match, not an
+    # absence check (ADR-0098 Amendment A6 / FRE-1347).
     extractor_model: str | None = None
 
 

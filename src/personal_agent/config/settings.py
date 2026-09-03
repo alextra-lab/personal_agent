@@ -2524,6 +2524,19 @@ class AppConfig(BaseSettings):
             "never blocks. Env var: AGENT_URL_GUARD_NOVELTY_WINDOW_DAYS"
         ),
     )
+    experimental_openai_base_llm_http_handler: bool = Field(
+        default=False,
+        alias="EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER",
+        description=(
+            "litellm's own flag (no AGENT_ prefix — read as litellm reads it), not ours. "
+            "Reroutes litellm's OpenAI-SDK-route dispatch through the generic "
+            "AsyncHTTPHandler-based handler, which silently drops a non-AsyncHTTPHandler "
+            "client= kwarg — detaching the egress guard LiteLLMClient injects for that "
+            "route with no error (ADR-0141 D2.2). Boot refuses to start when true "
+            "(enforce_experimental_litellm_handler_disabled). "
+            "Env var: EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
+        ),
+    )
 
     # FRE-335 / ADR-0066 D2: skill routing threshold monitor
     skill_index_p95_token_threshold: int = Field(
@@ -3303,6 +3316,36 @@ def enforce_slm_endpoint_declared(config: AppConfig) -> None:
     )
 
 
+def enforce_experimental_litellm_handler_disabled(config: AppConfig) -> None:
+    """Refuse to boot if litellm's experimental OpenAI base-handler flag is set (ADR-0141 D2.2).
+
+    ``EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER=true`` reroutes litellm's
+    OpenAI-SDK-route dispatch through the generic ``AsyncHTTPHandler``-based
+    handler instead of the OpenAI SDK path. That handler drops any ``client=``
+    kwarg that is not an ``AsyncHTTPHandler`` instance without error
+    (``llms/custom_httpx/llm_http_handler.py``), so the guarded ``AsyncOpenAI``
+    client :class:`~personal_agent.llm_client.litellm_client.LiteLLMClient`
+    injects for that route would silently detach — the egress guard would
+    stop guarding with no signal anywhere.
+
+    Args:
+        config: The constructed ``AppConfig`` — carries the flag as
+            ``experimental_openai_base_llm_http_handler`` (aliased directly to
+            litellm's own bare env var name, not one of ours).
+
+    Raises:
+        ValueError: If the flag is set.
+    """
+    if not config.experimental_openai_base_llm_http_handler:
+        return
+    raise ValueError(
+        "Refusing to start: EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER is set. This "
+        "litellm flag silently drops the egress-guarded AsyncOpenAI client injected "
+        "for OpenAI-SDK-route dispatch (ADR-0141 D2.2) — unset it, or add matching "
+        "AsyncHTTPHandler-based guard support before enabling it."
+    )
+
+
 def load_app_config() -> AppConfig:
     """Load and validate application configuration.
 
@@ -3330,6 +3373,7 @@ def load_app_config() -> AppConfig:
         enforce_required_secrets(config)
         enforce_slm_endpoint_declared(config)
         enforce_reasoning_declaration(config)
+        enforce_experimental_litellm_handler_disabled(config)
         _log_active_substrate_profile(config)
         log.info(
             "app_config_loaded",

@@ -7,6 +7,7 @@ import functools
 import ipaddress
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -530,6 +531,68 @@ async def _guard_request_hook(request: httpx.Request, *, guard: DomainGuard) -> 
             matched_entry=result.matched_entry,
         )
         raise EgressBlockedError(request, result.reason, result.matched_entry)
+
+
+def check_egress_or_raise(
+    url: str, *, guard: DomainGuard | None = None, trace_id: str | None = None
+) -> None:
+    """Layer-1 pre-dispatch DomainGuard check (ADR-0141 D2.1).
+
+    Route-independent: callers invoke this before handing dispatch to litellm,
+    so the caller-facing exception type never depends on unwrapping a
+    provider route's own wrapper shape (some routes raise without
+    ``from e``, making the cause chain unreliable). Mirrors
+    ``_guard_request_hook``'s never-fetches behaviour (FRE-1162).
+
+    Args:
+        url: The resolved endpoint/api_base about to be dispatched to.
+        guard: DomainGuard instance to consult; defaults to the process
+            singleton (``get_domain_guard()``).
+        trace_id: Caller's trace id, when in scope, so an egress-block event
+            on the LLM dispatch path can be correlated to the turn that
+            triggered it. ``_guard_request_hook`` (the httpx event-hook this
+            mirrors) has no request-scoped trace context available to it and
+            omits it for the same reason; this seam does have one available.
+
+    Raises:
+        EgressBlockedError: If the guard refuses ``url``.
+    """
+    resolved_guard = guard or get_domain_guard()
+    resolved_guard.note_staleness()
+    result = resolved_guard.check_url(url)
+    if not result.allowed:
+        log.warning(
+            "egress_blocked_pre_dispatch",
+            url=url,
+            reason=result.reason,
+            matched_entry=result.matched_entry,
+            trace_id=trace_id,
+        )
+        raise EgressBlockedError(httpx.Request("POST", url), result.reason, result.matched_entry)
+
+
+def guard_event_hooks(
+    *, guard: DomainGuard | None = None
+) -> dict[str, list[Callable[..., object]]]:
+    """Build an ``event_hooks`` dict carrying the DomainGuard's request hook.
+
+    For httpx-compatible objects that accept ``event_hooks=`` directly at
+    construction (e.g. litellm's ``AsyncHTTPHandler``, whose own
+    ``event_hooks`` parameter is typed ``Mapping[str, list[Callable[...,
+    object]]]``) rather than being built via
+    :func:`create_guarded_http_client`. Same hook, same guard behaviour,
+    different injection point (ADR-0141 D2.1 layer 2).
+
+    Args:
+        guard: DomainGuard instance to consult; defaults to the process
+            singleton (``get_domain_guard()``).
+
+    Returns:
+        An ``event_hooks`` dict with the guard hook as the sole ``request``
+        entry.
+    """
+    resolved_guard = guard or get_domain_guard()
+    return {"request": [functools.partial(_guard_request_hook, guard=resolved_guard)]}
 
 
 def create_guarded_http_client(

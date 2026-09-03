@@ -28,15 +28,22 @@ throttle by surprise. Placement (local vs cloud) decides only *dispatch* — whi
 client class handles the call — which is ``ModelConfig.placement_of``'s job, not
 this module's.
 
-**Stated plainly, because the paragraph above is now out of date and silence
-would read as "still true":** ADR-0141 T2 moved local placement onto
-``LiteLLMClient`` too, and ``LocalLLMClient`` is no longer constructed by any
-production path. Until T3 (FRE-1366) re-homes this controller as a process-level
-singleton acquired inside the unified ``respond()``, **no** deployment calls
-``request_slot`` — the local ``max_concurrency: 1`` GPU ceiling and the
-``InferencePriority`` tiers are inert, and ``priority``/``priority_timeout``
-arguments are accepted and ignored. The two tickets are a single cutover: T2
-must not deploy without T3.
+**Stated plainly, because the two paragraphs above are now out of date and
+silence would read as "still true":** ADR-0141 T2 moved local placement onto
+``LiteLLMClient``, and T3 (FRE-1366) re-homed this controller as the
+process-wide singleton returned by :func:`get_inference_concurrency_controller`,
+acquired inside ``LiteLLMClient.respond()`` (and its local-placement
+``_respond_local``) for every chat-completion provider — ``slm_local``,
+``anthropic``, ``openai``, ``ovhcloud``. ``LocalLLMClient`` is no longer
+constructed by any production path; its own controller instance is dead code
+pending deletion (T4, FRE-1367).
+
+The local ``max_concurrency: 1`` GPU ceiling and the ``InferencePriority``
+tiers carry over unchanged through the singleton's per-deployment
+``register_model`` registration. The cloud ceilings (``openai``/``anthropic``/
+``ovhcloud``, set high at 50 as a safety valve) are now live for the first
+time — ``voyage`` and ``ovh`` (reranker/embedder) never dispatch through
+``respond()`` and stay declared-but-inert, out of this ADR's scope by design.
 """
 
 from __future__ import annotations
@@ -357,3 +364,68 @@ class InferenceSlotTimeout(Exception):
     """Raised when a request cannot acquire an inference slot within the timeout."""
 
     pass
+
+
+# ---------------------------------------------------------------------------
+# Process-wide singleton (ADR-0141 D3)
+# ---------------------------------------------------------------------------
+
+_controller: InferenceConcurrencyController | None = None
+
+
+def _build_controller_from_catalog() -> InferenceConcurrencyController:
+    """Construct a controller registered against every catalog provider + deployment.
+
+    Mirrors the registration ``LocalLLMClient.__init__`` used to do for itself
+    (pre-ADR-0141): every provider gets its declared ceiling, every deployment
+    gets its own sub-limit beneath its provider. The difference is scope — this
+    now runs once, process-wide, for every placement.
+
+    Returns:
+        A freshly populated :class:`InferenceConcurrencyController`.
+    """
+    from personal_agent.config import load_model_config
+
+    config = load_model_config()
+    controller = InferenceConcurrencyController()
+    for provider_name, provider in config.providers.items():
+        controller.register_provider(provider_name, max_concurrency=provider.max_concurrency)
+    for role_name, model_def in config.models.items():
+        controller.register_model(
+            role=role_name,
+            max_concurrency=model_def.max_concurrency,
+            endpoint=model_def.endpoint,
+            provider=model_def.provider,
+        )
+    return controller
+
+
+def get_inference_concurrency_controller() -> InferenceConcurrencyController:
+    """Return the process-wide ``InferenceConcurrencyController`` singleton.
+
+    Created and populated from the model catalog on first call (ADR-0141 D3):
+    every declared provider and deployment is registered, so the returned
+    controller enforces the same ceilings ``config/models.yaml`` declares —
+    including the cloud providers ADR-0121's FRE-917 note wrongly recorded as
+    already live. Acquired by ``LiteLLMClient.respond()`` (both placements) for
+    every chat-completion call.
+
+    Returns:
+        The singleton controller, creating it on first call.
+    """
+    global _controller
+    if _controller is None:
+        _controller = _build_controller_from_catalog()
+    return _controller
+
+
+def set_inference_concurrency_controller(controller: InferenceConcurrencyController | None) -> None:
+    """Register (or clear) the process-wide controller. Test seam.
+
+    Args:
+        controller: The controller to install, or ``None`` to clear it — the
+            next :func:`get_inference_concurrency_controller` call then
+            rebuilds a fresh one from the catalog.
+    """
+    global _controller
+    _controller = controller

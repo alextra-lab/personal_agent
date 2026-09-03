@@ -11,6 +11,8 @@ from personal_agent.llm_client.concurrency import (
     InferenceConcurrencyController,
     InferencePriority,
     InferenceSlotTimeout,
+    get_inference_concurrency_controller,
+    set_inference_concurrency_controller,
 )
 from personal_agent.llm_client.cost_tracker import CostTrackerService, get_cost_tracker_service
 from personal_agent.llm_client.models import ToolCallingStrategy
@@ -70,6 +72,8 @@ __all__ = [
     "InferenceConcurrencyController",
     "InferencePriority",
     "InferenceSlotTimeout",
+    "get_inference_concurrency_controller",
+    "set_inference_concurrency_controller",
     "LLMClientError",
     "LLMConnectionError",
     "LLMInvalidResponse",

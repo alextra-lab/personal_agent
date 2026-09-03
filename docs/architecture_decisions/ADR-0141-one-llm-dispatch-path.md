@@ -73,8 +73,9 @@ masking the sub-agent depends on today.
 
 All LLM calls — local and cloud — dispatch through `LiteLLMClient` /
 `litellm.acompletion()`. The factory's placement branch (`factory.py::_build_client`) collapses to
-one constructor. The direct `LocalLLMClient()` constructor census (repo-wide, not `src/`-only):
-four production sites (`captains_log/reflection.py:367`, `memory/service.py:271`,
+one constructor. The direct `LocalLLMClient()` constructor census
+(executable non-test code — the test suite's many constructors are rewritten wholesale against
+the unified client at deletion and swept by AC-6's scan): four production sites (`captains_log/reflection.py:367`, `memory/service.py:271`,
 `second_brain/session_summary.py:649`, `second_brain/entity_extraction.py:1190`), one executable
 migration script (`scripts/migrate_fre865_entity_class_backfill.py:484`), three DSPy prototype
 scripts (`experiments/dspy_prototype/test_case_{a,b,c}_*.py`), and two docstring examples. All
@@ -139,14 +140,23 @@ Decision (owner-confirmed 2026-09-03):
    materially distinct route mechanism the catalog's providers actually use — at cutover that is
    the OpenAI-SDK route (local `openai/` dispatch; also `openai` cloud) **and** the
    `AsyncHTTPHandler` route (`anthropic`); a provider whose route introduces a third mechanism
-   adds a third test. A passing negative on one mechanism proves nothing about the other. Two
-   things are asserted per test: no transport is ever invoked (a sentinel transport that fails
-   the test if reached), and the caller sees `EgressBlockedError`. On the shape of that error:
-   the OpenAI SDK catches request-hook exceptions and wraps them in `APIConnectionError`
-   (verified against openai 2.24.0, `_base_client.py`), and `LiteLLMClient` today wraps provider
-   errors as `LLMClientError` — so the unified client **must unwrap the causal chain and
-   re-raise `EgressBlockedError`** to preserve the ADR-0132 exception contract for callers. If a
-   litellm upgrade detaches an injection, that mechanism's test — not an incident — fails. The
+   adds a third test. A passing negative on one mechanism proves nothing about the other.
+
+   The exception contract needs two layers, because the wrapped-exception shapes differ per
+   route and one of them is unrecoverable: the OpenAI SDK wraps request-hook exceptions in
+   `APIConnectionError ... from err` (causal chain intact, unwrappable — verified against openai
+   2.24.0), but litellm's Anthropic handler catches a hook exception and raises a **new
+   `AnthropicError` without `from e`** (verified against litellm 1.98.0 `anthropic/chat/handler.py`)
+   — the guard's exception is unrecoverable from the causal chain on that route. So:
+   **(layer 1, owns the exception type)** the unified client runs the DomainGuard check itself,
+   pre-dispatch, on the resolved endpoint/api_base — route-independent, raises
+   `EgressBlockedError` directly, preserving the ADR-0132 exception contract for every caller;
+   **(layer 2, owns the transport)** the per-route injected hook remains as depth — it also
+   covers URLs the SDK constructs internally and redirect hops, where its guarantee is *no
+   connection*, not exception type. Each mechanism's seeded negative asserts both: the caller
+   sees `EgressBlockedError` (layer 1), and — with layer 1 disabled in the test — a sentinel
+   transport is never reached (layer 2, whatever wrapper the route surfaces). If a litellm
+   upgrade detaches an injection, that mechanism's layer-2 test — not an incident — fails. The
    injection mechanisms are thereby replaceable; the tests are the contract.
 3. `litellm.aclient_session` (module-global client injection) is **rejected** as the mechanism —
    for partial coverage, not total inertness: verified against litellm 1.98.0, the modern OpenAI
@@ -253,7 +263,7 @@ classes at CI/boot. What un-vacuates it is a **behavioural canary** on the deplo
 | Capability | Today (local path) | Disposition | Mechanism after unification |
 |---|---|---|---|
 | Egress guard | `create_guarded_http_client` hook | **Preserved** (and extended to cloud) | D2: per-call guarded client injection + seeded-negative CI contract |
-| GPU-aware concurrency + priority tiers | Controller inside `LocalLLMClient` | **Re-homed** | D3: process singleton acquired in unified `respond()`, all providers |
+| GPU-aware concurrency + priority tiers | Controller inside `LocalLLMClient` | **Re-homed** | D3: process singleton acquired in unified `respond()` for every provider dispatching through it (chat providers; `voyage`/`ovh` stay outside, per D3) |
 | Four sampler/thinking params | Built into inert `extra_body` | **Preserved — and delivered for the first time** | D4: litellm `extra_body` → SDK flattening → top-level; AC-1 wire assertion |
 | `cache_prompt: true` (within-turn KV reuse) | Sent top-level by hand | **Preserved** | Same flattening path; delivery proven by the D6.3 wire assertion, corroborated by `cache_read_tokens` telemetry (D6.4). Cross-turn KV reuse stays server-side (slot config, ADR-0081/FRE-433) — unaffected by client choice |
 | Reasoning-content preservation (`<think>` / `reasoning_content` → `reasoning_trace`) | Extracted by the local response adapter (`adapters.py:373`): inline `<think>…</think>` is stripped from visible content into `reasoning_trace`, with the dedicated `reasoning_content` field as fallback — **both shapes** | **Preserved — requires new work, both shapes** | `LiteLLMClient` today returns `reasoning_trace=None` unconditionally; the unified client must carry over the same two-shape extraction. Mapping only the dedicated field would leak `<think>` text into answers and blind the D6.1 positive control; asserted by AC-9 |
@@ -378,7 +388,7 @@ are what make any mechanism trustworthy.
   server, with wire-level and behavioural proof they arrive — the FRE-1363 A/B becomes measurable
 - One dispatch path: one retry stack, one telemetry emitter, one egress surface, one place to add
   capabilities; the guarded-transport gap ADR-0132 recorded for litellm closes
-- Cloud concurrency ceilings go live, delivering ADR-0121's promise; FRE-1343 dissolves by
+- Chat-provider cloud concurrency ceilings go live, delivering that part of ADR-0121's promise (`voyage`/`ovh` stay inert, stated in D3); FRE-1343 dissolves by
   construction
 - FRE-1007's guard stops being vacuous: declaration checks are now backed by a live behavioural
   canary and a CI wire-shape assertion
@@ -435,7 +445,8 @@ are what make any mechanism trustworthy.
      streaming, timeouts, error mapping, telemetry parity, reasoning-content preservation,
      no-8192-for-local (D1, D4, D5, D7) — including the factory branch collapse and the
      production call-site moves
-  3. Concurrency re-homing: process singleton, all providers, cloud ceilings live (D3)
+  3. Concurrency re-homing: process singleton for every provider dispatching through
+     `respond()`; chat-provider cloud ceilings live (D3)
   4. Delete `LocalLLMClient` across the full D1 census — `src/`, `scripts/`, `experiments/` —
      migrate the two direct `litellm.acompletion()` eval scripts to the factory, extend the
      confinement rules (direct `acompletion()` outside `llm_client/` forbidden, AC-6) + ast-grep
@@ -469,11 +480,13 @@ deployed — not at merge of this ADR.
 - **AC-3 — A blocklisted URL cannot escape through any litellm route in use.** · **Check:**
   seeded-negative CI tests, **one per distinct route mechanism the catalog's providers use** (at
   cutover: the OpenAI-SDK route and the `AsyncHTTPHandler` route — D2.2), each dispatching to a
-  guard-blocklisted URL via the unified client and asserting both that a sentinel transport is
-  never reached and that the caller receives `EgressBlockedError` (unwrapped by the unified client
-  from the SDK's `APIConnectionError` wrapping — D2.2). · *Fails if* any in-use mechanism lacks
-  its own test, the request reaches a transport, the error surfaces only inside a generic
-  wrapper's causal chain, or the test stubs the layer the guard hangs on.
+  guard-blocklisted URL via the unified client and asserting both layers of D2.2: the caller
+  receives `EgressBlockedError` (layer 1, the pre-dispatch check — the route's own wrapper shapes
+  make chain-unwrapping unreliable, so the type guarantee never depends on them), and, with
+  layer 1 disabled in the test, a sentinel transport is never reached (layer 2, the injected
+  hook). · *Fails if* any in-use mechanism lacks its own test, the request reaches a transport,
+  the caller-facing type depends on unwrapping a route wrapper, or the test stubs the layer the
+  guard hangs on.
 - **AC-4 — Chat-provider concurrency ceilings are enforced, not just declared.** · **Check:** test
   registers a cloud chat provider with ceiling N through the re-homed singleton, issues N+1
   concurrent unified calls, asserts the N+1th blocks until a slot frees; local priority semantics

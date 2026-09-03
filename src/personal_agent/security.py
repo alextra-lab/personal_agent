@@ -533,7 +533,9 @@ async def _guard_request_hook(request: httpx.Request, *, guard: DomainGuard) -> 
         raise EgressBlockedError(request, result.reason, result.matched_entry)
 
 
-def check_egress_or_raise(url: str, *, guard: DomainGuard | None = None) -> None:
+def check_egress_or_raise(
+    url: str, *, guard: DomainGuard | None = None, trace_id: str | None = None
+) -> None:
     """Layer-1 pre-dispatch DomainGuard check (ADR-0141 D2.1).
 
     Route-independent: callers invoke this before handing dispatch to litellm,
@@ -546,6 +548,11 @@ def check_egress_or_raise(url: str, *, guard: DomainGuard | None = None) -> None
         url: The resolved endpoint/api_base about to be dispatched to.
         guard: DomainGuard instance to consult; defaults to the process
             singleton (``get_domain_guard()``).
+        trace_id: Caller's trace id, when in scope, so an egress-block event
+            on the LLM dispatch path can be correlated to the turn that
+            triggered it. ``_guard_request_hook`` (the httpx event-hook this
+            mirrors) has no request-scoped trace context available to it and
+            omits it for the same reason; this seam does have one available.
 
     Raises:
         EgressBlockedError: If the guard refuses ``url``.
@@ -559,6 +566,7 @@ def check_egress_or_raise(url: str, *, guard: DomainGuard | None = None) -> None
             url=url,
             reason=result.reason,
             matched_entry=result.matched_entry,
+            trace_id=trace_id,
         )
         raise EgressBlockedError(httpx.Request("POST", url), result.reason, result.matched_entry)
 

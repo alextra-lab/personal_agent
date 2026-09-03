@@ -568,7 +568,7 @@ class LiteLLMClient:
         resolved_guard = self._egress_guard or get_domain_guard()
         _egress_check_url = provider_def.base_url or _KNOWN_DEFAULT_HOSTS.get(self.provider)
         if _egress_check_url is not None:
-            check_egress_or_raise(_egress_check_url, guard=resolved_guard)
+            check_egress_or_raise(_egress_check_url, guard=resolved_guard, trace_id=trace_id)
 
         api_key: str | None = None
         if provider_def.auth_env:

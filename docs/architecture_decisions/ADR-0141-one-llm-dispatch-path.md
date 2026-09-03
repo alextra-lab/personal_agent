@@ -1,6 +1,6 @@
 # ADR-0141: One LLM Dispatch Path — Every Call Rides litellm, and the Wire Is Verified, Not Assumed
 
-**Status:** Proposed
+**Status:** Accepted — 2026-09-03 (owner)
 **Date:** 2026-09-03
 **Deciders:** Project owner + adr session (FRE-1362)
 **Tags:** llm-client, dispatch, litellm, egress, concurrency, configuration
@@ -570,3 +570,13 @@ deployed — not at merge of this ADR.
 local dispatch path's `extra_body` block never reaches the server. Egress mechanism, big-bang
 cutover, max_tokens coherence and the Critical designation of the adaptive-budget follow-up all
 settled in owner discussion before drafting.
+
+### 2026-09-03 - Accepted
+**Changed By:** master (owner acceptance, relayed in session)
+**Reason:** Owner accepted 2026-09-03, after the implementation chain (FRE-1364 through FRE-1369)
+was approved and fast-tracked. Two acceptance-gated clauses written against this moment now take
+effect without further edits to their own documents: ADR-0031's Alternative C closes, and
+ADR-0121's "Vocabulary by dispatch path" is superseded by vocabulary-by-placement. Each carries a
+dated note of its own recording that the gate is met. The ADR's nine acceptance criteria remain
+open and adjudicate on FRE-1362 after the chain lands and deploys — acceptance settles the
+decision, not its delivery.

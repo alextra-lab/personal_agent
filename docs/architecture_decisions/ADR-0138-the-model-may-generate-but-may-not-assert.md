@@ -223,7 +223,7 @@ carrying a silent exception.
 
 > **HALF WITHDRAWN 2026-09-02 (FRE-1357).** D2 has two axes and this note amended both. **The
 > narrowing stands** — ADR-0098 Amendment A §A6's provenance-terminus rule on the **authorship** axis
-> is live, is being implemented under FRE-1347, and nothing here disturbs it. **The widening is
+> is live and implemented (FRE-1347), and nothing here disturbs it. **The widening is
 > withdrawn** — ADR-0139 D2/D3/D7 on the **invocation** axis, under
 > [ADR-0140](ADR-0140-the-model-is-not-a-security-boundary.md): arbitrary-code tools keep the
 > categorical exclusion stated in the third bullet above, there is no `MODEL_AUTHORED_CODE_TOOLS`
@@ -249,10 +249,15 @@ where each rule lives.
 **The narrowing — ADR-0098 Amendment A §A6.** Entitlement follows the **terminus of the provenance
 chain**. A typed memory retrieval — item 1 of the admissible set above — whose chain terminates at an
 agent-authored turn or at `provenance_state = 'none'` earns `AGENT_DERIVED` and is **not** admissible
-as a citation. Aggregation is most-restrictive: one `none`-terminus item drops the whole recall.
-D2 previously treated a typed memory retrieval as admissible with reachability vacuous for
-referent-less items; that is no longer sufficient on its own. Provenance is **not** an input to
-`verify_turn`'s containment — it decides only the entitlement the recall registers with.
+as a citation. Aggregation is most-restrictive: one `AGENT_DERIVED`-terminus item drops the whole
+recall. Entities carry no `asserted_by` (that axis is Claim/Stance-only), so a `provenance_state =
+'none'` entity is not automatically `AGENT_DERIVED`: `create_entity`'s existing `extractor_model`
+parameter (`None` for the gateway's `store_fact` — user-provided, never extraction) distinguishes
+that terminus row from an agent-authored one, so a `none`-terminus, `extractor_model = None` entity
+earns `USER_STATED` instead. D2 previously treated a typed memory retrieval as admissible with
+reachability vacuous for referent-less items; that is no longer sufficient on its own. Provenance is
+**not** an input to `verify_turn`'s containment — it decides only the entitlement the recall
+registers with.
 
 **The widening — ADR-0139 D2, D3 and D7.** Admissibility is decided on the **result**, not on the
 pipe it arrived through, so the categorical exclusion of arbitrary-code tools in the third bullet

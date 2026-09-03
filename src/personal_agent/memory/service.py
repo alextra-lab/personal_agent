@@ -394,7 +394,7 @@ def _build_structural_arm_query(
     return cypher, params
 
 
-def _entity_node_from_record(node: Any) -> EntityNode:
+def _entity_node_from_record(node: Any, source_referents: list[str] | None = None) -> EntityNode:
     """Build an EntityNode from a Neo4j entity node (shared parse).
 
     Handles the heterogeneous storage of the temporal fields (Neo4j
@@ -402,8 +402,17 @@ def _entity_node_from_record(node: Any) -> EntityNode:
     ``properties`` field. Extracted so the broad recall paths and the
     structural arm (FRE-707) parse entities identically.
 
+    ``provenance_state`` and ``extractor_model`` (ADR-0098 Amendment A6 / FRE-1347) are flat
+    properties already stamped on ``node`` itself, so every caller gets them for free with no
+    Cypher change. ``source_referents`` is not a node property (it lives on the joined
+    ``:Source`` nodes reached via ``SOURCED_FROM``) — callers that resolve it pass it in
+    explicitly; callers that don't leave it empty, which is safe (entitlement only reads
+    ``provenance_state``; ``source_referents`` is purely for surfacing the real address).
+
     Args:
         node: A Neo4j node (mapping of entity properties) from a query record.
+        source_referents: This entity's distinct ``:Source.referent`` values, when the
+            caller's query joined them. Defaults to empty.
 
     Returns:
         The parsed EntityNode. ``entity_type`` defaults to ``"Unknown"`` and
@@ -441,6 +450,9 @@ def _entity_node_from_record(node: Any) -> EntityNode:
         last_seen=last_seen,
         mention_count=node.get("mention_count", 0),
         properties=properties,
+        provenance_state=node.get("provenance_state") or "none",
+        source_referents=source_referents or [],
+        extractor_model=node.get("extractor_model"),
     )
 
 
@@ -4487,6 +4499,62 @@ class MemoryService:
                     accessed_entity_ids.extend(conversation.key_entities or [])
                 accessed_entity_ids = list(dict.fromkeys(accessed_entity_ids))
 
+                # ADR-0098 Amendment A6 / FRE-1347: resolve the actual :Entity nodes an
+                # entity-targeted recall matched, with their provenance terminus. Before this,
+                # the entity-match path returned only Turn.key_entities -- bare names copied
+                # onto the Turn at write time, with no link at all to the :Entity node's own
+                # SOURCED_FROM provenance. That disconnect is the exact FRE-1338 shape: a
+                # citable-looking result carrying no checkable address. Separate query (not
+                # folded into the base_query above) because entity-name/type matching there is
+                # per-Turn (DISTINCT c), while this is per-Entity -- folding them would either
+                # multiply Turn rows per matching entity or require restructuring the existing,
+                # already-tested recall/ranking Cypher above.
+                resolved_entities: list[EntityNode] = []
+                if entity_recall:
+                    entity_vis_frag, entity_vis_params = _build_visibility_filter(
+                        "e", effective_user_id, effective_authenticated
+                    )
+                    entity_predicate = (
+                        "e.name IN $entity_names"
+                        if query.entity_names
+                        else "e.entity_type IN $entity_types"
+                    )
+                    entity_provenance_q = f"""
+                        MATCH (e:Entity)
+                        WHERE ({entity_predicate}) AND {entity_vis_frag}
+                        OPTIONAL MATCH (e)-[:SOURCED_FROM]->(src:Source)
+                        WITH e, collect(DISTINCT src.referent) AS refs
+                        RETURN e, refs
+                        LIMIT $limit
+                    """
+                    entity_provenance_params: dict[str, Any] = {
+                        "limit": query.limit,
+                        **entity_vis_params,
+                    }
+                    if query.entity_names:
+                        entity_provenance_params["entity_names"] = query.entity_names
+                    if query.entity_types:
+                        entity_provenance_params["entity_types"] = query.entity_types
+                    try:
+                        entity_result = await session.run(
+                            entity_provenance_q, **entity_provenance_params
+                        )
+                        for row in await entity_result.values():
+                            node, refs = row[0], row[1]
+                            if node is not None:
+                                resolved_entities.append(
+                                    _entity_node_from_record(
+                                        node, source_referents=[r for r in (refs or []) if r]
+                                    )
+                                )
+                    except Exception as entity_prov_exc:
+                        log.warning(
+                            "entity_provenance_resolution_failed",
+                            error=str(entity_prov_exc),
+                            trace_id=trace_id,
+                            session_id=session_id,
+                        )
+
                 relationship_element_ids = (
                     await self._collect_discusses_relationship_element_ids_for_memory_query(
                         session, conversations, accessed_entity_ids
@@ -4511,6 +4579,7 @@ class MemoryService:
 
                 result = MemoryQueryResult(
                     conversations=conversations,
+                    entities=resolved_entities,
                     relevance_scores=relevance_scores,
                 )
 
@@ -5788,10 +5857,15 @@ class MemoryService:
                             WHERE {turn_vis_frag}
                               {entity_type_clause}
                               AND (t.timestamp >= $cutoff OR e.name IN $relevant_entity_names)
-                            WITH e, count(t) AS mentions,
+                            OPTIONAL MATCH (e)-[:SOURCED_FROM]->(src:Source)
+                            WITH e, count(DISTINCT t) AS mentions,
+                                 collect(DISTINCT src.referent) AS source_referents,
                                  coalesce($entity_scores[e.name], 0.0) AS escore
                             RETURN e.name AS name, e.entity_type AS type,
-                                   e.description AS description, mentions
+                                   e.description AS description, mentions,
+                                   e.provenance_state AS provenance_state,
+                                   e.extractor_model AS extractor_model,
+                                   source_referents
                             ORDER BY escore DESC, mentions DESC LIMIT $limit
                         """
                         params: dict[str, Any] = {
@@ -5810,9 +5884,13 @@ class MemoryService:
                             WHERE {turn_vis_frag}
                               AND e.entity_type IN $entity_types
                               AND t.timestamp >= $cutoff
+                            OPTIONAL MATCH (e)-[:SOURCED_FROM]->(src:Source)
                             RETURN e.name as name, e.entity_type as type,
                                    e.description as description,
-                                   count(t) as mentions
+                                   count(DISTINCT t) as mentions,
+                                   e.provenance_state AS provenance_state,
+                                   e.extractor_model AS extractor_model,
+                                   collect(DISTINCT src.referent) AS source_referents
                             ORDER BY mentions DESC LIMIT $limit
                         """
                         r = await db_session.run(
@@ -5827,9 +5905,13 @@ class MemoryService:
                             MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
                             WHERE {turn_vis_frag}
                               AND t.timestamp >= $cutoff
+                            OPTIONAL MATCH (e)-[:SOURCED_FROM]->(src:Source)
                             RETURN e.name as name, e.entity_type as type,
                                    e.description as description,
-                                   count(t) as mentions
+                                   count(DISTINCT t) as mentions,
+                                   e.provenance_state AS provenance_state,
+                                   e.extractor_model AS extractor_model,
+                                   collect(DISTINCT src.referent) AS source_referents
                             ORDER BY mentions DESC LIMIT $limit
                         """
                         r = await db_session.run(entity_q, cutoff=cutoff, limit=limit, **vis_params)

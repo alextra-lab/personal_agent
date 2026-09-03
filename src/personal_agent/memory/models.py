@@ -255,6 +255,18 @@ class EntityNode(BaseModel):
     properties: dict[str, Any] = Field(default_factory=dict)
     # FRE-229: visibility scope
     visibility: str = Visibility.PUBLIC
+    # ADR-0098 Amendment A6 / FRE-1347: the terminus of this entity's provenance chain.
+    # 'provenanced' means a SOURCED_FROM edge reaches an external :Source; 'none' means it
+    # doesn't (default -- the safe, fail-closed value when a caller hasn't threaded the
+    # property through its Cypher).
+    provenance_state: str = "none"
+    # The distinct referents (URLs/document ids) of every :Source this entity is SOURCED_FROM,
+    # when provenance_state == 'provenanced'. Empty when not threaded or not provenanced.
+    source_referents: list[str] = Field(default_factory=list)
+    # None on a well-formed read distinguishes gateway store_fact (user-provided, no
+    # extraction) from LLM extraction (a model identifier) -- ADR-0098 A6's owner-statement
+    # terminus for entities, mirrored from create_entity's existing extractor_model param.
+    extractor_model: str | None = None
 
 
 class MemoryQuery(BaseModel):

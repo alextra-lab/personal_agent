@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from personal_agent.memory.models import MemoryQueryResult, TurnNode
+from personal_agent.memory.models import EntityNode, MemoryQueryResult, TurnNode
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.memory_search import (
     _extract_keywords,
@@ -116,6 +116,45 @@ async def test_search_memory_executor_entity_path_returns_matched_turns() -> Non
     assert len(result["matched_turns"]) == 1
     assert result["matched_turns"][0]["turn_id"] == "turn-1"
     assert "Athens" in result["matched_turns"][0]["user_message"]
+
+
+@pytest.mark.asyncio
+async def test_search_memory_executor_entity_path_returns_entities_with_provenance() -> None:
+    """FRE-1347: the entity-match path surfaces the matched entity's own provenance terminus.
+
+    Not just the bare Turn.key_entities name -- this is what closes the FRE-1338 leak.
+    """
+    entity = EntityNode(
+        entity_id="SafeCart",
+        name="SafeCart",
+        entity_type="Organization",
+        first_seen=datetime.now(timezone.utc),
+        last_seen=datetime.now(timezone.utc),
+        mention_count=2,
+        provenance_state="provenanced",
+        source_referents=["https://safecart.example/about"],
+        extractor_model="qwen3-8b",
+    )
+    query_result = MemoryQueryResult(conversations=[], entities=[entity])
+
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_claims = AsyncMock(return_value=[])
+    mock_service.query_memory = AsyncMock(return_value=query_result)
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        result = await search_memory_executor(
+            query_text="SafeCart",
+            entity_names=["SafeCart"],
+        )
+
+    assert result["entities_found"] == 1
+    assert len(result["entities"]) == 1
+    returned = result["entities"][0]
+    assert returned["name"] == "SafeCart"
+    assert returned["provenance_state"] == "provenanced"
+    assert returned["source_referents"] == ["https://safecart.example/about"]
+    assert returned["extractor_model"] == "qwen3-8b"
 
 
 @pytest.mark.asyncio

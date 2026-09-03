@@ -6,6 +6,9 @@ mocked-driver tests) is carried through the exact top-level JSON shape
 tools/memory_search.py's search_memory_executor emits, into the real registry and verifier —
 proving the whole pull path denies an agent-derived Claim rather than registering it as the
 most-trusted EXTERNAL tier (the bug this ticket closes).
+
+FRE-1347 extends the same proof to search_memory's ``entities`` (ADR-0098 Amendment A6):
+entitlement follows the terminus of the provenance chain, not merely Claim authorship.
 """
 
 from __future__ import annotations
@@ -35,17 +38,43 @@ def _claim_row(claim_id: str, content: str, asserted_by: str | None) -> dict[str
     }
 
 
-def _search_memory_output(claims: list[dict[str, object]]) -> str:
+def _search_memory_output(
+    claims: list[dict[str, object]], entities: list[dict[str, object]] | None = None
+) -> str:
     """The exact top-level shape search_memory_executor emits (tools/memory_search.py)."""
-    return json.dumps(
-        {
-            "matched_turns": [],
-            "entities_found": 0,
-            "total_turns": 0,
-            "query_path": "entity_match",
-            "claims": claims,
-        }
-    )
+    output: dict[str, object] = {
+        "matched_turns": [],
+        "entities_found": len(entities or []),
+        "total_turns": 0,
+        "query_path": "entity_match",
+        "claims": claims,
+    }
+    if entities is not None:
+        output["entities"] = entities
+    return json.dumps(output)
+
+
+def _entity_row(
+    name: str, *, provenance_state: str, extractor_model: str | None = "qwen3-8b"
+) -> dict[str, object]:
+    """Stand in for the entity dict tools/memory_search.py now emits (FRE-1347).
+
+    ``extractor_model`` distinguishes an agent-extracted entity (a model identifier,
+    the default here) from one written via the gateway's ``store_fact`` path
+    (``None`` -- user-provided, ADR-0098 Amendment A6's "a statement the owner made"
+    terminus row for entities, which carry no ``asserted_by``).
+    """
+    return {
+        "name": name,
+        "type": "Organization",
+        "description": None,
+        "mentions": 1,
+        "provenance_state": provenance_state,
+        "source_referents": ["https://example.com/vendor"]
+        if provenance_state == "provenanced"
+        else [],
+        "extractor_model": extractor_model,
+    }
 
 
 def _non_exempt(output: str, text: str) -> SpanExtraction:
@@ -122,3 +151,118 @@ def test_legacy_claim_with_no_authorship_property_is_refused() -> None:
 
     assert entitlement is Entitlement.AGENT_DERIVED
     assert outcome is CheckOutcome.SOURCE_NOT_ENTITLED
+
+
+# ---------------------------------------------------------------------------
+# FRE-1347 — entities: entitlement follows the terminus (ADR-0098 Amendment A6)
+# ---------------------------------------------------------------------------
+
+
+def _run_entity_chain(
+    *, mention_text: str, entities: list[dict[str, object]]
+) -> tuple[Entitlement, CheckOutcome]:
+    """search_memory entities-shaped output -> register_tool_result -> verify_turn."""
+    content = _search_memory_output([], entities=entities)
+
+    registry = SourceRegistry(turn_id=TURN)
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": mention_text[:20]},
+        content=content,
+    )
+    assert registration.source is not None
+    source = registration.source
+
+    output = f"{mention_text} [{source.identifier}]."
+    verification = verify_turn(_non_exempt(output, mention_text), parse_citations(output), registry)
+
+    return source.entitlement, verification.spans[0].outcome
+
+
+def test_entity_terminating_at_fetched_page_is_external_and_citable() -> None:
+    """AC-1, scenario 1: a SOURCED_FROM-linked entity's chain terminates externally."""
+    entitlement, outcome = _run_entity_chain(
+        mention_text="SafeCart",
+        entities=[_entity_row("SafeCart", provenance_state="provenanced")],
+    )
+
+    assert entitlement is Entitlement.EXTERNAL
+    assert outcome is CheckOutcome.PASSED
+
+
+def test_entity_written_via_store_fact_is_user_stated() -> None:
+    """AC-1, scenario 2 (entity path): ADR-0098 A6's owner-statement terminus row.
+
+    Entities carry no ``asserted_by`` (that axis is Claim/Stance-only), but
+    ``create_entity``'s ``extractor_model=None`` already distinguishes the gateway's
+    ``store_fact`` path (user-provided, no extraction) from LLM extraction
+    (``memory/service.py:2084-2117``) -- reused here rather than inventing a new field.
+    """
+    entitlement, outcome = _run_entity_chain(
+        mention_text="EaseCert",
+        entities=[_entity_row("EaseCert", provenance_state="none", extractor_model=None)],
+    )
+
+    assert entitlement is Entitlement.USER_STATED
+    assert outcome is CheckOutcome.PASSED
+
+
+def test_entity_terminating_at_agent_authored_turn_is_refused() -> None:
+    """AC-1 scenario 3 + AC-2: an entity with no external referent is not citable.
+
+    This is the FRE-1338 regression proof: before this fix, an entity-only recall
+    (no Claims) fell to the "no claims -> EXTERNAL" branch unconditionally, so a
+    bare, agent-extracted, unprovenanced entity name would have passed verification
+    at the most-trusted tier.
+    """
+    entitlement, outcome = _run_entity_chain(
+        mention_text="Consolidated Widgets",
+        entities=[
+            _entity_row("Consolidated Widgets", provenance_state="none", extractor_model="qwen3-8b")
+        ],
+    )
+
+    assert entitlement is Entitlement.AGENT_DERIVED
+    assert outcome is CheckOutcome.SOURCE_NOT_ENTITLED
+
+
+def test_mixed_recall_inherits_least_entitled_entity() -> None:
+    """AC-1 scenario 4: one provenanced entity + one none-terminus entity in the same call.
+
+    Both entities register under the same call-level entitlement (FRE-1280: one source
+    per call), so the whole call must inherit the *worse* of the two -- never the better.
+    """
+    entitlement, outcome = _run_entity_chain(
+        mention_text="SafeCart",
+        entities=[
+            _entity_row("SafeCart", provenance_state="provenanced"),
+            _entity_row("Consolidated Widgets", provenance_state="none"),
+        ],
+    )
+
+    assert entitlement is Entitlement.AGENT_DERIVED
+    assert outcome is CheckOutcome.SOURCE_NOT_ENTITLED
+
+
+def test_malformed_entities_shape_denies() -> None:
+    """A non-list ``entities`` value denies rather than falling through to EXTERNAL."""
+    content = json.dumps(
+        {
+            "matched_turns": [],
+            "entities_found": 0,
+            "total_turns": 0,
+            "query_path": "entity_match",
+            "claims": [],
+            "entities": {"not": "a list"},
+        }
+    )
+
+    registry = SourceRegistry(turn_id=TURN)
+    registration = registry.register_tool_result(
+        tool_name="search_memory",
+        arguments={"query_text": "whatever"},
+        content=content,
+    )
+
+    assert registration.source is not None
+    assert registration.source.entitlement is Entitlement.AGENT_DERIVED

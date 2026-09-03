@@ -493,31 +493,70 @@ key carries the same authorship gap, so both feed :func:`_search_memory_entitlem
 """
 
 
+def _entity_entitlement_of(item: Mapping[str, object]) -> Entitlement:
+    """Classify one recalled entity by its provenance terminus (ADR-0098 Amendment A6).
+
+    Entities carry no ``asserted_by`` — co-authorship is a Claim/Stance-only axis — so the
+    terminus is read off two existing, unrelated write-side signals instead:
+
+    - ``provenance_state`` (ADR-0098 Amendment A4b): ``'provenanced'`` means the chain reaches
+      an external ``:Source`` (A1's terminus) and earns :attr:`Entitlement.EXTERNAL`.
+    - ``extractor_model`` (:meth:`~personal_agent.memory.service.MemoryService.create_entity`):
+      ``None`` on a well-formed item (key present, value ``null``) means the entity was written
+      via the gateway's ``store_fact`` path — user-provided, never extraction — which is A6's
+      "a statement the owner made" terminus row for entities. A non-``None`` value names the
+      extracting model, i.e. an agent-authored terminus.
+
+    Anything else — a missing ``provenance_state``, a missing ``extractor_model`` key entirely
+    (as opposed to a present ``null``), or an ``extractor_model`` naming a model — denies to
+    :attr:`Entitlement.AGENT_DERIVED`, the same default-deny direction :func:`_entitlement_of`
+    already documents for Claims lacking ``asserted_by``.
+
+    Args:
+        item: One entity dict from ``search_memory``'s registered content.
+
+    Returns:
+        The entitlement this entity's declared provenance supports.
+    """
+    if item.get("provenance_state") == "provenanced":
+        return Entitlement.EXTERNAL
+    if "extractor_model" in item and item["extractor_model"] is None:
+        return Entitlement.USER_STATED
+    return Entitlement.AGENT_DERIVED
+
+
 def _search_memory_entitlement(content: str) -> Entitlement:
-    """Classify one ``search_memory`` tool result by its Claims' own authorship (FRE-1302).
+    """Classify one ``search_memory`` tool result by its Claims' and entities' terminus.
+
+    FRE-1302 (Claims) + FRE-1347 (entities, ADR-0098 Amendment A6).
 
     ``search_memory`` registers as **one** source per call (FRE-1280): matched turns,
     entities, and Claims share a single identifier and a single entitlement
     (``orchestrator/executor.py`` calls :meth:`SourceRegistry.register_tool_result` once per
-    dispatched tool result). There is no per-item entitlement in this architecture, so a call
-    is only as entitled as its least-entitled Claim — the aggregate is the most restrictive
-    entitlement among every Claim row actually present, reusing :func:`_entitlement_of`
-    (the same function :meth:`SourceRegistry.register_memory_item` calls, so "user-asserted"
-    has exactly one definition) rather than re-deriving the rule here.
+    dispatched tool result). There is no per-item entitlement in this architecture (that
+    remains FRE-1302's deferred architecture), so a call is only as entitled as its
+    least-entitled item — the aggregate is the most restrictive entitlement among every Claim
+    row (:func:`_entitlement_of`) and every entity (:func:`_entity_entitlement_of`) actually
+    present, combined into one ordering: any :attr:`Entitlement.AGENT_DERIVED` present forces
+    the whole call to :attr:`Entitlement.AGENT_DERIVED`; else any
+    :attr:`Entitlement.USER_STATED` forces :attr:`Entitlement.USER_STATED`; else
+    :attr:`Entitlement.EXTERNAL`.
 
-    Turns and entities carry no ``asserted_by`` at all today, so a call returning none of
-    ``claims``/``claims_history`` keeps :attr:`Entitlement.EXTERNAL` — that gap is real but is
-    this fix's sibling work (FRE-1299 covered the push path only), not this one's job.
+    A call whose ``matched_turns`` alone carries content (no Claims, no entities resolved)
+    still keeps :attr:`Entitlement.EXTERNAL` — a narrower, turns-only residue of the original
+    gap, and explicitly out of this fix's scope: closing it needs per-item entitlement, since
+    a matched turn's own ``summary``/``key_entities`` fields are agent-authored while its
+    ``user_message`` is not, and this function has no per-item admission to attach that to.
 
     Fails to :attr:`Entitlement.AGENT_DERIVED`, never to :attr:`Entitlement.EXTERNAL`, on any
     shape this function does not fully understand — unparsable content, a non-object top
-    level, a claim-bearing key holding something other than a list, or a list member that
-    isn't itself a mapping. ``EXTERNAL`` is an *admitted* tier (:func:`verify_turn` rejects
-    only ``AGENT_DERIVED``), so falling back to it on a malformed shape would readmit
+    level, a claim- or entity-bearing key holding something other than a list, or a list
+    member that isn't itself a mapping. ``EXTERNAL`` is an *admitted* tier (:func:`verify_turn`
+    rejects only ``AGENT_DERIVED``), so falling back to it on a malformed shape would readmit
     anything this parse couldn't account for — the same default-deny direction
     :func:`_entitlement_of` already documents for absent authorship. ``EXTERNAL`` is returned
-    only when the content is a well-formed object whose claim-bearing keys are absent or hold
-    an empty list.
+    only when the content is a well-formed object whose claim- and entity-bearing keys are
+    absent or hold an empty list.
 
     Args:
         content: The tool result exactly as registered — post argument-echo-strip, the same
@@ -525,7 +564,7 @@ def _search_memory_entitlement(content: str) -> Entitlement:
             D3(c) containment reason about identical bytes.
 
     Returns:
-        The entitlement this call's Claim rows support.
+        The entitlement this call's Claim rows and entities jointly support.
     """
     try:
         parsed = json.loads(content)
@@ -543,15 +582,31 @@ def _search_memory_entitlement(content: str) -> Entitlement:
             return Entitlement.AGENT_DERIVED
         claims.extend(value)
 
-    if not claims:
+    entities: list[object] = []
+    if "entities" in parsed:
+        value = parsed["entities"]
+        if not isinstance(value, list):
+            return Entitlement.AGENT_DERIVED
+        entities = value
+
+    if not claims and not entities:
         return Entitlement.EXTERNAL
 
-    if all(
-        isinstance(claim, Mapping) and _entitlement_of(claim) is Entitlement.USER_STATED
-        for claim in claims
-    ):
+    if any(not isinstance(claim, Mapping) for claim in claims):
+        return Entitlement.AGENT_DERIVED
+    if any(not isinstance(entity, Mapping) for entity in entities):
+        return Entitlement.AGENT_DERIVED
+
+    item_entitlements = [_entitlement_of(claim) for claim in claims if isinstance(claim, Mapping)]
+    item_entitlements.extend(
+        _entity_entitlement_of(entity) for entity in entities if isinstance(entity, Mapping)
+    )
+
+    if any(ent is Entitlement.AGENT_DERIVED for ent in item_entitlements):
+        return Entitlement.AGENT_DERIVED
+    if any(ent is Entitlement.USER_STATED for ent in item_entitlements):
         return Entitlement.USER_STATED
-    return Entitlement.AGENT_DERIVED
+    return Entitlement.EXTERNAL
 
 
 _AGENT_AUTHORED_TURN_FIELDS: frozenset[str] = frozenset(

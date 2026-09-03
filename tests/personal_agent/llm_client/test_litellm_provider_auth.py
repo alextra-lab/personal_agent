@@ -124,8 +124,17 @@ async def test_declared_auth_env_credential_resolves_in_dispatch_args() -> None:
 
     The declared credential is resolved and placed on the outbound call —
     asserted from the actual dispatch arguments litellm.acompletion receives.
+
+    Uses ``ovhcloud`` (real, pre-classified for the ADR-0141 D2 egress-guard
+    route — see ``test_litellm_client_egress_guard.py``) rather than a wholly
+    invented provider name: since that ticket, credential resolution staying
+    catalog-driven (asserted here) is necessary but no longer sufficient for
+    a provider to dispatch — it must also be classified into an egress-guard
+    route mechanism, which a fixture-only ``ProviderDefinition`` cannot grant
+    (see ``test_new_provider_unnamed_in_client_source_resolves_credential``
+    below for the now-unclassified case).
     """
-    provider_name = "acme_cloud"
+    provider_name = "ovhcloud"
     catalog = _fixture_config(
         provider_name,
         ProviderDefinition(
@@ -148,16 +157,27 @@ async def test_declared_auth_env_credential_resolves_in_dispatch_args() -> None:
 
 @pytest.mark.asyncio
 async def test_new_provider_unnamed_in_client_source_resolves_credential() -> None:
-    """AC2: adding a provider to the catalog requires no client edit.
+    """AC2: adding a provider to the catalog requires no client edit — for auth.
 
     ``brand_new_vendor`` is a name this test invents — it does not, and must
     not, appear anywhere in litellm_client.py. The credential still resolves
-    purely from the catalog lookup, proving the client has no special-casing
-    to defeat.
+    purely from the catalog lookup, proving the client has no per-provider
+    special-casing for auth to defeat.
+
+    Amended by ADR-0141 D2 (FRE-1364): auth/base_url resolution staying
+    catalog-driven is necessary but no longer sufficient for dispatch — a
+    provider must also be classified into an egress-guard route mechanism
+    (a small, explicit, security-reviewed allowlist; fail-closed otherwise,
+    "that is a security regression and is not accepted" per the ADR). A
+    wholly novel provider like this one is therefore expected to fail at the
+    *guard-classification* step specifically, proving auth resolved
+    correctly and it is the newer, deliberate check that refuses dispatch —
+    not a credential-resolution regression.
     """
     import inspect
 
     from personal_agent.llm_client import litellm_client as litellm_client_module
+    from personal_agent.llm_client.types import LLMClientError
 
     provider_name = "brand_new_vendor"
     assert provider_name not in inspect.getsource(litellm_client_module), (
@@ -176,12 +196,17 @@ async def test_new_provider_unnamed_in_client_source_resolves_credential() -> No
         brand_new_vendor_key="sk-bnv-123", anthropic_api_key=None, openai_api_key=None
     )
 
-    mock_acompletion = await _call_respond(
-        provider=provider_name, catalog=catalog, settings_mock=settings_mock
-    )
-
-    dispatch_kwargs = mock_acompletion.call_args.kwargs
-    assert dispatch_kwargs["api_key"] == "sk-bnv-123"
+    capture: dict[str, object] = {}
+    # The message itself is the proof: "egress-guard route mechanism" only
+    # appears in _build_guarded_client's failure, never in the auth_env /
+    # catalog-declaration failures raised earlier in respond() — so a match
+    # here means auth resolution ran and succeeded before this later,
+    # deliberate check refused the (still-unclassified) provider.
+    with pytest.raises(LLMClientError, match="egress-guard route mechanism"):
+        await _call_respond(
+            provider=provider_name, catalog=catalog, settings_mock=settings_mock, capture=capture
+        )
+    capture["acompletion"].assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -245,8 +270,10 @@ async def test_declared_base_url_used_as_outbound_dispatch_base() -> None:
     """AC4: a provider's declared base_url is used as the outbound base.
 
     Used for chat dispatch — asserted from the actual dispatch arguments.
+    Uses ``ovhcloud`` (see the AC1 test above for why a wholly novel provider
+    name no longer reaches a full dispatch, post ADR-0141 D2).
     """
-    provider_name = "acme_cloud"
+    provider_name = "ovhcloud"
     custom_base = "https://acme-cloud.example.net/v1"
     catalog = _fixture_config(
         provider_name,

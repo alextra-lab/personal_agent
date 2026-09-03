@@ -18,8 +18,11 @@ import time
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+import httpx
 import litellm
 import structlog
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from openai import AsyncOpenAI
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
 
 from personal_agent.llm_client.prompt_identity import (
@@ -30,16 +33,112 @@ from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
 )
+from personal_agent.security import (
+    check_egress_or_raise,
+    create_guarded_http_client,
+    get_domain_guard,
+    guard_event_hooks,
+)
 from personal_agent.telemetry.spans import model_call_span
 
 if TYPE_CHECKING:
+    from personal_agent.llm_client.models import ProviderDefinition
     from personal_agent.llm_client.types import LLMResponse, ModelRole, ToolCall
+    from personal_agent.security import DomainGuard
     from personal_agent.telemetry.trace import TraceContext
 
 log = structlog.get_logger(__name__)
 
 # Suppress litellm verbose startup logging
 litellm.suppress_debug_info = True
+
+# ── Egress guard route classification (ADR-0141 D2.1/D2.2) ────────────────
+# Verified against litellm 1.98.0 / openai SDK: which providers dispatch
+# through which transport mechanism decides which client= shape the guard
+# must be injected as. A provider in neither set fails closed in
+# _build_guarded_client rather than dispatching unguarded.
+_OPENAI_SDK_ROUTE_PROVIDERS = frozenset({"openai"})
+# ovhcloud's OVHCloudChatConfig rides litellm's generic base_llm_http_handler,
+# which is AsyncHTTPHandler-based like Anthropic's own dedicated handler — not
+# a third mechanism.
+_ASYNC_HTTP_HANDLER_ROUTE_PROVIDERS = frozenset({"anthropic", "ovhcloud"})
+# Layer-1 fallback for a provider with no catalog-declared base_url override
+# (anthropic, openai) — host-only; DomainGuard.check_url only extracts the
+# hostname, so this need not match litellm's own undocumented default URL
+# byte-for-byte, and is never fed into litellm_kwargs["api_base"].
+_KNOWN_DEFAULT_HOSTS: dict[str, str] = {
+    "anthropic": "https://api.anthropic.com",
+    "openai": "https://api.openai.com",
+}
+
+# Layer-2 client caches. Cache only what litellm never mutates in place.
+# The OpenAI-SDK route caches the guarded httpx.AsyncClient (the connection
+# pool) and builds a fresh AsyncOpenAI wrapper per call, because litellm
+# mutates .max_retries/.organization on a passed-in AsyncOpenAI object on
+# every call (openai.py::_set_dynamic_params_on_client) — sharing that
+# object across concurrent calls races. AsyncHTTPHandler has no equivalent
+# per-call mutation (verified against litellm 1.98.0), so it caches whole,
+# and is provider-independent (carries no auth/base_url state) so anthropic
+# and ovhcloud share one entry per guard. Keyed including id(guard) — not
+# just provider/endpoint — so a test constructing a fresh DomainGuard per
+# test never receives a stale client cached against a different guard; in
+# production the guard is the process singleton, so the cache is fully
+# effective there.
+_guarded_httpx_clients: dict[tuple[str | None, int], httpx.AsyncClient] = {}
+_guarded_async_http_handlers: dict[int, AsyncHTTPHandler] = {}
+
+
+def _build_guarded_client(
+    provider: str,
+    provider_def: ProviderDefinition,
+    api_key: str | None,
+    guard: DomainGuard,
+) -> AsyncOpenAI | AsyncHTTPHandler:
+    """Build the layer-2 guarded client object for litellm's ``client=`` kwarg.
+
+    Args:
+        provider: The catalog provider name (litellm dispatch prefix).
+        provider_def: The provider's catalog entry (for ``base_url``).
+        api_key: Resolved credential, or None.
+        guard: The DomainGuard to inject.
+
+    Returns:
+        A guarded ``AsyncOpenAI`` (OpenAI-SDK route) or ``AsyncHTTPHandler``
+        (AsyncHTTPHandler route) instance.
+
+    Raises:
+        LLMClientError: If ``provider`` is not classified into either route
+            mechanism — fails closed rather than dispatching unguarded
+            (ADR-0141 D2: "that is a security regression and is not
+            accepted").
+    """
+    from personal_agent.llm_client.types import LLMClientError
+
+    if provider in _OPENAI_SDK_ROUTE_PROVIDERS:
+        cache_key = (provider_def.base_url, id(guard))
+        pooled = _guarded_httpx_clients.get(cache_key)
+        if pooled is None:
+            pooled = create_guarded_http_client(guard=guard)
+            _guarded_httpx_clients[cache_key] = pooled
+        return AsyncOpenAI(
+            api_key=api_key or "unused",
+            base_url=provider_def.base_url,
+            http_client=pooled,
+        )
+
+    if provider in _ASYNC_HTTP_HANDLER_ROUTE_PROVIDERS:
+        handler = _guarded_async_http_handlers.get(id(guard))
+        if handler is None:
+            handler = AsyncHTTPHandler(event_hooks=guard_event_hooks(guard=guard))
+            _guarded_async_http_handlers[id(guard)] = handler
+        return handler
+
+    raise LLMClientError(
+        f"provider {provider!r} is not classified into an egress-guard route "
+        "mechanism (ADR-0141 D2) — refusing to dispatch unguarded. Add it to "
+        "_OPENAI_SDK_ROUTE_PROVIDERS or _ASYNC_HTTP_HANDLER_ROUTE_PROVIDERS "
+        "in litellm_client.py once its litellm route mechanism is verified."
+    )
 
 
 def _mark_message_cache_control(message: dict[str, Any]) -> bool:
@@ -287,6 +386,7 @@ class LiteLLMClient:
         *,
         budget_role: str,
         reasoning_effort: str | None = None,
+        egress_guard: DomainGuard | None = None,
     ) -> None:
         """Initialize LiteLLMClient with model and provider configuration.
 
@@ -316,12 +416,17 @@ class LiteLLMClient:
                 it came through. Reconciling the three to *zero* defaults makes
                 the omission a ``TypeError`` at construction instead of a
                 plausible wrong answer at billing time.
+            egress_guard: DomainGuard to inject for the egress guard
+                (ADR-0141 D2). Test seam — ``None`` (the production default)
+                resolves the process singleton (``get_domain_guard()``) at
+                call time.
         """
         self.model_id = model_id
         self.provider = provider
         self.max_tokens = max_tokens
         self.budget_role = budget_role
         self.reasoning_effort = reasoning_effort
+        self._egress_guard = egress_guard
         # LiteLLM model string: "provider/model_id"
         self._litellm_model = f"{provider}/{model_id}"
 
@@ -448,6 +553,23 @@ class LiteLLMClient:
                 "a known auth policy for it."
             )
 
+        # ── Egress guard, layer 1 (ADR-0141 D2.1) ─────────────────────────
+        # Route-independent pre-dispatch check, owns the exception type: some
+        # litellm provider routes wrap a hook exception without `from e`
+        # (verified for the Anthropic handler against litellm 1.98.0), making
+        # the cause chain unreliable, so the type guarantee never depends on
+        # unwrapping. Checked against a declared base_url when the catalog
+        # overrides one, else a known default host — never fed into
+        # litellm_kwargs["api_base"] (would risk a byte-mismatch against
+        # litellm's own undocumented per-provider default URL and silently
+        # break real dispatch). Layer 2 below still blocks the connection
+        # regardless of which host litellm actually resolves to.
+
+        resolved_guard = self._egress_guard or get_domain_guard()
+        _egress_check_url = provider_def.base_url or _KNOWN_DEFAULT_HOSTS.get(self.provider)
+        if _egress_check_url is not None:
+            check_egress_or_raise(_egress_check_url, guard=resolved_guard)
+
         api_key: str | None = None
         if provider_def.auth_env:
             resolved_key = getattr(_settings, provider_def.auth_env, None)
@@ -467,6 +589,21 @@ class LiteLLMClient:
         }
         if api_key:
             litellm_kwargs["api_key"] = api_key
+
+        # ── Egress guard, layer 2 (ADR-0141 D2.1/D2.2) ────────────────────
+        # Per-route injected hook, owns no-connection depth: covers URLs the
+        # SDK/handler constructs internally and redirect hops. Two mechanisms
+        # in scope today (verified against litellm 1.98.0): the OpenAI-SDK
+        # route (litellm's client= kwarg must be an AsyncOpenAI instance —
+        # anything else is used directly if passed, so building our own with
+        # a guarded http_client= is sufficient) and the AsyncHTTPHandler
+        # route (anthropic's dedicated handler, and ovhcloud's generic
+        # base_llm_http_handler — both isinstance-check client= against
+        # AsyncHTTPHandler and silently drop anything else). A provider in
+        # neither set fails closed rather than dispatching unguarded.
+        litellm_kwargs["client"] = _build_guarded_client(
+            self.provider, provider_def, api_key, resolved_guard
+        )
         if provider_def.base_url:
             litellm_kwargs["api_base"] = provider_def.base_url
         if tools:

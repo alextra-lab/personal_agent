@@ -16,7 +16,11 @@ from __future__ import annotations
 import json
 
 from personal_agent.grounding.citations import parse_citations
-from personal_agent.grounding.source_registry import Entitlement, SourceRegistry
+from personal_agent.grounding.source_registry import (
+    USER_STATED_EXTRACTOR_SENTINEL,
+    Entitlement,
+    SourceRegistry,
+)
 from personal_agent.grounding.spans import NonExemptReason, Span, SpanExtraction, SpanLabel
 from personal_agent.grounding.verification import CheckOutcome, verify_turn
 
@@ -61,8 +65,12 @@ def _entity_row(
 
     ``extractor_model`` distinguishes an agent-extracted entity (a model identifier,
     the default here) from one written via the gateway's ``store_fact`` path
-    (``None`` -- user-provided, ADR-0098 Amendment A6's "a statement the owner made"
-    terminus row for entities, which carry no ``asserted_by``).
+    (:data:`USER_STATED_EXTRACTOR_SENTINEL` -- user-provided, ADR-0098 Amendment A6's
+    "a statement the owner made" terminus row for entities, which carry no
+    ``asserted_by``). ``None`` here is deliberately its own, distinct case: it is what
+    a legacy or bare-``MERGE``-fallback-created entity looks like on the wire (Neo4j has
+    no persisted null, so "never set" and "explicitly None" are indistinguishable) --
+    it must deny, not be read as the sentinel.
     """
     return {
         "name": name,
@@ -193,18 +201,47 @@ def test_entity_terminating_at_fetched_page_is_external_and_citable() -> None:
 def test_entity_written_via_store_fact_is_user_stated() -> None:
     """AC-1, scenario 2 (entity path): ADR-0098 A6's owner-statement terminus row.
 
-    Entities carry no ``asserted_by`` (that axis is Claim/Stance-only), but
-    ``create_entity``'s ``extractor_model=None`` already distinguishes the gateway's
-    ``store_fact`` path (user-provided, no extraction) from LLM extraction
-    (``memory/service.py:2084-2117``) -- reused here rather than inventing a new field.
+    Entities carry no ``asserted_by`` (that axis is Claim/Stance-only), so
+    ``create_entity`` stamps :data:`USER_STATED_EXTRACTOR_SENTINEL` when its own
+    ``extractor_model`` argument is ``None`` (the gateway's ``store_fact`` path --
+    user-provided, no extraction; ``memory/service.py:2084-2117``) -- reused here
+    rather than inventing a new field.
     """
     entitlement, outcome = _run_entity_chain(
         mention_text="EaseCert",
-        entities=[_entity_row("EaseCert", provenance_state="none", extractor_model=None)],
+        entities=[
+            _entity_row(
+                "EaseCert",
+                provenance_state="none",
+                extractor_model=USER_STATED_EXTRACTOR_SENTINEL,
+            )
+        ],
     )
 
     assert entitlement is Entitlement.USER_STATED
     assert outcome is CheckOutcome.PASSED
+
+
+def test_legacy_entity_with_no_extractor_model_property_is_refused() -> None:
+    """The seeded negative for the sentinel design (feature-dev:code-reviewer finding).
+
+    A pre-FRE-1347 legacy entity, or one written by the bare-``MERGE`` fallback in
+    ``create_conversation`` (which predates ``extractor_model`` entirely), reads back
+    with the property genuinely absent -- ``None`` on the wire, identical to what
+    :data:`USER_STATED_EXTRACTOR_SENTINEL`'s absence-vs-presence collapse would produce
+    if the classifier matched on absence rather than the sentinel's exact value. Must
+    deny, not be mistaken for a store_fact write -- this is the over-admission the
+    review that found this design gap was guarding against.
+    """
+    entitlement, outcome = _run_entity_chain(
+        mention_text="Consolidated Widgets",
+        entities=[
+            _entity_row("Consolidated Widgets", provenance_state="none", extractor_model=None)
+        ],
+    )
+
+    assert entitlement is Entitlement.AGENT_DERIVED
+    assert outcome is CheckOutcome.SOURCE_NOT_ENTITLED
 
 
 def test_entity_terminating_at_agent_authored_turn_is_refused() -> None:

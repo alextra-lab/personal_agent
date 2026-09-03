@@ -22,6 +22,7 @@ from personal_agent.events import (
     MemoryAccessedEvent,
     get_event_bus,
 )
+from personal_agent.grounding.source_registry import USER_STATED_EXTRACTOR_SENTINEL
 from personal_agent.llm_client import InferencePriority, ModelRole
 from personal_agent.llm_client.cost_tracker import SYSTEM_SESSION_ID
 from personal_agent.llm_client.factory import get_llm_client
@@ -1330,7 +1331,15 @@ class MemoryService:
                             // provenance_state at all — the silent third state A5 forbids,
                             // on a post-change write rather than a legacy row. COALESCE keeps
                             // the transition one-way: never demotes an already-provenanced node.
-                            e.provenance_state = COALESCE(e.provenance_state, 'none')
+                            e.provenance_state = COALESCE(e.provenance_state, 'none'),
+                            // ADR-0098 A6 (FRE-1347): this node is unambiguously agent/system
+                            // -derived (a Turn's extracted key_entities, never owner-typed), so
+                            // it must never read back with no extractor_model at all -- that is
+                            // indistinguishable from create_entity's USER_STATED_EXTRACTOR_
+                            // SENTINEL absence-vs-presence collapse (Neo4j has no persisted
+                            // null) and would let the entitlement gate mistake it for a
+                            // store_fact write. COALESCE never overwrites a real model id.
+                            e.extractor_model = COALESCE(e.extractor_model, $fallback_extractor_model)
                         WITH e
                         MATCH (t:Turn {turn_id: $turn_id})
                         MERGE (t)-[:DISCUSSES]->(e)
@@ -1342,6 +1351,7 @@ class MemoryService:
                         visibility=visibility,
                         originating_trace_id=conversation.trace_id,
                         originating_session_id=conversation.session_id,
+                        fallback_extractor_model="key_entity_extraction",
                     )
 
                 log.info(
@@ -2311,9 +2321,20 @@ class MemoryService:
                 if originating_session_id is not None:
                     on_create_clauses.append("e.originating_session_id = $originating_session_id")
                     params["originating_session_id"] = originating_session_id
-                if extractor_model is not None:
-                    on_create_clauses.append("e.extractor_model = $extractor_model")
-                    params["extractor_model"] = extractor_model
+                # ADR-0098 Amendment A6 / FRE-1347: always stamp a non-null value, never leave
+                # the property unset on a caller passing extractor_model=None. Neo4j has no
+                # persisted null -- an unset property and one deliberately written as null are
+                # indistinguishable on read, so "absent" cannot be the signal for "user-stated
+                # via store_fact" (it's also what a legacy or bare-MERGE-created node looks
+                # like). USER_STATED_EXTRACTOR_SENTINEL is the one value the entitlement gate
+                # (_entity_entitlement_of) treats as a positive owner-statement terminus; any
+                # other non-null value, including this one, denies to AGENT_DERIVED.
+                on_create_clauses.append("e.extractor_model = $extractor_model")
+                params["extractor_model"] = (
+                    extractor_model
+                    if extractor_model is not None
+                    else USER_STATED_EXTRACTOR_SENTINEL
+                )
                 # FRE-711: the description-correction gate is evaluated inside the MERGE
                 # against the freshly-matched node (no app-side stale read → race-safe:
                 # two concurrent consolidations cannot double-archive), then the old value

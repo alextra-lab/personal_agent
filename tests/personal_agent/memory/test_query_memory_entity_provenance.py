@@ -110,8 +110,32 @@ async def test_unprovenanced_entity_resolved_with_no_referent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_store_fact_entity_carries_null_extractor_model() -> None:
-    """A gateway store_fact entity (user-provided, no extraction) reads back extractor_model=None."""
+async def test_entity_provenance_query_resolves_by_entity_type_when_no_names_given() -> None:
+    """entity_recall via entity_types alone (no entity_names) still resolves provenance.
+
+    query_memory's new entity-provenance query picks between two mutually exclusive
+    Cypher predicates/param sets depending on which of entity_names/entity_types the
+    caller set; only the entity_names branch was covered before this test.
+    """
+    node = _entity_node("SafeCart", provenance_state="provenanced", extractor_model="qwen3-8b")
+    service = _make_service([(node, ["https://safecart.example/about"])])
+
+    result = await service.query_memory(MemoryQuery(entity_types=["Organization"], limit=5))
+
+    assert len(result.entities) == 1
+    assert result.entities[0].name == "SafeCart"
+    assert result.entities[0].provenance_state == "provenanced"
+
+
+@pytest.mark.asyncio
+async def test_extractor_model_passes_through_verbatim_including_none() -> None:
+    """The read side is a faithful passthrough of whatever the node property holds.
+
+    None here stands in for a node with no extractor_model property at all (Neo4j has
+    no persisted null -- the entitlement gate, not this read path, is what must not
+    mistake that for the write side's USER_STATED_EXTRACTOR_SENTINEL; see
+    grounding/test_search_memory_entitlement_e2e.py's seeded-negative test).
+    """
     node = _entity_node("Owner Preference", provenance_state="none", extractor_model=None)
     service = _make_service([(node, [])])
 
@@ -129,3 +153,43 @@ async def test_non_entity_recall_does_not_resolve_entities() -> None:
     result = await service.query_memory(MemoryQuery(limit=5))
 
     assert result.entities == []
+
+
+@pytest.mark.asyncio
+async def test_entity_provenance_query_failure_degrades_to_empty_not_a_failed_recall() -> None:
+    """A session.run failure on the new query must not fail the whole query_memory call.
+
+    Proves the try/except scoped around just this query actually degrades gracefully
+    (resolved_entities stays empty; conversations/relevance_scores still come back)
+    rather than being verified only by reading the code.
+    """
+    service = MemoryService.__new__(MemoryService)
+    service.connected = True
+    service._query_feedback_by_key = {}
+
+    empty_result = AsyncMock()
+    empty_result.values = AsyncMock(return_value=[])
+    empty_result.data = AsyncMock(return_value=[])
+    empty_result.single = AsyncMock(return_value=None)
+
+    mock_session = AsyncMock()
+
+    async def _run_side_effect(cypher: str, **kwargs: object) -> AsyncMock:
+        if "SOURCED_FROM" in cypher and "MATCH (e:Entity)" in cypher:
+            raise RuntimeError("Neo4j connection reset")
+        return empty_result
+
+    mock_session.run = AsyncMock(side_effect=_run_side_effect)
+
+    service.driver = MagicMock()
+    service.driver.session = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_session),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+
+    result = await service.query_memory(MemoryQuery(entity_names=["SafeCart"], limit=5))
+
+    assert result.entities == []
+    assert result.conversations == []

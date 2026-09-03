@@ -251,10 +251,15 @@ chain**. A typed memory retrieval — item 1 of the admissible set above — who
 agent-authored turn or at `provenance_state = 'none'` earns `AGENT_DERIVED` and is **not** admissible
 as a citation. Aggregation is most-restrictive: one `AGENT_DERIVED`-terminus item drops the whole
 recall. Entities carry no `asserted_by` (that axis is Claim/Stance-only), so a `provenance_state =
-'none'` entity is not automatically `AGENT_DERIVED`: `create_entity`'s existing `extractor_model`
-parameter (`None` for the gateway's `store_fact` — user-provided, never extraction) distinguishes
-that terminus row from an agent-authored one, so a `none`-terminus, `extractor_model = None` entity
-earns `USER_STATED` instead. D2 previously treated a typed memory retrieval as admissible with
+'none'` entity is not automatically `AGENT_DERIVED`: `create_entity` stamps a reserved sentinel
+value on `extractor_model` (`USER_STATED_EXTRACTOR_SENTINEL`) only when its own `extractor_model`
+argument is `None` — the gateway's `store_fact` path, user-provided, never extraction — and a
+`none`-terminus entity carrying exactly that sentinel earns `USER_STATED` instead. The sentinel is
+a positive match, not an absence check: Neo4j persists no null, so a property a caller never set
+and one explicitly written as `None` are indistinguishable on read, which is also what a legacy or
+bare-`MERGE`-fallback-created entity looks like — treating bare absence as the signal would have
+misclassified those as owner-stated. D2 previously treated a typed memory retrieval as admissible
+with
 reachability vacuous for referent-less items; that is no longer sufficient on its own. Provenance is
 **not** an input to `verify_turn`'s containment — it decides only the entitlement the recall
 registers with.

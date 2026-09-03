@@ -493,6 +493,22 @@ key carries the same authorship gap, so both feed :func:`_search_memory_entitlem
 """
 
 
+USER_STATED_EXTRACTOR_SENTINEL = "user_stated"
+"""The one ``extractor_model`` value :func:`_entity_entitlement_of` treats as a positive
+owner-statement terminus (ADR-0098 Amendment A6 / FRE-1347).
+
+Not "absence of a value": Neo4j has no persisted null, so a property a caller never set and
+one a caller explicitly wrote as ``None`` are indistinguishable on read — which is also
+exactly what a bare-``MERGE``-created or pre-this-ticket legacy ``:Entity`` node looks like.
+Treating "no ``extractor_model``" as user-stated would therefore over-admit those agent- or
+system-derived nodes as if the owner asserted them. :meth:`~personal_agent.memory.service.
+MemoryService.create_entity` writes this literal sentinel when its own ``extractor_model``
+parameter is ``None`` (the gateway's ``store_fact`` path — user-provided, never extraction);
+every other entity-creating write path stamps a different non-null value, so this string is
+reserved and only ever means one thing.
+"""
+
+
 def _entity_entitlement_of(item: Mapping[str, object]) -> Entitlement:
     """Classify one recalled entity by its provenance terminus (ADR-0098 Amendment A6).
 
@@ -502,15 +518,19 @@ def _entity_entitlement_of(item: Mapping[str, object]) -> Entitlement:
     - ``provenance_state`` (ADR-0098 Amendment A4b): ``'provenanced'`` means the chain reaches
       an external ``:Source`` (A1's terminus) and earns :attr:`Entitlement.EXTERNAL`.
     - ``extractor_model`` (:meth:`~personal_agent.memory.service.MemoryService.create_entity`):
-      ``None`` on a well-formed item (key present, value ``null``) means the entity was written
-      via the gateway's ``store_fact`` path — user-provided, never extraction — which is A6's
-      "a statement the owner made" terminus row for entities. A non-``None`` value names the
-      extracting model, i.e. an agent-authored terminus.
+      exactly :data:`USER_STATED_EXTRACTOR_SENTINEL` means the entity was written via the
+      gateway's ``store_fact`` path — user-provided, never extraction — which is A6's "a
+      statement the owner made" terminus row for entities. Anything else (a real model
+      identifier, a missing property, or a malformed value) is an agent-authored terminus.
 
-    Anything else — a missing ``provenance_state``, a missing ``extractor_model`` key entirely
-    (as opposed to a present ``null``), or an ``extractor_model`` naming a model — denies to
-    :attr:`Entitlement.AGENT_DERIVED`, the same default-deny direction :func:`_entitlement_of`
-    already documents for Claims lacking ``asserted_by``.
+    Anything else — a missing ``provenance_state``, or an ``extractor_model`` that isn't the
+    sentinel — denies to :attr:`Entitlement.AGENT_DERIVED`, the same default-deny direction
+    :func:`_entitlement_of` already documents for Claims lacking ``asserted_by``. This is
+    deliberately a positive match on the sentinel, not an absence check: a pre-this-ticket
+    legacy entity or one written by the bare-``MERGE`` fallback (``memory/service.py``'s
+    ``create_conversation``, which predates ``extractor_model`` and never sets it) reads back
+    with no ``extractor_model`` at all — identical, on the wire, to a genuinely unset property
+    — and must deny, not be mistaken for a store_fact write.
 
     Args:
         item: One entity dict from ``search_memory``'s registered content.
@@ -520,7 +540,7 @@ def _entity_entitlement_of(item: Mapping[str, object]) -> Entitlement:
     """
     if item.get("provenance_state") == "provenanced":
         return Entitlement.EXTERNAL
-    if "extractor_model" in item and item["extractor_model"] is None:
+    if item.get("extractor_model") == USER_STATED_EXTRACTOR_SENTINEL:
         return Entitlement.USER_STATED
     return Entitlement.AGENT_DERIVED
 

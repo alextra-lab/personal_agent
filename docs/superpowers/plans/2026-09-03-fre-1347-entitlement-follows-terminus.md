@@ -151,3 +151,32 @@ most-restrictive fold ordering (any `AGENT_DERIVED` → `AGENT_DERIVED`; else an
 - AC-4 (ADR-0138 records its own narrowing) → the amendment-note text already exists (added
   2026-09-01) and names this ticket; this PR updates it from in-flight to shipped, and fixes the
   README index row that never mentioned it.
+
+## Self-review finding, fixed on-branch (post-implementation)
+
+`feature-dev:code-reviewer` (scoped to `git diff origin/main...HEAD`) found the implemented
+`_entity_entitlement_of` couldn't actually distinguish "user-stated via `store_fact`"
+(`extractor_model is None`) from two other, unrelated ways an entity ends up with no
+`extractor_model`: `create_conversation`'s bare-`MERGE` fallback (never sets the property) and
+any pre-this-ticket legacy `:Entity` node. Neo4j has no persisted null, so "never set" and
+"explicitly written as `None`" are structurally identical on read — the design as planned would
+have misclassified both populations as `USER_STATED`, an admitted citable tier, for entities that
+are actually agent/system-derived. Confirmed by reading `memory/service.py:1313-1345` (the
+fallback) and `create_entity`'s `ON CREATE` clause (`extractor_model` only ever set `ON CREATE`,
+conditionally).
+
+Fixed by replacing the absence check with a positive sentinel: `USER_STATED_EXTRACTOR_SENTINEL`
+(`grounding/source_registry.py`), written by `create_entity` only when its own `extractor_model`
+argument is `None`, and by the bare-`MERGE` fallback as a *different*, explicit non-sentinel value
+(`"key_entity_extraction"`) so it can never be mistaken for the sentinel. `_entity_entitlement_of`
+now matches the sentinel exactly rather than checking for absence. Added the seeded negative the
+review flagged as missing (`test_legacy_entity_with_no_extractor_model_property_is_refused`) plus
+three more gaps a second review pass found (entity_types-only fallback, the `session.run` failure
+path, and `query_memory_broad`'s Cypher aggregation correctness — all previously verified only by
+reading the code, not by a test). Full quality gate sequence re-run clean after the fix.
+
+Deliberately not fixed here, documented as follow-up: `_multipath_broad_entities`
+(`memory/service.py`, the `multipath_recall_enabled` path) still hand-selects a narrow field list
+that omits `provenance_state`/`extractor_model` — dormant since that flag defaults `False` and is
+unset in this worktree, and fails closed (denies citation) rather than over-admitting, so it is not
+a correctness regression, only an incompleteness one, to close before that flag is ever enabled.

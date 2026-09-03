@@ -9,11 +9,11 @@ sub-agent dispatch path.
 **Placement no longer discriminates, and this file says so rather than implying
 otherwise.** For one day (FRE-1319, 2026-08-28 to 08-30) the two roles sat on
 opposite sides of the placement split — ``primary`` on ``qwen3.8-flash-next``
-(``slm_local`` → ``LocalLLMClient``) and ``sub_agent`` on ``gpt-5.4-mini``
+(``slm_local`` → local placement) and ``sub_agent`` on ``gpt-5.4-mini``
 (``openai`` → ``LiteLLMClient``) — so asserting the client class was on its own
 enough to catch a silent fallback. That was always noted as a temporary
 property, and it has now reversed: both roles are local again, so a fallback to
-``primary`` would build the same ``LocalLLMClient`` a correct resolution does.
+``primary`` would build the same local-placement client a correct resolution does.
 The client-class assertion below is therefore *corroborating, not
 discriminating*, and ``test_sub_agent_does_not_resolve_to_primary`` is the
 assertion that actually guards FRE-958. It was written to survive exactly this
@@ -34,8 +34,9 @@ from __future__ import annotations
 
 from personal_agent.config import load_model_config
 from personal_agent.config.model_loader import resolve_role_target
-from personal_agent.llm_client.client import LocalLLMClient
 from personal_agent.llm_client.factory import get_llm_client
+from personal_agent.llm_client.litellm_client import LiteLLMClient
+from personal_agent.llm_client.models import Placement
 from personal_agent.llm_client.types import ModelRole
 
 
@@ -51,7 +52,7 @@ class TestSubAgentResolution:
         assert model_def.id == load_model_config().models["qwen3.6-35b-instruct"].id
 
     def test_builds_local_client_matching_its_deployment_placement(self) -> None:
-        """sub_agent dispatches to LocalLLMClient — qwen3.6-35b-instruct's placement.
+        """sub_agent dispatches at local placement — qwen3.6-35b-instruct's.
 
         Corroborating only. Since the 2026-08-30 revert both roles are
         ``slm_local``, so a fallback to primary's binding would satisfy this
@@ -63,7 +64,8 @@ class TestSubAgentResolution:
         """
         client = get_llm_client(role_name=ModelRole.SUB_AGENT.value)
 
-        assert isinstance(client, LocalLLMClient)
+        assert isinstance(client, LiteLLMClient)
+        assert client.placement is Placement.LOCAL
 
     def test_sub_agent_does_not_resolve_to_primary(self) -> None:
         """The FRE-958 bug stated directly, independent of either role's value.

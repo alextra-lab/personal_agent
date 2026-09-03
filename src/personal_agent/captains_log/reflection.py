@@ -37,7 +37,7 @@ from personal_agent.captains_log.prompt_manifest import (
 )
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client import ModelRole
 from personal_agent.llm_client.dspy_adapter import resolve_dspy_target
 from personal_agent.llm_client.factory import get_llm_client_for_key
 from personal_agent.sysgraph import SysgraphRepository, get_default_sysgraph_repo
@@ -363,13 +363,6 @@ async def generate_reflection_entry(
 
     _captains_log_role = resolve_role_model_key("captains_log")
 
-    # ── DSPy → manual JSON → basic ───────────────────────────────────────────
-    llm_client = LocalLLMClient(
-        base_url=settings.resolved_slm_base_url,
-        timeout_seconds=settings.llm_timeout_seconds,
-        max_retries=settings.llm_max_retries,
-    )
-
     # Phase 2: failure-path excerpt (ADR-0056 §D6, default False until validated)
     failure_excerpt_json = ""
     had_errors = False
@@ -410,7 +403,6 @@ async def generate_reflection_entry(
                 "final_state": effective_final_state,
                 "reply_length": reply_length,
                 "telemetry_summary": telemetry_summary,
-                "llm_client": llm_client,
                 "metrics_summary": metrics_summary,  # ADR-0014: Deterministic extraction
                 "captains_log_role": _captains_log_role,
                 "failure_excerpt_json": failure_excerpt_json,
@@ -537,10 +529,10 @@ async def generate_reflection_entry(
         from personal_agent.llm_client.concurrency import InferencePriority
 
         # FRE-1037: route via the factory using the already-resolved captains_log
-        # model key, not the bare local-only `llm_client` above (which has no auth
-        # headers and cannot honor captains_log's configured model when it's a
-        # cloud deployment — that shared client stays local-only for the DSPy
-        # path's get_dspy_lm() fallback, a different, narrower use).
+        # model key. The bare local-only client this used to sit beside is gone
+        # (ADR-0141 D1) — it could not honour a cloud captains_log binding, and
+        # the DSPy fallback that was its only remaining consumer now resolves
+        # placement through configure_dspy_lm instead.
         manual_client = get_llm_client_for_key(_captains_log_role, budget_role="captains_log")
 
         # Call LLM with manual prompt (reasoning model)

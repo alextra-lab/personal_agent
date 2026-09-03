@@ -310,7 +310,11 @@ async def test_local_path_passes_session_summary_role(monkeypatch: pytest.Monkey
         {"content": _valid_output(), "tool_calls": [], "finish_reason": "stop"}
     )
     fake_client.respond = AsyncMock(wraps=fake_client.respond)
-    monkeypatch.setattr(ss, "LocalLLMClient", lambda: fake_client)
+    # ADR-0141 D1: both branches acquire through the same factory door now.
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client_for_key",
+        lambda model_key, *, budget_role: fake_client,
+    )
 
     await ss._call_model("prompt", role_name="qwen3.6-35b-thinking", provider=None, session_id="s")
 

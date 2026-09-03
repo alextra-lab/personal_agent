@@ -91,7 +91,7 @@ class TestConsumerRaisesWhenMatrixMissing:
 
         with (
             patch(
-                "personal_agent.second_brain.entity_extraction.LocalLLMClient"
+                "personal_agent.llm_client.factory.get_llm_client_for_key"
             ) as mock_client_cls,
             pytest.raises(ModelRoleError, match="model_roles.yaml"),
         ):

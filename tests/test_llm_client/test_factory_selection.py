@@ -17,9 +17,9 @@ import pytest
 
 from personal_agent.config import load_model_config
 from personal_agent.config.selection import _current_selection, set_current_selection
-from personal_agent.llm_client.client import LocalLLMClient
 from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.litellm_client import LiteLLMClient
+from personal_agent.llm_client.models import Placement
 
 
 @pytest.fixture(autouse=True)
@@ -56,14 +56,18 @@ class TestPrimarySelectionDispatch:
         """AC-4c — a non-catalog key for primary → the local default, not empty/arbitrary."""
         client = get_llm_client("primary", selection_key="no_such_model_xyz")
 
-        # primary's default (qwen3.6-35b-thinking) is local.
-        assert isinstance(client, LocalLLMClient)
+        # primary's default (qwen3.6-35b-thinking) is local. Since ADR-0141 D1
+        # the class is the same for both placements, so what identifies the
+        # fallback is the client's placement, not its type.
+        assert isinstance(client, LiteLLMClient)
+        assert client.placement is Placement.LOCAL
 
     def test_wrong_kind_selection_falls_back_to_default(self) -> None:
         """A wrong-kind catalog key (embedding) for primary → the local default."""
         client = get_llm_client("primary", selection_key="embedding")
 
-        assert isinstance(client, LocalLLMClient)
+        assert isinstance(client, LiteLLMClient)
+        assert client.placement is Placement.LOCAL
 
 
 class TestPinnedRoleGuardrail:

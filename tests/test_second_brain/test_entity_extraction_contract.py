@@ -137,7 +137,7 @@ _TURN_TS = datetime(2026, 7, 1, 14, 30, 0, tzinfo=timezone.utc)
 
 
 def _mock_local_response(model_json: dict[str, Any]) -> dict[str, Any]:
-    """Shape a LocalLLMClient.respond() return value wrapping the model JSON."""
+    """Shape a respond() return value wrapping the model JSON."""
     return {
         "content": orjson.dumps(model_json).decode("utf-8"),
         "usage": {"prompt_tokens": 100, "completion_tokens": 200},
@@ -152,14 +152,14 @@ async def _run_extractor(
 ) -> dict[str, Any]:
     """Run the extractor with the local SLM path mocked to return model_json."""
     # models.yaml default entity_extraction_role is a cloud provider; force the
-    # local path by making provider None so LocalLLMClient is used, then mock it.
+    # local path by making provider None, then mock the factory door it uses.
     with (
         patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
         patch(
             "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
             return_value="primary",
         ),
-        patch("personal_agent.second_brain.entity_extraction.LocalLLMClient") as mock_client_cls,
+        patch("personal_agent.llm_client.factory.get_llm_client_for_key") as mock_client_cls,
     ):
         mock_cfg.return_value.models = {}  # model_def is None → provider None → local path
         mock_client = mock_client_cls.return_value
@@ -296,7 +296,7 @@ class TestFallbackShape:
                 return_value="primary",
             ),
             patch(
-                "personal_agent.second_brain.entity_extraction.LocalLLMClient"
+                "personal_agent.llm_client.factory.get_llm_client_for_key"
             ) as mock_client_cls,
         ):
             mock_cfg.return_value.models = {}
@@ -836,7 +836,7 @@ class TestLocalPathRole:
                 return_value="primary",
             ),
             patch(
-                "personal_agent.second_brain.entity_extraction.LocalLLMClient"
+                "personal_agent.llm_client.factory.get_llm_client_for_key"
             ) as mock_client_cls,
         ):
             mock_cfg.return_value.models = {}  # model_def is None -> provider None -> local path

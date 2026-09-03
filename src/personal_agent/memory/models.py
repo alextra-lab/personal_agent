@@ -255,6 +255,23 @@ class EntityNode(BaseModel):
     properties: dict[str, Any] = Field(default_factory=dict)
     # FRE-229: visibility scope
     visibility: str = Visibility.PUBLIC
+    # ADR-0098 Amendment A6 / FRE-1347: the terminus of this entity's provenance chain.
+    # 'provenanced' means a SOURCED_FROM edge reaches an external :Source; 'none' means it
+    # doesn't (default -- the safe, fail-closed value when a caller hasn't threaded the
+    # property through its Cypher).
+    provenance_state: str = "none"
+    # The distinct referents (URLs/document ids) of every :Source this entity is SOURCED_FROM,
+    # when provenance_state == 'provenanced'. Empty when not threaded or not provenanced.
+    source_referents: list[str] = Field(default_factory=list)
+    # create_entity stamps USER_STATED_EXTRACTOR_SENTINEL here for a gateway store_fact
+    # write (user-provided, no extraction); every other write path stamps a real model
+    # identifier or a different sentinel. The entitlement gate (_entity_entitlement_of)
+    # matches the sentinel exactly -- None (this field's default, and what a legacy or
+    # not-yet-threaded read looks like) denies, it does not grant USER_STATED. Neo4j has
+    # no persisted null, so "never set" and "explicitly None" are indistinguishable on
+    # read, which is exactly why the check is a positive sentinel match, not an
+    # absence check (ADR-0098 Amendment A6 / FRE-1347).
+    extractor_model: str | None = None
 
 
 class MemoryQuery(BaseModel):

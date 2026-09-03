@@ -207,6 +207,23 @@ async def search_memory_executor(
                     }
                     for t in result.conversations
                 ],
+                # ADR-0098 Amendment A6 / FRE-1347: the actual matched :Entity nodes, with
+                # their provenance terminus -- not just the bare names above (key_entities is
+                # a Turn-level property copy, disconnected from the entity's own provenance;
+                # this is the FRE-1338 leak this key closes). Same dict shape as the
+                # broad-recall branch below so _search_memory_entitlement reads one contract.
+                "entities": [
+                    {
+                        "name": e.name,
+                        "type": e.entity_type,
+                        "description": e.description,
+                        "mentions": e.mention_count,
+                        "provenance_state": e.provenance_state,
+                        "extractor_model": e.extractor_model,
+                        "source_referents": e.source_referents,
+                    }
+                    for e in result.entities
+                ],
                 "entities_found": len(result.entities),
                 "total_turns": len(result.conversations),
                 "query_path": "entity_match",

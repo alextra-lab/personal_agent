@@ -9,9 +9,10 @@ Two things about that, both established by this module:
 **The role-name path cannot make a paid call for either role** (finding six).
 Neither has a Layer-3 binding in ``config/model_roles.yaml``, so
 ``resolve_role_target`` falls back to treating the role name as a deployment
-key, finds no definition, and ``_build_client`` returns a ``LocalLLMClient``.
-``test_role_name_path_for_skill_routing_is_local`` pins that, so nobody assumes
-the ticket's stated path is paid.
+key and finds no definition. Since ADR-0141 D1 ``_build_client`` raises there
+rather than returning a key-ignoring client.
+``test_role_name_path_for_skill_routing_refuses_to_build_a_client`` pins that,
+so nobody assumes the ticket's stated path is paid.
 
 **So the criterion is proved against the path each role actually uses**:
 key-based acquisition for ``skill_routing`` (``executor.py``'s skill router) and
@@ -338,17 +339,25 @@ class TestStudyLane:
         acompletion.assert_not_awaited()
 
 
-def test_role_name_path_for_skill_routing_is_local() -> None:
+def test_role_name_path_for_skill_routing_refuses_to_build_a_client() -> None:
     """FRE-989 finding six, pinned so it is never silently assumed paid.
 
     ``skill_routing`` has no Layer-3 binding, so ``resolve_role_target`` treats
-    the name as a deployment key, finds nothing, and the factory hands back a
-    ``LocalLLMClient``. The ticket's "role-name path" for this role therefore
-    cannot bill anything — which is why AC-4 is proved above through the
-    key-based door the skill router actually uses.
-    """
-    from personal_agent.llm_client.client import LocalLLMClient
-    from personal_agent.llm_client.factory import get_llm_client
+    the name as a deployment key and finds nothing. The ticket's "role-name
+    path" for this role therefore cannot bill anything — which is why AC-4 is
+    proved above through the key-based door the skill router actually uses.
 
-    assert isinstance(get_llm_client(role_name="skill_routing"), LocalLLMClient)
-    assert isinstance(get_llm_client(role_name="study"), LocalLLMClient)
+    ADR-0141 D1 changed *how* it cannot bill. The factory used to hand back a
+    bare ``LocalLLMClient()``, which took no model key and dispatched against
+    whatever the catalog happened to resolve — the key-ignoring door of
+    FRE-1343. With one client per resolved key there is nothing to fall through
+    to, so an unresolvable role now fails loudly at the factory instead. The
+    property FRE-989 pinned is preserved and strengthened: this path books no
+    spend, and it no longer silently books the wrong *model* either.
+    """
+    from personal_agent.llm_client.factory import get_llm_client
+    from personal_agent.llm_client.types import LLMClientError
+
+    for role_name in ("skill_routing", "study"):
+        with pytest.raises(LLMClientError, match="resolves to no definition"):
+            get_llm_client(role_name=role_name)

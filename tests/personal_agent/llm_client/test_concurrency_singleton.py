@@ -95,11 +95,12 @@ def _client(model_id: str) -> LiteLLMClient:
     )
 
 
-def _patched_environment() -> ExitStack:
+def _patched_environment() -> tuple[ExitStack, MagicMock]:
     """Patch every respond()-cloud-path touchpoint EXCEPT the concurrency controller.
 
     The controller is deliberately left real — AC-a fails if the acquire path
-    is mocked rather than exercised.
+    is mocked rather than exercised. Returns the stack alongside the mock
+    gate so a caller can assert on ``reserve``/``commit``/``refund``.
     """
     catalog = ModelConfig(
         providers={
@@ -138,7 +139,7 @@ def _patched_environment() -> ExitStack:
     stack.enter_context(
         patch("personal_agent.llm_client.litellm_client.litellm.completion_cost", return_value=0.0)
     )
-    return stack
+    return stack, gate
 
 
 class TestCloudProviderCeilingEnforcedThroughTheSingleton:
@@ -160,7 +161,7 @@ class TestCloudProviderCeilingEnforcedThroughTheSingleton:
 
         acompletion = AsyncMock(side_effect=_gated_acompletion)
 
-        with _patched_environment():
+        with _patched_environment()[0]:
             with patch(
                 "personal_agent.llm_client.litellm_client.litellm.acompletion", new=acompletion
             ):
@@ -230,7 +231,7 @@ class TestSlotWaitTelemetry:
 
         trace_ctx = make_test_ctx("fre1366_wait")
 
-        with _patched_environment():
+        with _patched_environment()[0]:
             with (
                 patch(
                     "personal_agent.llm_client.litellm_client.litellm.acompletion", new=acompletion
@@ -268,3 +269,75 @@ class TestSlotWaitTelemetry:
         assert payload["priority"] is not None
         assert payload["wait_ms"] > 100
         assert payload["trace_id"] == trace_ctx.trace_id
+
+
+class TestSlotTimeoutRefundsTheReservation:
+    """Self-review fix (feature-dev:code-reviewer, FRE-1366): a slot wait that
+    times out must refund the cost-gate reservation, not leak it.
+
+    ``gate.reserve()`` runs before the concurrency-slot acquire in the cloud
+    path (D3 re-homes the acquire around the dispatch, after billing already
+    committed to a reservation). Without a dedicated ``except
+    InferenceSlotTimeout`` around the acquire, a timed-out wait raises before
+    the ``litellm.acompletion()``-scoped refund handlers ever run, and the
+    reservation only clears later via the cost-gate reaper's TTL sweep.
+    """
+
+    @pytest.mark.asyncio
+    async def test_slot_timeout_refunds_and_propagates(self) -> None:
+        ceiling = 1
+        model_keys = ["fre1366-holder", "fre1366-timeout"]
+        set_inference_concurrency_controller(_seeded_controller(ceiling, model_keys))
+
+        release = asyncio.Event()
+
+        async def _gated_acompletion(**kwargs: Any) -> SimpleNamespace:
+            await release.wait()
+            return _fake_response()
+
+        acompletion = AsyncMock(side_effect=_gated_acompletion)
+
+        stack, gate = _patched_environment()
+        try:
+            with patch(
+                "personal_agent.llm_client.litellm_client.litellm.acompletion", new=acompletion
+            ):
+                with stack:
+                    holder = asyncio.create_task(
+                        _client("fre1366-holder").respond(
+                            role=ModelRole.PRIMARY,
+                            messages=[{"role": "user", "content": "hi"}],
+                            trace_ctx=make_test_ctx("fre1366_slot_timeout_holder"),
+                        )
+                    )
+                    # Wait for the holder to actually occupy the (only) slot
+                    # before the second call races it — this is what makes the
+                    # second call's acquire genuinely time out rather than win
+                    # a scheduling coincidence.
+                    for _ in range(200):
+                        await asyncio.sleep(0.01)
+                        if acompletion.call_count >= 1:
+                            break
+                    assert acompletion.call_count == 1, "holder never occupied the slot"
+
+                    from personal_agent.llm_client.concurrency import InferenceSlotTimeout
+
+                    with pytest.raises(InferenceSlotTimeout):
+                        await _client("fre1366-timeout").respond(
+                            role=ModelRole.PRIMARY,
+                            messages=[{"role": "user", "content": "hi"}],
+                            trace_ctx=make_test_ctx("fre1366_slot_timeout_waiter"),
+                            priority_timeout=0.05,
+                        )
+
+                    release.set()
+                    await holder
+        finally:
+            release.set()
+
+        assert gate.reserve.call_count == 2, "both calls must reserve before acquiring a slot"
+        assert gate.refund.call_count == 1, "only the timed-out call's reservation is refunded"
+        refunded_id = gate.refund.call_args.args[0]
+        assert refunded_id == "reservation-fre1366"
+        # The timed-out call's reservation was refunded, never committed.
+        assert gate.commit.call_count == 1, "the holder still commits normally"

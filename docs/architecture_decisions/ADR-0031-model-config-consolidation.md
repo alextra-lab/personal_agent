@@ -135,3 +135,10 @@ call, local and cloud, dispatches through litellm, with DSPy remaining the one s
 by owner direction. The closure takes effect when ADR-0141 is Accepted; until then Alternative C
 remains Deferred-with-a-pending-decision. This ADR's own decision (catalog consolidation in
 `models.yaml`) was the stated prerequisite and stands unchanged.
+
+### 2026-09-03 - ADR-0141 Accepted: Alternative C is closed
+**Changed By:** master (owner acceptance, relayed in session)
+**Reason:** The entry above was written acceptance-gated. ADR-0141 was Accepted by the owner on
+2026-09-03, so Alternative C is no longer Deferred — it is **adopted**, by ADR-0141, with DSPy the
+one sanctioned outlier by owner direction. Read the earlier entry's "ADR-0141 (Proposed)" as the
+state at the time of writing. Deferred since 2026-03-10; closed 2026-09-03.

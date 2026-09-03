@@ -1250,3 +1250,11 @@ correction takes effect immediately; the supersession becomes effective when ADR
    then — those deployments dispatch through `memory/embeddings.py` / `memory/reranker.py`, which
    never enter `respond()` (stated explicitly in ADR-0141 D3). Discovered while drafting ADR-0141
    (FRE-1362); the related local "second door" (FRE-1343) dissolves under ADR-0141 D1.
+
+### 2026-09-03 - ADR-0141 Accepted: the gated supersession is now in force
+**Changed By:** master (owner acceptance, relayed in session)
+**Reason:** The entry above was written acceptance-gated. ADR-0141 was Accepted by the owner on
+2026-09-03, so its clause 1 takes effect: "Vocabulary by dispatch path" is superseded by
+vocabulary **by placement**. Read the earlier entry's "ADR-0141 is Proposed" as the state at the
+time of writing, not as current. Clause 2 (the FRE-917 inert-ceilings correction) was already
+effective and is unchanged.

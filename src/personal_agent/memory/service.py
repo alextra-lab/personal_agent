@@ -22,8 +22,9 @@ from personal_agent.events import (
     MemoryAccessedEvent,
     get_event_bus,
 )
-from personal_agent.llm_client import InferencePriority, LocalLLMClient, ModelRole
+from personal_agent.llm_client import InferencePriority, ModelRole
 from personal_agent.llm_client.cost_tracker import SYSTEM_SESSION_ID
+from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.token_counter import estimate_tokens
 from personal_agent.memory.embeddings import (
     cosine_similarity,
@@ -268,7 +269,7 @@ async def generate_query_paraphrases(
     if count < 1 or not query_text.strip():
         return []
     try:
-        client = LocalLLMClient()
+        client = get_llm_client("sub_agent")
         trace_ctx = TraceContext(trace_id=trace_id or str(uuid4()), session_id=session_id)
         response = await client.respond(
             role=ModelRole.SUB_AGENT,

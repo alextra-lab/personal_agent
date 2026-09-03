@@ -54,10 +54,13 @@ class TestGenerateReflectionDspyTagsReflectionSource:
         fake_dspy = MagicMock()
         fake_dspy.ChainOfThought.return_value = fake_predictor
 
-        llm_client = MagicMock()
-        llm_client.get_dspy_lm.return_value = MagicMock()
-
-        with patch.object(reflection_dspy_module, "dspy", fake_dspy):
+        with (
+            patch.object(reflection_dspy_module, "dspy", fake_dspy),
+            patch(
+                "personal_agent.llm_client.dspy_adapter.configure_dspy_lm",
+                return_value=MagicMock(),
+            ),
+        ):
             entry, _missing_skills = generate_reflection_dspy(
                 user_message="hi",
                 trace_id="trace-1",
@@ -65,7 +68,6 @@ class TestGenerateReflectionDspyTagsReflectionSource:
                 final_state="COMPLETED",
                 reply_length=5,
                 telemetry_summary="none",
-                llm_client=llm_client,
             )
 
         assert entry.proposed_change is not None
@@ -80,12 +82,15 @@ class TestGenerateReflectionDspyMarksLongUserMessage:
         fake_dspy = MagicMock()
         fake_dspy.ChainOfThought.return_value = fake_predictor
 
-        llm_client = MagicMock()
-        llm_client.get_dspy_lm.return_value = MagicMock()
-
         long_message = "considering the tradeoffs between options " * 20  # > 400 chars
 
-        with patch.object(reflection_dspy_module, "dspy", fake_dspy):
+        with (
+            patch.object(reflection_dspy_module, "dspy", fake_dspy),
+            patch(
+                "personal_agent.llm_client.dspy_adapter.configure_dspy_lm",
+                return_value=MagicMock(),
+            ),
+        ):
             generate_reflection_dspy(
                 user_message=long_message,
                 trace_id="trace-1",
@@ -93,7 +98,6 @@ class TestGenerateReflectionDspyMarksLongUserMessage:
                 final_state="COMPLETED",
                 reply_length=5,
                 telemetry_summary="none",
-                llm_client=llm_client,
             )
 
         passed_user_message = fake_predictor.call_args.kwargs["user_message"]
@@ -122,10 +126,13 @@ class TestGenerateReflectionDoesNotTakeTraceIdAsSignatureInput:
         fake_dspy = MagicMock()
         fake_dspy.ChainOfThought.return_value = fake_predictor
 
-        llm_client = MagicMock()
-        llm_client.get_dspy_lm.return_value = MagicMock()
-
-        with patch.object(reflection_dspy_module, "dspy", fake_dspy):
+        with (
+            patch.object(reflection_dspy_module, "dspy", fake_dspy),
+            patch(
+                "personal_agent.llm_client.dspy_adapter.configure_dspy_lm",
+                return_value=MagicMock(),
+            ),
+        ):
             generate_reflection_dspy(
                 user_message="hi",
                 trace_id="trace-1",
@@ -133,7 +140,6 @@ class TestGenerateReflectionDoesNotTakeTraceIdAsSignatureInput:
                 final_state="COMPLETED",
                 reply_length=5,
                 telemetry_summary="none",
-                llm_client=llm_client,
             )
 
         assert "trace_id" not in fake_predictor.call_args.kwargs

@@ -1,10 +1,15 @@
-"""LiteLLM-backed client for all cloud LLM providers.
+"""LiteLLM-backed client — the one dispatch path for every placement.
 
 Uses litellm.acompletion() to transparently handle message/tool format
 conversion across Anthropic, OpenAI, Google, Mistral, and other providers.
 
-Replaces ClaudeClient for all cloud providers (ADR-0033). Two clients, clear
-boundary: LocalLLMClient for local inference, LiteLLMClient for cloud.
+Since ADR-0141 D1 this also carries **local** placement, which dispatches as
+litellm's OpenAI-compatible provider against the deployment's own endpoint.
+That path is ``_respond_local``: no cost gate, the catalog's sampler and
+thinking parameters flattened onto the top level of the wire payload, streaming
+aggregation through the local response adapters, and the local error taxonomy.
+It exists because the raw-httpx client it replaces sent the literal key
+``extra_body`` on the wire, so five declared controls never reached the server.
 
 Our wrapper adds: cost tracking via CostTrackerService, budget enforcement,
 and telemetry (structlog). LiteLLM handles provider format conversion and retries.
@@ -23,8 +28,10 @@ import litellm
 import structlog
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from openai import AsyncOpenAI
+from opentelemetry.propagate import inject
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
 
+from personal_agent.llm_client.models import Placement
 from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
     derive_fallback_prompt_identity,
@@ -34,15 +41,17 @@ from personal_agent.llm_client.telemetry import (
     emit_model_call_started,
 )
 from personal_agent.security import (
+    EgressBlockedError,
     check_egress_or_raise,
     create_guarded_http_client,
     get_domain_guard,
     guard_event_hooks,
 )
+from personal_agent.telemetry.events import MODEL_CALL_ERROR
 from personal_agent.telemetry.spans import model_call_span
 
 if TYPE_CHECKING:
-    from personal_agent.llm_client.models import ProviderDefinition
+    from personal_agent.llm_client.models import ModelDefinition
     from personal_agent.llm_client.types import LLMResponse, ModelRole, ToolCall
     from personal_agent.security import DomainGuard
     from personal_agent.telemetry.trace import TraceContext
@@ -57,7 +66,12 @@ litellm.suppress_debug_info = True
 # through which transport mechanism decides which client= shape the guard
 # must be injected as. A provider in neither set fails closed in
 # _build_guarded_client rather than dispatching unguarded.
-_OPENAI_SDK_ROUTE_PROVIDERS = frozenset({"openai"})
+#
+# `slm_local` joins the OpenAI-SDK set at ADR-0141 T2: local placement
+# dispatches as litellm's OpenAI-compatible provider (`openai/{model_id}`),
+# so it rides the same `openai_chat_completions` handler and takes the guard
+# as an AsyncOpenAI built over a guarded http_client.
+_OPENAI_SDK_ROUTE_PROVIDERS = frozenset({"openai", "slm_local"})
 # ovhcloud's OVHCloudChatConfig rides litellm's generic base_llm_http_handler,
 # which is AsyncHTTPHandler-based like Anthropic's own dedicated handler — not
 # a third mechanism.
@@ -90,7 +104,7 @@ _guarded_async_http_handlers: dict[int, AsyncHTTPHandler] = {}
 
 def _build_guarded_client(
     provider: str,
-    provider_def: ProviderDefinition,
+    base_url: str | None,
     api_key: str | None,
     guard: DomainGuard,
 ) -> AsyncOpenAI | AsyncHTTPHandler:
@@ -98,7 +112,13 @@ def _build_guarded_client(
 
     Args:
         provider: The catalog provider name (litellm dispatch prefix).
-        provider_def: The provider's catalog entry (for ``base_url``).
+        base_url: The resolved endpoint this call dispatches to. Load-bearing
+            on the OpenAI-SDK route: litellm returns a passed-in ``client=``
+            verbatim and ignores its own ``api_base`` kwarg (verified against
+            litellm 1.98.0, ``OpenAIChatCompletion._get_openai_client``), so
+            the injected client's own ``base_url`` is what dispatch uses. A
+            local deployment's per-deployment ``endpoint`` override therefore
+            has to arrive here, not just in ``litellm_kwargs``.
         api_key: Resolved credential, or None.
         guard: The DomainGuard to inject.
 
@@ -115,14 +135,14 @@ def _build_guarded_client(
     from personal_agent.llm_client.types import LLMClientError
 
     if provider in _OPENAI_SDK_ROUTE_PROVIDERS:
-        cache_key = (provider_def.base_url, id(guard))
+        cache_key = (base_url, id(guard))
         pooled = _guarded_httpx_clients.get(cache_key)
         if pooled is None:
             pooled = create_guarded_http_client(guard=guard)
             _guarded_httpx_clients[cache_key] = pooled
         return AsyncOpenAI(
             api_key=api_key or "unused",
-            base_url=provider_def.base_url,
+            base_url=base_url,
             http_client=pooled,
         )
 
@@ -139,6 +159,144 @@ def _build_guarded_client(
         "_OPENAI_SDK_ROUTE_PROVIDERS or _ASYNC_HTTP_HANDLER_ROUTE_PROVIDERS "
         "in litellm_client.py once its litellm route mechanism is verified."
     )
+
+
+# Connect/write/pool budget for a local dispatch. Carried over verbatim from
+# the raw-httpx path it replaces: the ROLE timeout (600s on the primary) is a
+# generation budget and must not become the connect budget too, or an
+# unreachable SLM tunnel hangs the turn for ten minutes instead of ten seconds.
+_LOCAL_NON_READ_TIMEOUT_S = 10.0
+
+
+def _local_extra_body(model_def: ModelDefinition) -> dict[str, Any]:
+    """Build the non-standard parameter block for a local deployment.
+
+    Every key here is flattened into the **top level** of the request JSON by
+    the OpenAI SDK's ``extra_body`` mechanism. That flattening is the whole
+    point of ADR-0141: on the raw-httpx path the literal key ``extra_body``
+    went out on the wire and llama-server ignored the block entirely, so all
+    five controls were inert (measured 2026-09-03).
+
+    The two thinking controls are **distinct wire shapes**, not one (D4):
+    ``chat_template_kwargs.enable_thinking=false`` hard-disables at the chat
+    template, while ``thinking_budget`` caps the thinking stream. The catalog
+    model already refuses to declare both.
+
+    Args:
+        model_def: The local deployment's effective definition.
+
+    Returns:
+        The parameter block for litellm's ``extra_body``.
+    """
+    extra_body: dict[str, Any] = {
+        # Within-turn KV-cache prefix reuse. Current llama.cpp defaults this on,
+        # but older builds defaulted it off; sending it explicitly keeps the
+        # behaviour backend-version-independent (FRE-433 — cross-turn reuse is
+        # slot config, not this flag).
+        "cache_prompt": True,
+    }
+    if model_def.top_k is not None:
+        extra_body["top_k"] = model_def.top_k
+    if model_def.min_p is not None:
+        extra_body["min_p"] = model_def.min_p
+    if model_def.repetition_penalty is not None:
+        extra_body["repetition_penalty"] = model_def.repetition_penalty
+
+    if model_def.disable_thinking:
+        extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+    elif model_def.thinking_budget_tokens is not None:
+        extra_body["thinking_budget"] = model_def.thinking_budget_tokens
+
+    return extra_body
+
+
+def _exception_chain(exc: BaseException, *, limit: int = 8) -> list[BaseException]:
+    """Return ``exc`` and its causes, nearest first.
+
+    Args:
+        exc: The exception to walk.
+        limit: Maximum chain depth to follow.
+
+    Returns:
+        The exception followed by each ``__cause__``/``__context__`` link.
+    """
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and len(chain) < limit:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _map_local_dispatch_error(exc: Exception) -> Exception:
+    """Map a litellm dispatch failure onto this codebase's error taxonomy.
+
+    The class alone is not enough, and neither is the status code. Measured
+    against litellm 1.98.0 on the OpenAI-SDK route, a **refused connection**
+    arrives as ``litellm.InternalServerError`` carrying ``status_code=500`` —
+    so both of the obvious readings answer ``LLMServerError`` for what is
+    plainly a connection failure. What is reliable on this route is the causal
+    chain (``OpenAIError`` -> ``openai.APIConnectionError`` -> ``httpx.ConnectError``),
+    which the OpenAI SDK preserves with ``from err``.
+
+    Order matters: ``openai.APITimeoutError`` subclasses ``APIConnectionError``,
+    so the timeout arm must be tested first or every timeout reads as a
+    connection failure.
+
+    Args:
+        exc: The exception raised by ``litellm.acompletion`` or by consuming
+            its stream.
+
+    Returns:
+        The mapped exception to raise. An exception that is already part of
+        this taxonomy (notably ``LLMInvalidResponse`` from the response
+        adapters) is returned unchanged rather than flattened to the base
+        class, and so is an ``EgressBlockedError`` raised by the layer-2 hook.
+    """
+    import openai
+    from litellm.exceptions import RateLimitError, Timeout
+
+    from personal_agent.llm_client.types import (
+        LLMClientError,
+        LLMConnectionError,
+        LLMRateLimit,
+        LLMServerError,
+        LLMTimeout,
+    )
+
+    if isinstance(exc, LLMClientError):
+        return exc
+
+    chain = _exception_chain(exc)
+    status = getattr(exc, "status_code", None)
+
+    # The egress guard's exception keeps its own type, on both layers.
+    # ``EgressBlockedError`` subclasses ``httpx.RequestError`` so that existing
+    # seam handlers still catch it — which means the connection arm below would
+    # otherwise swallow it and report a network failure for a policy refusal.
+    # Layer 1 raises outside this mapper and is unaffected; this is what keeps
+    # the ADR-0132 contract on layer 2's redirect hops and SDK-constructed URLs,
+    # where the OpenAI SDK preserves the cause chain (ADR-0141 D2.2).
+    for link in chain:
+        if isinstance(link, EgressBlockedError):
+            return link
+
+    if any(
+        isinstance(link, (Timeout, openai.APITimeoutError, httpx.TimeoutException))
+        for link in chain
+    ):
+        return LLMTimeout(f"Local model call timed out: {exc}")
+
+    if isinstance(exc, RateLimitError) or status == 429:
+        return LLMRateLimit(f"Local model rate limited: {exc}")
+
+    if any(isinstance(link, (openai.APIConnectionError, httpx.RequestError)) for link in chain):
+        return LLMConnectionError(f"Failed to reach the local model server: {exc}")
+
+    if isinstance(status, int) and status >= 500:
+        return LLMServerError(f"Local model server error {status}: {exc}")
+
+    return LLMClientError(f"Local model call failed: {exc}")
 
 
 def _mark_message_cache_control(message: dict[str, Any]) -> bool:
@@ -382,18 +540,24 @@ class LiteLLMClient:
         self,
         model_id: str,
         provider: str = "anthropic",
-        max_tokens: int = 8192,
+        max_tokens: int | None = 8192,
         *,
         budget_role: str,
         reasoning_effort: str | None = None,
         egress_guard: DomainGuard | None = None,
+        placement: Placement = Placement.CLOUD,
+        model_def: ModelDefinition | None = None,
     ) -> None:
         """Initialize LiteLLMClient with model and provider configuration.
 
         Args:
             model_id: Provider model identifier (e.g., ``claude-sonnet-4-6``).
             provider: Provider name for LiteLLM dispatch.
-            max_tokens: Default maximum output tokens.
+            max_tokens: Default maximum output tokens. ``None`` means
+                omit-means-unbounded and is only valid for local placement
+                (ADR-0141 D5): on llama.cpp the completion budget **includes**
+                thinking, so a constructor-default cap would truncate answers
+                whose thinking ate the ceiling.
             reasoning_effort: The deployment's **declared** reasoning depth
                 (FRE-1007), applied to every call this client makes unless a
                 call site overrides it. Carried on the client rather than left
@@ -420,15 +584,50 @@ class LiteLLMClient:
                 (ADR-0141 D2). Test seam — ``None`` (the production default)
                 resolves the process singleton (``get_domain_guard()``) at
                 call time.
+            placement: Where this deployment runs (ADR-0121 Layer 1). Local
+                placement takes the ADR-0141 T2 dispatch path: no cost gate,
+                catalog sampler parameters flattened onto the wire, streaming
+                aggregation through the local response adapters, and the
+                ``LocalLLMClient`` error taxonomy.
+            model_def: The deployment's effective definition. **Required for
+                local placement** — it carries the sampler parameters, the
+                endpoint override and the role timeout that the local wire
+                payload is built from. Ignored for cloud placement.
+
+        Raises:
+            ValueError: If ``placement`` is local and ``model_def`` is None.
         """
+        if placement is Placement.LOCAL and model_def is None:
+            raise ValueError(
+                "local placement requires model_def — the sampler parameters, "
+                "endpoint and role timeout of the deployment are read from it "
+                "(ADR-0141 D1/D4)."
+            )
         self.model_id = model_id
         self.provider = provider
         self.max_tokens = max_tokens
         self.budget_role = budget_role
         self.reasoning_effort = reasoning_effort
         self._egress_guard = egress_guard
-        # LiteLLM model string: "provider/model_id"
-        self._litellm_model = f"{provider}/{model_id}"
+        self.placement = placement
+        self.model_def = model_def
+        self._is_local = placement is Placement.LOCAL
+        # LiteLLM model string: "provider/model_id".
+        #
+        # Local placement dispatches as litellm's OpenAI-compatible provider
+        # (ADR-0141 D1): litellm 1.98.0 does not recognise `slm_local/` as a
+        # provider prefix and fails with "LLM Provider NOT provided" before
+        # any transport. The `openai/` prefix is routing only — it never
+        # leaves this client, and it is stripped from the wire `model` field
+        # by litellm itself.
+        self._litellm_model = f"openai/{model_id}" if self._is_local else f"{provider}/{model_id}"
+        # What telemetry reports. Cloud keeps the canonical "provider/model_id"
+        # string (ADR-0121 T4 / AC-8, matched by the cost row). Local keeps the
+        # bare catalog id LocalLLMClient always emitted, so every existing
+        # dashboard filter over local traffic keeps matching across the
+        # cutover; the catalog provider (`slm_local`) is reported separately
+        # and is what attribution actually keys on.
+        self._telemetry_model = model_id if self._is_local else self._litellm_model
 
     @property
     def model_configs(self) -> dict[str, Any]:
@@ -502,6 +701,22 @@ class LiteLLMClient:
         from personal_agent.llm_client.types import LLMClientError
         from personal_agent.llm_client.types import LLMResponse as LLMResponseType
         from personal_agent.llm_client.types import ToolCall as ToolCallType
+
+        if self._is_local:
+            return await self._respond_local(
+                role=role,
+                messages=messages,
+                trace_ctx=trace_ctx,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                system_prompt=system_prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout_s=timeout_s,
+                max_retries=max_retries,
+                prompt_identity=prompt_identity,
+            )
 
         effective_max_tokens = max_tokens or self.max_tokens
         trace_id = str(trace_ctx.trace_id)
@@ -602,7 +817,7 @@ class LiteLLMClient:
         # AsyncHTTPHandler and silently drop anything else). A provider in
         # neither set fails closed rather than dispatching unguarded.
         litellm_kwargs["client"] = _build_guarded_client(
-            self.provider, provider_def, api_key, resolved_guard
+            self.provider, provider_def.base_url, api_key, resolved_guard
         )
         if provider_def.base_url:
             litellm_kwargs["api_base"] = provider_def.base_url
@@ -1003,3 +1218,287 @@ class LiteLLMClient:
             finish_reason=choice.finish_reason,
             raw=response.model_dump() if hasattr(response, "model_dump") else {},
         )
+
+    async def _respond_local(
+        self,
+        *,
+        role: ModelRole,
+        messages: list[dict[str, Any]],
+        trace_ctx: TraceContext,
+        tools: list[dict[str, Any]] | None,
+        tool_choice: str | dict[str, Any] | None,
+        response_format: dict[str, Any] | None,
+        system_prompt: str | None,
+        max_tokens: int | None,
+        temperature: float | None,
+        timeout_s: float | None,
+        max_retries: int | None,
+        prompt_identity: PromptIdentity | None,
+    ) -> LLMResponse:
+        """Dispatch a local-placement call through litellm (ADR-0141 T2).
+
+        Kept separate from the cloud body rather than branching through it.
+        The two paths agree on almost nothing below the transport — the cost
+        gate, the parameter vocabulary, the response shape and the error
+        taxonomy all differ — so interleaving them would produce a method
+        where every second line is a placement test, and would put the cloud
+        path (which this ticket does not change) at risk on every edit.
+
+        What this path preserves from the deleted raw-httpx client, per
+        ADR-0141 D7: the egress guard, the catalog sampler parameters, the
+        `cache_prompt` flag, two-shape reasoning extraction, the unconditional
+        text tool-call fallback, streaming, the four propagation headers, the
+        role timeout, the history sanitiser, and the error taxonomy. What it
+        deliberately does not do is touch the cost gate: local inference is
+        self-hosted and free, and a Postgres round-trip has no business on the
+        hot turn path.
+
+        Args:
+            role: Model role, for telemetry.
+            messages: OpenAI-format messages.
+            trace_ctx: Trace context for telemetry and header propagation.
+            tools: OpenAI-format tool definitions, or None.
+            tool_choice: Tool selection strategy, or None.
+            response_format: Structured-output constraint, or None.
+            system_prompt: Prepended as a system message when given.
+            max_tokens: Output cap override. ``None`` falls back to the
+                deployment's declared cap, which may itself be absent.
+            temperature: Override; ``None`` uses the deployment's declared value.
+            timeout_s: Read-timeout override; ``None`` uses the deployment's
+                ``default_timeout``.
+            max_retries: Retry budget; ``None`` uses ``settings.llm_max_retries``.
+            prompt_identity: Identity of the prompt (ADR-0078 D1/D4).
+
+        Returns:
+            Normalized LLMResponse.
+
+        Raises:
+            LLMTimeout: On a read timeout.
+            LLMRateLimit: On HTTP 429.
+            LLMServerError: On HTTP 5xx.
+            LLMConnectionError: When the local server cannot be reached.
+            LLMInvalidResponse: When the aggregated response cannot be adapted.
+            LLMClientError: On any other dispatch failure.
+            EgressBlockedError: When the endpoint is blocklisted (ADR-0132).
+        """
+        from personal_agent.config import load_model_config  # noqa: PLC0415
+        from personal_agent.config.settings import get_settings  # noqa: PLC0415
+        from personal_agent.llm_client.adapters import (  # noqa: PLC0415
+            _aggregate_streaming_chunks,
+            adapt_chat_completions_response,
+            normalise_tool_call_indices,
+        )
+        from personal_agent.llm_client.history_sanitiser import sanitise_messages  # noqa: PLC0415
+        from personal_agent.llm_client.models import ToolCallingStrategy  # noqa: PLC0415
+        from personal_agent.llm_client.types import LLMClientError  # noqa: PLC0415
+
+        assert self.model_def is not None  # guaranteed by __init__ for local placement
+        model_def = self.model_def
+        trace_id = str(trace_ctx.trace_id)
+
+        provider_def = load_model_config().providers.get(self.provider)
+        if provider_def is None:
+            raise LLMClientError(
+                f"provider {self.provider!r} is not declared in the model "
+                "catalog (config/models.yaml); refusing to dispatch."
+            )
+
+        # The deployment's own endpoint wins over the provider default: one
+        # provider can front several backends (the 8502/8503 split this ADR's
+        # own finding was masked by).
+        api_base = model_def.endpoint or provider_def.base_url
+        if not api_base:
+            raise LLMClientError(
+                f"local deployment {self.model_id!r} resolves no endpoint — "
+                "neither the deployment nor provider "
+                f"{self.provider!r} declares one."
+            )
+
+        # ── Egress guard, layer 1 (ADR-0141 D2.1) ─────────────────────────
+        # Route-independent and owns the exception type. Layer 2 (the guarded
+        # http_client inside the injected AsyncOpenAI) is attached below and
+        # additionally covers redirect hops and SDK-constructed URLs.
+        resolved_guard = self._egress_guard or get_domain_guard()
+        check_egress_or_raise(api_base, guard=resolved_guard, trace_id=trace_id)
+
+        settings = get_settings()
+
+        # ── Request assembly ──────────────────────────────────────────────
+        request_messages = list(messages)
+        if system_prompt:
+            request_messages.insert(0, {"role": "system", "content": system_prompt})
+        # FRE-237 — tool_call / tool_result consistency before dispatch.
+        request_messages, _ = sanitise_messages(request_messages, trace_id=trace_id)
+        # Some OpenAI-compatible backends reject a historical tool call with no
+        # `index`; the raw-httpx builder back-filled it and so must this path.
+        request_messages = normalise_tool_call_indices(request_messages)
+
+        # Strategy-aware tool filtering (ADR-0032). The orchestrator should
+        # already have stripped tools for a non-native strategy; this is the
+        # safety net that keeps a tools array away from a chat template that
+        # cannot render one.
+        if tools and model_def.effective_tool_strategy is not ToolCallingStrategy.NATIVE:
+            log.warning(
+                "tools_filtered_by_strategy",
+                model=self.model_id,
+                role=role.value,
+                tools_count=len(tools),
+                strategy=model_def.effective_tool_strategy.value,
+                reason="Tools stripped — model strategy is not NATIVE",
+                trace_id=trace_id,
+            )
+            tools = None
+            tool_choice = None
+
+        effective_timeout_s = (
+            timeout_s if timeout_s is not None else float(model_def.default_timeout)
+        )
+        effective_max_retries = max_retries if max_retries is not None else settings.llm_max_retries
+        effective_temperature = temperature if temperature is not None else model_def.temperature
+        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+
+        litellm_kwargs: dict[str, Any] = {
+            "model": self._litellm_model,
+            "messages": request_messages,
+            "api_base": api_base,
+            "client": _build_guarded_client(self.provider, api_base, None, resolved_guard),
+            # Streaming keeps the connection alive byte-by-byte, which is what
+            # avoids Cloudflare 524s on long local generations; include_usage
+            # is what makes llama-server / vLLM emit the usage block at all.
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            # The role timeout is a GENERATION budget. Handing it to litellm as
+            # a bare float would apply it to connect, write and pool as well,
+            # so an unreachable tunnel would hang a turn for the full 600s
+            # instead of failing in 10.
+            "timeout": httpx.Timeout(
+                connect=_LOCAL_NON_READ_TIMEOUT_S,
+                read=effective_timeout_s,
+                write=_LOCAL_NON_READ_TIMEOUT_S,
+                pool=_LOCAL_NON_READ_TIMEOUT_S,
+            ),
+            # One retry budget, not two: our budget becomes litellm's, and we
+            # run no loop of our own. Measured against litellm 1.98.0, this
+            # costs `2 * num_retries + 1` transport requests — more than the
+            # `num_retries + 1` the raw-httpx loop issued, which is why the
+            # background producers' `max_retries=0` (exactly one request) is
+            # asserted at the transport rather than assumed.
+            "num_retries": effective_max_retries,
+            # Flattened into the top level of the request JSON by the SDK.
+            "extra_body": _local_extra_body(model_def),
+        }
+        if effective_max_tokens is not None:
+            # Omitted entirely when the catalog declares none (ADR-0141 D5):
+            # on llama.cpp the completion budget includes thinking, so a
+            # default cap would truncate answers, not just bound them.
+            litellm_kwargs["max_tokens"] = effective_max_tokens
+        if effective_temperature is not None:
+            litellm_kwargs["temperature"] = effective_temperature
+        if model_def.top_p is not None:
+            litellm_kwargs["top_p"] = model_def.top_p
+        if model_def.presence_penalty is not None:
+            litellm_kwargs["presence_penalty"] = model_def.presence_penalty
+        if response_format is not None:
+            litellm_kwargs["response_format"] = response_format
+        if tools:
+            litellm_kwargs["tools"] = tools
+            litellm_kwargs["tool_choice"] = tool_choice if tool_choice else "auto"
+            if model_def.parallel_tool_calls:
+                litellm_kwargs["parallel_tool_calls"] = True
+
+        with model_call_span(
+            role=role.value, model=self.model_id, provider=self.provider
+        ) as _model_span:
+            span_id = format(_model_span.get_span_context().span_id, "016x")
+
+            # All four propagation headers (ADR-0141 D7): W3C traceparent plus
+            # the legacy trio slm_server still reads. inject() reads the active
+            # context — the model-call span opened just above.
+            propagation_carrier: dict[str, str] = {}
+            inject(propagation_carrier)
+            request_headers: dict[str, str] = {
+                "X-Trace-Id": trace_id,
+                "X-Span-Id": span_id,
+                **propagation_carrier,
+            }
+            if trace_ctx.session_id:
+                request_headers["X-Session-Id"] = trace_ctx.session_id
+            litellm_kwargs["extra_headers"] = request_headers
+
+            emit_model_call_started(
+                log=log,
+                role=role.value,
+                model=self._telemetry_model,
+                endpoint=api_base,
+                provider=self.provider,
+                trace_ctx=trace_ctx,
+                span_id=span_id,
+                extra={"max_tokens": effective_max_tokens},
+            )
+
+            try:
+                stream = await litellm.acompletion(**litellm_kwargs)
+                chunks = [chunk.model_dump() async for chunk in stream]
+                response_data = _aggregate_streaming_chunks(chunks)
+                # Reasoning extraction (both shapes) and the unconditional text
+                # tool-call fallback both live in this adapter, which is why the
+                # local path aggregates into its shape rather than reading
+                # litellm's ModelResponse directly.
+                llm_response = adapt_chat_completions_response(response_data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                mapped = _map_local_dispatch_error(exc)
+                log.error(
+                    MODEL_CALL_ERROR,
+                    role=role.value,
+                    model=self._telemetry_model,
+                    endpoint=api_base,
+                    provider=self.provider,
+                    error_type=type(mapped).__name__,
+                    error=str(mapped),
+                    trace_id=trace_id,
+                    session_id=trace_ctx.session_id,
+                    span_id=span_id,
+                )
+                raise mapped from exc
+
+            usage = llm_response["usage"]
+            input_tokens = usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("completion_tokens", 0)
+            # KV-cache reuse via the OpenAI-standard
+            # usage.prompt_tokens_details.cached_tokens (== llama-server's
+            # timings.cache_n). ADR-0141 D6.4 makes this the corroborating
+            # field for cache_prompt delivery.
+            prompt_details = usage.get("prompt_tokens_details") or {}
+            cached_tokens = prompt_details.get("cached_tokens") or 0
+
+            _model_span.set_attribute(gen_ai.GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
+            _model_span.set_attribute(gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
+
+            # FRE-1008: derived from what was actually sent — the sanitised,
+            # index-normalised messages and the strategy-filtered tools, not
+            # the caller's originals.
+            identity = prompt_identity or derive_fallback_prompt_identity(
+                f"role.{role.value}",
+                system_prompt=system_prompt,
+                request_messages=request_messages,
+                tools=tools,
+            )
+            emit_model_call_completed(
+                log=log,
+                role=role.value,
+                model=self._telemetry_model,
+                endpoint=api_base,
+                provider=self.provider,
+                trace_ctx=trace_ctx,
+                span_id=span_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                prompt_identity=identity,
+                total_tokens=usage.get("total_tokens") or (input_tokens + output_tokens),
+                cache_read_tokens=cached_tokens if cached_tokens > 0 else None,
+                extra={"tool_calls": len(llm_response["tool_calls"])},
+            )
+
+        return llm_response

@@ -45,7 +45,7 @@ from personal_agent.captains_log.capture import TaskCapture
 from personal_agent.config import load_model_config, resolve_role_model_key
 from personal_agent.config.settings import get_settings
 from personal_agent.cost_gate import BudgetDenied
-from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
+from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, ModelRole
 from personal_agent.llm_client.token_counter import estimate_tokens
 from personal_agent.memory.session_digest import (
     MAX_LABEL_CHARS,
@@ -645,8 +645,12 @@ async def _call_model(
             return _reply_payload(response)
 
         from personal_agent.llm_client.concurrency import InferencePriority  # noqa: PLC0415
+        from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
 
-        local_client = LocalLLMClient()
+        # ADR-0141 D1: the same factory door as the cloud branch above, on the
+        # same budget lane — placement now decides how the one client
+        # dispatches, not which class is built.
+        local_client = get_llm_client_for_key(role_name, budget_role="captains_log")
         llm_response = await local_client.respond(
             role=ModelRole.SESSION_SUMMARY,
             messages=[

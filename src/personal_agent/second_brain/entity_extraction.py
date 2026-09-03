@@ -17,7 +17,7 @@ import orjson
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import load_model_config, resolve_role_model_key, settings
 from personal_agent.cost_gate import BudgetDenied
-from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
+from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, ModelRole
 from personal_agent.memory.weight import AssertedBy
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.spans import close_root_span, open_root_span
@@ -1038,7 +1038,8 @@ async def extract_entities_and_relationships(
 
     Dispatches to a cloud provider or a local SLM based on the
     entity_extraction_role defined in config/models.yaml (ADR-0031).
-    Cloud dispatch uses LiteLLMClient; local dispatch uses LocalLLMClient.
+    Both placements dispatch through ``LiteLLMClient`` (ADR-0141 D1); the
+    branch below differs only in call parameters, not in client class.
 
     Args:
         user_message: User's message.
@@ -1186,8 +1187,15 @@ async def extract_entities_and_relationships(
                         }
                     )
             else:
-                # Local SLM path
-                local_client = LocalLLMClient()
+                # Local SLM path — ADR-0141 D1: the same factory door as the
+                # cloud branch above, keyed on the resolved deployment.
+                from personal_agent.llm_client.factory import (  # noqa: PLC0415
+                    get_llm_client_for_key,
+                )
+
+                local_client = get_llm_client_for_key(
+                    entity_extraction_role, budget_role="entity_extraction"
+                )
                 model_role = ModelRole.ENTITY_EXTRACTION
 
                 log.debug(

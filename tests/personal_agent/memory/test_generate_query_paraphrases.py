@@ -36,7 +36,9 @@ def _install_fake_client(
     monkeypatch: pytest.MonkeyPatch, *, content: str | None = None, error: Exception | None = None
 ) -> _FakeLocalClient:
     client = _FakeLocalClient(content=content, error=error)
-    monkeypatch.setattr(svc, "LocalLLMClient", lambda: client)
+    # ADR-0141 D1: the producer acquires its client from the factory now, not
+    # by constructing a placement-specific class.
+    monkeypatch.setattr(svc, "get_llm_client", lambda role_name: client)
     return client
 
 

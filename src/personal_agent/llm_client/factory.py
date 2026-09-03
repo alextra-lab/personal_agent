@@ -1,8 +1,15 @@
-"""LLM client factory — dispatches to LocalLLMClient or LiteLLMClient based on provider placement.
+"""LLM client factory — one client for every placement (ADR-0141 D1).
 
-Two-path dispatch (ADR-0033):
-  placement == local  →  LocalLLMClient (GPU-aware concurrency, thinking budget, tools)
-  placement == cloud  →  LiteLLMClient (all cloud providers via litellm.acompletion())
+Every LLM call, local and cloud, dispatches through :class:`LiteLLMClient` /
+``litellm.acompletion()``. The placement branch this module used to carry is
+gone: it produced two dispatch shapes, and the local one posted its
+``extra_body`` block as a literal wire key that llama-server ignored, so four
+declared sampler parameters and both thinking controls were inert (measured
+2026-09-03, ADR-0141).
+
+Placement still decides *how* the one client dispatches — local placement
+carries the catalog's sampler parameters onto the wire, skips the cost gate,
+and keeps the local error taxonomy — but not *which* client is built.
 
 Usage:
     from personal_agent.llm_client.factory import get_llm_client
@@ -25,11 +32,12 @@ if TYPE_CHECKING:
 
 
 class LLMClient(Protocol):
-    """Structural protocol for LLM clients (LocalLLMClient and LiteLLMClient).
+    """Structural protocol for the LLM client.
 
-    Both clients must implement respond() with this signature so the executor
-    can use either interchangeably. Extra client-specific params (priority,
-    priority_timeout) are absorbed by **kwargs.
+    Retained as the executor's structural contract after the placement branch
+    collapsed (ADR-0141 D1), so a caller still depends on the shape of
+    ``respond()`` rather than on a concrete class. Extra client-specific
+    params (priority, priority_timeout) are absorbed by **kwargs.
     """
 
     async def respond(
@@ -61,8 +69,8 @@ def _build_client(
 
     The single dispatch door (ADR-0121 §6): every path — role resolution and the
     key-bypass helper — resolves to a key, then enters here with an explicit
-    ``budget_role``. ``local`` placement → :class:`LocalLLMClient`; any cloud
-    placement → :class:`LiteLLMClient`.
+    ``budget_role``. Since ADR-0141 D1 there is one client for both placements;
+    placement is passed to it rather than selecting between two classes.
 
     Args:
         model_key: The resolved catalog deployment key (drives placement).
@@ -71,27 +79,48 @@ def _build_client(
         config: The loaded :class:`ModelConfig`.
 
     Returns:
-        A client whose placement matches the deployment's provider.
-    """
-    if model_def is not None and config.placement_of(model_key) is not Placement.LOCAL:
-        from personal_agent.llm_client.litellm_client import LiteLLMClient
+        A :class:`LiteLLMClient` configured for the deployment's placement.
 
-        return LiteLLMClient(
-            model_id=model_def.id,
-            provider=model_def.provider or "anthropic",
-            max_tokens=model_def.max_tokens or 8192,
-            budget_role=budget_role,
-            # FRE-1007: both doors into this function pass an EFFECTIVE definition
-            # — role-resolved (binding overrides merged) or key-resolved — so the
-            # declared reasoning depth travels with the client either way. This is
-            # the seam that makes the declaration effective for producers that
-            # never named an effort at their call site.
-            reasoning_effort=model_def.reasoning_effort,
+    Raises:
+        LLMClientError: If ``model_def`` is None — the deployment resolved to
+            no catalog definition. Before ADR-0141 this fell through to a bare
+            ``LocalLLMClient()``, which took no model key and therefore
+            dispatched against whatever the catalog happened to resolve
+            (FRE-1343). With one client per resolved key there is nothing to
+            fall through to, and a silent wrong-model dispatch is the exact
+            door the unification closes — so it fails loudly instead.
+    """
+    from personal_agent.llm_client.litellm_client import LiteLLMClient
+    from personal_agent.llm_client.types import LLMClientError
+
+    if model_def is None:
+        raise LLMClientError(
+            f"deployment key {model_key!r} resolves to no definition in the "
+            "model catalog (config/models.yaml); refusing to dispatch without "
+            "a known model (ADR-0141 D1)."
         )
 
-    from personal_agent.llm_client.client import LocalLLMClient
+    placement = config.placement_of(model_key)
+    is_local = placement is Placement.LOCAL
 
-    return LocalLLMClient()
+    return LiteLLMClient(
+        model_id=model_def.id,
+        provider=model_def.provider or ("slm_local" if is_local else "anthropic"),
+        # ADR-0141 D5: omit-means-unbounded is preserved for local placement.
+        # The `or 8192` fallback stays a CLOUD default — on llama.cpp the
+        # completion budget includes thinking, so applying it locally would
+        # cap a primary whose thinking budget alone declares 32768.
+        max_tokens=model_def.max_tokens if is_local else (model_def.max_tokens or 8192),
+        budget_role=budget_role,
+        # FRE-1007: both doors into this function pass an EFFECTIVE definition
+        # — role-resolved (binding overrides merged) or key-resolved — so the
+        # declared reasoning depth travels with the client either way. This is
+        # the seam that makes the declaration effective for producers that
+        # never named an effort at their call site.
+        reasoning_effort=model_def.reasoning_effort,
+        placement=placement,
+        model_def=model_def,
+    )
 
 
 def get_llm_client(role_name: str = "primary", *, selection_key: str | None = None) -> Any:
@@ -113,8 +142,8 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
        ``ExecutionProfile`` redirect this used to fall back to is gone — Path is
        removed).
 
-    ``local`` placement → :class:`LocalLLMClient`; any cloud placement →
-    :class:`LiteLLMClient`.
+    Both placements return a :class:`LiteLLMClient`, configured for the
+    resolved deployment's placement (ADR-0141 D1).
 
     ``role_name`` must be a literal factory role name (``"primary"``,
     ``"captains_log"``, etc.) — ``budget_role_for(role_name)`` derives the
@@ -199,7 +228,7 @@ def get_llm_client_for_key(model_key: str, *, budget_role: str) -> Any:
             bucket.
 
     Returns:
-        LiteLLMClient for cloud provider models; LocalLLMClient for local.
+        A :class:`LiteLLMClient` configured for the key's placement.
 
     Raises:
         ValueError: If ``model_key`` is not registered in ``models.yaml``.

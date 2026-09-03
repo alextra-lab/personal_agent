@@ -90,9 +90,7 @@ class TestConsumerRaisesWhenMatrixMissing:
         monkeypatch.setattr(config_guard, "repo_root", lambda: fixture_root)
 
         with (
-            patch(
-                "personal_agent.second_brain.entity_extraction.LocalLLMClient"
-            ) as mock_client_cls,
+            patch("personal_agent.llm_client.factory.get_llm_client_for_key") as mock_client_cls,
             pytest.raises(ModelRoleError, match="model_roles.yaml"),
         ):
             mock_client_cls.return_value.respond = AsyncMock(

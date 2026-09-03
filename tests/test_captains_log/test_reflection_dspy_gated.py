@@ -180,7 +180,6 @@ def test_cost_is_collected_even_when_the_job_raises() -> None:
             final_state="COMPLETED",
             reply_length=5,
             telemetry_summary="",
-            llm_client=None,  # type: ignore[arg-type]
             captains_log_role="captains_log",
             cost_sink=sink,
         )

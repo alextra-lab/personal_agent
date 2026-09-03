@@ -527,6 +527,42 @@ def build_responses_request(
     return payload
 
 
+def normalise_tool_call_indices(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a copy of ``messages`` with an ``index`` on every historical tool call.
+
+    Some OpenAI-compatible backends (mlx-openai-server) reject an assistant
+    message whose ``tool_calls`` entries carry no ``index``; others
+    (llama-cpp-python) do not care. Back-filling it keeps one request shape
+    valid across every backend the local deployments run on.
+
+    Extracted from :func:`build_chat_completions_request` (ADR-0141 T2) so the
+    unified litellm dispatch path applies the same normalisation the raw-httpx
+    path always did. An existing ``index`` is preserved, never renumbered.
+
+    Args:
+        messages: Chat messages (not modified).
+
+    Returns:
+        A shallow-copied message list whose assistant tool-call entries all
+        carry an ``index``.
+    """
+    normalized_messages: list[dict[str, Any]] = []
+    for msg in messages:
+        msg_copy = msg.copy()
+        if msg_copy.get("role", "") == "assistant" and "tool_calls" in msg_copy:
+            tool_calls = msg_copy["tool_calls"]
+            if isinstance(tool_calls, list):
+                normalized_tool_calls = []
+                for idx, tc in enumerate(tool_calls):
+                    tc_copy = tc.copy() if isinstance(tc, dict) else {}
+                    if "index" not in tc_copy:
+                        tc_copy["index"] = idx
+                    normalized_tool_calls.append(tc_copy)
+                msg_copy["tool_calls"] = normalized_tool_calls
+        normalized_messages.append(msg_copy)
+    return normalized_messages
+
+
 def build_chat_completions_request(
     messages: list[dict[str, Any]],
     model: str,
@@ -576,28 +612,7 @@ def build_chat_completions_request(
     Returns:
         Request payload dictionary.
     """
-    # Normalize messages: handle tool_calls format for different backends
-    # Some backends (mlx-openai-server) require 'index' field, others (llama-cpp-python) may not
-    # Some backends may not handle assistant messages with tool_calls in conversation history
-    normalized_messages: list[dict[str, Any]] = []
-    for msg in messages:
-        msg_copy = msg.copy()
-        role = msg_copy.get("role", "")
-
-        # Handle assistant messages with tool_calls
-        if role == "assistant" and "tool_calls" in msg_copy:
-            tool_calls = msg_copy["tool_calls"]
-            if isinstance(tool_calls, list):
-                normalized_tool_calls = []
-                for idx, tc in enumerate(tool_calls):
-                    tc_copy = tc.copy() if isinstance(tc, dict) else {}
-                    # Ensure index is present (some backends require it for validation)
-                    # If index already exists, preserve it; otherwise add it
-                    if "index" not in tc_copy:
-                        tc_copy["index"] = idx
-                    normalized_tool_calls.append(tc_copy)
-                msg_copy["tool_calls"] = normalized_tool_calls
-        normalized_messages.append(msg_copy)
+    normalized_messages = normalise_tool_call_indices(messages)
 
     payload: dict[str, Any] = {
         "model": model,

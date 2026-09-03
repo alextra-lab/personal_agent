@@ -27,6 +27,16 @@ step 2, FRE-917). They are set high (50) so that unification does not introduce 
 throttle by surprise. Placement (local vs cloud) decides only *dispatch* — which
 client class handles the call — which is ``ModelConfig.placement_of``'s job, not
 this module's.
+
+**Stated plainly, because the paragraph above is now out of date and silence
+would read as "still true":** ADR-0141 T2 moved local placement onto
+``LiteLLMClient`` too, and ``LocalLLMClient`` is no longer constructed by any
+production path. Until T3 (FRE-1366) re-homes this controller as a process-level
+singleton acquired inside the unified ``respond()``, **no** deployment calls
+``request_slot`` — the local ``max_concurrency: 1`` GPU ceiling and the
+``InferencePriority`` tiers are inert, and ``priority``/``priority_timeout``
+arguments are accepted and ignored. The two tickets are a single cutover: T2
+must not deploy without T3.
 """
 
 from __future__ import annotations

@@ -145,6 +145,22 @@ def _clear_guarded_client_caches() -> Iterator[None]:
     litellm_client_module._guarded_async_http_handlers.clear()
 
 
+@pytest.fixture(autouse=True)
+def _reset_concurrency_singleton() -> Iterator[None]:
+    """The re-homed controller (ADR-0141 D3) is process-global — reset it.
+
+    Without this, whichever test dispatches first permanently seeds the
+    singleton from ITS patched catalog, and every later test in this module
+    (each with its own ``_local_catalog()``) would resolve the primary's
+    deployment key against a stale registration.
+    """
+    from personal_agent.llm_client.concurrency import set_inference_concurrency_controller
+
+    set_inference_concurrency_controller(None)
+    yield
+    set_inference_concurrency_controller(None)
+
+
 # ── Recorded SSE streams ──────────────────────────────────────────────────
 
 

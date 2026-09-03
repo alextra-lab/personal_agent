@@ -13,6 +13,14 @@ It exists because the raw-httpx client it replaces sent the literal key
 
 Our wrapper adds: cost tracking via CostTrackerService, budget enforcement,
 and telemetry (structlog). LiteLLM handles provider format conversion and retries.
+
+Since ADR-0141 D3, every chat-completion provider dispatching through here
+(``slm_local``, ``anthropic``, ``openai``, ``ovhcloud``) acquires a slot from
+the process-wide :func:`~personal_agent.llm_client.concurrency.get_inference_concurrency_controller`
+singleton around the actual generation call, so the catalog's declared cloud
+ceilings are enforced for the first time and the local GPU ceiling / priority
+tiers carry over unchanged. ``voyage``/``ovh`` (reranker/embedder) never
+dispatch through here and stay out of scope, per the ADR.
 """
 
 from __future__ import annotations
@@ -31,6 +39,11 @@ from openai import AsyncOpenAI
 from opentelemetry.propagate import inject
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as gen_ai
 
+from personal_agent.llm_client.concurrency import (
+    InferencePriority,
+    InferenceSlotTimeout,
+    get_inference_concurrency_controller,
+)
 from personal_agent.llm_client.models import Placement
 from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
@@ -547,6 +560,7 @@ class LiteLLMClient:
         egress_guard: DomainGuard | None = None,
         placement: Placement = Placement.CLOUD,
         model_def: ModelDefinition | None = None,
+        model_key: str | None = None,
     ) -> None:
         """Initialize LiteLLMClient with model and provider configuration.
 
@@ -593,6 +607,22 @@ class LiteLLMClient:
                 local placement** — it carries the sampler parameters, the
                 endpoint override and the role timeout that the local wire
                 payload is built from. Ignored for cloud placement.
+            model_key: The catalog deployment key (e.g. ``"claude_sonnet"``,
+                ``"qwen3.6-35b-thinking"``) this client was built for (ADR-0141
+                D3). Used to acquire the re-homed ``InferenceConcurrencyController``'s
+                per-deployment sub-limit and priority-tier slot, the same key
+                ``config/models.yaml`` declares it under — **not** ``model_id``,
+                which is the wire model identifier and is not guaranteed unique
+                across deployments. ``None`` (a direct construction outside the
+                factory, e.g. a user-proposed model override with no catalog
+                entry) falls back to ``model_id``. Unless that string happens to
+                collide with a registered catalog key, ``request_slot`` resolves
+                neither a deployment sub-limit nor a provider through it and the
+                call bypasses concurrency control **entirely** — not just the
+                per-deployment sub-limit — because the controller looks up the
+                provider by role registration, not by ``self.provider`` directly.
+                Only pass ``None`` for a deployment genuinely outside the
+                catalog.
 
         Raises:
             ValueError: If ``placement`` is local and ``model_def`` is None.
@@ -604,6 +634,7 @@ class LiteLLMClient:
                 "(ADR-0141 D1/D4)."
             )
         self.model_id = model_id
+        self.model_key = model_key or model_id
         self.provider = provider
         self.max_tokens = max_tokens
         self.budget_role = budget_role
@@ -652,7 +683,7 @@ class LiteLLMClient:
         max_retries: int | None = None,
         reasoning_effort: str | None = None,
         previous_response_id: str | None = None,
-        priority: Any = None,
+        priority: InferencePriority = InferencePriority.USER_FACING,
         priority_timeout: float | None = None,
         prompt_identity: PromptIdentity | None = None,
         **kwargs: Any,
@@ -676,8 +707,13 @@ class LiteLLMClient:
             reasoning_effort: Reasoning effort hint (provider-specific, passed through).
             trace_ctx: Trace context for telemetry.
             previous_response_id: Ignored for cloud providers (stateless API).
-            priority: Ignored for cloud providers.
-            priority_timeout: Ignored for cloud providers.
+            priority: Inference priority tier for the re-homed concurrency
+                controller (ADR-0141 D3). Every provider that dispatches
+                through this client — local and cloud alike — acquires a
+                slot; this decides scheduling order when requests compete for
+                the same provider's or deployment's ceiling.
+            priority_timeout: Max seconds to wait for a concurrency slot.
+                ``None`` waits forever.
             prompt_identity: Identity of the prompt sent on this call (ADR-0078
                 D1/D4). When None, a fallback is derived so the emitted
                 ``model_call_completed`` always carries prompt identity fields.
@@ -692,6 +728,8 @@ class LiteLLMClient:
                 fail closed rather than surfacing an incidental ``AttributeError``
                 on ``role.value`` deeper in the call).
             LLMClientError: On API failure after retries.
+            InferenceSlotTimeout: If ``priority_timeout`` expires before a
+                concurrency slot is available (ADR-0141 D3).
         """
         from personal_agent.llm_client.types import ModelRole as _ModelRole
 
@@ -716,6 +754,8 @@ class LiteLLMClient:
                 timeout_s=timeout_s,
                 max_retries=max_retries,
                 prompt_identity=prompt_identity,
+                priority=priority,
+                priority_timeout=priority_timeout,
             )
 
         effective_max_tokens = max_tokens or self.max_tokens
@@ -946,137 +986,162 @@ class LiteLLMClient:
         # span's duration diverge from api_costs.latency_ms beyond ADR-0129
         # AC-4's 10% reconciliation tolerance. span_id is captured before the
         # `with` exits so emit_model_call_completed can use it further down.
-        with model_call_span(
-            role=role.value, model=self._litellm_model, provider=self.provider
-        ) as _model_span:
-            span_id = format(_model_span.get_span_context().span_id, "016x")
-            # ADR-0074 §I2: canonical model_call_started emission (parity with
-            # LocalLLMClient).
-            emit_model_call_started(
-                log=log,
-                role=role.value,
-                model=self._litellm_model,
-                endpoint=self.provider,
-                provider=self.provider,
-                trace_ctx=trace_ctx,
-                span_id=span_id,
-                extra={
-                    "budget_role": self.budget_role,
-                    "reservation_amount_usd": float(reservation_amount),
-                    "max_tokens": effective_max_tokens,
-                },
-            )
+        try:
+            async with get_inference_concurrency_controller().request_slot(
+                role=self.model_key,
+                priority=priority,
+                timeout=priority_timeout,
+                trace_id=trace_id,
+            ):
+                with model_call_span(
+                    role=role.value, model=self._litellm_model, provider=self.provider
+                ) as _model_span:
+                    span_id = format(_model_span.get_span_context().span_id, "016x")
+                    # ADR-0074 §I2: canonical model_call_started emission (parity with
+                    # LocalLLMClient).
+                    emit_model_call_started(
+                        log=log,
+                        role=role.value,
+                        model=self._litellm_model,
+                        endpoint=self.provider,
+                        provider=self.provider,
+                        trace_ctx=trace_ctx,
+                        span_id=span_id,
+                        extra={
+                            "budget_role": self.budget_role,
+                            "reservation_amount_usd": float(reservation_amount),
+                            "max_tokens": effective_max_tokens,
+                        },
+                    )
+                    try:
+                        response = await litellm.acompletion(**litellm_kwargs)
+                    except asyncio.CancelledError:
+                        # FRE-973: a turn-level wall-clock deadline (asyncio.wait_for in the
+                        # executor's step_llm_call) cancels this call directly. CancelledError
+                        # is a BaseException, not an Exception, so it would otherwise skip the
+                        # except Exception below entirely and leak this reservation until the
+                        # cost-gate reaper sweeps it at TTL. Resolve it the same as any other
+                        # failed exit, then propagate the cancellation — never swallow it.
+                        try:
+                            await gate.refund(reservation_id, trace_id=trace_id)
+                        except Exception as refund_exc:  # noqa: BLE001
+                            log.error(
+                                "litellm_refund_after_cancel_failed",
+                                trace_id=trace_id,
+                                session_id=trace_ctx.session_id,
+                                reservation_id=str(reservation_id),
+                                error=str(refund_exc),
+                            )
+                        raise
+                    except Exception as e:
+                        # Refund the reservation so the counter doesn't leak headroom.
+                        try:
+                            await gate.refund(reservation_id, trace_id=trace_id)
+                        except Exception as refund_exc:  # noqa: BLE001
+                            log.error(
+                                "litellm_refund_after_failure_failed",
+                                trace_id=trace_id,
+                                session_id=trace_ctx.session_id,
+                                reservation_id=str(reservation_id),
+                                error=str(refund_exc),
+                            )
+                        log.error(
+                            "litellm_request_failed",
+                            model=self._litellm_model,
+                            trace_id=trace_id,
+                            session_id=trace_ctx.session_id,
+                            error=str(e),
+                            exc_info=True,
+                        )
+                        raise LLMClientError(f"LiteLLM call failed: {e}") from e
+
+                    elapsed = time.monotonic() - start_time
+                    latency_ms = int(elapsed * 1000)
+
+                    # Extract response data (litellm returns OpenAI-format ModelResponse)
+                    choice = response.choices[0]
+                    message = choice.message
+                    content: str = message.content or ""
+
+                    # Parse tool calls
+                    tool_calls: list[ToolCall] = []
+                    if message.tool_calls:
+                        for tc in message.tool_calls:
+                            tool_calls.append(
+                                ToolCallType(
+                                    id=tc.id or str(uuid4()),
+                                    name=tc.function.name,
+                                    arguments=tc.function.arguments,
+                                )
+                            )
+
+                    # Usage — extract base tokens plus provider-specific cache fields
+                    usage: dict[str, Any] = {}
+                    if response.usage:
+                        usage = {
+                            "prompt_tokens": response.usage.prompt_tokens,
+                            "completion_tokens": response.usage.completion_tokens,
+                            "total_tokens": response.usage.total_tokens,
+                        }
+
+                        # Anthropic: explicit cache_control headers → cache_creation / cache_read fields
+                        cache_read = getattr(response.usage, "cache_read_input_tokens", None)
+                        cache_write = getattr(response.usage, "cache_creation_input_tokens", None)
+                        if cache_read is not None:
+                            usage["cache_read_input_tokens"] = cache_read
+                        if cache_write is not None:
+                            usage["cache_creation_input_tokens"] = cache_write
+
+                        # OpenAI: automatic server-side caching → prompt_tokens_details.cached_tokens
+                        # (gpt-4o, gpt-4o-mini, o1, and newer models; no client headers needed)
+                        prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+                        if prompt_details is not None:
+                            openai_cached = getattr(prompt_details, "cached_tokens", None)
+                            if openai_cached is not None and openai_cached > 0:
+                                # Use the same field so the log line is uniform across providers
+                                usage["cache_read_input_tokens"] = (
+                                    usage.get("cache_read_input_tokens", 0) + openai_cached
+                                )
+
+                        # FRE-766: reasoning-token count from the reasoning models (GPT-5 family
+                        # via litellm). Defensive across shapes — completion_tokens_details may be a
+                        # provider object (attribute) or a dict; left absent (never 0/None-forced)
+                        # when the provider omits it (e.g. Claude adaptive thinking) so the eval
+                        # never treats "missing" as "zero reasoning".
+                        completion_details = getattr(
+                            response.usage, "completion_tokens_details", None
+                        )
+                        if completion_details is not None:
+                            reasoning_tokens = (
+                                completion_details.get("reasoning_tokens")
+                                if isinstance(completion_details, dict)
+                                else getattr(completion_details, "reasoning_tokens", None)
+                            )
+                            if reasoning_tokens is not None:
+                                usage["reasoning_tokens"] = reasoning_tokens
+
+                    _model_span.set_attribute(
+                        gen_ai.GEN_AI_USAGE_INPUT_TOKENS, usage.get("prompt_tokens", 0)
+                    )
+                    _model_span.set_attribute(
+                        gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, usage.get("completion_tokens", 0)
+                    )
+        except InferenceSlotTimeout:
+            # A slot wait timing out (priority_timeout) raises before the
+            # async-with body ever runs, so the acompletion()-scoped refund
+            # handlers below never fire. Without this, the reservation made
+            # above leaks until the cost-gate reaper sweeps it at TTL.
             try:
-                response = await litellm.acompletion(**litellm_kwargs)
-            except asyncio.CancelledError:
-                # FRE-973: a turn-level wall-clock deadline (asyncio.wait_for in the
-                # executor's step_llm_call) cancels this call directly. CancelledError
-                # is a BaseException, not an Exception, so it would otherwise skip the
-                # except Exception below entirely and leak this reservation until the
-                # cost-gate reaper sweeps it at TTL. Resolve it the same as any other
-                # failed exit, then propagate the cancellation — never swallow it.
-                try:
-                    await gate.refund(reservation_id, trace_id=trace_id)
-                except Exception as refund_exc:  # noqa: BLE001
-                    log.error(
-                        "litellm_refund_after_cancel_failed",
-                        trace_id=trace_id,
-                        session_id=trace_ctx.session_id,
-                        reservation_id=str(reservation_id),
-                        error=str(refund_exc),
-                    )
-                raise
-            except Exception as e:
-                # Refund the reservation so the counter doesn't leak headroom.
-                try:
-                    await gate.refund(reservation_id, trace_id=trace_id)
-                except Exception as refund_exc:  # noqa: BLE001
-                    log.error(
-                        "litellm_refund_after_failure_failed",
-                        trace_id=trace_id,
-                        session_id=trace_ctx.session_id,
-                        reservation_id=str(reservation_id),
-                        error=str(refund_exc),
-                    )
+                await gate.refund(reservation_id, trace_id=trace_id)
+            except Exception as refund_exc:  # noqa: BLE001
                 log.error(
-                    "litellm_request_failed",
-                    model=self._litellm_model,
+                    "litellm_refund_after_slot_timeout_failed",
                     trace_id=trace_id,
                     session_id=trace_ctx.session_id,
-                    error=str(e),
-                    exc_info=True,
+                    reservation_id=str(reservation_id),
+                    error=str(refund_exc),
                 )
-                raise LLMClientError(f"LiteLLM call failed: {e}") from e
-
-            elapsed = time.monotonic() - start_time
-            latency_ms = int(elapsed * 1000)
-
-            # Extract response data (litellm returns OpenAI-format ModelResponse)
-            choice = response.choices[0]
-            message = choice.message
-            content: str = message.content or ""
-
-            # Parse tool calls
-            tool_calls: list[ToolCall] = []
-            if message.tool_calls:
-                for tc in message.tool_calls:
-                    tool_calls.append(
-                        ToolCallType(
-                            id=tc.id or str(uuid4()),
-                            name=tc.function.name,
-                            arguments=tc.function.arguments,
-                        )
-                    )
-
-            # Usage — extract base tokens plus provider-specific cache fields
-            usage: dict[str, Any] = {}
-            if response.usage:
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                }
-
-                # Anthropic: explicit cache_control headers → cache_creation / cache_read fields
-                cache_read = getattr(response.usage, "cache_read_input_tokens", None)
-                cache_write = getattr(response.usage, "cache_creation_input_tokens", None)
-                if cache_read is not None:
-                    usage["cache_read_input_tokens"] = cache_read
-                if cache_write is not None:
-                    usage["cache_creation_input_tokens"] = cache_write
-
-                # OpenAI: automatic server-side caching → prompt_tokens_details.cached_tokens
-                # (gpt-4o, gpt-4o-mini, o1, and newer models; no client headers needed)
-                prompt_details = getattr(response.usage, "prompt_tokens_details", None)
-                if prompt_details is not None:
-                    openai_cached = getattr(prompt_details, "cached_tokens", None)
-                    if openai_cached is not None and openai_cached > 0:
-                        # Use the same field so the log line is uniform across providers
-                        usage["cache_read_input_tokens"] = (
-                            usage.get("cache_read_input_tokens", 0) + openai_cached
-                        )
-
-                # FRE-766: reasoning-token count from the reasoning models (GPT-5 family
-                # via litellm). Defensive across shapes — completion_tokens_details may be a
-                # provider object (attribute) or a dict; left absent (never 0/None-forced)
-                # when the provider omits it (e.g. Claude adaptive thinking) so the eval
-                # never treats "missing" as "zero reasoning".
-                completion_details = getattr(response.usage, "completion_tokens_details", None)
-                if completion_details is not None:
-                    reasoning_tokens = (
-                        completion_details.get("reasoning_tokens")
-                        if isinstance(completion_details, dict)
-                        else getattr(completion_details, "reasoning_tokens", None)
-                    )
-                    if reasoning_tokens is not None:
-                        usage["reasoning_tokens"] = reasoning_tokens
-
-            _model_span.set_attribute(
-                gen_ai.GEN_AI_USAGE_INPUT_TOKENS, usage.get("prompt_tokens", 0)
-            )
-            _model_span.set_attribute(
-                gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, usage.get("completion_tokens", 0)
-            )
+            raise
 
         # Cost tracking — reconcile via litellm.completion_cost(), guarded so an
         # unmapped dated response id can't silently commit $0 (ADR-0101 §8b AC-11).
@@ -1234,6 +1299,8 @@ class LiteLLMClient:
         timeout_s: float | None,
         max_retries: int | None,
         prompt_identity: PromptIdentity | None,
+        priority: InferencePriority,
+        priority_timeout: float | None,
     ) -> LLMResponse:
         """Dispatch a local-placement call through litellm (ADR-0141 T2).
 
@@ -1268,6 +1335,11 @@ class LiteLLMClient:
                 ``default_timeout``.
             max_retries: Retry budget; ``None`` uses ``settings.llm_max_retries``.
             prompt_identity: Identity of the prompt (ADR-0078 D1/D4).
+            priority: Inference priority tier for the re-homed concurrency
+                controller (ADR-0141 D3). Controls scheduling order when
+                multiple requests compete for the GPU deployment's slot.
+            priority_timeout: Max seconds to wait for a concurrency slot.
+                ``None`` waits forever.
 
         Returns:
             Normalized LLMResponse.
@@ -1280,6 +1352,8 @@ class LiteLLMClient:
             LLMInvalidResponse: When the aggregated response cannot be adapted.
             LLMClientError: On any other dispatch failure.
             EgressBlockedError: When the endpoint is blocklisted (ADR-0132).
+            InferenceSlotTimeout: If ``priority_timeout`` expires before a
+                concurrency slot is available.
         """
         from personal_agent.config import load_model_config  # noqa: PLC0415
         from personal_agent.config.settings import get_settings  # noqa: PLC0415
@@ -1406,99 +1480,105 @@ class LiteLLMClient:
             if model_def.parallel_tool_calls:
                 litellm_kwargs["parallel_tool_calls"] = True
 
-        with model_call_span(
-            role=role.value, model=self.model_id, provider=self.provider
-        ) as _model_span:
-            span_id = format(_model_span.get_span_context().span_id, "016x")
+        async with get_inference_concurrency_controller().request_slot(
+            role=self.model_key,
+            priority=priority,
+            timeout=priority_timeout,
+            trace_id=trace_id,
+        ):
+            with model_call_span(
+                role=role.value, model=self.model_id, provider=self.provider
+            ) as _model_span:
+                span_id = format(_model_span.get_span_context().span_id, "016x")
 
-            # All four propagation headers (ADR-0141 D7): W3C traceparent plus
-            # the legacy trio slm_server still reads. inject() reads the active
-            # context — the model-call span opened just above.
-            propagation_carrier: dict[str, str] = {}
-            inject(propagation_carrier)
-            request_headers: dict[str, str] = {
-                "X-Trace-Id": trace_id,
-                "X-Span-Id": span_id,
-                **propagation_carrier,
-            }
-            if trace_ctx.session_id:
-                request_headers["X-Session-Id"] = trace_ctx.session_id
-            litellm_kwargs["extra_headers"] = request_headers
+                # All four propagation headers (ADR-0141 D7): W3C traceparent plus
+                # the legacy trio slm_server still reads. inject() reads the active
+                # context — the model-call span opened just above.
+                propagation_carrier: dict[str, str] = {}
+                inject(propagation_carrier)
+                request_headers: dict[str, str] = {
+                    "X-Trace-Id": trace_id,
+                    "X-Span-Id": span_id,
+                    **propagation_carrier,
+                }
+                if trace_ctx.session_id:
+                    request_headers["X-Session-Id"] = trace_ctx.session_id
+                litellm_kwargs["extra_headers"] = request_headers
 
-            emit_model_call_started(
-                log=log,
-                role=role.value,
-                model=self._telemetry_model,
-                endpoint=api_base,
-                provider=self.provider,
-                trace_ctx=trace_ctx,
-                span_id=span_id,
-                extra={"max_tokens": effective_max_tokens},
-            )
-
-            try:
-                stream = await litellm.acompletion(**litellm_kwargs)
-                chunks = [chunk.model_dump() async for chunk in stream]
-                response_data = _aggregate_streaming_chunks(chunks)
-                # Reasoning extraction (both shapes) and the unconditional text
-                # tool-call fallback both live in this adapter, which is why the
-                # local path aggregates into its shape rather than reading
-                # litellm's ModelResponse directly.
-                llm_response = adapt_chat_completions_response(response_data)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                mapped = _map_local_dispatch_error(exc)
-                log.error(
-                    MODEL_CALL_ERROR,
+                emit_model_call_started(
+                    log=log,
                     role=role.value,
                     model=self._telemetry_model,
                     endpoint=api_base,
                     provider=self.provider,
-                    error_type=type(mapped).__name__,
-                    error=str(mapped),
-                    trace_id=trace_id,
-                    session_id=trace_ctx.session_id,
+                    trace_ctx=trace_ctx,
                     span_id=span_id,
+                    extra={"max_tokens": effective_max_tokens},
                 )
-                raise mapped from exc
 
-            usage = llm_response["usage"]
-            input_tokens = usage.get("prompt_tokens", 0)
-            output_tokens = usage.get("completion_tokens", 0)
-            # KV-cache reuse via the OpenAI-standard
-            # usage.prompt_tokens_details.cached_tokens (== llama-server's
-            # timings.cache_n). ADR-0141 D6.4 makes this the corroborating
-            # field for cache_prompt delivery.
-            prompt_details = usage.get("prompt_tokens_details") or {}
-            cached_tokens = prompt_details.get("cached_tokens") or 0
+                try:
+                    stream = await litellm.acompletion(**litellm_kwargs)
+                    chunks = [chunk.model_dump() async for chunk in stream]
+                    response_data = _aggregate_streaming_chunks(chunks)
+                    # Reasoning extraction (both shapes) and the unconditional text
+                    # tool-call fallback both live in this adapter, which is why the
+                    # local path aggregates into its shape rather than reading
+                    # litellm's ModelResponse directly.
+                    llm_response = adapt_chat_completions_response(response_data)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    mapped = _map_local_dispatch_error(exc)
+                    log.error(
+                        MODEL_CALL_ERROR,
+                        role=role.value,
+                        model=self._telemetry_model,
+                        endpoint=api_base,
+                        provider=self.provider,
+                        error_type=type(mapped).__name__,
+                        error=str(mapped),
+                        trace_id=trace_id,
+                        session_id=trace_ctx.session_id,
+                        span_id=span_id,
+                    )
+                    raise mapped from exc
 
-            _model_span.set_attribute(gen_ai.GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
-            _model_span.set_attribute(gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
+                usage = llm_response["usage"]
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+                # KV-cache reuse via the OpenAI-standard
+                # usage.prompt_tokens_details.cached_tokens (== llama-server's
+                # timings.cache_n). ADR-0141 D6.4 makes this the corroborating
+                # field for cache_prompt delivery.
+                prompt_details = usage.get("prompt_tokens_details") or {}
+                cached_tokens = prompt_details.get("cached_tokens") or 0
 
-            # FRE-1008: derived from what was actually sent — the sanitised,
-            # index-normalised messages and the strategy-filtered tools, not
-            # the caller's originals.
-            identity = prompt_identity or derive_fallback_prompt_identity(
-                f"role.{role.value}",
-                system_prompt=system_prompt,
-                request_messages=request_messages,
-                tools=tools,
-            )
-            emit_model_call_completed(
-                log=log,
-                role=role.value,
-                model=self._telemetry_model,
-                endpoint=api_base,
-                provider=self.provider,
-                trace_ctx=trace_ctx,
-                span_id=span_id,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                prompt_identity=identity,
-                total_tokens=usage.get("total_tokens") or (input_tokens + output_tokens),
-                cache_read_tokens=cached_tokens if cached_tokens > 0 else None,
-                extra={"tool_calls": len(llm_response["tool_calls"])},
-            )
+                _model_span.set_attribute(gen_ai.GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
+                _model_span.set_attribute(gen_ai.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
+
+                # FRE-1008: derived from what was actually sent — the sanitised,
+                # index-normalised messages and the strategy-filtered tools, not
+                # the caller's originals.
+                identity = prompt_identity or derive_fallback_prompt_identity(
+                    f"role.{role.value}",
+                    system_prompt=system_prompt,
+                    request_messages=request_messages,
+                    tools=tools,
+                )
+                emit_model_call_completed(
+                    log=log,
+                    role=role.value,
+                    model=self._telemetry_model,
+                    endpoint=api_base,
+                    provider=self.provider,
+                    trace_ctx=trace_ctx,
+                    span_id=span_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    prompt_identity=identity,
+                    total_tokens=usage.get("total_tokens") or (input_tokens + output_tokens),
+                    cache_read_tokens=cached_tokens if cached_tokens > 0 else None,
+                    extra={"tool_calls": len(llm_response["tool_calls"])},
+                )
 
         return llm_response

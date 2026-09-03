@@ -105,6 +105,7 @@ def _build_client(
 
     return LiteLLMClient(
         model_id=model_def.id,
+        model_key=model_key,
         provider=model_def.provider or ("slm_local" if is_local else "anthropic"),
         # ADR-0141 D5: omit-means-unbounded is preserved for local placement.
         # The `or 8192` fallback stays a CLOUD default — on llama.cpp the

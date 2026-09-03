@@ -2138,6 +2138,11 @@ class MemoryService:
             extractor_model: Identifier of the LLM that produced this entity's
                 description / extraction (ADR-0074 §I5). ``None`` for user-provided
                 facts (gateway ``store_fact`` path); set for entity-extraction outputs.
+                Written ON CREATE as ``e.extractor_model``: the real identifier when
+                given, else :data:`~personal_agent.grounding.source_registry.
+                USER_STATED_EXTRACTOR_SENTINEL` (ADR-0098 Amendment A6 / FRE-1347) --
+                never left unset, since an unset property is indistinguishable from a
+                genuinely-agent-derived legacy node on read.
             description_confidence: Confidence of this write's description; a correction
                 lands only when it is *strictly greater* than the stored one (FRE-711).
             eval_mode: Whether this write originates from eval/test traffic; an eval write

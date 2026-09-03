@@ -122,3 +122,15 @@ Route all LLM calls (local and cloud) through LiteLLM, which normalizes provider
 - ADR-0007: Unified Configuration Management (established `settings.py` as config authority)
 - ADR-0003: Model Stack (initial model selection decisions)
 - ADR-0029: Inference Concurrency Control (uses `ModelDefinition.provider_type`)
+
+---
+
+## Status Updates
+
+### 2026-09-03 - Alternative C closed by ADR-0141
+**Changed By:** adr session (FRE-1362)
+**Reason:** Alternative C ("Use LiteLLM as the unified abstraction", Deferred since this ADR's
+2026-03-10 acceptance) is now decided: ADR-0141 adopts it — every LLM call, local and cloud,
+dispatches through litellm, with DSPy remaining the one sanctioned outlier by owner direction.
+This ADR's own decision (catalog consolidation in `models.yaml`) was the stated prerequisite and
+stands unchanged.

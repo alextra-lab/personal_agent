@@ -181,6 +181,37 @@ Each is recorded in the handoff so master can adjudicate against D7 directly.
 | ACs 1–7 pass vacuously on presence-only checks | The AC table was a summary; the tests assert **values** — `top_k == 20`, the endpoint URL, exact tool name and arguments, exact reasoning strings, the session-id value, and `X-Span-Id` equal to the emitted `span_id`. Strengthened further: response content on AC-b, `model_call_started` emission on AC-d, `traceparent` carrying the real span id on AC-f, exact arguments on AC-g |
 | AC-c passes while `cost_tracker.connect()` still does a round-trip | **Fixed.** The cost tracker is not acquired at all on the local path, and the test asserts it |
 
+## 4b. Self-review at the Step-6 gate — findings fixed on-branch
+
+`feature-dev:code-reviewer` returned one finding: a concrete sharpening of R1
+(the concurrency gap), with the `entity_extraction` slot-timeout numbers. Carried
+into R1 above; no code change, because FRE-1366 owns the fix.
+
+`security-review` returned no finding at its reporting bar, and two sub-bar
+observations. Both were acted on:
+
+1. **`EgressBlockedError` was being flattened to `LLMConnectionError`.** It
+   subclasses `httpx.RequestError`, so the mapper's connection arm swallowed it
+   — reporting a network failure for a policy refusal, and contradicting
+   `_respond_local`'s own `Raises:` line. The mapper now returns it unchanged,
+   on both layers. Layer 1 was never affected (it raises outside the mapper);
+   this is what keeps the ADR-0132 contract on layer 2's redirect hops.
+2. **The local route had no seeded negative of its own.** The FRE-1364 suite
+   covers the same injection *mechanism* through the cloud body of `respond()`,
+   so ADR-0141 D2.2's letter was arguably met — but an edit to `_respond_local`
+   alone would have tripped no test, and "the tests are the contract" is the
+   point of the clause. Added `TestEgressGuardOnTheLocalRoute`: both layers,
+   asserting `EgressBlockedError` at the caller and zero requests at the
+   transport.
+
+Also raised, and deliberately not changed: `generate_query_paraphrases` moving
+from a bare local client to `get_llm_client("sub_agent")` makes it follow the
+role binding and per-turn selection, so recall-query text can now reach a cloud
+sub-agent where it previously could not. That is ADR-0141 D1 working as
+designed — the old client honoured the selection too, but dispatched a cloud
+model id at the local endpoint, which is FRE-1343 itself. Flagged for the owner
+rather than pinned here, because pinning it is a design decision.
+
 ## 5. Steps
 
 | # | Step | Verify |
@@ -219,7 +250,7 @@ replaced. AC-a's own wording forbids hand-building the payload.
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | **Concurrency control is absent for local between T2 and T3.** The controller lives in `LocalLLMClient`; FRE-1366 re-homes it. Merging and deploying T2 alone removes the `max_concurrency: 1` GPU ceiling and the `InferencePriority` tiers. `priority` / `priority_timeout` become accepted-and-ignored | Not fixed here — FRE-1366 owns it, and duplicating it would collide with that ticket. **Flagged to master as a deploy-ordering constraint: do not deploy T2 without T3.** Recorded in the PR body and the handoff |
+| R1 | **Concurrency control is absent for local between T2 and T3.** The controller lives in `LocalLLMClient`; FRE-1366 re-homes it. Merging and deploying T2 alone removes the `max_concurrency: 1` GPU ceiling and the `InferencePriority` tiers. `priority` / `priority_timeout` become accepted-and-ignored, and `InferenceSlotTimeout` becomes unreachable on the local path. **Live effect:** `primary` and `sub_agent` are the two role bindings on local placement today, so the single-GPU ceiling that serialises them is what actually goes. **Latent effect:** `entity_extraction` and `session_summary` catch `InferenceSlotTimeout` for a fast 60 s / 120 s slot-wait bail; with the gate gone their worst case becomes the read timeout (90 s / 120 s). Both roles bind cloud today, so this is dormant until one is re-bound local | Not fixed here — FRE-1366 owns it, and duplicating it would collide with that ticket. **Flagged to master as a deploy-ordering constraint: do not deploy T2 without T3.** Recorded in the PR body, the handoff, and `concurrency.py`'s own module docstring, so the next reader of that module is not told a stale story |
 | R2 | `top_k: 20` reaches the primary for the first time | ADR-0141 D4 accepts it — the model-card preset finally applying. FRE-1363 re-baselines |
 | R3 | litellm upgrade changes `extra_body` flattening | AC-a pins it at the wire through the real dispatch path |
 | R4 | Local `finish_reason` is absent from `LLMResponse` | Parity — `LocalLLMClient` never set it either. `session_summary._reject_if_truncated` checks `finish_reason` first and the `completion_tokens` ceiling second, so an absent stop reason degrades to the token check exactly as it does today. The aggregated stream *does* carry a real `finish_reason`, so surfacing it is a one-line follow-up — deliberately not taken here, because it would widen local behaviour beyond parity |

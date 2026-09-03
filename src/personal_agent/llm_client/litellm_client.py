@@ -41,6 +41,7 @@ from personal_agent.llm_client.telemetry import (
     emit_model_call_started,
 )
 from personal_agent.security import (
+    EgressBlockedError,
     check_egress_or_raise,
     create_guarded_http_client,
     get_domain_guard,
@@ -250,7 +251,7 @@ def _map_local_dispatch_error(exc: Exception) -> Exception:
         The mapped exception to raise. An exception that is already part of
         this taxonomy (notably ``LLMInvalidResponse`` from the response
         adapters) is returned unchanged rather than flattened to the base
-        class.
+        class, and so is an ``EgressBlockedError`` raised by the layer-2 hook.
     """
     import openai
     from litellm.exceptions import RateLimitError, Timeout
@@ -268,6 +269,17 @@ def _map_local_dispatch_error(exc: Exception) -> Exception:
 
     chain = _exception_chain(exc)
     status = getattr(exc, "status_code", None)
+
+    # The egress guard's exception keeps its own type, on both layers.
+    # ``EgressBlockedError`` subclasses ``httpx.RequestError`` so that existing
+    # seam handlers still catch it — which means the connection arm below would
+    # otherwise swallow it and report a network failure for a policy refusal.
+    # Layer 1 raises outside this mapper and is unaffected; this is what keeps
+    # the ADR-0132 contract on layer 2's redirect hops and SDK-constructed URLs,
+    # where the OpenAI SDK preserves the cause chain (ADR-0141 D2.2).
+    for link in chain:
+        if isinstance(link, EgressBlockedError):
+            return link
 
     if any(
         isinstance(link, (Timeout, openai.APITimeoutError, httpx.TimeoutException))

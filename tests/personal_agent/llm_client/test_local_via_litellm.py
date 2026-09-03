@@ -42,7 +42,7 @@ from personal_agent.llm_client.types import (
     LLMTimeout,
     ModelRole,
 )
-from personal_agent.security import DomainGuard
+from personal_agent.security import DomainGuard, EgressBlockedError
 from personal_agent.telemetry.trace import SystemTraceContext
 
 LOCAL_HOST = "slm.test.example"
@@ -119,12 +119,22 @@ def _real_tracer() -> Any:
     return TracerProvider().get_tracer("fre1365-test")
 
 
-def _permissive_guard() -> DomainGuard:
-    """A pre-loaded DomainGuard that refuses nothing — never touches network or disk."""
+def _guard(blocklist: frozenset[str]) -> DomainGuard:
+    """A pre-loaded DomainGuard — never touches network or disk."""
     guard = DomainGuard(cache_path=Path("telemetry/security/_unused_test_blocklist.json"))
-    guard._blocklist = frozenset()
+    guard._blocklist = blocklist
     guard._last_loaded = datetime.now(timezone.utc)
     return guard
+
+
+def _permissive_guard() -> DomainGuard:
+    """A DomainGuard that refuses nothing."""
+    return _guard(frozenset())
+
+
+def _blocking_guard() -> DomainGuard:
+    """A DomainGuard that refuses the fixture deployments' own endpoint."""
+    return _guard(frozenset({LOCAL_HOST}))
 
 
 @pytest.fixture(autouse=True)
@@ -223,6 +233,7 @@ async def _dispatch(
     status: int | None = None,
     session_id: str | None = "11111111-1111-4111-8111-111111111111",
     capture: Captured | None = None,
+    guard: DomainGuard | None = None,
     **respond_kwargs: Any,
 ) -> Captured:
     """Run a local-placement call through the factory and real litellm dispatch.
@@ -233,6 +244,7 @@ async def _dispatch(
         transport_error: Raised by the transport instead of returning a response.
         status: HTTP status to return instead of a 200 SSE stream.
         session_id: Session id on the trace context (``None`` omits it).
+        guard: DomainGuard to inject; defaults to one that refuses nothing.
         capture: A caller-owned :class:`Captured` to fill in, so a test that
             expects the dispatch to raise can still read what the transport saw.
         **respond_kwargs: Passed through to ``respond()``.
@@ -301,7 +313,7 @@ async def _dispatch(
         )
         stack.enter_context(patch.object(httpx.AsyncHTTPTransport, "handle_async_request", _handle))
         client = get_llm_client_for_key(model_key, budget_role="main_inference")
-        client._egress_guard = _permissive_guard()
+        client._egress_guard = guard if guard is not None else _permissive_guard()
         captured.response = await client.respond(
             role=ModelRole.PRIMARY,
             messages=[{"role": "user", "content": "hello"}],
@@ -735,6 +747,40 @@ class TestRetryAndTimeoutParity:
         ) as sanitiser:
             await _dispatch()
         sanitiser.assert_called_once()
+
+
+class TestEgressGuardOnTheLocalRoute:
+    """The seeded negative, dispatched through ``_respond_local`` itself.
+
+    The FRE-1364 suite covers the OpenAI-SDK route through the cloud body of
+    ``respond()``. That is the same injection *mechanism*, so ADR-0141 D2.2 is
+    arguably satisfied by it — but an edit to ``_respond_local`` alone would
+    trip none of those tests, and "the tests are the contract" is the whole
+    point of the clause. So the local path gets its own.
+    """
+
+    @pytest.mark.asyncio
+    async def test_layer1_blocks_a_blocklisted_endpoint_before_any_transport(self) -> None:
+        captured = Captured()
+        with pytest.raises(EgressBlockedError):
+            await _dispatch(guard=_blocking_guard(), capture=captured)
+        assert captured.bodies == [], "the request must never reach the transport"
+
+    @pytest.mark.asyncio
+    async def test_layer2_alone_blocks_when_layer1_is_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Layer 1 off — proves the injected hook guards this route on its own.
+
+        The caller-facing type is asserted too: ``EgressBlockedError`` subclasses
+        ``httpx.RequestError``, so a mapper that read the exception chain
+        naively would report a network failure for a policy refusal.
+        """
+        monkeypatch.setattr(litellm_client_module, "check_egress_or_raise", lambda *a, **k: None)
+        captured = Captured()
+        with pytest.raises(EgressBlockedError):
+            await _dispatch(guard=_blocking_guard(), capture=captured)
+        assert captured.bodies == [], "the request must never reach the transport"
 
 
 class TestFactoryCollapse:

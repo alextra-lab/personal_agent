@@ -1225,22 +1225,25 @@ Status stays **Implemented**; this addendum is **Proposed** pending its own impl
 (FRE-964 children). A stopgap re-bind (FRE-963) ships separately and immediately; Addendum A makes it
 durable and general.
 
-### 2026-09-03 - Two records corrected by ADR-0141 (dispatch unification)
+### 2026-09-03 - One record corrected now; one supersession proposed by ADR-0141 (dispatch unification)
 **Changed By:** adr session (FRE-1362)
-**Reason:** Two statements in this ADR are superseded by ADR-0141:
+**Reason:** Two entries, of different standing — ADR-0141 is **Proposed**, so only the factual
+correction takes effect immediately; the supersession becomes effective when ADR-0141 is Accepted:
 
-1. **"Vocabulary by dispatch path" is superseded — the rule is now vocabulary by *placement*.**
-   ADR-0141 D1 collapses dispatch to a single client path (`LiteLLMClient` for every placement),
-   so "which client class handles the call" no longer exists as an anchor. The vocabulary split
-   itself survives unchanged in substance: local placement declares
-   `disable_thinking`/`thinking_budget_tokens` (delivered as top-level `chat_template_kwargs`),
-   cloud placement declares `reasoning_effort`. FRE-1007's guard enforces the same pairs, keyed on
-   placement.
-2. **The FRE-917 inert-ceilings note overpromised.** The 2026-07-19 status update above says the
-   cloud ceilings "become live" when "step 2 (FRE-917) unifies the two resolution paths." FRE-917
-   (Done 2026-07-20) unified *resolution* — which key, which budget lane — not *dispatch*: the
-   concurrency controller remained instantiated only by `LocalLLMClient`, so the
-   `openai`/`anthropic`/`voyage`/`ovh` ceilings stayed declared-but-inert. ADR-0141 D3 is what
-   actually delivers them, by re-homing the controller as a process-wide singleton acquired for
-   every provider. Discovered while drafting ADR-0141 (FRE-1362); the related local "second door"
-   (FRE-1343) dissolves under ADR-0141 D1.
+1. **Proposed supersession, effective on ADR-0141's acceptance: "Vocabulary by dispatch path"
+   becomes vocabulary by *placement*.** ADR-0141 D1 collapses dispatch to a single client path
+   (`LiteLLMClient` for every placement), so "which client class handles the call" stops existing
+   as an anchor. The vocabulary split itself survives unchanged in substance: local placement
+   declares `disable_thinking` (delivered as `chat_template_kwargs.enable_thinking=false`) or
+   `thinking_budget_tokens` (delivered as the distinct top-level `thinking_budget` key — two wire
+   shapes, not one), cloud placement declares `reasoning_effort`. FRE-1007's guard enforces the
+   same pairs, keyed on placement.
+2. **Factual correction, effective now regardless of ADR-0141's fate: the FRE-917 inert-ceilings
+   note overpromised.** The 2026-07-19 status update above says the cloud ceilings "become live"
+   when "step 2 (FRE-917) unifies the two resolution paths." FRE-917 (Done 2026-07-20) unified
+   *resolution* — which key, which budget lane — not *dispatch*: the concurrency controller
+   remained instantiated only by `LocalLLMClient`, so the cloud ceilings
+   (`openai`/`anthropic`/`voyage`/`ovh`/`ovhcloud`) stayed declared-but-inert. ADR-0141 D3 is
+   what proposes to deliver them, by re-homing the controller as a process-wide singleton acquired
+   for every provider. Discovered while drafting ADR-0141 (FRE-1362); the related local "second
+   door" (FRE-1343) dissolves under ADR-0141 D1.

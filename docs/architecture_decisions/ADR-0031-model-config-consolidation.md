@@ -127,10 +127,11 @@ Route all LLM calls (local and cloud) through LiteLLM, which normalizes provider
 
 ## Status Updates
 
-### 2026-09-03 - Alternative C closed by ADR-0141
+### 2026-09-03 - Alternative C: closure proposed by ADR-0141
 **Changed By:** adr session (FRE-1362)
 **Reason:** Alternative C ("Use LiteLLM as the unified abstraction", Deferred since this ADR's
-2026-03-10 acceptance) is now decided: ADR-0141 adopts it — every LLM call, local and cloud,
-dispatches through litellm, with DSPy remaining the one sanctioned outlier by owner direction.
-This ADR's own decision (catalog consolidation in `models.yaml`) was the stated prerequisite and
-stands unchanged.
+2026-03-10 acceptance) now has a deciding ADR: ADR-0141 (**Proposed**) adopts it — every LLM
+call, local and cloud, dispatches through litellm, with DSPy remaining the one sanctioned outlier
+by owner direction. The closure takes effect when ADR-0141 is Accepted; until then Alternative C
+remains Deferred-with-a-pending-decision. This ADR's own decision (catalog consolidation in
+`models.yaml`) was the stated prerequisite and stands unchanged.

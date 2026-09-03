@@ -295,9 +295,7 @@ class TestFallbackShape:
                 "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
                 return_value="primary",
             ),
-            patch(
-                "personal_agent.llm_client.factory.get_llm_client_for_key"
-            ) as mock_client_cls,
+            patch("personal_agent.llm_client.factory.get_llm_client_for_key") as mock_client_cls,
         ):
             mock_cfg.return_value.models = {}
             mock_client = mock_client_cls.return_value
@@ -835,9 +833,7 @@ class TestLocalPathRole:
                 "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
                 return_value="primary",
             ),
-            patch(
-                "personal_agent.llm_client.factory.get_llm_client_for_key"
-            ) as mock_client_cls,
+            patch("personal_agent.llm_client.factory.get_llm_client_for_key") as mock_client_cls,
         ):
             mock_cfg.return_value.models = {}  # model_def is None -> provider None -> local path
             mock_client = mock_client_cls.return_value

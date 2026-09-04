@@ -405,7 +405,14 @@ class ExpansionController:
                 task=task.goal,
                 context=messages[-4:] if messages else [],
                 output_format=task.expected_output,
-                max_tokens=settings.sub_agent_max_tokens,
+                # FRE-1379: no max_tokens override here — SubAgentSpec's own
+                # default (None) defers to the deployment's catalog-declared
+                # ceiling. settings.sub_agent_max_tokens used to be passed here
+                # unconditionally and silently shadowed the catalog's own
+                # (smaller, deliberately sized) value on every call; that
+                # setting is still used by the separate autonomous-mode
+                # decomposition path in expansion.py, which is why it is not
+                # deleted, just no longer read here.
                 timeout_seconds=settings.worker_timeout_seconds,
                 hard_deadline_seconds=settings.worker_hard_deadline_seconds,
                 tools=task.tools,

@@ -22,6 +22,7 @@ from typing import Any
 import structlog
 
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
+from personal_agent.llm_client.types import GenerationProgress, LLMTimeout
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 
 logger = structlog.get_logger(__name__)
@@ -33,6 +34,9 @@ logger = structlog.get_logger(__name__)
 _MEMORY_CONTEXT_MARKER = "## Your Memory Graph"
 # Per-message content preview length (mirrors executor.llm_call_messages_debug).
 _CONTEXT_PREVIEW_CHARS = 200
+# Cap on the digest injected into the parent's synthesis context (FRE-1379:
+# shared by the success path and the killed-result path below).
+_SUMMARY_CAP_CHARS = 2000
 
 # System prompt for sub-agents: focused, no personality
 _SUB_AGENT_SYSTEM_PROMPT = (
@@ -148,10 +152,64 @@ def _emit_sub_agent_capture(
         error=result.error,
         duration_ms=result.duration_ms,
         cost_usd=result.cost_usd,
+        tokens_generated=result.tokens_generated,
+        elapsed_generation_ms=result.elapsed_generation_ms,
         eval_mode=eval_mode,
         **context_breakdown,
     )
     write_sub_agent_capture(capture)
+
+
+def _killed_result(
+    task_id: uuid.UUID,
+    spec: SubAgentSpec,
+    duration_ms: float,
+    progress: GenerationProgress,
+    error: str,
+    cost_usd: float = 0.0,
+) -> SubAgentResult:
+    """Build a SubAgentResult for a sub-agent that never returned (FRE-1379).
+
+    Recovers whatever the streaming client captured into ``progress`` before
+    the call was cancelled out from under it, so a killed worker still reports
+    partial content, an estimated token count, and generation-only elapsed
+    time — instead of the empty ``digest_chars=0, full_output_chars=0`` record
+    every timeout/cancellation produced before this. Shared by the outer
+    hard-deadline timeout, the inner generation-budget timeout, and a global
+    dispatch cancellation — all three are the same "killed with whatever
+    progress was captured" shape, just different triggers.
+
+    Args:
+        task_id: This sub-agent invocation's identifier.
+        spec: The sub-agent specification.
+        duration_ms: Wall-clock time since spawn.
+        progress: Whatever the streaming client recorded before cancellation.
+        error: Human-readable reason, distinguishing which budget fired.
+        cost_usd: Cost incurred before the kill (0.0 unless the caller tracked one).
+
+    Returns:
+        A failed SubAgentResult carrying whatever partial state is available.
+    """
+    partial = progress.content
+    elapsed_generation_ms = (
+        (time.monotonic() - progress.generation_started_monotonic) * 1000
+        if progress.generation_started_monotonic is not None
+        else None
+    )
+    return SubAgentResult(
+        task_id=task_id,
+        spec_task=spec.task,
+        summary=partial[:_SUMMARY_CAP_CHARS],
+        full_output=partial,
+        tools_used=[],
+        token_count=0,
+        tokens_generated=len(partial.split()) if partial else 0,
+        elapsed_generation_ms=elapsed_generation_ms,
+        duration_ms=duration_ms,
+        success=False,
+        error=error,
+        cost_usd=cost_usd,
+    )
 
 
 async def run_sub_agent(
@@ -205,6 +263,10 @@ async def run_sub_agent(
 
     tools_used: list[str] = []
     call_cost_usd = 0.0
+    # FRE-1379: mutable sink the streaming client writes into per chunk, so
+    # whatever was generated survives even when the wait_for below cancels
+    # the call and discards its return value.
+    progress = GenerationProgress()
     try:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": _system_content},
@@ -241,22 +303,29 @@ async def run_sub_agent(
                 max_tokens=spec.max_tokens,
                 trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
                 timeout_s=spec.timeout_seconds,
+                progress_sink=progress,
             ),
             timeout=hard_deadline,
         )
         response_content = _parse_llm_response(raw_response)
         call_cost_usd = _extract_call_cost(raw_response)
-        summary_cap = 2000
 
         duration_ms = int(time.monotonic() * 1000) - start_ms
+        elapsed_generation_ms = (
+            (time.monotonic() - progress.generation_started_monotonic) * 1000
+            if progress.generation_started_monotonic is not None
+            else None
+        )
 
         result = SubAgentResult(
             task_id=task_id,
             spec_task=spec.task,
-            summary=response_content[:summary_cap],
+            summary=response_content[:_SUMMARY_CAP_CHARS],
             full_output=response_content,
             tools_used=tools_used,
             token_count=len(response_content.split()),
+            tokens_generated=len(response_content.split()),
+            elapsed_generation_ms=elapsed_generation_ms,
             duration_ms=duration_ms,
             success=True,
             cost_usd=call_cost_usd,
@@ -264,15 +333,11 @@ async def run_sub_agent(
 
     except asyncio.TimeoutError:
         duration_ms = int(time.monotonic() * 1000) - start_ms
-        result = SubAgentResult(
-            task_id=task_id,
-            spec_task=spec.task,
-            summary="",
-            full_output="",
-            tools_used=[],
-            token_count=0,
-            duration_ms=duration_ms,
-            success=False,
+        result = _killed_result(
+            task_id,
+            spec,
+            duration_ms,
+            progress,
             # FRE-1374 (AC-2): report the measured elapsed time, not the nominal
             # budget — the hard deadline that actually fired may differ from
             # spec.timeout_seconds, and the old hard-coded value hid exactly the
@@ -280,20 +345,32 @@ async def run_sub_agent(
             error=f"Timeout after {duration_ms / 1000:.1f}s",
         )
 
+    except LLMTimeout as exc:
+        # FRE-1379: the client's own wall-clock generation budget fired before
+        # the outer hard-deadline above did — this is the common case now that
+        # the local streaming path enforces spec.timeout_seconds as a real
+        # duration bound, not just a read timeout. Distinct wording from the
+        # outer branch so a reader can tell which budget fired without
+        # cross-referencing durations.
+        duration_ms = int(time.monotonic() * 1000) - start_ms
+        result = _killed_result(
+            task_id,
+            spec,
+            duration_ms,
+            progress,
+            error=f"Timeout after {duration_ms / 1000:.1f}s (generation budget): {exc}",
+        )
+
     except asyncio.CancelledError:
         # The outer dispatch can cancel us on a global timeout (expansion_controller).
         # CancelledError is a BaseException — not caught by `except Exception` — so we
         # emit the audit record here (FRE-505) and re-raise to preserve cancellation.
         duration_ms = int(time.monotonic() * 1000) - start_ms
-        cancelled = SubAgentResult(
-            task_id=task_id,
-            spec_task=spec.task,
-            summary="",
-            full_output="",
-            tools_used=tools_used,
-            token_count=0,
-            duration_ms=duration_ms,
-            success=False,
+        cancelled = _killed_result(
+            task_id,
+            spec,
+            duration_ms,
+            progress,
             error="cancelled (global dispatch timeout)",
             cost_usd=call_cost_usd,
         )
@@ -304,15 +381,11 @@ async def run_sub_agent(
 
     except Exception as exc:
         duration_ms = int(time.monotonic() * 1000) - start_ms
-        result = SubAgentResult(
-            task_id=task_id,
-            spec_task=spec.task,
-            summary="",
-            full_output="",
-            tools_used=tools_used,
-            token_count=0,
-            duration_ms=duration_ms,
-            success=False,
+        result = _killed_result(
+            task_id,
+            spec,
+            duration_ms,
+            progress,
             error=str(exc),
             cost_usd=call_cost_usd,
         )
@@ -329,6 +402,8 @@ async def run_sub_agent(
         truncation_ratio=(_digest_chars / _full_output_chars if _full_output_chars else 0.0),
         error=result.error,
         cost_usd=round(result.cost_usd, 6),
+        tokens_generated=result.tokens_generated,
+        elapsed_generation_ms=result.elapsed_generation_ms,
         trace_id=trace_id,
         session_id=session_id,
     )

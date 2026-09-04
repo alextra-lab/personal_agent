@@ -146,7 +146,7 @@ class SubAgentCapture(BaseModel):
     memory_in_context: bool = False
     mode: str
     model_role: str
-    max_tokens: int
+    max_tokens: int | None = None
 
     # Task surface — granted vs actually exercised
     tools_granted: list[str] = Field(default_factory=list)
@@ -162,6 +162,13 @@ class SubAgentCapture(BaseModel):
     error: str | None = None
     duration_ms: float
     cost_usd: float = 0.0
+    # FRE-1379: word-count estimate of the completion actually generated (same
+    # approximation convention as token_count elsewhere) and the generation-only
+    # elapsed time, distinct from duration_ms — populated on a killed sub-agent
+    # too, closing the "digest_chars=0, full_output_chars=0" black hole a timed-out
+    # worker used to leave behind.
+    tokens_generated: int = 0
+    elapsed_generation_ms: float | None = None
     # FRE-523: EVAL provenance, uniform with TaskCapture (the sub-agent audit
     # record is written unconditionally; this flags eval-run origin).
     eval_mode: bool = False

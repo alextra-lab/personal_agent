@@ -18,6 +18,7 @@ from personal_agent.llm_client.cost_tracker import CostTrackerService, get_cost_
 from personal_agent.llm_client.models import ToolCallingStrategy
 from personal_agent.llm_client.tool_call_parser import parse_text_tool_calls
 from personal_agent.llm_client.types import (
+    GenerationProgress,
     LLMClientError,
     LLMConnectionError,
     LLMInvalidResponse,
@@ -74,6 +75,7 @@ __all__ = [
     "InferenceSlotTimeout",
     "get_inference_concurrency_controller",
     "set_inference_concurrency_controller",
+    "GenerationProgress",
     "LLMClientError",
     "LLMConnectionError",
     "LLMInvalidResponse",

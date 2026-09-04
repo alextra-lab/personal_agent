@@ -19,7 +19,9 @@ class TestSubAgentSpec:
         assert spec.task == "Summarise the document."
         assert spec.context == []
         assert spec.output_format == "text"
-        assert spec.max_tokens == 4096
+        # FRE-1379: None means "defer to the deployment's catalog max_tokens" —
+        # a hardcoded 4096 default here used to silently shadow that.
+        assert spec.max_tokens is None
         assert spec.timeout_seconds == 120.0
         assert spec.tools == []
         assert spec.background == ""

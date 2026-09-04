@@ -249,7 +249,6 @@ class TestExpansionControllerExecute:
         mock_settings.planner_timeout_seconds = 0.01
         mock_settings.worker_timeout_seconds = 45.0
         mock_settings.worker_global_timeout_seconds = 90.0
-        mock_settings.sub_agent_max_tokens = 4096
 
         with (
             patch(
@@ -706,7 +705,6 @@ class TestAdmittedWorkerIndependentOfGlobalBound:
         # ceiling=2 means admission has zero contention, so it should never take
         # anywhere near this long on its own.
         mock_settings.worker_global_timeout_seconds = 0.05
-        mock_settings.sub_agent_max_tokens = 4096
         mock_settings.worker_timeout_seconds = 60.0
         mock_settings.worker_hard_deadline_seconds = 85.0
 
@@ -769,7 +767,6 @@ class TestAdmittedWorkerIndependentOfGlobalBound:
         mock_settings = MagicMock()
         # Only enough window for ONE worker to ever get admitted.
         mock_settings.worker_global_timeout_seconds = 0.05
-        mock_settings.sub_agent_max_tokens = 4096
         mock_settings.worker_timeout_seconds = 60.0
         mock_settings.worker_hard_deadline_seconds = 85.0
 

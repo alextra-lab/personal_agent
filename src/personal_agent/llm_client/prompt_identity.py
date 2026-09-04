@@ -26,8 +26,8 @@ Three ways to build a :class:`PromptIdentity`:
 * :func:`derive_orchestrator_prompt_identity` — used by ``orchestrator.primary``.
   Hashes the actual ``request_messages``/``tools`` handed to
   :meth:`LLMClient.respond`, not an intermediate candidate string — see FRE-1008.
-* :func:`derive_fallback_prompt_identity` — used by ``LocalLLMClient``/
-  ``LiteLLMClient`` when a caller passes no explicit ``prompt_identity`` (every
+* :func:`derive_fallback_prompt_identity` — used by ``LiteLLMClient`` when a
+  caller passes no explicit ``prompt_identity`` (every
   non-taxonomy callsite: captains_log, second_brain, memory paraphrasing,
   sub-agents, etc.). Resolves the effective system content (``system_prompt``, or
   an embedded system-role message) as the static prefix, and the rest of the
@@ -254,8 +254,8 @@ def derive_fallback_prompt_identity(
 ) -> PromptIdentity:
     """Build a :class:`PromptIdentity` for call sites with no component-aware split.
 
-    Used by ``LocalLLMClient``/``LiteLLMClient`` when the caller passes no
-    explicit ``prompt_identity`` — every callsite except ``orchestrator.primary``
+    Used by ``LiteLLMClient`` when the caller passes no explicit
+    ``prompt_identity`` — every callsite except ``orchestrator.primary``
     and ``gateway.chat`` (FRE-1008). ``static_prefix`` is the effective system
     content: ``system_prompt`` if given, else the first embedded system-role
     message (fixes the empty-string collapse seen live when a caller folds

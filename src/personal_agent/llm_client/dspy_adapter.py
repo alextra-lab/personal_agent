@@ -1,6 +1,6 @@
 """DSPy adapter for structured LLM outputs.
 
-This module provides integration between LocalLLMClient and DSPy for structured
+This module provides integration between the LLM client and DSPy for structured
 outputs via Pydantic models. Based on E-008 prototype evaluation and ADR-0010.
 
 Usage:

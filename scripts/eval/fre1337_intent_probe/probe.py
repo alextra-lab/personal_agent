@@ -5,15 +5,17 @@ Contamination-free by construction (AC-2/AC-3): a single ``respond()`` call with
 :func:`taxonomy.build_probe_prompt`. There is nothing for ``search_memory`` — or any other
 tool — to be, because no tool definitions are ever passed.
 
-Model identity (codex plan-review finding, 2026-08-30): ``get_llm_client_for_key`` for a
-**local** deployment returns a bare, role-agnostic ``LocalLLMClient`` — the requested key
-is discarded, and ``respond(role=...)`` re-resolves the model from the per-turn selection
+Model identity (codex plan-review finding, 2026-08-30 — historical; the underlying gap
+this worked around no longer exists): before ADR-0141 D1, ``get_llm_client_for_key`` for a
+**local** deployment returned a bare, role-agnostic ``LocalLLMClient`` — the requested key
+was discarded, and ``respond(role=...)`` re-resolved the model from the per-turn selection
 context (empty for a standalone script), falling through to whatever
-``config/model_roles.yaml``'s binding for that role says. Cloud is unaffected (a
-``LiteLLMClient``'s model is fixed at construction). The fix applies uniformly to both
-placements: pin the exact deployment via ``set_current_selection`` before calling
-``respond()`` — ``resolve_role_target`` honors an explicit ``model_key`` unconditionally,
-regardless of any role binding.
+``config/model_roles.yaml``'s binding for that role said (FRE-1343). ADR-0141 D1 dissolved
+this by construction: every placement now dispatches through ``LiteLLMClient``, whose model
+is fixed at construction regardless of placement. The ``set_current_selection`` pin below is
+therefore now belt-and-suspenders rather than a required workaround, and is left in place —
+``resolve_role_target`` still honors an explicit ``model_key`` unconditionally, so it remains
+correct, just no longer load-bearing.
 """
 
 from __future__ import annotations

@@ -15,9 +15,9 @@ assumes: if the guard's hook did NOT fire first, the patched transport would
 be reached and raise `AssertionError`, failing the test.
 
 The "proceeds" half of each pair reuses each seam's own existing mock pattern
-(see `tests/test_llm_client/test_client.py`, `tests/personal_agent/memory/
-test_embeddings.py`, etc.) so a real seam wiring change is what's under test,
-not a reimplementation of those fixtures.
+(see `tests/personal_agent/llm_client/test_local_via_litellm.py`,
+`tests/personal_agent/memory/test_embeddings.py`, etc.) so a real seam wiring
+change is what's under test, not a reimplementation of those fixtures.
 """
 
 from __future__ import annotations
@@ -69,105 +69,96 @@ def _unreachable_transport() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# 1. LLM client (LocalLLMClient.respond)
+# 1. LLM client (LiteLLMClient.respond, local placement) — ADR-0141 D1/FRE-1367
 # ---------------------------------------------------------------------------
+#
+# Rewritten against the unified client: local placement now dispatches through
+# litellm's OpenAI-compatible route (AsyncOpenAI(http_client=guarded)), not raw
+# httpx.AsyncClient. This test exercises the PRODUCTION DEFAULT fallback path
+# (`self._egress_guard or get_domain_guard()`, leaving `_egress_guard` unset) —
+# distinct from test_local_via_litellm.py's TestEgressGuardOnTheLocalRoute,
+# which always injects `client._egress_guard` directly (a test seam bypassing
+# the process-wide singleton this test proves picks up the monkeypatched guard).
 
 
-def _stream_mock_for_response(response: dict[str, Any]) -> MagicMock:
-    choice = response.get("choices", [{}])[0]
-    msg = choice.get("message", {})
-    delta = {k: v for k, v in msg.items() if v is not None}
+def _sse_response(content: str) -> bytes:
     chunk = {
         "id": "chatcmpl-mock",
         "object": "chat.completion.chunk",
         "choices": [
-            {"index": 0, "delta": delta, "finish_reason": choice.get("finish_reason", "stop")}
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
         ],
-        "usage": response.get("usage"),
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
-    lines = [f"data: {json.dumps(chunk)}", "data: [DONE]"]
-
-    async def aiter_lines() -> Any:
-        for line in lines:
-            yield line
-
-    response_obj = MagicMock()
-    response_obj.raise_for_status = MagicMock()
-    response_obj.aiter_lines = aiter_lines
-    stream_cm = MagicMock()
-    stream_cm.__aenter__ = AsyncMock(return_value=response_obj)
-    stream_cm.__aexit__ = AsyncMock(return_value=None)
-    return stream_cm
+    return f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
 
 
 class TestLlmClientSeam:
-    @pytest.fixture
-    def model_config_path(self, tmp_path: Path) -> Path:
-        config_file = tmp_path / "models.yaml"
-        config_file.write_text(
-            """
-models:
-  primary:
-    id: "test-primary"
-    context_length: 32768
-    quantization: "8bit"
-    max_concurrency: 2
-    default_timeout: 60
-"""
+    def _client(self, *, endpoint: str) -> Any:
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
+        from personal_agent.llm_client.models import ModelDefinition, Placement
+
+        return LiteLLMClient(
+            model_id="test-primary",
+            provider="slm_local",
+            max_tokens=None,
+            budget_role="main_inference",
+            placement=Placement.LOCAL,
+            model_def=ModelDefinition(
+                id="test-primary",
+                endpoint=endpoint,
+                context_length=32768,
+                max_concurrency=2,
+                default_timeout=5,
+            ),
         )
-        return config_file
 
     @pytest.mark.asyncio
     async def test_disallowed_domain_refused_before_connection(
-        self, monkeypatch: pytest.MonkeyPatch, model_config_path: Path
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from personal_agent.llm_client.client import LocalLLMClient
-        from personal_agent.llm_client.types import LLMConnectionError, ModelRole
+        from personal_agent.llm_client.types import ModelRole
+        from personal_agent.security import EgressBlockedError
 
         _patch_guard(
             monkeypatch, mode=GuardMode.ALLOWLIST, allowlist=frozenset({"allowed.example"})
         )
-        client = LocalLLMClient(
-            base_url="https://not-allowed.example",
-            timeout_seconds=5,
-            max_retries=0,
-            model_config_path=model_config_path,
-        )
-        with _unreachable_transport(), pytest.raises(LLMConnectionError):
+        client = self._client(endpoint="https://not-allowed.example")
+        with _unreachable_transport(), pytest.raises(EgressBlockedError):
             await client.respond(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "hi"}],
                 trace_ctx=TraceContext.new_trace(),
+                max_retries=0,
             )
 
     @pytest.mark.asyncio
-    async def test_allowed_domain_proceeds(
-        self, monkeypatch: pytest.MonkeyPatch, model_config_path: Path
-    ) -> None:
-        from personal_agent.llm_client.client import LocalLLMClient
+    async def test_allowed_domain_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from personal_agent.llm_client.types import ModelRole
 
         _patch_guard(
             monkeypatch, mode=GuardMode.ALLOWLIST, allowlist=frozenset({"allowed.example"})
         )
-        client = LocalLLMClient(
-            base_url="https://allowed.example",
-            timeout_seconds=5,
-            max_retries=0,
-            model_config_path=model_config_path,
-        )
-        mock_response = {
-            "choices": [{"message": {"role": "assistant", "content": "hi back"}}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
-            mock_client_class.return_value.__aenter__.return_value = mock_client
+        client = self._client(endpoint="https://allowed.example")
+
+        async def _handle(_self: Any, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=_sse_response("hi back"),
+                headers={"content-type": "text/event-stream"},
+                request=request,
+            )
+
+        with patch.object(httpx.AsyncHTTPTransport, "handle_async_request", _handle):
             response = await client.respond(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "hi"}],
                 trace_ctx=TraceContext.new_trace(),
+                max_retries=0,
             )
         assert response["content"] == "hi back"
 

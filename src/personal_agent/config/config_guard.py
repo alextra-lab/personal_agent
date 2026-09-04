@@ -901,8 +901,9 @@ def check_budget_role_coverage(root: Path) -> list[Finding]:
 # ── Mandatory reasoning declaration (FRE-1007, ADR-0121 Layer 2/3) ───────────
 
 #: Deployment fields that carry a reasoning declaration on the LOCAL dispatch
-#: path. LocalLLMClient sends these through ``extra_body`` as chat-template
-#: arguments (client.py -> adapters.py); ``reasoning_effort`` is never sent there.
+#: path. The unified client sends these through litellm's ``extra_body``
+#: mechanism as chat-template arguments (ADR-0141 D4); ``reasoning_effort`` is
+#: never sent there.
 _LOCAL_REASONING_FIELDS: tuple[str, ...] = ("disable_thinking", "thinking_budget_tokens")
 
 #: Deployment fields forwarded to litellm alongside the effort, which can make an
@@ -983,7 +984,7 @@ def _check_one_reasoning_declaration(
                     "reasoning_vocabulary_mismatch",
                     "safety",
                     f"{where} declares reasoning_effort={effort!r}, which the local dispatch "
-                    "path never sends (LocalLLMClient forwards chat-template arguments via "
+                    "path never sends (the unified client forwards chat-template arguments via "
                     "extra_body). It would read as configured while doing nothing — declare "
                     f"one of {list(_LOCAL_REASONING_FIELDS)} instead (FRE-1007).",
                 )

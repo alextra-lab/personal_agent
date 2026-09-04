@@ -441,7 +441,7 @@ def _build_llm_batch_classifier() -> tuple[BatchClassifier, str]:
     raised exception (from this or any other :data:`BatchClassifier`) into a fail-open batch result,
     so the fail-open contract holds regardless of which classifier implementation is plugged in.
 
-    Deliberately bypasses ``get_llm_client(role_name=...)`` for the cloud path: that factory's
+    Deliberately bypasses ``get_llm_client(role_name=...)``: that factory's
     ``budget_role_for(role_name)`` (cost_gate/__init__.py) expects the ORIGINAL role name
     (``"entity_extraction"``) to map to the ``entity_extraction`` budget lane, but
     ``resolve_role_model_key("entity_extraction")`` returns a resolved MODEL KEY (e.g.
@@ -449,39 +449,21 @@ def _build_llm_batch_classifier() -> tuple[BatchClassifier, str]:
     falls back to ``"main_inference"`` — the same latent mis-billing already present in
     ``entity_extraction.py``'s ``get_llm_client(role_name=entity_extraction_role)`` call and
     ``migrate_fre772_entity_type_v2.py``'s identical pattern (pre-existing, out of this ticket's
-    scope to fix repo-wide). Here we mirror ``entity_extraction.py``'s OWN eval-override branch,
-    which already works around this by constructing ``LiteLLMClient`` directly with an explicit
-    ``budget_role="entity_extraction"`` — so this backfill's spend lands in the correct budget
-    lane regardless of the shared factory's latent bug.
+    scope to fix repo-wide). Uses :func:`get_llm_client_for_key` instead — the trusted-config
+    door built for exactly this (a config-resolved key with an explicit budget lane) — which also
+    collapses the local/cloud placement branching entirely (ADR-0141 D1) and fails loudly if the
+    resolved role has no catalog definition, rather than silently dispatching whatever the
+    catalog happens to resolve.
 
     Returns:
         A ``(batch_classifier, model_id)`` pair.
     """
-    from personal_agent.config import load_model_config
     from personal_agent.llm_client import ModelRole
-    from personal_agent.llm_client.models import Placement
+    from personal_agent.llm_client.factory import get_llm_client_for_key
     from personal_agent.telemetry.trace import SystemTraceContext
 
     role = resolve_role_model_key("entity_extraction")
-    catalog = load_model_config()
-    model_def = catalog.models.get(role)
-    # Typed Any to match get_llm_client's own return annotation (factory.py) — LocalLLMClient's
-    # concrete respond() signature (extra named kwargs) doesn't structurally satisfy the LLMClient
-    # Protocol's **kwargs catch-all, the same pre-existing mismatch the factory function sidesteps.
-    client: Any
-    if model_def is not None and catalog.placement_of(role) is not Placement.LOCAL:
-        from personal_agent.llm_client.litellm_client import LiteLLMClient
-
-        client = LiteLLMClient(
-            model_id=model_def.id,
-            provider=model_def.provider or "anthropic",
-            max_tokens=model_def.max_tokens or 8192,
-            budget_role="entity_extraction",
-        )
-    else:
-        from personal_agent.llm_client.client import LocalLLMClient
-
-        client = LocalLLMClient()
+    client = get_llm_client_for_key(role, budget_role="entity_extraction")
 
     async def classify(nodes: Sequence[EntityCandidate]) -> BatchClassifyResult:
         prompt = _build_batch_prompt(nodes)

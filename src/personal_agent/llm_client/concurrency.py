@@ -17,26 +17,21 @@ so live behaviour is preserved, but the general case differs in both directions
 and is asserted as such in the tests.
 
 Every provider — including cloud ones — is registered with a ceiling, and any
-deployment that acquires a slot is capped at its provider's ceiling. But note
-what actually reaches this controller today: it is instantiated only by
-``LocalLLMClient``, so only **local-placement** deployments call ``request_slot``.
-Cloud placement dispatches to ``LiteLLMClient``, which does not go through here,
-so the registered cloud ceilings (``openai``/``anthropic``/``voyage``/``ovh``)
-are declared-but-inert until the two resolution paths are unified (ADR-0121
-step 2, FRE-917). They are set high (50) so that unification does not introduce a
-throttle by surprise. Placement (local vs cloud) decides only *dispatch* — which
-client class handles the call — which is ``ModelConfig.placement_of``'s job, not
-this module's.
+deployment that acquires a slot is capped at its provider's ceiling.
 
-**Stated plainly, because the two paragraphs above are now out of date and
-silence would read as "still true":** ADR-0141 T2 moved local placement onto
-``LiteLLMClient``, and T3 (FRE-1366) re-homed this controller as the
-process-wide singleton returned by :func:`get_inference_concurrency_controller`,
-acquired inside ``LiteLLMClient.respond()`` (and its local-placement
-``_respond_local``) for every chat-completion provider — ``slm_local``,
-``anthropic``, ``openai``, ``ovhcloud``. ``LocalLLMClient`` is no longer
-constructed by any production path; its own controller instance is dead code
-pending deletion (T4, FRE-1367).
+**Historical note, kept because the module predates ADR-0141's unification:**
+this controller was originally instantiated per-client by a local-only
+dispatch class, so only local-placement deployments called ``request_slot`` and
+the registered cloud ceilings (``openai``/``anthropic``/``voyage``/``ovh``)
+were declared-but-inert (ADR-0121 step 2, FRE-917 recorded — incorrectly — that
+this had already been fixed). ADR-0141 T2 moved local placement onto
+``LiteLLMClient``, T3 (FRE-1366) re-homed this controller as the process-wide
+singleton returned by :func:`get_inference_concurrency_controller`, acquired
+inside ``LiteLLMClient.respond()`` (and its local-placement ``_respond_local``)
+for every chat-completion provider — ``slm_local``, ``anthropic``, ``openai``,
+``ovhcloud`` — and T4 (FRE-1367) deleted the local-only dispatch class
+entirely. Placement (local vs cloud) now decides only parameter shape and
+cost-gate applicability, not which controller instance is acquired.
 
 The local ``max_concurrency: 1`` GPU ceiling and the ``InferencePriority``
 tiers carry over unchanged through the singleton's per-deployment
@@ -401,10 +396,11 @@ _controller: InferenceConcurrencyController | None = None
 def _build_controller_from_catalog() -> InferenceConcurrencyController:
     """Construct a controller registered against every catalog provider + deployment.
 
-    Mirrors the registration ``LocalLLMClient.__init__`` used to do for itself
-    (pre-ADR-0141): every provider gets its declared ceiling, every deployment
-    gets its own sub-limit beneath its provider. The difference is scope — this
-    now runs once, process-wide, for every placement.
+    Mirrors the registration the now-deleted local-only dispatch class used to
+    do for itself (pre-ADR-0141): every provider gets its declared ceiling,
+    every deployment gets its own sub-limit beneath its provider. The
+    difference is scope — this now runs once, process-wide, for every
+    placement.
 
     Returns:
         A freshly populated :class:`InferenceConcurrencyController`.

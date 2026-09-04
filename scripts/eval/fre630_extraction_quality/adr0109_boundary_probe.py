@@ -10,9 +10,10 @@ curated boundary fixture instead of the FRE-630 gold set. This is how FRE-782 (t
 KnowledgeArtifact/QuantityMeasure boundary) and FRE-790 (the Phenomenon ↔ DomainOrTopic
 boundary) both run on one reproducible instrument.
 
-Like ``relabel_v2_types``, this calls ``litellm.acompletion()`` DIRECTLY (not the app's
-cost-gated ``LiteLLMClient``): there is no production extraction happening, just
-single-turn blind classification — the same deliberate, documented exception.
+Like ``relabel_v2_types``, raters dispatch through a directly-constructed
+``LiteLLMClient`` (ADR-0141 D1/FRE-1367) — behind the egress guard and the cost
+gate, ``budget_role="study"`` — since this module reuses ``relabel_v2_types``'s
+``classify_all``/``_call_rater`` unchanged.
 
 Usage::
 

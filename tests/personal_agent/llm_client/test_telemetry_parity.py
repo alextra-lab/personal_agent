@@ -431,55 +431,65 @@ class TestClientWiring:
         assert telemetry_model == cost_row_model == "anthropic/claude-sonnet-4-6"
 
     @pytest.mark.asyncio
-    async def test_local_client_calls_started_with_correct_args(self, tmp_path: Path) -> None:
-        """LocalLLMClient invokes ``emit_model_call_started`` correctly.
+    async def test_local_client_calls_started_with_correct_args(self) -> None:
+        """LiteLLMClient (local placement) invokes ``emit_model_call_started`` correctly.
 
-        We assert only on the started emit so we can short-circuit the call
-        by raising from ``httpx`` right after — keeping the test off the
-        streaming aggregator and response parser.
+        Rewritten against the unified client (ADR-0141 D1/FRE-1367) — asserts
+        only on the started emit by raising from ``litellm.acompletion`` right
+        after it fires, keeping the test off the streaming aggregator and
+        response parser.
+
+        NOTE on scope narrowing from the deleted test: the old
+        ``LocalLLMClient``-based version also asserted a ``provider=None``
+        (undeclared provider) deployment's started-event falls back to
+        ``provider="unknown"``. That specific scenario is no longer reachable
+        through the unified client — verified by reading ``_respond_local``:
+        it looks up ``load_model_config().providers.get(self.provider)``
+        *before* ``emit_model_call_started`` fires and raises ``LLMClientError``
+        immediately when the provider isn't declared, which is the correct
+        ADR-0141 D1 behavior (fail loudly on an unknown provider rather than
+        emitting telemetry for a call that never dispatches). What survives
+        and is asserted here is the genuinely portable half: the
+        started-fires/completed-does-not asymmetry on failure, and the
+        started-event's field shape, using a real declared provider.
         """
         import httpx
 
-        from personal_agent.llm_client.client import LocalLLMClient
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
+        from personal_agent.llm_client.models import ModelDefinition, Placement
         from personal_agent.llm_client.types import LLMTimeout, ModelRole
 
-        config = tmp_path / "models.yaml"
-        config.write_text(
-            """
-models:
-  primary:
-    id: "test-primary"
-    context_length: 32768
-    quantization: "8bit"
-    max_concurrency: 2
-    default_timeout: 60
-"""
-        )
-
         ctx = _ctx_with_session()
-        client = LocalLLMClient(
-            base_url="http://mock-slm.test/v1",
-            timeout_seconds=30,
-            max_retries=0,
-            model_config_path=config,
+        client = LiteLLMClient(
+            model_id="test-primary",
+            provider="slm_local",
+            max_tokens=None,
+            budget_role="main_inference",
+            placement=Placement.LOCAL,
+            model_def=ModelDefinition(
+                id="test-primary",
+                endpoint="http://mock-slm.test/v1",
+                context_length=32768,
+                max_concurrency=2,
+                default_timeout=60,
+            ),
         )
 
         with (
-            patch("personal_agent.llm_client.client.emit_model_call_started") as started,
-            patch("personal_agent.llm_client.client.emit_model_call_completed") as completed,
-            patch("httpx.AsyncClient") as mock_client_class,
-        ):
+            patch("personal_agent.llm_client.litellm_client.emit_model_call_started") as started,
+            patch(
+                "personal_agent.llm_client.litellm_client.emit_model_call_completed"
+            ) as completed,
             # Force the call to terminate right after the started emit so we
             # don't have to fake the streaming response shape.
-            mock_client = AsyncMock()
-            mock_client.stream = MagicMock(side_effect=httpx.TimeoutException("stop"))
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-
+            patch("litellm.acompletion", AsyncMock(side_effect=httpx.TimeoutException("stop"))),
+        ):
             with pytest.raises(LLMTimeout):
                 await client.respond(
                     role=ModelRole.PRIMARY,
                     messages=[{"role": "user", "content": "hi"}],
                     trace_ctx=ctx,
+                    max_retries=0,
                 )
 
         started.assert_called_once()
@@ -490,11 +500,7 @@ models:
         assert s_kwargs["model"] == "test-primary"
         assert s_kwargs["role"] == "primary"
         assert s_kwargs["endpoint"] == "http://mock-slm.test/v1/chat/completions"
-        # This fixture's models.yaml declares no `providers:` block, so the
-        # ADR-0121 provider-required validator never runs and
-        # ModelDefinition.provider is None — the emit helper must fall back
-        # to "unknown" rather than crash the chat turn.
-        assert s_kwargs["provider"] == "unknown"
+        assert s_kwargs["provider"] == "slm_local"
         assert s_kwargs["span_id"]  # non-empty
 
 

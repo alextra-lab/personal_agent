@@ -183,11 +183,12 @@ class ModelDefinition(BaseModel):
         id: Model identifier. For local models this is the LM Studio slug
             (e.g., "qwen3.5-35b-a3b"). For cloud models this is the provider's
             model name (e.g., "claude-sonnet-4-5-20250514", "o4-mini").
-        provider: Cloud provider name. "anthropic", "openai", etc. dispatch to LiteLLMClient.
-            None means local model via LocalLLMClient.
+        provider: Cloud provider name. "anthropic", "openai", etc. None means a
+            local model — both dispatch through LiteLLMClient (ADR-0141 D1).
         max_tokens: Maximum output tokens for this model. Primarily useful for
-            cloud models where output length is billed per token. None = provider
-            default / LocalLLMClient call-site default.
+            cloud models where output length is billed per token. None means
+            provider default for cloud; omit-means-unbounded for local
+            placement (ADR-0141 D5).
         endpoint: Optional base URL override for this model. If None, uses
             settings.slm_base_url. Not used for cloud models (they use provider SDK).
         context_length: Maximum context length for this model.

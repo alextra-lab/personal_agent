@@ -38,6 +38,7 @@ from personal_agent.llm_client.models import (
 )
 from personal_agent.llm_client.types import (
     GenerationProgress,
+    LLMClientError,
     LLMConnectionError,
     LLMRateLimit,
     LLMResponse,
@@ -421,6 +422,33 @@ class TestWireShape:
         assert body["stream_options"] == {"include_usage": True}
 
 
+class TestSystemPromptAndParams:
+    """Ported from the deleted tests/test_llm_client/test_client.py (ADR-0141 T4 /
+    FRE-1367) — genuinely unique assertions not duplicated by TestWireShape above.
+    """
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_is_prepended_on_the_wire(self) -> None:
+        body = (await _dispatch(system_prompt="You are a helpful assistant.")).body
+        assert body["messages"][0] == {"role": "system", "content": "You are a helpful assistant."}
+
+    @pytest.mark.asyncio
+    async def test_model_default_temperature_reaches_the_wire(self) -> None:
+        """No caller override — the catalog's declared temperature (0.6) is sent."""
+        body = (await _dispatch()).body
+        assert body["temperature"] == 0.6
+
+    @pytest.mark.asyncio
+    async def test_caller_temperature_overrides_the_model_default(self) -> None:
+        body = (await _dispatch(temperature=0.1)).body
+        assert body["temperature"] == 0.1
+
+    @pytest.mark.asyncio
+    async def test_response_format_reaches_the_wire(self) -> None:
+        body = (await _dispatch(response_format={"type": "json_object"})).body
+        assert body["response_format"] == {"type": "json_object"}
+
+
 # ── AC-b — streaming parity ───────────────────────────────────────────────
 
 
@@ -581,6 +609,11 @@ class TestTelemetryParity:
         assert payload["error_type"] == "LLMServerError"
         assert payload["provider"] == "slm_local"
         assert payload["role"] == ModelRole.PRIMARY.value
+        # Ported from the deleted tests/test_llm_client/test_client.py
+        # (test_respond_error_logs_session_id) — the error event must carry
+        # session_id, not just trace_id, so a failed call is still joinable
+        # to its session.
+        assert payload["session_id"] == "11111111-1111-4111-8111-111111111111"
 
 
 # ── AC-e — reasoning preservation, both shapes ────────────────────────────
@@ -719,6 +752,15 @@ class TestErrorTaxonomy:
     async def test_503_maps_to_server_error(self) -> None:
         with pytest.raises(LLMServerError):
             await _dispatch(status=503, max_retries=0)
+
+    @pytest.mark.asyncio
+    async def test_404_maps_to_client_error(self) -> None:
+        """Ported from the deleted tests/test_llm_client/test_client.py — the
+        generic catch-all branch of ``_map_local_dispatch_error`` (a 4xx that
+        is neither 429 nor >=500 falls through to the base ``LLMClientError``).
+        """
+        with pytest.raises(LLMClientError):
+            await _dispatch(status=404, max_retries=0)
 
 
 # ── Parity: retries, timeouts, sanitiser, tool strategy ───────────────────

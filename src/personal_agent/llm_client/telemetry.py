@@ -1,10 +1,9 @@
 """Canonical telemetry emit helpers for model clients (ADR-0074 §I2).
 
-Both :class:`personal_agent.llm_client.client.LocalLLMClient` and
-:class:`personal_agent.llm_client.litellm_client.LiteLLMClient` route their
+:class:`personal_agent.llm_client.litellm_client.LiteLLMClient` routes its
 ``model_call_started`` / ``model_call_completed`` emissions through this
-module so a request handler that switches between local and cloud paths
-cannot tell the difference from telemetry alone.
+module for both placements (ADR-0141 D1), so a request handler that switches
+between local and cloud paths cannot tell the difference from telemetry alone.
 
 ADR-0129 D3 / FRE-1067: the field-contract frozensets this module used to cite
 (``CANONICAL_MODEL_CALL_STARTED_FIELDS`` / ``CANONICAL_MODEL_CALL_COMPLETED_FIELDS``)

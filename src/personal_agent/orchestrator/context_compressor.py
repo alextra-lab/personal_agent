@@ -46,11 +46,18 @@ CAUSE_ASSEMBLY_ERROR = "assembly_error"
 def _is_role_config_missing(exc: BaseException) -> bool:
     """Return True for the runtime "compressor key resolved but absent from catalog" error.
 
-    ``LocalLLMClient.respond`` raises a base ``ModelConfigError`` with this exact
-    message shape (``client.py``) when a resolved role key has no catalog config —
-    the runtime twin of the resolve-time ``ModelRoleError``. Narrow on the message
-    so genuine config-load/validation ``ModelConfigError``s are NOT masked as a
-    graceful role-missing skip (they remain real failures).
+    This message shape (``"No configuration found for role"``) was raised as a
+    base ``ModelConfigError`` by the now-deleted ``LocalLLMClient.respond``
+    (ADR-0141 D1). FOUND DURING FRE-1367'S CENSUS, NOT FIXED HERE (pre-existing,
+    introduced by T2/FRE-1365's earlier unification, unrelated to this deletion):
+    the call site below (``get_llm_client_for_key``) now raises ``LLMClientError``
+    with a different message when a resolved key has no catalog definition
+    (``factory.py::_build_client``) — this ``ModelConfigError``-gated branch no
+    longer catches that path, so a runtime role-missing failure now falls through
+    to the generic ``CAUSE_LLM_ERROR`` classification below instead of the
+    graceful ``CAUSE_ROLE_MISSING`` this function exists to produce. Flagged to
+    master; needs its own fix (either a typed exception out of ``_build_client``
+    or a message-based check on ``LLMClientError``), not folded into FRE-1367.
     """
     return str(exc).startswith("No configuration found for role")
 

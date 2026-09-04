@@ -264,7 +264,7 @@ async def run_sub_agent(
 
     Args:
         spec: Sub-agent specification from the primary agent.
-        llm_client: LLM client instance (LocalLLMClient or LiteLLMClient).
+        llm_client: LLM client instance (LiteLLMClient).
         trace_id: Parent request trace identifier.
         concurrency_controller: Optional concurrency controller for slot management.
         session_id: Originating session id for cost attribution (ADR-0074).

@@ -680,7 +680,7 @@ class JoinabilityWalk:
                     # _emit_gateway_model_call_completed) never sets cost_usd,
                     # so a correlation failure on THAT path stays yellow below
                     # rather than escalating here — everything routed through
-                    # llm_client (LiteLLMClient / LocalLLMClient) is covered.
+                    # llm_client (LiteLLMClient) is covered.
                     "cost_bearing_trace": {
                         "filter": {
                             "bool": {

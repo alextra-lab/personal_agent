@@ -1,6 +1,6 @@
 # Fixture (FRE-1007): reasoning_effort is never sent on the local dispatch path
-# (LocalLLMClient forwards chat-template args via extra_body), so declaring it
-# here reads as configured while doing nothing.
+# (the unified client forwards chat-template args via extra_body), so declaring
+# it here reads as configured while doing nothing.
 providers:
   anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50 }
   openai:    { auth_env: openai_api_key,    placement: cloud, max_concurrency: 50 }

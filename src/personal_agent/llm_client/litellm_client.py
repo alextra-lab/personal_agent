@@ -653,7 +653,7 @@ class LiteLLMClient:
                 placement takes the ADR-0141 T2 dispatch path: no cost gate,
                 catalog sampler parameters flattened onto the wire, streaming
                 aggregation through the local response adapters, and the
-                ``LocalLLMClient`` error taxonomy.
+                local-dispatch error taxonomy (:func:`_map_local_dispatch_error`).
             model_def: The deployment's effective definition. **Required for
                 local placement** — it carries the sampler parameters, the
                 endpoint override and the role timeout that the local wire
@@ -705,10 +705,10 @@ class LiteLLMClient:
         self._litellm_model = f"openai/{model_id}" if self._is_local else f"{provider}/{model_id}"
         # What telemetry reports. Cloud keeps the canonical "provider/model_id"
         # string (ADR-0121 T4 / AC-8, matched by the cost row). Local keeps the
-        # bare catalog id LocalLLMClient always emitted, so every existing
-        # dashboard filter over local traffic keeps matching across the
-        # cutover; the catalog provider (`slm_local`) is reported separately
-        # and is what attribution actually keys on.
+        # bare catalog id the pre-ADR-0141 local dispatch path always emitted,
+        # so every existing dashboard filter over local traffic keeps matching
+        # across the cutover; the catalog provider (`slm_local`) is reported
+        # separately and is what attribution actually keys on.
         self._telemetry_model = model_id if self._is_local else self._litellm_model
 
     @property
@@ -1056,8 +1056,7 @@ class LiteLLMClient:
                     role=role.value, model=self._litellm_model, provider=self.provider
                 ) as _model_span:
                     span_id = format(_model_span.get_span_context().span_id, "016x")
-                    # ADR-0074 §I2: canonical model_call_started emission (parity with
-                    # LocalLLMClient).
+                    # ADR-0074 §I2: canonical model_call_started emission.
                     emit_model_call_started(
                         log=log,
                         role=role.value,
@@ -1286,9 +1285,8 @@ class LiteLLMClient:
 
         response_id: str | None = getattr(response, "id", None)
 
-        # ADR-0074 §I2: canonical model_call_completed emission (parity with
-        # LocalLLMClient). Reuses span_id minted at started emit so a single
-        # span threads through the call.
+        # ADR-0074 §I2: canonical model_call_completed emission. Reuses span_id
+        # minted at started emit so a single span threads through the call.
         _cost_usd: float | None = round(cost, 6) if cost else None
         _input_tokens = usage.get("prompt_tokens")
         _output_tokens = usage.get("completion_tokens")

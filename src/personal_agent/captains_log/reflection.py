@@ -420,8 +420,9 @@ async def generate_reflection_entry(
             # invisibly, on the very role behind the FRE-987 incident.
             #
             # Only the CLOUD placement is gated: a local DSPy call is free and
-            # must not consume a paid lane's headroom (mirrors the
-            # LocalLLMClient / LiteLLMClient split). Reservation failure lands
+            # must not consume a paid lane's headroom (mirrors the unified
+            # client's local/cloud placement split, ADR-0141 D7). Reservation
+            # failure lands
             # inside this try, so a denial degrades exactly like any other DSPy
             # failure — through to the manual client below, which is itself
             # gated and will deny again, honouring captains_log's `nack`.

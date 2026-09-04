@@ -85,3 +85,23 @@ class PhaseResult:
     duration_ms: float
     success: bool
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class SubAgentInterval:
+    """Wall-clock window one sub-agent occupied during dispatch (FRE-1380 AC-1).
+
+    Recorded around each dispatch call so serialization can be verified from real
+    timestamps rather than from the dispatch implementation asserting its own semaphore
+    value.
+
+    Args:
+        task_name: The plan task's name.
+        start_monotonic: ``time.monotonic()`` reading when this task's dispatch began.
+        end_monotonic: ``time.monotonic()`` reading when this task's dispatch ended
+            (success, failure, or a raised exception — always recorded).
+    """
+
+    task_name: str
+    start_monotonic: float
+    end_monotonic: float

@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from personal_agent.llm_client.types import LLMServerError, ModelRole
 from personal_agent.orchestrator.expansion_controller import (
     ExpansionController,
     _validate_plan_json,
@@ -726,3 +727,94 @@ class TestSynthesisContextExcludesFullOutput:
         assert digest in context
         assert full_output not in context
         assert "LONG_FULL_OUTPUT_MARKER" not in context
+
+
+class TestPlannerRoleBinding:
+    """FRE-1390 — the planner call must reason about a turn that has not happened
+
+    yet, so it runs on a thinking-capable deployment. ``ModelRole.SUB_AGENT``
+    binds to the instruct sibling with ``disable_thinking: true``
+    (config/model_roles.yaml); ``ModelRole.PRIMARY`` is the thinking-capable
+    deployment. AC-1's live-container verification is evidence for the PR, not
+    a unit test — this asserts the one thing a unit test can: which role the
+    call site actually requests.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.mark.asyncio
+    async def test_planner_call_requests_primary_role(
+        self, controller: ExpansionController
+    ) -> None:
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(3), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result(f"task_{i}") for i in range(3)]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-role",
+                messages=[],
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is False  # real planner path, not fallback
+        client.respond.assert_awaited_once()
+        call_kwargs = client.respond.call_args.kwargs
+        assert call_kwargs["role"] is ModelRole.PRIMARY
+        assert call_kwargs["role"] is not ModelRole.SUB_AGENT
+
+
+class TestPlannerServerErrorFallback:
+    """FRE-1390 AC-4 — a 503 from the busier, larger-context deployment the
+
+    planner now shares must still hand off to the deterministic fallback
+    planner. Exercised with the real exception class the client raises for a
+    5xx after exhausting retries (``LLMServerError``,
+    llm_client/types.py:202), not assumed from the generic ``except
+    Exception`` in ``_run_planner``.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.mark.asyncio
+    async def test_planner_503_falls_back_to_deterministic_planner(
+        self, controller: ExpansionController
+    ) -> None:
+        client = AsyncMock()
+        client.respond = AsyncMock(side_effect=LLMServerError("Server error 503: shared GPU busy"))
+
+        # Comma-list query so the fallback planner's entity path fires
+        # (evaluate_redis, evaluate_memcached, evaluate_hazelcast, synthesize).
+        mock_results = [
+            _make_sub_agent_result("evaluate_redis"),
+            _make_sub_agent_result("evaluate_memcached"),
+            _make_sub_agent_result("evaluate_hazelcast"),
+            _make_sub_agent_result("synthesize_recommendation"),
+        ]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-503",
+                messages=[],
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is True
+        assert result.degraded is False
+        assert result.successful_count == 4

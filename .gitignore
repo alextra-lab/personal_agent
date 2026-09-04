@@ -229,6 +229,10 @@ telemetry/evaluation/fre1281-span-extraction/
 # FRE-996 digest contract A/B/C run outputs (raw runs never committed; docs/research writeup is)
 telemetry/evaluation/fre996-digest-contract/
 
+# FRE-1390 planner role A/B run outputs (raw runs never committed; the numbers that
+# matter live in the ticket handoff and the PR description)
+telemetry/evaluation/fre1390-planner-role-ab/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

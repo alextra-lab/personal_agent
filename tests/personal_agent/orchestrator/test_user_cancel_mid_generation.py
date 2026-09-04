@@ -71,8 +71,10 @@ def _make_ctx(**overrides: object) -> ExecutionContext:
 
 
 def _register_connection(session_id: str) -> ws_endpoint._ConnectionState:
-    """Register a minimal active connection — the precondition _get_cancel_event
-    checks before racing (only a connected session can ever receive USER_CANCEL).
+    """Register a minimal active connection and its cancel event — mirrors what
+    the real WS connect handler does, which is the precondition _get_cancel_event
+    checks before racing (only a session that has connected can ever receive
+    USER_CANCEL).
     """
     conn = ws_endpoint._ConnectionState(
         websocket=MagicMock(),
@@ -81,6 +83,7 @@ def _register_connection(session_id: str) -> ws_endpoint._ConnectionState:
         outbound_queue=asyncio.Queue(),
     )
     ws_endpoint._active_connections[session_id] = conn
+    ws_endpoint._get_or_create_cancel_event(session_id)
     return conn
 
 
@@ -278,6 +281,61 @@ class TestMidCallCancellation:
 
         assert result == TaskState.SYNTHESIS
         assert ctx.final_reply == "no session answer"
+
+    @pytest.mark.asyncio
+    async def test_cancel_still_lands_during_a_reconnect_gap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression guard (feature-dev:code-reviewer finding on this ticket):
+        a call that starts while the WebSocket happens to be briefly down (a
+        connection blip mid-turn — exactly what the ticket's own incident log
+        shows: a ws.disconnected during the 05:04-05:06 cancel storm) must still
+        be racing against Stop. The gate must track "has this session ever
+        connected" (stable, set once at connect time), not "is a connection
+        live this instant" — the latter flickers false on every disconnect and
+        would silently drop the race for the whole in-flight call.
+        """
+        monkeypatch.setattr(settings, "orchestrator_task_timeout_seconds", 30)
+        session_id = "sess-cancel-reconnect-gap"
+        _register_connection(session_id)
+        ws_endpoint._active_connections.pop(session_id, None)  # simulate the blip
+        assert ws_endpoint.get_active_connection(session_id) is None
+        assert ws_endpoint.get_cancel_event(session_id) is not None, (
+            "the event must survive — it was created at connect time, not lazily"
+        )
+
+        ctx = _make_ctx(session_id=session_id)
+        completed = {"value": False}
+        cancel_event = ws_endpoint.get_cancel_event(session_id)
+
+        async def slow_respond(**_kwargs: object) -> dict[str, object]:
+            await asyncio.sleep(0.05)
+            cancel_event.set()
+            await asyncio.sleep(5.0)
+            completed["value"] = True
+            return {
+                "content": "should never be delivered",
+                "tool_calls": [],
+                "response_id": None,
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+        respond_mock = AsyncMock(side_effect=slow_respond)
+        mock_llm = _mock_llm_client(respond_mock)
+        trace_ctx = TraceContext.new_trace()
+
+        try:
+            with _step_llm_call_patches(mock_llm):
+                result = await asyncio.wait_for(
+                    ex.step_llm_call(ctx, _mock_session(), trace_ctx),  # type: ignore[arg-type]
+                    timeout=5.0,
+                )
+        finally:
+            ws_endpoint._active_connections.pop(session_id, None)
+
+        assert result == TaskState.SYNTHESIS
+        assert completed["value"] is False, "the cancel must still land despite the reconnect gap"
+        assert ctx.turn_stopped_early is True
 
 
 class TestNoActiveConnectionDoesNotTouchCancelMachinery:

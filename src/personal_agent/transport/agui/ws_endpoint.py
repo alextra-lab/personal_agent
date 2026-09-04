@@ -145,16 +145,26 @@ def get_active_connection(session_id: str) -> _ConnectionState | None:
     return _active_connections.get(session_id)
 
 
-def get_cancel_event(session_id: str) -> asyncio.Event:
-    """Return the session's cancel event, creating it if this is the first call (FRE-1375).
+def get_cancel_event(session_id: str) -> asyncio.Event | None:
+    """Return the session's cancel event, or None if it has never connected (FRE-1375).
+
+    Deliberately non-creating: the executor uses this to decide whether racing an
+    in-flight call against cancellation is worth it at all. Only a session that has
+    connected at least once (see the connect handler, which eagerly registers the
+    event) has any possible source of a ``USER_CANCEL`` — a session_id that has
+    never opened a WebSocket connection (most orchestrator unit tests, or a
+    background/system call) must get None here, not a freshly-created Event that
+    can never be set, which is what re-introduced the pytest-asyncio cross-loop
+    phantom-cancel hazard the first version of this gate exists to avoid.
 
     Args:
         session_id: Session to look up.
 
     Returns:
-        The event, set the instant a ``USER_CANCEL`` arrives for this session.
+        The event, set the instant a ``USER_CANCEL`` arrives for this session, or
+        None if this session has never had a connection.
     """
-    return _get_or_create_cancel_event(session_id)
+    return _session_cancel_events.get(session_id)
 
 
 def is_cancel_requested(session_id: str) -> bool:
@@ -693,6 +703,12 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         outbound_queue=queue,
     )
     _active_connections[session_id] = conn
+    # FRE-1375: create the cancel event now, at first connect, rather than lazily
+    # on first race — makes its existence track "has this session ever connected"
+    # (stable once true) instead of "is a connection live this instant" (a fact
+    # that flickers false during every disconnect/reconnect gap, including one
+    # landing mid-call — exactly the incident this ticket reports).
+    _get_or_create_cancel_event(session_id)
 
     sender_task: asyncio.Task[None] | None = None
     receiver_task: asyncio.Task[None] | None = None

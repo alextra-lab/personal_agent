@@ -240,6 +240,28 @@ class TestUserCancel:
             client.post("/__test/done", params={"session_id": session_id})
             ws.receive_json()  # DONE
 
+    def test_cancel_event_exists_from_connect_even_without_a_cancel(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """The event is created eagerly at connect time, not lazily on the first
+        USER_CANCEL — this is what makes it survive a disconnect that happens
+        WHILE a call is already in flight and racing against it (a code-reviewer
+        finding on this ticket): the race must not depend on a connection being
+        live at the instant it starts, only on the session having connected at
+        some point before.
+        """
+        from personal_agent.transport.agui import ws_endpoint as wsep
+
+        client, _ = harness
+        session_id = str(uuid4())
+
+        assert wsep.get_cancel_event(session_id) is None, "not yet connected"
+
+        with ws_connect(client, session_id):
+            evt = wsep.get_cancel_event(session_id)
+            assert evt is not None
+            assert not evt.is_set()
+
     def test_user_cancel_sets_the_session_scoped_cancel_event(
         self, harness: tuple[TestClient, FakeSessionEventBuffer]
     ) -> None:

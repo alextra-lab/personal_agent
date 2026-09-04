@@ -207,21 +207,19 @@ def _is_turn_cancelled(session_id: str) -> bool:
 
 
 def _get_cancel_event(session_id: str) -> asyncio.Event | None:
-    """Return the session's cancel event, or None with no live WS connection (FRE-1375).
+    """Return the session's cancel event, or None if it has never connected (FRE-1375).
 
-    Gated on an active connection — not just a truthy ``session_id`` — because only a
-    connected session can ever receive a ``USER_CANCEL``. Without this gate, every
-    orchestrator call with a session_id (most unit tests included) would create and
-    race against an ``asyncio.Event`` that never gets set: harmless in production
-    (one long-lived event loop), but pytest-asyncio's per-test event loops make a
-    reused ``asyncio.Event`` object from a prior test's closed loop resolve as
+    ``get_cancel_event`` is deliberately non-creating: only a session that has
+    connected over WebSocket at least once (a fact that is stable once true — it
+    does not flip back on a later disconnect) has any possible source of a
+    ``USER_CANCEL``. Racing against a freshly-created Event that can never be set
+    would be a no-op in production, but pytest-asyncio's per-test event loops make
+    a *reused* ``asyncio.Event`` object from a prior test's closed loop resolve as
     spuriously "done" the instant it's raced again — surfacing as a phantom cancel
     on a completely unrelated test that happens to reuse the same session_id.
     """
-    from personal_agent.transport.agui.ws_endpoint import get_active_connection, get_cancel_event
+    from personal_agent.transport.agui.ws_endpoint import get_cancel_event
 
-    if get_active_connection(session_id) is None:
-        return None
     return get_cancel_event(session_id)
 
 

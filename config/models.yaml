@@ -160,13 +160,12 @@ models:
     # old at benchmark time.
     provider: slm_local
     id: "unsloth/qwen3.8-flash-next"
-    context_length: 87381        # --ctx-size 262144 / --parallel 3 (2026-09-04). The window is
-                                 # divided across slots, so 87381 is the real per-request
-                                 # ceiling. NOTE: a measured turn hit 91,284 input tokens on
-                                 # 2026-09-03 — above this. That turn was oversized because
-                                 # sub-agent delegation had failed and the primary carried
-                                 # every raw tool result itself; with delegation working the
-                                 # primary should stay far below. Watch for truncation.
+    context_length: 262144       # Full --ctx-size. slm_server runs --kv-unified, which POOLS
+                                 # the KV cache across slots instead of partitioning it, so a
+                                 # single request may use the whole window — do NOT divide by
+                                 # --parallel. The real constraint is aggregate KV across
+                                 # concurrent requests, which this per-deployment field cannot
+                                 # express; concurrent large requests contend for one pool.
     quantization: "UD-IQ4_XS"
     min_concurrency: 1
     max_concurrency: 1
@@ -203,9 +202,12 @@ models:
   qwen3.8-flash-next-instruct:
     provider: slm_local
     id: "unsloth/qwen3.8-flash-next"
-    context_length: 87381        # --ctx-size 262144 / --parallel 3. llama-server
-                                 # divides the window across slots, so this is the
-                                 # real per-request ceiling, NOT 262144.
+    context_length: 262144       # Full --ctx-size. slm_server runs --kv-unified, which POOLS
+                                 # the KV cache across slots instead of partitioning it, so a
+                                 # single request may use the whole window — do NOT divide by
+                                 # --parallel. The real constraint is aggregate KV across
+                                 # concurrent requests, which this per-deployment field cannot
+                                 # express; concurrent large requests contend for one pool.
     quantization: "4bit"
     min_concurrency: 1
     max_concurrency: 3

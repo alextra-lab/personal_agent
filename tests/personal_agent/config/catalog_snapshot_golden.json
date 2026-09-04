@@ -220,7 +220,7 @@
     },
     "binding|primary": {
       "definition": {
-        "context_length": 87381,
+        "context_length": 262144,
         "default_timeout": 600,
         "disable_thinking": false,
         "endpoint": "http://localhost:9099/v1",
@@ -316,7 +316,7 @@
     },
     "binding|sub_agent": {
       "definition": {
-        "context_length": 87381,
+        "context_length": 262144,
         "default_timeout": 90,
         "disable_thinking": true,
         "endpoint": "http://localhost:9099/v1",

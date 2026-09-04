@@ -35,8 +35,15 @@ _MEMORY_CONTEXT_MARKER = "## Your Memory Graph"
 # Per-message content preview length (mirrors executor.llm_call_messages_debug).
 _CONTEXT_PREVIEW_CHARS = 200
 # Cap on the digest injected into the parent's synthesis context (FRE-1379:
-# shared by the success path and the killed-result path below).
-_SUMMARY_CAP_CHARS = 2000
+# shared by the success path and the killed-result path below). FRE-1387: raised
+# from 2000 to a circuit breaker sized ~2x the highest full_output_chars ever
+# observed (12,987) — high enough that neither the catalog-declared generation
+# ceiling (~2048 tokens / ~8,000 chars) nor settings.sub_agent_max_tokens
+# (4096 / ~16,000 chars) can ever exceed it, so a real sub-agent response now
+# fits whole. It still exists as a backstop against a shape that has never
+# occurred here — a tool-using sub-agent dumping a long tool-call transcript
+# into its response — not to shape ordinary output.
+_SUMMARY_CAP_CHARS = 25_000
 
 # System prompt for sub-agents: focused, no personality
 _SUB_AGENT_SYSTEM_PROMPT = (
@@ -158,6 +165,39 @@ def _emit_sub_agent_capture(
         **context_breakdown,
     )
     write_sub_agent_capture(capture)
+
+
+def _warn_if_clipped(result: SubAgentResult, trace_id: str, session_id: str | None) -> None:
+    """Log a WARNING when the digest cap actually clipped this result (FRE-1387).
+
+    ``full_output_chars``/``digest_chars``/``truncation_ratio`` were already
+    computed and logged at INFO on every terminal path (FRE-505) — and nothing
+    consumed them, which is how 60% of sub-agent output went silently
+    discarded for three months. This gives a clip its own WARNING-level event
+    name, so it is picked up by :data:`personal_agent.telemetry.error_monitor.
+    WARNING_EVENT_ALLOWLIST` and surfaced through the ADR-0056 error-pattern
+    scan instead of requiring someone to read raw INFO logs to notice it.
+
+    Args:
+        result: The terminal sub-agent result to check.
+        trace_id: Parent request trace identifier.
+        session_id: Originating session id.
+    """
+    full_output_chars = len(result.full_output)
+    digest_chars = len(result.summary)
+    if digest_chars >= full_output_chars:
+        return
+    logger.warning(
+        "sub_agent_output_clipped",
+        task_id=str(result.task_id),
+        trace_id=trace_id,
+        session_id=session_id,
+        full_output_chars=full_output_chars,
+        digest_chars=digest_chars,
+        discarded_chars=full_output_chars - digest_chars,
+        truncation_ratio=digest_chars / full_output_chars if full_output_chars else 0.0,
+        cap_chars=_SUMMARY_CAP_CHARS,
+    )
 
 
 def _killed_result(
@@ -377,6 +417,7 @@ async def run_sub_agent(
         _emit_sub_agent_capture(
             cancelled, spec, _context_breakdown, trace_id, session_id, eval_mode
         )
+        _warn_if_clipped(cancelled, trace_id, session_id)
         raise
 
     except Exception as exc:
@@ -412,6 +453,7 @@ async def run_sub_agent(
     # injected digest + truncation ratio) so a decomposition turn is reconstructable
     # from telemetry alone. Best-effort; never raises.
     _emit_sub_agent_capture(result, spec, _context_breakdown, trace_id, session_id, eval_mode)
+    _warn_if_clipped(result, trace_id, session_id)
 
     return result
 

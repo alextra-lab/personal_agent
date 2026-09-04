@@ -233,8 +233,8 @@ if gw.decomposition.strategy in (HYBRID, DECOMPOSE):
              │                            │
           ┌──▼────────────────────────────▼────────┐
           │         Executor Dispatch              │
-          │   spawn sub-agents in parallel         │
-          │   per-worker + global timeout          │
+          │   dispatch sub-agents sequentially     │
+          │   per-worker timeout only (FRE-1380)   │
           └────────────────────┬───────────────────┘
                                │
                     ┌──────────▼──────────┐

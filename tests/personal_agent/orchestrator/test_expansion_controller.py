@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -248,7 +249,6 @@ class TestExpansionControllerExecute:
         mock_settings = MagicMock()
         mock_settings.planner_timeout_seconds = 0.01
         mock_settings.worker_timeout_seconds = 45.0
-        mock_settings.worker_global_timeout_seconds = 90.0
 
         with (
             patch(
@@ -364,7 +364,7 @@ class TestExpansionPhaseEvents:
     """ADR-0123 AC-8 (FRE-934): a fan-out is one EXPANSION parent + N SUB_AGENT children.
 
     Drives ``_run_dispatch`` with a hand-built 3-task plan (bypassing the planner /
-    fallback) so the assertion is purely about dispatch concurrency + phase pairing.
+    fallback) so the assertion is purely about phase pairing.
     """
 
     @pytest.fixture
@@ -397,8 +397,9 @@ class TestExpansionPhaseEvents:
         events = self._capture_phase_events(monkeypatch)
         plan = _validate_plan_json(_make_plan_json(3))
 
-        # Staggered completion so children finish in a different order than they
-        # start — proving independent child lifecycles, not lockstep.
+        # Distinct per-task duration — phase pairing must hold regardless of how
+        # long each child takes (dispatch is sequential, so completion order
+        # matches dispatch order: 0, 1, 2).
         delays = {"Goal for task 0": 0.03, "Goal for task 1": 0.01, "Goal for task 2": 0.02}
 
         async def _delayed(**kwargs: Any) -> SubAgentResult:
@@ -526,9 +527,12 @@ class TestExpansionResultCost:
         assert result.cost_usd == pytest.approx(0.05)
 
 
-class TestFanOutRespectsCeiling:
-    """FRE-1374 Defect 2 — dispatch is bounded by the sub-agent deployment's real
-    concurrency ceiling, not fanned out unconditionally.
+class TestSerializedDispatch:
+    """FRE-1380 — the fan-out is sequential.
+
+    Sub-agents exist for context isolation, not latency, and the owner ruled
+    15.8% wall-clock is worth deleting the FRE-1374 admission race outright
+    rather than merely narrowing its window.
     """
 
     @pytest.fixture
@@ -536,110 +540,27 @@ class TestFanOutRespectsCeiling:
         return ExpansionController()
 
     @staticmethod
-    def _tracking_run_sub_agent() -> tuple[Any, list[int]]:
-        """A run_sub_agent stand-in that records observed in-flight concurrency."""
-        state = {"concurrent": 0}
-        observed: list[int] = []
+    def _timed_run_sub_agent(delay_s: float = 0.02) -> tuple[Any, list[tuple[float, float]]]:
+        """A run_sub_agent stand-in that independently records its own call window."""
+        observed: list[tuple[float, float]] = []
 
         async def _run(**kwargs: Any) -> SubAgentResult:
-            state["concurrent"] += 1
-            observed.append(state["concurrent"])
-            await asyncio.sleep(0.02)
-            state["concurrent"] -= 1
+            observed_start = time.monotonic()
+            await asyncio.sleep(delay_s)
+            observed.append((observed_start, time.monotonic()))
             return _make_sub_agent_result(kwargs["spec"].task)
 
         return _run, observed
 
-    @staticmethod
-    def _stub_controller(ceiling: int) -> MagicMock:
-        stub = MagicMock()
-        stub.effective_ceiling.return_value = ceiling
-        return stub
-
     @pytest.mark.asyncio
-    async def test_low_ceiling_bounds_concurrency_and_all_tasks_still_complete(
-        self, controller: ExpansionController
-    ) -> None:
-        """AC-3 — ceiling seeded low, plan calls for more: every sub-agent still
-        completes, none time out, and observed concurrency never exceeds the ceiling.
-        """
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = _validate_plan_json(_make_plan_json(4))
-        assert plan is not None
-        run_stub, observed = self._tracking_run_sub_agent()
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=run_stub,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
-                return_value=self._stub_controller(2),
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="test-trace-ceiling",
-                messages=[],
-                result=ExpansionResult(),
-            )
-
-        assert len(results) == 4
-        assert all(r.success for r in results)
-        assert max(observed) <= 2
-
-    @pytest.mark.asyncio
-    async def test_ceiling_change_changes_observed_concurrency(
-        self, controller: ExpansionController
-    ) -> None:
-        """AC-4 — the same plan against ceilings of 2 and 4 dispatches differently."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = _validate_plan_json(_make_plan_json(4))
-        assert plan is not None
-
-        max_observed: dict[int, int] = {}
-        for ceiling in (2, 4):
-            run_stub, observed = self._tracking_run_sub_agent()
-            with (
-                patch(
-                    "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                    side_effect=run_stub,
-                ),
-                patch(
-                    "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
-                    return_value=self._stub_controller(ceiling),
-                ),
-            ):
-                await controller._run_dispatch(
-                    plan=plan,
-                    llm_client=AsyncMock(),
-                    trace_id=f"test-trace-ceiling-{ceiling}",
-                    messages=[],
-                    result=ExpansionResult(),
-                )
-            max_observed[ceiling] = max(observed)
-
-        assert max_observed[2] <= 2
-        assert max_observed[4] <= 4
-        assert max_observed[2] != max_observed[4]
-
-    @pytest.mark.asyncio
-    async def test_unresolvable_role_does_not_constrain_dispatch(
-        self, controller: ExpansionController
-    ) -> None:
-        """An llm_client with no resolvable model_key (e.g. a bare test double) must
-        not silently degrade to some ambient default ceiling — dispatch stays
-        unconstrained, matching today's behavior for every existing caller.
-        """
+    async def test_intervals_never_overlap(self, controller: ExpansionController) -> None:
+        """AC-1 — proven by real recorded timestamps, not by reading the code."""
         from personal_agent.orchestrator.expansion_controller import ExpansionResult
 
         plan = _validate_plan_json(_make_plan_json(3))
         assert plan is not None
-        run_stub, observed = self._tracking_run_sub_agent()
+        run_stub, observed = self._timed_run_sub_agent()
+        expansion_result = ExpansionResult()
 
         with patch(
             "personal_agent.orchestrator.expansion_controller.run_sub_agent",
@@ -648,157 +569,160 @@ class TestFanOutRespectsCeiling:
             results = await controller._run_dispatch(
                 plan=plan,
                 llm_client=AsyncMock(),
-                trace_id="test-trace-unresolvable",
-                messages=[],
-                result=ExpansionResult(),
-            )
-
-        assert len(results) == 3
-        # Unconstrained: all 3 could run concurrently (no artificial ceiling applied).
-        assert max(observed) == 3
-
-
-class TestAdmittedWorkerIndependentOfGlobalBound:
-    """FRE-1374 AC-1 (owner direction, verbatim: "The timeout need be applied to
-    each individual subagent session. not globally.") — worker_global_timeout_seconds
-    bounds ONLY the wait for a concurrency-ceiling slot. A worker already admitted
-    runs on its own clock, full stop — it is never truncated for time it spent
-    waiting, or for time another worker spent working.
-    """
-
-    @pytest.fixture
-    def controller(self) -> ExpansionController:
-        return ExpansionController()
-
-    @staticmethod
-    def _stub_controller(ceiling: int) -> MagicMock:
-        stub = MagicMock()
-        stub.effective_ceiling.return_value = ceiling
-        return stub
-
-    @pytest.mark.asyncio
-    async def test_admitted_worker_completes_past_the_old_global_deadline(
-        self, controller: ExpansionController
-    ) -> None:
-        """Once admitted (ceiling covers both, so admission is immediate for
-        both — no queuing race to make this flaky under real scheduler load),
-        a worker's own execution is never re-checked against
-        worker_global_timeout_seconds. An asyncio.Event (not a sleep-vs-sleep
-        race) holds both workers open well past the nominal window and proves
-        the dispatch is still running, not cancelled.
-        """
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = _validate_plan_json(_make_plan_json(2))
-        assert plan is not None
-        completed: list[str] = []
-        release_workers = asyncio.Event()
-
-        async def _run(**kwargs: Any) -> SubAgentResult:
-            await release_workers.wait()
-            completed.append(kwargs["spec"].task)
-            return _make_sub_agent_result(kwargs["spec"].task)
-
-        mock_settings = MagicMock()
-        # Small enough that the later assertion (held open 6x longer) is
-        # unambiguous, but large enough to absorb ordinary admission overhead —
-        # ceiling=2 means admission has zero contention, so it should never take
-        # anywhere near this long on its own.
-        mock_settings.worker_global_timeout_seconds = 0.05
-        mock_settings.worker_timeout_seconds = 60.0
-        mock_settings.worker_hard_deadline_seconds = 85.0
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_run,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_settings",
-                return_value=mock_settings,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
-                return_value=self._stub_controller(2),  # covers both — admission is instant
-            ),
-        ):
-            dispatch_task = asyncio.create_task(
-                controller._run_dispatch(
-                    plan=plan,
-                    llm_client=AsyncMock(),
-                    trace_id="test-trace-admitted",
-                    messages=[],
-                    result=ExpansionResult(),
-                )
-            )
-            # Generous margin (300x the nominal window) against scheduler jitter —
-            # both workers are blocked on release_workers well past the window by
-            # now, so if the global bound still reached an admitted worker, the
-            # dispatch would already be finished (with failures) at this point.
-            await asyncio.sleep(0.3)
-            assert not dispatch_task.done(), (
-                "dispatch finished before being released — the global bound "
-                "reached an admitted worker"
-            )
-            release_workers.set()
-            results = await dispatch_task
-
-        assert len(completed) == 2
-        assert len(results) == 2
-        assert all(r.success for r in results)
-
-    @pytest.mark.asyncio
-    async def test_never_admitted_worker_is_reported_not_run(
-        self, controller: ExpansionController
-    ) -> None:
-        """AC-3 — a worker that never gets a ceiling slot within the fan-out window
-        is reported as a failed/not-run result, never silently dropped, and the
-        expansion result is marked degraded with a specific reason.
-        """
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = _validate_plan_json(_make_plan_json(2))
-        assert plan is not None
-
-        async def _run(**kwargs: Any) -> SubAgentResult:
-            await asyncio.sleep(0.2)
-            return _make_sub_agent_result(kwargs["spec"].task)
-
-        mock_settings = MagicMock()
-        # Only enough window for ONE worker to ever get admitted.
-        mock_settings.worker_global_timeout_seconds = 0.05
-        mock_settings.worker_timeout_seconds = 60.0
-        mock_settings.worker_hard_deadline_seconds = 85.0
-
-        expansion_result = ExpansionResult()
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_run,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_settings",
-                return_value=mock_settings,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
-                return_value=self._stub_controller(1),
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="test-trace-not-admitted",
+                trace_id="test-trace-serialized",
                 messages=[],
                 result=expansion_result,
             )
 
-        assert len(results) == 2
-        succeeded = [r for r in results if r.success]
-        not_run = [r for r in results if not r.success]
-        assert len(succeeded) == 1
-        assert len(not_run) == 1
-        assert not_run[0].error is not None
-        assert "Not dispatched" in not_run[0].error
-        assert expansion_result.degraded is True
-        assert "not admitted" in (expansion_result.degradation_reason or "")
+        assert len(results) == 3
+        intervals = expansion_result.dispatch_intervals
+        assert len(intervals) == 3
+        assert [iv.task_name for iv in intervals] == [t.name for t in plan.tasks]
+
+        for earlier, later in zip(intervals, intervals[1:], strict=False):
+            assert later.start_monotonic >= earlier.end_monotonic
+
+        # Cross-check against the independently-observed call windows: a mis-wired
+        # recording could still produce a non-overlapping timeline if it measured
+        # the wrong thing, so each controller-recorded interval must bracket the
+        # stub's own (start, end) for that same task.
+        for interval, (observed_start, observed_end) in zip(intervals, observed, strict=True):
+            assert interval.start_monotonic <= observed_start
+            assert interval.end_monotonic >= observed_end
+
+    @pytest.mark.asyncio
+    async def test_interval_recorded_even_on_failure(self, controller: ExpansionController) -> None:
+        """AC-1 completeness.
+
+        A raised exception still yields an interval, and dispatch continues
+        past it (the finally guarantee).
+        """
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            if kwargs["spec"].task == "Goal for task 1":
+                raise RuntimeError("boom")
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        expansion_result = ExpansionResult()
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_run,
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-partial-raise",
+                messages=[],
+                result=expansion_result,
+            )
+
+        assert len(results) == 2  # the raising task is filtered, not a SubAgentResult
+        assert len(expansion_result.dispatch_intervals) == 3
+        assert [iv.task_name for iv in expansion_result.dispatch_intervals] == [
+            t.name for t in plan.tasks
+        ]
+
+    @pytest.mark.asyncio
+    async def test_max_observed_concurrency_is_one(self, controller: ExpansionController) -> None:
+        """AC-1, belt-and-braces — never more than one sub-agent in flight."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        state = {"concurrent": 0}
+        observed: list[int] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            state["concurrent"] += 1
+            observed.append(state["concurrent"])
+            await asyncio.sleep(0.01)
+            state["concurrent"] -= 1
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_run,
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-max-concurrency",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert max(observed) == 1
+
+    @pytest.mark.asyncio
+    async def test_all_tasks_admitted_beyond_old_ceiling(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-2 — N=8 exceeds both HYBRID's old cap (4) and DECOMPOSE's (6).
+
+        Every task still produces a real result, none carrying the deleted "not
+        admitted" outcome, and the expansion is never marked degraded for
+        admission reasons.
+        """
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
+
+        plan = ExpansionPlan(
+            strategy="DECOMPOSE",
+            tasks=[PlanTask(name=f"task_{i}", goal=f"Goal for task {i}") for i in range(8)],
+        )
+        expansion_result = ExpansionResult()
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=lambda **kwargs: _make_sub_agent_result(kwargs["spec"].task),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-beyond-ceiling",
+                messages=[],
+                result=expansion_result,
+            )
+
+        assert len(results) == 8
+        assert all(r.success for r in results)
+        assert all(r.error is None for r in results)
+        assert expansion_result.degraded is False
+
+
+class TestSynthesisContextExcludesFullOutput:
+    """FRE-1380 AC-4 (lock half) — synthesis is built from digests only.
+
+    The primary's synthesis context is built from ``summary`` alone;
+    ``full_output`` never reaches it. This is the whole justification for
+    running sub-agents at all (context isolation), so a regression here must
+    fail a test, not wait to be noticed in production.
+    """
+
+    def test_full_output_never_appears_in_synthesis_context(self) -> None:
+        controller = ExpansionController()
+        plan = _validate_plan_json(_make_plan_json(1))
+        assert plan is not None
+
+        digest = "SHORT_DIGEST_MARKER"
+        full_output = "LONG_FULL_OUTPUT_MARKER" * 200
+        result = SubAgentResult(
+            task_id=uuid4(),
+            spec_task="task_0",
+            summary=digest,
+            full_output=full_output,
+            tools_used=[],
+            token_count=10,
+            duration_ms=10,
+            success=True,
+        )
+
+        context = controller._build_synthesis_context(plan=plan, sub_results=[result])
+
+        assert digest in context
+        assert full_output not in context
+        assert "LONG_FULL_OUTPUT_MARKER" not in context

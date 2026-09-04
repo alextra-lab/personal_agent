@@ -570,24 +570,11 @@ class AppConfig(BaseSettings):
             "acquisition (passed as timeout_s to llm_client.respond), so this is a "
             "defense-in-depth cap for a client that ignores timeout_s — not the primary "
             "timeout mechanism. Sized as 60s generation + 25s queue-wait absorption (the "
-            "live incident's worst observed wait was 22.8s). Owner direction (2026-09-04): "
-            "this budget is per-worker and fully independent of worker_global_timeout_seconds "
-            "— once a worker is admitted past the concurrency ceiling, nothing re-checks the "
-            "global bound against it, so this value needs no arithmetic relationship to it."
-        ),
-    )
-    worker_global_timeout_seconds: float = Field(
-        default=180.0,
-        description=(
-            "Max time a sub-agent may wait for a concurrency-ceiling slot before being "
-            "reported as not dispatched (FRE-1374, owner direction 2026-09-04: 'the "
-            "timeout need be applied to each individual subagent session, not globally'). "
-            "Bounds ONLY the admission queue — once a worker is admitted, this no longer "
-            "applies to it; its own clock is worker_timeout_seconds/worker_hard_deadline_seconds, "
-            "entirely independent of every other worker's timing. A worker that never gets "
-            "admitted within this window is not silently dropped: it comes back as a failed "
-            "SubAgentResult (error prefixed 'Not dispatched') and the expansion is marked "
-            "degraded."
+            "live incident's worst observed wait was 22.8s). This budget is per-worker, "
+            "with no arithmetic relationship to any other worker's timing (FRE-1380 "
+            "serialized the fan-out itself, deleting the concurrency-ceiling admission "
+            "race — and the settings field that bounded it — this sentence originally "
+            "referred to)."
         ),
     )
     synthesis_timeout_seconds: float = Field(

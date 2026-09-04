@@ -1,51 +1,78 @@
-# Last session — 2026-09-01 → 02
+# Last session — 2026-09-03 → 04
 
 ## Doing / discussing  (≤5 sentences)
-Four PRs cleared (grounding denominator, self-improvement loop, ADR-0140, Grafana panels). The
-session ended mid-discussion on **local model serving** — the owner ran model tests on the mpb and
-relayed a serving recommendation via the slm_server CC session; nothing was filed or changed, and
-the thread is open. The SLM upstream was down (502) for most of the day and is
-**back up and verified at 19:12 UTC** — not an incident, the owner was reworking inference. Three
-decisions sit with the owner (FRE-1354's deploy, six board dispositions, ADR-0140's acceptance),
-and **all three streams are idle** because those dispositions produce the next eligible heads.
+The night's spine was **owner-directed single-model serving**: ADR-0141 (unify LLM dispatch on
+litellm) authored, accepted and T1–T3 shipped, then the catalog repointed so `qwen3.8-flash-next`
+serves both primary and sub_agent, split only by the thinking flag. Two owner test turns then
+exposed three defects nothing in code review had found — sub-agent timeouts, a stop button that
+stopped nothing, and a research query routed to unimplemented delegation. The live thread at reset
+is **whether to serialize sub-agents** (see below) and a design conversation on router/harness
+architecture now carried in FRE-1377. Nothing is half-merged; two seats are working.
 
 ## What was decided and why
 
-**The issue-budget gate counted the wrong population.** Owner ruling: cap Seshat's *self-created*
-open tickets at 10, retiring `issue_budget_threshold: 200` over all non-terminal team issues. 200
-was arbitrary and throttled Seshat on volume it never produced (81 `Backlog` notes, the whole human
-queue). Recorded on FRE-1354.
+**The `extra_body` bug is why ADR-0141 exists.** Measured live: Seshat posted `extra_body` as a
+literal wire key, so `enable_thinking`, `thinking_budget`, `top_k`, `min_p` and
+`repetition_penalty` were ALL inert. Nothing looked broken because backend 8503's launch flag was
+doing the work. Collapsing to one model removed that accident — which is why the cutover had to
+land before the single-model config, not after.
 
-**ADR-0140 merged without the ultra its own seat asked for.** The seat flagged that round 3's fixes
-were not codex-reviewed and named the diff. Master judged that seriously necessary and recommended
-it rather than merging; the owner re-invoked the gate without running one. Master treated the
-re-invocation as the decision, merged, and **recorded the gap on FRE-1357** rather than letting it
-pass silently. Both ADRs are `Proposed`, so the pass can still be spent before acceptance.
+**`thinking_budget` is inert; `reasoning_effort` is the real lever and must never be sent.**
+Probed directly. Master first concluded "max_tokens is the only lever" — wrong, corrected on
+FRE-1362. `reasoning_effort` is pinned server-side to `medium`; sending an invalid value returns
+500, and slm_server's watchdog treats 5xx as backend failure and **restarts the model** under
+every other worker.
 
-**Round 6 diagnosed altitude, not defects** — 4 findings against 7/5/5, count falling but trend not
-flattening, three of four being the prior round's answer one level down. It then withdrew ADR-0139
-D2/D3/D7 and authored ADR-0140 instead of rewriting a fourth time. The AC that gave it *permission
-to stop* is what produced this; without it a review round's only move is to find more defects.
+**SERIALIZATION — the live decision, unfiled.** slm_server benchmarked concurrency: aggregate
+throughput rises only **18.8%** from 1→3 (34.2 → 40.6 tok/s) while per-request drops **2.57x**
+(37.1 → 14.4). Fan-out of 3 saves 15.8% wall-clock, not 3x. Master's argument for serializing goes
+further than the benchmark: **sub-agents are about context isolation, not speed** — the primary
+hit 91k tokens because it carried raw tool results itself, and a digest-returning sub-agent fixes
+that whether or not it runs in parallel. So serializing costs 15.8% and keeps the part that
+matters, while removing the wedge risk and giving 2.6x deadline headroom. Owner has not ruled.
+
+**Four concurrent requests WEDGE the server.** All four 504, backend unresponsive, forced restart
+required. Three is a hard cap, not a target. Master verified Seshat cannot exceed it today
+(provider semaphore 3, health probe is a GET, local reranker unserved).
+
+**The taxonomy is thinner than it looks.** `_MAX_TASKS = {"HYBRID": 4, "DECOMPOSE": 6}` — two
+named strategies one integer apart, same code path. Owner's framing: model choice is
+capability/cost/latency and is the user's; how the response is produced is harness architecture.
+Whole conversation is on FRE-1377, including the owner's routing-control-with-auto proposal.
+
+**Master's own errors, because they recurred.** A `LIMIT 8` on a 12-row aggregate read as the
+whole population ("delegation has never fired" — it had, 3 times). A grep for `error` matched
+`error-monitor` and `failed_count=0`, producing a false deploy alarm — the same unbounded-substring
+bug filed as FRE-1376 twenty minutes earlier. Named the wrong setting on FRE-1374
+(`sub_agent_timeout_seconds`, actually `worker_timeout_seconds`) and corrected mid-flight, costing
+the seat a rework cycle.
+
+**Worker A was normal; worker D was the anomaly.** 12.7 tok/s matches the measured 14.4 at
+concurrency 3. D's 65 tok/s exceeds the single-stream ceiling and is probably a measurement
+artefact. The 2-of-4 timeout is then fully explained: 85s × 14.4 = ~1,224 tokens against
+`max_tokens=4096`. Deterministic, not intermittent.
 
 ## Worktrees — anything special
-Nothing — all three seats idle on their merged branches (`git worktree list` has it).
+`build` holds `fre-1370-query-paraphrase-pinned-role` with one unpushed WIP commit (`7aeef49a`)
+for a **cancelled** ticket. Kept deliberately — it is the only copy, and cancellation is not
+reason to force-delete an unmerged branch.
 
 ## Sequence position + drift
-**Heavy drift, owner-directed.** The Observability Foundation directive remains untouched; the
-session ran the grounding chain (FRE-1332/1333, ADR-0139→0140) and the self-improvement loop. The
-owner's earlier framing still holds: every Urgent sits in Memory or the formerly-unfiled bucket
-while the directed area has nothing pointed at a seat.
+**Total drift from the Observability Foundation directive, owner-directed throughout.** The owner
+fast-tracked single-model serving at 11:39; master then let two self-generated side-quests
+(FRE-1370 paraphrase pin, FRE-442 citations) occupy both seats while the fast-tracked work waited,
+until the owner said "stop everything but what asked for". Both were real; neither was asked for.
+The lesson is not "don't surface findings" but "don't put them in front of the directive".
 
 ## Answers for the fresh start
-- **Why is FRE-1354 merged but not deployed?** Master stopped the gateway rebuild because session
-  `0b4123f8` had five streaming turns in the preceding ten minutes — the FRE-1352 shape. Owner-gated
-  since. Expect ~5 auto-filed tickets on the first post-deploy consolidation; the `.env` promotion-
-  project gotcha was checked and does **not** bite (line 409 is commented out).
-- **The SLM was down most of the day (502).** Owner was reworking inference on the mpb; back up
-  19:12 UTC. Not an incident, nothing to file.
-- **Why are all streams idle?** The six ADR-0140 dispositions (cancel FRE-1335; cancel FRE-1334
-  as-scoped folding its OBSERVED part into FRE-1336; approve FRE-1336; amend FRE-1355 to row one;
-  re-point FRE-1356; re-scope FRE-1306) are unexecuted and owner-gated. They produce the next heads.
-- **Should the 27B be reconsidered?** Owner's open question, unfiled. It spent 182 reasoning tokens
-  against the 35B's 1429 — 87% fewer — and loses on wall-clock only narrowly. Quality was never
-  benchmarked, so a quality-weighted A/B could flip it.
+- **Why is FRE-1375 not Done?** Deployed 08:51, but AC-2's backend half needs an owner-side live
+  check: press Stop mid-generation, then send a second query immediately. If it stalls, the backend
+  kept its slot — that is a *separate, more serious* ticket, not a fold-in.
+- **Why did master's own tickets sit at In Progress?** They shouldn't have. FRE-1375 sat merged and
+  deployed at In Progress for an hour, holding `stream:build1` and blocking FRE-1379. Caught by the
+  reset gate, not at the merge. Advance dispatch AT the merge.
+- **Is the citation work dead?** No — FRE-442 is parked and rescoped around the owner's actual ask
+  (clickable internet links, not memory provenance). Its usage counts predate the model change and
+  need refreshing before being quoted.
+- **What did the owner originally want?** Verifiable links to pages Sasha actually read. Three ADRs
+  grew around that want while FRE-442 sat at no priority since June.

@@ -5,6 +5,13 @@
 **Deployed revision under measurement:** `main@16af9e28` (FRE-1376's word-boundary fix included).
 Confirmed by container file hash, not by board state — see [Method](#method-appendix), M1.
 
+> **Correction, 2026-09-04 12:30, after owner challenge.** One finding — **F10** — rested on
+> sub-agent execution, and the sub-agent path was under active repair on the day it was measured.
+> F10 is **withdrawn** as evidence about expansion's value, and the two recommendations that hung on
+> it (P1's "keep the expansion denial", P3's "repair expansion before widening the door") are
+> withdrawn with it. See **F18** for the deploy chain and **the retraction notice on F10**. The other
+> sixteen findings do not touch sub-agent execution and are unaffected; F18 states which is which.
+
 ---
 
 ## Verdict, up front
@@ -29,11 +36,11 @@ Five further measurements reshape the recommendation:
    `expansion_budget=1` from the brainstem and spawned **four** sub-agents. Master's hypothesis on
    the ticket — that the strategy name is "largely redundant with the budget it accompanies" — is
    backwards: the strategy name is the *only* thing bounding fan-out, and the budget is a boolean.
-3. **Routing to expansion currently makes the answer worse.** The one turn in this corpus that was
-   classified `analysis`, routed `hybrid`, and expanded lost 2 of its 4 sub-agents to the
-   concurrency ceiling and synthesised a **160-character** reply. The turn misrouted to
-   `delegation` on a comparable research brief produced **23,732 characters**. Both lanes hit the
-   same 900-second wall on the same question.
+3. ~~**Routing to expansion currently makes the answer worse.**~~ **Withdrawn — see F10 and F18.**
+   The comparison was real but it was taken against an expansion path under active repair, two of
+   whose three fixes had not yet shipped. It measured a construction site, not a design. What
+   survives is narrower and still worth stating: **nobody has a clean measurement of what expansion
+   is worth**, because every expansion turn on record predates the repair.
 4. **A model classifier is not an oracle.** FRE-1337's arm 2 has now been run — first on its own
    seven fixtures, where three models agreed unanimously, and then on 60 real messages, where the
    two models agree with the deterministic cascade **70%** of the time and with **each other only
@@ -43,9 +50,10 @@ Five further measurements reshape the recommendation:
    shared single GPU, one after 324.8 seconds of retries.
 
 So the recommendation is not "let the model decide", not "weight by position", and not "add a
-selector". It is: **fix the polarity of the fallback where it is safe to, make the ceiling that
-already exists actually bind, repair the expansion path before sending more traffic into it, and show
-the user what the router chose before offering them a control over a decision that is 95% constant.**
+selector". It is: **fix the polarity of the fallback, make the ceiling that already exists actually
+bind, and show the user what the router chose before offering them a control over a decision that is
+95% constant.** Whether the expansion denial should be lifted at the same time is left open, not
+answered — see P1, and F10's retraction for why this document is not entitled to an opinion on it.
 
 Two ideas are tested here and **recommended against**, with the numbers: position-weighted signals
 (F3 — would change 2 messages in 2,125, one of them for the worse) and a length-gated model arbiter
@@ -445,12 +453,34 @@ already this exact shape") is stronger than stated: the shape exists at the HTTP
 
 ---
 
-### F10 — the correctly-routed turn produced a 160-character answer; the misrouted one produced 23,732
+### F10 — WITHDRAWN — the correctly-routed turn produced a 160-character answer; the misrouted one produced 23,732
 
-**Verdict: POSITIVE.** Sample size is two comparable turns and is stated as such.
+> **RETRACTED 2026-09-04 12:30, on owner challenge, and the challenge was right.**
+>
+> The numbers below are accurate. The **inference drawn from them was not**, and it was the one
+> conclusion in this document that a study measuring a harness under active development had no
+> business drawing.
+>
+> The owner's objection, in their words: *"Sub agent use has been failing and you are now basing
+> decisions on it."* Correct. The 2026-09-04 07:16 turn ran **in the middle of a three-fix repair
+> sequence on the sub-agent path**, of which one fix was live and two were not (F18). A turn that
+> loses half its workers to a deadline that a merged-but-undeployed fix exists to address measures
+> the state of the repair, not the value of expansion.
+>
+> **This finding is therefore withdrawn as evidence about whether expansion helps or hurts**, and
+> with it P1's recommendation to keep `conversational_always_single`, and P3's "repair expansion
+> before widening the door" — which this document called its strongest recommendation. It was its
+> weakest, because it was the only one resting on a moving part.
+>
+> **What survives, and it is not nothing:** there is currently **no clean measurement of what
+> expansion is worth**. Every expansion turn in the ledger predates the repair, so the corpus cannot
+> answer the commission's "what does a wrong strategy cost in answer quality" in either direction.
+> That is an absence of evidence, and this document previously reported it as evidence of absence.
+>
+> The measurement is retained below rather than deleted, because it is the correct *before* half of
+> the comparison that should now be run.
 
-This is the comparison the commission asks for — *what does a wrong strategy cost in tokens, latency
-and answer quality* — and it comes out the opposite way round.
+The numbers, as measured, with the inference removed.
 
 **The query:**
 
@@ -504,13 +534,14 @@ Two of four sub-agents never got a slot — the FRE-1374 defect, on a local serv
 `max_concurrency: 3` and a 4-way fan-out. The synthesis over the two survivors produced **160
 characters** from 3,476 characters of sub-agent output.
 
-**↯ argues with the brief, and with the owner's framing.** The premise underneath both the ticket and
-the routing-control proposal is that a wrong route costs a worse answer. On the only pair of
-comparable live turns this corpus contains, the *right* route cost the worse answer, because the
-expansion path it unlocks is currently lossy (FRE-1374) and its synthesis step discards most of what
-the sub-agents returned. A design that gives the model freer rein to expand — the owner's stated
-direction — would route *more* traffic into that path. **Repairing expansion is a prerequisite for
-any change that increases how often it is chosen**, not a parallel workstream.
+**What this does NOT support (the retracted claim, kept visible on purpose).** This document
+originally read the pair as evidence that a right route can cost a worse answer, and concluded that
+repairing expansion was a prerequisite for any routing change. That conclusion is withdrawn. Two
+turns, one of them running inside an in-flight repair, cannot carry it. The generation arithmetic
+alone explains the deaths without any appeal to design: `sub_agent_max_tokens` is 4096 and per-request
+throughput on the shared GPU falls to 14.42 tok/s at concurrency 3, so 4096 tokens needs ~284s against
+an 85s deadline. Serialized at 37.08 tok/s the same budget fits in ~110s — which is why FRE-1380
+exists, and it is now live (F18).
 
 ---
 
@@ -825,6 +856,74 @@ never receives, F5) or the model's own reading mid-turn (which is not a gateway 
 not point where the disagreements are, because the disagreements are visibly elsewhere in the same
 sample.
 
+### F18 — the sub-agent path was mid-repair when F10 was measured, and has since moved twice
+
+**Verdict: POSITIVE.** Added 2026-09-04 12:30 in response to the owner's challenge. This finding
+exists to bound the blast radius of F10's retraction — i.e. to say precisely which of this document's
+claims touch sub-agent execution and which do not.
+
+**The query** — every commit touching the sub-agent path, hashed against the file contents inside the
+running container, so the deployed code is pinned to a commit rather than inferred from ticket state:
+
+```
+docker exec cloud-sim-seshat-gateway sha256sum /app/src/personal_agent/orchestrator/{sub_agent,expansion_controller}.py
+```
+
+**Its actual output** (abridged to the matching rows):
+
+```
+--- orchestrator/sub_agent.py            container=1ae96184d304
+    cb236602 2026-09-04 10:57 1ae96184d304 fix: a killed sub-agent reports partial progress (FRE-1379)  <== CONTAINER
+--- orchestrator/expansion_controller.py container=82b7462e3366
+    75eb12e4 2026-09-04 11:47 82b7462e3366 fix: correct _run_dispatch's Returns docstring (FRE-1380)    <== CONTAINER
+
+docker inspect cloud-sim-seshat-gateway --format '{{.Created}}'  ->  2026-09-04T11:57:19Z
+```
+
+**The chain, and where the measured turn sits in it:**
+
+| Fix | Merged | Live at 07:16 (when F10's turn ran)? | Live now |
+|---|---|---|---|
+| FRE-1374 — per-worker clock, fan-out respects the ceiling | `d39c85d8` 05:05 / `a1036ce3` 05:30 | **Yes** | Yes |
+| FRE-1379 — a killed sub-agent reports partial progress | `cb236602` 10:57 | **No** | Yes |
+| FRE-1380 — serialize the fan-out | `bcd7abd7` 11:42 | **No** | Yes |
+
+FRE-1374 being live at 07:16 is not inferred from its ticket (which reads `Done` at 06:10, while its
+merge commit is timestamped 08:01 — board state and git disagree, and neither is the instrument). It
+is established from the data: the observed kill message is `Timeout after 85.0s`, and
+`worker_hard_deadline_seconds = 85.0` was introduced by FRE-1374's own commit `d39c85d8`. A turn
+reporting that number was running that code.
+
+So F10's turn had per-worker clocks (FRE-1374) but **still ran concurrently** (no FRE-1380) and its
+killed workers **still reported nothing** (no FRE-1379). Both of the fixes that would have changed its
+outcome were absent. It is a *before* measurement, and this document read it as a property.
+
+**A second correction this forces: M1's deploy anchor is now stale.** The container was rebuilt at
+**11:57:19**, between the last of these measurements and this correction. Every finding here is
+anchored to the pre-11:57 build. The router files (`intent.py`, `decomposition.py`) are untouched by
+that rebuild, so the classifier findings are unaffected; the expansion path is not.
+
+**Which findings touch sub-agent execution at all.** This is the useful part:
+
+| Finding | Rests on | Affected by the repair? |
+|---|---|---|
+| F1, F2, F3, F4, F5 | classifier replay over the capture corpus; `pipeline.py` call shape | **No** — no sub-agent, no tool, no inference |
+| F15, F16, F17 | FRE-1337's probe: stateless single-turn model calls, no tools, no history | **No** |
+| F7, F9, F12, F13 | the ledger's routing columns, the live OpenAPI document, the container's own file listing, live config | **No** |
+| F14 | capture-level behaviour of turns that never expanded (all `SINGLE`) | **No** |
+| F6, F8 | `sub_agent_count`, which counts workers **dispatched**, not workers that succeeded | **No** — the plumbing claim is about how many were spawned, and the repair does not change that a budget of 1 produced a fan-out of 4 |
+| F11 | the 900s `orchestrator_task_timeout` wall | **Partly** — one of the eleven wall-hitting turns is an expansion turn whose wall included sub-agent time |
+| **F10** | sub-agent success, digests, synthesis output | **Yes — withdrawn** |
+
+Sixteen of eighteen findings are untouched. One is partly affected and says so. One is withdrawn.
+
+**What should happen now, and it is a measurement, not a proposal.** All three fixes are live as of
+11:57. The comparison F10 attempted is worth running properly: the same research brief, once through
+`SINGLE` and once through `EXPAND`, on the repaired path, with FRE-1379's partial-progress reporting
+making a killed worker legible and FRE-1380's AC-4 digest-vs-full-output figures showing what context
+isolation actually bought. That is the measurement that would answer the commission's question about
+answer quality. This study cannot answer it and should not have implied that it had.
+
 ---
 
 ## Proposals
@@ -833,30 +932,33 @@ Nine, in the order they should be considered. Each names the findings it rests o
 *sequencing* recommendations rather than changes — the measurements say the order matters more than
 the individual items.
 
-### P1 — Split `conversational`'s two effects and act on them separately: lift the iteration cap, keep the expansion denial for now
+### P1 — Split `conversational`'s two effects; lift the iteration cap. Whether to lift the expansion denial is left open
 
-**Rests on:** F13, F14, F10. **No new ticket — belongs to FRE-1288**, where the measurements were posted as a comment.
+**Rests on:** F13, F14. **No new ticket — belongs to FRE-1288**, where the measurements were posted
+as a comment.
 
-`conversational` does two things under one label and the evidence for them points in opposite
-directions.
+`conversational` does two things under one label, and only one of them this study can speak to.
 
-The **6-iteration cap** is a real, occasionally-binding constraint on a bucket that demonstrably does
-research: it binds on 13 of 504 turns, while 128 of 339 recent conversational turns used
-`web_search`. Raising or removing it for the no-match case is a small, low-risk change with an
-immediate benefit and no expansion-cost implications at all.
+**The 6-iteration cap** — recommended for lifting on the no-match case. It is a real, occasionally
+binding constraint on a bucket that demonstrably does research: it binds on 13 of 504 turns, while
+128 of 339 recent conversational turns used `web_search`. Small, low-risk, no expansion-cost
+implications, and it does not depend on anything in the sub-agent path.
 
-The **expansion denial** (`conversational_always_single`) is the effect FRE-1288 identifies as the
-larger one, and it is — 504 of 504 turns. But F10 says that routing a research turn into the
-expansion path today produced a *worse* answer than leaving it in the primary. **This study
-recommends keeping `conversational_always_single` in place until P3 is satisfied**, and says so
-explicitly because the obvious reading of FRE-1288 is to remove it.
+**The expansion denial** (`conversational_always_single`) — **left open.** An earlier version of this
+document recommended keeping it, on the strength of F10. F10 is withdrawn (F18), so that
+recommendation is withdrawn with it, and this study does not have a replacement. It cannot: FRE-1288's
+own "It fails if" clause demands that anything removing the SINGLE forcing state what then bounds
+expansion cost, and answering that honestly needs a measurement of the repaired path that nobody has
+yet taken.
 
-FRE-1288's own "It fails if" clause requires that anything removing the SINGLE forcing must state
-what then bounds expansion cost. P2 is that statement.
+What this study *can* contribute to that decision is the size of the population it would move —
+78–81% of all traffic — and the fact that the label is assigned by an absence of evidence rather than
+a presence of it. Both argue that the denial is doing more work than its author intended. Neither
+tells you whether lifting it produces better answers today.
 
 ### P2 — Make the per-turn expansion budget actually bind
 
-**Rests on:** F6. **Filed as FRE-1382.**
+**Rests on:** F6. **Filed as FRE-1382.** **Owner direction, 2026-09-04: "ceiling after"** — this is sequenced behind the other work, not ahead of it. Recorded here so the ticket is not read as a front-of-queue item.
 
 `expansion_controller.py:45` caps fan-out on a constant keyed by strategy name. `governance.expansion_budget`
 — computed by the brainstem from live CPU and memory, emitted on every turn, and read exactly once as
@@ -869,20 +971,28 @@ than a performance ticket — **it is the missing piece of the owner's proposed 
 already exist." Measured: the budget exists as a *number* but not as a *ceiling*. Wiring it is what
 makes the three-part design describable at all.
 
-### P3 — Repair expansion before widening the door to it
+### P3 — Re-measure expansion on the repaired path; this study cannot say what it is worth
 
-**Rests on:** F10, F11. **No new ticket — this is a sequencing call over the existing FRE-1374 and FRE-1380.**
+**Rests on:** F18, and the retraction of F10.
 
-On the only pair of comparable live turns in this corpus, the turn that reached expansion lost 2 of
-its 4 sub-agents to the concurrency ceiling and synthesised 160 characters from 3,476 characters of
-sub-agent output; the turn that was denied expansion returned 23,732 characters. Both routing lanes
-hit the same 900-second `orchestrator_task_timeout` on the same question.
+**This proposal replaces one that said the opposite.** It previously read "repair expansion before
+widening the door to it", and called itself the most important recommendation in the document. That
+rested entirely on F10, which measured a turn running inside a three-fix repair with two of the fixes
+not yet shipped. Withdrawn.
 
-Every other proposal on this page — the owner's "let the model decompose as it deems necessary", a
-routing selector, a model arbiter — increases how often expansion is chosen. Each is a multiplier on
-a path that is currently lossy. **Sequence FRE-1374 and FRE-1380 to landing and live verification
-before any routing change ships.** This is the single most important recommendation in the document
-and it is a sequencing one, not a design one.
+All three fixes — FRE-1374 (per-worker clock), FRE-1379 (a killed worker reports partial progress),
+FRE-1380 (serialize the fan-out) — are live as of the 11:57 rebuild. The sequencing argument is
+therefore moot on its own terms: the repair already happened.
+
+What is left is an absence. **There is no clean measurement of what expansion buys**, in either
+direction, because every expansion turn in the ledger predates the repair. The commission asks what a
+wrong strategy costs in "tokens, latency and answer quality", and on answer quality the honest answer
+from this study is: *unmeasured, and not measurable from the existing corpus.*
+
+The measurement worth running is small and well-specified, and two of its instruments now exist:
+the same research brief through `SINGLE` and through `EXPAND` on the repaired path, with FRE-1379
+making a killed worker legible and FRE-1380's AC-4 digest-vs-full-output figures showing what context
+isolation actually bought — the figure its own ticket notes "nobody has ever measured".
 
 ### P4 — Visibility before control: show what the router resolved to, as its own change
 
@@ -978,7 +1088,7 @@ Do this together with P2, since both touch the same cap.
 
 ### P8 — Decide `DELEGATION`'s status explicitly rather than leaving it gated-off
 
-**Rests on:** F7, F4, F10. **Filed as FRE-1385.**
+**Rests on:** F7, F4, F11. **Filed as FRE-1385.**
 
 The commission asks whether a task type should exist for a capability that is not implemented. The
 measured answer: over the ledger's entire history the DELEGATE route has run four times and delegated
@@ -1029,8 +1139,10 @@ absent here would itself be a violation.
 - **P1** (split `conversational`'s two effects) belongs to **FRE-1288**, which is Approved, Urgent
   and unstarted and already asks exactly that question. A comment carrying the measurements was
   posted there rather than a competing ticket.
-- **P3** (repair expansion first) is a sequencing recommendation over **FRE-1374** and **FRE-1380**,
-  which exist. It needs master's ordering, not a third ticket.
+- **P3** is now a call for a measurement rather than a sequencing recommendation, and the repair it
+  would have sequenced behind (FRE-1374, FRE-1379, FRE-1380) has already shipped. No ticket filed:
+  the comparison it asks for is largely FRE-1380's own AC-4 and AC-5, which are still to be
+  evidenced at that ticket's gate.
 - **P5** (scope the routing selector) is a disposition on the owner's own proposal. It is the
   owner's call, not a work item this seat should manufacture.
 - **P9** is one description amendment on FRE-1288 (requested in the comment; explore does not edit
@@ -1166,9 +1278,9 @@ one direction only: they may under-report. Nothing in this document argues from 
 Postgres `route_traces` figures are not subject to this; the ledger is a synchronous, bus-independent
 write.
 
-Sample sizes are small in two places and labelled at the point of use: F10 rests on two comparable
-turns, and F17's gated subpopulation is n=5. Neither carries a conclusion beyond what that n
-supports.
+Sample sizes are small in two places: F17's gated subpopulation is n=5, labelled at the point of
+use. F10 rested on two turns and drew a conclusion beyond what that n supported — it is retracted in
+place, with F18 explaining why the n was not the only problem with it.
 
 ### M9 — reproducing this
 

@@ -226,14 +226,23 @@ async def run_sub_agent(
         # content for both Mapping and bare-string responses.
         from personal_agent.telemetry.trace import TraceContext
 
+        # FRE-1374: timeout_s reaches the client as the GENERATION-only budget — for
+        # LiteLLMClient it becomes the read timeout applied inside its concurrency-slot
+        # context, so it starts counting at slot acquisition, not at spawn. The outer
+        # wait_for below is a separate, larger, explicitly-named safety net (not the
+        # primary timeout mechanism) for a client that ignores timeout_s.
+        hard_deadline = max(
+            spec.hard_deadline_seconds or spec.timeout_seconds, spec.timeout_seconds
+        )
         raw_response = await asyncio.wait_for(
             llm_client.respond(
                 role=spec.model_role,
                 messages=messages,
                 max_tokens=spec.max_tokens,
                 trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
+                timeout_s=spec.timeout_seconds,
             ),
-            timeout=spec.timeout_seconds,
+            timeout=hard_deadline,
         )
         response_content = _parse_llm_response(raw_response)
         call_cost_usd = _extract_call_cost(raw_response)
@@ -264,7 +273,11 @@ async def run_sub_agent(
             token_count=0,
             duration_ms=duration_ms,
             success=False,
-            error=f"Timeout after {spec.timeout_seconds}s",
+            # FRE-1374 (AC-2): report the measured elapsed time, not the nominal
+            # budget — the hard deadline that actually fired may differ from
+            # spec.timeout_seconds, and the old hard-coded value hid exactly the
+            # shortfall this ticket exists to make visible.
+            error=f"Timeout after {duration_ms / 1000:.1f}s",
         )
 
     except asyncio.CancelledError:

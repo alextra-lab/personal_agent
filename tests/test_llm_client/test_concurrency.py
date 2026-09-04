@@ -279,6 +279,45 @@ class TestInferenceConcurrencyController:
         assert status["models"]["reasoning"]["active"] == 0
 
 
+class TestEffectiveCeiling:
+    """FRE-1374 — the binding concurrency constraint for a role, for fan-out sizing."""
+
+    def _make_controller(self) -> InferenceConcurrencyController:
+        ctrl = InferenceConcurrencyController(default_base_url="http://slm-test:8000/v1")
+        ctrl.register_provider("slm_local", max_concurrency=2)
+        for role, limit in (("router", 4), ("reasoning", 1), ("standard", 2)):
+            ctrl.register_model(
+                role,
+                max_concurrency=limit,
+                endpoint="http://slm-test:8000/v1",
+                provider="slm_local",
+            )
+        return ctrl
+
+    def test_provider_ceiling_binds_when_tighter(self) -> None:
+        ctrl = self._make_controller()
+        # provider ceiling (2) is tighter than the deployment's own limit (4).
+        assert ctrl.effective_ceiling("router", default=99) == 2
+
+    def test_model_ceiling_binds_when_tighter(self) -> None:
+        ctrl = self._make_controller()
+        # deployment's own limit (1) is tighter than the provider ceiling (2).
+        assert ctrl.effective_ceiling("reasoning", default=99) == 1
+
+    def test_equal_ceilings(self) -> None:
+        ctrl = self._make_controller()
+        assert ctrl.effective_ceiling("standard", default=99) == 2
+
+    def test_unregistered_role_returns_caller_default(self) -> None:
+        """No baked-in fallback — an unresolvable role must not silently guess a ceiling."""
+        ctrl = self._make_controller()
+        assert ctrl.effective_ceiling("nonexistent_role", default=7) == 7
+
+    def test_none_role_returns_caller_default(self) -> None:
+        ctrl = self._make_controller()
+        assert ctrl.effective_ceiling(None, default=5) == 5
+
+
 class TestInferencePriority:
     """Test priority enum ordering."""
 

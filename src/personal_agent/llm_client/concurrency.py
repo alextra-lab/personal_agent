@@ -346,6 +346,31 @@ class InferenceConcurrencyController:
             if provider_acquired and provider_sem:
                 await provider_sem.release()
 
+    def effective_ceiling(self, role: str | None, default: int) -> int:
+        """Return the binding concurrency ceiling for a role (FRE-1374).
+
+        The tighter of the deployment's own sub-limit and its provider's ceiling —
+        the same two constraints :meth:`request_slot` already enforces in sequence.
+        Callers use this to size a fan-out so it never guarantees a queue.
+
+        Args:
+            role: Deployment key, or ``None`` when the caller has no resolvable role
+                (e.g. a test double with no catalog identity).
+            default: Value returned when ``role`` is ``None`` or not registered.
+                Required rather than an internal fallback, so an unresolvable role
+                means "the caller decides," never a silently-guessed ceiling.
+
+        Returns:
+            The effective ceiling, or ``default`` when it cannot be determined.
+        """
+        if role is None:
+            return default
+        model_sem = self._model_semaphores.get(role)
+        provider = self._model_provider.get(role)
+        provider_sem = self._provider_semaphores.get(provider) if provider else None
+        limits = [sem.limit for sem in (model_sem, provider_sem) if sem is not None]
+        return min(limits) if limits else default
+
     def get_status(self) -> dict[str, dict[str, dict[str, int]]]:
         """Return current concurrency status for monitoring.
 

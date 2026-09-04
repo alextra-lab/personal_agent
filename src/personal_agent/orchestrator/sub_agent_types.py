@@ -30,7 +30,13 @@ class SubAgentSpec:
         output_format: Expected output shape — e.g. "text", "json",
             "bullet_list", "code". Used by synthesiser to interpret results.
         max_tokens: Token ceiling for this sub-agent's response.
-        timeout_seconds: Execution timeout for this sub-agent call.
+        timeout_seconds: Generation timeout for this sub-agent call, passed to the LLM
+            client as ``timeout_s`` — measured from concurrency-slot acquisition, not
+            from spawn (FRE-1374).
+        hard_deadline_seconds: Spawn-to-completion safety net — a separate, larger
+            budget bounding the whole call (including any slot wait) in case the
+            underlying client ignores ``timeout_seconds``. ``None`` falls back to
+            ``timeout_seconds`` (today's behavior, for callers that don't set it).
         tools: Tool names the sub-agent is allowed to invoke (empty = none).
         background: Background context injected into the sub-agent's system
             prompt (parent task summary, constraints, etc.).
@@ -43,6 +49,7 @@ class SubAgentSpec:
     output_format: str = "text"
     max_tokens: int = 4096
     timeout_seconds: float = 120.0
+    hard_deadline_seconds: float | None = None
     tools: list[str] = field(default_factory=list)
     background: str = ""
     model_role: ModelRole = ModelRole.SUB_AGENT

@@ -21,10 +21,12 @@ import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 import structlog
 
 from personal_agent.config import get_settings
+from personal_agent.llm_client.concurrency import get_inference_concurrency_controller
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.observability.topology import report_degradation
 from personal_agent.orchestrator.expansion_types import (
@@ -41,6 +43,13 @@ logger = structlog.get_logger(__name__)
 
 # Plan schema: max entity tasks per strategy (synthesis task is additional)
 _MAX_TASKS = {"HYBRID": 4, "DECOMPOSE": 6}
+
+# FRE-1374 (owner direction, 2026-09-04): worker_global_timeout_seconds bounds ONLY
+# how long a sub-agent may wait for a concurrency-ceiling slot — never a worker
+# already running. A result whose error carries this prefix never reached
+# run_sub_agent at all; it is a reportable "did not run" outcome (AC-3), never a
+# silent drop.
+_NOT_ADMITTED_ERROR_PREFIX = "Not dispatched"
 
 # System prompt for the planner LLM call
 _PLANNER_SYSTEM_PROMPT = (
@@ -359,7 +368,14 @@ class ExpansionController:
         session_id: str | None = None,
         eval_mode: bool = False,
     ) -> list[SubAgentResult]:
-        """Phase 2: Dispatch sub-agents in parallel.
+        """Phase 2: Dispatch sub-agents, bounded by the real concurrency ceiling.
+
+        FRE-1374 (owner direction): each sub-agent's timeout is its own, never a
+        slice of a shared wall. Fan-out is gated by a ceiling-sized semaphore, and
+        ``worker_global_timeout_seconds`` bounds ONLY how long a task may wait to be
+        admitted through it — never a worker already running. A worker that never
+        gets admitted is reported as a failed, not-run ``SubAgentResult`` rather
+        than dropped.
 
         Args:
             plan: Validated expansion plan with tasks.
@@ -372,7 +388,8 @@ class ExpansionController:
                 to per-sub-agent audit records for EVAL provenance (FRE-523).
 
         Returns:
-            List of SubAgentResult from all dispatched sub-agents.
+            List of SubAgentResult — one per task, whether it succeeded, failed
+            during execution, or was never admitted within the fan-out window.
         """
         settings = get_settings()
         start_ms = time.monotonic() * 1000
@@ -390,12 +407,22 @@ class ExpansionController:
                 output_format=task.expected_output,
                 max_tokens=settings.sub_agent_max_tokens,
                 timeout_seconds=settings.worker_timeout_seconds,
+                hard_deadline_seconds=settings.worker_hard_deadline_seconds,
                 tools=task.tools,
                 background=(f"Sub-task: {task.name}. Constraints: {', '.join(task.constraints)}"),
                 mode=task.mode,
             )
             for task in plan.tasks
         ]
+
+        # FRE-1374 (Defect 2): fan-out must not guarantee a queue. `default=len(specs)`
+        # means "unresolvable role -> don't constrain," matching today's behavior for
+        # any caller whose llm_client carries no catalog model_key (e.g. a test double).
+        ceiling = get_inference_concurrency_controller().effective_ceiling(
+            getattr(llm_client, "model_key", None), default=len(specs)
+        )
+        dispatch_semaphore = asyncio.Semaphore(max(1, ceiling))
+        dispatch_start = time.monotonic()
 
         # ADR-0123 §1/AC-8 (FRE-934): a sub-agent fan-out is one parent EXPANSION
         # phase with N concurrent SUB_AGENT children, each with its own lifecycle.
@@ -405,58 +432,95 @@ class ExpansionController:
         from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
         from personal_agent.transport.events import Phase  # noqa: PLC0415
 
-        async def _dispatch_one(spec: SubAgentSpec, parent_id: str | None) -> SubAgentResult:
-            async with phase_span(
-                session_id=session_id,
-                phase=Phase.SUB_AGENT,
-                detail=spec.task[:80],
-                parent_id=parent_id,
-            ):
-                return await run_sub_agent(
-                    spec=spec,
-                    llm_client=llm_client,
-                    trace_id=trace_id,
-                    session_id=session_id,
-                    eval_mode=eval_mode,
-                )
+        def _not_admitted_result(spec: SubAgentSpec) -> SubAgentResult:
+            return SubAgentResult(
+                task_id=uuid4(),
+                spec_task=spec.task,
+                summary="",
+                full_output="",
+                tools_used=[],
+                token_count=0,
+                duration_ms=int((time.monotonic() - dispatch_start) * 1000),
+                success=False,
+                error=(
+                    f"{_NOT_ADMITTED_ERROR_PREFIX}: no concurrency slot within the "
+                    f"{settings.worker_global_timeout_seconds:.1f}s fan-out window"
+                ),
+            )
 
-        try:
-            async with phase_span(
-                session_id=session_id,
-                phase=Phase.EXPANSION,
-                detail=f"{len(specs)} sub-agents",
-            ) as _parent_id:
-                raw_results = await asyncio.wait_for(
-                    asyncio.gather(
-                        *[_dispatch_one(spec, _parent_id) for spec in specs],
-                        return_exceptions=True,
-                    ),
-                    timeout=settings.worker_global_timeout_seconds,
-                )
-            # Filter out exceptions — keep only successful SubAgentResult objects
-            sub_results: list[SubAgentResult] = [
-                r for r in raw_results if isinstance(r, SubAgentResult)
-            ]
-            failed_count = len(raw_results) - len(sub_results)
-            if failed_count > 0:
-                logger.warning(
-                    "expansion_dispatch_partial_failure",
-                    total=len(raw_results),
-                    failed=failed_count,
-                    trace_id=trace_id,
-                )
-        except asyncio.TimeoutError:
-            # Global timeout cancels all tasks
-            logger.warning("expansion_dispatch_global_timeout", trace_id=trace_id)
-            sub_results = []
+        async def _dispatch_one(spec: SubAgentSpec, parent_id: str | None) -> SubAgentResult:
+            # FRE-1374 (owner direction): worker_global_timeout_seconds bounds ONLY
+            # the wait for a ceiling slot — never a worker already running. Once
+            # admitted, this task's clock is entirely its own (worker_timeout_seconds
+            # / worker_hard_deadline_seconds inside run_sub_agent), independent of
+            # every other worker's timing.
+            admission_budget = settings.worker_global_timeout_seconds - (
+                time.monotonic() - dispatch_start
+            )
+            if admission_budget <= 0:
+                logger.warning("sub_agent_not_admitted", task=spec.task[:80], trace_id=trace_id)
+                return _not_admitted_result(spec)
+            try:
+                await asyncio.wait_for(dispatch_semaphore.acquire(), timeout=admission_budget)
+            except asyncio.TimeoutError:
+                logger.warning("sub_agent_not_admitted", task=spec.task[:80], trace_id=trace_id)
+                return _not_admitted_result(spec)
+            try:
+                async with phase_span(
+                    session_id=session_id,
+                    phase=Phase.SUB_AGENT,
+                    detail=spec.task[:80],
+                    parent_id=parent_id,
+                ):
+                    return await run_sub_agent(
+                        spec=spec,
+                        llm_client=llm_client,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        eval_mode=eval_mode,
+                    )
+            finally:
+                dispatch_semaphore.release()
+
+        async with phase_span(
+            session_id=session_id,
+            phase=Phase.EXPANSION,
+            detail=f"{len(specs)} sub-agents",
+        ) as _parent_id:
+            raw_results = await asyncio.gather(
+                *[_dispatch_one(spec, _parent_id) for spec in specs],
+                return_exceptions=True,
+            )
+        # Filter out exceptions — keep every SubAgentResult (success, per-task
+        # failure, or not-admitted are all real, reportable outcomes; only a raw
+        # exception, e.g. from an externally-cancelled turn, is dropped here).
+        sub_results: list[SubAgentResult] = [
+            r for r in raw_results if isinstance(r, SubAgentResult)
+        ]
+        failed_count = len(raw_results) - len(sub_results)
+        if failed_count > 0:
+            logger.warning(
+                "expansion_dispatch_partial_failure",
+                total=len(raw_results),
+                failed=failed_count,
+                trace_id=trace_id,
+            )
+
+        not_admitted_count = sum(
+            1 for r in sub_results if r.error and r.error.startswith(_NOT_ADMITTED_ERROR_PREFIX)
+        )
+        if not_admitted_count > 0:
             result.degraded = True
-            result.degradation_reason = "Global dispatch timeout"
+            result.degradation_reason = (
+                f"{not_admitted_count} of {len(specs)} sub-agents not admitted "
+                "within the fan-out window"
+            )
             if session_id is not None:
                 await report_degradation(
                     trace_id=trace_id,
                     session_id=session_id,
                     where="expansion:dispatch",
-                    reason="Global dispatch timeout",
+                    reason="Fan-out window exceeded before every sub-agent was admitted",
                     severity="warning",
                 )
 
@@ -467,7 +531,7 @@ class ExpansionController:
                 phase=ExpansionPhase.DISPATCH,
                 duration_ms=duration_ms,
                 success=len(sub_results) > 0,
-                error="Global timeout" if not sub_results else None,
+                error=None if sub_results else "No sub-agent results",
             )
         )
 

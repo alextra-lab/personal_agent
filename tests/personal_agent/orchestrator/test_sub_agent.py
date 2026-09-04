@@ -14,13 +14,16 @@ from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 
 
-def _spec(task: str = "test task", timeout: float = 30.0) -> SubAgentSpec:
+def _spec(
+    task: str = "test task", timeout: float = 30.0, hard_deadline: float | None = None
+) -> SubAgentSpec:
     return SubAgentSpec(
         task=task,
         context=[{"role": "user", "content": "do the thing"}],
         output_format="text",
         max_tokens=1024,
         timeout_seconds=timeout,
+        hard_deadline_seconds=hard_deadline,
     )
 
 
@@ -89,6 +92,85 @@ class TestRunSubAgent:
         assert result.success is False
         assert result.error is not None
         assert "timeout" in result.error.lower() or "Timeout" in result.error
+
+    @pytest.mark.asyncio
+    async def test_generation_timeout_passed_to_client(self) -> None:
+        """FRE-1374 — timeout_s reaches llm_client.respond so a real client can bound
+        generation from concurrency-slot acquisition, not from spawn.
+        """
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="ok")
+
+        await run_sub_agent(spec=_spec(timeout=42.0), llm_client=mock_client, trace_id="t")
+
+        _, kwargs = mock_client.respond.call_args
+        assert kwargs["timeout_s"] == 42.0
+
+    @pytest.mark.asyncio
+    async def test_queue_wait_does_not_shrink_generation_budget(self) -> None:
+        """AC-1 — a call that runs longer than the OLD single nominal budget still
+        completes, because the outer bound is now the separate, larger hard deadline.
+        """
+        mock_client = AsyncMock()
+
+        async def slow_but_within_hard_deadline(*args: object, **kwargs: object) -> str:
+            await asyncio.sleep(0.15)
+            return "done"
+
+        mock_client.respond = slow_but_within_hard_deadline
+
+        result = await run_sub_agent(
+            spec=_spec(timeout=0.05, hard_deadline=0.3),
+            llm_client=mock_client,
+            trace_id="test-trace",
+        )
+        assert result.success is True
+        assert result.summary == "done"
+
+    @pytest.mark.asyncio
+    async def test_outer_hard_deadline_reports_actual_duration_not_nominal_budget(self) -> None:
+        """AC-2 — the shortfall is visible: the message reflects real elapsed time,
+        not the nominal generation budget that used to be hard-coded into it.
+        """
+        mock_client = AsyncMock()
+
+        async def hangs(*args: object, **kwargs: object) -> str:
+            await asyncio.sleep(10)
+            return "too late"
+
+        mock_client.respond = hangs
+
+        result = await run_sub_agent(
+            spec=_spec(timeout=0.05, hard_deadline=0.2),
+            llm_client=mock_client,
+            trace_id="test-trace",
+        )
+        assert result.success is False
+        assert result.error is not None
+        assert "0.05" not in result.error
+        assert result.duration_ms == pytest.approx(200, abs=100)
+
+    @pytest.mark.asyncio
+    async def test_hard_deadline_clamped_above_generation_timeout(self) -> None:
+        """A hard_deadline_seconds smaller than timeout_seconds (e.g. a bad override)
+        must not resurrect the old bug by cutting generation short of its own budget.
+        """
+        mock_client = AsyncMock()
+
+        async def slow(*args: object, **kwargs: object) -> str:
+            await asyncio.sleep(0.15)
+            return "done"
+
+        mock_client.respond = slow
+
+        # hard_deadline (0.01) is deliberately smaller than timeout_seconds (0.2) —
+        # the clamp must use timeout_seconds as the floor.
+        result = await run_sub_agent(
+            spec=_spec(timeout=0.2, hard_deadline=0.01),
+            llm_client=mock_client,
+            trace_id="test-trace",
+        )
+        assert result.success is True
 
     @pytest.mark.asyncio
     async def test_telemetry_event_emitted(self) -> None:

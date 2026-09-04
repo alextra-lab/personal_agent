@@ -537,19 +537,25 @@ class AppConfig(BaseSettings):
             "acquisition (passed as timeout_s to llm_client.respond), so this is a "
             "defense-in-depth cap for a client that ignores timeout_s — not the primary "
             "timeout mechanism. Sized as 60s generation + 25s queue-wait absorption (the "
-            "live incident's worst observed wait was 22.8s). Must also fit inside "
-            "worker_global_timeout_seconds (180s, expansion_controller.py): the ceiling-aware "
-            "dispatch this budget pairs with can serialise a plan into multiple sequential "
-            "batches when task count exceeds the provider ceiling (e.g. today's DECOMPOSE "
-            "max of 6 tasks against a ceiling of 3 is 2 batches), and 2 worst-case batches "
-            "at this default (170s) still leave margin under the global bound — raising this "
-            "value without checking that arithmetic against the current catalog's ceilings "
-            "and _MAX_TASKS re-creates the same silent-killer shape one level up."
+            "live incident's worst observed wait was 22.8s). Owner direction (2026-09-04): "
+            "this budget is per-worker and fully independent of worker_global_timeout_seconds "
+            "— once a worker is admitted past the concurrency ceiling, nothing re-checks the "
+            "global bound against it, so this value needs no arithmetic relationship to it."
         ),
     )
     worker_global_timeout_seconds: float = Field(
         default=180.0,
-        description="Max total time for all sub-agent workers combined (serial GPU)",
+        description=(
+            "Max time a sub-agent may wait for a concurrency-ceiling slot before being "
+            "reported as not dispatched (FRE-1374, owner direction 2026-09-04: 'the "
+            "timeout need be applied to each individual subagent session, not globally'). "
+            "Bounds ONLY the admission queue — once a worker is admitted, this no longer "
+            "applies to it; its own clock is worker_timeout_seconds/worker_hard_deadline_seconds, "
+            "entirely independent of every other worker's timing. A worker that never gets "
+            "admitted within this window is not silently dropped: it comes back as a failed "
+            "SubAgentResult (error prefixed 'Not dispatched') and the expansion is marked "
+            "degraded."
+        ),
     )
     synthesis_timeout_seconds: float = Field(
         default=25.0,

@@ -25,6 +25,7 @@ from typing import Any
 import structlog
 
 from personal_agent.config import get_settings
+from personal_agent.llm_client.concurrency import get_inference_concurrency_controller
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.observability.topology import report_degradation
 from personal_agent.orchestrator.expansion_types import (
@@ -390,12 +391,21 @@ class ExpansionController:
                 output_format=task.expected_output,
                 max_tokens=settings.sub_agent_max_tokens,
                 timeout_seconds=settings.worker_timeout_seconds,
+                hard_deadline_seconds=settings.worker_hard_deadline_seconds,
                 tools=task.tools,
                 background=(f"Sub-task: {task.name}. Constraints: {', '.join(task.constraints)}"),
                 mode=task.mode,
             )
             for task in plan.tasks
         ]
+
+        # FRE-1374 (Defect 2): fan-out must not guarantee a queue. `default=len(specs)`
+        # means "unresolvable role -> don't constrain," matching today's behavior for
+        # any caller whose llm_client carries no catalog model_key (e.g. a test double).
+        ceiling = get_inference_concurrency_controller().effective_ceiling(
+            getattr(llm_client, "model_key", None), default=len(specs)
+        )
+        dispatch_semaphore = asyncio.Semaphore(max(1, ceiling))
 
         # ADR-0123 §1/AC-8 (FRE-934): a sub-agent fan-out is one parent EXPANSION
         # phase with N concurrent SUB_AGENT children, each with its own lifecycle.
@@ -406,19 +416,23 @@ class ExpansionController:
         from personal_agent.transport.events import Phase  # noqa: PLC0415
 
         async def _dispatch_one(spec: SubAgentSpec, parent_id: str | None) -> SubAgentResult:
-            async with phase_span(
-                session_id=session_id,
-                phase=Phase.SUB_AGENT,
-                detail=spec.task[:80],
-                parent_id=parent_id,
-            ):
-                return await run_sub_agent(
-                    spec=spec,
-                    llm_client=llm_client,
-                    trace_id=trace_id,
+            # Gate on the ceiling BEFORE opening the child's own phase/timing, so a
+            # task that waited its turn here is not charged for that wait the same
+            # way Defect 1 stops the concurrency-slot wait from being charged.
+            async with dispatch_semaphore:
+                async with phase_span(
                     session_id=session_id,
-                    eval_mode=eval_mode,
-                )
+                    phase=Phase.SUB_AGENT,
+                    detail=spec.task[:80],
+                    parent_id=parent_id,
+                ):
+                    return await run_sub_agent(
+                        spec=spec,
+                        llm_client=llm_client,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        eval_mode=eval_mode,
+                    )
 
         try:
             async with phase_span(

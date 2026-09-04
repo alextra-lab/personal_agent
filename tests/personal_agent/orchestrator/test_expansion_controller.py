@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 
 from personal_agent.orchestrator.expansion_controller import (
+    _MAX_TASKS,
     ExpansionController,
     _validate_plan_json,
 )
@@ -517,3 +518,168 @@ class TestExpansionResultCost:
         assert result.planner_cost_usd == pytest.approx(0.02)
         # total = planner 0.02 + 3 sub-agents × 0.01
         assert result.cost_usd == pytest.approx(0.05)
+
+
+class TestFanOutRespectsCeiling:
+    """FRE-1374 Defect 2 — dispatch is bounded by the sub-agent deployment's real
+    concurrency ceiling, not fanned out unconditionally.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @staticmethod
+    def _tracking_run_sub_agent() -> tuple[Any, list[int]]:
+        """A run_sub_agent stand-in that records observed in-flight concurrency."""
+        state = {"concurrent": 0}
+        observed: list[int] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            state["concurrent"] += 1
+            observed.append(state["concurrent"])
+            await asyncio.sleep(0.02)
+            state["concurrent"] -= 1
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        return _run, observed
+
+    @staticmethod
+    def _stub_controller(ceiling: int) -> MagicMock:
+        stub = MagicMock()
+        stub.effective_ceiling.return_value = ceiling
+        return stub
+
+    @pytest.mark.asyncio
+    async def test_low_ceiling_bounds_concurrency_and_all_tasks_still_complete(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-3 — ceiling seeded low, plan calls for more: every sub-agent still
+        completes, none time out, and observed concurrency never exceeds the ceiling.
+        """
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(4))
+        assert plan is not None
+        run_stub, observed = self._tracking_run_sub_agent()
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=run_stub,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                return_value=self._stub_controller(2),
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-ceiling",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert len(results) == 4
+        assert all(r.success for r in results)
+        assert max(observed) <= 2
+
+    @pytest.mark.asyncio
+    async def test_ceiling_change_changes_observed_concurrency(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-4 — the same plan against ceilings of 2 and 4 dispatches differently."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(4))
+        assert plan is not None
+
+        max_observed: dict[int, int] = {}
+        for ceiling in (2, 4):
+            run_stub, observed = self._tracking_run_sub_agent()
+            with (
+                patch(
+                    "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                    side_effect=run_stub,
+                ),
+                patch(
+                    "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                    return_value=self._stub_controller(ceiling),
+                ),
+            ):
+                await controller._run_dispatch(
+                    plan=plan,
+                    llm_client=AsyncMock(),
+                    trace_id=f"test-trace-ceiling-{ceiling}",
+                    messages=[],
+                    result=ExpansionResult(),
+                )
+            max_observed[ceiling] = max(observed)
+
+        assert max_observed[2] <= 2
+        assert max_observed[4] <= 4
+        assert max_observed[2] != max_observed[4]
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_role_does_not_constrain_dispatch(
+        self, controller: ExpansionController
+    ) -> None:
+        """An llm_client with no resolvable model_key (e.g. a bare test double) must
+        not silently degrade to some ambient default ceiling — dispatch stays
+        unconstrained, matching today's behavior for every existing caller.
+        """
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        run_stub, observed = self._tracking_run_sub_agent()
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=run_stub,
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-unresolvable",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert len(results) == 3
+        # Unconstrained: all 3 could run concurrently (no artificial ceiling applied).
+        assert max(observed) == 3
+
+
+class TestWorkerDeadlineFitsGlobalBudget:
+    """FRE-1374 (master's ticket amendment) — worker_hard_deadline_seconds must fit
+    inside worker_global_timeout_seconds even across the worst-case number of
+    sequential ceiling-bound dispatch batches this ticket's own fan-out fix can
+    now produce. Without this guard, a future change to any of the three inputs
+    below (the deadline, the global bound, or the catalog's real ceiling) can
+    silently recreate the exact "budget charged for queue time" shape this ticket
+    fixes, just one level up — the global timeout becomes the new silent killer.
+    """
+
+    def test_two_worst_case_batches_fit_inside_the_global_bound(self) -> None:
+        from personal_agent.config import get_settings
+        from personal_agent.llm_client.concurrency import get_inference_concurrency_controller
+
+        settings = get_settings()
+        # The catalog's real "sub_agent" role deployment (config/model_roles.yaml).
+        ceiling = get_inference_concurrency_controller().effective_ceiling(
+            "qwen3.8-flash-next-instruct", default=1
+        )
+        max_tasks = max(_MAX_TASKS.values())
+        worst_case_batches = -(-max_tasks // ceiling)  # ceil division, no float rounding
+
+        budget_needed = worst_case_batches * settings.worker_hard_deadline_seconds
+        assert budget_needed <= settings.worker_global_timeout_seconds, (
+            f"{worst_case_batches} worst-case batches (max_tasks={max_tasks}, "
+            f"ceiling={ceiling}) x {settings.worker_hard_deadline_seconds}s = "
+            f"{budget_needed}s exceeds worker_global_timeout_seconds "
+            f"({settings.worker_global_timeout_seconds}s) — a plan needing this many "
+            "batches would hit the global timeout before every sub-agent gets its "
+            "fair per-task deadline."
+        )

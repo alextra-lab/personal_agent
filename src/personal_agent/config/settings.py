@@ -529,6 +529,24 @@ class AppConfig(BaseSettings):
         default=60.0,
         description="Max time per sub-agent worker in expansion dispatch",
     )
+    worker_hard_deadline_seconds: float = Field(
+        default=85.0,
+        description=(
+            "Spawn-to-completion safety net per sub-agent (FRE-1374). Deliberately larger "
+            "than worker_timeout_seconds (60s): that budget now starts at concurrency-slot "
+            "acquisition (passed as timeout_s to llm_client.respond), so this is a "
+            "defense-in-depth cap for a client that ignores timeout_s — not the primary "
+            "timeout mechanism. Sized as 60s generation + 25s queue-wait absorption (the "
+            "live incident's worst observed wait was 22.8s). Must also fit inside "
+            "worker_global_timeout_seconds (180s, expansion_controller.py): the ceiling-aware "
+            "dispatch this budget pairs with can serialise a plan into multiple sequential "
+            "batches when task count exceeds the provider ceiling (e.g. today's DECOMPOSE "
+            "max of 6 tasks against a ceiling of 3 is 2 batches), and 2 worst-case batches "
+            "at this default (170s) still leave margin under the global bound — raising this "
+            "value without checking that arithmetic against the current catalog's ceilings "
+            "and _MAX_TASKS re-creates the same silent-killer shape one level up."
+        ),
+    )
     worker_global_timeout_seconds: float = Field(
         default=180.0,
         description="Max total time for all sub-agent workers combined (serial GPU)",

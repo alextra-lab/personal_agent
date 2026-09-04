@@ -198,7 +198,11 @@ models:
     quantization: "4bit"
     min_concurrency: 1
     max_concurrency: 3
-    default_timeout: 300
+    default_timeout: 90          # unchanged from the retired qwen3.6-35b-instruct entry.
+                                 # NOTE: that value assumed a dedicated 2-slot backend. With
+                                 # one served model the sub-agent now queues behind the
+                                 # primary, so 90s may be too short under contention — revisit
+                                 # once the slot count is known rather than guessing now.
     # Unsloth's NON-thinking preset. presence_penalty 1.5 is correct here and
     # deliberately differs from the thinking entry's 0.0 -- same reasoning as the
     # retired qwen3.6-35b-instruct entry this replaces.

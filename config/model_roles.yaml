@@ -157,7 +157,8 @@ bindings:
     deployment: qwen3.8-flash-next-instruct
     open: true
     defaults_by_primary:
-      qwen3.8-flash-next:   qwen3.8-flash-next-instruct  # 2026-09-03: slm_server collapsed to one served model; the instruct sibling is the SAME id with disable_thinking. Supersedes the FRE-1319 cloud pairing, which routed sub_agent (and recall paraphrasing) to OpenAI.
+      qwen3.8-flash-next:   qwen3.8-flash-next-instruct
+      qwen3.8-flash-next-instruct: qwen3.8-flash-next-instruct  # self-pair — it IS the instruct half of the single served model  # 2026-09-03: slm_server collapsed to one served model; the instruct sibling is the SAME id with disable_thinking. Supersedes the FRE-1319 cloud pairing, which routed sub_agent (and recall paraphrasing) to OpenAI.
       qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
       qwen3.6-35b-instruct: qwen3.6-35b-instruct  # self-pair — no cheaper local companion
       qwen3.6-27b-ovh:      qwen3.6-27b-ovh       # self-pair — no cheaper OVH-hosted companion

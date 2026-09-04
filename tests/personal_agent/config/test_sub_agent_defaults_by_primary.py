@@ -17,6 +17,7 @@ from personal_agent.llm_client.models import ModelKind
 _QWEN_FLASH = "qwen3.8-flash-next"  # FRE-1317: the bound primary since 2026-08-28
 _QWEN_THINKING = "qwen3.6-35b-thinking"  # retained in the catalog so reverting stays one line
 _QWEN_INSTRUCT = "qwen3.6-35b-instruct"
+_QWEN_FLASH_INSTRUCT = "qwen3.8-flash-next-instruct"
 _CLAUDE_SONNET = "claude_sonnet"
 _CLAUDE_HAIKU = "claude_haiku"
 _GPT_MINI = "gpt-5.4-mini"
@@ -28,7 +29,8 @@ _EXPECTED_DEFAULTS_BY_PRIMARY = {
     # second, so the first was dead and the dict asserted one fewer mapping than
     # it appeared to. Deduplicated; the surviving value is FRE-1319's, which is
     # what config/model_roles.yaml actually carries.
-    _QWEN_FLASH: _GPT_MINI,  # FRE-1319: on a Flash-Next primary the local companion is unloaded, so the cloud model expresses no-thinking
+    _QWEN_FLASH: _QWEN_FLASH_INSTRUCT,  # 2026-09-03: slm_server collapsed to ONE served model, so the instruct companion is the same id with disable_thinking. Supersedes FRE-1319, whose cloud pairing sent sub_agent (and recall paraphrasing) to OpenAI.
+    _QWEN_FLASH_INSTRUCT: _QWEN_FLASH_INSTRUCT,  # self-pair — it IS the instruct half
     _QWEN_THINKING: _QWEN_INSTRUCT,  # ADR-0121 Addendum A example; durable form of FRE-963
     _QWEN_INSTRUCT: _QWEN_INSTRUCT,  # self-pair, no cheaper local companion
     _CLAUDE_SONNET: _CLAUDE_SONNET,  # ADR-0121 Addendum A example
@@ -90,5 +92,5 @@ class TestMigrationWindowLeavesFlatBindingOperative:
         """
         config = load_model_config()
         binding = config.roles["sub_agent"]
-        assert binding.deployment == _QWEN_INSTRUCT
+        assert binding.deployment == _QWEN_FLASH_INSTRUCT
         assert binding.open is True

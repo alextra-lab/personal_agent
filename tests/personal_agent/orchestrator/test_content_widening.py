@@ -447,7 +447,7 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
     # by role. `role_key` is the calling role's own resolution; the image
     # always routes `effective_model_key` to the pinned `vision` deployment
     # instead (ADR-0121 T5), so the two always differ.
-    assert entry["role_key"] == "qwen3.6-35b-thinking"
+    assert entry["role_key"] == "qwen3.8-flash-next"
     assert entry["effective_model_key"] == "claude_sonnet"
     assert entry["escalated"] is True
 

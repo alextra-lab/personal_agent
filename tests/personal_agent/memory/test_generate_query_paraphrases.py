@@ -1,7 +1,7 @@
 # tests/personal_agent/memory/test_generate_query_paraphrases.py
 """Tests for the multi-query paraphrase generator (ADR-0104 / FRE-723).
 
-Unit tests — mocks LocalLLMClient.respond, no live LLM server needed. The
+Unit tests — mocks the LLM client's respond(), no live LLM server needed. The
 generator must fail open (return []) on any error; callers depend on this to
 degrade to the dense arm alone rather than hard-failing recall.
 """
@@ -16,7 +16,7 @@ import personal_agent.memory.service as svc
 
 
 class _FakeLocalClient:
-    """Minimal stand-in for LocalLLMClient, matching the codebase's fake-client
+    """Minimal stand-in for the LLM client, matching the codebase's fake-client
     test convention (see tests/personal_agent/second_brain/test_session_summary.py).
     """
 

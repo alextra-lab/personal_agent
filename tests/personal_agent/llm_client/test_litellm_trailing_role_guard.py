@@ -4,8 +4,8 @@ Anthropic (via litellm) rejects such a request with: "This model does not
 support assistant message prefill. The conversation must end with a user
 message." A within-session compression recap with an empty tail can leave
 ``ctx.messages`` ending on a lone assistant turn; ``sanitise_messages`` (the
-choke point both ``LiteLLMClient`` and ``LocalLLMClient`` call before every
-dispatch) must close the request out on user/tool before it reaches litellm.
+choke point ``LiteLLMClient`` calls before every dispatch, both placements)
+must close the request out on user/tool before it reaches litellm.
 
 Unlike ``test_litellm_emit_payload.py``'s ``_call_respond`` helper, which
 patches ``sanitise_messages`` out to a no-op, these tests leave it real so

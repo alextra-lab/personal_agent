@@ -1,10 +1,11 @@
 """FRE-1037: the manual-JSON reflection fallback must route through the factory.
 
-A bare LocalLLMClient (no auth headers) cannot honor captains_log's configured
-model when it resolves to a cloud deployment (claude_sonnet) — the fallback
-must construct its client via get_llm_client_for_key using the already-resolved
-captains_log role key, and label the call role=ModelRole.CAPTAINS_LOG rather
-than the old role=ModelRole.PRIMARY mislabel.
+The now-deleted local-only dispatch class (no auth headers) could not honor
+captains_log's configured model when it resolved to a cloud deployment
+(claude_sonnet) — the fallback must construct its client via
+get_llm_client_for_key using the already-resolved captains_log role key, and
+label the call role=ModelRole.CAPTAINS_LOG rather than the old
+role=ModelRole.PRIMARY mislabel.
 """
 
 from __future__ import annotations

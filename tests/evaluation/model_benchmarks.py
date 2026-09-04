@@ -18,7 +18,8 @@ from enum import Enum
 from pathlib import Path
 from statistics import mean, median
 
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.telemetry.trace import TraceContext
 
 
@@ -313,8 +314,12 @@ class ModelBenchmark:
     """Main benchmark orchestrator."""
 
     def __init__(self):
-        """Initialize the benchmark runner with LLM client, data loader, and evaluator."""
-        self.client = LocalLLMClient()
+        """Initialize the benchmark runner with data loader and evaluator.
+
+        The LLM client is resolved per role inside benchmark_model() — unlike
+        the deleted LocalLLMClient, the unified client is fixed to one model
+        at construction, so it cannot be built once here for every role.
+        """
         self.data_loader = BenchmarkDataLoader()
         self.evaluator = BenchmarkEvaluator()
         self.results_dir = Path("telemetry/evaluation/benchmarks")
@@ -324,6 +329,7 @@ class ModelBenchmark:
         self, role: ModelRole, suite: BenchmarkSuite, num_runs: int = 1
     ) -> BenchmarkReport:
         """Run benchmark suite against a model."""
+        client = get_llm_client(role_name=role.value)
         # Load tasks
         tasks = self.data_loader.load_suite(suite)
 
@@ -355,7 +361,7 @@ class ModelBenchmark:
                 start_time = time.time()
 
                 try:
-                    response = await self.client.respond(
+                    response = await client.respond(
                         role=role,
                         messages=[{"role": "user", "content": task.prompt}],
                         tools=task.tools,

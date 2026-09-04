@@ -9,13 +9,14 @@ from statistics import mean, median
 from typing import Any
 
 from personal_agent.config import load_model_config
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.telemetry.trace import TraceContext
 
 
 async def benchmark_model(role: ModelRole, model_id: str, num_runs: int = 3) -> dict[str, Any]:
     """Benchmark a single model."""
-    client = LocalLLMClient()
+    client = get_llm_client(role_name=role.value)
     latencies: list[float] = []
     token_stats: list[dict[str, Any]] = []
 

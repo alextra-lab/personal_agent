@@ -124,8 +124,17 @@ class TestLlmClientSeam:
         from personal_agent.llm_client.types import ModelRole
         from personal_agent.security import EgressBlockedError
 
-        _patch_guard(
+        guard = _patch_guard(
             monkeypatch, mode=GuardMode.ALLOWLIST, allowlist=frozenset({"allowed.example"})
+        )
+        # LiteLLMClient imports get_domain_guard by name
+        # (`from personal_agent.security import get_domain_guard`), so
+        # patching `personal_agent.security.get_domain_guard` alone does not
+        # reach its call site — patch the bound name in litellm_client's own
+        # namespace too, or this test silently falls back to the real
+        # process-wide singleton (whose mode depends on test run order).
+        monkeypatch.setattr(
+            "personal_agent.llm_client.litellm_client.get_domain_guard", lambda: guard
         )
         client = self._client(endpoint="https://not-allowed.example")
         with _unreachable_transport(), pytest.raises(EgressBlockedError):
@@ -140,8 +149,13 @@ class TestLlmClientSeam:
     async def test_allowed_domain_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from personal_agent.llm_client.types import ModelRole
 
-        _patch_guard(
+        guard = _patch_guard(
             monkeypatch, mode=GuardMode.ALLOWLIST, allowlist=frozenset({"allowed.example"})
+        )
+        # See the sibling test above — the bound name in litellm_client's own
+        # namespace must be patched directly.
+        monkeypatch.setattr(
+            "personal_agent.llm_client.litellm_client.get_domain_guard", lambda: guard
         )
         client = self._client(endpoint="https://allowed.example")
 

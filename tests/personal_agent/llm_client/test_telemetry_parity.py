@@ -28,7 +28,6 @@ client (where the wiring lives).
 from __future__ import annotations
 
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -499,7 +498,10 @@ class TestClientWiring:
         assert s_kwargs["trace_ctx"] is ctx
         assert s_kwargs["model"] == "test-primary"
         assert s_kwargs["role"] == "primary"
-        assert s_kwargs["endpoint"] == "http://mock-slm.test/v1/chat/completions"
+        # The unified client's started-event endpoint is the bare api_base
+        # (no /chat/completions suffix) — different from the deleted class,
+        # which built and reported the full request URL.
+        assert s_kwargs["endpoint"] == "http://mock-slm.test/v1"
         assert s_kwargs["provider"] == "slm_local"
         assert s_kwargs["span_id"]  # non-empty
 

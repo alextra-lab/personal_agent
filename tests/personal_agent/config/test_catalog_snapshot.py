@@ -8,16 +8,19 @@ resolving to a different model — the FRE-879 regression class.
 A definition-only snapshot is **not sufficient**: model definitions can stay
 byte-identical while live behaviour changes, because several consumers key off
 the *role name* rather than the resolved definition. This module therefore
-captures four dimensions:
+captures three dimensions:
 
-1. **Resolution** — ``(profile, role) -> resolved key + full definition``.
-2. **Concurrency** — which semaphore each role registers, and at what limit.
-   (``LocalLLMClient`` registers by catalog key and acquires by ``ModelRole``
-   value; re-keying the catalog can silently disconnect the two.)
-3. **Timeouts** — the effective per-``ModelRole`` timeout. ``_role_timeouts`` is
-   built from ``models.get(role.value)``; a miss falls back to a hardcoded
-   default, which would silently drop ``primary`` from 600s to 60s.
-4. **Pricing** — the ``litellm.model_cost`` entries the config registers, keyed
+1. **Resolution** — ``(profile, role) -> resolved key + full definition``. This
+   also covers the effective per-role timeout: ``default_timeout`` is one of
+   the captured ``_BEHAVIOUR_FIELDS``, and since ADR-0141 D1 the unified
+   client reads it directly off this same resolved definition (no more
+   independent ``ModelRole``-keyed re-resolution with a hardcoded fallback —
+   a dimension this module used to need on its own, before that
+   architectural change removed the divergence risk it existed to catch).
+2. **Concurrency** — which semaphore each role registers, and at what limit
+   (the process-wide controller registers by catalog key and acquires by
+   ``ModelRole`` value; re-keying the catalog can silently disconnect the two).
+3. **Pricing** — the ``litellm.model_cost`` entries the config registers, keyed
    by ``provider/id`` rather than by role.
 
 Dimension 5 from the plan (substrate ``model_endpoint:<role>``) is covered by
@@ -185,8 +188,8 @@ def _clear_caches() -> None:
 _BEHAVIOUR_FIELDS: tuple[str, ...] = (
     "id",
     "provider",
-    # Placement decides LocalLLMClient vs LiteLLMClient dispatch (factory.py,
-    # dspy_adapter.py). Its predecessor `provider_type` was added to this list
+    # Placement decides local vs cloud parameter shape within LiteLLMClient
+    # (factory.py, dspy_adapter.py). Its predecessor `provider_type` was added to this list
     # after a code review found that omitting it let a local<->cloud flip pass
     # green — local inference silently billed through LiteLLM, or cloud
     # inference posted at the SLM tunnel. FRE-916 phase 2 deleted the field in
@@ -263,17 +266,30 @@ def _capture_resolution() -> dict[str, Any]:
     return out
 
 
-def _capture_concurrency_and_timeouts() -> dict[str, Any]:
-    """Capture semaphore registration and effective per-ModelRole timeouts."""
-    from personal_agent.llm_client.client import LocalLLMClient
-    from personal_agent.llm_client.types import ModelRole
+def _capture_concurrency() -> dict[str, Any]:
+    """Capture semaphore registration from the process-wide controller (ADR-0141 D3).
+
+    The per-role effective timeout used to be a separate dimension here,
+    captured off a throwaway client's own ``_role_timeouts`` re-resolution.
+    Since ADR-0141 D1, the unified client reads ``default_timeout`` directly
+    off the same resolved ``ModelDefinition`` dimension 1 (Resolution)
+    already captures — the independent re-resolution path that could
+    silently diverge is gone, so a separate timeout dimension is redundant.
+    """
+    from personal_agent.llm_client.concurrency import (
+        get_inference_concurrency_controller,
+        set_inference_concurrency_controller,
+    )
 
     _clear_caches()
-    client = LocalLLMClient(model_config_path=_CATALOG)
-    return {
-        "concurrency": client._concurrency.get_status(),
-        "timeouts": {role.value: client._role_timeouts[role] for role in ModelRole},
-    }
+    set_inference_concurrency_controller(None)  # force a rebuild from the catalog
+    try:
+        return {"concurrency": get_inference_concurrency_controller().get_status()}
+    finally:
+        # Leave no real, catalog-populated singleton behind for a later test
+        # in the same session to read (the process-wide controller has no
+        # per-test reset of its own outside this module).
+        set_inference_concurrency_controller(None)
 
 
 def _capture_pricing() -> dict[str, Any]:
@@ -292,11 +308,11 @@ def _capture_pricing() -> dict[str, Any]:
 
 
 def build_snapshot() -> dict[str, Any]:
-    """Build the full four-dimension behaviour snapshot for the single catalog."""
+    """Build the full three-dimension behaviour snapshot for the single catalog."""
     _clear_caches()
     snapshot = {
         "resolution": _capture_resolution(),
-        "runtime": _capture_concurrency_and_timeouts(),
+        "concurrency": _capture_concurrency(),
         "pricing": _capture_pricing(),
     }
     _clear_caches()
@@ -337,10 +353,9 @@ def test_catalog_behaviour_matches_golden() -> None:
         + ". Every difference must be an explicitly declared, reviewed delta "
         "(ADR-0121 §7) — never a silent side effect of the refactor."
     )
-    assert actual["runtime"] == expected["runtime"], (
-        "Concurrency registration or per-role timeouts changed. A role whose "
-        "catalog key no longer matches its ModelRole value loses its semaphore "
-        "and falls back to a hardcoded timeout."
+    assert actual["concurrency"] == expected["concurrency"], (
+        "Concurrency registration changed. A role whose catalog key no longer "
+        "matches its ModelRole value loses its semaphore."
     )
     assert actual["pricing"] == expected["pricing"], "Registered model pricing changed."
 

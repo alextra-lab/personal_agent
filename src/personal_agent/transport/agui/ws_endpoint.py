@@ -121,10 +121,40 @@ class _ConstraintWaiter:
 #: Scaling to multiple workers would require moving this to shared state (e.g. Redis).
 _session_constraint_waiters: dict[str, dict[str, _ConstraintWaiter]] = {}
 
+#: Per-session cancel event (FRE-1375), keyed ``session_id -> event`` — set the
+#: instant ``USER_CANCEL`` arrives, so an in-flight primary model call can wake on
+#: it immediately instead of only being polled between tool rounds. Session-scoped
+#: rather than living on ``_ConnectionState`` for the same reason as
+#: ``_session_constraint_waiters`` above: a reconnect mid-turn (observed in this
+#: ticket's own incident — cancels resumed right after a reconnect) replaces the
+#: connection object, which would orphan a race already holding the old event.
+_session_cancel_events: dict[str, asyncio.Event] = {}
+
+
+def _get_or_create_cancel_event(session_id: str) -> asyncio.Event:
+    """Return the session's cancel event, creating it on first use."""
+    evt = _session_cancel_events.get(session_id)
+    if evt is None:
+        evt = asyncio.Event()
+        _session_cancel_events[session_id] = evt
+    return evt
+
 
 def get_active_connection(session_id: str) -> _ConnectionState | None:
     """Return the active connection state for a session, if any."""
     return _active_connections.get(session_id)
+
+
+def get_cancel_event(session_id: str) -> asyncio.Event:
+    """Return the session's cancel event, creating it if this is the first call (FRE-1375).
+
+    Args:
+        session_id: Session to look up.
+
+    Returns:
+        The event, set the instant a ``USER_CANCEL`` arrives for this session.
+    """
+    return _get_or_create_cancel_event(session_id)
 
 
 def is_cancel_requested(session_id: str) -> bool:
@@ -142,7 +172,7 @@ def is_cancel_requested(session_id: str) -> bool:
 
 
 def clear_cancel_flag(session_id: str) -> None:
-    """Reset the cancellation flag at the start of a new turn (ADR-0076).
+    """Reset the cancellation flag and event at the start of a new turn (ADR-0076).
 
     Args:
         session_id: Session whose cancel flag should be cleared.
@@ -150,6 +180,9 @@ def clear_cancel_flag(session_id: str) -> None:
     conn = _active_connections.get(session_id)
     if conn is not None:
         conn.cancel_requested = False
+    evt = _session_cancel_events.get(session_id)
+    if evt is not None:
+        evt.clear()
 
 
 # ── Decision waiter API (replaces approval_waiter.py) ──────────────────────
@@ -867,6 +900,7 @@ async def _receiver(conn: _ConnectionState) -> None:
                     _resolve_constraint_decision(conn, request_id, msg)
             case "USER_CANCEL":
                 conn.cancel_requested = True
+                _get_or_create_cancel_event(conn.session_id).set()
                 cancelled = _resolve_all_waiters_user_cancel(conn)
                 log.info(
                     "user_cancel_received",

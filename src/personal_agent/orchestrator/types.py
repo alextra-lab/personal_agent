@@ -330,6 +330,12 @@ class ExecutionContext:
     turn_started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # Set True when the iteration limit fires so step_llm_call performs a no-tool synthesis pass
     force_synthesis_from_limit: bool = False
+    # FRE-973/FRE-1375: set by _stop_turn_for_deadline / _stop_turn_for_cancel. Tells
+    # step_synthesis to skip grounding verification/retry — an early-stopped reply is
+    # a salvage of gathered results, not a generated claim, and enforcement's retry
+    # path (back to TaskState.LLM_CALL) would otherwise issue exactly the extra model
+    # call a deadline stop or a user Stop must never produce.
+    turn_stopped_early: bool = False
     # ADR-0076: extra iterations granted when the user picks "Continue" at a
     # tool_iteration_limit constraint pause. Added on top of the resolved max.
     tool_iteration_bonus: int = 0

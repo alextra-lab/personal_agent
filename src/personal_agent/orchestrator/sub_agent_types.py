@@ -80,8 +80,11 @@ class SubAgentResult:
             key the ``(trace_id, task_id)`` route-trace segment row (ADR-0088, FRE-517);
             stringified at wire/log/ES boundaries.
         spec_task: Original task string from the SubAgentSpec.
-        summary: Compact distillation for the parent agent's synthesis context.
-            Should be ≤ 500 tokens to keep synthesis context manageable.
+        summary: The response text injected into the parent agent's synthesis
+            context, capped at ``sub_agent._SUMMARY_CAP_CHARS`` (25,000 chars,
+            FRE-1387) — a circuit breaker sized above every generation ceiling
+            in the system, not a routine summarisation budget. Equal to
+            ``full_output`` unless that cap actually fired.
         full_output: Complete sub-agent response, stored to ES for observability.
         tools_used: Names of tools actually invoked during this call.
         token_count: Total tokens consumed (prompt + completion). Word-count

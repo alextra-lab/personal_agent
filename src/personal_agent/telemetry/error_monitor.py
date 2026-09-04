@@ -43,6 +43,9 @@ WARNING_EVENT_ALLOWLIST: frozenset[str] = frozenset(
         "insights_cost_query_failed",
         "captains_log_backfill_failed",
         "dead_letter_routed",
+        # sub-agent digest cap actually clipped a result (FRE-1387) — the parent
+        # synthesis context lost characters the worker generated.
+        "sub_agent_output_clipped",
         # mcp timeout/failure family
         "mcp_tool_call_failed",
         "mcp_tool_timeout",

@@ -444,6 +444,98 @@ class TestSubAgentCaptureEmitted:
         assert "cancel" in (captured[0].error or "").lower()
 
 
+class TestDigestCapAndClipVisibility:
+    """FRE-1387 — the digest cap no longer fires in normal operation, and when it
+    does, the clip is visible as its own WARNING event, not just a computed ratio.
+    """
+
+    @pytest.mark.asyncio
+    async def test_real_sized_output_is_not_clipped(self) -> None:
+        """AC-1 — output well within the old 2000-char cap but past it (the
+        measured p90 of real sub-agent output, ~11,425 chars) now fits whole.
+        """
+        content = "x" * 11_425
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value=content)
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.summary == content
+        assert len(result.summary) == len(result.full_output)
+
+    @pytest.mark.asyncio
+    async def test_output_under_new_cap_emits_no_clip_warning(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="x" * 100)
+
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert not [e for e in cap_logs if e.get("event") == "sub_agent_output_clipped"]
+
+    @pytest.mark.asyncio
+    async def test_output_over_new_cap_is_clipped_and_warned(self) -> None:
+        """AC-2 — a clip fires its own WARNING event, distinct from the INFO
+        completion event that already carried truncation_ratio unread.
+        """
+        content = "x" * 30_000
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value=content)
+
+        with structlog.testing.capture_logs() as cap_logs:
+            result = await run_sub_agent(
+                spec=_spec(), llm_client=mock_client, trace_id="t", session_id="s"
+            )
+
+        assert len(result.summary) == 25_000
+        assert len(result.full_output) == 30_000
+
+        warnings = [e for e in cap_logs if e.get("event") == "sub_agent_output_clipped"]
+        assert len(warnings) == 1
+        w = warnings[0]
+        assert w["log_level"] == "warning"
+        assert w["trace_id"] == "t"
+        assert w["session_id"] == "s"
+        assert w["full_output_chars"] == 30_000
+        assert w["digest_chars"] == 25_000
+        assert w["discarded_chars"] == 5_000
+        assert w["truncation_ratio"] == pytest.approx(25_000 / 30_000)
+
+    @pytest.mark.asyncio
+    async def test_clip_warning_is_allowlisted_for_error_pattern_scan(self) -> None:
+        """The event name must be in error_monitor's WARNING_EVENT_ALLOWLIST or
+        the ADR-0056 scan never picks it up regardless of how often it fires.
+        """
+        from personal_agent.telemetry.error_monitor import WARNING_EVENT_ALLOWLIST
+
+        assert "sub_agent_output_clipped" in WARNING_EVENT_ALLOWLIST
+
+    @pytest.mark.asyncio
+    async def test_killed_worker_over_cap_is_clipped_and_warned(self) -> None:
+        """The killed-result path shares the same cap and must warn identically."""
+
+        async def _slow_over_cap(*args: object, **kwargs: object) -> str:
+            progress: GenerationProgress | None = kwargs.get("progress_sink")  # type: ignore[assignment]
+            if progress is not None:
+                progress.generation_started_monotonic = time.monotonic()
+                progress.content = "y" * 26_000
+            await asyncio.sleep(10)
+            return "too late"
+
+        mock_client = AsyncMock()
+        mock_client.respond = _slow_over_cap
+
+        with structlog.testing.capture_logs() as cap_logs:
+            result = await run_sub_agent(
+                spec=_spec(timeout=0.05), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.success is False
+        assert len(result.summary) == 25_000
+        warnings = [e for e in cap_logs if e.get("event") == "sub_agent_output_clipped"]
+        assert len(warnings) == 1
+
+
 def _llm_response_with_cost(
     content: str, cost: float, tool_calls: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:

@@ -125,19 +125,30 @@ class ExpansionController:
         constraints: dict[str, Any] | None = None,  # TODO: wire into planner prompt
         session_id: str | None = None,
         eval_mode: bool = False,
+        planner_llm_client: Any | None = None,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
         Args:
             query: User's original query.
             strategy: "HYBRID" or "DECOMPOSE".
-            llm_client: LLM client for planner and synthesis calls.
+            llm_client: LLM client for the dispatch (sub-agent) calls — must be
+                built for role=SUB_AGENT (FRE-958).
             trace_id: Request trace identifier.
             messages: Conversation context for sub-agents.
             constraints: Optional expansion constraints from gateway.
             session_id: Originating session id for cost attribution (ADR-0074).
             eval_mode: True when the parent turn originated from an eval run; threaded
                 to per-sub-agent audit records for EVAL provenance (FRE-523).
+            planner_llm_client: LLM client for the planner call — must be built
+                for role=PRIMARY (FRE-1390): decomposition is a reasoning
+                judgement about work that has not happened yet, and SUB_AGENT
+                binds to a deployment with thinking hard-disabled. A caller's
+                own client is fixed to one deployment at construction (the
+                ``role`` kwarg on ``.respond()`` is a telemetry label only), so
+                this must be a genuinely different client, not a request-time
+                override — defaults to ``llm_client`` for a caller that has not
+                been updated to build one (e.g. an existing test double).
 
         Returns:
             ExpansionResult with plan, sub-agent results, and synthesis context.
@@ -149,7 +160,7 @@ class ExpansionController:
         plan = await self._run_planner(
             query=query,
             strategy=strategy,
-            llm_client=llm_client,
+            llm_client=planner_llm_client if planner_llm_client is not None else llm_client,
             trace_id=trace_id,
             timeout_s=settings.planner_timeout_seconds,
             result=result,

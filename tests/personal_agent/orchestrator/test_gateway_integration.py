@@ -322,14 +322,24 @@ class TestExpansionCostRollup:
 
 
 class TestEnforcedExpansionClientRole:
-    """FRE-958 regression guard.
+    """FRE-958 / FRE-1390 regression guard.
 
-    The enforced HYBRID/DECOMPOSE path must build its ExpansionController client
-    for the ``sub_agent`` role — both the planner call (expansion_controller.py)
-    and every dispatched sub-agent (sub_agent.py) request ``role=SUB_AGENT``.
-    Building it for ``primary`` instead (the FRE-958 bug) hands the dispatch
-    phase a client resolved for the wrong role/placement, which for a
-    cloud-bound sub_agent silently dials the local SLM base URL and dies.
+    The enforced HYBRID/DECOMPOSE path builds TWO separate clients: the
+    dispatch client (every ``run_sub_agent`` call, and — pre-FRE-1390 — the
+    planner too) for role=``sub_agent``, and, since FRE-1390, a second,
+    dedicated planner client for role=``primary`` (decomposition needs
+    reasoning; ``sub_agent`` binds to a thinking-disabled deployment).
+
+    FRE-958 was: building the ONE shared client for ``primary`` instead of
+    ``sub_agent`` handed dispatch a client resolved for the wrong
+    role/placement, which for a cloud-bound sub_agent silently dials the
+    local SLM base URL and dies. That invariant still holds for the dispatch
+    client specifically — this guard now asserts both: dispatch is still
+    ``sub_agent``-only, and a genuinely separate ``primary`` client exists for
+    the planner (not a same-client role-kwarg substitution, which would be
+    inert — see FRE-1390's finding that ``LiteLLMClient``'s dispatched
+    deployment is fixed at construction, not by the ``role`` kwarg passed to
+    ``.respond()``).
     """
 
     @pytest.mark.asyncio
@@ -340,10 +350,12 @@ class TestEnforcedExpansionClientRole:
     async def test_enforced_expansion_builds_sub_agent_role_client(
         self, monkeypatch: pytest.MonkeyPatch, strategy: DecompositionStrategy
     ) -> None:
-        """Enforced-mode step_init requests the sub_agent role client.
+        """Enforced-mode step_init requests both role clients, never a third.
 
-        Requests get_llm_client(role_name="sub_agent"), never "primary", for
-        both HYBRID and DECOMPOSE strategies.
+        get_llm_client is called exactly twice: once with role_name="sub_agent"
+        (dispatch) and once with role_name="primary" (planner) — never
+        "primary" for dispatch, and never a single shared call, for both
+        HYBRID and DECOMPOSE strategies.
         """
         import personal_agent.orchestrator.executor as ex
         from personal_agent.llm_client.types import ModelRole
@@ -387,7 +399,11 @@ class TestEnforcedExpansionClientRole:
             lambda: controller,
         )
 
-        get_llm_client_spy = MagicMock(return_value=MagicMock())
+        # Two DISTINCT return values, one per role — a fixed single MagicMock
+        # return_value would make the FRE-1390 "same client twice" bug
+        # invisible to the identity assertion below.
+        returned_clients = [MagicMock(name="sub_agent_client"), MagicMock(name="primary_client")]
+        get_llm_client_spy = MagicMock(side_effect=returned_clients)
         monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client", get_llm_client_spy)
 
         session_manager = MagicMock()
@@ -397,4 +413,18 @@ class TestEnforcedExpansionClientRole:
         state = await ex.step_init(ctx, session_manager, trace_ctx)
 
         assert state == TaskState.LLM_CALL
-        get_llm_client_spy.assert_called_once_with(role_name=ModelRole.SUB_AGENT.value)
+        assert get_llm_client_spy.call_count == 2
+        calls = [c.kwargs.get("role_name") for c in get_llm_client_spy.call_args_list]
+        assert calls == [ModelRole.SUB_AGENT.value, ModelRole.PRIMARY.value]
+
+        # The dispatch client and the planner client passed into
+        # controller.execute() must be the two DISTINCT get_llm_client() return
+        # values, in the right slots — not the same object twice (which would
+        # silently resurrect the FRE-1390 bug: a role-kwarg substitution on one
+        # shared client, rather than a genuinely separate PRIMARY-built one).
+        execute_call = controller.execute.await_args
+        dispatch_client = execute_call.kwargs["llm_client"]
+        planner_client = execute_call.kwargs["planner_llm_client"]
+        assert dispatch_client is returned_clients[0]
+        assert planner_client is returned_clients[1]
+        assert dispatch_client is not planner_client

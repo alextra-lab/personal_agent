@@ -4789,14 +4789,25 @@ async def step_init(
                     ExpansionController,
                 )
 
-                # FRE-958: this client serves ONLY the planner and dispatch calls
-                # inside ExpansionController.execute(), both of which request
-                # role=SUB_AGENT internally — it must be built for that role (ADR-0033
-                # client isolation, mirrored in expansion.py's autonomous-mode path),
-                # never PRIMARY. sub_agent may be bound to a different placement
-                # (e.g. a cloud provider) than primary; building for the wrong role
-                # dials the wrong client/endpoint for every sub-agent call.
+                # FRE-958: the DISPATCH client (every run_sub_agent call) must be
+                # built for role=SUB_AGENT (ADR-0033 client isolation, mirrored in
+                # expansion.py's autonomous-mode path), never PRIMARY. sub_agent may
+                # be bound to a different placement (e.g. a cloud provider) than
+                # primary; building for the wrong role dials the wrong
+                # client/endpoint for every sub-agent call.
                 llm_client = get_llm_client(role_name=ModelRole.SUB_AGENT.value)
+                # FRE-1390: the PLANNER client is a SEPARATE, explicitly-built
+                # client for role=PRIMARY. Decomposition is a reasoning judgement
+                # about work that has not happened yet, and SUB_AGENT binds to a
+                # deployment with thinking hard-disabled (config/model_roles.yaml).
+                # A single shared client cannot serve both roles: LiteLLMClient's
+                # dispatched deployment is fixed at construction, not by the
+                # ``role`` kwarg passed to ``.respond()`` (that kwarg is a
+                # telemetry label only) — so passing role=PRIMARY into a
+                # SUB_AGENT-built client would keep silently dispatching to the
+                # SUB_AGENT deployment. This must be a second client, not a
+                # request-time override.
+                planner_llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value)
                 controller = ExpansionController()
                 # ADR-0088 D4: report progress at dispatch start so tool/context fields are
                 # live during the (potentially multi-minute) expansion window. Cost itself
@@ -4808,6 +4819,7 @@ async def step_init(
                     else "",
                     strategy=gw.decomposition.strategy.value.upper(),
                     llm_client=llm_client,
+                    planner_llm_client=planner_llm_client,
                     trace_id=ctx.trace_id,
                     messages=ctx.messages,
                     constraints=ctx.expansion_constraints,

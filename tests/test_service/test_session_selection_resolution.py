@@ -26,7 +26,7 @@ from personal_agent.service.app import _resolve_session_selection
 
 _USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 _A = "claude_sonnet"  # non-default
-_D = "qwen3.6-35b-thinking"  # configured default (primary binding)
+_D = "qwen3.8-flash-next"  # configured default (primary binding)
 
 _SESSIONLOCAL = "personal_agent.service.app.AsyncSessionLocal"
 _SESSION_GET = "personal_agent.service.repositories.session_repository.SessionRepository.get"

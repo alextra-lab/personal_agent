@@ -49,7 +49,7 @@
 # "the one value" — kept because the loader and the dangling-ref check both
 # still read that key name, not because there is anything left to be "all" of.
 roles:
-  primary:            { all: qwen3.6-35b-thinking }
+  primary:            { all: qwen3.8-flash-next }
   entity_extraction:  { all: gpt-5.4-mini }
   captains_log:       { all: claude_sonnet }
   # ADR-0124 D2 (FRE-947): the session summariser's own role. It previously
@@ -119,7 +119,7 @@ bindings:
   # orchestrator_task_timeout_seconds deadline (FRE-973) and delivered the
   # degraded stub instead of an answer. The FRE-1317 note that "wall clock is
   # not the only factor" stands — this is that measurement, on real work.
-  primary:            { deployment: qwen3.6-35b-thinking, open: true }
+  primary:            { deployment: qwen3.8-flash-next, open: true }
   # No default_timeout override: with a profile active — which is every
   # production request — this role already resolved to the sub_agent
   # deployment's 90s. The 120s only ever appeared on the no-profile path, which
@@ -154,10 +154,11 @@ bindings:
   # needs. Non-thinking is expressed by the deployment itself, so FRE-1007's
   # reasoning-declaration guard is satisfied without a cloud reasoning lever.
   sub_agent:
-    deployment: qwen3.6-35b-instruct
+    deployment: qwen3.8-flash-next-instruct
     open: true
     defaults_by_primary:
-      qwen3.8-flash-next:   gpt-5.4-mini           # FRE-1319: the local instruct companion is unloaded (one model fits); gpt-5.4-mini is the cloud deployment that can express no-thinking
+      qwen3.8-flash-next:   qwen3.8-flash-next-instruct
+      qwen3.8-flash-next-instruct: qwen3.8-flash-next-instruct  # self-pair — it IS the instruct half of the single served model  # 2026-09-03: slm_server collapsed to one served model; the instruct sibling is the SAME id with disable_thinking. Supersedes the FRE-1319 cloud pairing, which routed sub_agent (and recall paraphrasing) to OpenAI.
       qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
       qwen3.6-35b-instruct: qwen3.6-35b-instruct  # self-pair — no cheaper local companion
       qwen3.6-27b-ovh:      qwen3.6-27b-ovh       # self-pair — no cheaper OVH-hosted companion

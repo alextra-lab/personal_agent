@@ -179,6 +179,47 @@ models:
     endpoint: "https://slm.example.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
+  # ---------------------------------------------------------------------------
+  # Owner collapsed slm_server to a single served model 2026-09-03 21:50: only
+  # `unsloth/qwen3.8-flash-next` is served now (port 8502, ctx 262144, UD-IQ4_XS).
+  # Both the reasoning and instruct roles therefore point at the SAME id, and the
+  # only thing separating them is the per-request thinking control -- which
+  # actually reaches llama.cpp for the first time as of ADR-0141 T2 (FRE-1365,
+  # deployed 2026-09-03 21:26). Before that, `disable_thinking` was inert on the
+  # wire and the split only worked because backend 8503 was launched thinking-off.
+  # That backend no longer exists, so this entry is now load-bearing rather than
+  # belt-and-braces.
+  qwen3.8-flash-next-instruct:
+    provider: slm_local
+    id: "unsloth/qwen3.8-flash-next"
+    context_length: 131072       # conservative: server reports --ctx-size 262144
+                                 # but llama-server divides it across slots and the
+                                 # slot count is not yet confirmed. Raise once known.
+    quantization: "4bit"
+    min_concurrency: 1
+    max_concurrency: 3
+    default_timeout: 90          # unchanged from the retired qwen3.6-35b-instruct entry.
+                                 # NOTE: that value assumed a dedicated 2-slot backend. With
+                                 # one served model the sub-agent now queues behind the
+                                 # primary, so 90s may be too short under contention — revisit
+                                 # once the slot count is known rather than guessing now.
+    # Unsloth's NON-thinking preset. presence_penalty 1.5 is correct here and
+    # deliberately differs from the thinking entry's 0.0 -- same reasoning as the
+    # retired qwen3.6-35b-instruct entry this replaces.
+    temperature: 0.7
+    top_p: 0.8
+    top_k: 20
+    min_p: 0.0
+    presence_penalty: 1.5
+    repetition_penalty: 1.0
+    max_tokens: 2048             # bounded sub-task output; safe because thinking is
+                                 # hard-disabled below, so reasoning cannot eat the budget
+    disable_thinking: true       # hard disable via chat_template_kwargs (ADR-0023)
+    supports_function_calling: true
+    supports_vision: true
+    supports_pdf_document: false
+    tool_calling_strategy: "native"
+    endpoint: "https://slm.example.com/v1"
   qwen3.6-35b-instruct:
     # Focused single-task completion for HYBRID expansion sub-agents.
     # Second instance of Qwen3.6-35B-A3B, served with thinking disabled

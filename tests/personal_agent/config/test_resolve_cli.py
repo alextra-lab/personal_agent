@@ -24,7 +24,7 @@ from personal_agent.config.resolve import main, resolve
 
 class TestResolve:
     def test_resolve_primary_returns_qwen(self) -> None:
-        assert resolve("primary") == "qwen3.6-35b-thinking"
+        assert resolve("primary") == "qwen3.8-flash-next"
 
     def test_resolve_entity_extraction_returns_gpt_5_4_mini(self) -> None:
         assert resolve("entity_extraction") == "gpt-5.4-mini"
@@ -38,7 +38,7 @@ class TestResolve:
         footprint; the owner-directed 2026-08-30 revert to the qwen3.6-35b pair
         loads both again, so the companion is local once more.
         """
-        assert resolve("sub_agent") == "qwen3.6-35b-instruct"
+        assert resolve("sub_agent") == "qwen3.8-flash-next-instruct"
 
     def test_resolve_artifact_builder_returns_claude_sonnet(self) -> None:
         """FRE-926 AC-1 — artifact_builder was never declared in the legacy matrix."""

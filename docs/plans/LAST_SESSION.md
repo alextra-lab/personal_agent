@@ -23,13 +23,18 @@ FRE-1362. `reasoning_effort` is pinned server-side to `medium`; sending an inval
 500, and slm_server's watchdog treats 5xx as backend failure and **restarts the model** under
 every other worker.
 
-**SERIALIZATION — the live decision, unfiled.** slm_server benchmarked concurrency: aggregate
-throughput rises only **18.8%** from 1→3 (34.2 → 40.6 tok/s) while per-request drops **2.57x**
-(37.1 → 14.4). Fan-out of 3 saves 15.8% wall-clock, not 3x. Master's argument for serializing goes
-further than the benchmark: **sub-agents are about context isolation, not speed** — the primary
-hit 91k tokens because it carried raw tool results itself, and a digest-returning sub-agent fixes
-that whether or not it runs in parallel. So serializing costs 15.8% and keeps the part that
-matters, while removing the wedge risk and giving 2.6x deadline headroom. Owner has not ruled.
+**SERIALIZATION — ruled, and the framing matters more than the ruling.** The owner ruled
+"Serialize", then corrected the justification mid-turn: **"the goal is context management, not
+latency."** That reframing is the durable part. The benchmark argument (aggregate throughput rises
+only 18.8% from concurrency 1→3 while per-request drops 2.57x, so fan-out buys 15.8% wall-clock,
+not 3x) is real but secondary — sub-agents exist so raw tool output stays in the sub-agent and only
+a digest reaches the primary, and that property is indifferent to whether they ran side by side.
+Filed as FRE-1380 with criteria that measure context, not speed. Two things master found while
+scoping it, both now in the ticket: serialization must be a **loop, not a semaphore of 1** (a
+semaphore leaves the 180s admission race, and worker 4 would be silently dropped with a fabricated
+result), and `_build_synthesis_context` already composes from `r.summary` — so isolation holds
+today, but `full_output_chars`/`digest_chars` have been logged all along and **nobody has ever
+looked at them**. The justification for the whole mechanism is unmeasured.
 
 **Four concurrent requests WEDGE the server.** All four 504, backend unresponsive, forced restart
 required. Three is a hard cap, not a target. Master verified Seshat cannot exceed it today
@@ -40,6 +45,12 @@ named strategies one integer apart, same code path. Owner's framing: model choic
 capability/cost/latency and is the user's; how the response is produced is harness architecture.
 Whole conversation is on FRE-1377, including the owner's routing-control-with-auto proposal.
 
+**A third inert knob, same family.** The sub-agent token ceiling is declared twice —
+`models.yaml` says `max_tokens: 2048`, `settings.sub_agent_max_tokens` says 4096, and the settings
+value is what reaches the wire. Joins the inert 60s `worker_timeout_seconds` and (post-FRE-1380)
+`worker_global_timeout_seconds`. Three knobs in one subsystem that read as load-bearing and bound
+nothing; assume a fourth until proven otherwise.
+
 **Master's own errors, because they recurred.** A `LIMIT 8` on a 12-row aggregate read as the
 whole population ("delegation has never fired" — it had, 3 times). A grep for `error` matched
 `error-monitor` and `failed_count=0`, producing a false deploy alarm — the same unbounded-substring
@@ -47,10 +58,8 @@ bug filed as FRE-1376 twenty minutes earlier. Named the wrong setting on FRE-137
 (`sub_agent_timeout_seconds`, actually `worker_timeout_seconds`) and corrected mid-flight, costing
 the seat a rework cycle.
 
-**Worker A was normal; worker D was the anomaly.** 12.7 tok/s matches the measured 14.4 at
-concurrency 3. D's 65 tok/s exceeds the single-stream ceiling and is probably a measurement
-artefact. The 2-of-4 timeout is then fully explained: 85s × 14.4 = ~1,224 tokens against
-`max_tokens=4096`. Deterministic, not intermittent.
+**Worker A was normal; D was the anomaly** — 12.7 tok/s matches the benchmarked 14.4 at
+concurrency 3; D's 65 exceeds the single-stream ceiling. Full reasoning on FRE-1379.
 
 ## Worktrees — anything special
 `build` holds `fre-1370-query-paraphrase-pinned-role` with one unpushed WIP commit (`7aeef49a`)
@@ -65,6 +74,9 @@ until the owner said "stop everything but what asked for". Both were real; neith
 The lesson is not "don't surface findings" but "don't put them in front of the directive".
 
 ## Answers for the fresh start
+- **Is serialization done?** No — FRE-1380 is filed and Approved, queued behind FRE-1379 on
+  build1 so the instrumentation exists before anything is measured. Both were dispatched 2026-09-04
+  and both seats were mid-work at reset.
 - **Why is FRE-1375 not Done?** Deployed 08:51, but AC-2's backend half needs an owner-side live
   check: press Stop mid-generation, then send a second query immediately. If it stalls, the backend
   kept its slot — that is a *separate, more serious* ticket, not a fold-in.

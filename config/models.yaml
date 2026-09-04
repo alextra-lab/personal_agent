@@ -49,7 +49,12 @@ providers:
     base_url: "https://slm.example.com/v1"
     auth: none
     placement: local
-    max_concurrency: 2
+    # 2026-09-04: raised 2 -> 3 to match slm_server's `--parallel 3` on the single
+    # served model. At 2 the expansion controller's 4-way fan-out could only ever
+    # place 2 sub-agents; the other 2 sat in the client queue and hit
+    # sub_agent_timeout_seconds (60s) without acquiring a slot. Deterministic 50%
+    # sub-agent loss, observed live 2026-09-04 03:50.
+    max_concurrency: 3
     summary: "Owner's Mac GPU via the CF-Access tunnel (llama.cpp + MLX)"
   ovh:
     base_url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
@@ -155,7 +160,13 @@ models:
     # old at benchmark time.
     provider: slm_local
     id: "unsloth/qwen3.8-flash-next"
-    context_length: 131072
+    context_length: 87381        # --ctx-size 262144 / --parallel 3 (2026-09-04). The window is
+                                 # divided across slots, so 87381 is the real per-request
+                                 # ceiling. NOTE: a measured turn hit 91,284 input tokens on
+                                 # 2026-09-03 — above this. That turn was oversized because
+                                 # sub-agent delegation had failed and the primary carried
+                                 # every raw tool result itself; with delegation working the
+                                 # primary should stay far below. Watch for truncation.
     quantization: "UD-IQ4_XS"
     min_concurrency: 1
     max_concurrency: 1
@@ -192,9 +203,9 @@ models:
   qwen3.8-flash-next-instruct:
     provider: slm_local
     id: "unsloth/qwen3.8-flash-next"
-    context_length: 131072       # conservative: server reports --ctx-size 262144
-                                 # but llama-server divides it across slots and the
-                                 # slot count is not yet confirmed. Raise once known.
+    context_length: 87381        # --ctx-size 262144 / --parallel 3. llama-server
+                                 # divides the window across slots, so this is the
+                                 # real per-request ceiling, NOT 262144.
     quantization: "4bit"
     min_concurrency: 1
     max_concurrency: 3

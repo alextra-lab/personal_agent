@@ -144,6 +144,39 @@ class TestInferenceConcurrencyController:
         assert status["models"]["reasoning"]["active"] == 0
 
     @pytest.mark.asyncio
+    async def test_cancellation_releases_the_slot(self) -> None:
+        """FRE-1375 AC-2 (code-level half): a task cancelled while holding a
+        slot must not leak it — this is what step_llm_call's cancel race
+        (and the FRE-973 deadline race before it) relies on to make Stop
+        immediately reusable, not just eventually-consistent once the
+        orphaned call finally finishes on its own. Whether the *backend's own*
+        slot (llama.cpp) is also freed cannot be proven here — that half needs
+        a live measurement (see the FRE-1375 handoff's runbook).
+        """
+        ctrl = self._make_controller()
+        holding_slot = asyncio.Event()
+
+        async def hold_forever() -> None:
+            async with ctrl.request_slot("reasoning", InferencePriority.USER_FACING):
+                holding_slot.set()
+                await asyncio.sleep(60)
+
+        task = asyncio.ensure_future(hold_forever())
+        await asyncio.wait_for(holding_slot.wait(), timeout=2.0)
+        assert ctrl.get_status()["models"]["reasoning"]["active"] == 1
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        status = ctrl.get_status()
+        assert status["models"]["reasoning"]["active"] == 0, "cancellation must release the slot"
+
+        # And it's immediately reusable — no lingering reservation.
+        async with ctrl.request_slot("reasoning", InferencePriority.USER_FACING):
+            assert ctrl.get_status()["models"]["reasoning"]["active"] == 1
+
+    @pytest.mark.asyncio
     async def test_model_limit_enforced(self) -> None:
         ctrl = self._make_controller()
 

@@ -206,6 +206,23 @@ def _is_turn_cancelled(session_id: str) -> bool:
     return is_cancel_requested(session_id)
 
 
+def _get_cancel_event(session_id: str) -> asyncio.Event | None:
+    """Return the session's cancel event, or None if it has never connected (FRE-1375).
+
+    ``get_cancel_event`` is deliberately non-creating: only a session that has
+    connected over WebSocket at least once (a fact that is stable once true — it
+    does not flip back on a later disconnect) has any possible source of a
+    ``USER_CANCEL``. Racing against a freshly-created Event that can never be set
+    would be a no-op in production, but pytest-asyncio's per-test event loops make
+    a *reused* ``asyncio.Event`` object from a prior test's closed loop resolve as
+    spuriously "done" the instant it's raced again — surfacing as a phantom cancel
+    on a completely unrelated test that happens to reuse the same session_id.
+    """
+    from personal_agent.transport.agui.ws_endpoint import get_cancel_event
+
+    return get_cancel_event(session_id)
+
+
 async def _emit_turn_cancelled(*, session_id: str, trace_id: str) -> None:
     """Emit a ``CANCELLED`` event and clear the cancel flag (ADR-0076)."""
     from personal_agent.transport.agui.transport import emit_cancelled
@@ -2807,6 +2824,34 @@ def _stop_turn_for_deadline(ctx: ExecutionContext) -> None:
             "metadata": {"budget_seconds": budget},
         }
     )
+    ctx.turn_stopped_early = True
+
+
+def _stop_turn_for_cancel(ctx: ExecutionContext) -> None:
+    """Populate ``ctx.final_reply`` for a user-initiated Stop (ADR-0076 / FRE-1375).
+
+    Called from :func:`step_llm_call` when the cancel event fires while a primary
+    call is in flight, and from :func:`step_tool_execution`'s between-rounds
+    checkpoint. Deliberately never routes back through another ``LLM_CALL`` — AC-3
+    requires that pressing Stop cannot itself schedule more model work, which is
+    exactly what the old ``force_synthesis_from_limit`` / ``TaskState.LLM_CALL``
+    path this replaces used to do.
+    """
+    if ctx.tool_results:
+        ctx.final_reply = _fallback_reply_from_tool_results(
+            ctx,
+            lead="Stopped — here's what was gathered before the stop:",
+        )
+    else:
+        ctx.final_reply = "Stopped before gathering any results."
+    ctx.steps.append(
+        {
+            "type": "warning",
+            "description": "Turn stopped by user request",
+            "metadata": {"reason": "user_cancel"},
+        }
+    )
+    ctx.turn_stopped_early = True
 
 
 def _select_no_tool_final_reply(
@@ -5934,21 +5979,77 @@ async def step_llm_call(
             async with phase_span(
                 session_id=ctx.session_id, phase=_inference_phase, detail=_inference_detail
             ):
-                response = await asyncio.wait_for(
-                    llm_client.respond(
-                        role=respond_role,
-                        messages=request_messages,
-                        system_prompt=system_prompt,
-                        tools=tools if tools else None,
-                        tool_choice=tool_choice,
-                        trace_ctx=span_ctx,
-                        previous_response_id=ctx.last_response_id,
-                        max_retries=max_retries_override,
-                        priority=InferencePriority.USER_FACING,
-                        prompt_identity=_prompt_identity,
-                    ),
-                    timeout=_deadline_remaining,
+                _respond_coro = llm_client.respond(
+                    role=respond_role,
+                    messages=request_messages,
+                    system_prompt=system_prompt,
+                    tools=tools if tools else None,
+                    tool_choice=tool_choice,
+                    trace_ctx=span_ctx,
+                    previous_response_id=ctx.last_response_id,
+                    max_retries=max_retries_override,
+                    priority=InferencePriority.USER_FACING,
+                    prompt_identity=_prompt_identity,
                 )
+                _cancel_event = _get_cancel_event(ctx.session_id) if ctx.session_id else None
+                if _cancel_event is None:
+                    response = await asyncio.wait_for(_respond_coro, timeout=_deadline_remaining)
+                else:
+                    # ADR-0076 / FRE-1375: race the call against the user's cancel
+                    # event too, so Stop aborts an in-flight generation instead of
+                    # only being read between tool rounds (where a turn almost
+                    # never is). Two real tasks via asyncio.wait rather than a
+                    # watcher cancelling the inner future out-of-band from
+                    # asyncio.wait_for's own timeout — mixing two independent
+                    # cancellation sources on one future is fragile across
+                    # asyncio's cancel/uncancel bookkeeping (codex plan-review).
+                    _respond_task = asyncio.ensure_future(_respond_coro)
+                    _cancel_wait_task = asyncio.ensure_future(_cancel_event.wait())
+                    _race_tasks = (_respond_task, _cancel_wait_task)
+                    try:
+                        done, _pending = await asyncio.wait(
+                            _race_tasks,
+                            timeout=_deadline_remaining,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        # Unconditional: runs even if this await is itself
+                        # cancelled from outside (a turn-level cancellation), so
+                        # _respond_task is never orphaned still generating and
+                        # holding its concurrency slot (codex plan-review).
+                        for _t in _race_tasks:
+                            if not _t.done():
+                                _t.cancel()
+                        await asyncio.gather(*_race_tasks, return_exceptions=True)
+
+                    # Cancel checked first: if both complete in the same
+                    # asyncio.wait() call, Stop must win — a response landing in
+                    # the same instant as a cancel must never be delivered (AC-3).
+                    if _cancel_wait_task in done:
+                        log.info(
+                            "user_cancel_mid_generation",
+                            trace_id=ctx.trace_id,
+                            session_id=ctx.session_id,
+                            span_id=span_id,
+                        )
+                        await _emit_turn_cancelled(session_id=ctx.session_id, trace_id=ctx.trace_id)
+                        _stop_turn_for_cancel(ctx)
+                        log.info(
+                            STEP_PLANNING_COMPLETED,
+                            trace_id=ctx.trace_id,
+                            session_id=ctx.session_id,
+                            span_id=span_id,
+                            parent_span_id=trace_ctx.parent_span_id,
+                            model_role=model_role.value,
+                            channel=ctx.channel.value,
+                            status="user_cancelled",
+                            next_state="synthesis",
+                        )
+                        return TaskState.SYNTHESIS
+                    if _respond_task in done:
+                        response = _respond_task.result()
+                    else:
+                        raise TimeoutError
         except TimeoutError:
             log.warning(
                 "turn_wall_clock_budget_exceeded_mid_call",
@@ -6276,12 +6377,14 @@ async def step_tool_execution(
     # zero-tool) exit.
     ctx.last_tool_execution_count = 0
 
-    # ADR-0076: Stop button checkpoint — if the user cancelled mid-turn,
-    # synthesize from results gathered so far instead of running more tools.
+    # ADR-0076 / FRE-1375: Stop button checkpoint — if the user cancelled mid-turn,
+    # synthesize from results gathered so far instead of running more tools. Goes
+    # straight to SYNTHESIS, never back through another LLM_CALL (AC-3: Stop must
+    # never itself schedule more model work).
     if ctx.session_id and _is_turn_cancelled(ctx.session_id):
         await _emit_turn_cancelled(session_id=ctx.session_id, trace_id=ctx.trace_id)
-        ctx.force_synthesis_from_limit = True
-        return TaskState.LLM_CALL
+        _stop_turn_for_cancel(ctx)
+        return TaskState.SYNTHESIS
 
     # Loop governance: prevent infinite tool execution cycles
     ctx.tool_iteration_count += 1
@@ -6753,8 +6856,12 @@ async def step_synthesis(
     # ADR-0138 D3/D4 (FRE-1282): the inline checks, then D4's decision. Placed here
     # because this is where the turn's reply is final and the registry is complete;
     # a retry returns to LLM_CALL, which the driver loop already allows.
+    # FRE-1375: skipped entirely once turn_stopped_early — a salvaged reply from a
+    # deadline or user Stop is not a generated claim to verify, and enforce mode's
+    # retry path (back to TaskState.LLM_CALL) would otherwise issue exactly the
+    # extra model call a Stop must never produce (AC-3).
     mode = settings.grounding_verification_mode
-    if mode != "off":
+    if mode != "off" and not ctx.turn_stopped_early:
         ctx.grounding_attempts += 1
         verification = await _verify_grounding(ctx, trace_ctx)
         _record_grounding(ctx, verification, mode)

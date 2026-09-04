@@ -240,6 +240,73 @@ class TestUserCancel:
             client.post("/__test/done", params={"session_id": session_id})
             ws.receive_json()  # DONE
 
+    def test_cancel_event_exists_from_connect_even_without_a_cancel(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """The event is created eagerly at connect time, not lazily on the first
+        USER_CANCEL — this is what makes it survive a disconnect that happens
+        WHILE a call is already in flight and racing against it (a code-reviewer
+        finding on this ticket): the race must not depend on a connection being
+        live at the instant it starts, only on the session having connected at
+        some point before.
+        """
+        from personal_agent.transport.agui import ws_endpoint as wsep
+
+        client, _ = harness
+        session_id = str(uuid4())
+
+        assert wsep.get_cancel_event(session_id) is None, "not yet connected"
+
+        with ws_connect(client, session_id):
+            evt = wsep.get_cancel_event(session_id)
+            assert evt is not None
+            assert not evt.is_set()
+
+    def test_user_cancel_sets_the_session_scoped_cancel_event(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """USER_CANCEL also sets the cancel event step_llm_call races against
+        (FRE-1375), not just the bool the between-rounds checkpoint polls.
+        """
+        from personal_agent.transport.agui import ws_endpoint as wsep
+
+        client, _ = harness
+        session_id = str(uuid4())
+
+        with ws_connect(client, session_id) as ws:
+            ws.send_json({"type": "USER_CANCEL"})
+            # Give the receiver task a turn to process the inbound message.
+            client.post("/__test/done", params={"session_id": session_id})
+            ws.receive_json()  # DONE
+
+        assert wsep.get_cancel_event(session_id).is_set()
+
+    def test_cancel_event_survives_a_reconnect(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """The cancel event must be session-scoped, not tied to the WebSocket
+        connection object — this ticket's own incident involved a reconnect
+        mid-cancel-storm, and a connection-scoped event would be replaced by a
+        fresh, unset one on exactly that reconnect (FRE-1375).
+        """
+        from personal_agent.transport.agui import ws_endpoint as wsep
+
+        client, _ = harness
+        session_id = str(uuid4())
+
+        with ws_connect(client, session_id) as ws:
+            ws.send_json({"type": "USER_CANCEL"})
+            client.post("/__test/done", params={"session_id": session_id})
+            ws.receive_json()  # DONE
+
+        assert wsep.get_cancel_event(session_id).is_set()
+
+        # Reconnect on the same session — a fresh _ConnectionState is installed.
+        with ws_connect(client, session_id):
+            assert wsep.get_cancel_event(session_id).is_set(), (
+                "reconnecting must not replace the session's cancel event"
+            )
+
 
 # ── STATE_DELTA — turn_status ─────────────────────────────────────────────────
 

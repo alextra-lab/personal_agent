@@ -49,7 +49,12 @@ providers:
     base_url: "https://slm.example.com/v1"
     auth: none
     placement: local
-    max_concurrency: 2
+    # 2026-09-04: raised 2 -> 3 to match slm_server's `--parallel 3` on the single
+    # served model. At 2 the expansion controller's 4-way fan-out could only ever
+    # place 2 sub-agents; the other 2 sat in the client queue and hit
+    # sub_agent_timeout_seconds (60s) without acquiring a slot. Deterministic 50%
+    # sub-agent loss, observed live 2026-09-04 03:50.
+    max_concurrency: 3
     summary: "Owner's Mac GPU via the CF-Access tunnel (llama.cpp + MLX)"
   ovh:
     base_url: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
@@ -155,7 +160,12 @@ models:
     # old at benchmark time.
     provider: slm_local
     id: "unsloth/qwen3.8-flash-next"
-    context_length: 131072
+    context_length: 262144       # Full --ctx-size. slm_server runs --kv-unified, which POOLS
+                                 # the KV cache across slots instead of partitioning it, so a
+                                 # single request may use the whole window — do NOT divide by
+                                 # --parallel. The real constraint is aggregate KV across
+                                 # concurrent requests, which this per-deployment field cannot
+                                 # express; concurrent large requests contend for one pool.
     quantization: "UD-IQ4_XS"
     min_concurrency: 1
     max_concurrency: 1
@@ -192,9 +202,12 @@ models:
   qwen3.8-flash-next-instruct:
     provider: slm_local
     id: "unsloth/qwen3.8-flash-next"
-    context_length: 131072       # conservative: server reports --ctx-size 262144
-                                 # but llama-server divides it across slots and the
-                                 # slot count is not yet confirmed. Raise once known.
+    context_length: 262144       # Full --ctx-size. slm_server runs --kv-unified, which POOLS
+                                 # the KV cache across slots instead of partitioning it, so a
+                                 # single request may use the whole window — do NOT divide by
+                                 # --parallel. The real constraint is aggregate KV across
+                                 # concurrent requests, which this per-deployment field cannot
+                                 # express; concurrent large requests contend for one pool.
     quantization: "4bit"
     min_concurrency: 1
     max_concurrency: 3

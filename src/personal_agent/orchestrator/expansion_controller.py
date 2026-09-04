@@ -112,7 +112,14 @@ class ExpansionController:
 
     Usage:
         controller = ExpansionController()
-        result = await controller.execute(query, strategy, llm_client, trace_id, messages)
+        result = await controller.execute(
+            query, strategy, llm_client, trace_id, messages,
+            planner_llm_client=planner_llm_client,
+        )
+
+    Omitting planner_llm_client falls back to the dispatch (sub_agent-bound)
+    client and defeats FRE-1390's fix — the planner call generates on the
+    thinking-disabled deployment again, silently.
     """
 
     async def execute(

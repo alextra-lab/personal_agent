@@ -216,11 +216,18 @@ class TestRunGatewayPipeline:
         assert result.decomposition.strategy == DecompositionStrategy.DECOMPOSE
 
     @pytest.mark.asyncio
-    async def test_delegation_produces_delegate_strategy(self) -> None:
-        """Coding/delegation request produces DELEGATE strategy.
+    async def test_delegation_produces_delegate_strategy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Coding/delegation request produces DELEGATE strategy when an adapter is wired.
 
-        Uses 'write a function' keyword (exact substring match in _CODING_KEYWORDS).
+        Uses 'write a function' keyword (word-boundary match in _CODING_KEYWORD_PATTERN).
+        FRE-1376: DELEGATE is no longer the unconditional default — explicitly enable
+        delegation to exercise the AC-3 positive path.
         """
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "delegation_enabled", True)
         result = await run_gateway_pipeline(
             user_message="write a function to parse and validate JSON schemas",
             session_id="s",
@@ -231,6 +238,90 @@ class TestRunGatewayPipeline:
         )
         assert result.intent.task_type == TaskType.DELEGATION
         assert result.decomposition.strategy == DecompositionStrategy.DELEGATE
+
+    @pytest.mark.asyncio
+    async def test_delegation_without_target_configured_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1376 AC-1 + AC-2: without a wired adapter, DELEGATION never reaches DELEGATE.
+
+        AC-1: the real research-query fixture (session 5014ca54) classifies as ANALYSIS,
+        not DELEGATION, once the word-boundary fix lands.
+        AC-2: forcing a genuine coding message to classify as DELEGATION still does not
+        reach DELEGATE when no adapter is configured — it falls back by complexity, and
+        the fallback is recorded in the decomposition reason.
+        """
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "delegation_enabled", False)
+
+        research_query = (
+            "Research how skills, memory, and subagents are actually used in "
+            "state-of-the-art AI agent harnesses today, and determine what distinct "
+            "role each plays. Compare how leading agent systems and harnesses "
+            "implement these three capabilities in practice."
+        )
+        result = await run_gateway_pipeline(
+            user_message=research_query,
+            session_id="s",
+            session_messages=[],
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+        )
+        assert result.intent.task_type == TaskType.ANALYSIS
+        assert result.decomposition.strategy != DecompositionStrategy.DELEGATE
+
+        coding_result = await run_gateway_pipeline(
+            user_message="Refactor the routing module",
+            session_id="s",
+            session_messages=[],
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+        )
+        assert coding_result.intent.task_type == TaskType.DELEGATION
+        assert coding_result.decomposition.strategy != DecompositionStrategy.DELEGATE
+        assert coding_result.decomposition.reason.startswith("delegation_no_target_fallback")
+
+    @pytest.mark.asyncio
+    async def test_decomposition_assessed_reason_telemetry_reflects_gate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1376 AC-2: the gate's fallback is recorded in telemetry, not just returned."""
+        import structlog.testing
+
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "delegation_enabled", False)
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_gateway_pipeline(
+                user_message="Refactor the routing module",
+                session_id="s",
+                session_messages=[],
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        events = [e for e in cap_logs if e.get("event") == "decomposition_assessed"]
+        assert len(events) >= 1
+        assert all(e["reason"].startswith("delegation_no_target_fallback") for e in events)
+        assert all(e["strategy"] != "delegate" for e in events)
+
+        monkeypatch.setattr(get_settings(), "delegation_enabled", True)
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_gateway_pipeline(
+                user_message="Refactor the routing module",
+                session_id="s",
+                session_messages=[],
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        events = [e for e in cap_logs if e.get("event") == "decomposition_assessed"]
+        assert len(events) >= 1
+        assert all(e["reason"] == "delegation_route_external" for e in events)
+        assert all(e["strategy"] == "delegate" for e in events)
 
     @pytest.mark.asyncio
     async def test_budget_trim_when_context_exceeds_limit(self) -> None:

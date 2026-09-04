@@ -111,7 +111,11 @@ async def run_gateway_pipeline(
     )
 
     # Stage 5: Decomposition Assessment
-    decomposition = assess_decomposition(intent=intent, governance=governance)
+    decomposition = assess_decomposition(
+        intent=intent,
+        governance=governance,
+        delegation_enabled=settings.delegation_enabled,
+    )
 
     logger.info(
         "decomposition_assessed",

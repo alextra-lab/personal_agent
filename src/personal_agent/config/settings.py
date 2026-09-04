@@ -504,6 +504,15 @@ class AppConfig(BaseSettings):
         le=10,
         description="Maximum request expansion budget (max decomposition depth)",
     )
+    delegation_enabled: bool = Field(
+        default=False,
+        description=(
+            "Whether the external delegation route (DecompositionStrategy.DELEGATE) is wired "
+            "to a live adapter (see delegation/adapters/). False (default) means "
+            "DELEGATION-classified requests fall back to SINGLE/HYBRID/DECOMPOSE by complexity "
+            "instead of composing a DelegationPackage nothing can receive (FRE-1376)."
+        ),
+    )
     sub_agent_timeout_seconds: float = Field(
         default=120.0,
         gt=0,

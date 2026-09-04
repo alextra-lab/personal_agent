@@ -292,6 +292,10 @@ services:
       AGENT_PRIMITIVE_TOOLS_ENABLED: "false"
       AGENT_PREFER_PRIMITIVES: "false"
       AGENT_CLOUD_WEEKLY_BUDGET_USD: "50.0"
+      # FRE-1376: production defaults delegation off (no adapter wired). The eval
+      # harness's CP-05 path (dataset.py) exercises real DelegationPackage
+      # composition, so enable it here.
+      AGENT_DELEGATION_ENABLED: "true"
     ports:
       # Host 9002 → container 9001 (uvicorn port is hardcoded in Dockerfile.gateway)
       - "127.0.0.1:9002:9001"
@@ -379,6 +383,10 @@ services:
       # Required: without this, bash commands block indefinitely for PWA approval
       AGENT_APPROVAL_UI_ENABLED: "false"
       AGENT_CLOUD_WEEKLY_BUDGET_USD: "50.0"
+      # FRE-1376: production defaults delegation off (no adapter wired). The eval
+      # harness's CP-05 path (dataset.py) exercises real DelegationPackage
+      # composition, so enable it here.
+      AGENT_DELEGATION_ENABLED: "true"
     ports:
       # Host 9003 → container 9001
       - "127.0.0.1:9003:9001"

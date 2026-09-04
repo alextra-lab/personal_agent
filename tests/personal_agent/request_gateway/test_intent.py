@@ -278,6 +278,119 @@ class TestArtifactBuild:
         assert "artifact_build" not in result.signals
 
 
+class TestCodingKeywordWordBoundary:
+    """FRE-1376 AC-4: _CODING_KEYWORDS substring match must respect word boundaries.
+
+    The bare substring check ``"implement the" in message.lower()`` matched inside
+    "implement these"/"implement their" — the exact bug that misrouted a real research
+    query to DELEGATION (session 5014ca54, see TestFre1376ResearchQuery below).
+    """
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "The framework will implement these features automatically.",
+            "Developers often implement their own caching layer.",
+            "The module was refactored last week.",
+            "We rely on unit testing throughout the codebase.",
+            "Our unit tester caught the issue.",
+            "We need to improve unit testability.",
+            "The integration testers filed a report.",
+            "The subunit tests passed.",
+        ],
+    )
+    def test_false_positives_no_longer_match(self, message: str) -> None:
+        """Word-boundary fix excludes these substring false positives."""
+        result = classify_intent(message)
+        assert result.task_type != TaskType.DELEGATION, (
+            f"{message!r} incorrectly classified as DELEGATION (signals={result.signals})"
+        )
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Please implement the function as described.",
+            "Please refactor this module.",
+            "Add a unit test for this.",
+            "Add unit tests for this.",
+        ],
+    )
+    def test_true_positives_still_match(self, message: str) -> None:
+        """Word-boundary fix preserves the genuine keyword matches."""
+        result = classify_intent(message)
+        assert result.task_type == TaskType.DELEGATION, (
+            f"{message!r} not classified as DELEGATION (signals={result.signals})"
+        )
+        assert "coding_pattern" in result.signals
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # Eval harness regression guard: tests/evaluation/harness/dataset.py CP-24
+            # and the "Write unit tests for the edge cases" turn hard-assert DELEGATION
+            # on plural "unit tests" — must keep matching.
+            "Can you look into why our unit tests keep failing and fix the flaky ones?",
+            "Write unit tests for the edge cases — circular references and nested structures.",
+        ],
+    )
+    def test_unit_tests_plural_still_matches(self, message: str) -> None:
+        """Plural 'unit tests' must keep matching (eval-harness dependency)."""
+        result = classify_intent(message)
+        assert result.task_type == TaskType.DELEGATION, (
+            f"{message!r} not classified as DELEGATION (signals={result.signals})"
+        )
+
+
+# Verbatim 1,900-char user message from the live session that motivated FRE-1376
+# (session 5014ca54-4975-4eab-9518-a7f4c2a80e54, read from sessions.messages in
+# cloud-sim-postgres). The interaction depends on this exact text — "harnesses
+# implement these three capabilities in practice" is what tripped the bare
+# substring match on "implement the" before the word-boundary fix.
+_FRE_1376_RESEARCH_QUERY = (
+    "Research how skills, memory, and subagents are actually used in state-of-the-art "
+    "AI agent harnesses today, and determine what distinct role each plays.\n\n"
+    "I am not looking for a generic explanation of agents or a list of frameworks. "
+    "Compare how leading agent systems and harnesses implement these three capabilities "
+    "in practice, including systems such as Claude Code, Codex, OpenAI Agents/ChatGPT, "
+    "Gemini CLI, Cursor, and other relevant current systems you identify.\n\n"
+    "Specifically determine:\n\n"
+    "* What each system means by a skill and how skills are selected, loaded, scoped, "
+    "and executed.\n"
+    "* What forms of memory are actually implemented: conversation history, persistent "
+    "user memory, project memory, episodic memory, semantic retrieval, summaries, or "
+    "other mechanisms.\n"
+    "* When systems use subagents or delegated execution rather than simply calling "
+    "tools or injecting additional context.\n"
+    "* Which responsibilities overlap between skills, memory, tools, and subagents, and "
+    "where their architectural boundaries differ.\n"
+    "* Whether there is evidence of an emerging common architecture across the "
+    "strongest current agent harnesses.\n"
+    "* Which capabilities appear genuinely important for agent performance versus "
+    "features that are mostly implementation convenience or product UX.\n\n"
+    "Distinguish clearly between documented behavior, behavior observable from "
+    "open-source implementations, and reasonable architectural inference. Do not treat "
+    "vendor terminology as equivalent when the underlying mechanisms differ.\n\n"
+    "Prioritize primary sources, technical documentation, repositories, engineering "
+    "posts, and published research. Use secondary sources only where primary evidence "
+    "is unavailable.\n\n"
+    "Conclude with your own evidence-backed model of the role that skills, memory, and "
+    "subagents should play in a modern agent harness, including where responsibility "
+    "should not be duplicated between them.\n\n"
+    "Cite the sources you used.\n"
+)
+
+
+class TestFre1376ResearchQuery:
+    """FRE-1376 AC-1: the owner's exact query no longer routes to DELEGATION."""
+
+    def test_classifies_as_analysis(self) -> None:
+        """The real 1,900-char fixture (not a paraphrase) must classify as ANALYSIS."""
+        result = classify_intent(_FRE_1376_RESEARCH_QUERY)
+        assert result.task_type == TaskType.ANALYSIS, (
+            f"Expected ANALYSIS, got {result.task_type.value} (signals={result.signals})"
+        )
+
+
 class TestSelfImprove:
     """Self-improvement patterns -- agent discussing its own architecture."""
 

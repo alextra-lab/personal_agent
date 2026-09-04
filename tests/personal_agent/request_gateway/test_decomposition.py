@@ -165,21 +165,62 @@ class TestPlanningMatrix:
         assert result.reason == "planning_moderate_hybrid"
 
 
-class TestDelegationAlwaysDelegate:
-    """DELEGATION → DELEGATE at every complexity level."""
+class TestDelegationGate:
+    """FRE-1376: DELEGATION only routes to DELEGATE when delegation_enabled=True.
 
-    def test_delegation_simple(self) -> None:
+    Without a wired adapter, DELEGATE composes a DelegationPackage nothing can
+    receive (three adapters exist, none configured) — so it falls back to the
+    complexity-appropriate strategy, mirroring the ANALYSIS matrix shape.
+    """
+
+    def test_delegation_without_target_simple_falls_back_to_single(self) -> None:
         result = assess_decomposition(
             _intent(TaskType.DELEGATION, Complexity.SIMPLE), _governance()
         )
-        assert result.strategy == DecompositionStrategy.DELEGATE
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "delegation_no_target_fallback_single"
 
-    def test_delegation_complex(self) -> None:
+    def test_delegation_without_target_moderate_falls_back_to_hybrid(self) -> None:
+        result = assess_decomposition(
+            _intent(TaskType.DELEGATION, Complexity.MODERATE), _governance()
+        )
+        assert result.strategy == DecompositionStrategy.HYBRID
+        assert result.reason == "delegation_no_target_fallback_hybrid"
+
+    def test_delegation_without_target_complex_falls_back_to_decompose(self) -> None:
         result = assess_decomposition(
             _intent(TaskType.DELEGATION, Complexity.COMPLEX), _governance()
         )
+        assert result.strategy == DecompositionStrategy.DECOMPOSE
+        assert result.reason == "delegation_no_target_fallback_decompose"
+
+    def test_delegation_with_target_configured_simple_routes_delegate(self) -> None:
+        result = assess_decomposition(
+            _intent(TaskType.DELEGATION, Complexity.SIMPLE),
+            _governance(),
+            delegation_enabled=True,
+        )
         assert result.strategy == DecompositionStrategy.DELEGATE
         assert result.reason == "delegation_route_external"
+
+    def test_delegation_with_target_configured_complex_routes_delegate(self) -> None:
+        result = assess_decomposition(
+            _intent(TaskType.DELEGATION, Complexity.COMPLEX),
+            _governance(),
+            delegation_enabled=True,
+        )
+        assert result.strategy == DecompositionStrategy.DELEGATE
+        assert result.reason == "delegation_route_external"
+
+    def test_expansion_denied_overrides_delegation_enabled(self) -> None:
+        """Resource pressure still forces SINGLE even when delegation is enabled."""
+        result = assess_decomposition(
+            _intent(TaskType.DELEGATION, Complexity.COMPLEX),
+            _governance(expansion_permitted=False),
+            delegation_enabled=True,
+        )
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "expansion_denied"
 
 
 class TestSelfImproveAlwaysSingle:

@@ -44,7 +44,7 @@ _CODING_PATTERNS: re.Pattern[str] = re.compile(
     r"|(?:(?:debug|refactor|implement|fix|write|add)\s+(?:the\s+|this\s+|a\s+|an\s+|my\s+|new\s+)?"
     r"(?:code|function|class|module|test|endpoint|route|api|bug|CI|pipeline|failure))"
     r"|(?:traceback|stack\s*trace)"
-    r"|(?:(?:unit|integration)\s*test)"
+    r"|(?:\b(?:unit|integration)\s*tests?\b)"
     r"|(?:pull\s*request|PR\s+review|code\s+review)"
     r"|(?:use\s+(?:claude\s+code|codex|copilot|cursor)\s+to\s+)",
 )
@@ -60,6 +60,20 @@ _CODING_KEYWORDS: tuple[str, ...] = (
     "add a new endpoint",
     "use claude code",
     "refactor",
+)
+
+# Word-boundary wrapped version of _CODING_KEYWORDS (FRE-1376). A bare substring
+# check matched "implement the" inside "implement these"/"implement their" --
+# the exact bug that misrouted a research query to DELEGATION. "test"-ending
+# keywords get "s?" folded inside the boundary (not a trailing lookahead) so
+# "unit test"/"unit tests" both match while "unit testing"/"unit tester" don't.
+_CODING_KEYWORD_PATTERN: re.Pattern[str] = re.compile(
+    r"(?i)(?:"
+    + "|".join(
+        rf"\b{re.escape(kw)}s?\b" if kw.endswith("test") else rf"\b{re.escape(kw)}\b"
+        for kw in _CODING_KEYWORDS
+    )
+    + r")"
 )
 
 _ANALYSIS_PATTERNS: re.Pattern[str] = re.compile(
@@ -269,9 +283,7 @@ def classify_intent(user_message: str) -> IntentResult:
         )
 
     # 3. Coding -> DELEGATION
-    if _CODING_PATTERNS.search(user_message) or any(
-        kw in user_message.lower() for kw in _CODING_KEYWORDS
-    ):
+    if _CODING_PATTERNS.search(user_message) or _CODING_KEYWORD_PATTERN.search(user_message):
         signals.append("coding_pattern")
         task_type = TaskType.DELEGATION
         confidence = 0.85

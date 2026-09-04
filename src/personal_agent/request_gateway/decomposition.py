@@ -26,6 +26,7 @@ logger = structlog.get_logger(__name__)
 def assess_decomposition(
     intent: IntentResult,
     governance: GovernanceContext,
+    delegation_enabled: bool = False,
 ) -> DecompositionResult:
     """Assess how to handle this request: single, hybrid, decompose, or delegate.
 
@@ -38,6 +39,11 @@ def assess_decomposition(
     Args:
         intent: Classified intent from Stage 4.
         governance: Governance context from Stage 3.
+        delegation_enabled: Whether a delegation adapter is actually wired
+            (``settings.delegation_enabled``). When False, TaskType.DELEGATION
+            falls back to a complexity-based strategy instead of DELEGATE —
+            DELEGATE would otherwise compose a DelegationPackage nothing can
+            receive (FRE-1376).
 
     Returns:
         DecompositionResult with strategy and human-readable reason.
@@ -60,6 +66,7 @@ def assess_decomposition(
     strategy, reason = _apply_matrix(
         intent.task_type,
         intent.complexity,
+        delegation_enabled,
     )
 
     logger.info(
@@ -79,12 +86,14 @@ def assess_decomposition(
 def _apply_matrix(
     task_type: TaskType,
     complexity: Complexity,
+    delegation_enabled: bool,
 ) -> tuple[DecompositionStrategy, str]:
     """Apply the decomposition decision matrix.
 
     Args:
         task_type: Classified task type.
         complexity: Estimated complexity.
+        delegation_enabled: Whether a delegation adapter is wired (FRE-1376).
 
     Returns:
         Tuple of (strategy, reason).
@@ -100,7 +109,24 @@ def _apply_matrix(
             return DecompositionStrategy.SINGLE, "self_improve_always_single"
 
         case TaskType.DELEGATION:
-            return DecompositionStrategy.DELEGATE, "delegation_route_external"
+            if delegation_enabled:
+                return DecompositionStrategy.DELEGATE, "delegation_route_external"
+            match complexity:
+                case Complexity.SIMPLE:
+                    return (
+                        DecompositionStrategy.SINGLE,
+                        "delegation_no_target_fallback_single",
+                    )
+                case Complexity.MODERATE:
+                    return (
+                        DecompositionStrategy.HYBRID,
+                        "delegation_no_target_fallback_hybrid",
+                    )
+                case _:
+                    return (
+                        DecompositionStrategy.DECOMPOSE,
+                        "delegation_no_target_fallback_decompose",
+                    )
 
         case TaskType.TOOL_USE:
             return DecompositionStrategy.SINGLE, "tool_use_single"

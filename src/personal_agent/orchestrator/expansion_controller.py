@@ -281,7 +281,13 @@ class ExpansionController:
 
             raw_response = await asyncio.wait_for(
                 llm_client.respond(
-                    role=ModelRole.SUB_AGENT,
+                    # FRE-1390: decomposition is a reasoning judgement about work
+                    # that has not happened yet, and nothing downstream re-opens
+                    # a bad plan. SUB_AGENT binds to the instruct sibling with
+                    # thinking hard-disabled (config/model_roles.yaml); PRIMARY
+                    # is the thinking-capable deployment the plan's own output
+                    # will be judged against.
+                    role=ModelRole.PRIMARY,
                     messages=planner_messages,
                     max_tokens=1024,
                     response_format={"type": "json_object"},

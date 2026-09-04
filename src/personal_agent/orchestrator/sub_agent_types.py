@@ -29,7 +29,15 @@ class SubAgentSpec:
             (messages, retrieved docs, tool results, etc.).
         output_format: Expected output shape — e.g. "text", "json",
             "bullet_list", "code". Used by synthesiser to interpret results.
-        max_tokens: Token ceiling for this sub-agent's response.
+        max_tokens: Token ceiling for this sub-agent's response. ``None`` (the
+            default) defers to the deployment's own catalog-declared ceiling
+            (FRE-1379) — a caller passing an explicit value is a deliberate
+            override of that declaration, not a competitor to it. Before
+            FRE-1379 this defaulted to a hardcoded 4096 that the dispatch call
+            site (``expansion_controller.py``) always supplied, silently
+            shadowing the catalog's own (smaller, deliberately sized) value on
+            every call — the same "knob that reads load-bearing and is not"
+            shape as ``timeout_seconds`` below.
         timeout_seconds: Generation timeout for this sub-agent call, passed to the LLM
             client as ``timeout_s`` — measured from concurrency-slot acquisition, not
             from spawn (FRE-1374).
@@ -47,7 +55,7 @@ class SubAgentSpec:
     task: str
     context: list[dict[str, Any]]
     output_format: str = "text"
-    max_tokens: int = 4096
+    max_tokens: int | None = None
     timeout_seconds: float = 120.0
     hard_deadline_seconds: float | None = None
     tools: list[str] = field(default_factory=list)
@@ -76,7 +84,8 @@ class SubAgentResult:
             Should be ≤ 500 tokens to keep synthesis context manageable.
         full_output: Complete sub-agent response, stored to ES for observability.
         tools_used: Names of tools actually invoked during this call.
-        token_count: Total tokens consumed (prompt + completion).
+        token_count: Total tokens consumed (prompt + completion). Word-count
+            approximation, not a real tokenizer count. 0 on any failure path.
         duration_ms: Wall-clock execution time in milliseconds.
         success: True if the call completed without error.
         error: Error message if success=False, None otherwise.
@@ -84,6 +93,22 @@ class SubAgentResult:
             (paid/cloud calls only; 0.0 for free local calls or when a
             timeout/exception loses the partial figure). Rolled into the live
             turn meter ``ctx.turn_cost_usd`` by the executor (FRE-501).
+        tokens_generated: Word-count estimate of the completion actually
+            generated — same approximation convention as ``token_count``, but
+            populated on every terminal path including a killed one (FRE-1379),
+            so a fan-out's survivors and its casualties are comparable on the
+            same field for the first time. 0 when nothing was generated
+            (failure before any streamed content, or a non-streaming/cloud call
+            with no progress sink).
+        elapsed_generation_ms: Time from the first streamed chunk received to
+            when this result was built — the *generation* budget's own clock,
+            distinct from ``duration_ms`` (wall time since spawn, which also
+            includes any concurrency-slot wait and connect/prompt-processing
+            time before the first token). ``None`` when no streaming progress
+            was recorded (cloud placement, or failure before any chunk
+            arrived). May include a few milliseconds of post-cancellation
+            cleanup on a killed sub-agent — negligible against the 60-85s
+            budgets this exists to characterise.
     """
 
     task_id: UUID
@@ -96,3 +121,5 @@ class SubAgentResult:
     success: bool
     error: str | None = None
     cost_usd: float = 0.0
+    tokens_generated: int = 0
+    elapsed_generation_ms: float | None = None

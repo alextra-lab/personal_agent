@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -10,6 +11,7 @@ from uuid import UUID
 import pytest
 import structlog.testing
 
+from personal_agent.llm_client.types import GenerationProgress
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 
@@ -216,6 +218,115 @@ class TestRunSubAgent:
         assert len(complete) == 1
         assert complete[0]["session_id"] == "sess-1"
         assert isinstance(complete[0]["digest_chars"], int)
+
+
+class TestPartialProgressOnKill:
+    """FRE-1379 AC-1 — a killed sub-agent reports what it managed.
+
+    A stub client that streams slowly (advancing a caller-supplied
+    ``progress_sink`` between awaits, exactly like the real streaming client
+    would) and never returns before the hard deadline. Before this ticket the
+    result carried an empty ``full_output``/``summary`` and no token or
+    elapsed-generation figures — the "digest_chars=0, full_output_chars=0"
+    black hole the ticket exists to close.
+    """
+
+    @staticmethod
+    async def _slow_streaming_respond(*args: object, **kwargs: object) -> str:
+        progress: GenerationProgress | None = kwargs.get("progress_sink")  # type: ignore[assignment]
+        if progress is not None:
+            progress.generation_started_monotonic = time.monotonic()
+        for word in ("partial", "words", "so", "far"):
+            if progress is not None:
+                progress.content += word + " "
+            await asyncio.sleep(0.05)
+        return "too late"
+
+    @pytest.mark.asyncio
+    async def test_outer_hard_deadline_reports_partial_content_and_tokens(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.respond = self._slow_streaming_respond
+
+        result = await run_sub_agent(
+            spec=_spec(timeout=0.05, hard_deadline=0.15),
+            llm_client=mock_client,
+            trace_id="test-trace",
+        )
+
+        assert result.success is False
+        assert "Timeout" in (result.error or "")
+        # The stub had appended at least one word by 0.15s (each step is 0.05s).
+        assert result.full_output.strip() != ""
+        assert result.summary == result.full_output
+        assert result.tokens_generated == len(result.full_output.split())
+        assert result.tokens_generated > 0
+        assert result.elapsed_generation_ms is not None
+        assert result.elapsed_generation_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_capture_written_on_kill_carries_partial_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import personal_agent.orchestrator.sub_agent as sa
+
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+
+        mock_client = AsyncMock()
+        mock_client.respond = self._slow_streaming_respond
+
+        result = await run_sub_agent(
+            spec=_spec(timeout=0.05, hard_deadline=0.15),
+            llm_client=mock_client,
+            trace_id="t",
+        )
+
+        assert len(captured) == 1
+        cap = captured[0]
+        assert cap.success is False
+        assert cap.full_output == result.full_output
+        assert cap.full_output_chars > 0
+        assert cap.tokens_generated == result.tokens_generated
+        assert cap.elapsed_generation_ms == result.elapsed_generation_ms
+
+
+class TestGenerationMetricsOnSuccess:
+    """FRE-1379 — tokens_generated/elapsed_generation_ms exist uniformly.
+
+    Populated on success too (not just on a killed sub-agent) so a fan-out's
+    survivors and its casualties are comparable on the same fields.
+    """
+
+    @pytest.mark.asyncio
+    async def test_populated_when_client_uses_progress_sink(self) -> None:
+        async def streaming_respond(*args: object, **kwargs: object) -> str:
+            progress: GenerationProgress | None = kwargs.get("progress_sink")  # type: ignore[assignment]
+            if progress is not None:
+                progress.generation_started_monotonic = time.monotonic()
+                progress.content = "the final answer"
+            return "the final answer"
+
+        mock_client = AsyncMock()
+        mock_client.respond = streaming_respond
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.success is True
+        assert result.tokens_generated == len("the final answer".split())
+        assert result.elapsed_generation_ms is not None
+        assert result.elapsed_generation_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_absent_when_client_ignores_progress_sink(self) -> None:
+        """Back-compat: a mock/cloud client that never touches progress_sink."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="plain reply here")
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.success is True
+        assert result.tokens_generated == result.token_count
+        assert result.elapsed_generation_ms is None
 
 
 class TestInputContextSummary:

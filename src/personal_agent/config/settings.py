@@ -522,7 +522,17 @@ class AppConfig(BaseSettings):
     sub_agent_max_tokens: int = Field(
         default=4096,
         ge=500,
-        description="Maximum tokens per sub-agent response",
+        description=(
+            "Maximum tokens per sub-agent response — consumed only by "
+            "orchestrator/expansion.py's autonomous-mode decomposition path "
+            "(parse_decomposition_plan), which is inactive unless "
+            "orchestration_mode='autonomous' (default 'enforced'). The "
+            "enforced-mode HYBRID dispatch (expansion_controller.py) does NOT "
+            "read this — it defers to each deployment's own catalog-declared "
+            "max_tokens instead (FRE-1379): this setting used to be passed "
+            "there too and silently overrode the catalog's smaller, "
+            "deliberately-sized value on every call."
+        ),
     )
     # --- Expansion controller (ADR-0036) ---
     orchestration_mode: str = Field(
@@ -536,7 +546,21 @@ class AppConfig(BaseSettings):
     )
     worker_timeout_seconds: float = Field(
         default=60.0,
-        description="Max time per sub-agent worker in expansion dispatch",
+        description=(
+            "Generation budget per sub-agent worker, from concurrency-slot "
+            "acquisition (FRE-1374). Enforced two ways on the local streaming "
+            "path (FRE-1379): as the httpx read timeout (gap between bytes) "
+            "and, separately, as a wall-clock bound on the whole call — before "
+            "FRE-1379 only the read timeout applied, which a steadily "
+            "streaming response never trips, so this budget was inert against "
+            "the real client and only the larger worker_hard_deadline_seconds "
+            "ever fired. Measured live throughput at the fan-out's own "
+            "concurrency (FRE-1379 AC-4, master benchmark 2026-09-04): "
+            "~14.4 tok/s at concurrency 3, so this budget permits roughly "
+            "850 generated tokens at 60s — well under a sub-agent's typical "
+            "catalog-declared max_tokens ceiling for a long task. Not tuned "
+            "in FRE-1379 per the ticket's own scope."
+        ),
     )
     worker_hard_deadline_seconds: float = Field(
         default=85.0,

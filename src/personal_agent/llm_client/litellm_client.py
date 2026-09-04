@@ -26,6 +26,7 @@ dispatch through here and stay out of scope, per the ADR.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import time
 from typing import TYPE_CHECKING, Any
@@ -65,7 +66,7 @@ from personal_agent.telemetry.spans import model_call_span
 
 if TYPE_CHECKING:
     from personal_agent.llm_client.models import ModelDefinition
-    from personal_agent.llm_client.types import LLMResponse, ModelRole, ToolCall
+    from personal_agent.llm_client.types import GenerationProgress, LLMResponse, ModelRole, ToolCall
     from personal_agent.security import DomainGuard
     from personal_agent.telemetry.trace import TraceContext
 
@@ -310,6 +311,56 @@ def _map_local_dispatch_error(exc: Exception) -> Exception:
         return LLMServerError(f"Local model server error {status}: {exc}")
 
     return LLMClientError(f"Local model call failed: {exc}")
+
+
+def _update_generation_progress(progress: GenerationProgress, chunk: dict[str, Any]) -> None:
+    """Fold one streamed chunk's visible content into a caller's progress sink (FRE-1379).
+
+    Called on every chunk of a local streaming response, success or eventually
+    cancelled — this is what lets a caller recover partial output after an
+    outer timeout discards this function's own return value. Only the first
+    choice's ``delta.content`` is tracked (assistant-visible text), not
+    reasoning/tool-call deltas — sufficient for "was anything generated" and
+    for the word-count throughput estimate this ticket needs.
+
+    Args:
+        progress: The caller-owned sink to update in place.
+        chunk: One streamed chunk, already ``model_dump()``-ed.
+    """
+    if progress.generation_started_monotonic is None:
+        progress.generation_started_monotonic = time.monotonic()
+    choices = chunk.get("choices") or []
+    if not choices:
+        return
+    delta = choices[0].get("delta") or {}
+    content_piece = delta.get("content")
+    if isinstance(content_piece, str):
+        progress.content += content_piece
+
+
+async def _safe_aclose_stream(stream: Any) -> None:
+    """Best-effort close of a litellm local streaming response (FRE-1379).
+
+    A cancelled or wall-clock-timed-out call otherwise leaves the stream's
+    underlying connection unreturned to the cached guarded ``httpx.AsyncClient``
+    (process-lifetime pool, ``_guarded_httpx_clients``), risking a wedged
+    connection for the next call through the same pool. Verified against
+    litellm 1.98.0's ``CustomStreamWrapper``, which exposes ``aclose()`` and
+    shields the provider stream's own cleanup from cancellation. Swallows any
+    close failure so it can never mask the real timeout/cancellation
+    propagating through the caller's own ``finally``.
+
+    Args:
+        stream: The value ``litellm.acompletion(stream=True, ...)`` returned,
+            or ``None`` if that call itself never completed.
+    """
+    if stream is None:
+        return
+    aclose = getattr(stream, "aclose", None)
+    if aclose is None:
+        return
+    with contextlib.suppress(Exception):
+        await aclose()
 
 
 def _mark_message_cache_control(message: dict[str, Any]) -> bool:
@@ -686,6 +737,7 @@ class LiteLLMClient:
         priority: InferencePriority = InferencePriority.USER_FACING,
         priority_timeout: float | None = None,
         prompt_identity: PromptIdentity | None = None,
+        progress_sink: GenerationProgress | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """Make an LLM call via LiteLLM to any cloud provider.
@@ -717,6 +769,12 @@ class LiteLLMClient:
             prompt_identity: Identity of the prompt sent on this call (ADR-0078
                 D1/D4). When None, a fallback is derived so the emitted
                 ``model_call_completed`` always carries prompt identity fields.
+            progress_sink: Mutable sink a caller uses to recover partial
+                streamed content if it cancels this call from the outside
+                (FRE-1379) — see :class:`~personal_agent.llm_client.types.GenerationProgress`.
+                Populated only on the local-placement streaming path; ignored
+                for cloud placement, which makes one blocking call with no
+                partial state to report.
             **kwargs: Additional provider-specific parameters passed to litellm.
 
         Returns:
@@ -756,6 +814,7 @@ class LiteLLMClient:
                 prompt_identity=prompt_identity,
                 priority=priority,
                 priority_timeout=priority_timeout,
+                progress_sink=progress_sink,
             )
 
         effective_max_tokens = max_tokens or self.max_tokens
@@ -1301,6 +1360,7 @@ class LiteLLMClient:
         prompt_identity: PromptIdentity | None,
         priority: InferencePriority,
         priority_timeout: float | None,
+        progress_sink: GenerationProgress | None,
     ) -> LLMResponse:
         """Dispatch a local-placement call through litellm (ADR-0141 T2).
 
@@ -1331,8 +1391,12 @@ class LiteLLMClient:
             max_tokens: Output cap override. ``None`` falls back to the
                 deployment's declared cap, which may itself be absent.
             temperature: Override; ``None`` uses the deployment's declared value.
-            timeout_s: Read-timeout override; ``None`` uses the deployment's
-                ``default_timeout``.
+            timeout_s: Generation-budget override; ``None`` uses the deployment's
+                ``default_timeout``. Enforced two ways (FRE-1379): as the httpx
+                read timeout (gap between bytes) and, separately, as a wall-clock
+                bound on the whole post-slot-acquisition call — a steadily
+                streaming response trips the read timeout only on a stall, so the
+                wall-clock bound is what actually terminates it at this value.
             max_retries: Retry budget; ``None`` uses ``settings.llm_max_retries``.
             prompt_identity: Identity of the prompt (ADR-0078 D1/D4).
             priority: Inference priority tier for the re-homed concurrency
@@ -1340,12 +1404,17 @@ class LiteLLMClient:
                 multiple requests compete for the GPU deployment's slot.
             priority_timeout: Max seconds to wait for a concurrency slot.
                 ``None`` waits forever.
+            progress_sink: Mutable sink updated per streamed chunk so a caller
+                that cancels this call from the outside can still recover
+                partial content, token count, and generation-only elapsed time
+                (FRE-1379). ``None`` skips the bookkeeping.
 
         Returns:
             Normalized LLMResponse.
 
         Raises:
-            LLMTimeout: On a read timeout.
+            LLMTimeout: On a read timeout, or when the wall-clock generation
+                budget (``timeout_s``) is exceeded.
             LLMRateLimit: On HTTP 429.
             LLMServerError: On HTTP 5xx.
             LLMConnectionError: When the local server cannot be reached.
@@ -1364,7 +1433,7 @@ class LiteLLMClient:
         )
         from personal_agent.llm_client.history_sanitiser import sanitise_messages  # noqa: PLC0415
         from personal_agent.llm_client.models import ToolCallingStrategy  # noqa: PLC0415
-        from personal_agent.llm_client.types import LLMClientError  # noqa: PLC0415
+        from personal_agent.llm_client.types import LLMClientError, LLMTimeout  # noqa: PLC0415
 
         assert self.model_def is not None  # guaranteed by __init__ for local placement
         model_def = self.model_def
@@ -1517,8 +1586,29 @@ class LiteLLMClient:
                 )
 
                 try:
-                    stream = await litellm.acompletion(**litellm_kwargs)
-                    chunks = [chunk.model_dump() async for chunk in stream]
+                    stream: Any = None
+                    # FRE-1379: bounds BOTH stream creation (acompletion()) and
+                    # consumption in one wall-clock budget, from slot acquisition —
+                    # the httpx read timeout below only catches a stalled connection
+                    # (gap between bytes), which a steadily streaming response never
+                    # trips. asyncio.timeout() (not wait_for) so its own expiry is
+                    # distinguishable from an externally triggered cancel: the former
+                    # surfaces as TimeoutError on exit, the latter still propagates as
+                    # CancelledError.
+                    async with asyncio.timeout(effective_timeout_s):
+                        stream = await litellm.acompletion(**litellm_kwargs)
+                        try:
+                            chunks: list[dict[str, Any]] = []
+                            async for chunk in stream:
+                                dumped = chunk.model_dump()
+                                if progress_sink is not None:
+                                    _update_generation_progress(progress_sink, dumped)
+                                chunks.append(dumped)
+                        finally:
+                            # Best-effort: an unclosed stream on a cancelled/timed-out
+                            # call would otherwise leak into the cached guarded
+                            # httpx.AsyncClient (process-lifetime connection pool).
+                            await _safe_aclose_stream(stream)
                     response_data = _aggregate_streaming_chunks(chunks)
                     # Reasoning extraction (both shapes) and the unconditional text
                     # tool-call fallback both live in this adapter, which is why the
@@ -1527,6 +1617,24 @@ class LiteLLMClient:
                     llm_response = adapt_chat_completions_response(response_data)
                 except asyncio.CancelledError:
                     raise
+                except TimeoutError as exc:
+                    mapped: Exception = LLMTimeout(
+                        f"Local generation exceeded its {effective_timeout_s:.1f}s "
+                        "wall-clock budget"
+                    )
+                    log.error(
+                        MODEL_CALL_ERROR,
+                        role=role.value,
+                        model=self._telemetry_model,
+                        endpoint=api_base,
+                        provider=self.provider,
+                        error_type=type(mapped).__name__,
+                        error=str(mapped),
+                        trace_id=trace_id,
+                        session_id=trace_ctx.session_id,
+                        span_id=span_id,
+                    )
+                    raise mapped from exc
                 except Exception as exc:
                     mapped = _map_local_dispatch_error(exc)
                     log.error(

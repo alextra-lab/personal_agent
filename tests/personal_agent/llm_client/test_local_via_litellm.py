@@ -15,8 +15,10 @@ the old raw-httpx path is the finding that forced ADR-0141.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Iterator
+import time
+from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +37,7 @@ from personal_agent.llm_client.models import (
     ToolCallingStrategy,
 )
 from personal_agent.llm_client.types import (
+    GenerationProgress,
     LLMConnectionError,
     LLMRateLimit,
     LLMResponse,
@@ -205,6 +208,23 @@ def _plain_stream(content: str = "the answer") -> bytes:
     )
 
 
+async def _slow_sse(*chunks: dict[str, Any], delay: float) -> AsyncIterator[bytes]:
+    """An SSE stream yielded one chunk at a time with a real await between them (FRE-1379).
+
+    ``_sse()``/``_plain_stream()`` build a static bytes blob — httpx reads that
+    all at once, with no real elapsed time between chunks, so a wall-clock
+    timeout could never genuinely interrupt one mid-stream in a test. httpx
+    reads an async-iterable ``content=`` lazily on iteration (verified: it does
+    not eagerly materialise it at ``httpx.Response(...)`` construction time),
+    so the ``asyncio.sleep`` between chunks here is real elapsed wall-clock
+    time inside the test, not merely simulated.
+    """
+    for chunk in chunks:
+        yield b"data: " + json.dumps(chunk).encode() + b"\n\n"
+        await asyncio.sleep(delay)
+    yield b"data: [DONE]\n\n"
+
+
 # ── Dispatch harness ──────────────────────────────────────────────────────
 
 
@@ -244,7 +264,7 @@ class Captured:
 async def _dispatch(
     *,
     model_key: str = BUDGET_KEY,
-    stream: bytes | None = None,
+    stream: bytes | AsyncIterator[bytes] | None = None,
     transport_error: Exception | None = None,
     status: int | None = None,
     session_id: str | None = "11111111-1111-4111-8111-111111111111",
@@ -256,7 +276,9 @@ async def _dispatch(
 
     Args:
         model_key: Catalog key to acquire (drives which fixture shape is used).
-        stream: SSE bytes the transport returns. Defaults to a plain reply.
+        stream: SSE bytes the transport returns, or an async byte iterator
+            (e.g. :func:`_slow_sse`) for a test that needs real elapsed time
+            between chunks. Defaults to a plain reply.
         transport_error: Raised by the transport instead of returning a response.
         status: HTTP status to return instead of a 200 SSE stream.
         session_id: Session id on the trace context (``None`` omits it).
@@ -810,3 +832,74 @@ class TestFactoryCollapse:
         ):
             client = get_llm_client_for_key(BUDGET_KEY, budget_role="main_inference")
         assert isinstance(client, LiteLLMClient)
+
+
+# ── FRE-1379 AC-2/AC-3 — the generation budget bounds a real streaming call ─
+
+
+class TestGenerationWallClockBudget:
+    """The inner budget (``timeout_s``) now bounds wall-clock duration too.
+
+    Before this, ``timeout_s`` only became the httpx read timeout (gap between
+    bytes), which a steadily streaming response never trips — only the much
+    larger outer hard deadline in ``sub_agent.py`` ever fired (the live
+    incident this ticket exists for). Dispatched through the real
+    ``LiteLLMClient``/``litellm.acompletion`` path; only the transport is
+    faked, via the same harness every other test in this file uses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_wall_clock_budget_terminates_a_steadily_streaming_call(self) -> None:
+        # Warm-up: the harness's first-ever local dispatch in a process pays a
+        # ~0.7s one-time cost (litellm's cost-map lookup for an unmapped
+        # model, tracer setup) unrelated to the mechanism under test — without
+        # paying it here first, it would compete with the wall-clock budget
+        # below and this test would assert on that overhead instead of on the
+        # timeout. Measured: first dispatch ~0.79s, every one after ~0.05s.
+        await _dispatch()
+
+        slow_stream = _slow_sse(
+            _chunk(delta={"role": "assistant", "content": "one "}),
+            _chunk(delta={"content": "two "}),
+            _chunk(delta={"content": "three "}),
+            _chunk(delta={"content": "four "}),
+            delay=0.08,
+        )
+        progress = GenerationProgress()
+
+        start = time.monotonic()
+        with pytest.raises(LLMTimeout) as exc_info:
+            await _dispatch(
+                stream=slow_stream, timeout_s=0.15, progress_sink=progress, max_retries=0
+            )
+        elapsed = time.monotonic() - start
+
+        assert "0.1" in str(exc_info.value)  # names the wall-clock budget, not a read timeout
+        # The proof that the budget actually intervened is in the CONTENT, not
+        # wall-clock proximity (fragile in a shared/CI environment): cut off
+        # before every chunk arrived (four chunks * 0.08s = 0.32s unbounded).
+        assert progress.content != ""
+        assert "four" not in progress.content
+        assert progress.generation_started_monotonic is not None
+        # Loose sanity bound only — did not run to completion.
+        assert elapsed < 0.32
+
+    @pytest.mark.asyncio
+    async def test_stream_close_leaves_the_cached_pool_healthy_for_the_next_call(self) -> None:
+        """Codex plan-review flagged this: an unclosed cancelled stream could
+        leak into the cached guarded httpx.AsyncClient (process-lifetime pool)
+        and wedge the next request through it.
+        """
+        slow_stream = _slow_sse(
+            _chunk(delta={"role": "assistant", "content": "one "}),
+            _chunk(delta={"content": "two "}),
+            delay=0.05,
+        )
+        with pytest.raises(LLMTimeout):
+            await _dispatch(stream=slow_stream, timeout_s=0.03)
+
+        # A second, ordinary call through the same cached guarded client still
+        # succeeds — the cancelled stream's cleanup did not wedge the pool.
+        second = await _dispatch()
+        assert second.response is not None
+        assert second.response["content"] == "the answer"

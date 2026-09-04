@@ -7,6 +7,7 @@ This module defines the core types used by the LLM clients:
 - Error classes: Hierarchy of LLM client errors
 """
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -148,6 +149,27 @@ class LLMStreamEvent(TypedDict):
 
     type: str  # "token" | "tool_call" | "trace" | "done" | "error"
     data: Any
+
+
+@dataclass
+class GenerationProgress:
+    """Mutable sink for partial-streaming state during a ``respond()`` call (FRE-1379).
+
+    A caller that wraps ``respond()`` in its own outer timeout loses the return
+    value when that timeout cancels the call — everything local to the client's
+    frame, including any streamed content received so far, goes with it. Passing
+    a ``GenerationProgress`` into ``respond(progress_sink=...)`` lets the caller
+    recover what was generated up to the point of cancellation: the streaming
+    client writes into it as a side effect of consuming the stream, not via the
+    (lost) return value, so it survives the cancellation.
+
+    One instance per call — not shared across concurrent ``respond()`` calls.
+    Only the streaming client writes; the caller only reads, and only after the
+    call returns or its cancellation has unwound.
+    """
+
+    content: str = ""
+    generation_started_monotonic: float | None = None
 
 
 # Error hierarchy

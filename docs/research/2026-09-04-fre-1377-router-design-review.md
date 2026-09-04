@@ -11,6 +11,14 @@ Confirmed by container file hash, not by board state — see [Method](#method-ap
 > it (P1's "keep the expansion denial", P3's "repair expansion before widening the door") are
 > withdrawn with it. See **F18** for the deploy chain and **the retraction notice on F10**. The other
 > sixteen findings do not touch sub-agent execution and are unaffected; F18 states which is which.
+>
+> **Extended, 2026-09-04 15:30, at the owner's request.** Three findings added from the discussion
+> that followed: **F19** (the owner already routes manually, by prefixing a keyword — which withdraws
+> this study's objection to the routing selector, P5), and **F20**/**F21** on what the sub-agent
+> mechanism actually is (no tools, ever; a 2,000-character prefix slice for a "digest"). The last two
+> are retrospective and cannot test the owner's forward hypothesis about a *properly configured*
+> sub-agent — they establish what the parts are today, so the gap between them and that hypothesis
+> is legible. That distinction was the owner's, not this study's.
 
 ---
 
@@ -924,6 +932,175 @@ making a killed worker legible and FRE-1380's AC-4 digest-vs-full-output figures
 isolation actually bought. That is the measurement that would answer the commission's question about
 answer quality. This study cannot answer it and should not have implied that it had.
 
+### F19 — the owner is already the router, and does it by prefixing a keyword
+
+**Verdict: POSITIVE.** Added 2026-09-04 in discussion with the owner, whose own account is the
+hypothesis this tests: *"Right now I am at the mercy of the keyword router which basically only ever
+chooses single conversation unless I expressly tell it to do research, build an artifact, chain
+multiple requests in 1 query etc."*
+
+**The query** — every capture whose `user_message` contains "General Product Safety", ordered by
+timestamp, with the replayed rung and the observed behaviour alongside. The same question, asked
+eight times over six days, in two phrasings.
+
+**Its actual output:**
+
+```
+the SAME question, both phrasings (n=8):
+  2026-08-29T21:38  rung=conversational secs=   902 tools=3  "What's changed in the EU's revised General Product Safety "
+  2026-08-30T07:06  rung=conversational secs=   462 tools=3  "What's changed in the EU's revised General Product Safety "
+  2026-08-30T07:09  rung=conversational secs=   110 tools=3  "What's changed in the EU's revised General Product Safety "
+  2026-08-30T07:11  rung=conversational secs=   150 tools=4  "What's changed in the EU's revised General Product Safety "
+  2026-09-03T22:15  rung=analysis       secs=   903 tools=2  "Research What's changed in the EU's revised General Produc"
+  2026-09-04T04:03  rung=analysis       secs=   859 tools=2  "Research What's changed in the EU's revised General Produc"
+  2026-09-04T05:15  rung=analysis       secs=   821 tools=3  "Research What's changed in the EU's revised General Produc"
+  2026-09-04T07:16  rung=analysis       secs=   904 tools=2  "Research What's changed in the EU's revised General Produc"
+```
+
+One word, prepended, moves the classification deterministically. And the pattern generalises across
+the recent real window:
+
+```
+recent real turns n=417
+  begin with a router-steering imperative: 21  (5.0%)
+  of those, the ladder classified: {'analysis': 14, 'tool_use': 5, 'planning': 1, 'conversational': 1}
+  and NOT conversational: 20/21
+  turns WITHOUT the imperative n=396: conversational 338 (85.4%)
+```
+
+(Steering imperative = the message opens with `research|analyz|analys|investigat|evaluat|compar|
+build|create|generate|make|plan|outline|decompos|break down`.)
+
+**↯ argues with this study's own earlier position.** P5 originally objected to the owner's routing
+selector on the grounds that overrides would be too few and too uniform to be a useful dataset. That
+objection is withdrawn, and this finding is why. **A manual routing control already exists — it is
+just undocumented, unlabelled, and spelled as an incantation at the start of a sentence.** The
+proposed selector does not add a control the user lacks; it replaces a hidden one with a visible one,
+and it captures a choice the owner is already making that nothing currently records.
+
+It also sharpens F2's headline. The 78% fallback rate is not simply "the router misses things" — it
+is the rate at which a user who has *not* learned the incantation gets the low-capability lane.
+
+---
+
+### F20 — sub-agents have never been granted a tool, and neither planner can request one
+
+**Verdict: NEGATIVE.** Arms carried below.
+
+The owner's hypothesis, stated 2026-09-04: *"I hypothesize that using a properly configured subagent
+would improve context management. Apparently this is already demonstrated."* The mechanism assumed —
+and the one FRE-1380's ticket describes — is that *"a sub-agent runs the tool calls, absorbs the raw
+results, and returns a digest."*
+
+**The query** — every document in `agent-captains-captures-subagents-*` (scroll API, all 104 docs,
+2026-06-07 → 2026-09-04), tallying `tools_granted` and `tools_used`.
+
+**Its actual output:**
+
+```
+sub-agent captures: 104  window 2026-06-07 .. 2026-09-04
+  success 88  failed 16
+  tools_granted: [((), 104)]
+  model_role:   [('sub_agent', 104)]
+  mode:         [('parallel_inference', 104)]
+```
+
+Every sub-agent that has ever run was granted an empty tool list, and used none. **The primary makes
+every tool call and absorbs every raw result**; the sub-agent is a pure inference call over context
+the primary hands it (`context=messages[-4:]`, `expansion_controller.py:412`).
+
+**Arm 1 — target-identifier provenance (1a, raw instance).** A capture quoted verbatim from the
+store the finding queries:
+
+```
+index: agent-captains-captures-subagents-2026-09
+  trace_id: 94fda7de4fce7905273532e78ccda063
+  task_id: 3ff9e010-e092-43f0-9ddc-a25dd965f026
+  model_role: sub_agent      max_tokens: 4096
+  tools_granted: []          tools_used: []
+  full_output_chars: 0       digest_chars: 0    truncation_ratio: 0.0
+  success: False             error: Timeout after 85.0s
+```
+
+The identifier under test is present and populated in the document — as an empty list, not as an
+absent field. This is the load-bearing distinction: a wrong field name yields *absence*, and absence
+is what would have been returned had the name been wrong. `[]`, returned 104 times out of 104, is an
+exhaustive enumeration of a live field rather than a query that found nothing.
+
+**Arm 2 — path liveness, same query, only the field varied.** On the identical scroll over the
+identical index and window: `model_role` returns `sub_agent` ×104, `mode` returns
+`parallel_inference` ×104, and `full_output_chars` is non-zero on 87 documents. The index is
+reachable, the documents are populated, and the query shape is sound.
+
+**Arm 3 — scope match.** Store: production Elasticsearch, index pattern
+`agent-captains-captures-subagents-*`. Window: all 104 documents, the full lifetime of the index,
+2026-06-07 → 2026-09-04. The verdict is stated at exactly that scope: *no sub-agent recorded in this
+index has ever been granted or used a tool.* It claims nothing about sub-agent runs that predate the
+index or were never captured.
+
+**Why it is this way, and it is smaller than "the feature is missing."** The dispatch wiring is
+complete: `expansion_controller.py:424` passes `tools=task.tools` into `SubAgentSpec`, and
+`sub_agent.py:144` records it. The gap is one level up, in the planner's own output schema —
+`_PLANNER_SYSTEM_PROMPT` (`expansion_controller.py:56`) specifies
+`{"strategy": ..., "tasks": [{"name","goal","constraints","expected_output"}]}` and **the string
+`tools` appears in it zero times**. The LLM planner is structurally incapable of requesting a tool;
+the deterministic fallback planner never mentions tools either. `PlanTask`'s own docstring
+(`expansion_types.py:47`) says it outright: *"tools: Tool names available to the sub-agent (currently
+always empty)."*
+
+**What this means for the hypothesis.** The context-isolation benefit the owner is reaching for —
+keeping raw tool transcripts out of the primary — is not what today's sub-agent delivers, because
+the sub-agent never goes near a tool. The primary's within-turn growth (FRE-1138) is untouched by
+expansion for exactly this reason. But the fix is a planner-schema field and a governance decision
+about which tools a sub-agent may hold, not a new subsystem.
+
+---
+
+### F21 — the "digest" is a raw prefix slice at 2,000 characters, not a summary
+
+**Verdict: POSITIVE.**
+
+FRE-1380's AC-4 asks for the digest-versus-full-output figure and notes that *"nobody has ever
+measured"* it. Here it is, over every successful sub-agent on record.
+
+**The query** — the same 104-document scroll, restricted to the 87 successful sub-agents with
+non-zero output.
+
+**Its actual output:**
+
+```
+CONTEXT ISOLATION (n=87 successful sub-agents)
+  full_output_chars  total   330618  p50   2564  p90  11425  max  12987
+  digest_chars       total   130990  p50   2000  p90   2000  max   2000
+  characters KEPT OUT of the primary's context: 199,628  (60.4% of sub-agent output)
+  truncation_ratio   p50 0.780  mean 0.690
+
+  by month:
+    2026-06  n= 28  full  163621  digest  41488  kept out  122133  ratio 0.254
+    2026-07  n= 33  full   93497  digest  46444  kept out   47053  ratio 0.497
+    2026-08  n= 17  full   49667  digest  27798  kept out   21869  ratio 0.560
+    2026-09  n=  9  full   23833  digest  15260  kept out    8573  ratio 0.640
+```
+
+`digest_chars` has p50 = p90 = max = **2000**. That is not a distribution; it is a wall.
+
+**The mechanism, and it is one line.** `sub_agent.py:39` declares `_SUMMARY_CAP_CHARS = 2000`, and
+both the success path (`:323`) and the killed-worker path (`:202`) construct the digest as
+`response_content[:_SUMMARY_CAP_CHARS]` — **a raw prefix slice.** No second model call, no
+summarisation, not even a sentence boundary. The 199,628 characters "kept out of the primary" were
+**cut mid-word at 2,000 characters and discarded.**
+
+So context isolation is real in the narrow sense that `_build_synthesis_context` composes only from
+`r.summary` and never from `r.full_output` — the primary genuinely does not see the full transcript.
+But what it does see is the *first 2,000 characters*, and what the sub-agent concluded in its last
+paragraph is gone. Against a `max_tokens` of 4096, a sub-agent is routinely asked to generate roughly
+twice what can survive the clip.
+
+**↯ relevant to the owner's plan.** "Manage context and thinking" via better-configured sub-agents
+runs into this before it runs into model choice: raising a sub-agent's output quality raises the
+amount thrown away, because the clip is positional. Together with F20 these are the two things
+standing between the current mechanism and the one the hypothesis assumes — and both are small.
+
 ---
 
 ## Proposals
@@ -1008,30 +1185,30 @@ Building the display alone delivers the thing every instance in this family has 
 reader can tell it took the wrong path"* — and it is strictly cheaper than the selector. It should
 ship first and be allowed to stand on its own.
 
-### P5 — Build the routing selector as a defect-detector, not as a ground-truth generator
+### P5 — Build the routing selector. The objection this study raised against it is withdrawn
 
-**Rests on:** F1, plus the corpus volume. **No ticket — this is a disposition on the owner's own proposal, and the owner's call to make.**
+**Rests on:** F19. **No ticket — this is the owner's own proposal and their call to scope.**
 
-This is a scoping disposition on the owner's proposal, which this study otherwise supports.
+**This proposal previously argued the opposite** and it was wrong. It objected that user overrides
+would be too few (417 real turns in two months) and too uniform (95% `SINGLE`) to be a useful dataset,
+and recommended scoping the control down to an escape hatch.
 
-The proposal's strongest stated argument is that a user override "manufactures ground truth, which we
-have none of". That argument is the weakest part of it. The corpus holds **417 real non-eval turns in
-two months**. Even at an implausibly high 20% override rate that is ~40 labels a month, and 95.2% of
-those turns resolve to the same strategy — so the labels would be overwhelmingly `SINGLE → SINGLE`
-non-events. As a training set for refining a classifier this will not reach useful size on any
-horizon the project cares about. The brief's own bias caveat (people override what they notice) is
-correct and compounds it.
+F19 dissolves that. **A manual routing control already exists.** The owner steers the router by
+prefixing a keyword — the same question runs as `conversational` four times and as `analysis` four
+times, the only difference being the word "Research" at the front — and across the recent window,
+20 of 21 turns opening with a steering imperative escape the `conversational` lane while 85.4% of
+those without it do not.
 
-What the control *does* deliver is worth having on its own terms: a per-turn escape hatch for the
-user, a visible record of each disagreement, and — as the brief correctly notes — a clean way to make
-the delegation capability gate a fact about the interface rather than a hidden branch. Scope it to
-that, and it is a good change. Scope it to "this is how we get labels", and it will disappoint
-quietly for months.
+So the selector does not introduce a control the user lacks. It replaces an undocumented incantation
+with a visible one, and records a choice the owner is already making that nothing currently captures.
+The "future dataset" is a log of that choice — and its value does not depend on reaching a size that
+would support fitting a classifier, which is the reading this study incorrectly attacked.
 
-**Also from F9:** `model` and `skill_routing_mode` are *already* per-request routing controls on the
-deployed `/chat` endpoint. A routing selector is the third instance of an existing pattern, not a new
-category of control — which is a stronger version of the argument the brief makes from the model
-picker.
+Two findings still bear on the design, as support rather than objection. **F9**: nothing on the
+deployed client surface carries the resolved route, so "Auto, resolved to research" has no field to
+live in yet — P4 remains a prerequisite. **F1**: with 95% of turns resolving to `SINGLE` today, a
+selector shipped before the fallback is fixed would mostly offer a choice between one real option and
+several that rarely apply.
 
 ### P6 — Reject the model-in-the-hot-path design; and reject the length-gated arbiter this study itself proposed
 
@@ -1118,6 +1295,34 @@ flip two messages in 2,125 — one of them the wrong way. A short docstring note
 recording that the order was measured on 2026-09-04 and found not to be load-bearing closes the
 "undocumented" half without touching the mechanism, and stops the next reader re-opening it.
 
+### P10 — Close the two gaps between today's sub-agent and the one the context-isolation argument assumes
+
+**Rests on:** F20, F21. **Filed as FRE-1387.** Added at the owner's request, 2026-09-04.
+
+This is the one proposal here that is not about the router. It earns its place because it conditions
+P1 and P3: the value of routing a turn *to* expansion depends on what expansion does when it gets
+there, and the owner's stated plan — *"use larger models, manage context and thinking"* — meets these
+two before it meets model choice.
+
+**Gap 1: the planner cannot ask for a tool.** The dispatch wiring is complete
+(`expansion_controller.py:424` → `SubAgentSpec.tools` → `sub_agent.py:144`), but
+`_PLANNER_SYSTEM_PROMPT`'s JSON schema has no `tools` field, so `PlanTask.tools` is always empty and
+104 of 104 recorded sub-agents ran with none. The consequence: the primary still makes every tool call
+and absorbs every raw result, which is exactly the growth the mechanism is supposed to contain.
+
+**Gap 2: the digest is a prefix slice.** `summary = response_content[:2000]` — no summarisation, no
+sentence boundary. Measured: `digest_chars` p50 = p90 = max = 2000 across 87 successful sub-agents,
+60.4% of output discarded mid-word. Against `max_tokens` 4096 a sub-agent is routinely asked to
+generate about twice what can survive.
+
+**Sequencing note.** Gap 1 without gap 2 makes things worse, not better: a tool-using sub-agent
+produces *more* output, and more output against a positional clip means more of the conclusion thrown
+away. If only one ships, ship the digest fix.
+
+**Deliberately not specified here.** Which tools a sub-agent may hold is a governance question
+(`config/governance/tools.yaml`), not a plumbing one, and it is the owner's call — a sub-agent with
+`bash` is a different risk object from one with `web_search`.
+
 ---
 
 ## Filed tickets
@@ -1133,6 +1338,7 @@ absent here would itself be a violation.
 | **FRE-1384** | P4 | The routing decision reaches no client surface — show what the router resolved to, before offering a control over it |
 | **FRE-1385** | P8 | Decide DELEGATION's status — the route has run four times, delegated zero times, and now sits behind a permanently-false flag |
 | **FRE-1386** | P6 | Stage 4 classifies from the user message alone — test whether giving it the previous turns moves agreement, at zero inference cost |
+| **FRE-1387** | P10 | Sub-agents are granted no tools and their "digest" is a 2,000-character prefix slice — close both gaps before tuning models |
 
 **No ticket was filed for P1, P3, P5 or P9**, deliberately.
 
@@ -1248,8 +1454,9 @@ to catch, and it happened on the first query of this study.
 ### M7 — what was measured against, and what was not
 
 **Measured against:** production Postgres (`route_traces`, 727 rows / 649 turn-level, 2026-06-07 →
-2026-09-04); production Elasticsearch (`agent-captains-captures-*`, `agent-captains-captures-subagents-*`,
-`agent-logs-*` — 431,002 docs); the running `cloud-sim-seshat-gateway` container (config, file
+2026-09-04); production Elasticsearch (`agent-captains-captures-*` — 2,229 docs;
+`agent-captains-captures-subagents-*` — 104 docs, the store behind F20/F21; `agent-logs-*` — 431,002
+docs); the running `cloud-sim-seshat-gateway` container (config, file
 hashes, live OpenAPI document); the SLM server's model list across the Caddy egress; and three live
 model deployments via FRE-1337's probe.
 
@@ -1293,5 +1500,8 @@ scopes this branch to one file. Each is a few dozen lines over the artifacts nam
 - `position.py` — the position-weighting counterfactual.
 - `corpus_probe.py` — FRE-1337's `classify_with_model()` over a seeded (1377) 60-turn sample, timed.
 - `probe_report.py` — confusion matrices, latency percentiles, behavioural adjudication.
+- (F19–F21, added later) an inline scroll over `agent-captains-captures-subagents-*` tallying
+  `tools_granted` / `tools_used` / `full_output_chars` / `digest_chars`, and a regex census of
+  router-steering imperatives over `recs.json`.
 
 Every SQL statement and ES query is quoted verbatim in the finding that uses it.

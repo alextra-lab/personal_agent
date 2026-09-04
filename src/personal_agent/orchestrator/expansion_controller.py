@@ -391,8 +391,11 @@ class ExpansionController:
                 to per-sub-agent audit records for EVAL provenance (FRE-523).
 
         Returns:
-            List of SubAgentResult — one per task, in dispatch order, whether it
-            succeeded or failed during execution.
+            List of SubAgentResult, in dispatch order — one entry per task that
+            returned a result (success or a reported per-task failure). A task
+            whose dispatch raised a raw exception is dropped from this list; see
+            ``result.dispatch_intervals`` for the complete per-task record,
+            including dropped tasks.
         """
         settings = get_settings()
         start_ms = time.monotonic() * 1000

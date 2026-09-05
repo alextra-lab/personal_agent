@@ -370,6 +370,40 @@ class TestBuildToolDefs:
         assert [d["function"]["name"] for d in defs] == ["run_python"]
 
 
+class TestEffectiveHardDeadline:
+    """A tool-using loop's deadline must scale with its own iteration cap —
+
+    the single-call sizing (worker_hard_deadline_seconds: "60s generation +
+    25s queue-wait absorption") predates this loop and would otherwise kill a
+    genuine multi-round tool-using sub-agent well before it ever reaches its
+    own cap.
+    """
+
+    def test_no_tools_keeps_single_call_sizing(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
+
+        assert _effective_hard_deadline(_spec(timeout=60.0)) == 60.0
+
+    def test_tools_scale_by_iteration_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.config import settings
+        from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+
+        assert _effective_hard_deadline(_spec_with_tools(["run_python"], timeout=60.0)) == 300.0
+
+    def test_explicit_hard_deadline_still_wins_if_larger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+        from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        spec = _spec_with_tools(["run_python"], timeout=60.0, hard_deadline=1000.0)
+
+        assert _effective_hard_deadline(spec) == 1000.0
+
+
 class TestSubAgentToolLoop:
     """FRE-1389 — the sub-agent's own bounded tool loop."""
 

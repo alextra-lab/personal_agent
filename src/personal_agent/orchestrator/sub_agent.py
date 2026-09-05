@@ -161,6 +161,33 @@ def _normalize_tool_calls(
     ]
 
 
+def _effective_hard_deadline(spec: SubAgentSpec) -> float:
+    """Compute the tool loop's overall ``wait_for`` deadline (FRE-1389).
+
+    ``spec.hard_deadline_seconds``/``spec.timeout_seconds`` alone are sized for
+    ONE inference call — ``worker_hard_deadline_seconds``'s own description
+    states it as "60s generation + 25s queue-wait absorption", from before
+    this loop existed. A genuinely multi-round tool-using sub-agent would
+    otherwise be killed by that single-call budget well before ever reaching
+    its own ``sub_agent_max_tool_iterations`` cap (AC-2's "explicit, distinct
+    terminal state" would then rarely fire in practice). When the spec grants
+    no tools, no multi-round loop can occur, so the single-call sizing is
+    left exactly as it was pre-loop.
+
+    Args:
+        spec: The sub-agent specification.
+
+    Returns:
+        The deadline in seconds to pass to the outer ``asyncio.wait_for``.
+    """
+    single_call_deadline = max(
+        spec.hard_deadline_seconds or spec.timeout_seconds, spec.timeout_seconds
+    )
+    if not spec.tools:
+        return single_call_deadline
+    return max(single_call_deadline, spec.timeout_seconds * settings.sub_agent_max_tool_iterations)
+
+
 def _extract_stated_tool_gap(content: str) -> tuple[str, str | None]:
     """Strip a trailing ``TOOL_GAP: <name>`` sentinel line from a response.
 
@@ -635,10 +662,11 @@ async def run_sub_agent(
         # context, so it starts counting at slot acquisition, not at spawn. The outer
         # wait_for below bounds the ENTIRE tool loop (every round's inference and tool
         # execution, FRE-1389) — a separate, larger, explicitly-named safety net (not
-        # the primary timeout mechanism) for a client that ignores timeout_s.
-        hard_deadline = max(
-            spec.hard_deadline_seconds or spec.timeout_seconds, spec.timeout_seconds
-        )
+        # the primary timeout mechanism) for a client that ignores timeout_s. Scaled by
+        # the iteration cap for a tool-granted spec (_effective_hard_deadline) — the
+        # single-call sizing alone would kill a genuine multi-round loop before it ever
+        # reached its own cap.
+        hard_deadline = _effective_hard_deadline(spec)
         response_content, stated_tool_gap = await asyncio.wait_for(
             _run_tool_loop(
                 state, spec, llm_client, tool_defs, tool_layer, loaded_skills, trace_id, session_id

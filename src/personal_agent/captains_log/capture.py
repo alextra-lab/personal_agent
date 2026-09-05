@@ -150,6 +150,10 @@ class SubAgentCapture(BaseModel):
 
     # Task surface — granted vs actually exercised
     tools_granted: list[str] = Field(default_factory=list)
+    # FRE-1388: tools this task requested that the sub-agent tool grant set
+    # refused — makes a seeded-negative refusal visible in the audit record
+    # itself, not only a log line.
+    tools_denied: list[str] = Field(default_factory=list)
     tools_used: list[str] = Field(default_factory=list)
 
     # Output — full text, the injected digest, and the truncation ratio

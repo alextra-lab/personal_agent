@@ -149,6 +149,7 @@ def _emit_sub_agent_capture(
         model_role=spec.model_role.value,
         max_tokens=spec.max_tokens,
         tools_granted=list(spec.tools),
+        tools_denied=list(result.denied_tools),
         tools_used=result.tools_used,
         full_output=result.full_output,
         full_output_chars=full_output_chars,
@@ -249,6 +250,7 @@ def _killed_result(
         success=False,
         error=error,
         cost_usd=cost_usd,
+        denied_tools=spec.denied_tools,
     )
 
 
@@ -369,6 +371,7 @@ async def run_sub_agent(
             duration_ms=duration_ms,
             success=True,
             cost_usd=call_cost_usd,
+            denied_tools=spec.denied_tools,
         )
 
     except asyncio.TimeoutError:

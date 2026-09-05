@@ -45,11 +45,17 @@ class SubAgentSpec:
             budget bounding the whole call (including any slot wait) in case the
             underlying client ignores ``timeout_seconds``. ``None`` falls back to
             ``timeout_seconds`` (today's behavior, for callers that don't set it).
-        tools: Tool names the sub-agent is allowed to invoke (empty = none).
+        tools: Tool names the sub-agent is allowed to invoke (empty = none). Already
+            filtered against the sub-agent tool principal's grant set (FRE-1388) —
+            a caller populates this with the *granted* subset, never the raw request.
         background: Background context injected into the sub-agent's system
             prompt (parent task summary, constraints, etc.).
         model_role: Model role to use for inference. Defaults to SUB_AGENT (ADR-0033).
         mode: Execution mode (ADR-0036); currently always PARALLEL_INFERENCE.
+        denied_tools: Tool names this task requested that the sub-agent tool grant
+            set refused (FRE-1388) — informational, carried through to
+            :class:`SubAgentResult` so the refusal is legible to the primary
+            (AC-4) rather than only a log line.
     """
 
     task: str
@@ -66,6 +72,7 @@ class SubAgentSpec:
     skill_index_block: str = ""
     # Skills already loaded by parent — sub-agent inherits to avoid re-emitting bodies
     loaded_skills: frozenset[str] = field(default_factory=frozenset)
+    denied_tools: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,10 @@ class SubAgentResult:
             arrived). May include a few milliseconds of post-cancellation
             cleanup on a killed sub-agent — negligible against the 60-85s
             budgets this exists to characterise.
+        denied_tools: Tool names this task requested that were refused by the
+            sub-agent tool grant set (FRE-1388), copied from
+            ``SubAgentSpec.denied_tools`` on every terminal path (success,
+            timeout, cancellation, exception). Empty when nothing was denied.
     """
 
     task_id: UUID
@@ -126,3 +137,4 @@ class SubAgentResult:
     cost_usd: float = 0.0
     tokens_generated: int = 0
     elapsed_generation_ms: float | None = None
+    denied_tools: tuple[str, ...] = field(default_factory=tuple)

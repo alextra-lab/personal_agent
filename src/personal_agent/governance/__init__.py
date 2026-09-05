@@ -52,6 +52,11 @@ from personal_agent.governance.models import (
     TransitionCondition,
     TransitionRule,
 )
+from personal_agent.governance.sub_agent_tools import (
+    SUB_AGENT_DENIED_MODES,
+    SubAgentToolGrant,
+    evaluate_sub_agent_tool_grant,
+)
 
 __all__ = [
     # Main exports
@@ -76,4 +81,8 @@ __all__ = [
     "RateLimits",
     "HumanApproval",
     "HumanApprovalRule",
+    # Sub-agent tool principal (FRE-1388)
+    "SUB_AGENT_DENIED_MODES",
+    "SubAgentToolGrant",
+    "evaluate_sub_agent_tool_grant",
 ]

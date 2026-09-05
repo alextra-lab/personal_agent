@@ -1,6 +1,19 @@
 # Tool permissions and risk classifications
 # See ADR-0005 for detailed semantics
 
+# FRE-1388: sub-agent tool principal. A sub-agent is a distinct governance
+# principal from the primary, not a subset of it — this list is the ONLY
+# source of a sub-agent's tool grants and does not consult a tool's own
+# `allowed_in_modes` below. Owner decision, 2026-09-04: grant set is
+# run_python only. Not web_search, fetch_url, search_memory, or
+# recall_personal_history — those want their own decision later.
+# Sub-agents additionally hold no tools at all in ALERT or DEGRADED mode
+# regardless of this list (enforced in code — personal_agent.governance.
+# sub_agent_tools.SUB_AGENT_DENIED_MODES — because a sub-agent runs
+# unattended and those modes have no approver to grant `requires_approval_in_modes`).
+sub_agent_tools:
+  - "run_python"
+
 # Per-mode allowed categories. Used by the mode-policy gate in evaluate_governance().
 # Not intersected with TaskType — the TaskType→tool-filter wire was severed in
 # ADR-0063 §D1 (FRE-260). mode is the only tool-availability signal.

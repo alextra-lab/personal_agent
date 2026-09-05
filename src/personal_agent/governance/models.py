@@ -272,6 +272,14 @@ class GovernanceConfig(BaseModel):
         default_factory=dict, description="Tool category definitions"
     )
     tools: dict[str, ToolPolicy] = Field(..., description="Tool policies")
+    sub_agent_tools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Tool names granted to the sub-agent principal (FRE-1388). Independent of "
+            "`tools[name].allowed_in_modes`, which governs the primary only — a sub-agent "
+            "is a distinct principal, not a subset of the primary's policy."
+        ),
+    )
     mode_constraints: dict[str, ModeModelConstraints] = Field(
         ..., description="Model constraints per mode"
     )

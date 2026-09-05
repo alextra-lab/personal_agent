@@ -216,6 +216,24 @@ def test_governance_config_model_constraints() -> None:
     assert len(lockdown_constraints.allowed_roles) == 0
 
 
+def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
+    """FRE-1388 AC-1 — the sub-agent principal's grant set loads from the real config
+
+    and is independent of the primary's per-tool ``allowed_in_modes``.
+    """
+    project_root = Path(__file__).parent.parent.parent
+    config_dir = project_root / "config" / "governance"
+
+    config = load_governance_config(config_dir)
+
+    # Owner decision, 2026-09-04: the grant set is run_python only.
+    assert config.sub_agent_tools == ["run_python"]
+    # web_search is granted to the primary in NORMAL but is not in the
+    # sub-agent grant set — proves the two lists are genuinely independent.
+    assert "web_search" in config.tools
+    assert "web_search" not in config.sub_agent_tools
+
+
 def test_governance_config_safety_policies() -> None:
     """Test that safety policies are correctly structured."""
     project_root = Path(__file__).parent.parent.parent

@@ -176,7 +176,6 @@ class TestHybridExecutionPath:
                 specs=specs,
                 llm_client=MagicMock(),
                 trace_id="test-trace",
-                max_concurrent=2,
             )
             assert len(results) == 1
             assert results[0].success is True

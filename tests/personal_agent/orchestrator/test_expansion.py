@@ -3,12 +3,30 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import structlog.testing
 
 from personal_agent.orchestrator.expansion import execute_hybrid, parse_decomposition_plan
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
+
+
+def _make_result(spec_task: str) -> SubAgentResult:
+    from uuid import uuid4
+
+    return SubAgentResult(
+        task_id=uuid4(),
+        spec_task=spec_task,
+        summary="done",
+        full_output="done",
+        tools_used=[],
+        token_count=10,
+        duration_ms=1,
+        success=True,
+    )
 
 
 class TestParseDecompositionPlan:
@@ -70,7 +88,6 @@ class TestExecuteHybrid:
         results = await execute_hybrid(
             specs=specs,
             trace_id="test",
-            max_concurrent=2,
         )
         assert len(results) == 2
         assert all(isinstance(r, SubAgentResult) for r in results)
@@ -108,7 +125,6 @@ class TestExecuteHybrid:
         results = await execute_hybrid(
             specs=specs,
             trace_id="test",
-            max_concurrent=2,
         )
         assert len(results) == 2
         failures = [r for r in results if not r.success]
@@ -118,36 +134,132 @@ class TestExecuteHybrid:
 
     @pytest.mark.asyncio
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_respects_max_concurrent(self, mock_get_llm_client: AsyncMock) -> None:
-        concurrent_count = 0
-        max_observed = 0
+    async def test_tasks_run_sequentially_not_concurrently(
+        self, mock_get_llm_client: AsyncMock
+    ) -> None:
+        """AC-1 — proven by real recorded timestamps, not by reading the loop."""
+        mock_get_llm_client.return_value = AsyncMock()
 
-        async def tracking_respond(*args: object, **kwargs: object) -> str:
-            nonlocal concurrent_count, max_observed
-            concurrent_count += 1
-            max_observed = max(max_observed, concurrent_count)
-            await asyncio.sleep(0.05)
-            concurrent_count -= 1
-            return "done"
+        observed: list[tuple[float, float]] = []
 
-        mock_client = AsyncMock()
-        mock_client.respond = tracking_respond
-        mock_get_llm_client.return_value = mock_client
+        async def _timed_run(**kwargs: Any) -> SubAgentResult:
+            observed_start = time.monotonic()
+            await asyncio.sleep(0.02)
+            observed.append((observed_start, time.monotonic()))
+            return _make_result(kwargs["spec"].task)
 
-        specs = [
-            SubAgentSpec(
-                task=f"Task {i}",
-                context=[],
-                output_format="text",
-                max_tokens=512,
-                timeout_seconds=10.0,
-            )
-            for i in range(4)
-        ]
+        specs = [SubAgentSpec(task=f"Task {i}", context=[], timeout_seconds=10.0) for i in range(3)]
 
-        await execute_hybrid(
-            specs=specs,
-            trace_id="test",
-            max_concurrent=1,
-        )
-        assert max_observed <= 1
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion.run_sub_agent",
+                side_effect=_timed_run,
+            ),
+            structlog.testing.capture_logs() as logs,
+        ):
+            results = await execute_hybrid(specs=specs, trace_id="test-sequential")
+
+        assert len(results) == 3
+        for earlier, later in zip(observed, observed[1:], strict=False):
+            assert later[0] >= earlier[1]
+
+        interval_events = [log for log in logs if log["event"] == "hybrid_expansion_intervals"]
+        assert len(interval_events) == 1
+        intervals = interval_events[0]["intervals"]
+        assert len(intervals) == 3
+        for earlier, later in zip(intervals, intervals[1:], strict=False):
+            assert later["start_s"] >= earlier["end_s"]
+
+    @pytest.mark.asyncio
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_max_observed_concurrency_is_one(self, mock_get_llm_client: AsyncMock) -> None:
+        """AC-1, belt-and-braces — never more than one sub-agent in flight."""
+        mock_get_llm_client.return_value = AsyncMock()
+
+        state = {"concurrent": 0}
+        observed: list[int] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            state["concurrent"] += 1
+            observed.append(state["concurrent"])
+            await asyncio.sleep(0.01)
+            state["concurrent"] -= 1
+            return _make_result(kwargs["spec"].task)
+
+        specs = [SubAgentSpec(task=f"Task {i}", context=[], timeout_seconds=10.0) for i in range(3)]
+
+        with patch("personal_agent.orchestrator.expansion.run_sub_agent", side_effect=_run):
+            await execute_hybrid(specs=specs, trace_id="test-max-concurrency")
+
+        assert max(observed) == 1
+
+    @pytest.mark.asyncio
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_intervals_logged_for_every_spec(self, mock_get_llm_client: AsyncMock) -> None:
+        """AC-4 — real-timestamp interval evidence, matching FRE-1380's instrumentation."""
+        mock_get_llm_client.return_value = AsyncMock()
+
+        specs = [SubAgentSpec(task=f"Task {i}", context=[], timeout_seconds=10.0) for i in range(3)]
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion.run_sub_agent",
+                side_effect=lambda **kwargs: _make_result(kwargs["spec"].task),
+            ),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await execute_hybrid(specs=specs, trace_id="test-intervals")
+
+        interval_events = [log for log in logs if log["event"] == "hybrid_expansion_intervals"]
+        assert len(interval_events) == 1
+        intervals = interval_events[0]["intervals"]
+        assert [iv["task"] for iv in intervals] == [s.task for s in specs]
+
+    @pytest.mark.asyncio
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_raw_exception_mid_batch_does_not_abort_loop(
+        self, mock_get_llm_client: AsyncMock
+    ) -> None:
+        """AC-2 (strengthened) — a raw exception (not a caught-internal failure
+        converted to a SubAgentResult) from one task does not stop later tasks,
+        and every task's interval is still recorded (the `finally` guarantee).
+        """
+        mock_get_llm_client.return_value = AsyncMock()
+
+        specs = [SubAgentSpec(task=f"Task {i}", context=[], timeout_seconds=10.0) for i in range(3)]
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            if kwargs["spec"].task == "Task 1":
+                raise RuntimeError("boom before run_sub_agent's own try block")
+            return _make_result(kwargs["spec"].task)
+
+        with (
+            patch("personal_agent.orchestrator.expansion.run_sub_agent", side_effect=_run),
+            structlog.testing.capture_logs() as logs,
+        ):
+            results = await execute_hybrid(specs=specs, trace_id="test-raw-exception")
+
+        assert len(results) == 2  # the raising task is filtered, not a SubAgentResult
+        assert {r.spec_task for r in results} == {"Task 0", "Task 2"}
+
+        interval_events = [log for log in logs if log["event"] == "hybrid_expansion_intervals"]
+        intervals = interval_events[0]["intervals"]
+        assert len(intervals) == 3
+        assert [iv["task"] for iv in intervals] == [s.task for s in specs]
+
+    @pytest.mark.asyncio
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_many_tasks_all_succeed(self, mock_get_llm_client: AsyncMock) -> None:
+        """Regression — removing the semaphore introduces no other implicit ceiling."""
+        mock_get_llm_client.return_value = AsyncMock()
+
+        specs = [SubAgentSpec(task=f"Task {i}", context=[], timeout_seconds=10.0) for i in range(8)]
+
+        with patch(
+            "personal_agent.orchestrator.expansion.run_sub_agent",
+            side_effect=lambda **kwargs: _make_result(kwargs["spec"].task),
+        ):
+            results = await execute_hybrid(specs=specs, trace_id="test-many-tasks")
+
+        assert len(results) == 8
+        assert all(r.success for r in results)

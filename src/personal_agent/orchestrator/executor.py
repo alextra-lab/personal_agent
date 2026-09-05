@@ -6171,7 +6171,6 @@ async def step_llm_call(
                 results = await execute_hybrid(
                     specs=specs,
                     trace_id=ctx.trace_id,
-                    max_concurrent=max_sub,
                     session_id=ctx.session_id,
                     eval_mode=ctx.eval_mode,
                 )

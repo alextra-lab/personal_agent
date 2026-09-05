@@ -2,8 +2,9 @@
 
 When the gateway flags HYBRID or DECOMPOSE, the primary agent creates
 a decomposition plan, this module parses it into SubAgentSpecs, runs
-them concurrently (within the expansion_budget), and returns results
-for the primary agent to synthesize.
+them sequentially (FRE-1381, matching FRE-1380's serialization of the
+enforced-mode dispatch path), and returns results for the primary
+agent to synthesize.
 
 Gateway decides IF to expand. Agent decides HOW. This module does the HOW.
 
@@ -16,13 +17,14 @@ See: docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 4.4
 
 from __future__ import annotations
 
-import asyncio
 import re
+import time
 from collections.abc import Sequence
 
 import structlog
 
 from personal_agent.config import settings
+from personal_agent.orchestrator.expansion_types import SubAgentInterval
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 
@@ -79,57 +81,81 @@ def parse_decomposition_plan(
 async def execute_hybrid(
     specs: Sequence[SubAgentSpec],
     trace_id: str,
-    max_concurrent: int | None = None,
     session_id: str | None = None,
     eval_mode: bool = False,
 ) -> list[SubAgentResult]:
-    """Execute sub-agents concurrently within the expansion budget.
+    """Execute sub-agents sequentially, one task at a time.
 
     Creates a dedicated sub_agent LLM client via factory (ADR-0033 client isolation).
     Sub-agents always use the sub_agent model config — they never inherit the primary
     agent's client or model.
 
-    Uses an asyncio.Semaphore to limit concurrent sub-agent calls.
-    All sub-agents run; partial failures do not abort the batch.
+    FRE-1381 (matching FRE-1380's serialization of the enforced-mode dispatch path):
+    dispatch is sequential, not concurrent. Sub-agents exist for context isolation —
+    a digest reaches synthesis, never the full transcript — and that property holds
+    identically whether tasks run side by side or one after another. All sub-agents
+    still run; partial failures do not abort the batch.
 
     Args:
         specs: Sub-agent specifications from decomposition planning.
         trace_id: Parent request trace identifier.
-        max_concurrent: Max concurrent sub-agents (None = config default).
         session_id: Originating session id for cost attribution (ADR-0074).
         eval_mode: True when the parent turn originated from an eval run; threaded
             to per-sub-agent audit records for EVAL provenance (FRE-523).
 
     Returns:
-        List of SubAgentResults in the same order as specs.
+        List of SubAgentResults, in dispatch order, whether they succeeded or
+        failed during execution.
     """
     from personal_agent.llm_client.factory import get_llm_client
 
     # Sub-agent client isolation: always use "sub_agent" role config (ADR-0033)
     sub_agent_client = get_llm_client(role_name="sub_agent")
 
-    max_conc = max_concurrent or settings.expansion_budget_max
-    semaphore = asyncio.Semaphore(max(1, max_conc))
-
     logger.info(
         "hybrid_expansion_start",
         sub_agent_count=len(specs),
-        max_concurrent=max_conc,
         trace_id=trace_id,
     )
 
-    async def _run_with_semaphore(spec: SubAgentSpec) -> SubAgentResult:
-        async with semaphore:
-            return await run_sub_agent(
+    dispatch_start = time.monotonic()
+    raw_results: list[SubAgentResult | Exception] = []
+    intervals: list[SubAgentInterval] = []
+
+    for spec in specs:
+        interval_start = time.monotonic()
+        try:
+            sub_result = await run_sub_agent(
                 spec=spec,
                 llm_client=sub_agent_client,
                 trace_id=trace_id,
                 session_id=session_id,
                 eval_mode=eval_mode,
             )
+        except Exception as exc:
+            raw_results.append(exc)
+        else:
+            raw_results.append(sub_result)
+        finally:
+            intervals.append(SubAgentInterval(spec.task[:80], interval_start, time.monotonic()))
 
-    tasks = [_run_with_semaphore(spec) for spec in specs]
-    results: list[SubAgentResult] = await asyncio.gather(*tasks, return_exceptions=False)
+    logger.info(
+        "hybrid_expansion_intervals",
+        trace_id=trace_id,
+        intervals=[
+            {
+                "task": iv.task_name,
+                "start_s": round(iv.start_monotonic - dispatch_start, 3),
+                "end_s": round(iv.end_monotonic - dispatch_start, 3),
+            }
+            for iv in intervals
+        ],
+    )
+
+    # Filter out exceptions — keep every SubAgentResult (success or per-task
+    # failure are both real, reportable outcomes; only a raw exception, e.g. from
+    # setup code that ran before run_sub_agent's own try block, is dropped here).
+    results: list[SubAgentResult] = [r for r in raw_results if isinstance(r, SubAgentResult)]
 
     successes = sum(1 for r in results if r.success)
     failures = len(results) - successes
@@ -142,4 +168,4 @@ async def execute_hybrid(
         trace_id=trace_id,
     )
 
-    return list(results)
+    return results

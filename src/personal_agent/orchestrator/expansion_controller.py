@@ -447,7 +447,13 @@ class ExpansionController:
                     # will be judged against.
                     role=ModelRole.PRIMARY,
                     messages=planner_messages,
-                    max_tokens=1024,
+                    # FRE-1413: no max_tokens override here. The old hardcoded
+                    # 1024 was sized for the retired thinking-disabled SUB_AGENT
+                    # call — on llama.cpp the completion budget includes
+                    # thinking (ADR-0141 D5), so it silently cut PRIMARY off
+                    # mid-reasoning. Omitting the kwarg defers to the resolved
+                    # client's own catalog ceiling, exactly like every other
+                    # `.respond()` call in the orchestrator's main turn loop.
                     response_format={"type": "json_object"},
                     trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
                 ),
@@ -477,9 +483,18 @@ class ExpansionController:
                 )
                 return plan
 
+            # FRE-1413 AC-3: a response cut off at the token ceiling
+            # (finish_reason == "length") must not surface identically to a
+            # genuinely malformed one — that ambiguity is what let the
+            # FRE-1390 cap-sizing defect run unnoticed. Checked only once
+            # validation has already failed: the prompt requires bare JSON
+            # with nothing after it, so a successful parse is accepted as
+            # complete regardless of finish_reason.
+            truncated = raw_response.get("finish_reason") == "length"
             logger.warning(
                 "planner_failed",
-                reason="schema_validation_failed",
+                reason="output_truncated" if truncated else "schema_validation_failed",
+                finish_reason=raw_response.get("finish_reason"),
                 trace_id=trace_id,
             )
 

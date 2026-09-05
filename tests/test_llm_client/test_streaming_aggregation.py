@@ -79,6 +79,9 @@ def test_aggregated_shape_round_trips_through_response_adapter() -> None:
     assert llm_response["content"] == "answer"
     assert llm_response["tool_calls"] == []
     assert llm_response["usage"]["total_tokens"] == 2
+    # FRE-1413: finish_reason must survive the round trip — it is how a caller
+    # tells a truncated local completion from a complete one.
+    assert llm_response["finish_reason"] == "stop"
 
 
 def test_single_tool_call_concatenates_argument_fragments() -> None:

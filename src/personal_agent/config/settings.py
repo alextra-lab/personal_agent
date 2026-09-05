@@ -547,8 +547,18 @@ class AppConfig(BaseSettings):
     )
     # --- Expansion controller (ADR-0036) ---
     planner_timeout_seconds: float = Field(
-        default=30.0,
-        description="Max time for LLM planner phase in expansion controller",
+        default=600.0,
+        description=(
+            "Max wall-clock time for the LLM planner phase in expansion controller. "
+            "30.0 (the prior default) was sized for the retired thinking-disabled "
+            "SUB_AGENT-bound planner call; FRE-1390 moved the call to PRIMARY "
+            "(thinking-capable), and this wrapper's asyncio.wait_for() enforces its "
+            "own deadline independently of the client's internal call timeout — so "
+            "the old value kept truncating a long think via TimeoutError even after "
+            "FRE-1413 removed the separate max_tokens cap. Matches "
+            "qwen3.6-35b-thinking's own catalog default_timeout (config/models.yaml), "
+            "sized there for '128K prefill + up to 32K thinking output'."
+        ),
     )
     worker_timeout_seconds: float = Field(
         default=60.0,

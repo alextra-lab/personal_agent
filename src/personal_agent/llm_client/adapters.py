@@ -423,6 +423,13 @@ def adapt_chat_completions_response(response_data: dict[str, Any]) -> LLMRespons
             reasoning_trace=reasoning_trace,
             usage=usage,
             response_id=response_id,
+            # FRE-1413: this is the local-call path (LM Studio / llama-server /
+            # vLLM via `_respond_local`) — it aggregates the same streamed
+            # `finish_reason` the cloud path already surfaces (FRE-996), but
+            # previously dropped it here, so every local call looked identical
+            # to "we did not look" and a truncated reply was indistinguishable
+            # from a complete one.
+            finish_reason=choice.get("finish_reason"),
             raw=response_data,
         )
     except (KeyError, TypeError, ValueError) as e:

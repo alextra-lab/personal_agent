@@ -1,6 +1,6 @@
 # ADR-0142: Capability Is Not a Property of Register — a Turn Earns Its Budget by Demonstrating Need, and the User Arbitrates
 
-**Status:** Proposed
+**Status:** Accepted — 2026-09-05 (owner)
 **Date:** 2026-09-05
 **Deciders:** Owner (architect); adr seat (Opus)
 **Tags:** routing, request-gateway, orchestrator, governance, cost-control, transport

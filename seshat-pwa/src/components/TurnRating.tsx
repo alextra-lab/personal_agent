@@ -18,7 +18,7 @@
  *     until the user re-rates.
  *   - Resting state reads as ok (solid green) — a persisted value, not a faint
  *     "unset" default. The persisted-on-send write is issued by the streaming
- *     hook on turn completion (useSSEStream DONE), NOT by this component, so
+ *     hook on turn completion (useAgentStream DONE), NOT by this component, so
  *     no POST is ever fired on mount / hydration / replay.
  *   - Touch targets are 44×44px (Apple HIG / WCAG 2.5.5) around a ~24px icon.
  *

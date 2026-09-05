@@ -1,5 +1,5 @@
 /**
- * FRE-236 — isReconnecting state and draft persistence in useSSEStream.
+ * FRE-236 — isReconnecting state and draft persistence in useAgentStream.
  *
  * Tests the new lifecycle behavior:
  * - isReconnecting is false initially.
@@ -56,7 +56,7 @@ vi.mock('@/lib/uuid', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { useSSEStream } from '@/hooks/useSSEStream';
+import { useAgentStream } from '@/hooks/useAgentStream';
 import { connectWebSocket } from '@/lib/agui-client';
 
 const mockConnect = connectWebSocket as Mock;
@@ -71,7 +71,7 @@ function pushEvent(event: object): void {
 }
 
 async function startTurn(
-  hook: ReturnType<typeof renderHook<ReturnType<typeof useSSEStream>, unknown>>,
+  hook: ReturnType<typeof renderHook<ReturnType<typeof useAgentStream>, unknown>>,
 ): Promise<void> {
   await act(async () => {
     await hook.result.current.sendMessage('hello', 'session-1', 'local');
@@ -99,14 +99,14 @@ beforeEach(() => {
 
 // ── isReconnecting tests ───────────────────────────────────────────────────
 
-describe('useSSEStream — isReconnecting', () => {
+describe('useAgentStream — isReconnecting', () => {
   it('is false initially', () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     expect(hook.result.current.isReconnecting).toBe(false);
   });
 
   it('is set true when onWsDisconnected fires while isStreaming', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     expect(hook.result.current.isStreaming).toBe(true);
 
@@ -117,7 +117,7 @@ describe('useSSEStream — isReconnecting', () => {
   });
 
   it('stays false when onWsDisconnected fires after streaming has ended (DONE received)', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     // Complete the turn first
@@ -132,7 +132,7 @@ describe('useSSEStream — isReconnecting', () => {
   });
 
   it('is cleared to false by onWsConnected', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     act(() => {
       capturedOpts?.onWsDisconnected?.();
@@ -146,7 +146,7 @@ describe('useSSEStream — isReconnecting', () => {
   });
 
   it('is cleared to false by DONE event', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     act(() => {
       capturedOpts?.onWsDisconnected?.();
@@ -158,7 +158,7 @@ describe('useSSEStream — isReconnecting', () => {
   });
 
   it('is cleared to false by sendMessage', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     act(() => {
       capturedOpts?.onWsDisconnected?.();
@@ -174,11 +174,11 @@ describe('useSSEStream — isReconnecting', () => {
 
 // ── Draft persistence tests ────────────────────────────────────────────────
 
-describe('useSSEStream — draft persistence on visibility hide', () => {
+describe('useAgentStream — draft persistence on visibility hide', () => {
   const DRAFT_KEY = (sid: string) => `seshat_bg_draft_${sid}`;
 
   it('writes draft to localStorage on visibilitychange→hidden while streaming', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     // Simulate some partial text arriving
@@ -198,7 +198,7 @@ describe('useSSEStream — draft persistence on visibility hide', () => {
   });
 
   it('does not write draft when not streaming', () => {
-    renderHook(() => useSSEStream());
+    renderHook(() => useAgentStream());
     // No startTurn — hook is idle
 
     setVisibilityState('hidden');
@@ -211,7 +211,7 @@ describe('useSSEStream — draft persistence on visibility hide', () => {
   });
 
   it('clears draft from localStorage on DONE event', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent({ type: 'TEXT_DELTA', data: { text: 'content' }, seq: 1 });
 
@@ -228,7 +228,7 @@ describe('useSSEStream — draft persistence on visibility hide', () => {
   });
 
   it('clears draft from localStorage on sendMessage', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent({ type: 'TEXT_DELTA', data: { text: 'content' }, seq: 1 });
 

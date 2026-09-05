@@ -1,5 +1,5 @@
 /**
- * Tests for useSSEStream hook event dispatch (FRE-400 WS2).
+ * Tests for useAgentStream hook event dispatch (FRE-400 WS2).
  *
  * Strategy: mock connectWebSocket to capture the onEvent callback, then
  * drive it directly with crafted AGUIEvent objects. This exercises all the
@@ -50,7 +50,7 @@ vi.mock('@/lib/uuid', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { useSSEStream } from '@/hooks/useSSEStream';
+import { useAgentStream } from '@/hooks/useAgentStream';
 import { connectWebSocket, getSessionMessages } from '@/lib/agui-client';
 import { submitTurnRating } from '@/lib/submitTurnRating';
 
@@ -65,7 +65,7 @@ function pushEvent(event: object): void {
   act(() => { capturedOnEvent!(event); });
 }
 
-async function startTurn(hook: ReturnType<typeof renderHook<ReturnType<typeof useSSEStream>, unknown>>) {
+async function startTurn(hook: ReturnType<typeof renderHook<ReturnType<typeof useAgentStream>, unknown>>) {
   await act(async () => {
     await hook.result.current.sendMessage('hello', 'session-1', 'local');
   });
@@ -84,9 +84,9 @@ beforeEach(() => {
   mockGetSessionMessages.mockResolvedValue([]);
 });
 
-describe('useSSEStream — TEXT_DELTA accumulation', () => {
+describe('useAgentStream — TEXT_DELTA accumulation', () => {
   it('accumulates TEXT_DELTA events into a single assistant message', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({ type: 'TEXT_DELTA', data: { text: 'Hello' }, seq: 1 });
@@ -98,7 +98,7 @@ describe('useSSEStream — TEXT_DELTA accumulation', () => {
   });
 
   it('sets isStreaming=false on DONE', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     expect(hook.result.current.isStreaming).toBe(true);
 
@@ -107,7 +107,7 @@ describe('useSSEStream — TEXT_DELTA accumulation', () => {
   });
 });
 
-describe('useSSEStream — FRE-757 persist-on-send', () => {
+describe('useAgentStream — FRE-757 persist-on-send', () => {
   function pushTraceStatus(traceId: string): void {
     pushEvent({
       type: 'STATE_DELTA',
@@ -127,7 +127,7 @@ describe('useSSEStream — FRE-757 persist-on-send', () => {
   }
 
   it('persists the ok default (rating=2, default=true) once on DONE', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushTraceStatus('trace-done');
     pushEvent({ type: 'DONE', seq: null });
@@ -137,7 +137,7 @@ describe('useSSEStream — FRE-757 persist-on-send', () => {
   });
 
   it('does NOT persist a default when the completed turn has no trace_id', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent({ type: 'DONE', seq: null });
     expect(mockSubmitRating).not.toHaveBeenCalled();
@@ -147,7 +147,7 @@ describe('useSSEStream — FRE-757 persist-on-send', () => {
     mockGetSessionMessages.mockResolvedValueOnce([
       { role: 'assistant', content: 'hi', trace_id: 't1', rating: 3 },
     ]);
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     await act(async () => {
@@ -164,9 +164,9 @@ describe('useSSEStream — FRE-757 persist-on-send', () => {
   });
 });
 
-describe('useSSEStream — STATE_DELTA (turn_status)', () => {
+describe('useAgentStream — STATE_DELTA (turn_status)', () => {
   it('sets turnStatus from STATE_DELTA key=turn_status', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({
@@ -191,9 +191,9 @@ describe('useSSEStream — STATE_DELTA (turn_status)', () => {
   });
 });
 
-describe('useSSEStream — STATE_DELTA (session_selection, ADR-0121 §4)', () => {
+describe('useAgentStream — STATE_DELTA (session_selection, ADR-0121 §4)', () => {
   it('sets serverSelection from a well-formed session_selection STATE_DELTA', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({
@@ -212,7 +212,7 @@ describe('useSSEStream — STATE_DELTA (session_selection, ADR-0121 §4)', () =>
   });
 
   it('ignores a malformed session_selection payload', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({
@@ -225,9 +225,9 @@ describe('useSSEStream — STATE_DELTA (session_selection, ADR-0121 §4)', () =>
   });
 });
 
-describe('useSSEStream — CONSTRAINT_PAUSE / CONSTRAINT_RESOLVED', () => {
+describe('useAgentStream — CONSTRAINT_PAUSE / CONSTRAINT_RESOLVED', () => {
   it('sets pendingConstraint on CONSTRAINT_PAUSE', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({
@@ -250,7 +250,7 @@ describe('useSSEStream — CONSTRAINT_PAUSE / CONSTRAINT_RESOLVED', () => {
   });
 
   it('clears pendingConstraint and adds to resolvedConstraints on CONSTRAINT_RESOLVED', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({
@@ -285,7 +285,7 @@ describe('useSSEStream — CONSTRAINT_PAUSE / CONSTRAINT_RESOLVED', () => {
   });
 });
 
-describe('useSSEStream — concurrent constraint pauses queue (FRE-928)', () => {
+describe('useAgentStream — concurrent constraint pauses queue (FRE-928)', () => {
   function pushPause(requestId: string, seq: number): void {
     pushEvent({
       type: 'CONSTRAINT_PAUSE',
@@ -306,7 +306,7 @@ describe('useSSEStream — concurrent constraint pauses queue (FRE-928)', () => 
     // Two turns can run concurrently on one session (/chat/stream is fire-and-forget).
     // Overwriting left the first card unanswerable while its server-side waiter rode
     // a full timeout, silently applying a default the user never chose.
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushPause('req-a', 1);
@@ -316,7 +316,7 @@ describe('useSSEStream — concurrent constraint pauses queue (FRE-928)', () => 
   });
 
   it('answering the first card advances to the second', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushPause('req-a', 1);
@@ -331,7 +331,7 @@ describe('useSSEStream — concurrent constraint pauses queue (FRE-928)', () => 
 
   it('a replayed duplicate pause does not queue twice', async () => {
     // Reconnect replays persisted events, so the same pause can arrive again.
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushPause('req-a', 1);
@@ -349,7 +349,7 @@ describe('useSSEStream — concurrent constraint pauses queue (FRE-928)', () => 
     // live server waiter that now survives a disconnect, and nothing blocks sending
     // while one is open — so clearing hid an answerable card whose waiter then timed
     // out into a default, i.e. exactly the defect this ticket fixes.
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushPause('req-a', 1);
@@ -361,7 +361,7 @@ describe('useSSEStream — concurrent constraint pauses queue (FRE-928)', () => 
   });
 
   it('resolving a queued card removes it from anywhere in the queue', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushPause('req-a', 1);
@@ -390,9 +390,9 @@ describe('useSSEStream — concurrent constraint pauses queue (FRE-928)', () => 
   });
 });
 
-describe('useSSEStream — CANCELLED', () => {
+describe('useAgentStream — CANCELLED', () => {
   it('sets cancelled=true and isStreaming=false on CANCELLED', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     expect(hook.result.current.isStreaming).toBe(true);
 
@@ -403,9 +403,9 @@ describe('useSSEStream — CANCELLED', () => {
   });
 });
 
-describe('useSSEStream — RUN_ERROR', () => {
+describe('useAgentStream — RUN_ERROR', () => {
   it('sets classifiedError and clears isStreaming on RUN_ERROR', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({
@@ -429,7 +429,7 @@ describe('useSSEStream — RUN_ERROR', () => {
   });
 
   it('dismissClassifiedError clears classifiedError', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({
@@ -451,9 +451,9 @@ describe('useSSEStream — RUN_ERROR', () => {
   });
 });
 
-describe('useSSEStream — outbound sends', () => {
+describe('useAgentStream — outbound sends', () => {
   it('sendConstraintDecision sends CONSTRAINT_DECISION over WS', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     act(() => { hook.result.current.sendConstraintDecision('req-1', 'continue_10', false); });
@@ -467,7 +467,7 @@ describe('useSSEStream — outbound sends', () => {
   });
 
   it('sendUserCancel sends USER_CANCEL over WS', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     act(() => { hook.result.current.sendUserCancel(); });
@@ -476,9 +476,9 @@ describe('useSSEStream — outbound sends', () => {
   });
 });
 
-describe('useSSEStream — seq dedup', () => {
+describe('useAgentStream — seq dedup', () => {
   it('ignores events with seq <= last handled seq', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({ type: 'TEXT_DELTA', data: { text: 'first' }, seq: 5 });

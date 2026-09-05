@@ -275,10 +275,17 @@ def build_ws_test_app(
         return {"ok": "sent"}
 
     @test_router.post("/__test/done")
-    async def _inject_done(session_id: str) -> dict[str, str]:
-        from personal_agent.transport.agui.ws_endpoint import get_event_queue
+    async def _inject_done(session_id: str, trace_id: str | None = None) -> dict[str, str]:
+        if trace_id is not None:
+            # Real emit_done path (FRE-427) — persists + enqueues a trace_id-bearing
+            # close sentinel, so the live DONE frame carries it.
+            from personal_agent.transport.agui.transport import emit_done
 
-        await get_event_queue(session_id).put(None)  # None sentinel → DONE frame
+            await emit_done(session_id, trace_id=trace_id)
+        else:
+            from personal_agent.transport.agui.ws_endpoint import get_event_queue
+
+            await get_event_queue(session_id).put(None)  # bare sentinel → DONE frame
         return {"ok": "sent"}
 
     @test_router.post("/__test/turn_status")

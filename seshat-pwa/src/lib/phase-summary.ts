@@ -1,7 +1,7 @@
 /**
  * ADR-0123 T4 (FRE-937) — pure derivation for the collapsed per-turn summary.
  *
- * On turn completion/cancellation/error, useSSEStream.ts calls buildTurnSummary
+ * On turn completion/cancellation/error, useAgentStream.ts calls buildTurnSummary
  * to derive a compact, persistent record from the live phase/tool state it
  * already holds — no new server-side storage, per ADR §7.
  */

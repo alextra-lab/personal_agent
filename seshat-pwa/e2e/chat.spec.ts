@@ -332,7 +332,7 @@ test.describe('TurnStatusBar remount resilience', () => {
     await expect(page.getByText('$0.47')).toBeVisible();
     await expect(page.getByText(/tools 4\/6/)).toBeVisible();
 
-    // Send DONE — useSSEStream writes { tool_iteration: 4, tool_iteration_max: 6 }
+    // Send DONE — useAgentStream writes { tool_iteration: 4, tool_iteration_max: 6 }
     // to localStorage synchronously inside the DONE handler.
     serverSend(ws, {
       type: 'DONE',

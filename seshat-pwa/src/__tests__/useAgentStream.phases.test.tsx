@@ -46,7 +46,7 @@ vi.mock('@/lib/uuid', () => ({
   generateUUID: vi.fn(() => 'test-uuid'),
 }));
 
-import { useSSEStream } from '@/hooks/useSSEStream';
+import { useAgentStream } from '@/hooks/useAgentStream';
 import { connectWebSocket } from '@/lib/agui-client';
 
 const mockConnect = connectWebSocket as Mock;
@@ -61,7 +61,7 @@ function pushEvent(event: object): void {
 }
 
 async function startTurn(
-  hook: ReturnType<typeof renderHook<ReturnType<typeof useSSEStream>, unknown>>,
+  hook: ReturnType<typeof renderHook<ReturnType<typeof useAgentStream>, unknown>>,
 ): Promise<void> {
   await act(async () => {
     await hook.result.current.sendMessage('hello', 'session-1', 'local');
@@ -116,15 +116,15 @@ afterEach(() => {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
 
-describe('useSSEStream — phases lifecycle', () => {
+describe('useAgentStream — phases lifecycle', () => {
   it('is empty before any PHASE_START', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     expect(hook.result.current.phases).toEqual([]);
   });
 
   it('PHASE_START appends a running node holding the server fields verbatim', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent(
@@ -150,7 +150,7 @@ describe('useSSEStream — phases lifecycle', () => {
   });
 
   it('PHASE_END with ok:true (default) resolves the matching node to completed', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent(phaseEnd(2, { phase_id: 'p1' }));
@@ -160,7 +160,7 @@ describe('useSSEStream — phases lifecycle', () => {
   it('PHASE_END with ok:false resolves the matching node to error, independent of any later RUN_ERROR', async () => {
     // FRE-936: this is the realistic backend ordering — phase_span's `finally`
     // always emits PHASE_END before an outer error handler gets to RUN_ERROR.
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent(phaseEnd(2, { phase_id: 'p1', ok: false }));
@@ -179,9 +179,9 @@ function phaseState(seq: number, active: object[]): object {
   };
 }
 
-describe('useSSEStream — phase_state snapshot (FRE-986, AC-3)', () => {
+describe('useAgentStream — phase_state snapshot (FRE-986, AC-3)', () => {
   it('converges the active phase from a snapshot alone (no prior deltas)', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(
       phaseState(5, [
@@ -200,7 +200,7 @@ describe('useSSEStream — phase_state snapshot (FRE-986, AC-3)', () => {
   });
 
   it('self-corrects a stuck-running phase whose PHASE_END was dropped', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     // PHASE_END for p1 is dropped; a later snapshot (for a new phase p2) omits p1.
@@ -221,7 +221,7 @@ describe('useSSEStream — phase_state snapshot (FRE-986, AC-3)', () => {
   });
 
   it('lets a later RUN_ERROR upgrade a snapshot-resolved node to error', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent(phaseState(3, [])); // p1 dropped its PHASE_END(ok:false) → snapshot-completes it
@@ -231,7 +231,7 @@ describe('useSSEStream — phase_state snapshot (FRE-986, AC-3)', () => {
   });
 
   it('lets a later CANCELLED upgrade a snapshot-resolved node to cancelled', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent(phaseState(3, []));
@@ -240,7 +240,7 @@ describe('useSSEStream — phase_state snapshot (FRE-986, AC-3)', () => {
   });
 
   it('does NOT let RUN_ERROR mislabel a genuinely completed earlier phase', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent(phaseEnd(2, { phase_id: 'p1' })); // genuine ok:true completion
@@ -252,7 +252,7 @@ describe('useSSEStream — phase_state snapshot (FRE-986, AC-3)', () => {
   });
 
   it('ignores a malformed phase_state payload without throwing', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     // null value, non-array active — must be ignored, leaving p1 running.
@@ -268,12 +268,12 @@ describe('useSSEStream — phase_state snapshot (FRE-986, AC-3)', () => {
 
 // ── AC-3: reconnect resumes rather than restarts or re-narrates ────────────
 
-describe('useSSEStream — AC-3 reconnect', () => {
+describe('useAgentStream — AC-3 reconnect', () => {
   it('60s-run + 30s-drop + reattach: shows the currently active phase (not the first), elapsed ≈90s, byte-equal startedAt, and a phase completed before the drop is not re-narrated as active', async () => {
     const t0 = new Date('2026-07-25T10:00:00.000Z');
     vi.setSystemTime(t0);
 
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     // p0: the turn's FIRST phase — starts and fully ends before the drop.
@@ -322,9 +322,9 @@ describe('useSSEStream — AC-3 reconnect', () => {
 
 // ── AC-9: cancel/error terminate the surface honestly ──────────────────────
 
-describe('useSSEStream — AC-9 terminal states', () => {
+describe('useAgentStream — AC-9 terminal states', () => {
   it('(a) CANCELLED resolves a still-running phase to cancelled (backstop — no PHASE_END arrived)', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent({ type: 'CANCELLED', seq: null });
@@ -332,7 +332,7 @@ describe('useSSEStream — AC-9 terminal states', () => {
   });
 
   it('(a) CANCELLED does not touch a phase already resolved by its own PHASE_END', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent(phaseEnd(2, { phase_id: 'p1' }));
@@ -341,7 +341,7 @@ describe('useSSEStream — AC-9 terminal states', () => {
   });
 
   it('(b) RUN_ERROR resolves a still-running phase to error (backstop — no PHASE_END arrived)', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent({
@@ -353,7 +353,7 @@ describe('useSSEStream — AC-9 terminal states', () => {
   });
 
   it('(b) a phase already resolved to error via ok:false stays error across a later RUN_ERROR', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent(phaseEnd(2, { phase_id: 'p1', ok: false }));
@@ -366,7 +366,7 @@ describe('useSSEStream — AC-9 terminal states', () => {
   });
 
   it('DONE resolves any still-running phase to completed (safety net — nothing spins forever)', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     pushEvent({ type: 'DONE', seq: null });
@@ -376,9 +376,9 @@ describe('useSSEStream — AC-9 terminal states', () => {
 
 // ── Concurrent children ─────────────────────────────────────────────────────
 
-describe('useSSEStream — concurrent children (AC-8 shape)', () => {
+describe('useAgentStream — concurrent children (AC-8 shape)', () => {
   it('a parent EXPANSION phase and its SUB_AGENT children each resolve independently', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent(
@@ -410,9 +410,9 @@ describe('useSSEStream — concurrent children (AC-8 shape)', () => {
 
 // ── Reset semantics ──────────────────────────────────────────────────────
 
-describe('useSSEStream — phases reset semantics', () => {
+describe('useAgentStream — phases reset semantics', () => {
   it('resets to empty on a new sendMessage (new turn)', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     expect(hook.result.current.phases).toHaveLength(1);
@@ -424,7 +424,7 @@ describe('useSSEStream — phases reset semantics', () => {
   });
 
   it('is left untouched by REPLAY_GAP — clearing would destroy live state with nothing to replace it', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-25T10:00:00.000Z' }));
     const before = hook.result.current.phases;

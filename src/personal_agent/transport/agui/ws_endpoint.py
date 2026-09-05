@@ -565,6 +565,12 @@ def _cancel_all_waiters(conn: _ConnectionState) -> None:
 
 # ── Per-session event queues ───────────────────────────────────────────────
 
+#: Close-signal marker enqueued by ``emit_done`` in place of a bare ``None`` so the
+#: turn's ``trace_id`` survives to the live DONE frame (FRE-427). ``None`` itself is
+#: still accepted by ``_sender`` for backward compatibility with callers (e.g. the
+#: WS integration test harness) that have no trace_id to attach.
+DONE_SENTINEL_TYPE = "__done_sentinel__"
+
 _session_queues: dict[str, asyncio.Queue[dict[str, Any] | None]] = {}
 
 
@@ -829,9 +835,12 @@ async def _sender(conn: _ConnectionState, last_seq: int) -> None:
             item = await queue.get()
         except asyncio.CancelledError:
             return
-        if item is None:
+        if item is None or item.get("type") == DONE_SENTINEL_TYPE:
+            done_trace_id = item.get("trace_id") if item is not None else None
             try:
-                await ws.send_text(json.dumps({"type": "DONE", "seq": None}))
+                await ws.send_text(
+                    json.dumps({"type": "DONE", "seq": None, "trace_id": done_trace_id})
+                )
             except RuntimeError:
                 pass
             return

@@ -1,9 +1,9 @@
 /**
  * ApprovalModal — full-screen overlay for primitive tool-approval decisions.
  *
- * Rendered when the backend emits a ``tool_approval_request`` SSE event.
+ * Rendered when the backend emits a ``tool_approval_request`` event.
  * The agent is paused; this modal collects an approve/deny decision and
- * POSTs it to the backend via ``handleApprovalDecision`` from useSSEStream.
+ * POSTs it to the backend via ``handleApprovalDecision`` from useAgentStream.
  *
  * MANUAL TEST PLAN
  * ================
@@ -23,7 +23,7 @@
  * 4. Watch the countdown timer tick down each second toward 0.
  *
  * 5. Click Approve — modal dismisses, agent continues execution.
- *    Expected: SSE stream resumes, response appears in chat.
+ *    Expected: the stream resumes, response appears in chat.
  *
  * 6. Repeat step 1, click Deny — modal dismisses, agent aborts the tool.
  *    Expected: agent reports the denial in chat.
@@ -86,7 +86,7 @@ function riskChipClasses(risk: ToolApprovalRequestData['risk_level']): string {
  * tool executes. Auto-denies when the countdown reaches zero.
  *
  * Args:
- *   data:      The ``tool_approval_request`` SSE payload.
+ *   data:      The ``tool_approval_request`` event payload.
  *   onApprove: Called when the user clicks Approve.
  *   onDeny:    Called when the user clicks Deny or the countdown expires.
  */

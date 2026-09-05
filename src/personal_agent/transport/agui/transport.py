@@ -32,6 +32,7 @@ from personal_agent.telemetry import get_logger
 from personal_agent.transport.agui.adapter import to_agui_event
 from personal_agent.transport.agui.event_buffer import SessionEventBuffer
 from personal_agent.transport.agui.ws_endpoint import (
+    DONE_SENTINEL_TYPE,
     ApprovalDecision,
     WaiterMetadata,
     get_event_queue,
@@ -279,11 +280,11 @@ async def _emit_phase_snapshot_best_effort(session_id: str, phase_id: str) -> No
         )
 
 
-async def emit_done(session_id: str) -> None:
+async def emit_done(session_id: str, trace_id: str) -> None:
     """Persist the terminal ``DONE`` row, then enqueue the close sentinel (FRE-518).
 
     Runs under the same per-session emit lock as :func:`_push_event` so the DONE
-    row's ``seq`` is ordered after every prior live emit and the ``None`` sentinel
+    row's ``seq`` is ordered after every prior live emit and the close sentinel
     is enqueued in seq order behind them. The sentinel closes the sender's live
     drain loop; the persisted DONE row is what reconnect replay delivers.
 
@@ -292,6 +293,10 @@ async def emit_done(session_id: str) -> None:
 
     Args:
         session_id: Target session identifier.
+        trace_id: The completed turn's trace_id (FRE-427) — carried on both the
+            persisted row (replay) and the close sentinel (live delivery) so a
+            client joining on trace_id (e.g. the rating control) never has to
+            fall back to a trace_id stashed from an earlier event.
     """
     async with _get_emit_lock(session_id):
         try:
@@ -300,15 +305,17 @@ async def emit_done(session_id: str) -> None:
                 await buf.append(
                     session_id=UUID(session_id),
                     event_type="DONE",
-                    payload={"type": "DONE"},
+                    payload={"type": "DONE", "trace_id": trace_id},
                 )
         except Exception:
-            log.exception("transport.persist_done_failed", session_id=session_id)
+            log.exception("transport.persist_done_failed", session_id=session_id, trace_id=trace_id)
         queue = get_event_queue(session_id)
         try:
-            queue.put_nowait(None)
+            queue.put_nowait({"type": DONE_SENTINEL_TYPE, "trace_id": trace_id})
         except asyncio.QueueFull:
-            log.warning("transport.queue_full", session_id=session_id, event_type="DONE")
+            log.warning(
+                "transport.queue_full", session_id=session_id, event_type="DONE", trace_id=trace_id
+            )
 
 
 async def register_and_push_constraint(

@@ -199,7 +199,7 @@ class ToolApprovalRequestEvent:
     Attributes:
         request_id: Unique identifier for this approval round-trip (UUID string).
         trace_id: Trace context identifier for telemetry correlation.
-        session_id: Target session identifier (used to route the SSE event).
+        session_id: Target session identifier (used to route the event).
         tool: Name of the tool awaiting approval.
         args: Arguments that will be passed to the tool if approved.
         risk_level: Qualitative risk label for the PWA to display.

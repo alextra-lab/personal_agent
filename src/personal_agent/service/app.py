@@ -220,13 +220,13 @@ async def _process_chat_stream_background(
     client_msg_id: str | None = None,
     attachments_json: str | None = None,
 ) -> None:
-    """Run the full orchestrator pipeline and push the result to the SSE queue.
+    """Run the full orchestrator pipeline and push the result to the WS queue.
 
-    Runs as a fire-and-forget ``asyncio.Task``.  A ``None`` sentinel is always
-    pushed to the SSE queue, even on error, so the client stream closes cleanly.
+    Runs as a fire-and-forget ``asyncio.Task``.  A DONE close signal is always
+    pushed to the WS queue, even on error, so the client stream closes cleanly.
 
     Args:
-        session_id: Client-generated session UUID (used for SSE queue key and DB).
+        session_id: Client-generated session UUID (used for WS queue key and DB).
         message: User's message text.
         user_id: Authenticated user UUID — used for session ownership scoping.
         trace_id: Pre-generated trace ID (from the endpoint, used for dedup record).
@@ -446,7 +446,7 @@ async def _process_chat_stream_background(
                 error=sanitize_error_message(e),
                 exc_info=True,
             )
-            # Do not include exception details in the SSE stream to avoid
+            # Do not include exception details in the WS stream to avoid
             # information exposure; full context is in the structured log.
             response_content = f"An error occurred processing your request. (Error ID: {error_id})"
         finally:
@@ -554,12 +554,12 @@ async def _process_chat_stream_background(
         )
     finally:
         # Persist DONE to Postgres (so reconnect replay delivers it) then push
-        # the None sentinel to close the live WS drain loop — serialized under
-        # the per-session emit lock so the DONE seq + sentinel stay ordered
-        # behind every prior live emit (FRE-518).
+        # the trace_id-bearing close sentinel to close the live WS drain loop —
+        # serialized under the per-session emit lock so the DONE seq + sentinel
+        # stay ordered behind every prior live emit (FRE-518).
         from personal_agent.transport.agui.transport import emit_done  # noqa: E402
 
-        await emit_done(session_id)
+        await emit_done(session_id, trace_id)
         # Release the dedup entry so the user can immediately retry on error
         # without waiting for TTL expiry (FRE-392).
         get_deduplicator().release(session_id, message, client_msg_id=client_msg_id)

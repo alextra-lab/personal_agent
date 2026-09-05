@@ -5033,6 +5033,24 @@ async def step_init(
             ctx.expansion_phase_results = expansion_result.phase_results
             ctx.expansion_skipped_tasks = expansion_result.skipped_tasks
 
+            if expansion_result.plan is not None and expansion_result.plan.is_fallback:
+                # FRE-1413 AC-4: a keyword-split fallback plan must reach the
+                # turn's own record, not only the structlog line below — this
+                # is what OrchestratorResult["steps"] returns to the caller, so
+                # a reader can tell a real decomposition from a keyword split
+                # without a trace_id and a log query.
+                ctx.steps.append(
+                    {
+                        "type": "warning",
+                        "description": (
+                            "Expansion planner fell back to a deterministic keyword "
+                            "split — no model-generated decomposition was used for "
+                            "this turn."
+                        ),
+                        "metadata": {"planner_fallback": True},
+                    }
+                )
+
             # Build synthesis context and append to messages. FRE-1397: also
             # fires when every task was skipped for turn-budget exhaustion
             # (sub_agent_results empty but skipped_tasks not) — otherwise the

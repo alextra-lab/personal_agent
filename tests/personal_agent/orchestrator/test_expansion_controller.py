@@ -1699,6 +1699,163 @@ class TestPlannerRoleBinding:
         assert call_kwargs["role"] is ModelRole.PRIMARY
         assert call_kwargs["role"] is not ModelRole.SUB_AGENT
 
+    @pytest.mark.asyncio
+    async def test_planner_call_does_not_override_max_tokens(
+        self, controller: ExpansionController
+    ) -> None:
+        """FRE-1413: the planner call must NOT pass a hardcoded max_tokens.
+
+        The prior ``max_tokens=1024`` was sized for the retired thinking-disabled
+        SUB_AGENT-bound call; PRIMARY is thinking-capable and the local llama.cpp
+        completion budget includes thinking (ADR-0141 D5), so any hardcoded
+        override here reproduces the truncation this ticket fixes. Omitting the
+        kwarg entirely defers to the resolved client's own catalog ceiling — the
+        same pattern the main orchestrator turn call already uses
+        (executor.py's llm_client.respond() call has no max_tokens override).
+        """
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(3), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result(f"task_{i}") for i in range(3)]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-no-cap",
+                messages=[],
+            )
+
+        call_kwargs = client.respond.call_args.kwargs
+        assert "max_tokens" not in call_kwargs
+
+
+class TestPlannerTruncationDistinguishedFromParseFailure:
+    """FRE-1413 AC-3 — truncation must be distinguishable from a parse failure.
+
+    A planner response cut off at the token ceiling must be distinguishable in
+    telemetry from one that merely fails to parse. Before this fix both
+    surfaced as an undifferentiated ``schema_validation_failed``, which is
+    exactly what let the FRE-1390 cap-sizing defect run unnoticed.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.mark.asyncio
+    async def test_truncated_response_logs_output_truncated(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC-3's own seeded check: a tiny cap truncates mid-JSON.
+
+        finish_reason reports "length", and the failure must name truncation
+        specifically.
+        """
+        caplog.set_level("WARNING", logger="personal_agent.orchestrator.expansion_controller")
+        client = AsyncMock()
+        client.respond = AsyncMock(
+            return_value={
+                "content": '{"strategy": "HYBRID", "tasks": [{"name": "a", "go',
+                "finish_reason": "length",
+                "cost_usd": 0.0,
+            }
+        )
+
+        mock_results = [_make_sub_agent_result("evaluate_redis")]
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis and Memcached",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-truncated",
+                messages=[],
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is True
+        assert "output_truncated" in caplog.text
+        assert "schema_validation_failed" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_non_truncated_invalid_json_still_logs_schema_validation_failed(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Regression: a genuinely malformed response (finish_reason="stop") must keep its reason.
+
+        The new distinction must not collapse both directions into
+        "output_truncated".
+        """
+        caplog.set_level("WARNING", logger="personal_agent.orchestrator.expansion_controller")
+        client = AsyncMock()
+        client.respond = AsyncMock(
+            return_value={
+                "content": "I'll just answer directly...",
+                "finish_reason": "stop",
+                "cost_usd": 0.0,
+            }
+        )
+
+        mock_results = [_make_sub_agent_result("evaluate_redis")]
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis and Memcached",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-malformed",
+                messages=[],
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is True
+        assert "schema_validation_failed" in caplog.text
+        assert "output_truncated" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_length_finish_reason_with_valid_json_is_still_accepted(
+        self, controller: ExpansionController
+    ) -> None:
+        """A schema-valid plan is used as-is even if finish_reason=="length".
+
+        The prompt requires bare JSON with nothing after it, so a successful
+        parse is strong evidence the content is complete. finish_reason is
+        consulted only once validation has already failed (deliberate — see
+        the plan doc).
+        """
+        client = AsyncMock()
+        client.respond = AsyncMock(
+            return_value={
+                "content": _make_plan_json(3),
+                "finish_reason": "length",
+                "cost_usd": 0.0,
+            }
+        )
+        mock_results = [_make_sub_agent_result(f"task_{i}") for i in range(3)]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-valid-length",
+                messages=[],
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is False
+
 
 class TestPlannerServerErrorFallback:
     """FRE-1390 AC-4 — a 503 from the busier, larger-context deployment the

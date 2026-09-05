@@ -199,6 +199,42 @@ class TestAdaptChatCompletionsResponse:
         assert result["usage"]["completion_tokens"] == 0
         assert result["usage"]["total_tokens"] == 0
 
+    def test_finish_reason_propagated(self) -> None:
+        """FRE-1413: a truncated local completion must be distinguishable from a complete one.
+
+        Before this fix the adapter read ``message`` off ``choice`` but never
+        ``choice["finish_reason"]`` itself, so every local call came back with
+        the field absent — indistinguishable from a genuinely complete reply
+        and silently misreported as a parse failure downstream.
+        """
+        response_data = {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "cut off mid-"},
+                    "finish_reason": "length",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1024, "total_tokens": 1034},
+        }
+
+        result = adapt_chat_completions_response(response_data)
+
+        assert result["finish_reason"] == "length"
+
+    def test_finish_reason_absent_stays_absent(self) -> None:
+        """A choice with no ``finish_reason`` key must not be defaulted to a real-looking value.
+
+        ``"stop"`` and "we did not look" must stay distinguishable (FRE-996,
+        llm_client/types.py:126).
+        """
+        response_data = {
+            "choices": [{"message": {"role": "assistant", "content": "Test"}}],
+        }
+
+        result = adapt_chat_completions_response(response_data)
+
+        assert result.get("finish_reason") is None
+
 
 class TestBuildResponsesRequest:
     """Test building responses API request payload."""

@@ -1,7 +1,8 @@
 """Expansion controller — deterministic workflow enforcement.
 
-When the gateway sets strategy ∈ {HYBRID, DECOMPOSE} and orchestration_mode
-is "enforced", this controller takes over from the executor. The LLM generates
+When the gateway sets strategy ∈ {HYBRID, DECOMPOSE}, this controller takes
+over from the executor (FRE-1381: the only path — the autonomous alternative,
+where the LLM decided whether to expand, was deleted). The LLM generates
 plan content only; it does not decide whether to expand.
 
 State machine:
@@ -569,9 +570,8 @@ class ExpansionController:
                 # ceiling. settings.sub_agent_max_tokens used to be passed here
                 # unconditionally and silently shadowed the catalog's own
                 # (smaller, deliberately sized) value on every call; that
-                # setting is still used by the separate autonomous-mode
-                # decomposition path in expansion.py, which is why it is not
-                # deleted, just no longer read here.
+                # setting's only other reader was the autonomous-mode
+                # decomposition path, deleted in FRE-1381 along with the field.
                 timeout_seconds=settings.worker_timeout_seconds,
                 hard_deadline_seconds=settings.worker_hard_deadline_seconds,
                 tools=list(grant.granted),

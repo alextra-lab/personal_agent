@@ -524,33 +524,7 @@ class AppConfig(BaseSettings):
             "instead of composing a DelegationPackage nothing can receive (FRE-1376)."
         ),
     )
-    sub_agent_timeout_seconds: float = Field(
-        default=120.0,
-        gt=0,
-        le=3600,
-        description="Timeout for sub-agent task execution",
-    )
-    sub_agent_max_tokens: int = Field(
-        default=4096,
-        ge=500,
-        description=(
-            "Maximum tokens per sub-agent response — consumed only by "
-            "orchestrator/expansion.py's autonomous-mode decomposition path "
-            "(parse_decomposition_plan), which is inactive unless "
-            "orchestration_mode='autonomous' (default 'enforced'). The "
-            "enforced-mode HYBRID dispatch (expansion_controller.py) does NOT "
-            "read this — it defers to each deployment's own catalog-declared "
-            "max_tokens instead (FRE-1379): this setting used to be passed "
-            "there too and silently overrode the catalog's smaller, "
-            "deliberately-sized value on every call."
-        ),
-    )
     # --- Expansion controller (ADR-0036) ---
-    orchestration_mode: str = Field(
-        default="enforced",
-        description="Expansion enforcement mode: 'enforced' (gateway binding) or 'autonomous' (LLM decides)",
-    )
-
     planner_timeout_seconds: float = Field(
         default=30.0,
         description="Max time for LLM planner phase in expansion controller",

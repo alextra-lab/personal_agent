@@ -1,90 +1,96 @@
-# Last session — 2026-09-03 → 04
+# Last session — 2026-09-04 → 05
 
 ## Doing / discussing  (≤5 sentences)
-The night's spine was **owner-directed single-model serving**: ADR-0141 (unify LLM dispatch on
-litellm) authored, accepted and T1–T3 shipped, then the catalog repointed so `qwen3.8-flash-next`
-serves both primary and sub_agent, split only by the thinking flag. Two owner test turns then
-exposed three defects nothing in code review had found — sub-agent timeouts, a stop button that
-stopped nothing, and a research query routed to unimplemented delegation. The live thread at reset
-is **whether to serialize sub-agents** (see below) and a design conversation on router/harness
-architecture now carried in FRE-1377. Nothing is half-merged; two seats are working.
+The night's spine was the **sub-agent chain**: repair the expansion path, make its output
+observable, then prepare it to hold tools. Five tickets shipped and deployed — FRE-1379,
+FRE-1380, FRE-1387, FRE-1390 and the FRE-1377 study — and FRE-1375 closed on the owner's own
+live cancel. The owner's queries became the verification instrument, and twice by accident they
+produced fresh evidence for FRE-1288. The live thread at reset is **the primary tool loop**,
+which three separate turns showed is now the dominant cost. FRE-1388 carries the owner's
+`run_python` grant decision and is build1's head.
 
 ## What was decided and why
 
-**The `extra_body` bug is why ADR-0141 exists.** Measured live: Seshat posted `extra_body` as a
-literal wire key, so `enable_thinking`, `thinking_budget`, `top_k`, `min_p` and
-`repetition_penalty` were ALL inert. Nothing looked broken because backend 8503's launch flag was
-doing the work. Collapsing to one model removed that accident — which is why the cutover had to
-land before the single-model config, not after.
+**`run_python` is the sub-agent's first tool grant, and the strawman was inverted.** FRE-1388
+filed `run_python` under "blast radius is the machine". Reading `tools/primitives/sandbox.py`
+shows otherwise: `--network=none`, `--read-only`, `--cap-drop ALL`, non-root 1000:1000,
+`no-new-privileges`, 512 MB with swap capped equal, one CPU, an ephemeral container, and one
+writable mount that is a scratch directory rather than the repository. **No network is the
+decisive property.** The risk this ticket manages is a model-authored instruction running
+unattended; a tool that cannot reach the network cannot exfiltrate whatever that instruction
+says. That makes `run_python` safer than `web_search` and `fetch_url`, which the strawman called
+plausible and which pull untrusted content into a turn nobody reviews. Owner accepted, scoped to
+step one. The read-only set follows once the loop is proven, because that is where the
+FRE-1138 payoff is.
 
-**`thinking_budget` is inert; `reasoning_effort` is the real lever and must never be sent.**
-Probed directly. Master first concluded "max_tokens is the only lever" — wrong, corrected on
-FRE-1362. `reasoning_effort` is pinned server-side to `medium`; sending an invalid value returns
-500, and slm_server's watchdog treats 5xx as backend failure and **restarts the model** under
-every other worker.
+**Sub-agents hold no tools in ALERT or DEGRADED.** Added to FRE-1388 on owner direction.
+`run_python` declares `requires_approval_in_modes: ["ALERT", "DEGRADED"]`, and a sub-agent runs
+unattended, so in those modes there is nobody to approve and the request has no correct outcome.
 
-**SERIALIZATION — ruled, and the framing matters more than the ruling.** The owner ruled
-"Serialize", then corrected the justification mid-turn: **"the goal is context management, not
-latency."** That reframing is the durable part. The benchmark argument (aggregate throughput rises
-only 18.8% from concurrency 1→3 while per-request drops 2.57x, so fan-out buys 15.8% wall-clock,
-not 3x) is real but secondary — sub-agents exist so raw tool output stays in the sub-agent and only
-a digest reaches the primary, and that property is indifferent to whether they ran side by side.
-Filed as FRE-1380 with criteria that measure context, not speed. Two things master found while
-scoping it, both now in the ticket: serialization must be a **loop, not a semaphore of 1** (a
-semaphore leaves the 180s admission race, and worker 4 would be silently dropped with a fabricated
-result), and `_build_synthesis_context` already composes from `r.summary` — so isolation holds
-today, but `full_output_chars`/`digest_chars` have been logged all along and **nobody has ever
-looked at them**. The justification for the whole mechanism is unmeasured.
+**The primary tool loop is the real defect, and it was measured three times in one evening.**
+Not expansion, which now works. Trace `515625b3`: three sub-agents finished in 91 s with clean
+digests, then the primary made its own `web_search` and `fetch_url` calls and grew from 29,527
+to 54,639 to 76,706 input tokens across three rounds, hit the 900 s deadline, and returned a
+**160-character reply**. Trace at 20:19: 207.8 s total, of which planner 15.5 s, dispatch 27.0 s,
+`span_extraction` 16 s — and **144 s, 69 percent, in the primary's own loop**. FRE-1389 owns
+this and is blocked only by FRE-1388.
 
-**Four concurrent requests WEDGE the server.** All four 504, backend unresponsive, forced restart
-required. Three is a hard cap, not a target. Master verified Seshat cannot exceed it today
-(provider semaphore 3, health probe is a GET, local reranker unserved).
+**A fourth inert knob, same family as the other three.** FRE-1390's first commit changed only
+the `role=` kwarg on `.respond()`. That kwarg is a telemetry label; `LiteLLMClient` fixes its
+deployment at construction, so the planner would have kept generating on the thinking-disabled
+deployment. The build seat caught it in its own review and fixed it properly with two distinct
+clients. Same shape as `extra_body`, `worker_timeout_seconds` and the catalog `max_tokens`.
 
-**The taxonomy is thinner than it looks.** `_MAX_TASKS = {"HYBRID": 4, "DECOMPOSE": 6}` — two
-named strategies one integer apart, same code path. Owner's framing: model choice is
-capability/cost/latency and is the user's; how the response is produced is harness architecture.
-Whole conversation is on FRE-1377, including the owner's routing-control-with-auto proposal.
+**FRE-1390's measured cost was 1 second, not the predicted 7 to 15.** The fixture harness
+reported planner median 13.86 s to 20.96 s. On real turns it went 14.5 s to 15.5 s, with output
+tokens 389 to 501 — the extra tokens being the reasoning now present. Both arms are n=1, so this
+is a data point rather than a contradiction. Do not quote the harness figure as the live cost.
 
-**A third inert knob, same family.** The sub-agent token ceiling is declared twice —
-`models.yaml` says `max_tokens: 2048`, `settings.sub_agent_max_tokens` says 4096, and the settings
-value is what reaches the wire. Joins the inert 60s `worker_timeout_seconds` and (post-FRE-1380)
-`worker_global_timeout_seconds`. Three knobs in one subsystem that read as load-bearing and bound
-nothing; assume a fourth until proven otherwise.
+**ADR status headers are the close gate, not the merge.** Clearing the Awaiting Deploy backlog,
+four tickets closed on verified evidence and **FRE-1328 did not**. Its deliverable ADR-0139
+reads "Proposed — partially withdrawn", and the withdrawn sections D2, D3 and D7 are exactly the
+ones answering its questions. ADR-0141 by contrast reads "Accepted — 2026-09-03 (owner)". Read
+the header; a merged PR is not a settled decision.
 
-**Master's own errors, because they recurred.** A `LIMIT 8` on a 12-row aggregate read as the
-whole population ("delegation has never fired" — it had, 3 times). A grep for `error` matched
-`error-monitor` and `failed_count=0`, producing a false deploy alarm — the same unbounded-substring
-bug filed as FRE-1376 twenty minutes earlier. Named the wrong setting on FRE-1374
-(`sub_agent_timeout_seconds`, actually `worker_timeout_seconds`) and corrected mid-flight, costing
-the seat a rework cycle.
+**Master's own instrument errors, both caught and both worth repeating.** A `size: 40` ES query
+sorted ascending truncated the newest events, and master told the owner a model call was "still
+running at 464 s" when it had completed 328 s earlier. Separately, a cancel-path query returned
+zero because the FRE-1375 fix logs `status="user_cancelled"` on `step_planning_completed` rather
+than emitting a new event name — the negative result was the instrument, again.
 
-**Worker A was normal; D was the anomaly** — 12.7 tok/s matches the benchmarked 14.4 at
-concurrency 3; D's 65 exceeds the single-stream ceiling. Full reasoning on FRE-1379.
+**Haiku 4.5 cannot run auto mode.** The dispatch daemon switched build1 to Haiku for a
+`Tier-3:Haiku` ticket and stranded the seat in manual mode, where it cannot work. FRE-1388 was
+retiered to `Tier-2:Sonnet`, which is honest anyway — it needs a governance principal, a
+deny-by-default and a seeded negative, not a config edit. **Any Tier-3 ticket can strand a seat
+this way.** The seat model is pinned per seat in `~/.claude/cc-sessions.conf`, so a restart
+restores it, but `cc-master` is pinned to `-` and would inherit a changed default.
 
 ## Worktrees — anything special
-`build` holds `fre-1370-query-paraphrase-pinned-role` with one unpushed WIP commit (`7aeef49a`)
-for a **cancelled** ticket. Kept deliberately — it is the only copy, and cancellation is not
-reason to force-delete an unmerged branch.
+`build2` holds `fre-1367-delete-localllmclient` with two WIP commits, rebased onto main and
+clean. `build` holds the merged `fre-1390` branch. `adrs` is on `fre-1288-adr-intent-taxonomy`
+and working. `fre-1370-query-paraphrase-pinned-role` still carries its single unpushed WIP
+commit `7aeef49a` for a cancelled ticket; it is the only copy.
 
 ## Sequence position + drift
-**Total drift from the Observability Foundation directive, owner-directed throughout.** The owner
-fast-tracked single-model serving at 11:39; master then let two self-generated side-quests
-(FRE-1370 paraphrase pin, FRE-442 citations) occupy both seats while the fast-tracked work waited,
-until the owner said "stop everything but what asked for". Both were real; neither was asked for.
-The lesson is not "don't surface findings" but "don't put them in front of the directive".
+The owner fast-tracked the sub-agent chain ahead of the Approved queue on 2026-09-04, so
+FRE-1387, FRE-1390, FRE-1388 and FRE-1389 run before everything else. FRE-1382 is deliberately
+sequenced after ("ceiling after"), and FRE-1383 to FRE-1386 stay `Backlog` pending the owner's
+read of the router study. **The Observability Foundation directive remains unstarted**, now for
+a second consecutive session.
 
 ## Answers for the fresh start
-- **Is serialization done?** No — FRE-1380 is filed and Approved, queued behind FRE-1379 on
-  build1 so the instrumentation exists before anything is measured. Both were dispatched 2026-09-04
-  and both seats were mid-work at reset.
-- **Why is FRE-1375 not Done?** Deployed 08:51, but AC-2's backend half needs an owner-side live
-  check: press Stop mid-generation, then send a second query immediately. If it stalls, the backend
-  kept its slot — that is a *separate, more serious* ticket, not a fold-in.
-- **Why did master's own tickets sit at In Progress?** They shouldn't have. FRE-1375 sat merged and
-  deployed at In Progress for an hour, holding `stream:build1` and blocking FRE-1379. Caught by the
-  reset gate, not at the merge. Advance dispatch AT the merge.
-- **Is the citation work dead?** No — FRE-442 is parked and rescoped around the owner's actual ask
-  (clickable internet links, not memory provenance). Its usage counts predate the model change and
-  need refreshing before being quoted.
-- **What did the owner originally want?** Verifiable links to pages Sasha actually read. Three ADRs
-  grew around that want while FRE-442 sat at no priority since June.
+- **What is build1 doing?** FRE-1388, the `run_python` grant. Then FRE-1389, then FRE-1381 at
+  Medium. The chain is the priority.
+- **Why is FRE-1328 still at Awaiting Deploy?** ADR-0139 is `Proposed`, not `Accepted`, and the
+  parts answering the ticket were withdrawn. It needs an owner decision, not a state change.
+- **Is the expansion path fixed?** Yes, and verified on live turns: digests at
+  `truncation_ratio` 1.0, non-overlapping dispatch intervals, planner on the thinking role.
+  What is *not* fixed is that sub-agents hold no tools, so it contains nothing that costs
+  anything.
+- **Can we measure whether a change improved answers?** No. FRE-453's canonical eval set exists
+  and measures path, tokens, cost and latency, and it states that expectations never gate. There
+  is no ratings table. Answer quality is unmeasurable until something produces labels — FRE-1384
+  and the owner's auto-routing-control proposal are the only candidates.
+- **Why did the owner have to phrase a question three ways to reach expansion?** That is
+  FRE-1288, now on `stream:adr`. `conversational` forces SINGLE regardless of length, and
+  `analysis` needs a literal keyword from `_ANALYSIS_PATTERNS`.

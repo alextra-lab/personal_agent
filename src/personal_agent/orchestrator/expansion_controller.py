@@ -139,6 +139,12 @@ class ExpansionResult:
             dispatch, in plan order (FRE-1380 AC-1) — proof the fan-out ran
             sequentially, from real timestamps rather than the dispatch loop's
             own structure.
+        skipped_tasks: Plan task names never dispatched because the turn's
+            remaining budget (FRE-1397) was already exhausted when their turn
+            came up in the serialized loop. Distinct from a failed
+            ``SubAgentResult`` — these never ran at all, so they are reported
+            here rather than fabricated into ``sub_agent_results`` (AC-3
+            mirrors why FRE-1380 deleted ``_not_admitted_result``).
     """
 
     plan: ExpansionPlan | None = None
@@ -149,6 +155,7 @@ class ExpansionResult:
     degradation_reason: str | None = None
     planner_cost_usd: float = 0.0
     dispatch_intervals: list[SubAgentInterval] = field(default_factory=list)
+    skipped_tasks: list[str] = field(default_factory=list)
 
     @property
     def cost_usd(self) -> float:
@@ -249,6 +256,7 @@ class ExpansionController:
         session_id: str | None = None,
         eval_mode: bool = False,
         planner_llm_client: Any | None = None,
+        turn_deadline_monotonic: float | None = None,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -263,6 +271,17 @@ class ExpansionController:
             session_id: Originating session id for cost attribution (ADR-0074).
             eval_mode: True when the parent turn originated from an eval run; threaded
                 to per-sub-agent audit records for EVAL provenance (FRE-523).
+            turn_deadline_monotonic: The turn's own absolute ``time.monotonic()``
+                deadline (FRE-1397) — the caller's ``turn_started_monotonic +
+                min(turn_deadline_remaining, turn_lifetime_remaining)``, computed
+                ONCE by the caller before this call (which itself runs the
+                planner phase first). Passed through unchanged to
+                ``_run_dispatch`` rather than re-derived from a duration at
+                dispatch time: re-anchoring a "seconds remaining" figure to
+                "now" after the planner call already ran would silently hand
+                dispatch back the time the planner just spent. ``None`` (the
+                default) leaves dispatch unbounded by the turn, exactly as
+                today, for a caller that has not been updated to pass it.
             planner_llm_client: LLM client for the planner call — must be built
                 for role=PRIMARY (FRE-1390): decomposition is a reasoning
                 judgement about work that has not happened yet, and SUB_AGENT
@@ -324,6 +343,7 @@ class ExpansionController:
             result=result,
             session_id=session_id,
             eval_mode=eval_mode,
+            turn_deadline_monotonic=turn_deadline_monotonic,
         )
         result.sub_agent_results = sub_results
 
@@ -361,6 +381,7 @@ class ExpansionController:
         result.synthesis_context = self._build_synthesis_context(
             plan=plan,
             sub_results=sub_results,
+            skipped_tasks=result.skipped_tasks,
         )
 
         if strategy.upper() == "HYBRID":
@@ -507,6 +528,7 @@ class ExpansionController:
         result: ExpansionResult,
         session_id: str | None = None,
         eval_mode: bool = False,
+        turn_deadline_monotonic: float | None = None,
     ) -> list[SubAgentResult]:
         """Phase 2: Dispatch sub-agents sequentially, one task at a time.
 
@@ -532,6 +554,21 @@ class ExpansionController:
             session_id: Originating session id for cost attribution (ADR-0074).
             eval_mode: True when the parent turn originated from an eval run; threaded
                 to per-sub-agent audit records for EVAL provenance (FRE-523).
+            turn_deadline_monotonic: The turn's absolute ``time.monotonic()``
+                deadline (FRE-1397), or ``None`` for no bound (today's
+                behavior). Re-checked fresh before each serialized task: once
+                the remaining time hits zero, every task still queued is
+                skipped outright — recorded in ``result.skipped_tasks``, never
+                given a fabricated ``SubAgentResult`` (AC-3) — and each
+                dispatched task's own deadline is capped to whatever remains
+                at that moment, never divided up-front across the plan. Since
+                a task's actual run time can never exceed the deadline it was
+                given, and that deadline can never exceed what was left when
+                it started, the cumulative dispatch time can never exceed
+                ``turn_deadline_monotonic`` by more than one task's own small
+                post-``wait_for`` cleanup overhead (already documented as
+                negligible against these 60-300s budgets elsewhere on
+                ``SubAgentResult.elapsed_generation_ms``).
 
         Returns:
             List of SubAgentResult, in dispatch order — one entry per task that
@@ -541,8 +578,10 @@ class ExpansionController:
             AC-5) — both the original and the replacement are kept, so
             ``ExpansionResult.cost_usd`` never silently drops the first,
             incomplete attempt's cost. A task whose dispatch raised a raw
-            exception is dropped from this list; see ``result.dispatch_intervals``
-            for the complete per-task record, including dropped tasks.
+            exception, or that was skipped for turn-budget exhaustion, is
+            dropped from this list; see ``result.dispatch_intervals`` for the
+            complete per-task record of what raised, and
+            ``result.skipped_tasks`` for what never ran.
         """
         settings = get_settings()
         start_ms = time.monotonic() * 1000
@@ -602,6 +641,23 @@ class ExpansionController:
             detail=f"{len(specs)} sub-agents",
         ) as _parent_id:
             for task, spec in zip(plan.tasks, specs, strict=True):
+                # FRE-1397: recomputed fresh for every task rather than divided
+                # up-front across the plan — most sub-agents finish well under
+                # their own ceiling, so a live "whatever's left" check wastes
+                # none of that headroom on tasks earlier in the loop.
+                worker_max_deadline: float | None = None
+                if turn_deadline_monotonic is not None:
+                    remaining = turn_deadline_monotonic - time.monotonic()
+                    if remaining <= 0:
+                        logger.warning(
+                            "sub_agent_dispatch_skipped_turn_budget_exhausted",
+                            task_name=task.name,
+                            trace_id=trace_id,
+                        )
+                        result.skipped_tasks.append(task.name)
+                        continue
+                    worker_max_deadline = remaining
+
                 interval_start = time.monotonic()
                 sub_result: SubAgentResult | None = None
                 try:
@@ -617,6 +673,7 @@ class ExpansionController:
                             trace_id=trace_id,
                             session_id=session_id,
                             eval_mode=eval_mode,
+                            max_deadline_seconds=worker_max_deadline,
                         )
                 except Exception as exc:
                     raw_results.append(exc)
@@ -644,6 +701,7 @@ class ExpansionController:
                     eval_mode=eval_mode,
                     parent_span_id=_parent_id,
                     intervals=intervals,
+                    turn_deadline_monotonic=turn_deadline_monotonic,
                 )
                 if replacement is not None:
                     sub_results.append(replacement)
@@ -705,6 +763,7 @@ class ExpansionController:
         eval_mode: bool,
         parent_span_id: Any,
         intervals: list[SubAgentInterval],
+        turn_deadline_monotonic: float | None = None,
     ) -> SubAgentResult | None:
         """Single-shot replacement dispatch when a sub-agent stated a tool gap (FRE-1389 AC-5).
 
@@ -730,12 +789,18 @@ class ExpansionController:
                 replacement's own SUB_AGENT span nests under the same parent.
             intervals: Mutable interval list; the replacement's own wall-clock
                 window is appended here for dispatch-observability parity.
+            turn_deadline_monotonic: The turn's absolute deadline (FRE-1397),
+                threaded from ``_run_dispatch`` — this is still one more
+                serialized ``run_sub_agent`` call inside the same dispatch
+                phase, so it must respect the same bound or the aggregate
+                guarantee would have a hole exactly here.
 
         Returns:
             The replacement SubAgentResult, or ``None`` when there was no gap,
-            the gap named nothing actually registered, or a re-check of the
+            the gap named nothing actually registered, a re-check of the
             grant still denies it (the original refusal already stands via
-            ``denied_tools``/the synthesis context).
+            ``denied_tools``/the synthesis context), or the turn's budget is
+            already exhausted.
         """
         from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
         from personal_agent.transport.events import Phase  # noqa: PLC0415
@@ -750,6 +815,18 @@ class ExpansionController:
         )[:_MAX_GAP_NAMES_PER_TASK]
         if not gap_names:
             return None
+
+        redispatch_max_deadline: float | None = None
+        if turn_deadline_monotonic is not None:
+            remaining = turn_deadline_monotonic - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "sub_agent_redispatch_skipped_turn_budget_exhausted",
+                    task_name=task.name,
+                    trace_id=trace_id,
+                )
+                return None
+            redispatch_max_deadline = remaining
 
         # Untrusted model output: don't spend a whole extra dispatch on a name
         # that isn't even a registered tool — governance would deny it anyway,
@@ -804,6 +881,7 @@ class ExpansionController:
                     trace_id=trace_id,
                     session_id=session_id,
                     eval_mode=eval_mode,
+                    max_deadline_seconds=redispatch_max_deadline,
                 )
             return replacement_result
         except Exception as exc:
@@ -823,12 +901,17 @@ class ExpansionController:
         self,
         plan: ExpansionPlan,
         sub_results: list[SubAgentResult],
+        skipped_tasks: list[str] | None = None,
     ) -> str:
         """Build the synthesis context string from sub-agent results.
 
         Args:
             plan: The expansion plan used for this run.
             sub_results: Results from all dispatched sub-agents.
+            skipped_tasks: Plan task names never dispatched because the turn's
+                budget ran out first (FRE-1397) — distinct from a failure:
+                these produced no result at all, so they get their own note
+                rather than being silently absent.
 
         Returns:
             Formatted synthesis context string for the parent agent.
@@ -852,6 +935,13 @@ class ExpansionController:
             parts.append(
                 f"\n**Note:** The following sub-tasks failed: {', '.join(failed)}. "
                 "Synthesize from available results and note any gaps.\n"
+            )
+
+        if skipped_tasks:
+            parts.append(
+                f"\n**Note:** The following sub-tasks were not run — the turn's time "
+                f"budget was exhausted before dispatch reached them: {', '.join(skipped_tasks)}. "
+                "Synthesize from available results and note this gap.\n"
             )
 
         return "".join(parts)

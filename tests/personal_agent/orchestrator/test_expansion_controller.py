@@ -761,6 +761,211 @@ class TestSerializedDispatch:
         assert expansion_result.degraded is False
 
 
+class TestTurnBudgetBound:
+    """FRE-1397 — dispatch cannot outlive the turn's own remaining budget.
+
+    ``turn_deadline_monotonic`` is an absolute ``time.monotonic()`` reading
+    the caller derives once from the turn's own clocks
+    (``executor._turn_deadline_remaining``/``_turn_lifetime_remaining``), not
+    a new setting (AC-4). Passed through unchanged rather than re-derived
+    from a duration at dispatch time — re-anchoring "seconds remaining" to
+    "now" after the planner phase already ran would silently hand dispatch
+    back the time the planner just spent. A task that starts after the
+    deadline passes is skipped outright rather than dispatched with a doomed
+    near-zero budget, and it is never turned into a fabricated failed
+    ``SubAgentResult`` (AC-3) — mirrors the deleted ``_not_admitted_result``
+    shape FRE-1380 removed for the same reason.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.mark.asyncio
+    async def test_tasks_are_skipped_once_budget_exhausted(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-2/AC-3 — 4 tasks at ~0.05s each against a budget covering only some."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(4))
+        assert plan is not None
+        expansion_result = ExpansionResult()
+        call_count = {"n": 0}
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            call_count["n"] += 1
+            await asyncio.sleep(0.05)
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_run,
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-budget",
+                messages=[],
+                result=expansion_result,
+                turn_deadline_monotonic=time.monotonic() + 0.11,
+            )
+
+        assert call_count["n"] < 4  # the budget did not cover every task
+        assert len(results) == call_count["n"]
+        assert len(expansion_result.skipped_tasks) == 4 - call_count["n"]
+        assert set(expansion_result.skipped_tasks) <= {t.name for t in plan.tasks}
+        # AC-3: a skipped task is never returned as a fabricated failed result.
+        assert all(r.spec_task not in expansion_result.skipped_tasks for r in results)
+
+    @pytest.mark.asyncio
+    async def test_dispatched_deadline_shrinks_with_remaining_budget(
+        self, controller: ExpansionController
+    ) -> None:
+        """Each dispatched call's cap reflects what is actually left, call over call."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(2))
+        assert plan is not None
+        expansion_result = ExpansionResult()
+        seen_caps: list[float] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            seen_caps.append(kwargs["max_deadline_seconds"])
+            await asyncio.sleep(0.03)
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_run,
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-cap",
+                messages=[],
+                result=expansion_result,
+                turn_deadline_monotonic=time.monotonic() + 1.0,
+            )
+
+        assert len(seen_caps) == 2
+        assert all(cap is not None for cap in seen_caps)
+        assert seen_caps[0] <= 1.0
+        assert seen_caps[0] > seen_caps[1]
+
+    @pytest.mark.asyncio
+    async def test_none_budget_preserves_todays_unbounded_behavior(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-4 — a caller that omits the param gets exactly today's behavior."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        expansion_result = ExpansionResult()
+        seen_caps: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            seen_caps.append(kwargs.get("max_deadline_seconds"))
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_run,
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-nobudget",
+                messages=[],
+                result=expansion_result,
+            )
+
+        assert len(results) == 3
+        assert expansion_result.skipped_tasks == []
+        assert all(cap is None for cap in seen_caps)
+
+    @pytest.mark.asyncio
+    async def test_already_negative_budget_skips_everything(
+        self, controller: ExpansionController
+    ) -> None:
+        """The turn is already over budget when expansion starts — nothing dispatches."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        expansion_result = ExpansionResult()
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+        ) as mock_run:
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-negative",
+                messages=[],
+                result=expansion_result,
+                turn_deadline_monotonic=time.monotonic() - 5.0,
+            )
+
+        mock_run.assert_not_called()
+        assert results == []
+        assert set(expansion_result.skipped_tasks) == {t.name for t in plan.tasks}
+
+    @pytest.mark.asyncio
+    async def test_execute_forwards_turn_deadline_to_dispatch_unchanged(
+        self, controller: ExpansionController
+    ) -> None:
+        """The public entry point threads the caller's absolute deadline through
+
+        UNCHANGED — never re-anchored to "now" after the planner phase, which
+        would silently hand dispatch back the time the planner just spent.
+        """
+        mock_llm = AsyncMock()
+
+        async def _slow_plan(*args: Any, **kwargs: Any) -> str:
+            await asyncio.sleep(0.05)
+            return _make_plan_json(2)
+
+        mock_llm.respond = _slow_plan
+        mock_results = [_make_sub_agent_result(f"task_{i}") for i in range(2)]
+        deadline = time.monotonic() + 42.0
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=mock_results,
+            ),
+            patch.object(
+                controller, "_run_dispatch", wraps=controller._run_dispatch
+            ) as spy_dispatch,
+        ):
+            await controller.execute(
+                query="Compare Redis and Memcached",
+                strategy="HYBRID",
+                llm_client=mock_llm,
+                trace_id="test-trace-thread-budget",
+                messages=[],
+                turn_deadline_monotonic=deadline,
+            )
+
+        _, kwargs = spy_dispatch.call_args
+        assert kwargs["turn_deadline_monotonic"] == deadline
+
+    def test_synthesis_context_notes_skipped_tasks(self, controller: ExpansionController) -> None:
+        """A skipped task is surfaced to the primary distinctly from a failed one."""
+        plan = _validate_plan_json(_make_plan_json(2))
+        assert plan is not None
+        results = [_make_sub_agent_result("task_0")]
+
+        context = controller._build_synthesis_context(
+            plan=plan, sub_results=results, skipped_tasks=["task_1"]
+        )
+
+        assert "task_1" in context
+        assert "not run" in context.lower()
+
+
 class TestSubAgentToolGrant:
     """FRE-1388 — a sub-agent's requested tools are filtered against the
 

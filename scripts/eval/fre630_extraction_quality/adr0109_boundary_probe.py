@@ -39,8 +39,8 @@ import structlog
 import yaml  # type: ignore[import-untyped]
 from scripts.eval.fre630_extraction_quality.relabel_v2_types import (
     EntityItem,
+    _classify_all_with_cost_gate,
     build_report,
-    classify_all,
     render_report_table,
     write_raw_telemetry,
 )
@@ -115,7 +115,7 @@ def main() -> None:
         dry_run=args.dry_run,
         n_items=len(items),
     )
-    by_item = asyncio.run(classify_all(items, dry_run=args.dry_run))
+    by_item = asyncio.run(_classify_all_with_cost_gate(items, dry_run=args.dry_run))
     out_path = write_raw_telemetry(args.run_id, items, by_item)
     report = build_report(items, by_item)
     print(render_report_table(report))

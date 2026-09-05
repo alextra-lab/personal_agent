@@ -55,6 +55,7 @@ from scripts.eval.fre630_extraction_quality.gold import (
 from scripts.eval.fre630_extraction_quality.iaa import IAAReport, build_iaa_report
 from scripts.eval.fre630_extraction_quality.relabel_v2_types import RATERS, Rater
 
+from personal_agent.config import settings
 from personal_agent.llm_client.litellm_client import LiteLLMClient
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -462,6 +463,33 @@ def render_report_table(report: IAAReport) -> str:
     return "\n".join(lines)
 
 
+async def _classify_all_with_cost_gate(
+    items: Sequence[RelItem], *, dry_run: bool
+) -> dict[str, dict[str, RaterResponse]]:
+    """Register a CostGate around a real run; dry-run never touches it.
+
+    ``LiteLLMClient.respond()``'s cloud path requires a registered gate
+    before any paid call (mirrors ``harness.py``'s ``_with_cost_gate`` in this
+    same directory — a standalone script has no app startup to register one).
+    ``dry_run=True`` never calls ``_call_rater`` (see ``classify_all``), so it
+    skips this entirely rather than requiring a live Postgres connection for
+    a fast smoke run.
+    """
+    if dry_run:
+        return await classify_all(items, dry_run=True)
+
+    from personal_agent.cost_gate import CostGate, load_budget_config, set_default_gate
+
+    gate = CostGate(config=load_budget_config(), db_url=settings.database_url)
+    await gate.connect()
+    set_default_gate(gate)
+    try:
+        return await classify_all(items, dry_run=False)
+    finally:
+        await gate.disconnect()
+        set_default_gate(None)
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -476,7 +504,7 @@ def main() -> None:
         items = items[: args.limit]
 
     log.info("rel_relabel_run_start", run_id=args.run_id, dry_run=args.dry_run, n_items=len(items))
-    by_item = asyncio.run(classify_all(items, dry_run=args.dry_run))
+    by_item = asyncio.run(_classify_all_with_cost_gate(items, dry_run=args.dry_run))
     out_path = write_raw_telemetry(args.run_id, items, by_item)
     print(render_report_table(report := build_report(items, by_item)))
     log.info(

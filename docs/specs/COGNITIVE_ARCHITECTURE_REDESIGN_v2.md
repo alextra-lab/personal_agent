@@ -799,8 +799,9 @@ Which model runs sub-agents is a design variable:
 ### 4.7 Sub-Agent Dispatch Model
 
 Sub-agents execute as `asyncio.Task` instances within the existing service
-process, one task at a time (FRE-1380, FRE-1381: both the enforced-mode and
-the autonomous-mode fan-out are sequential). slm_server's own concurrency
+process, one task at a time (FRE-1380: the enforced-mode fan-out is
+sequential; FRE-1381: the autonomous-mode alternative was removed entirely,
+not serialized -- it no longer exists). slm_server's own concurrency
 benchmark showed aggregate throughput rising only ~19% from concurrency 1->3
 while per-request throughput fell 2.57x, so concurrent dispatch never bought
 the wall-clock win it appeared to. Sub-agents exist for context isolation --

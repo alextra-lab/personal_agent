@@ -271,16 +271,18 @@ describe('TurnStatusBar — context ceiling absent is distinct from zero (FRE-96
   // fabricated 0% ceiling. (c) — a legitimate counter 0 with a resolved ceiling — is the
   // discriminator: an implementation that hides everything falsy fails it.
 
-  it('(a) unresolved context_max renders "—", never a fabricated 0% ceiling', () => {
+  it('(a) unresolved context_max renders "—/—" — never a real figure beside a dash (FRE-1401 AC-1)', () => {
     render(
       <TurnStatusBar
         status={makeStatus({ session_context_tokens: 10000, context_max: null })}
       />,
     );
-    const ctxSpan = screen.getByText(/10K\//);
-    expect(ctxSpan.textContent).toContain('10K/—');
+    const ctxSpan = screen.getByText(/—\/—/);
+    expect(ctxSpan.textContent).toContain('—/—');
     expect(ctxSpan.textContent).not.toMatch(/%/);
-    // The old defect coerced null→0 and showed "10K/0 0%".
+    // FRE-1401: a real-looking numerator beside a "—" denominator is the specific
+    // defect this ticket removes — it reads as "plenty of room" when it is not known.
+    expect(screen.queryByText(/10K\//)).toBeNull();
     expect(screen.queryByText(/10K\/0/)).toBeNull();
   });
 
@@ -300,6 +302,16 @@ describe('TurnStatusBar — context ceiling absent is distinct from zero (FRE-96
       />,
     );
     expect(screen.getByText(/0\/100K 0%/)).toBeDefined();
+    expect(screen.queryByText(/0\/—/)).toBeNull();
+  });
+
+  it('(d) an unresolved ceiling never renders a fabricated 0 numerator either (FRE-1401 AC-1)', () => {
+    render(
+      <TurnStatusBar
+        status={makeStatus({ session_context_tokens: 0, context_max: null })}
+      />,
+    );
+    expect(screen.getByText(/—\/—/)).toBeDefined();
     expect(screen.queryByText(/0\/—/)).toBeNull();
   });
 });

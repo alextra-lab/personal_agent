@@ -10,6 +10,7 @@ import { generateUUID } from '@/lib/uuid';
 import { LAST_SESSION_KEY } from '@/lib/session';
 import { useAgentStream } from '@/hooks/useAgentStream';
 import { useSessionConfig } from '@/hooks/useSessionConfig';
+import type { TurnStatus } from '@/lib/types';
 
 import { resolutionLabel } from '@/lib/constraint-options';
 import { isTurnCollapsed } from '@/lib/phase-summary';
@@ -29,6 +30,23 @@ import { TurnStatusBar } from './TurnStatusBar';
 
 // FRE-575 (fold-in to FRE-573): per-session key for last completed engagement tool state.
 const toolStateKey = (sid: string) => `seshat-tool-state-${sid}`;
+
+// FRE-1401: the cold-lane reading. No context ceiling has resolved for this session
+// in this process, so both meter halves render "—" (owner decision: dash, not
+// rehydration — a stale numerator beside a real ceiling reads as "plenty of room").
+const COLD_SESSION_TURN_STATUS: TurnStatus = {
+  context_tokens: 0,
+  context_max: null,
+  tool_iteration: null,
+  tool_iteration_max: null,
+  turn_cost_usd: 0,
+  session_cost_usd: 0,
+  session_context_tokens: 0,
+  compaction_count: 0,
+  cache_reset_count: 0,
+  quality_alert_count: 0,
+  quality_alert: null,
+};
 
 // FRE-1269 follow-up: gesture trigger for the safe-area debug overlay, for
 // launch modes (standalone home-screen PWA) with no URL bar to carry
@@ -163,6 +181,11 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     let cancelled = false;
     setIsLoadingHistory(true);
 
+    // FRE-1401: reset the status bar the instant the session changes, before either
+    // REST call below resolves — a session switch must never carry the previous
+    // session's ctx/cost/tools reading, even for one render.
+    seedTurnStatus(COLD_SESSION_TURN_STATUS);
+
     getSessionMessages(sessionId)
       .then((serverMsgs) => {
         if (cancelled || serverMsgs.length === 0) return;
@@ -197,47 +220,40 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         if (cancelled || s === null) return;
         if (s.turn_count !== undefined) setSessionTurnCount(s.turn_count);
         setSessionTitle(s.session_label ?? s.title ?? null);
-        // FRE-426: seed the status bar so context + cost show on mount/switch,
-        // before the first live turn_status. Corrected by the next turn.
-        if (s.context_tokens !== undefined && s.context_max !== undefined) {
-          // FRE-575 (fold-in to FRE-573): restore last completed engagement tool
-          // state from localStorage so the engagement lane doesn't reset on
-          // remount (e.g. after navigating to an artifact and back).
-          // FRE-928 AC-4 / FRE-935: with nothing stored, the lane stays UNKNOWN.
-          // It must never be seeded with an invented ceiling — a fabricated 6 once
-          // rendered an amber near-limit warning on a turn whose real ceiling was 25.
-          let restoredTool: { tool_iteration: number | null; tool_iteration_max: number | null } = {
-            tool_iteration: null,
-            tool_iteration_max: null,
-          };
-          if (typeof window !== 'undefined' && sessionId) {
-            try {
-              const raw = localStorage.getItem(toolStateKey(sessionId));
-              if (raw) {
-                const parsed = JSON.parse(raw) as { tool_iteration: number; tool_iteration_max: number };
-                if (typeof parsed.tool_iteration === 'number' && typeof parsed.tool_iteration_max === 'number') {
-                  restoredTool = parsed;
-                }
+        // FRE-575 (fold-in to FRE-573): restore last completed engagement tool
+        // state from localStorage so the engagement lane doesn't reset on
+        // remount (e.g. after navigating to an artifact and back).
+        // FRE-928 AC-4 / FRE-935: with nothing stored, the lane stays UNKNOWN.
+        // It must never be seeded with an invented ceiling — a fabricated 6 once
+        // rendered an amber near-limit warning on a turn whose real ceiling was 25.
+        let restoredTool: { tool_iteration: number | null; tool_iteration_max: number | null } = {
+          tool_iteration: null,
+          tool_iteration_max: null,
+        };
+        if (typeof window !== 'undefined' && sessionId) {
+          try {
+            const raw = localStorage.getItem(toolStateKey(sessionId));
+            if (raw) {
+              const parsed = JSON.parse(raw) as { tool_iteration: number; tool_iteration_max: number };
+              if (typeof parsed.tool_iteration === 'number' && typeof parsed.tool_iteration_max === 'number') {
+                restoredTool = parsed;
               }
-            } catch {
-              // Corrupt localStorage entry — keep defaults.
             }
+          } catch {
+            // Corrupt localStorage entry — keep defaults.
           }
-          seedTurnStatus({
-            context_tokens: s.context_tokens,
-            context_max: s.context_max,
-            tool_iteration: restoredTool.tool_iteration,
-            tool_iteration_max: restoredTool.tool_iteration_max,
-            turn_cost_usd: s.cost_usd ?? 0,
-            // ADR-0092 session lane — corrected by first live turn_status.
-            session_cost_usd: s.cost_usd ?? 0,
-            session_context_tokens: s.context_tokens,
-            compaction_count: 0,
-            cache_reset_count: 0,
-            quality_alert_count: 0,
-            quality_alert: null,
-          });
         }
+        // FRE-1401: restore cost + tools only. The context ceiling is resolved
+        // per-turn by the live projector (ADR-0092 §D3, process-local) and must
+        // never be rehydrated from a durable source (owner decision, FRE-1401) —
+        // it stays the cold-lane "—" until a live turn_status resolves it.
+        seedTurnStatus({
+          ...COLD_SESSION_TURN_STATUS,
+          tool_iteration: restoredTool.tool_iteration,
+          tool_iteration_max: restoredTool.tool_iteration_max,
+          turn_cost_usd: s.cost_usd ?? 0,
+          session_cost_usd: s.cost_usd ?? 0,
+        });
       })
       .catch(() => {
         // Keep the cached pill on a transient fetch error.

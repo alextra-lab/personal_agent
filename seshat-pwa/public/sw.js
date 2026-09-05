@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v54-drop-dead-stream-bypass';
+const CACHE_NAME = 'seshat-v55-context-meter-cold-lane';
 
 const PRECACHE_URLS = [
   '/',

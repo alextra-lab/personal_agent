@@ -247,7 +247,12 @@ models:
     # Focused single-task completion for HYBRID expansion sub-agents.
     # Sampling per the Qwen3.6 card "Instruct (Non-Thinking) Mode" preset.
     #
-    # 2026-09-05, owner swap back to qwen3.6-35b: this is NO LONGER a second
+    # 2026-09-05 catalog correction. The bindings are NOT changed here: the
+    # primary and sub_agent roles still bind qwen3.8-flash-next. Only the
+    # description of what the backend serves is corrected, so that a future
+    # swap to this model does not fail on a stale id.
+    #
+    # This is NO LONGER a second
     # served instance. The owner serves ONE model, and this entry points at the
     # SAME id as qwen3.6-35b-thinking — exactly the shape the flash-next pair
     # already used since 2026-09-03. The only thing separating the two roles is

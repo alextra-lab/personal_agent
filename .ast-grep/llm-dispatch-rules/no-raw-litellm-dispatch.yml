@@ -1,0 +1,11 @@
+id: no-raw-litellm-dispatch
+language: python
+severity: error
+message: >-
+  litellm.acompletion()/litellm.completion() must be confined to llm_client/
+  (ADR-0141 AC-6) — dispatch through the factory (get_llm_client /
+  get_llm_client_for_key) or LiteLLMClient directly instead.
+rule:
+  any:
+    - pattern: litellm.acompletion($$$)
+    - pattern: litellm.completion($$$)

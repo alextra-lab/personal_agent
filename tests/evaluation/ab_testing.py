@@ -18,7 +18,8 @@ from pathlib import Path
 from statistics import mean
 
 from personal_agent.config import load_model_config
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.telemetry.trace import TraceContext
 
 
@@ -72,8 +73,12 @@ class ABTester:
     """A/B testing orchestrator."""
 
     def __init__(self):
-        """Initialize the A/B tester with LLM client and result storage."""
-        self.client = LocalLLMClient()
+        """Initialize the A/B tester with result storage.
+
+        The LLM client is resolved per role at each respond() call — unlike
+        the deleted LocalLLMClient, the unified client is fixed to one model
+        at construction, so it cannot be built once here for both roles.
+        """
         self.results_dir = Path("telemetry/evaluation/ab_tests")
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -154,7 +159,8 @@ class ABTester:
         start_time = time.time()
 
         try:
-            response = await self.client.respond(
+            client = get_llm_client(role_name=role.value)
+            response = await client.respond(
                 role=role, messages=[{"role": "user", "content": query}], trace_ctx=trace_ctx
             )
 
@@ -213,7 +219,8 @@ Output ONLY valid JSON, nothing else."""
 
         try:
             trace_ctx = TraceContext.new_trace()
-            response = await self.client.respond(
+            client = get_llm_client(role_name=ModelRole.PRIMARY.value)
+            response = await client.respond(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": judge_prompt}],
                 trace_ctx=trace_ctx,

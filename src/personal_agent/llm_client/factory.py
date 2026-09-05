@@ -84,11 +84,12 @@ def _build_client(
     Raises:
         LLMClientError: If ``model_def`` is None — the deployment resolved to
             no catalog definition. Before ADR-0141 this fell through to a bare
-            ``LocalLLMClient()``, which took no model key and therefore
-            dispatched against whatever the catalog happened to resolve
-            (FRE-1343). With one client per resolved key there is nothing to
-            fall through to, and a silent wrong-model dispatch is the exact
-            door the unification closes — so it fails loudly instead.
+            local-only client construction that took no model key and
+            therefore dispatched against whatever the catalog happened to
+            resolve (FRE-1343). With one client per resolved key there is
+            nothing to fall through to, and a silent wrong-model dispatch is
+            the exact door the unification closes — so it fails loudly
+            instead.
     """
     from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.llm_client.types import LLMClientError

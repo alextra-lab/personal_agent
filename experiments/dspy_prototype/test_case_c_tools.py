@@ -15,9 +15,9 @@ import time
 
 import dspy
 
-from personal_agent.config import settings
 from personal_agent.config.model_loader import load_model_config
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools import ToolExecutionLayer, get_default_registry
 
@@ -46,11 +46,7 @@ async def manual_tool_agent(query: str) -> str:
     tool_layer = ToolExecutionLayer(get_default_registry())
     trace_ctx = TraceContext.new_trace()
 
-    llm_client = LocalLLMClient(
-        base_url=settings.llm_base_url,
-        timeout_seconds=settings.llm_timeout_seconds,
-        max_retries=settings.llm_max_retries,
-    )
+    llm_client = get_llm_client(role_name="sub_agent")
 
     messages = [{"role": "user", "content": query}]
     max_iterations = 3

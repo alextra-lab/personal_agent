@@ -2,7 +2,7 @@
 
 Prevents reflection from calling the live primary model in unit tests.
 The reflection path (executor → generate_reflection_entry → reflection_dspy →
-ModelRole.PRIMARY) creates its own LocalLLMClient internally, bypassing any
+ModelRole.PRIMARY) resolves its own LLM client internally, bypassing any
 executor-level patches. This fixture blocks that path for all non-integration tests.
 """
 
@@ -14,7 +14,7 @@ from personal_agent.llm_client.models import ToolCallingStrategy
 
 
 def configure_mock_llm_client_model_configs(mock_client: AsyncMock) -> None:
-    """Set model_configs on a mock LocalLLMClient so executor can read effective_tool_strategy.
+    """Set model_configs on a mock LLM client so executor can read effective_tool_strategy.
 
     Without this, model_configs.get(role) returns an AsyncMock and accessing
     .effective_tool_strategy raises AttributeError (coroutine has no attribute).

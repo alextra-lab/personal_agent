@@ -2,10 +2,9 @@
 
 Before Phase 3 the orchestrator emitted ``MODEL_CALL_STARTED`` at the LLM-call
 boundary with a thinner ``(trace_id, span_id, model_role, channel)`` payload,
-colliding with the canonical ``model_call_started`` event that
-``LocalLLMClient`` / ``LiteLLMClient`` emit with the full
-``(model, role, endpoint, session_id, parent_span_id, ...)`` shape. Two emits
-under one event name = ambiguous Kibana queries.
+colliding with the canonical ``model_call_started`` event that the LLM client
+emits with the full ``(model, role, endpoint, session_id, parent_span_id, ...)``
+shape. Two emits under one event name = ambiguous Kibana queries.
 
 Phase 3 renames the orchestrator emit to ``step_planning_started`` (and adds
 a matching ``step_planning_completed`` on every exit path — success, error,
@@ -50,7 +49,7 @@ def test_executor_does_not_emit_model_call_started() -> None:
     names = _log_call_event_names(EXECUTOR)
     assert "MODEL_CALL_STARTED" not in names, (
         "Orchestrator must not emit MODEL_CALL_STARTED — that event is reserved "
-        "for LocalLLMClient/LiteLLMClient. Use STEP_PLANNING_STARTED instead."
+        "for the LLM client. Use STEP_PLANNING_STARTED instead."
     )
 
 

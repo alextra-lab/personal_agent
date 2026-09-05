@@ -1,0 +1,9 @@
+id: no-local-llm-client
+language: python
+severity: error
+message: >-
+  LocalLLMClient was deleted (ADR-0141 D1) — every LLM call, local and cloud,
+  dispatches through LiteLLMClient via personal_agent.llm_client.factory.
+  A local-only replacement client must not be reintroduced.
+rule:
+  pattern: LocalLLMClient

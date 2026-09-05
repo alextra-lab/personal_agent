@@ -460,8 +460,10 @@ async def test_vision_escalation_labels_respond_call_role_vision(
     the calling role (primary/sub_agent) — cost attribution and telemetry must
     reflect the model that actually ran, not the turn's nominal role. Gated on
     the escalated client being a LiteLLMClient (its model is fixed at
-    construction, so relabeling is provably safe there) to avoid a double
-    resolution hazard on LocalLLMClient, which re-resolves role.value itself.
+    construction, so relabeling is provably safe there) — a defensive check
+    against any future client shape that re-resolves role.value internally,
+    which would risk a second, divergent resolution (ADR-0141 D1 unified all
+    placements onto LiteLLMClient, so this is now the only reachable case).
     """
     from personal_agent.config import settings
     from personal_agent.llm_client.litellm_client import LiteLLMClient
@@ -515,74 +517,6 @@ async def test_vision_escalation_labels_respond_call_role_vision(
 
     assert mock_escalated_client.respond.called, "escalated LLM client was not called"
     assert mock_escalated_client.respond.call_args.kwargs["role"] is ModelRole.VISION
-
-
-@pytest.mark.asyncio
-async def test_vision_escalation_onto_a_local_client_keeps_calling_role(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """FRE-1037: a vision escalation onto a LocalLLMClient must NOT relabel to VISION.
-
-    LocalLLMClient.respond() re-resolves its deployment internally from
-    role.value — relabeling to VISION there risks a second, divergent
-    resolution from the effective_model_key already picked. The gate must
-    keep the calling role (primary/sub_agent) in that case. Not reachable in
-    the current config (vision is pinned to a cloud deployment), but the
-    isinstance gate is a code-level guarantee that should hold regardless.
-    """
-    from personal_agent.config import settings
-    from personal_agent.llm_client.client import LocalLLMClient
-    from personal_agent.llm_client.types import ModelRole
-    from personal_agent.orchestrator.types import AttachmentRef
-    from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
-
-    ctx = _make_minimal_ctx_with_block_content()
-    ctx.attachments = (
-        AttachmentRef(
-            artifact_id="abc-123",
-            content_type="image/png",
-            title="photo.png",
-            r2_key="upload/user/GLOBAL/abc.png",
-        ),
-    )
-    trace_ctx = TraceContext.new_trace()
-    mock_local_client = MagicMock(spec=LocalLLMClient)
-    mock_local_client.respond = AsyncMock(return_value=_make_minimal_response())
-    mock_local_client.model_configs = {}
-    mock_session = MagicMock()
-    mock_session.add_message = AsyncMock()
-    mock_session.get_messages = AsyncMock(return_value=[])
-
-    with (
-        patch("personal_agent.orchestrator.skills.get_skill_bodies", return_value=("", ())),
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        ),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        ),
-        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
-        patch(
-            "personal_agent.llm_client.factory.get_llm_client_for_key",
-            return_value=mock_local_client,
-        ),
-        patch(
-            "personal_agent.orchestrator.executor.get_default_registry",
-            return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
-        ),
-    ):
-        from personal_agent.orchestrator.executor import step_llm_call
-
-        await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
-
-    assert mock_local_client.respond.called, "escalated LLM client was not called"
-    assert mock_local_client.respond.call_args.kwargs["role"] is ModelRole.PRIMARY
 
 
 @pytest.mark.asyncio

@@ -5482,7 +5482,7 @@ async def step_llm_call(
     )
 
     try:
-        # Create LLM client — dispatches to LocalLLMClient or LiteLLMClient by provider placement
+        # Create LLM client — LiteLLMClient for every placement (ADR-0141 D1)
         # ADR-0101 §5/§8a + ADR-0102 §3: an image or document attachment always
         # routes to the pinned `vision` role (ADR-0121 T5) instead of the
         # calling role's own selection — resolved here, inside the try block,
@@ -5538,10 +5538,12 @@ async def step_llm_call(
             )
             # FRE-1037: relabel the call's telemetry role to VISION only when
             # it's provably safe — LiteLLMClient's model is fixed at
-            # construction, so `role` is label-only there. LocalLLMClient
-            # re-resolves its deployment from role.value internally, so
-            # relabeling on that client risks a second, divergent resolution
-            # if `vision` is ever rebound to a local deployment.
+            # construction, so `role` is label-only there. A client that
+            # re-resolves its deployment from role.value internally would risk
+            # a second, divergent resolution if `vision` is ever rebound to a
+            # local deployment (ADR-0141 D1 unified all placements onto
+            # LiteLLMClient, but the guard stays — defensive against any
+            # future client shape, not this specific historical split).
             respond_role = ModelRole.VISION if isinstance(llm_client, LiteLLMClient) else model_role
 
         # ADR-0138 D5 (FRE-1284): stamp the deployment key that actually serves this
@@ -5819,7 +5821,7 @@ async def step_llm_call(
         )
         ctx.messages, _inline_outcome = _inline_volatile_with_outcome(ctx.messages, _volatile_block)
 
-        # Call LocalLLMClient.respond()
+        # Call the unified client's respond()
         # Pass previous_response_id for stateful /v1/responses API
         max_retries_override: int | None = 1 if tools else None
 

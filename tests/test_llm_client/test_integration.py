@@ -1,4 +1,4 @@
-"""Integration tests for LocalLLMClient with real LM Studio instance.
+"""Integration tests for the unified LLM client with a real LM Studio instance.
 
 These tests require LM Studio (or compatible server) to be running.
 Skip with: pytest -m "not requires_llm_server"
@@ -6,7 +6,8 @@ Skip with: pytest -m "not requires_llm_server"
 
 import pytest
 
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.telemetry.trace import TraceContext
 
 
@@ -22,8 +23,8 @@ async def test_real_llm_call_router_model() -> None:
     - Telemetry is logged
     - Usage/tokens are captured
     """
-    # Create client with default settings (should use http://localhost:1234/v1)
-    client = LocalLLMClient()
+    # Resolves the primary role's catalog-declared endpoint
+    client = get_llm_client(role_name="primary")
 
     # Create trace context
     trace_ctx = TraceContext.new_trace()
@@ -78,7 +79,7 @@ async def test_real_llm_call_with_fallback() -> None:
 
     This verifies the automatic fallback mechanism works in practice.
     """
-    client = LocalLLMClient()
+    client = get_llm_client(role_name="primary")
     trace_ctx = TraceContext.new_trace()
 
     messages = [{"role": "user", "content": "Reply with just: OK"}]
@@ -100,7 +101,7 @@ async def test_real_llm_call_with_fallback() -> None:
 @pytest.mark.asyncio
 async def test_real_llm_call_all_roles() -> None:
     """Test calling all model roles to verify configuration is correct."""
-    client = LocalLLMClient()
+    client = get_llm_client(role_name="primary")
     trace_ctx = TraceContext.new_trace()
 
     test_message = "Say 'test' and nothing else."

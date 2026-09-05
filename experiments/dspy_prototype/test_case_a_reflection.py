@@ -15,9 +15,9 @@ import time
 
 import dspy
 
-from personal_agent.config import settings
 from personal_agent.config.model_loader import load_model_config
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.telemetry.trace import TraceContext
 
 from .setup_dspy import configure_dspy
@@ -89,11 +89,7 @@ async def manual_reflection_generation(
         reply_length=reply_length,
     )
 
-    llm_client = LocalLLMClient(
-        base_url=settings.llm_base_url,
-        timeout_seconds=settings.llm_timeout_seconds,
-        max_retries=settings.llm_max_retries,
-    )
+    llm_client = get_llm_client(role_name="primary")
 
     response = await llm_client.respond(
         role=ModelRole.PRIMARY,

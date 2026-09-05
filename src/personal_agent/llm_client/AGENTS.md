@@ -1,25 +1,36 @@
 # LLM Client
 
-Model abstraction layer for local LLM interactions (Qwen via LM Studio).
-
-**Spec**: `../../docs/architecture/LOCAL_LLM_CLIENT_SPEC_v0.1.md`
+Unified LLM dispatch layer for local and cloud model calls (ADR-0141). Every
+call — local (llama.cpp/MLX via the SLM tunnel) and cloud (Anthropic, OpenAI,
+OVH) — dispatches through `LiteLLMClient` / `litellm.acompletion()`. There is
+one client class, not one per placement.
 
 ## Responsibilities
 
-- Abstract OpenAI-compatible API calls
-- Handle retries and error recovery
+- Single dispatch path for every provider and placement
+- Egress guard on every outbound call (ADR-0132)
+- Cost-gate reservation for cloud placement; skipped for local (self-hosted, free)
+- Process-wide inference concurrency control (ADR-0029/ADR-0141 D3)
 - Emit telemetry for all LLM calls
+- Handle retries and error recovery
 
 ## Structure
 
 ```
 llm_client/
-├── __init__.py          # Exports: LocalLLMClient
-├── client.py            # LocalLLMClient class
-├── dspy_adapter.py      # DSPy integration for structured outputs (ADR-0010)
-├── adapters.py          # API adapters
-├── models.py            # Model configuration types
-└── types.py             # Response types
+├── __init__.py          # Public exports
+├── factory.py            # get_llm_client() / get_llm_client_for_key() — the construction door
+├── litellm_client.py      # LiteLLMClient — the one dispatch class, both placements
+├── concurrency.py         # InferenceConcurrencyController + process-wide singleton
+├── dspy_adapter.py        # DSPy integration for structured outputs (ADR-0010)
+├── adapters.py            # Response/request adapters
+├── history_sanitiser.py   # tool_call/tool_result consistency before dispatch
+├── prompt_identity.py     # Prompt identity derivation (ADR-0078)
+├── cost_tracker.py        # Cost/telemetry recording
+├── cost_estimator.py      # Pre-call cost estimation
+├── models.py              # Model/provider configuration types
+├── telemetry.py           # Canonical model_call_started/completed emit helpers
+└── types.py                # Response types, ModelRole, error taxonomy
 ```
 
 ## Usage
@@ -27,10 +38,11 @@ llm_client/
 ### Standard LLM Calls
 
 ```python
-from personal_agent.llm_client import LocalLLMClient
+from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.types import ModelRole
+from personal_agent.telemetry.trace import TraceContext
 
-client = LocalLLMClient()  # base URL comes from settings.slm_base_url
+client = get_llm_client(role_name="primary")  # resolves placement + endpoint from the catalog
 trace_ctx = TraceContext.new_trace()
 
 response = await client.respond(
@@ -40,44 +52,37 @@ response = await client.respond(
 )
 ```
 
+Use `get_llm_client(role_name=...)` for a factory role name resolved through
+the current selection + binding (`config/model_roles.yaml`). Use
+`get_llm_client_for_key(model_key, budget_role=...)` for a **trusted-config**
+key already resolved elsewhere (it skips the user-selection guardrail and
+fails loudly on an unknown key).
+
 ### Structured Outputs with DSPy (ADR-0010)
 
-Use DSPy signatures and modules for structured LLM outputs:
+DSPy configuration is independent of the client above — `configure_dspy_lm()`
+resolves a `dspy.LM` directly from a role or model key:
 
 ```python
 import dspy
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client.dspy_adapter import configure_dspy_lm
+from personal_agent.llm_client.types import ModelRole
 
-# 1. Define DSPy signature (schema)
 class ExtractUser(dspy.Signature):
     """Extract user information from text."""
     text: str = dspy.InputField(desc="Text containing user information")
     name: str = dspy.OutputField(desc="User's name")
     age: int = dspy.OutputField(desc="User's age")
 
-# 2. Configure DSPy with LocalLLMClient
-client = LocalLLMClient()
-lm = client.get_dspy_lm(role=ModelRole.PRIMARY)
+lm = configure_dspy_lm(role=ModelRole.PRIMARY)
 dspy.configure(lm=lm)
 
-# 3. Create predictor (use ChainOfThought for complex reasoning)
 predictor = dspy.ChainOfThought(ExtractUser)
-
-# 4. Execute and get structured output
 result = predictor(text="Alice is 30 years old")
 
-# 5. Access validated fields
 assert result.name == "Alice"
 assert result.age == 30
 ```
-
-**Benefits of DSPy structured outputs:**
-
-- ✅ Signature-based schema definition (cleaner than JSON prompts)
-- ✅ Type-safe output fields (validated by DSPy)
-- ✅ ChainOfThought adds explicit reasoning (improves quality)
-- ✅ No manual JSON parsing or validation
-- ✅ Works with LM Studio's OpenAI-compatible endpoint
 
 **DSPy Module Types:**
 
@@ -95,42 +100,33 @@ assert result.age == 30
 **Implementation Notes:**
 
 - Based on E-008 prototype evaluation (100% reliability, ~30-40% code reduction)
-- DSPy configured via `client.get_dspy_lm(role)` for consistency
 - See `dspy_adapter.py` for configuration details
 - See ADR-0010 for decision rationale (selective adoption for Captain's Log)
 
-**Example: Captain's Log Reflection (Day 31-32)**
+## Placement (ADR-0141)
 
-```python
-import dspy
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+Placement decides parameter shape and cost-gate applicability, not which
+client class handles the call:
 
-class GenerateReflection(dspy.Signature):
-    """Generate structured reflection on task execution."""
-    user_message: str = dspy.InputField()
-    steps_count: int = dspy.InputField()
-    final_state: str = dspy.InputField()
+| | Local | Cloud |
+|---|---|---|
+| Dispatch | litellm's OpenAI-compatible route (`openai/{model_id}`, `api_base` set) | litellm's native provider route |
+| Sampler params | catalog values flattened onto the wire via `extra_body` | provider-native kwargs |
+| `max_tokens` | omit-means-unbounded if the catalog declares none (D5) | `or 8192` default applies |
+| Cost gate | skipped — self-hosted, free | reserve/commit/refund (ADR-0065) |
+| Concurrency | process-wide controller, GPU sub-limit | process-wide controller, cloud safety-valve ceiling |
 
-    rationale: str = dspy.OutputField(desc="Analysis of execution")
-    proposed_change_what: str = dspy.OutputField(desc="What to change (empty if none)")
-    proposed_change_why: str = dspy.OutputField(desc="Why it helps")
-    supporting_metrics: str = dspy.OutputField(desc="Comma-separated metrics")
+The catalog/telemetry provider name (`slm_local`) and the litellm dispatch
+prefix (`openai/`) are different things — the prefix never leaves the client.
 
-# Configure and use
-client = LocalLLMClient()
-lm = client.get_dspy_lm(role=ModelRole.PRIMARY)
-dspy.configure(lm=lm)
+## Egress Guard (ADR-0132 D2)
 
-reflection_generator = dspy.ChainOfThought(GenerateReflection)
-result = reflection_generator(
-    user_message="What is Python?",
-    steps_count=3,
-    final_state="COMPLETED",
-)
-
-print(f"Rationale: {result.rationale}")
-print(f"Change: {result.proposed_change_what}")
-```
+Every dispatch route is guarded: a pre-dispatch check
+(`check_egress_or_raise`, raises `EgressBlockedError` directly) plus a
+per-route injected hook (`AsyncOpenAI(http_client=create_guarded_http_client())`
+on the OpenAI-SDK route). See `tests/personal_agent/llm_client/test_local_via_litellm.py::TestEgressGuardOnTheLocalRoute`
+and `tests/test_security/test_egress_seams.py::TestLlmClientSeam` for the
+seeded-negative proofs.
 
 ## Retries
 
@@ -139,7 +135,7 @@ MAX_RETRIES = 3
 
 for attempt in range(MAX_RETRIES):
     try:
-        response = await client.generate(prompt, ctx=trace_ctx)
+        response = await client.respond(role=role, messages=messages, trace_ctx=trace_ctx)
         break
     except LLMClientError as e:
         if attempt < MAX_RETRIES - 1:
@@ -149,23 +145,26 @@ for attempt in range(MAX_RETRIES):
             raise
 ```
 
+`max_retries` is also accepted directly by `respond()` — most producers pass
+it explicitly rather than looping themselves.
+
 ## Telemetry
 
-```python
-log.info("llm_request", model=model_name, prompt_length=len(prompt), trace_id=ctx.trace_id)
-response = await client.generate(prompt, ctx=ctx)
-log.info("llm_response", response_length=len(response), duration_ms=duration, trace_id=ctx.trace_id)
-```
+Canonical `model_call_started` / `model_call_completed` events are emitted by
+the client itself (`telemetry.py`), not by callers — see
+`emit_model_call_started` / `emit_model_call_completed`.
 
 ## Config
 
-- Base URL: `settings.slm_base_url` — declared per deployment (ADR-0132 D4); no default
-- Model: Qwen-based (configured in LM Studio)
-- **No API key needed** - local only
+- Local endpoint: the deployment's declared `endpoint`, or the provider's
+  `base_url` (`config/models.yaml`) — no default (ADR-0132 D4)
+- Cloud credentials: the provider's declared `auth_env` (`config/models.yaml`),
+  resolved from settings — never passed manually per call
 
 ## Dependencies
 
-- `httpx`: Async HTTP calls
+- `litellm`: unified dispatch to every provider
+- `openai`: SDK used on the OpenAI-compatible route (local + `openai` cloud)
 - `telemetry`: Logging
 - `pydantic`: Response validation
 - `dspy`: Structured outputs via signatures and modules (ADR-0010)
@@ -173,37 +172,34 @@ log.info("llm_response", response_length=len(response), duration_ms=duration, tr
 ## Search
 
 ```bash
-rg -n "LocalLLMClient|client\.generate" src/
+rg -n "get_llm_client|LiteLLMClient" src/
 rg -n "LLMClientError" src/
 ```
 
 ## Critical
 
-- **Local only** - no cloud fallback (local-first principle)
-- Timeout handling - LLM calls can be slow, set reasonable timeouts
-- **No API key needed** - LM Studio runs locally
+- Timeout handling — LLM calls can be slow; the role timeout is a
+  **generation** budget, not a connect/write/pool one (see `litellm_client.py`)
 - **Never send secrets/PII** in prompts
+- Never call `litellm.acompletion()`/`litellm.completion()` outside this
+  package (ast-grep tombstone, ADR-0141 AC-6) — dispatch through the factory
+  or `LiteLLMClient` directly
 
 ## Testing
 
-- Mock httpx responses
+- `tests/personal_agent/llm_client/test_local_via_litellm.py` — local-placement
+  dispatch parity, through the real litellm path (transport-level mocking only)
+- `tests/personal_agent/llm_client/test_litellm_*.py` — cloud-placement dispatch,
+  egress guard, cost-gate wiring
+- Mock at the `litellm.acompletion` boundary, or the transport
+  (`httpx.AsyncHTTPTransport.handle_async_request`) for wire-shape assertions
 - Test error handling (timeout, connection refused, 5xx)
 - Test retry logic
-- Use recorded responses for integration tests
-
-## LM Studio Setup
-
-```bash
-# 1. Download: https://lmstudio.ai
-# 2. Download Qwen model from UI
-# 3. Start local server on the port AGENT_SLM_BASE_URL names
-# 4. Test: curl $AGENT_SLM_BASE_URL/v1/models
-```
 
 ## Pre-PR
 
 ```bash
-pytest tests/test_llm_client/ -v
+pytest tests/personal_agent/llm_client/ tests/test_llm_client/ -v
 mypy src/personal_agent/llm_client/
 ruff check src/personal_agent/llm_client/
 ```

@@ -15,9 +15,9 @@ not to emit it, and any model-supplied provenance fields are ignored, never
 trusted (mirrors `entity_extraction.py`'s `_build_provenance` split).
 
 `seed` is recorded honestly as an integer run-identifier the caller
-supplies — not a proven determinism guarantee. Neither `LiteLLMClient` nor
-`LocalLLMClient` expose a native seed passthrough, and Anthropic's API has
-no seed parameter; true reproducibility isn't achievable via the API today.
+supplies — not a proven determinism guarantee. `LiteLLMClient` exposes no
+native seed passthrough, and Anthropic's API has no seed parameter; true
+reproducibility isn't achievable via the API today.
 """
 
 from __future__ import annotations

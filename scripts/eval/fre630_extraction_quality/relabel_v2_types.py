@@ -4,10 +4,14 @@ Drives 3 model raters (gpt-5.4-mini, gpt-5.4, claude-sonnet-5) through a BLIND
 classification prompt per gold entity — the entity name + its case's source
 text + the ADR-0109 V2 GoLLIE type definitions, verbatim. No V1 label, no other
 rater's answer, no rater identity is shown. This is a one-off research/labeling
-script: it calls ``litellm.acompletion()`` DIRECTLY (not the app's cost-gated
-``LiteLLMClient``) since there is no production extraction happening, just
-single-turn classification — a deliberate, called-out exception documented in
-docs/superpowers/plans/2026-07-04-fre-770-gold-relabel-iaa.md.
+script: raters dispatch through ``LiteLLMClient`` constructed directly (not via
+the factory's ``get_llm_client_for_key`` — the "full" gpt-5.4 rater has no
+catalog entry, and ``LiteLLMClient``'s own constructor docstring sanctions
+direct construction for a deployment genuinely outside the catalog), which puts
+every call behind the egress guard and the cost gate (``budget_role="study"``,
+the same one-off-research lane ``scripts/study/categorizer.py`` uses) —
+documented in docs/superpowers/plans/2026-07-04-fre-770-gold-relabel-iaa.md and
+ADR-0141 (FRE-1367).
 
 Usage::
 
@@ -44,6 +48,9 @@ from scripts.eval.fre630_extraction_quality.gold import (
 from scripts.eval.fre630_extraction_quality.iaa import IAAReport, build_iaa_report
 
 from personal_agent.config import settings
+from personal_agent.llm_client.litellm_client import LiteLLMClient
+from personal_agent.llm_client.types import ModelRole
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 
@@ -264,7 +271,14 @@ def _parse_rater_response(raw_text: str) -> RaterResponse:
 
 
 async def _call_rater(rater: Rater, prompt: str) -> RaterResponse:
-    """Call one rater directly via litellm (bypassing the app's cost gate).
+    """Call one rater via a directly-constructed LiteLLMClient (ADR-0141 D1/FRE-1367).
+
+    ``rater.provider``/``rater.model_id`` are genuinely outside the catalog (no
+    ``models.yaml`` entry for the "full" gpt-5.4 rater) — direct construction
+    with ``model_key=None`` is the pattern ``LiteLLMClient``'s own constructor
+    docstring sanctions for exactly this case. Credentials resolve from the
+    catalog's ``providers.{openai,anthropic}.auth_env`` automatically; no manual
+    ``api_key`` needed.
 
     Args:
         rater: The rater to call.
@@ -275,25 +289,25 @@ async def _call_rater(rater: Rater, prompt: str) -> RaterResponse:
         recorded as an ``error`` field, not propagated, so one rater's outage
         doesn't crash the whole run).
     """
-    import litellm
-
-    api_key = (
-        settings.anthropic_api_key if rater.provider == "anthropic" else settings.openai_api_key
+    client = LiteLLMClient(
+        model_id=rater.model_id,
+        provider=rater.provider,
+        max_tokens=200,
+        budget_role="study",
     )
-    kwargs: dict[str, Any] = {
-        "model": f"{rater.provider}/{rater.model_id}",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 200,
-    }
+    kwargs: dict[str, Any] = {}
     if rater.temperature is not None:
         kwargs["temperature"] = rater.temperature
-    if api_key:
-        kwargs["api_key"] = api_key
     try:
-        response = await litellm.acompletion(**kwargs)
+        response = await client.respond(
+            role=ModelRole.STUDY,
+            messages=[{"role": "user", "content": prompt}],
+            trace_ctx=SystemTraceContext.new("fre630_relabel_v2"),
+            **kwargs,
+        )
     except Exception as exc:  # noqa: BLE001 — a rater outage is a data point, not a crash
         return RaterResponse(type_label="", rationale="", raw_text="", error=type(exc).__name__)
-    text = response.choices[0].message.content or ""
+    text = response.get("content") or ""
     return _parse_rater_response(text)
 
 
@@ -464,6 +478,33 @@ def render_report_table(report: IAAReport) -> str:
     return "\n".join(lines)
 
 
+async def _classify_all_with_cost_gate(
+    items: Sequence[EntityItem], *, dry_run: bool
+) -> dict[str, dict[str, RaterResponse]]:
+    """Register a CostGate around a real run; dry-run never touches it.
+
+    ``LiteLLMClient.respond()``'s cloud path requires a registered gate
+    before any paid call (mirrors ``harness.py``'s ``_with_cost_gate`` in this
+    same directory — a standalone script has no app startup to register one).
+    ``dry_run=True`` never calls ``_call_rater`` (see ``classify_all``), so it
+    skips this entirely rather than requiring a live Postgres connection for
+    a fast smoke run.
+    """
+    if dry_run:
+        return await classify_all(items, dry_run=True)
+
+    from personal_agent.cost_gate import CostGate, load_budget_config, set_default_gate
+
+    gate = CostGate(config=load_budget_config(), db_url=settings.database_url)
+    await gate.connect()
+    set_default_gate(gate)
+    try:
+        return await classify_all(items, dry_run=False)
+    finally:
+        await gate.disconnect()
+        set_default_gate(None)
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -478,7 +519,7 @@ def main() -> None:
         items = items[: args.limit]
 
     log.info("relabel_run_start", run_id=args.run_id, dry_run=args.dry_run, n_items=len(items))
-    by_item = asyncio.run(classify_all(items, dry_run=args.dry_run))
+    by_item = asyncio.run(_classify_all_with_cost_gate(items, dry_run=args.dry_run))
     out_path = write_raw_telemetry(args.run_id, items, by_item)
     report = build_report(items, by_item)
     print(render_report_table(report))

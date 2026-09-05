@@ -104,7 +104,7 @@ from personal_agent.events.models import (
     LLMCallStartedEvent,
     ModelCallCompletedEvent,
 )
-from personal_agent.llm_client.client import LocalLLMClient
+from personal_agent.llm_client.litellm_client import LiteLLMClient
 from personal_agent.llm_client.cost_estimator import CostEstimate
 from personal_agent.llm_client.token_counter import estimate_tokens
 from personal_agent.memory.protocol import MemoryProtocol, TraceContext
@@ -155,7 +155,7 @@ async def run_turn(
     messages: list[dict[str, Any]],
     *,
     trace_id: str,
-    llm_client: LocalLLMClient,
+    llm_client: LiteLLMClient,
     bus: EventBus | None = None,
 ) -> TurnResult:
     \"\"\"Execute one orchestrator turn: LLM call → tool dispatch → response.

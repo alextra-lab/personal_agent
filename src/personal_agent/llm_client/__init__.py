@@ -1,7 +1,7 @@
-"""Local LLM Client module.
+"""LLM Client module.
 
-This module provides the LocalLLMClient for interacting with local LLM servers
-(LM Studio, Ollama, etc.) with proper error handling, retries, and telemetry.
+Every LLM call, local and cloud, dispatches through LiteLLMClient via
+personal_agent.llm_client.factory (ADR-0141 D1).
 """
 
 import warnings
@@ -33,17 +33,12 @@ from personal_agent.llm_client.types import (
 if TYPE_CHECKING:
     # Type checking only - avoid circular import
     from personal_agent.config import ModelConfigError, load_model_config
-    from personal_agent.llm_client.client import LocalLLMClient
     from personal_agent.llm_client.factory import LLMClient, get_llm_client
 else:
     # Lazy import to avoid circular dependency at runtime
     # Re-export from config module with deprecation warning
     # TODO: Remove in v0.2.0 - use `from personal_agent.config import load_model_config` instead
     def __getattr__(name: str):
-        if name == "LocalLLMClient":
-            from personal_agent.llm_client.client import LocalLLMClient
-
-            return LocalLLMClient
         if name == "LLMClient":
             from personal_agent.llm_client.factory import LLMClient
 
@@ -67,7 +62,6 @@ else:
 
 
 __all__ = [
-    "LocalLLMClient",
     "load_model_config",
     "ModelConfigError",
     "InferenceConcurrencyController",

@@ -1,11 +1,10 @@
-"""Integration tests for DSPy adapter and LocalLLMClient.get_dspy_lm().
+"""Integration tests for the DSPy adapter (configure_dspy_lm()).
 
 These tests verify that the DSPy integration works correctly with LM Studio's
 OpenAI-compatible endpoint. Based on E-008 prototype evaluation.
 
 Test Coverage:
 - DSPy LM configuration with role-based model selection
-- LocalLLMClient.get_dspy_lm() method
 - Basic DSPy Predict module
 - DSPy ChainOfThought module (recommended for Captain's Log)
 - Error handling (missing dependencies, invalid role)
@@ -30,7 +29,7 @@ from personal_agent.config.model_loader import (  # noqa: E402
     ModelConfigError,
     load_model_config,
 )
-from personal_agent.llm_client import LocalLLMClient, ModelRole  # noqa: E402
+from personal_agent.llm_client import ModelRole  # noqa: E402
 from personal_agent.llm_client.dspy_adapter import (  # noqa: E402
     configure_dspy_lm,
     create_dspy_predictor,
@@ -39,12 +38,6 @@ from personal_agent.llm_client.dspy_adapter import (  # noqa: E402
 # ============================================================================
 # Test Fixtures
 # ============================================================================
-
-
-@pytest.fixture
-def llm_client():
-    """Create LocalLLMClient for testing."""
-    return LocalLLMClient()
 
 
 @pytest.fixture(autouse=True)
@@ -141,44 +134,16 @@ def test_configure_dspy_lm_with_custom_timeout():
 
 
 # ============================================================================
-# Unit Tests: LocalLLMClient.get_dspy_lm()
-# ============================================================================
-
-
-def test_llm_client_get_dspy_lm(llm_client):
-    """Test LocalLLMClient.get_dspy_lm() method."""
-    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
-
-    assert lm is not None
-    assert hasattr(lm, "model")
-    assert lm.model.startswith("openai/")
-
-
-def test_llm_client_get_dspy_lm_uses_client_config(llm_client):
-    """Test that get_dspy_lm() uses client's base_url and timeout."""
-    # Create client with custom config
-    custom_client = LocalLLMClient(
-        base_url="http://custom:1234",
-        timeout_seconds=60,
-    )
-
-    lm = custom_client.get_dspy_lm(role=ModelRole.PRIMARY)
-
-    # Verify LM is created (no exception means config was passed correctly)
-    assert lm is not None
-
-
-# ============================================================================
 # Integration Tests: DSPy Predict Module
 # ============================================================================
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_dspy_predict_simple_question(llm_client):
+async def test_dspy_predict_simple_question():
     """Test basic DSPy Predict module with simple question."""
     # Configure DSPy
-    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Create predictor
@@ -203,10 +168,10 @@ async def test_dspy_predict_simple_question(llm_client):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_dspy_chain_of_thought_reasoning(llm_client):
+async def test_dspy_chain_of_thought_reasoning():
     """Test DSPy ChainOfThought module (recommended for Captain's Log)."""
     # Configure DSPy
-    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Create ChainOfThought predictor
@@ -229,10 +194,10 @@ async def test_dspy_chain_of_thought_reasoning(llm_client):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_dspy_chain_of_thought_with_empty_fields(llm_client):
+async def test_dspy_chain_of_thought_with_empty_fields():
     """Test ChainOfThought handles optional/empty fields correctly."""
     # Configure DSPy
-    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Signature with optional field
@@ -383,7 +348,7 @@ def test_configure_dspy_lm_local_model_sets_api_base():
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.slow
-async def test_dspy_chain_of_thought_latency_baseline(llm_client):
+async def test_dspy_chain_of_thought_latency_baseline():
     """Measure DSPy ChainOfThought latency for baseline comparison.
 
     This test establishes a baseline for Captain's Log reflection latency.
@@ -392,7 +357,7 @@ async def test_dspy_chain_of_thought_latency_baseline(llm_client):
     import time
 
     # Configure DSPy
-    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Create ChainOfThought predictor

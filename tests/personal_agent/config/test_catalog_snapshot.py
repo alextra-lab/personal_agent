@@ -126,6 +126,26 @@ explicit delta, and it is an addition rather than a change:
    call on the turn path is an unbounded one. The 180 is what the catalog
    declares, not what the judge waits.
 
+**Rebaselined a fifth time, deliberately, for the owner's qwen3.6-35b primary
+swap (FRE-1411, 2026-09-05).** Two cells changed, both by design:
+
+1. **``binding|primary`` and ``binding|sub_agent``: ``qwen3.8-flash-next(-instruct)``
+   → ``qwen3.6-35b-thinking`` / ``qwen3.6-35b-instruct``.** Owner-directed
+   reversion of the local primary/sub_agent pair (``config/model_roles.yaml``'s
+   ``bindings:``). ``binding|primary``'s resolved definition moves on ``id``,
+   ``quantization`` and ``temperature``; ``binding|sub_agent``'s moves on ``id``
+   and ``quantization`` only — its ``temperature`` (0.7) is unchanged, since
+   both the retired and the new instruct entry share the Unsloth
+   Instruct/non-thinking preset. ``context_length`` is 262144 on both sides of
+   the diff for both cells (the retired flash-next pair already served the
+   full window; the owner separately raised local Qwen's own declared window
+   from 131072/65536 to the same 262144 in this same swap — a fact this golden
+   cannot show, since only the deployment that answers changed here, not what
+   any single deployment declares). ``endpoint`` is unchanged
+   (``http://localhost:9099/v1``, the test-environment rewrite of the
+   catalog's ``slm.example.com`` placeholder) — both bindings stay on
+   ``slm_local``. No other cell moved.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

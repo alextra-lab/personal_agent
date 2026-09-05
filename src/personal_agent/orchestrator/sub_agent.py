@@ -57,11 +57,12 @@ _CONTEXT_PREVIEW_CHARS = 200
 # shared by the success path and the killed-result path below). FRE-1387: raised
 # from 2000 to a circuit breaker sized ~2x the highest full_output_chars ever
 # observed (12,987) — high enough that neither the catalog-declared generation
-# ceiling (~2048 tokens / ~8,000 chars) nor settings.sub_agent_max_tokens
-# (4096 / ~16,000 chars) can ever exceed it, so a real sub-agent response now
-# fits whole. It still exists as a backstop against a shape that has never
-# occurred here — a tool-using sub-agent dumping a long tool-call transcript
-# into its response — not to shape ordinary output.
+# ceiling (~2048 tokens / ~8,000 chars) nor the now-deleted (FRE-1381)
+# settings.sub_agent_max_tokens (4096 / ~16,000 chars) could ever exceed it,
+# so a real sub-agent response now fits whole. It still exists as a backstop
+# against a shape that has never occurred here — a tool-using sub-agent
+# dumping a long tool-call transcript into its response — not to shape
+# ordinary output.
 _SUMMARY_CAP_CHARS = 25_000
 
 # System prompt for sub-agents: focused, no personality

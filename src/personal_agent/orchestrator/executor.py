@@ -4783,97 +4783,84 @@ async def step_init(
             ctx.expansion_strategy = gw.decomposition.strategy.value
             ctx.expansion_constraints = gw.decomposition.constraints or {}
 
-            if settings.orchestration_mode == "enforced":
-                from personal_agent.llm_client.factory import get_llm_client
-                from personal_agent.orchestrator.expansion_controller import (
-                    ExpansionController,
-                )
+            from personal_agent.llm_client.factory import get_llm_client
+            from personal_agent.orchestrator.expansion_controller import (
+                ExpansionController,
+            )
 
-                # FRE-958: the DISPATCH client (every run_sub_agent call) must be
-                # built for role=SUB_AGENT (ADR-0033 client isolation, mirrored in
-                # expansion.py's autonomous-mode path), never PRIMARY. sub_agent may
-                # be bound to a different placement (e.g. a cloud provider) than
-                # primary; building for the wrong role dials the wrong
-                # client/endpoint for every sub-agent call.
-                llm_client = get_llm_client(role_name=ModelRole.SUB_AGENT.value)
-                # FRE-1390: the PLANNER client is a SEPARATE, explicitly-built
-                # client for role=PRIMARY. Decomposition is a reasoning judgement
-                # about work that has not happened yet, and SUB_AGENT binds to a
-                # deployment with thinking hard-disabled (config/model_roles.yaml).
-                # A single shared client cannot serve both roles: LiteLLMClient's
-                # dispatched deployment is fixed at construction, not by the
-                # ``role`` kwarg passed to ``.respond()`` (that kwarg is a
-                # telemetry label only) — so passing role=PRIMARY into a
-                # SUB_AGENT-built client would keep silently dispatching to the
-                # SUB_AGENT deployment. This must be a second client, not a
-                # request-time override.
-                planner_llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value)
-                controller = ExpansionController()
-                # ADR-0088 D4: report progress at dispatch start so tool/context fields are
-                # live during the (potentially multi-minute) expansion window. Cost itself
-                # climbs from turn.model_call_completed events, not a per-loop accumulator.
-                await _report_turn_progress(ctx)
-                expansion_result = await controller.execute(
-                    query=get_text_content(ctx.messages[-1].get("content", ""))
-                    if ctx.messages
-                    else "",
-                    strategy=gw.decomposition.strategy.value.upper(),
-                    llm_client=llm_client,
-                    planner_llm_client=planner_llm_client,
-                    trace_id=ctx.trace_id,
-                    messages=ctx.messages,
-                    constraints=ctx.expansion_constraints,
-                    session_id=ctx.session_id,
-                    eval_mode=ctx.eval_mode,
-                )
+            # FRE-958: the DISPATCH client (every run_sub_agent call) must be
+            # built for role=SUB_AGENT (ADR-0033 client isolation), never PRIMARY.
+            # sub_agent may be bound to a different placement (e.g. a cloud
+            # provider) than primary; building for the wrong role dials the wrong
+            # client/endpoint for every sub-agent call.
+            llm_client = get_llm_client(role_name=ModelRole.SUB_AGENT.value)
+            # FRE-1390: the PLANNER client is a SEPARATE, explicitly-built
+            # client for role=PRIMARY. Decomposition is a reasoning judgement
+            # about work that has not happened yet, and SUB_AGENT binds to a
+            # deployment with thinking hard-disabled (config/model_roles.yaml).
+            # A single shared client cannot serve both roles: LiteLLMClient's
+            # dispatched deployment is fixed at construction, not by the
+            # ``role`` kwarg passed to ``.respond()`` (that kwarg is a
+            # telemetry label only) — so passing role=PRIMARY into a
+            # SUB_AGENT-built client would keep silently dispatching to the
+            # SUB_AGENT deployment. This must be a second client, not a
+            # request-time override.
+            planner_llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value)
+            controller = ExpansionController()
+            # ADR-0088 D4: report progress at dispatch start so tool/context fields are
+            # live during the (potentially multi-minute) expansion window. Cost itself
+            # climbs from turn.model_call_completed events, not a per-loop accumulator.
+            await _report_turn_progress(ctx)
+            expansion_result = await controller.execute(
+                query=get_text_content(ctx.messages[-1].get("content", "")) if ctx.messages else "",
+                strategy=gw.decomposition.strategy.value.upper(),
+                llm_client=llm_client,
+                planner_llm_client=planner_llm_client,
+                trace_id=ctx.trace_id,
+                messages=ctx.messages,
+                constraints=ctx.expansion_constraints,
+                session_id=ctx.session_id,
+                eval_mode=ctx.eval_mode,
+            )
 
-                ctx.expansion_plan = expansion_result.plan
-                ctx.sub_agent_results = expansion_result.sub_agent_results
-                ctx.expansion_phase_results = expansion_result.phase_results
+            ctx.expansion_plan = expansion_result.plan
+            ctx.sub_agent_results = expansion_result.sub_agent_results
+            ctx.expansion_phase_results = expansion_result.phase_results
 
-                # Build synthesis context and append to messages
-                if expansion_result.sub_agent_results:
-                    synthesis_msg = {
-                        "role": "user",
-                        "content": (
-                            f"{expansion_result.synthesis_context}\n"
-                            "The sub-tasks above have been completed. "
-                            "Synthesize the results into a coherent response "
-                            "for the user's original question."
-                        ),
-                    }
-                    ctx.messages.append(synthesis_msg)
+            # Build synthesis context and append to messages
+            if expansion_result.sub_agent_results:
+                synthesis_msg = {
+                    "role": "user",
+                    "content": (
+                        f"{expansion_result.synthesis_context}\n"
+                        "The sub-tasks above have been completed. "
+                        "Synthesize the results into a coherent response "
+                        "for the user's original question."
+                    ),
+                }
+                ctx.messages.append(synthesis_msg)
 
-                log.info(
-                    "expansion_controller_complete",
-                    mode="enforced",
-                    plan_is_fallback=expansion_result.plan.is_fallback
-                    if expansion_result.plan
-                    else None,
-                    sub_agent_count=len(expansion_result.sub_agent_results),
-                    successful=expansion_result.successful_count,
-                    degraded=expansion_result.degraded,
-                    trace_id=ctx.trace_id,
-                )
-
-                # ADR-0088 D3: FRE-501's per-loop cost rollup is removed — the live meter
-                # now climbs from turn.model_call_completed events (every model call,
-                # including these sub-agents, publishes one from the cost boundary) and the
-                # durable row's authoritative cost is SUM(api_costs). Report progress so the
-                # tool/context fields refresh after expansion.
-                await _report_turn_progress(ctx)
-
-                # Go directly to synthesis LLM call
-                return TaskState.LLM_CALL
-
-            # Autonomous mode — existing behavior
             log.info(
-                "step_init_expansion_flagged",
-                mode="autonomous",
-                strategy=gw.decomposition.strategy.value,
-                constraints=gw.decomposition.constraints,
+                "expansion_controller_complete",
+                mode="enforced",
+                plan_is_fallback=expansion_result.plan.is_fallback
+                if expansion_result.plan
+                else None,
+                sub_agent_count=len(expansion_result.sub_agent_results),
+                successful=expansion_result.successful_count,
+                degraded=expansion_result.degraded,
                 trace_id=ctx.trace_id,
             )
+
+            # ADR-0088 D3: FRE-501's per-loop cost rollup is removed — the live meter
+            # now climbs from turn.model_call_completed events (every model call,
+            # including these sub-agents, publishes one from the cost boundary) and the
+            # durable row's authoritative cost is SUM(api_costs). Report progress so the
+            # tool/context fields refresh after expansion.
+            await _report_turn_progress(ctx)
+
+            # Go directly to synthesis LLM call
+            return TaskState.LLM_CALL
         return TaskState.LLM_CALL
 
     # Apply context window controls before LLM usage to prevent overflow.
@@ -5298,7 +5285,6 @@ async def step_llm_call(
     # corresponding fragments are spliced in; consumed at the respond() call to
     # build the orchestrator.primary PromptIdentity.
     _skill_index_present = False
-    _decomposition_added = False
     tool_awareness = ""
 
     # ADR-0081 D4: the volatile skill-bodies block (selected bodies +
@@ -5758,27 +5744,6 @@ async def step_llm_call(
             else:
                 system_prompt = f"{tool_prompt}\n\n{tool_awareness}"
 
-        # HYBRID decomposition prompt (autonomous mode only — enforced mode
-        # uses the expansion controller which has already run by this point).
-        if (
-            ctx.expansion_strategy is not None
-            and ctx.sub_agent_results is None
-            and settings.orchestration_mode == "autonomous"
-        ):
-            hybrid_prompt = (
-                "\n\n## Decomposition Instructions\n"
-                "Break your response into a numbered list of independent sub-tasks "
-                "(1. ..., 2. ..., 3. ...). Each item should be a self-contained "
-                "task that can be researched or answered independently. "
-                "Keep to 2-4 sub-tasks. After the sub-tasks complete, you will "
-                "synthesize their results into a final answer."
-            )
-            _decomposition_added = True
-            if system_prompt:
-                system_prompt = f"{system_prompt}{hybrid_prompt}"
-            else:
-                system_prompt = hybrid_prompt.strip()
-
         # Capture the cacheable prefix AFTER all STATIC/SEMI-STATIC assembly
         # (incl. the stable skill index) and BEFORE the VOLATILE tail — this is
         # what the static_prefix_hash covers (ADR-0081 D1 + D4).
@@ -5908,8 +5873,6 @@ async def step_llm_call(
         _component_ids.append("current_datetime")
         if tool_awareness:
             _component_ids.append("tool_use_rules")
-        if _decomposition_added:
-            _component_ids.append("decomposition_instructions")
         # FRE-1008: dynamic_hash must cover what is actually sent — request_messages
         # (which carries the ADR-0081 volatile tail inlined into the current user
         # turn) and tools — not a precomputed candidate string, since the inline step
@@ -6132,105 +6095,6 @@ async def step_llm_call(
         # Some reasoning models may emit router-style JSON with a `response` field.
         # Unwrap it to avoid returning JSON to the user.
         response_content = _unwrap_embedded_response_json(response_content)
-
-        # --- HYBRID expansion hook (autonomous mode only) ---
-        if (
-            ctx.expansion_strategy is not None
-            and ctx.sub_agent_results is None
-            and settings.orchestration_mode == "autonomous"
-        ):
-            from personal_agent.orchestrator.expansion import (
-                execute_hybrid,
-                parse_decomposition_plan,
-            )
-
-            max_sub = (ctx.expansion_constraints or {}).get("max_sub_agents", 3)
-            specs = parse_decomposition_plan(
-                plan_text=response_content,
-                max_sub_agents=max_sub,
-            )
-
-            # Phase B: inherit skill index + loaded_skills from parent context
-            if specs and settings.prefer_primitives_enabled:
-                from dataclasses import replace  # noqa: PLC0415
-
-                from personal_agent.orchestrator.skills import assemble_skill_index  # noqa: PLC0415
-
-                _sub_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
-                _parent_loaded = frozenset(ctx.loaded_skills)
-                specs = [
-                    replace(spec, skill_index_block=_sub_index, loaded_skills=_parent_loaded)
-                    for spec in specs
-                ]
-
-            if specs:
-                # ADR-0088 D4: report progress at dispatch start (the meter is already
-                # lit by the seam's turn.topology_entered + primary model_call_completed
-                # events; cost is not accumulated per-loop).
-                await _report_turn_progress(ctx)
-                results = await execute_hybrid(
-                    specs=specs,
-                    trace_id=ctx.trace_id,
-                    max_concurrent=max_sub,
-                    session_id=ctx.session_id,
-                    eval_mode=ctx.eval_mode,
-                )
-                ctx.sub_agent_results = results
-
-                # ADR-0088 D3: FRE-501's per-loop sub-agent cost rollup is removed — each
-                # sub-agent model call already publishes turn.model_call_completed from the
-                # cost boundary, so the live meter climbs without accumulation here. Report
-                # progress so the tool/context fields refresh after the fan-out.
-                await _report_turn_progress(ctx)
-
-                # Build synthesis context and append to messages
-                synthesis_parts = ["Sub-agent results:\n"]
-                for r in results:
-                    status = "OK" if r.success else f"FAILED: {r.error}"
-                    synthesis_parts.append(f"- {r.spec_task}: [{status}] {r.summary}\n")
-                synthesis_context = "".join(synthesis_parts)
-
-                synthesis_msg = {
-                    "role": "user",
-                    "content": (
-                        f"{synthesis_context}\n"
-                        "The sub-tasks above have been completed. "
-                        "Synthesize the results into a coherent response "
-                        "for the user's original question."
-                    ),
-                }
-                hybrid_assistant_msg: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": response_content,
-                }
-                # Preserve thinking trace for templates that support
-                # `preserve_thinking` (Qwen3.6 unsloth template reads
-                # `message.reasoning_content` first, falls back to <think> tags
-                # in content). Cloud paths and sub-agents with disable_thinking
-                # emit reasoning_trace=None, so this is a no-op for them.
-                hybrid_reasoning = response.get("reasoning_trace")
-                if hybrid_reasoning:
-                    hybrid_assistant_msg["reasoning_content"] = hybrid_reasoning
-                ctx.messages.append(hybrid_assistant_msg)
-                ctx.messages.append(synthesis_msg)
-
-                log.info(
-                    "expansion_phase1_complete",
-                    sub_agent_count=len(results),
-                    successful=sum(1 for r in results if r.success),
-                    trace_id=ctx.trace_id,
-                )
-
-                # Re-enter LLM_CALL for synthesis (phase 2)
-                return TaskState.LLM_CALL
-
-            # No parseable specs — fall through to normal response path
-            log.warning(
-                "expansion_no_specs_parsed",
-                strategy=ctx.expansion_strategy,
-                trace_id=ctx.trace_id,
-            )
-        # --- End HYBRID expansion hook ---
 
         # Add assistant message to history (with tool calls if present).
         # Tool_call ids are rewritten with a turn prefix so ids do not collide

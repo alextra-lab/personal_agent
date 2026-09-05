@@ -262,7 +262,6 @@ async def test_enforced_expansion_subpath_also_emits_exactly_once(
     async def _noop_progress(c: ExecutionContext) -> None:
         return None
 
-    monkeypatch.setattr(ex.settings, "orchestration_mode", "enforced")
     monkeypatch.setattr(ex, "_report_turn_progress", _noop_progress)
 
     controller = MagicMock()
@@ -401,7 +400,6 @@ async def test_enforced_expansion_subpath_also_emits_conversation_context_loaded
     async def _noop_progress(c: ExecutionContext) -> None:
         return None
 
-    monkeypatch.setattr(ex.settings, "orchestration_mode", "enforced")
     monkeypatch.setattr(ex, "_report_turn_progress", _noop_progress)
 
     controller = MagicMock()

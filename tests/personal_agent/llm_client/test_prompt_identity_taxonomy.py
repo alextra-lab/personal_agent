@@ -40,7 +40,6 @@ class TestPromptComponentTaxonomy:
             "artifact_builder_planning_note",
             "current_datetime",
             "tool_use_rules",
-            "decomposition_instructions",
         }
         taxonomy_set = set(PROMPT_COMPONENT_TAXONOMY)
         missing = executor_component_ids - taxonomy_set
@@ -77,7 +76,6 @@ class TestPromptComponentTaxonomy:
             "artifact_builder_planning_note",
             "current_datetime",
             "tool_use_rules",
-            "decomposition_instructions",
         ):
             assert f'_component_ids.append("{component_id}")' in source, (
                 f"executor.py no longer appends '{component_id}'; "

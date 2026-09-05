@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -26,6 +26,20 @@ def _spec(
         max_tokens=1024,
         timeout_seconds=timeout,
         hard_deadline_seconds=hard_deadline,
+    )
+
+
+def _spec_with_tools(
+    tools: list[str], timeout: float = 30.0, hard_deadline: float | None = None
+) -> SubAgentSpec:
+    return SubAgentSpec(
+        task="test task",
+        context=[{"role": "user", "content": "do the thing"}],
+        output_format="text",
+        max_tokens=1024,
+        timeout_seconds=timeout,
+        hard_deadline_seconds=hard_deadline,
+        tools=tools,
     )
 
 
@@ -267,6 +281,420 @@ class TestRunSubAgent:
         assert isinstance(complete[0]["digest_chars"], int)
 
 
+def _stub_tool_layer(*tool_names: str) -> MagicMock:
+    """A get_shared_tool_execution_layer() stub advertising ``tool_names``."""
+    layer = MagicMock()
+    layer.registry.get_tool_definitions_for_llm.return_value = [
+        {"type": "function", "function": {"name": n, "description": "d", "parameters": {}}}
+        for n in tool_names
+    ]
+    return layer
+
+
+def _dispatch_result(tool_call_id: str, tool_name: str, content: str) -> dict[str, Any]:
+    return {
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+        "content": content,
+        "success": True,
+        "latency_ms": 1.0,
+        "output_hash": "h",
+        "gate_result": None,
+        "args_hash": "",
+        "loop_policy": None,
+        "tool_layer_output": None,
+        "tool_layer_error": None,
+    }
+
+
+class TestNormalizeToolCalls:
+    """FRE-1389 — per-round unique tool_call ids, mirroring executor's own scheme."""
+
+    def test_ids_differ_across_rounds_for_the_same_raw_id(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _normalize_tool_calls
+
+        raw = [{"id": "call_0", "name": "run_python", "arguments": "{}"}]
+        round1 = _normalize_tool_calls(raw, 1)
+        round2 = _normalize_tool_calls(raw, 2)
+        assert round1[0]["id"] != round2[0]["id"]
+
+    def test_shape_matches_openai_format(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _normalize_tool_calls
+
+        raw = [{"id": "call_0", "name": "run_python", "arguments": '{"a": 1}'}]
+        normalized = _normalize_tool_calls(raw, 1)
+        assert normalized[0]["type"] == "function"
+        assert normalized[0]["function"] == {"name": "run_python", "arguments": '{"a": 1}'}
+        assert normalized[0]["index"] == 0
+
+
+class TestExtractStatedToolGap:
+    def test_strips_trailing_sentinel_line(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _extract_stated_tool_gap
+
+        content, gap = _extract_stated_tool_gap("Here is my answer.\nTOOL_GAP: web_search")
+        assert gap == "web_search"
+        assert "TOOL_GAP" not in content
+        assert content == "Here is my answer."
+
+    def test_no_sentinel_is_a_noop(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _extract_stated_tool_gap
+
+        content, gap = _extract_stated_tool_gap("Just a normal answer.")
+        assert gap is None
+        assert content == "Just a normal answer."
+
+    def test_sentinel_must_be_the_last_line(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _extract_stated_tool_gap
+
+        content, gap = _extract_stated_tool_gap("TOOL_GAP: web_search\nmore text after")
+        assert gap is None
+        assert "TOOL_GAP" in content
+
+
+class TestBuildToolDefs:
+    def test_empty_grant_returns_none(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _build_tool_defs
+
+        assert _build_tool_defs([]) is None
+
+    def test_filters_to_granted_subset(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _build_tool_defs
+
+        with patch(
+            "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+            return_value=_stub_tool_layer("run_python", "bash", "read"),
+        ):
+            defs = _build_tool_defs(["run_python"])
+        assert defs is not None
+        assert [d["function"]["name"] for d in defs] == ["run_python"]
+
+
+class TestEffectiveHardDeadline:
+    """A tool-using loop's deadline must scale with its own iteration cap —
+
+    the single-call sizing (worker_hard_deadline_seconds: "60s generation +
+    25s queue-wait absorption") predates this loop and would otherwise kill a
+    genuine multi-round tool-using sub-agent well before it ever reaches its
+    own cap.
+    """
+
+    def test_no_tools_keeps_single_call_sizing(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
+
+        assert _effective_hard_deadline(_spec(timeout=60.0)) == 60.0
+
+    def test_tools_scale_by_iteration_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.config import settings
+        from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+
+        assert _effective_hard_deadline(_spec_with_tools(["run_python"], timeout=60.0)) == 300.0
+
+    def test_explicit_hard_deadline_still_wins_if_larger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+        from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        spec = _spec_with_tools(["run_python"], timeout=60.0, hard_deadline=1000.0)
+
+        assert _effective_hard_deadline(spec) == 1000.0
+
+
+class TestSubAgentToolLoop:
+    """FRE-1389 — the sub-agent's own bounded tool loop."""
+
+    @pytest.mark.asyncio
+    async def test_tool_round_trip_populates_tools_used(self) -> None:
+        """AC-1: a granted tool is actually called, and it shows up as used."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "",
+                    tool_calls=[{"id": "c0", "name": "run_python", "arguments": '{"code": "1"}'}],
+                ),
+                _llm_response("final answer"),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", "42")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.success is True
+        assert result.tools_used == ["run_python"]
+        assert result.tool_iterations == 1
+        assert result.summary == "final answer"
+
+    @pytest.mark.asyncio
+    async def test_empty_grant_never_passes_tools_to_respond(self) -> None:
+        """Regression: a grant-less sub-agent must behave exactly as before the loop."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="plain answer")
+
+        await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        _, kwargs = mock_client.respond.call_args
+        assert kwargs["tools"] is None
+
+    @pytest.mark.asyncio
+    async def test_iteration_cap_stops_the_loop_with_explicit_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-2: the cap is the sub-agent's own number, and hitting it is a
+        distinct failure — not a disguised empty success.
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 2)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            return_value=_llm_response(
+                "still working",
+                tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}],
+            )
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.success is False
+        assert "tool iteration limit" in (result.error or "")
+        assert result.tool_iterations == 2
+        # Two executed rounds, plus the third call whose batch was refused.
+        assert mock_client.respond.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_tool_outside_grant_is_refused_without_dispatch(self) -> None:
+        """AC-3: seeded negative — an out-of-grant attempt is refused, never dispatched."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "",
+                    tool_calls=[
+                        {"id": "c0", "name": "run_python", "arguments": "{}"},
+                        {"id": "c1", "name": "bash", "arguments": "{}"},
+                    ],
+                ),
+                _llm_response("final answer"),
+            ]
+        )
+        dispatch_mock = AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok"))
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch_mock),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.refused_tool_attempts == ("bash",)
+        assert result.tools_used == ["run_python"]
+        assert dispatch_mock.call_count == 1
+        assert dispatch_mock.call_args.kwargs["tool_name"] == "run_python"
+
+    @pytest.mark.asyncio
+    async def test_malformed_arguments_are_refused_without_dispatch(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "",
+                    tool_calls=[{"id": "c0", "name": "run_python", "arguments": "not json"}],
+                ),
+                _llm_response("final answer"),
+            ]
+        )
+        dispatch_mock = AsyncMock()
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch_mock),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.success is True
+        assert result.tools_used == []
+        assert result.refused_tool_attempts == ()
+        dispatch_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tool_result_chars_absorbed_measures_isolation(self) -> None:
+        """AC-4: raw tool-result chars are counted even though they never reach summary."""
+        raw_tool_output = "x" * 500
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response("ok"),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", raw_tool_output)),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.tool_result_chars_absorbed >= 500
+        assert len(result.summary) < result.tool_result_chars_absorbed
+
+    @pytest.mark.asyncio
+    async def test_multi_round_cost_is_summed(self) -> None:
+        """AC-6: every round's cost_usd is summed, not just the last call's."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response_with_cost(
+                    "", 0.01, tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response_with_cost("done", 0.02),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.cost_usd == pytest.approx(0.03)
+
+    @pytest.mark.asyncio
+    async def test_stated_tool_gap_is_parsed_and_stripped_from_summary(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="Did what I could.\nTOOL_GAP: web_search")
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.stated_tool_gap == "web_search"
+        assert "TOOL_GAP" not in result.summary
+
+    @pytest.mark.asyncio
+    async def test_whole_loop_deadline_not_per_call(self) -> None:
+        """The hard deadline bounds the ENTIRE loop, not each respond() call alone."""
+
+        async def _always_wants_more_tools(*args: object, **kwargs: object) -> dict[str, Any]:
+            await asyncio.sleep(0.1)
+            return _llm_response(
+                "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+            )
+
+        mock_client = AsyncMock()
+        mock_client.respond = _always_wants_more_tools
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=0.05, hard_deadline=0.15),
+                llm_client=mock_client,
+                trace_id="t",
+            )
+
+        # Each individual respond() call (0.1s) is well under the 0.15s hard
+        # deadline; only the SUM across rounds exceeds it.
+        assert result.success is False
+        assert "Timeout" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_completed_round_cost_survives_a_later_timeout(self) -> None:
+        """A paid round's cost is not lost when a LATER round is what times out."""
+
+        async def _first_cheap_then_hangs(*args: object, **kwargs: object) -> dict[str, Any] | str:
+            if not hasattr(_first_cheap_then_hangs, "called"):
+                _first_cheap_then_hangs.called = True  # type: ignore[attr-defined]
+                return _llm_response_with_cost(
+                    "", 0.05, tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+                )
+            await asyncio.sleep(10)
+            return "too late"
+
+        mock_client = AsyncMock()
+        mock_client.respond = _first_cheap_then_hangs
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=0.05, hard_deadline=0.15),
+                llm_client=mock_client,
+                trace_id="t",
+            )
+
+        assert result.success is False
+        assert result.cost_usd == pytest.approx(0.05)
+        assert result.tools_used == ["run_python"]
+
+
 class TestPartialProgressOnKill:
     """FRE-1379 AC-1 — a killed sub-agent reports what it managed.
 
@@ -467,6 +895,51 @@ class TestSubAgentCaptureEmitted:
         assert cap.success is False
         assert cap.truncation_ratio == 0.0
         assert cap.full_output == ""
+
+    @pytest.mark.asyncio
+    async def test_capture_carries_tool_loop_activity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1389: tool-loop fields reach the audit record, not just the result."""
+        import personal_agent.orchestrator.sub_agent as sa
+
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "",
+                    tool_calls=[
+                        {"id": "c0", "name": "run_python", "arguments": "{}"},
+                        {"id": "c1", "name": "bash", "arguments": "{}"},
+                    ],
+                ),
+                _llm_response("Done.\nTOOL_GAP: web_search"),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", "x" * 50)),
+            ),
+        ):
+            await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert len(captured) == 1
+        cap = captured[0]
+        assert cap.tool_iterations == 1
+        assert cap.tool_result_chars_absorbed >= 50
+        assert cap.refused_tool_attempts == ["bash"]
+        assert cap.stated_tool_gap == "web_search"
 
     @pytest.mark.asyncio
     async def test_capture_written_on_cancellation(self, monkeypatch: pytest.MonkeyPatch) -> None:

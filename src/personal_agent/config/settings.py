@@ -228,6 +228,17 @@ class AppConfig(BaseSettings):
             "runs (no tools) so gathered results are never silently discarded."
         ),
     )
+    sub_agent_max_tool_iterations: int = Field(
+        default=5,
+        ge=0,
+        description=(
+            "FRE-1389 AC-2: the sub-agent tool loop's own iteration cap. Deliberately "
+            "separate from orchestrator_max_tool_iterations_by_task_type, which is keyed "
+            "on the PARENT turn's TaskType — the wrong axis for a sub-agent's own bounded-"
+            "worker budget. Lower than the primary's cap because a sub-agent is a single "
+            "focused task, not an open-ended turn."
+        ),
+    )
     orchestrator_max_repeated_tool_calls: int = Field(
         default=1,
         ge=0,

@@ -55,6 +55,8 @@ def _make_sub_agent_result(
     summary: str = "Result summary",
     cost_usd: float = 0.0,
     denied_tools: tuple[str, ...] = (),
+    refused_tool_attempts: tuple[str, ...] = (),
+    stated_tool_gap: str | None = None,
 ) -> SubAgentResult:
     return SubAgentResult(
         task_id=uuid4(),
@@ -68,6 +70,8 @@ def _make_sub_agent_result(
         error=None if success else "Timeout",
         cost_usd=cost_usd,
         denied_tools=denied_tools,
+        refused_tool_attempts=refused_tool_attempts,
+        stated_tool_gap=stated_tool_gap,
     )
 
 
@@ -103,10 +107,13 @@ class TestValidatePlanJson:
 
 
 class TestPlannerDiscoveryRetired:
-    """FRE-884 — ADR-0086's tooled discovery-slice parsing is retired.
+    """FRE-884 — ADR-0086's tooled discovery-slice ``mode`` is retired.
 
-    A raw plan carrying a ``mode``/``tools`` field (the old discovery-slice
-    shape) is always ignored: every task parses as plain PARALLEL_INFERENCE.
+    A raw plan carrying the old discovery-slice ``mode`` field is still
+    ignored — ``SubAgentMode`` only has PARALLEL_INFERENCE. ``tools`` is a
+    SEPARATE, still-live field (FRE-1389): it is now parsed and later
+    filtered against the sub-agent tool grant set at dispatch time, not
+    dropped at parse time.
     """
 
     @staticmethod
@@ -125,18 +132,74 @@ class TestPlannerDiscoveryRetired:
             }
         )
 
-    def test_mode_and_tools_fields_are_ignored(self) -> None:
+    def test_mode_field_is_still_ignored(self) -> None:
         from personal_agent.orchestrator.expansion_types import SubAgentMode
 
         plan = _validate_plan_json(self._tooled_plan(["bash", "read"]))
         assert plan is not None
         assert plan.tasks[0].mode == SubAgentMode.PARALLEL_INFERENCE
+
+    def test_tools_field_is_now_parsed(self) -> None:
+        """FRE-1389: closes the FRE-884 gap — the planner's tools request now
+        reaches PlanTask.tools, where dispatch-time governance filters it.
+        """
+        plan = _validate_plan_json(self._tooled_plan(["bash", "read"]))
+        assert plan is not None
+        assert plan.tasks[0].tools == ["bash", "read"]
+
+    def test_non_list_tools_field_is_ignored(self) -> None:
+        """A malformed (non-list) tools field must not be iterated char-by-char."""
+        raw = json.dumps(
+            {
+                "strategy": "HYBRID",
+                "tasks": [{"name": "t", "goal": "g", "tools": "run_python"}],
+            }
+        )
+        plan = _validate_plan_json(raw)
+        assert plan is not None
         assert plan.tasks[0].tools == []
 
     def test_planner_prompt_never_mentions_tooled_sequential(self) -> None:
-        from personal_agent.orchestrator.expansion_controller import _PLANNER_SYSTEM_PROMPT
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
 
-        assert "tooled_sequential" not in _PLANNER_SYSTEM_PROMPT
+        assert "tooled_sequential" not in _build_planner_system_prompt(["run_python"])
+        assert "tooled_sequential" not in _build_planner_system_prompt([])
+
+
+class TestPlannerPromptToolSurface:
+    """FRE-1389: the planner prompt advertises the LIVE sub-agent tool grant."""
+
+    def test_lists_available_tools(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        prompt = _build_planner_system_prompt(["run_python"])
+        assert "run_python" in prompt
+        assert '"tools"' in prompt
+
+    def test_empty_surface_tells_planner_to_omit(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        prompt = _build_planner_system_prompt([])
+        assert "no tools are currently available" in prompt
+
+    def test_surface_lookup_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A governance/mode lookup error yields an empty surface, not a crash."""
+        from personal_agent.config import GovernanceConfigError
+        from personal_agent.orchestrator import expansion_controller as ec
+
+        def _boom() -> None:
+            raise GovernanceConfigError("boom")
+
+        monkeypatch.setattr(ec, "get_current_mode", lambda: Mode.NORMAL)
+        monkeypatch.setattr(ec, "load_governance_config", _boom)
+
+        assert ec._current_sub_agent_tool_surface("t") == []
 
 
 class TestExpansionControllerExecute:
@@ -939,6 +1002,420 @@ class TestSubAgentToolGrant:
         assert captured_specs[0].tools == []
         assert captured_specs[0].denied_tools == ("run_python",)
         assert results[0].success is True
+
+
+class TestSubAgentGapRedispatch:
+    """FRE-1389 AC-5 — a stated tool gap gets ONE replacement dispatch, never a
+
+    sub-agent acquiring the tool itself. ``_maybe_redispatch_on_gap`` is
+    exercised through ``_run_dispatch`` end to end, using the same hermetic
+    governance-mocking pattern as ``TestSubAgentToolGrant``.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @staticmethod
+    def _hermetic_config(sub_agent_tools: list[str]) -> Any:
+        from personal_agent.governance.models import GovernanceConfig
+
+        return GovernanceConfig(
+            modes={}, tools={}, sub_agent_tools=sub_agent_tools, mode_constraints={}
+        )
+
+    @staticmethod
+    def _one_task_plan(tools: list[str] | None = None) -> Any:
+        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
+
+        return ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[PlanTask(name="task_0", goal="Goal for task 0", tools=tools or [])],
+        )
+
+    @staticmethod
+    def _stub_registry_knowing(*names: str) -> MagicMock:
+        """A get_shared_tool_execution_layer() stub whose registry recognizes ``names``."""
+        layer = MagicMock()
+        layer.registry.get_tool = lambda n: object() if n in names else None
+        return layer
+
+    @pytest.mark.asyncio
+    async def test_refused_attempt_triggers_one_replacement_dispatch(
+        self, controller: ExpansionController
+    ) -> None:
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan()
+        calls: list[Any] = []
+
+        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            calls.append(spec)
+            if len(calls) == 1:
+                return _make_sub_agent_result("task_0", refused_tool_attempts=("run_python",))
+            return _make_sub_agent_result("task_0")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_dispatch,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-refused",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert len(calls) == 2
+        assert calls[1].tools == ["run_python"]
+        assert "retry" in calls[1].task
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_stated_tool_gap_triggers_one_replacement_dispatch(
+        self, controller: ExpansionController
+    ) -> None:
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan()
+        calls: list[Any] = []
+
+        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            calls.append(spec)
+            if len(calls) == 1:
+                return _make_sub_agent_result("task_0", stated_tool_gap="run_python")
+            return _make_sub_agent_result("task_0")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_dispatch,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-stated",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert len(calls) == 2
+        assert calls[1].tools == ["run_python"]
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_is_single_shot(self, controller: ExpansionController) -> None:
+        """The replacement's OWN stated gap is never acted on — no chained retries."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan()
+        calls: list[Any] = []
+
+        async def _always_states_a_gap(**kwargs: Any) -> SubAgentResult:
+            calls.append(kwargs["spec"])
+            return _make_sub_agent_result("task_0", stated_tool_gap="run_python")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_always_states_a_gap,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-single-shot",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert len(calls) == 2  # original + exactly one replacement, never a third
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_unregistered_gap_name_is_ignored(self, controller: ExpansionController) -> None:
+        """A hallucinated name that isn't even a registered tool spends no retry."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan()
+        calls: list[Any] = []
+
+        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+            calls.append(kwargs["spec"])
+            return _make_sub_agent_result("task_0", stated_tool_gap="not_a_real_tool")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_dispatch,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-unregistered",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert len(calls) == 1
+        assert len(results) == 1
+
+    @pytest.mark.asyncio
+    async def test_gap_still_denied_on_retry_yields_no_extra_result(
+        self, controller: ExpansionController
+    ) -> None:
+        """A gap outside the sub-agent grant surface entirely stays denied — no retry."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan()
+        calls: list[Any] = []
+
+        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+            calls.append(kwargs["spec"])
+            return _make_sub_agent_result("task_0", stated_tool_gap="web_search")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                # web_search is registered but NOT in the sub-agent grant surface.
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python", "web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_dispatch,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-still-denied",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert len(calls) == 1
+        assert len(results) == 1
+
+    @pytest.mark.asyncio
+    async def test_redispatch_pairs_with_the_right_task_after_earlier_exception(
+        self, controller: ExpansionController
+    ) -> None:
+        """An earlier task's raw dispatch exception must not shift the retry pairing."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
+
+        plan = ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[
+                PlanTask(name="task_boom", goal="raises"),
+                PlanTask(name="task_gap", goal="states a gap"),
+            ],
+        )
+        calls: list[Any] = []
+
+        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            calls.append(spec)
+            if "raises" in spec.task:
+                raise RuntimeError("boom")
+            if "retry" in spec.task:
+                return _make_sub_agent_result("task_gap")
+            return _make_sub_agent_result("task_gap", stated_tool_gap="run_python")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_dispatch,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-alignment",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        # task_boom's exception drops it entirely; task_gap gets its own retry,
+        # correctly paired (not confused with task_boom's slot).
+        assert len(results) == 2
+        assert all(r.spec_task == "task_gap" for r in results)
+        assert calls[-1].task.startswith("states a gap")
+
+    @pytest.mark.asyncio
+    async def test_replacement_cost_is_not_dropped(self, controller: ExpansionController) -> None:
+        """AC-6: the original attempt's cost survives even though it was incomplete."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan()
+        calls: list[Any] = []
+
+        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+            calls.append(kwargs["spec"])
+            if len(calls) == 1:
+                return _make_sub_agent_result("task_0", stated_tool_gap="run_python", cost_usd=0.01)
+            return _make_sub_agent_result("task_0", cost_usd=0.02)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_dispatch,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-cost",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert sum(r.cost_usd for r in results) == pytest.approx(0.03)
+
+    @pytest.mark.asyncio
+    async def test_gap_for_an_already_denied_requested_tool_is_not_retried(
+        self, controller: ExpansionController
+    ) -> None:
+        """A partially-granted task's gap must compare against what was actually
+
+        GRANTED (spec.tools), not merely requested (task.tools) — a gap for a
+        tool the planner already asked for and governance already denied must
+        not spend a retry re-asking the same, unchanged question.
+        """
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
+
+        # bash was requested but denied; run_python was requested and granted.
+        plan = ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[PlanTask(name="task_0", goal="Goal for task 0", tools=["bash", "run_python"])],
+        )
+        calls: list[Any] = []
+
+        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            calls.append(spec)
+            return _make_sub_agent_result(
+                "task_0", denied_tools=spec.denied_tools, refused_tool_attempts=("bash",)
+            )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                # bash is never in the sub-agent grant surface — always denied.
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python", "bash"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_dispatch,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-already-denied",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert calls[0].tools == ["run_python"]
+        assert len(calls) == 1  # no retry — bash was already, and still, denied
+        assert len(results) == 1
 
 
 class TestSynthesisContextExcludesFullOutput:

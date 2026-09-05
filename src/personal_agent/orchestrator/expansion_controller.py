@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import structlog
@@ -27,6 +27,7 @@ import structlog
 from personal_agent.brainstem import ModeManagerError, get_current_mode
 from personal_agent.config import GovernanceConfigError, get_settings, load_governance_config
 from personal_agent.governance.sub_agent_tools import (
+    SUB_AGENT_DENIED_MODES,
     SubAgentToolGrant,
     evaluate_sub_agent_tool_grant,
 )
@@ -42,26 +43,82 @@ from personal_agent.orchestrator.expansion_types import (
 from personal_agent.orchestrator.fallback_planner import generate_fallback_plan
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
+from personal_agent.orchestrator.tool_dispatch import get_shared_tool_execution_layer
 
 logger = structlog.get_logger(__name__)
 
 # Plan schema: max entity tasks per strategy (synthesis task is additional)
 _MAX_TASKS = {"HYBRID": 4, "DECOMPOSE": 6}
+# FRE-1389: bound on how many out-of-grant gap signals one dispatch pass acts
+# on — a defensive cap, not an expected count (a result's own signals are
+# already capped at the source; this bounds the union across every task).
+_MAX_GAP_NAMES_PER_TASK = 10
 
-# System prompt for the planner LLM call
-_PLANNER_SYSTEM_PROMPT = (
-    "You are a task decomposition planner. Given a user query and a strategy, "
-    "produce a JSON plan that breaks the query into independent sub-tasks.\n\n"
-    "Output ONLY valid JSON matching this schema:\n"
-    '{"strategy": "HYBRID|DECOMPOSE", "tasks": [{"name": "string", '
-    '"goal": "string", "constraints": ["string"], "expected_output": "string"}]}\n\n'
-    "Rules:\n"
-    "- Each task must be independently answerable\n"
-    "- HYBRID: 2-3 tasks + 1 synthesis task (max 4)\n"
-    "- DECOMPOSE: 3-5 tasks + 1 recommendation task (max 6)\n"
-    "- task names must be snake_case identifiers\n"
-    "- Do NOT answer the question — only produce the plan"
-)
+
+def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
+    """The sub-agent tool names currently grantable in the active mode (FRE-1389).
+
+    Fails closed (empty list) on any governance/mode lookup error, matching
+    ``_compute_sub_agent_grants``'s existing default-deny posture — the planner
+    prompt just omits the tools rule's options.
+
+    Args:
+        trace_id: Request trace identifier, for logging.
+
+    Returns:
+        Tool names in ``config.sub_agent_tools`` eligible in the current mode
+        (empty in ALERT/DEGRADED, where sub-agents hold no tools at all).
+    """
+    try:
+        current_mode = get_current_mode()
+        governance_config = load_governance_config()
+    except (GovernanceConfigError, ModeManagerError) as exc:
+        logger.warning("sub_agent_tool_surface_lookup_failed", error=str(exc), trace_id=trace_id)
+        return []
+    if current_mode in SUB_AGENT_DENIED_MODES:
+        return []
+    return list(governance_config.sub_agent_tools)
+
+
+def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
+    """Build the planner system prompt with the live sub-agent tool surface.
+
+    Dynamic rather than hardcoded (FRE-1389 AC-1): the eligible set is read
+    live from governance config so this prompt never drifts from
+    ``config/governance/tools.yaml``'s ``sub_agent_tools`` list — a stale
+    hardcoded name here would be the same silent-gap shape FRE-884 left
+    behind (a schema field the real planner has no reason to ever populate).
+
+    Args:
+        available_sub_agent_tools: Tool names currently grantable to a
+            sub-agent in the active mode (from
+            :func:`_current_sub_agent_tool_surface`).
+
+    Returns:
+        The complete planner system prompt.
+    """
+    if available_sub_agent_tools:
+        tools_rule = (
+            "list of tool names this task needs, chosen ONLY from: "
+            f"{', '.join(available_sub_agent_tools)} (omit or leave empty if none needed)"
+        )
+    else:
+        tools_rule = "no tools are currently available to sub-agents — always omit or leave empty"
+    return (
+        "You are a task decomposition planner. Given a user query and a strategy, "
+        "produce a JSON plan that breaks the query into independent sub-tasks.\n\n"
+        "Output ONLY valid JSON matching this schema:\n"
+        '{"strategy": "HYBRID|DECOMPOSE", "tasks": [{"name": "string", '
+        '"goal": "string", "constraints": ["string"], "expected_output": "string", '
+        '"tools": ["string"]}]}\n\n'
+        "Rules:\n"
+        "- Each task must be independently answerable\n"
+        "- HYBRID: 2-3 tasks + 1 synthesis task (max 4)\n"
+        "- DECOMPOSE: 3-5 tasks + 1 recommendation task (max 6)\n"
+        "- task names must be snake_case identifiers\n"
+        f"- tools: {tools_rule}\n"
+        "- Do NOT answer the question — only produce the plan"
+    )
 
 
 @dataclass
@@ -345,8 +402,11 @@ class ExpansionController:
         logger.info("planner_started", strategy=strategy, trace_id=trace_id)
 
         try:
+            planner_system_prompt = _build_planner_system_prompt(
+                _current_sub_agent_tool_surface(trace_id)
+            )
             planner_messages = [
-                {"role": "system", "content": _PLANNER_SYSTEM_PROMPT},
+                {"role": "system", "content": planner_system_prompt},
                 {
                     "role": "user",
                     "content": (f"Strategy: {strategy}\nQuery: {query}\n\nProduce the JSON plan."),
@@ -474,10 +534,14 @@ class ExpansionController:
 
         Returns:
             List of SubAgentResult, in dispatch order — one entry per task that
-            returned a result (success or a reported per-task failure). A task
-            whose dispatch raised a raw exception is dropped from this list; see
-            ``result.dispatch_intervals`` for the complete per-task record,
-            including dropped tasks.
+            returned a result (success or a reported per-task failure), plus one
+            extra entry immediately after any task whose result triggered a
+            single-shot replacement dispatch on a stated tool gap (FRE-1389
+            AC-5) — both the original and the replacement are kept, so
+            ``ExpansionResult.cost_usd`` never silently drops the first,
+            incomplete attempt's cost. A task whose dispatch raised a raw
+            exception is dropped from this list; see ``result.dispatch_intervals``
+            for the complete per-task record, including dropped tasks.
         """
         settings = get_settings()
         start_ms = time.monotonic() * 1000
@@ -530,6 +594,7 @@ class ExpansionController:
 
         raw_results: list[SubAgentResult | Exception] = []
         intervals: list[SubAgentInterval] = []
+        sub_results: list[SubAgentResult] = []
 
         async with phase_span(
             session_id=session_id,
@@ -538,6 +603,7 @@ class ExpansionController:
         ) as _parent_id:
             for task, spec in zip(plan.tasks, specs, strict=True):
                 interval_start = time.monotonic()
+                sub_result: SubAgentResult | None = None
                 try:
                     async with phase_span(
                         session_id=session_id,
@@ -559,6 +625,29 @@ class ExpansionController:
                 finally:
                     intervals.append(SubAgentInterval(task.name, interval_start, time.monotonic()))
 
+                if sub_result is None:
+                    continue
+                sub_results.append(sub_result)
+
+                # FRE-1389 AC-5: single-shot replacement dispatch when this
+                # result stated a tool gap — the controller (not the
+                # sub-agent) decides whether to grant more, acting in-loop so
+                # the replacement is always paired with the right task even
+                # if an earlier task in this same plan raised a raw exception.
+                replacement = await self._maybe_redispatch_on_gap(
+                    task=task,
+                    spec=spec,
+                    original_result=sub_result,
+                    llm_client=llm_client,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    eval_mode=eval_mode,
+                    parent_span_id=_parent_id,
+                    intervals=intervals,
+                )
+                if replacement is not None:
+                    sub_results.append(replacement)
+
         result.dispatch_intervals = intervals
         logger.info(
             "expansion_dispatch_intervals",
@@ -573,13 +662,9 @@ class ExpansionController:
             ],
         )
 
-        # Filter out exceptions — keep every SubAgentResult (success or per-task
-        # failure are both real, reportable outcomes; only a raw exception is
-        # dropped here, matching the prior gather(return_exceptions=True) filter).
-        sub_results: list[SubAgentResult] = [
-            r for r in raw_results if isinstance(r, SubAgentResult)
-        ]
-        failed_count = len(raw_results) - len(sub_results)
+        failed_count = len(raw_results) - len(
+            [r for r in raw_results if isinstance(r, SubAgentResult)]
+        )
         if failed_count > 0:
             logger.warning(
                 "expansion_dispatch_partial_failure",
@@ -608,6 +693,131 @@ class ExpansionController:
             )
 
         return sub_results
+
+    async def _maybe_redispatch_on_gap(
+        self,
+        task: PlanTask,
+        spec: SubAgentSpec,
+        original_result: SubAgentResult,
+        llm_client: Any,
+        trace_id: str,
+        session_id: str | None,
+        eval_mode: bool,
+        parent_span_id: Any,
+        intervals: list[SubAgentInterval],
+    ) -> SubAgentResult | None:
+        """Single-shot replacement dispatch when a sub-agent stated a tool gap (FRE-1389 AC-5).
+
+        The sub-agent only ever REPORTS a gap — an out-of-grant tool-call
+        attempt refused at the source (``refused_tool_attempts``), or its own
+        ``TOOL_GAP: <name>`` sentinel (``stated_tool_gap``) — it never
+        acquires the tool itself. This method, acting on the controller's
+        behalf (the "primary" in the ticket's architecture section), is the
+        only thing that may construct a replacement with an expanded grant,
+        and it does so at most once per task: the replacement's own gap
+        signals, if any, are never checked, so a task cannot chain retries.
+
+        Args:
+            task: The plan task that produced ``original_result``.
+            spec: The original dispatch's spec — reused via ``dataclasses.replace``
+                so context/output_format/timeouts/mode carry over unchanged.
+            original_result: The completed sub-agent result to check for a gap.
+            llm_client: LLM client for the replacement dispatch call.
+            trace_id: Request trace identifier.
+            session_id: Originating session id.
+            eval_mode: EVAL provenance, threaded through like the original dispatch.
+            parent_span_id: The dispatch's EXPANSION phase span id, so the
+                replacement's own SUB_AGENT span nests under the same parent.
+            intervals: Mutable interval list; the replacement's own wall-clock
+                window is appended here for dispatch-observability parity.
+
+        Returns:
+            The replacement SubAgentResult, or ``None`` when there was no gap,
+            the gap named nothing actually registered, or a re-check of the
+            grant still denies it (the original refusal already stands via
+            ``denied_tools``/the synthesis context).
+        """
+        from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
+        from personal_agent.transport.events import Phase  # noqa: PLC0415
+
+        gap_names = list(
+            dict.fromkeys(
+                [
+                    *original_result.refused_tool_attempts,
+                    *([original_result.stated_tool_gap] if original_result.stated_tool_gap else []),
+                ]
+            )
+        )[:_MAX_GAP_NAMES_PER_TASK]
+        if not gap_names:
+            return None
+
+        # Untrusted model output: don't spend a whole extra dispatch on a name
+        # that isn't even a registered tool — governance would deny it anyway,
+        # but this skips the round-trip.
+        registry = get_shared_tool_execution_layer().registry
+        gap_names = [name for name in gap_names if registry.get_tool(name) is not None]
+        if not gap_names:
+            return None
+
+        # Reuses _compute_sub_agent_grants's existing fail-closed lookup
+        # (GovernanceConfigError/ModeManagerError → deny everything) rather
+        # than a second hand-rolled try/except around the same lookup.
+        (new_grant,) = _compute_sub_agent_grants(
+            [replace(task, tools=list(dict.fromkeys([*task.tools, *gap_names])))], trace_id
+        )
+        # Compare against spec.tools (what was ACTUALLY granted before this
+        # retry), not task.tools (what the planner merely requested) — granted
+        # is always a subset of requested, so a name denied in the original
+        # request would otherwise be excluded from this check for free and
+        # mask a real expansion on the rare case governance state itself
+        # changes between the original dispatch and this redispatch check.
+        newly_grantable = set(new_grant.granted) - set(spec.tools)
+        if not newly_grantable:
+            return None
+
+        logger.info(
+            "sub_agent_redispatched_with_expanded_grant",
+            task_name=task.name,
+            stated_gap=gap_names,
+            expanded_grant=list(new_grant.granted),
+            trace_id=trace_id,
+        )
+
+        replacement_spec = replace(
+            spec,
+            task=f"{task.goal} (retry: expanded tool grant)",
+            tools=list(new_grant.granted),
+            denied_tools=new_grant.denied,
+        )
+
+        interval_start = time.monotonic()
+        try:
+            async with phase_span(
+                session_id=session_id,
+                phase=Phase.SUB_AGENT,
+                detail=replacement_spec.task[:80],
+                parent_id=parent_span_id,
+            ):
+                replacement_result = await run_sub_agent(
+                    spec=replacement_spec,
+                    llm_client=llm_client,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    eval_mode=eval_mode,
+                )
+            return replacement_result
+        except Exception as exc:
+            logger.warning(
+                "sub_agent_redispatch_failed",
+                task_name=task.name,
+                error=str(exc),
+                trace_id=trace_id,
+            )
+            return None
+        finally:
+            intervals.append(
+                SubAgentInterval(f"{task.name} (retry)", interval_start, time.monotonic())
+            )
 
     def _build_synthesis_context(
         self,
@@ -683,12 +893,16 @@ def _validate_plan_json(
         if not name or not goal:
             return None
 
+        raw_tools = t.get("tools", [])
+        tools = [str(x) for x in raw_tools] if isinstance(raw_tools, list) else []
+
         tasks.append(
             PlanTask(
                 name=str(name),
                 goal=str(goal),
                 constraints=[str(c) for c in t.get("constraints", [])],
                 expected_output=str(t.get("expected_output", "text")),
+                tools=tools,
             )
         )
 

@@ -380,11 +380,20 @@ def test_subagents_pins_its_shape() -> None:
         "context_chars",
         "full_output_chars",
         "skill_index_block_chars",
+        "tool_result_chars_absorbed",
     ):
         assert props.get(field, {}).get("type") in ("long", "integer"), field
     assert props["mode"]["type"] == "keyword"
     assert props["memory_in_context"]["type"] == "boolean"
     assert props["success"]["type"] == "boolean"
+
+
+def test_subagents_pins_tool_loop_fields() -> None:
+    """FRE-1389: tool-loop activity fields are explicitly mapped, not dynamic."""
+    props = _props(_load("captains-subagents-index-template.json"))
+    assert props["tool_iterations"]["type"] == "integer"
+    assert props["refused_tool_attempts"]["type"] == "keyword"
+    assert props["stated_tool_gap"]["type"] == "keyword"
 
 
 # --------------------------------------------------------------------------- #

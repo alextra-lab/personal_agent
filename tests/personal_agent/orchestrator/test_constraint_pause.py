@@ -400,10 +400,13 @@ class TestPauseAccounting:
         assert ctx.credited_pause_seconds >= 0.0
 
     @pytest.mark.asyncio
-    async def test_connection_lost_still_records_the_pause(
+    async def test_connection_lost_is_not_recorded_as_a_pause(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The defensive connection_lost early return must not skip accounting."""
+        """The defensive connection_lost branch stands for an immediate no-client
+        default, not a resolved wait — it must not be credited as one (found in
+        codex review: this early return sits before the accounting block).
+        """
         ctx = _ctx()
 
         async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
@@ -424,5 +427,6 @@ class TestPauseAccounting:
             ctx=ctx,
         )
 
-        assert ctx.pause_count == 1
-        assert ctx.constraint_resolutions[0].action_id == "finish_now"
+        assert ctx.pause_count == 0
+        assert ctx.constraint_resolutions == []
+        assert ctx.credited_pause_seconds == 0.0

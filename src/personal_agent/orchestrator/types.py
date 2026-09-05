@@ -358,9 +358,11 @@ class ExecutionContext:
     # ADR-0076: extra iterations granted when the user picks "Continue" at a
     # tool_iteration_limit constraint pause. Added on top of the resolved max.
     tool_iteration_bonus: int = 0
-    # ADR-0142 (FRE-1391): the post-grant tool-iteration ceiling this turn's loop actually
-    # used, stamped by _resolve_max_iterations on every call so the last stamp before turn
-    # end reflects any bonus granted mid-turn. None until the loop resolves it once.
+    # ADR-0142 (FRE-1391): the post-grant ceiling _resolve_max_iterations last computed
+    # for this turn, stamped on every call so the last stamp before turn end reflects
+    # any bonus granted mid-turn. Populated whenever that resolver ran at least once —
+    # including a tool-free turn, since the resolver also backs the Captain's Log
+    # reflection-cadence check — so None only means it never ran at all this turn.
     effective_tool_iteration_ceiling: int | None = None
     # ADR-0142 (FRE-1391): one entry per constraint pause this turn raised, in the order
     # they resolved. See ConstraintResolutionRecord for why this is a list, not a scalar.

@@ -183,8 +183,9 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
             base = min(by_type[task_type_val], global_max)
     resolved = base + ctx.tool_iteration_bonus + ctx.grounding_retrieval_grant
     # ADR-0142 (FRE-1391): stamp the post-grant value actually used, so the route-trace
-    # ledger records what ran rather than what was configured (AC-1). Re-stamped on every
-    # call; the last call before turn end reflects any bonus granted mid-turn.
+    # ledger records what ran rather than what was configured (AC-1). Re-stamped on
+    # every call — including the reflection-cadence check on a tool-free turn — so the
+    # last call before turn end reflects any bonus granted mid-turn.
     ctx.effective_tool_iteration_ceiling = resolved
     return resolved
 
@@ -785,21 +786,13 @@ async def _maybe_pause_for_constraint(
     resolution = str(payload.get("resolution", "user_choice"))
     remember = bool(payload.get("remember", False))
 
-    # ADR-0142 (FRE-1391): a pause happened here, whatever it resolves to — record it
-    # before any early return so accounting cannot be short-circuited. A preference
-    # bypass never reaches this line (it returns above), so this is pause-only by
-    # construction.
-    if ctx is not None:
-        ctx.pause_count += 1
-        ctx.credited_pause_seconds += _pause_duration_seconds
-        ctx.constraint_resolutions.append(
-            ConstraintResolutionRecord(constraint=constraint, action_id=action_id)
-        )
-
     # Defensive: since FRE-928 the constraint waiter no longer returns connection_lost
     # (a disconnect leaves the waiter pending to ride its timeout), so this path is
     # unreachable via the pause transport. Kept because the resolution Literal still
     # admits it — but it is no longer "the no-WS path", which now times out instead.
+    # ADR-0142 (FRE-1391): checked before pause accounting — this branch stands for an
+    # immediate no-client default, not a resolved wait, so it must not be credited as
+    # one if it is ever reached.
     if resolution == "connection_lost":
         log.info(
             "constraint_no_ws_default_applied",
@@ -809,6 +802,17 @@ async def _maybe_pause_for_constraint(
             session_id=session_id,
         )
         return ConstraintDecision(default_id, "connection_lost")
+
+    # ADR-0142 (FRE-1391): a pause happened here, whatever it resolves to — record it
+    # before any further early return so accounting cannot be short-circuited. A
+    # preference bypass never reaches this line (it returns above), so this is
+    # pause-only by construction.
+    if ctx is not None:
+        ctx.pause_count += 1
+        ctx.credited_pause_seconds += _pause_duration_seconds
+        ctx.constraint_resolutions.append(
+            ConstraintResolutionRecord(constraint=constraint, action_id=action_id)
+        )
 
     log.info(
         "constraint_decision_received",

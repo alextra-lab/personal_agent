@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS route_traces (
     session_id UUID,
     task_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    schema_version SMALLINT NOT NULL DEFAULT 1,
+    schema_version SMALLINT NOT NULL DEFAULT 2,
 
     -- Stimulus (PII-gated)
     user_message_chars INTEGER NOT NULL DEFAULT 0,

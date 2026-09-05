@@ -11,3 +11,8 @@
 ALTER TABLE route_traces
     ADD COLUMN IF NOT EXISTS effective_tool_iteration_ceiling INTEGER,
     ADD COLUMN IF NOT EXISTS constraint_resolutions JSONB;
+
+-- RouteTraceRow's schema_version default moved 1 -> 2 with this change (codex review:
+-- keep the DB default aligned with the DTO default, even though every application write
+-- path already passes schema_version explicitly and never relies on the column default).
+ALTER TABLE route_traces ALTER COLUMN schema_version SET DEFAULT 2;

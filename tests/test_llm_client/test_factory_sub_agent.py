@@ -47,9 +47,9 @@ class TestSubAgentResolution:
         """resolve_role_target("sub_agent") names sub_agent's deployment, not primary's."""
         resolved_key, model_def = resolve_role_target("sub_agent")
 
-        assert resolved_key == "qwen3.8-flash-next-instruct"
+        assert resolved_key == "qwen3.6-35b-instruct"
         assert model_def is not None
-        assert model_def.id == load_model_config().models["qwen3.8-flash-next-instruct"].id
+        assert model_def.id == load_model_config().models["qwen3.6-35b-instruct"].id
 
     def test_builds_local_client_matching_its_deployment_placement(self) -> None:
         """sub_agent dispatches at local placement — qwen3.6-35b-instruct's.

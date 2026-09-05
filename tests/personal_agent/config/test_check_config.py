@@ -51,7 +51,7 @@ class TestRealRepoMatrixShape:
         # here, unlike `sub_agent`'s: ADR-0121 T5 (FRE-920, master gate 2026-07-20)
         # removed that entry — a stale duplicate of the Layer-3 binding, never
         # actually consulted through this matrix in the first place).
-        assert roles["primary"] == {"all": "qwen3.8-flash-next"}
+        assert roles["primary"] == {"all": "qwen3.6-35b-thinking"}
         assert "sub_agent" not in roles
 
     def test_no_role_carries_a_retired_per_profile_key(self) -> None:

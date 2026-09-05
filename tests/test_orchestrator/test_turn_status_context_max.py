@@ -64,7 +64,7 @@ def test_context_max_resolves_current_default_primary_binding() -> None:
     expected = load_model_config().models[default_key].context_length
 
     assert _resolve_context_max() == expected
-    # Today's bound primary (2026-08-28 swap) — pin the key so this test fails loudly,
+    # Today's bound primary (2026-09-05 swap) — pin the key so this test fails loudly,
     # not silently, the next time the primary binding changes.
-    assert default_key == "qwen3.8-flash-next"
+    assert default_key == "qwen3.6-35b-thinking"
     assert expected == 262144

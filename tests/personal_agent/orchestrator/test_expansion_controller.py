@@ -706,11 +706,23 @@ class TestSubAgentToolGrant:
     (bypassing the planner-JSON path, which always zeroes ``tools`` per
     FRE-884) so the grant filter has something real to refuse — a seeded
     negative, not a vacuous check against an empty request (AC-3).
+
+    ``load_governance_config`` is patched to a hermetic, in-memory config in
+    every test here so these assertions depend only on the dispatch logic
+    under test, never on what ``config/governance/tools.yaml`` currently says.
     """
 
     @pytest.fixture
     def controller(self) -> ExpansionController:
         return ExpansionController()
+
+    @staticmethod
+    def _hermetic_config() -> Any:
+        from personal_agent.governance.models import GovernanceConfig
+
+        return GovernanceConfig(
+            modes={}, tools={}, sub_agent_tools=["run_python"], mode_constraints={}
+        )
 
     @staticmethod
     def _one_task_plan(tools: list[str]) -> Any:
@@ -743,6 +755,10 @@ class TestSubAgentToolGrant:
             patch(
                 "personal_agent.orchestrator.expansion_controller.get_current_mode",
                 return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(),
             ),
             patch(
                 "personal_agent.orchestrator.expansion_controller.run_sub_agent",
@@ -782,6 +798,10 @@ class TestSubAgentToolGrant:
                 return_value=Mode.NORMAL,
             ),
             patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(),
+            ),
+            patch(
                 "personal_agent.orchestrator.expansion_controller.run_sub_agent",
                 side_effect=_echo_denial,
             ),
@@ -816,6 +836,10 @@ class TestSubAgentToolGrant:
             patch(
                 "personal_agent.orchestrator.expansion_controller.get_current_mode",
                 return_value=Mode.ALERT,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(),
             ),
             patch(
                 "personal_agent.orchestrator.expansion_controller.run_sub_agent",
@@ -853,6 +877,10 @@ class TestSubAgentToolGrant:
                 return_value=Mode.NORMAL,
             ),
             patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=self._hermetic_config(),
+            ),
+            patch(
                 "personal_agent.orchestrator.expansion_controller.run_sub_agent",
                 side_effect=_capture_spec,
             ),
@@ -869,6 +897,48 @@ class TestSubAgentToolGrant:
         assert captured_specs[0].tools == []
         assert captured_specs[0].denied_tools == ()
         assert "denied" not in context.lower()
+
+    @pytest.mark.asyncio
+    async def test_governance_lookup_failure_fails_safe_to_deny(
+        self, controller: ExpansionController
+    ) -> None:
+        """A config-load error denies every requested tool rather than aborting the turn."""
+        from personal_agent.config import GovernanceConfigError
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan(["run_python"])
+        captured_specs: list[Any] = []
+
+        async def _capture_spec(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            captured_specs.append(spec)
+            return _make_sub_agent_result("task_0", denied_tools=spec.denied_tools)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                side_effect=GovernanceConfigError("config directory missing"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_capture_spec,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-tool-grant-failsafe",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert captured_specs[0].tools == []
+        assert captured_specs[0].denied_tools == ("run_python",)
+        assert results[0].success is True
 
 
 class TestSynthesisContextExcludesFullOutput:

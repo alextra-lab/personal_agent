@@ -24,9 +24,12 @@ from typing import Any
 
 import structlog
 
-from personal_agent.brainstem import get_current_mode
-from personal_agent.config import get_settings, load_governance_config
-from personal_agent.governance.sub_agent_tools import evaluate_sub_agent_tool_grant
+from personal_agent.brainstem import ModeManagerError, get_current_mode
+from personal_agent.config import GovernanceConfigError, get_settings, load_governance_config
+from personal_agent.governance.sub_agent_tools import (
+    SubAgentToolGrant,
+    evaluate_sub_agent_tool_grant,
+)
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.observability.topology import report_degradation
 from personal_agent.orchestrator.expansion_types import (
@@ -107,6 +110,59 @@ class ExpansionResult:
     def failed_count(self) -> int:
         """Count of sub-agents that failed."""
         return sum(1 for r in self.sub_agent_results if not r.success)
+
+
+def _compute_sub_agent_grants(
+    tasks: list[PlanTask],
+    trace_id: str,
+) -> list[SubAgentToolGrant]:
+    """Filter each task's requested tools against the sub-agent tool grant set (FRE-1388).
+
+    Fails safe: a governance-config or mode-lookup error denies every tool this
+    dispatch requested rather than aborting the whole expansion turn. The grant
+    set's own policy is already default-deny, so degrading to "deny everything"
+    on a lookup failure changes no correctness guarantee — it only matters once
+    a task actually requests a tool, which the planner never does today (FRE-884).
+
+    Args:
+        tasks: Plan tasks whose ``tools`` field to filter.
+        trace_id: Request trace identifier, for logging.
+
+    Returns:
+        One :class:`SubAgentToolGrant` per task, in ``tasks`` order.
+    """
+    try:
+        current_mode = get_current_mode()
+        governance_config = load_governance_config()
+    except (GovernanceConfigError, ModeManagerError) as exc:
+        logger.warning(
+            "sub_agent_tool_grant_lookup_failed",
+            error=str(exc),
+            trace_id=trace_id,
+        )
+        return [
+            SubAgentToolGrant(
+                granted=(),
+                denied=tuple(task.tools),
+                denial_reason=f"governance lookup failed: {exc}",
+            )
+            for task in tasks
+        ]
+
+    grants = [
+        evaluate_sub_agent_tool_grant(task.tools, current_mode, governance_config) for task in tasks
+    ]
+    for task, grant in zip(tasks, grants, strict=True):
+        if grant.denied:
+            logger.warning(
+                "sub_agent_tool_denied",
+                task_name=task.name,
+                denied_tools=list(grant.denied),
+                reason=grant.denial_reason,
+                mode=current_mode.value,
+                trace_id=trace_id,
+            )
+    return grants
 
 
 class ExpansionController:
@@ -437,22 +493,7 @@ class ExpansionController:
         # filtered against the sub-agent tool grant set here — never passed
         # through unfiltered, and never checked against the primary's own
         # per-tool `allowed_in_modes`.
-        current_mode = get_current_mode()
-        governance_config = load_governance_config()
-        grants = [
-            evaluate_sub_agent_tool_grant(task.tools, current_mode, governance_config)
-            for task in plan.tasks
-        ]
-        for task, grant in zip(plan.tasks, grants, strict=True):
-            if grant.denied:
-                logger.warning(
-                    "sub_agent_tool_denied",
-                    task_name=task.name,
-                    denied_tools=list(grant.denied),
-                    reason=grant.denial_reason,
-                    mode=current_mode.value,
-                    trace_id=trace_id,
-                )
+        grants = _compute_sub_agent_grants(plan.tasks, trace_id)
 
         specs = [
             SubAgentSpec(

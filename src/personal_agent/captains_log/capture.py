@@ -155,6 +155,15 @@ class SubAgentCapture(BaseModel):
     # itself, not only a log line.
     tools_denied: list[str] = Field(default_factory=list)
     tools_used: list[str] = Field(default_factory=list)
+    # FRE-1389: tool-loop activity. tool_iterations/tool_result_chars_absorbed
+    # measure the loop's own bound and the context isolation it provides (AC-2/
+    # AC-4). refused_tool_attempts/stated_tool_gap are the two signals the
+    # expansion controller reads to decide on a replacement dispatch (AC-3/AC-5)
+    # — the sub-agent only ever reports these, it never acquires the tool itself.
+    tool_iterations: int = 0
+    tool_result_chars_absorbed: int = 0
+    refused_tool_attempts: list[str] = Field(default_factory=list)
+    stated_tool_gap: str | None = None
 
     # Output — full text, the injected digest, and the truncation ratio
     full_output: str

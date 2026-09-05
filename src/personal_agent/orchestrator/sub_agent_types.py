@@ -55,7 +55,12 @@ class SubAgentSpec:
         denied_tools: Tool names this task requested that the sub-agent tool grant
             set refused (FRE-1388) — informational, carried through to
             :class:`SubAgentResult` so the refusal is legible to the primary
-            (AC-4) rather than only a log line.
+            (AC-4) rather than only a log line. Note this grant is necessary but
+            not sufficient: a name in ``tools`` still passes through
+            ``dispatch_tool_call`` -> ``ToolExecutionLayer.execute_tool``, which
+            enforces that primitive's own ``allowed_modes``/``forbidden_in_modes``
+            on top — the sub-agent principal can never grant access the tool's own
+            base policy forbids.
     """
 
     task: str
@@ -123,6 +128,29 @@ class SubAgentResult:
             sub-agent tool grant set (FRE-1388), copied from
             ``SubAgentSpec.denied_tools`` on every terminal path (success,
             timeout, cancellation, exception). Empty when nothing was denied.
+        tool_iterations: Number of tool-execution rounds actually run (FRE-1389
+            AC-2), bounded by ``settings.sub_agent_max_tool_iterations`` — the
+            sub-agent's own cap, not the primary's per-TaskType one.
+        tool_result_chars_absorbed: Sum of every tool-role message's raw content
+            length the sub-agent fed back into its own next inference call —
+            successful dispatches, failed dispatches, and synthetic refusal/
+            malformed-argument errors alike, since all of it is context the
+            sub-agent absorbed and none of it crosses into ``summary`` (FRE-1389
+            AC-4). Compare against ``len(summary)`` to measure the isolation
+            this mechanism exists to provide.
+        refused_tool_attempts: Tool names the model tried to call mid-loop that
+            were NOT in ``SubAgentSpec.tools`` — refused without dispatch
+            (FRE-1389 AC-3's seeded negative). Distinct from ``denied_tools``,
+            which is the governance-level refusal of the planner's *request*
+            before this spec even existed.
+        stated_tool_gap: A tool name the sub-agent explicitly reported needing
+            but did not have, via the ``TOOL_GAP: <name>`` sentinel line in its
+            final response (stripped from ``summary``/``full_output``). ``None``
+            when no gap was stated. Together with ``refused_tool_attempts``,
+            this is the signal the expansion controller uses to decide whether
+            to dispatch a replacement with an expanded grant (FRE-1389 AC-5) —
+            the sub-agent only ever reports the gap; it never acquires the tool
+            itself.
     """
 
     task_id: UUID
@@ -138,3 +166,7 @@ class SubAgentResult:
     tokens_generated: int = 0
     elapsed_generation_ms: float | None = None
     denied_tools: tuple[str, ...] = field(default_factory=tuple)
+    tool_iterations: int = 0
+    tool_result_chars_absorbed: int = 0
+    refused_tool_attempts: tuple[str, ...] = field(default_factory=tuple)
+    stated_tool_gap: str | None = None

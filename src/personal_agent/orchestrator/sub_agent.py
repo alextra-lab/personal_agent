@@ -1,8 +1,10 @@
 """Sub-agent runner — executes focused inference calls.
 
-Each sub-agent is a single LLM call with a constrained context slice.
-The runner acquires a concurrency slot, runs the inference, and
-returns a SubAgentResult with a compressed summary.
+Each sub-agent is a focused task with a constrained context slice: one LLM
+call when its spec grants no tools, or a bounded tool loop (FRE-1389) when it
+does — never an open-ended agent. The runner acquires a concurrency slot, runs
+the inference (and any granted tool calls), and returns a SubAgentResult with
+a compressed summary.
 
 Full output goes to ES via structlog; only the summary enters
 the primary agent's synthesis context.
@@ -13,19 +15,36 @@ See: docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 4.6
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 import structlog
 
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
+from personal_agent.config import settings
 from personal_agent.llm_client.types import GenerationProgress, LLMTimeout
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
+from personal_agent.orchestrator.tool_dispatch import (
+    dispatch_tool_call,
+    get_shared_tool_execution_layer,
+)
 
 logger = structlog.get_logger(__name__)
+
+# FRE-1389 AC-5: a sub-agent may state, in its final line, that it lacked a tool
+# it needed — it never acquires the tool itself, only reports the gap. The
+# expansion controller (not the sub-agent) decides whether to dispatch a
+# replacement with an expanded grant. Parsed strictly (exact line prefix) so
+# this stays a deterministic signal, not free-text parsing.
+_TOOL_GAP_PREFIX = "TOOL_GAP:"
+# Bound on how many distinct out-of-grant attempts one call records — a model
+# is untrusted input here; this is a defensive cap, not an expected count.
+_MAX_REFUSED_TOOL_ATTEMPTS = 10
 
 
 # Marker the primary injects when proactive-memory/KG entities are in context
@@ -50,7 +69,11 @@ _SUB_AGENT_SYSTEM_PROMPT = (
     "You are a focused sub-agent executing a specific sub-task. "
     "Be concise and direct. Respond with the requested output format only. "
     "Do not ask follow-up questions. Do not add preamble or explanation "
-    "beyond what was requested."
+    "beyond what was requested. "
+    "You cannot request additional tools mid-task. If you cannot complete this "
+    "task because you lack a specific tool, do the best you can with what you "
+    "have, then end your response with a final line reading exactly "
+    f'"{_TOOL_GAP_PREFIX} <tool_name>" (one tool name, no other text on that line).'
 )
 
 
@@ -70,6 +93,97 @@ def _extract_call_cost(response: Any) -> float:
     if isinstance(response, Mapping):
         return float(response.get("cost_usd") or 0.0)
     return 0.0
+
+
+def _extract_tool_calls(response: Any) -> list[dict[str, Any]]:
+    """Pull the raw ``tool_calls`` list from an LLM response.
+
+    Args:
+        response: The value returned by ``llm_client.respond``.
+
+    Returns:
+        The response's ``ToolCall`` list (each ``{id, name, arguments}``), or
+        an empty list when absent or the response is a bare string.
+    """
+    if isinstance(response, Mapping):
+        return list(response.get("tool_calls") or [])
+    return []
+
+
+def _build_tool_defs(tool_names: list[str]) -> list[dict[str, Any]] | None:
+    """Build OpenAI-format tool definitions restricted to a granted subset.
+
+    Args:
+        tool_names: Tool names this sub-agent is granted (``SubAgentSpec.tools``).
+
+    Returns:
+        Tool definitions for exactly ``tool_names``, or ``None`` when the list
+        is empty — ``None`` (not ``[]``) so ``respond()`` never receives a
+        ``tools`` argument for a grant-less sub-agent, preserving today's exact
+        no-tools behavior.
+    """
+    if not tool_names:
+        return None
+    granted = set(tool_names)
+    all_defs = get_shared_tool_execution_layer().registry.get_tool_definitions_for_llm(mode=None)
+    defs = [d for d in all_defs if d.get("function", {}).get("name") in granted]
+    return defs or None
+
+
+def _normalize_tool_calls(
+    raw_tool_calls: list[dict[str, Any]], round_num: int
+) -> list[dict[str, Any]]:
+    """Convert response-shaped tool calls into OpenAI assistant-message shape.
+
+    Prefixes each id with the round number so ids stay unique across rounds —
+    mirrors ``executor._build_assistant_tool_calls``: server-side parsers
+    (e.g. ``tool_call_parser="qwen3"``) commonly regenerate ids from ``call_0``
+    every round, and colliding ids across rounds would make history look
+    corrupted.
+
+    Args:
+        raw_tool_calls: ``ToolCall``-shaped dicts (``id``, ``name``, ``arguments``).
+        round_num: This loop round's 1-based iteration number.
+
+    Returns:
+        OpenAI-format tool_call dicts (``id``, ``type``, ``function``, ``index``).
+    """
+    return [
+        {
+            "id": f"call_r{round_num}_{idx}_{tc['id']}"
+            if tc.get("id")
+            else f"call_r{round_num}_{idx}",
+            "type": "function",
+            "function": {"name": tc.get("name", ""), "arguments": tc.get("arguments", "{}")},
+            "index": idx,
+        }
+        for idx, tc in enumerate(raw_tool_calls)
+    ]
+
+
+def _extract_stated_tool_gap(content: str) -> tuple[str, str | None]:
+    """Strip a trailing ``TOOL_GAP: <name>`` sentinel line from a response.
+
+    Args:
+        content: The sub-agent's final text response.
+
+    Returns:
+        A tuple of (content with the sentinel line removed, the stated tool
+        name or ``None`` if no sentinel line was present). Only the LAST line
+        is checked — a strict, deterministic parse (FRE-1389 AC-5), not a
+        free-text scan.
+    """
+    lines = content.rstrip().splitlines()
+    if not lines:
+        return content, None
+    last = lines[-1].strip()
+    if not last.startswith(_TOOL_GAP_PREFIX):
+        return content, None
+    name = last[len(_TOOL_GAP_PREFIX) :].strip()
+    if not name:
+        return content, None
+    remainder = "\n".join(lines[:-1]).rstrip()
+    return remainder, name
 
 
 def _summarize_input_context(system_content: str, spec: SubAgentSpec) -> dict[str, Any]:
@@ -151,6 +265,10 @@ def _emit_sub_agent_capture(
         tools_granted=list(spec.tools),
         tools_denied=list(result.denied_tools),
         tools_used=result.tools_used,
+        tool_iterations=result.tool_iterations,
+        tool_result_chars_absorbed=result.tool_result_chars_absorbed,
+        refused_tool_attempts=list(result.refused_tool_attempts),
+        stated_tool_gap=result.stated_tool_gap,
         full_output=result.full_output,
         full_output_chars=full_output_chars,
         injected_digest=result.summary,
@@ -208,6 +326,10 @@ def _killed_result(
     progress: GenerationProgress,
     error: str,
     cost_usd: float = 0.0,
+    tools_used: list[str] | None = None,
+    tool_iterations: int = 0,
+    tool_result_chars_absorbed: int = 0,
+    refused_tool_attempts: tuple[str, ...] = (),
 ) -> SubAgentResult:
     """Build a SubAgentResult for a sub-agent that never returned (FRE-1379).
 
@@ -226,7 +348,15 @@ def _killed_result(
         duration_ms: Wall-clock time since spawn.
         progress: Whatever the streaming client recorded before cancellation.
         error: Human-readable reason, distinguishing which budget fired.
-        cost_usd: Cost incurred before the kill (0.0 unless the caller tracked one).
+        cost_usd: Cost of every COMPLETED round before the kill, summed by the
+            caller (FRE-1389 AC-6) — 0.0 unless the caller tracked one.
+        tools_used: Tools actually dispatched in completed rounds before the
+            kill (FRE-1389). ``None`` normalizes to an empty list.
+        tool_iterations: Tool-execution rounds completed before the kill.
+        tool_result_chars_absorbed: Raw tool-result chars absorbed in
+            completed rounds before the kill.
+        refused_tool_attempts: Out-of-grant attempts refused in completed
+            rounds before the kill.
 
     Returns:
         A failed SubAgentResult carrying whatever partial state is available.
@@ -242,7 +372,7 @@ def _killed_result(
         spec_task=spec.task,
         summary=partial[:_SUMMARY_CAP_CHARS],
         full_output=partial,
-        tools_used=[],
+        tools_used=tools_used if tools_used is not None else [],
         token_count=0,
         tokens_generated=len(partial.split()) if partial else 0,
         elapsed_generation_ms=elapsed_generation_ms,
@@ -251,7 +381,177 @@ def _killed_result(
         error=error,
         cost_usd=cost_usd,
         denied_tools=spec.denied_tools,
+        tool_iterations=tool_iterations,
+        tool_result_chars_absorbed=tool_result_chars_absorbed,
+        refused_tool_attempts=refused_tool_attempts,
     )
+
+
+@dataclass
+class _ToolLoopState:
+    """Mutable tool-loop accumulator, external to the loop coroutine's own frame.
+
+    A cancellation mid-loop (the outer hard-deadline ``wait_for``, FRE-1379)
+    destroys the cancelled coroutine's local frame — exactly why
+    ``GenerationProgress`` exists for the single-call case. This extends the
+    same pattern across a multi-round loop (FRE-1389): every completed
+    round's activity lands here as it happens, so a kill mid-round still
+    reports every prior round's cost/tools/chars, not just the in-flight one.
+    """
+
+    messages: list[dict[str, Any]]
+    tools_used: list[str] = field(default_factory=list)
+    tool_iterations: int = 0
+    tool_result_chars_absorbed: int = 0
+    refused_tool_attempts: list[str] = field(default_factory=list)
+    cost_usd: float = 0.0
+    progress: GenerationProgress = field(default_factory=GenerationProgress)
+
+
+class _ToolIterationLimitReached(Exception):
+    """Raised when the sub-agent's own tool-loop cap (AC-2) is hit.
+
+    Carries whatever text accompanied the refused batch so the caller can
+    still report it — the sub-agent stays a pure bounded function: no
+    injected "please wrap up" round, just a stop.
+    """
+
+    def __init__(self, partial_content: str) -> None:
+        super().__init__("sub-agent tool iteration limit reached")
+        self.partial_content = partial_content
+
+
+async def _run_tool_loop(
+    state: _ToolLoopState,
+    spec: SubAgentSpec,
+    llm_client: Any,
+    tool_defs: list[dict[str, Any]] | None,
+    tool_layer: Any,
+    loaded_skills: set[str],
+    trace_id: str,
+    session_id: str | None,
+) -> tuple[str, str | None]:
+    """Run inference/tool-execution rounds until the model stops or the cap fires.
+
+    Mutates ``state`` in place after every completed round so a caller that
+    cancels this coroutine mid-round still sees every prior round's activity.
+    A tool call for a name outside ``spec.tools`` is refused without dispatch
+    (AC-3); refused names are deduplicated and bounded via
+    ``_MAX_REFUSED_TOOL_ATTEMPTS`` since they are untrusted model output.
+
+    Args:
+        state: Mutable accumulator, updated as each round completes.
+        spec: The sub-agent specification (task, tools, model_role).
+        llm_client: LLM client instance.
+        tool_defs: OpenAI-format tool definitions restricted to ``spec.tools``,
+            or ``None`` for a grant-less sub-agent.
+        tool_layer: Shared ``ToolExecutionLayer`` for real dispatch.
+        loaded_skills: Mutable ``read_skill`` dedup set for ``dispatch_tool_call``.
+        trace_id: Parent request trace identifier.
+        session_id: Originating session id.
+
+    Returns:
+        (final response text with any ``TOOL_GAP`` sentinel stripped, the
+        stated gap tool name or ``None``).
+
+    Raises:
+        _ToolIterationLimitReached: When another tool batch would exceed
+            ``settings.sub_agent_max_tool_iterations``.
+    """
+    from personal_agent.telemetry.trace import TraceContext
+
+    tool_choice = "auto" if tool_defs else None
+    while True:
+        round_progress = GenerationProgress()
+        state.progress = round_progress
+        raw_response = await llm_client.respond(
+            role=spec.model_role,
+            messages=state.messages,
+            max_tokens=spec.max_tokens,
+            trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
+            timeout_s=spec.timeout_seconds,
+            progress_sink=round_progress,
+            tools=tool_defs,
+            tool_choice=tool_choice,
+        )
+        state.cost_usd += _extract_call_cost(raw_response)
+        raw_tool_calls = _extract_tool_calls(raw_response)
+        response_content = _parse_llm_response(raw_response)
+
+        if not raw_tool_calls:
+            return _extract_stated_tool_gap(response_content)
+
+        if state.tool_iterations >= settings.sub_agent_max_tool_iterations:
+            raise _ToolIterationLimitReached(response_content)
+
+        state.tool_iterations += 1
+        normalized_calls = _normalize_tool_calls(raw_tool_calls, state.tool_iterations)
+        state.messages.append(
+            {"role": "assistant", "content": response_content, "tool_calls": normalized_calls}
+        )
+
+        for call, raw_call in zip(normalized_calls, raw_tool_calls, strict=True):
+            tool_call_id = call["id"]
+            tool_name = call["function"]["name"]
+
+            if tool_name not in spec.tools:
+                if len(state.refused_tool_attempts) < _MAX_REFUSED_TOOL_ATTEMPTS:
+                    state.refused_tool_attempts.append(tool_name)
+                error_content = json.dumps(
+                    {"status": "error", "hint": f"{tool_name} is not available to this sub-agent."}
+                )
+                state.tool_result_chars_absorbed += len(error_content)
+                state.messages.append(
+                    {
+                        "tool_call_id": tool_call_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": error_content,
+                    }
+                )
+                continue
+
+            try:
+                arguments = json.loads(raw_call.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                error_content = json.dumps(
+                    {
+                        "status": "retry",
+                        "hint": "Arguments were not valid JSON. Retry with valid JSON arguments.",
+                    }
+                )
+                state.tool_result_chars_absorbed += len(error_content)
+                state.messages.append(
+                    {
+                        "tool_call_id": tool_call_id,
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": error_content,
+                    }
+                )
+                continue
+
+            dispatch_result = await dispatch_tool_call(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                arguments=arguments,
+                tool_layer=tool_layer,
+                trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
+                trace_id=trace_id,
+                session_id=session_id,
+                loaded_skills=loaded_skills,
+            )
+            state.tools_used.append(tool_name)
+            content = str(dispatch_result["content"])
+            state.tool_result_chars_absorbed += len(content)
+            state.messages.append(
+                {
+                    "tool_call_id": tool_call_id,
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": content,
+                }
+            )
 
 
 async def run_sub_agent(
@@ -303,59 +603,53 @@ async def run_sub_agent(
         **_context_breakdown,
     )
 
-    tools_used: list[str] = []
-    call_cost_usd = 0.0
-    # FRE-1379: mutable sink the streaming client writes into per chunk, so
-    # whatever was generated survives even when the wait_for below cancels
-    # the call and discards its return value.
-    progress = GenerationProgress()
+    # FRE-1389: tool defs restricted to exactly this spec's granted subset —
+    # None (not []) when spec.tools is empty, so respond() never receives a
+    # tools argument for a grant-less sub-agent, preserving pre-loop behavior.
+    tool_layer = get_shared_tool_execution_layer()
+    tool_defs = _build_tool_defs(spec.tools)
+    loaded_skills: set[str] = set(spec.loaded_skills)
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": _system_content},
+    ]
+    messages.extend(spec.context)
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"Task: {spec.task}\n"
+                f"Output format: {spec.output_format}\n"
+                "Respond with the result only."
+            ),
+        }
+    )
+    # External to the loop coroutine's own frame (see _ToolLoopState) so a
+    # cancellation mid-round still leaves every completed round's activity
+    # readable from here in the except blocks below.
+    state = _ToolLoopState(messages=messages)
+
     try:
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _system_content},
-        ]
-        messages.extend(spec.context)
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    f"Task: {spec.task}\n"
-                    f"Output format: {spec.output_format}\n"
-                    "Respond with the result only."
-                ),
-            }
-        )
-
-        # Single inference call. Capture the raw response so its cost_usd is
-        # rolled into the turn meter (FRE-501); _parse_llm_response yields the
-        # content for both Mapping and bare-string responses.
-        from personal_agent.telemetry.trace import TraceContext
-
         # FRE-1374: timeout_s reaches the client as the GENERATION-only budget — for
         # LiteLLMClient it becomes the read timeout applied inside its concurrency-slot
         # context, so it starts counting at slot acquisition, not at spawn. The outer
-        # wait_for below is a separate, larger, explicitly-named safety net (not the
-        # primary timeout mechanism) for a client that ignores timeout_s.
+        # wait_for below bounds the ENTIRE tool loop (every round's inference and tool
+        # execution, FRE-1389) — a separate, larger, explicitly-named safety net (not
+        # the primary timeout mechanism) for a client that ignores timeout_s.
         hard_deadline = max(
             spec.hard_deadline_seconds or spec.timeout_seconds, spec.timeout_seconds
         )
-        raw_response = await asyncio.wait_for(
-            llm_client.respond(
-                role=spec.model_role,
-                messages=messages,
-                max_tokens=spec.max_tokens,
-                trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
-                timeout_s=spec.timeout_seconds,
-                progress_sink=progress,
+        response_content, stated_tool_gap = await asyncio.wait_for(
+            _run_tool_loop(
+                state, spec, llm_client, tool_defs, tool_layer, loaded_skills, trace_id, session_id
             ),
             timeout=hard_deadline,
         )
-        response_content = _parse_llm_response(raw_response)
-        call_cost_usd = _extract_call_cost(raw_response)
 
         duration_ms = int(time.monotonic() * 1000) - start_ms
         elapsed_generation_ms = (
-            (time.monotonic() - progress.generation_started_monotonic) * 1000
-            if progress.generation_started_monotonic is not None
+            (time.monotonic() - state.progress.generation_started_monotonic) * 1000
+            if state.progress.generation_started_monotonic is not None
             else None
         )
 
@@ -364,14 +658,41 @@ async def run_sub_agent(
             spec_task=spec.task,
             summary=response_content[:_SUMMARY_CAP_CHARS],
             full_output=response_content,
-            tools_used=tools_used,
+            tools_used=state.tools_used,
             token_count=len(response_content.split()),
             tokens_generated=len(response_content.split()),
             elapsed_generation_ms=elapsed_generation_ms,
             duration_ms=duration_ms,
             success=True,
-            cost_usd=call_cost_usd,
+            cost_usd=state.cost_usd,
             denied_tools=spec.denied_tools,
+            tool_iterations=state.tool_iterations,
+            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
+            stated_tool_gap=stated_tool_gap,
+        )
+
+    except _ToolIterationLimitReached as exc:
+        # AC-2: an explicit, distinct terminal state — not a disguised success —
+        # so a caller's failure/degradation checks see an incomplete worker as
+        # incomplete, not as having answered.
+        duration_ms = int(time.monotonic() * 1000) - start_ms
+        result = SubAgentResult(
+            task_id=task_id,
+            spec_task=spec.task,
+            summary=exc.partial_content[:_SUMMARY_CAP_CHARS],
+            full_output=exc.partial_content,
+            tools_used=state.tools_used,
+            token_count=len(exc.partial_content.split()),
+            tokens_generated=len(exc.partial_content.split()),
+            duration_ms=duration_ms,
+            success=False,
+            error=f"tool iteration limit reached after {state.tool_iterations} rounds",
+            cost_usd=state.cost_usd,
+            denied_tools=spec.denied_tools,
+            tool_iterations=state.tool_iterations,
+            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
         )
 
     except asyncio.TimeoutError:
@@ -380,12 +701,17 @@ async def run_sub_agent(
             task_id,
             spec,
             duration_ms,
-            progress,
+            state.progress,
             # FRE-1374 (AC-2): report the measured elapsed time, not the nominal
             # budget — the hard deadline that actually fired may differ from
             # spec.timeout_seconds, and the old hard-coded value hid exactly the
             # shortfall this ticket exists to make visible.
             error=f"Timeout after {duration_ms / 1000:.1f}s",
+            cost_usd=state.cost_usd,
+            tools_used=state.tools_used,
+            tool_iterations=state.tool_iterations,
+            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
         )
 
     except LLMTimeout as exc:
@@ -400,8 +726,13 @@ async def run_sub_agent(
             task_id,
             spec,
             duration_ms,
-            progress,
+            state.progress,
             error=f"Timeout after {duration_ms / 1000:.1f}s (generation budget): {exc}",
+            cost_usd=state.cost_usd,
+            tools_used=state.tools_used,
+            tool_iterations=state.tool_iterations,
+            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
         )
 
     except asyncio.CancelledError:
@@ -413,9 +744,13 @@ async def run_sub_agent(
             task_id,
             spec,
             duration_ms,
-            progress,
+            state.progress,
             error="cancelled (global dispatch timeout)",
-            cost_usd=call_cost_usd,
+            cost_usd=state.cost_usd,
+            tools_used=state.tools_used,
+            tool_iterations=state.tool_iterations,
+            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
         )
         _emit_sub_agent_capture(
             cancelled, spec, _context_breakdown, trace_id, session_id, eval_mode
@@ -429,9 +764,13 @@ async def run_sub_agent(
             task_id,
             spec,
             duration_ms,
-            progress,
+            state.progress,
             error=str(exc),
-            cost_usd=call_cost_usd,
+            cost_usd=state.cost_usd,
+            tools_used=state.tools_used,
+            tool_iterations=state.tool_iterations,
+            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
         )
 
     _full_output_chars = len(result.full_output)

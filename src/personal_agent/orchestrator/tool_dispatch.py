@@ -34,6 +34,28 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+_tool_execution_layer: "ToolExecutionLayer | None" = None
+
+
+def get_shared_tool_execution_layer() -> "ToolExecutionLayer":
+    """Get or create the module-level tool execution layer for non-primary callers.
+
+    A separate singleton from ``executor.py``'s own private
+    ``_get_tool_execution_layer`` — that one is module-private to a file large
+    enough that a sub-agent loop should not import from it. Both wrap the same
+    underlying stateless registry/governance config, so having two instances
+    changes no correctness guarantee.
+
+    Returns:
+        ToolExecutionLayer instance with the default tool registry.
+    """
+    global _tool_execution_layer
+    if _tool_execution_layer is None:
+        from personal_agent.tools import ToolExecutionLayer, get_default_registry  # noqa: PLC0415
+
+        _tool_execution_layer = ToolExecutionLayer(get_default_registry())
+    return _tool_execution_layer
+
 
 async def dispatch_tool_call(
     *,

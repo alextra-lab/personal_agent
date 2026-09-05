@@ -69,6 +69,31 @@ def test_tools_denied_records_a_refusal() -> None:
     assert cap.tools_granted == ["run_python"]
 
 
+def test_tool_loop_fields_default_to_empty() -> None:
+    """FRE-1389: today's no-tool-loop shape keeps its defaults."""
+    cap = _capture()
+    assert cap.tool_iterations == 0
+    assert cap.tool_result_chars_absorbed == 0
+    assert cap.refused_tool_attempts == []
+    assert cap.stated_tool_gap is None
+
+
+def test_tool_loop_fields_record_activity() -> None:
+    """FRE-1389: a runtime refusal and a stated gap are visible on the record itself."""
+    cap = _capture(
+        tools_granted=["run_python"],
+        tools_used=["run_python"],
+        tool_iterations=2,
+        tool_result_chars_absorbed=1234,
+        refused_tool_attempts=["bash"],
+        stated_tool_gap="web_search",
+    )
+    assert cap.tool_iterations == 2
+    assert cap.tool_result_chars_absorbed == 1234
+    assert cap.refused_tool_attempts == ["bash"]
+    assert cap.stated_tool_gap == "web_search"
+
+
 def test_frozen() -> None:
     """The record is immutable (ConfigDict frozen=True)."""
     cap = _capture()

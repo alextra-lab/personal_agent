@@ -16,8 +16,10 @@ from enum import Enum
 class SubAgentMode(Enum):
     """Execution mode for a sub-agent task.
 
-    PARALLEL_INFERENCE: Fire-and-forget LLM call, no tool access.
-        Used for analysis, comparison, and synthesis sub-tasks.
+    PARALLEL_INFERENCE: A focused LLM call, optionally with a bounded tool loop
+        when the task requests tools that clear the sub-agent tool grant
+        (FRE-1388/FRE-1389). Used for analysis, comparison, and synthesis
+        sub-tasks.
     """
 
     PARALLEL_INFERENCE = "parallel_inference"
@@ -44,7 +46,9 @@ class PlanTask:
         constraints: Scope or focus limits for the sub-agent.
         expected_output: Output shape description ("text", "comparison table", etc.).
         mode: Execution mode (currently always PARALLEL_INFERENCE).
-        tools: Tool names available to the sub-agent (currently always empty).
+        tools: Tool names this task requests (FRE-1389) — model-authored by the
+            planner, filtered against the sub-agent tool grant set before
+            dispatch (FRE-1388) and never passed through unfiltered.
     """
 
     name: str

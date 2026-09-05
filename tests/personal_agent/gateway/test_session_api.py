@@ -472,7 +472,7 @@ def test_get_session_stale_stored_key_provenance_is_default() -> None:
             resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
 
     body = resp.json()
-    assert body["primary_selection"] == "qwen3.8-flash-next"  # guardrail fell back to default
+    assert body["primary_selection"] == "qwen3.6-35b-thinking"  # guardrail fell back to default
     assert body["selection_provenance"] == "default"  # NOT 'server-hydrated'
 
 
@@ -530,7 +530,7 @@ def test_get_session_selection_defaults_when_no_row() -> None:
             resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
 
     body = resp.json()
-    assert body["primary_selection"] == "qwen3.8-flash-next"
+    assert body["primary_selection"] == "qwen3.6-35b-thinking"
     assert body["selection_provenance"] == "default"
 
 
@@ -588,8 +588,8 @@ def test_get_session_context_max_defaults_when_no_selection() -> None:
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["primary_selection"] == "qwen3.8-flash-next"
-    assert body["context_max"] == 262144  # flash-next, full pooled --ctx-size (--kv-unified)
+    assert body["primary_selection"] == "qwen3.6-35b-thinking"
+    assert body["context_max"] == 262144  # qwen3.6-35b-thinking, full pooled --ctx-size (--kv-unified)
 
 
 def test_get_session_context_max_resolution_failure_surfaces_as_500() -> None:
@@ -845,7 +845,7 @@ def test_get_session_config_ac9_slice_reports_stored_selection_not_raw_default()
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
 
     primary = resp.json()["roles"]["primary"]
-    assert primary["resolved"] == "claude_sonnet"  # NOT the raw default qwen3.8-flash-next
+    assert primary["resolved"] == "claude_sonnet"  # NOT the raw default qwen3.6-35b-thinking
     assert primary["provenance"] == "server-hydrated"
 
 
@@ -871,9 +871,9 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
 
     roles = resp.json()["roles"]
-    assert roles["primary"]["resolved"] == "qwen3.8-flash-next"
+    assert roles["primary"]["resolved"] == "qwen3.6-35b-thinking"
     assert roles["artifact_builder"]["resolved"] == "claude_sonnet"
-    assert roles["sub_agent"]["resolved"] == "qwen3.8-flash-next-instruct"  # 2026-09-03: one served model, instruct half
+    assert roles["sub_agent"]["resolved"] == "qwen3.6-35b-instruct"  # owner swap 2026-09-05
 
 
 def test_get_session_config_selection_store_failure_logs_trace_id() -> None:

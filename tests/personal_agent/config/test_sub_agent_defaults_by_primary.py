@@ -79,18 +79,20 @@ class TestMigrationWindowLeavesFlatBindingOperative:
     """The flat binding must keep resolving exactly as today (no intermediate gap)."""
 
     def test_deployment_and_open_are_unchanged(self) -> None:
-        """The flat binding still resolves; the value has moved twice, FRE-967 has not yet cut over.
+        """The flat binding still resolves; the value has moved three times, FRE-967 has not yet cut over.
 
         FRE-1319 moved it to gpt-5.4-mini on 2026-08-28 because the MBP held one
         model at Flash-Next's 87 GiB; the owner-directed 2026-08-30 revert to the
-        qwen3.6-35b pair loads both deployments again, so it is back on the local
-        instruct companion. What this test guards is unchanged and is not the
-        value: `deployment` is still the field that actually resolves, and
-        `defaults_by_primary` is still substrate-only until FRE-967 cuts the
-        resolver over. A binding that silently stopped resolving through
-        `deployment` during that window is the gap this catches.
+        qwen3.6-35b pair loaded both deployments again, so it moved to the local
+        instruct companion; the owner-directed 2026-09-05 swap back to
+        qwen3.6-35b keeps it there under the new id. What this test guards is
+        unchanged and is not the value: `deployment` is still the field that
+        actually resolves, and `defaults_by_primary` is still substrate-only
+        until FRE-967 cuts the resolver over. A binding that silently stopped
+        resolving through `deployment` during that window is the gap this
+        catches.
         """
         config = load_model_config()
         binding = config.roles["sub_agent"]
-        assert binding.deployment == _QWEN_FLASH_INSTRUCT
+        assert binding.deployment == _QWEN_INSTRUCT
         assert binding.open is True

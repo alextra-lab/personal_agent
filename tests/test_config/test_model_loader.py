@@ -672,7 +672,7 @@ class TestResolveActiveContextLength:
     """
 
     _CLOUD_KEY = "claude_sonnet"  # context_length 200000 (config/models.yaml)
-    _LOCAL_KEY = "qwen3.6-35b-thinking"  # context_length 131072 (config/models.yaml)
+    _LOCAL_KEY = "qwen3.6-35b-thinking"  # context_length 262144 (config/models.yaml)
 
     def test_resolves_active_primary_selection(self) -> None:
         """Returns the selected model's real context_length, not the fallback."""
@@ -725,4 +725,4 @@ class TestResolveActiveContextLength:
             result = resolve_active_context_length("primary", fallback=-1)
         finally:
             reset_current_selection(token)
-        assert result == 131072
+        assert result == 262144

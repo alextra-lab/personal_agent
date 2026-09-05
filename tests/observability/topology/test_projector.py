@@ -925,3 +925,137 @@ async def test_sole_emitter_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # emit_turn_status called exactly once per event that emits (all 5 above).
     assert call_count == len(events_to_handle)
+
+
+# ---------------------------------------------------------------------------
+# FRE-1401 — a post-completion straggler must not null a published ceiling
+# ---------------------------------------------------------------------------
+
+
+async def test_straggler_after_completion_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-2b: an event for a trace already popped at completion must not recreate
+    a fresh (ceiling-absent) observation and re-emit over the last good turn_status.
+    """
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            tool_iteration=3,
+            tool_iteration_max=25,
+            context_tokens=8000,
+            context_max=40000,
+            topology="primary",
+        )
+    )
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.10
+        )
+    )
+    emitted_before_straggler = len(emitted)
+    last_good = emitted[-1]
+
+    # A straggler for the popped trace (e.g. post-turn telemetry landing late).
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            tool_iteration=3,
+            tool_iteration_max=25,
+            context_tokens=8000,
+            context_max=40000,
+            topology="primary",
+        )
+    )
+
+    # The straggler produces no new emit at all — the last-published turn_status
+    # (real ceiling included) stands untouched.
+    assert len(emitted) == emitted_before_straggler
+    assert emitted[-1] == last_good
+    assert emitted[-1]["context_max"] == 40000
+    # And the trace is not resurrected into per-trace state.
+    assert "t-1" not in proj._by_trace
+
+
+async def test_straggler_after_completion_ignores_other_event_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The drop applies to any event type for a completed trace, not just progress."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.05
+        )
+    )
+    emitted_before_straggler = len(emitted)
+
+    await proj.handle(
+        ModelCallCompletedEvent(
+            trace_id="t-1", session_id="s-1", cost_usd=0.01, input_tokens=1, output_tokens=1
+        )
+    )
+    await proj.handle(
+        TurnDegradedEvent(
+            trace_id="t-1", session_id="s-1", where="x", reason="y", severity="warning"
+        )
+    )
+
+    assert len(emitted) == emitted_before_straggler
+
+
+async def test_completed_traces_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The completed-trace memory is LRU-bounded like the other per-trace maps."""
+    _capture(monkeypatch)
+    monkeypatch.setattr(projector_mod, "_MAX_COMPLETED_TRACES", 2)
+    proj = TurnObservationProjector()
+
+    for tid in ("t-1", "t-2", "t-3"):
+        await proj.handle(
+            TurnCompletedEvent(
+                trace_id=tid, session_id="s-1", topology="primary", cost_authoritative_usd=0.01
+            )
+        )
+
+    assert len(proj._completed_traces) == 2
+    # The oldest ("t-1") was evicted — a straggler for it would recreate an
+    # observation rather than being dropped, which is the accepted bounded tradeoff.
+    assert "t-1" not in proj._completed_traces
+    assert "t-2" in proj._completed_traces
+    assert "t-3" in proj._completed_traces
+
+
+async def test_late_compaction_marker_on_completed_trace_still_folds_into_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A B/D/A marker arriving after its trace completed must not undercount —
+    only the per-trace observation/emit is suppressed (FRE-1401 finding: a
+    blanket drop would silently lose a late-first-seen compaction fact).
+    """
+    from personal_agent.events.models import CompactionBMarkerEvent
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.05
+        )
+    )
+    emitted_before_marker = len(emitted)
+
+    # The B marker for t-1 arrives late — after t-1 has already completed.
+    await proj.handle(
+        CompactionBMarkerEvent(trace_id="t-1", session_id="s-1", trigger="soft", fact_id="late-b-1")
+    )
+
+    # No new emit for the popped trace...
+    assert len(emitted) == emitted_before_marker
+    # ...but the fact is not lost — it surfaces on the session's next natural emit.
+    await proj.handle(TopologyEnteredEvent(trace_id="t-2", session_id="s-1", topology="primary"))
+    assert emitted[-1]["compaction_count"] == 1

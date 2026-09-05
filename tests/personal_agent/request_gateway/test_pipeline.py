@@ -405,15 +405,27 @@ class TestStage7BudgetResolvesActiveSelection:
     FRE-972 (the in-turn compaction/consent gate), in Stage 7 of the pre-LLM
     gateway instead of the executor's state machine.
 
-    ``qwen3.6-35b-instruct`` (context_length 65536) is smaller than the
-    static fallback (120000); ``claude_sonnet`` (200000) is larger. A history
-    sized between the two proves the trim now tracks the *selected* model,
-    not a constant every session sizes identically against.
+    FRE-1411: the 2026-09-05 catalog correction records every local Qwen
+    deployment at its full natural window (262,144), so no ``kind: llm``
+    deployment left in
+    the catalog is smaller than the static fallback (120000) any more — every
+    real chat-capable candidate (the local Qwen pair, ``qwen3.6-27b-ovh``,
+    ``claude_sonnet``/``claude_haiku``, ``gpt-5.4-mini`` at 128000) now exceeds
+    it. ``resolve_active_context_length`` resolves purely off a deployment's
+    ``context_length`` field regardless of ``kind`` (``config/model_loader.py``),
+    so this test substitutes ``embedding`` (context_length 32768) — the
+    smallest real entry left in the catalog — to exercise Stage 7's own
+    trimming arithmetic; the assertion never puts a real turn through an
+    embedding deployment, and no user-selectable path can put one there either
+    (``is_selectable_binding`` enforces ``kind`` for real selections).
+    ``claude_sonnet`` (200000) is larger. A history sized between the two
+    proves the trim now tracks the *selected* model, not a constant every
+    session sizes identically against.
     """
 
-    _SMALL_KEY = "qwen3.6-35b-instruct"  # context_length 65536 (config/models.yaml)
+    _SMALL_KEY = "embedding"  # context_length 32768 (config/models.yaml)
     _LARGE_KEY = "claude_sonnet"  # context_length 200000 (config/models.yaml)
-    _HISTORY_TOKENS = 90000  # > 65536, < 120000 (static fallback), < 200000
+    _HISTORY_TOKENS = 90000  # > 32768, < 120000 (static fallback), < 200000
 
     @pytest.mark.asyncio
     async def test_trims_for_a_selection_smaller_than_the_static_fallback(self) -> None:

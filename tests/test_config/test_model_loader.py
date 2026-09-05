@@ -672,7 +672,7 @@ class TestResolveActiveContextLength:
     """
 
     _CLOUD_KEY = "claude_sonnet"  # context_length 200000 (config/models.yaml)
-    _LOCAL_KEY = "qwen3.6-35b-thinking"  # context_length 131072 (config/models.yaml)
+    _LOCAL_KEY = "qwen3.6-35b-thinking"
 
     def test_resolves_active_primary_selection(self) -> None:
         """Returns the selected model's real context_length, not the fallback."""
@@ -684,7 +684,7 @@ class TestResolveActiveContextLength:
             reset_current_selection(token)
 
     def test_differs_cloud_vs_local(self) -> None:
-        """Selection-aware: cloud (Sonnet 200K) differs from local (Qwen 131K)."""
+        """Selection-aware: the cloud window differs from the local one."""
         cloud_token = set_current_selection({"primary": self._CLOUD_KEY})
         try:
             cloud_max = resolve_active_context_length("primary", fallback=1)
@@ -720,9 +720,11 @@ class TestResolveActiveContextLength:
 
     def test_fallback_not_used_when_selection_resolves(self) -> None:
         """A resolvable selection wins over the fallback (fallback is a trap value)."""
+        expected = load_model_config().models[self._LOCAL_KEY].context_length
         token = set_current_selection({"primary": self._LOCAL_KEY})
         try:
             result = resolve_active_context_length("primary", fallback=-1)
         finally:
             reset_current_selection(token)
-        assert result == 131072
+        assert result != -1
+        assert result == expected

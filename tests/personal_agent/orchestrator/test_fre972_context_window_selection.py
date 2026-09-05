@@ -9,9 +9,20 @@ truncation and a spurious "Context window nearly full" consent popup at
 
 These tests prove the outcome the ticket names as its own test: a sonnet
 session does not truncate / trigger hard compression until it approaches a
-fraction of 200K, while a qwen (131,072) session — sized identically — does,
-because the same history now crosses qwen's smaller threshold but not
+fraction of 200K, while a small-window session — sized identically — does,
+because the same history now crosses the small window's threshold but not
 sonnet's larger one.
+
+FRE-1411: the 2026-09-05 catalog correction records the local Qwen
+deployment at its full natural window (262,144), so no local deployment is
+smaller than
+sonnet's 200K any more — the pair this file compares against local Qwen
+originally is retired here in favor of ``gpt-5.4-mini`` (context_length
+128,000, ``config/models.yaml``), the smallest ``kind: llm`` deployment left
+in the catalog below sonnet's window. It plays the small-window role only for
+this test's arithmetic; the assertions exercise ``resolve_active_context_length``
+directly and do not depend on gpt-5.4-mini ever actually being selected as a
+session's real primary.
 """
 
 from __future__ import annotations
@@ -54,7 +65,7 @@ def _restore_executor_tool_globals() -> object:
     _ex._tool_execution_layer = saved_layer
 
 
-_QWEN_KEY = "qwen3.6-35b-thinking"  # context_length 131072 (config/models.yaml)
+_SMALL_KEY = "gpt-5.4-mini"  # context_length 128000 (config/models.yaml)
 _SONNET_KEY = "claude_sonnet"  # context_length 200000 (config/models.yaml)
 
 
@@ -114,10 +125,10 @@ async def _run_step_init_with_selection(
 
 @pytest.mark.asyncio
 async def test_step_init_does_not_truncate_sonnet_session_within_its_real_window() -> None:
-    """Sonnet session with history sized between qwen's and sonnet's budgets.
+    """Sonnet session with history sized between the small and sonnet budgets.
 
-    ~163K tokens of history: over qwen's ~126.6K trim budget, under sonnet's
-    ~195.5K trim budget (reserved_tokens=4500 in both cases).
+    ~163K tokens of history: over gpt-5.4-mini's ~123.5K trim budget, under
+    sonnet's ~195.5K trim budget (reserved_tokens=4500 in both cases).
     """
     history = _big_history(turns=18, tokens_per_turn=9000)
 
@@ -128,15 +139,15 @@ async def test_step_init_does_not_truncate_sonnet_session_within_its_real_window
 
 
 @pytest.mark.asyncio
-async def test_step_init_truncates_qwen_session_at_its_smaller_window() -> None:
-    """Qwen selection on the same history truncates it.
+async def test_step_init_truncates_small_window_session_at_its_own_window() -> None:
+    """A small-window selection on the same history truncates it.
 
     Proves the truncation is keyed to the *selected* model, not one static
     constant that would treat both sessions identically.
     """
     history = _big_history(turns=18, tokens_per_turn=9000)
 
-    messages = await _run_step_init_with_selection(_QWEN_KEY, history)
+    messages = await _run_step_init_with_selection(_SMALL_KEY, history)
 
     assert len(messages) < len(history) + 1
 
@@ -177,9 +188,10 @@ async def _run_step_llm_call_with_selection(
     token = set_current_selection({"primary": primary_key})
     try:
         with (
-            patch("personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
+            patch(
+                "personal_agent.orchestrator.skills.get_skill_bodies",
+                return_value=("", ()),
+            ),
             patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
             patch(
                 "personal_agent.orchestrator.skills.assemble_skill_index_directive",
@@ -207,10 +219,10 @@ async def _run_step_llm_call_with_selection(
 
 @pytest.mark.asyncio
 async def test_sonnet_session_does_not_trigger_consent_popup_below_its_real_window() -> None:
-    """Sonnet session with history above qwen's hard threshold but below its own.
+    """Sonnet session with history above the small window's hard threshold but below its own.
 
-    ~145K tokens: over qwen's hard threshold (0.85 * 131,072 ≈ 111.4K), under
-    sonnet's (0.85 * 200,000 = 170K). The old static-96K gate would have
+    ~145K tokens: over gpt-5.4-mini's hard threshold (0.85 * 128,000 = 108.8K),
+    under sonnet's (0.85 * 200,000 = 170K). The old static-96K gate would have
     fired the popup on either session at this size.
     """
     history = _big_history(turns=16, tokens_per_turn=9000)
@@ -224,14 +236,14 @@ async def test_sonnet_session_does_not_trigger_consent_popup_below_its_real_wind
 
 
 @pytest.mark.asyncio
-async def test_qwen_session_still_triggers_consent_popup_at_its_own_threshold() -> None:
-    """Qwen selection on the same history still fires.
+async def test_small_window_session_still_triggers_consent_popup_at_its_own_threshold() -> None:
+    """A small-window selection on the same history still fires.
 
     The gate isn't disabled, it's now correctly scaled per session.
     """
     history = _big_history(turns=16, tokens_per_turn=9000)
     pause_mock = AsyncMock(return_value="compress_and_continue")
 
-    await _run_step_llm_call_with_selection(_QWEN_KEY, history, pause_mock)
+    await _run_step_llm_call_with_selection(_SMALL_KEY, history, pause_mock)
 
     assert pause_mock.await_count == 1

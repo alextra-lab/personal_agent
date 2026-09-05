@@ -150,8 +150,10 @@ bindings:
   # this to gpt-5.4-mini only because the MBP could hold a single model at
   # Flash-Next's footprint; with both 35B deployments loaded again that
   # constraint is gone, and the companion is local, free and concurrent
-  # (max_concurrency 3 against the primary's 1), which is what HYBRID fan-out
-  # needs. Non-thinking is expressed by the deployment itself, so FRE-1007's
+  # (max_concurrency 3 against the primary's 1). HYBRID fan-out itself now
+  # dispatches sub-agents sequentially (FRE-1380), so this headroom is not
+  # what fan-out needs; the pairing stands on its other merits. Non-thinking
+  # is expressed by the deployment itself, so FRE-1007's
   # reasoning-declaration guard is satisfied without a cloud reasoning lever.
   sub_agent:
     deployment: qwen3.8-flash-next-instruct

@@ -52,7 +52,8 @@ _INSERT_SQL = """
         latency_total_ms, latency_breakdown,
         cost_live_usd, cost_authoritative_usd, cost_reconciled,
         input_tokens, output_tokens,
-        fallback_triggered, error_type, error_class
+        fallback_triggered, error_type, error_class,
+        effective_tool_iteration_ceiling, constraint_resolutions
     ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9,
@@ -66,7 +67,8 @@ _INSERT_SQL = """
         $32, $33::jsonb,
         $34, $35, $36,
         $37, $38,
-        $39, $40, $41
+        $39, $40, $41,
+        $42, $43::jsonb
     )
     ON CONFLICT (trace_id, task_id) DO NOTHING
 """
@@ -258,6 +260,8 @@ class RouteTraceLedger:
                 row.fallback_triggered,
                 row.error_type,
                 row.error_class,
+                row.effective_tool_iteration_ceiling,
+                json.dumps(list(row.constraint_resolutions)),
             )
         log.debug(
             "route_trace_written",
@@ -361,6 +365,7 @@ def _row_from_record(record: asyncpg.Record) -> RouteTraceRow:
     sub_agents = _loads(record["sub_agents"]) or []
     latency_breakdown = _loads(record["latency_breakdown"])
     ped = _loads(record["pedagogical_outcomes"])
+    constraint_resolutions = _loads(record["constraint_resolutions"]) or []
     return RouteTraceRow(
         trace_id=record["trace_id"],
         session_id=record["session_id"],
@@ -403,6 +408,8 @@ def _row_from_record(record: asyncpg.Record) -> RouteTraceRow:
         fallback_triggered=record["fallback_triggered"],
         error_type=record["error_type"],
         error_class=record["error_class"],
+        effective_tool_iteration_ceiling=record["effective_tool_iteration_ceiling"],
+        constraint_resolutions=tuple(constraint_resolutions),
     )
 
 

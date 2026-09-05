@@ -226,6 +226,41 @@ def test_reply_overlap_unrelated_reply_is_zero() -> None:
     assert row.sub_agents[0]["reply_overlap"] == 0.0
 
 
+def test_effective_tool_iteration_ceiling_defaults_to_none() -> None:
+    """ADR-0142 AC-1 (FRE-1391): unset on a ctx whose tool loop never ran."""
+    row = _assemble(_base_ctx())
+    assert row.effective_tool_iteration_ceiling is None
+
+
+def test_effective_tool_iteration_ceiling_reads_the_stamped_value() -> None:
+    """ADR-0142 AC-1 (FRE-1391): the assembler reads the post-grant stamp, not a re-derivation."""
+    row = _assemble(_base_ctx(effective_tool_iteration_ceiling=35))
+    assert row.effective_tool_iteration_ceiling == 35
+
+
+def test_constraint_resolutions_defaults_to_empty() -> None:
+    """ADR-0142 AC-2 (FRE-1391): a quiet turn's resolution list is empty, not absent."""
+    row = _assemble(_base_ctx())
+    assert row.constraint_resolutions == ()
+
+
+def test_constraint_resolutions_preserves_order() -> None:
+    """ADR-0142 AC-2 (FRE-1391): two pauses map to two entries, in order."""
+    from personal_agent.orchestrator.types import ConstraintResolutionRecord
+
+    ctx = _base_ctx(
+        constraint_resolutions=[
+            ConstraintResolutionRecord(constraint="tool_iteration_limit", action_id="continue_10"),
+            ConstraintResolutionRecord(constraint="context_compression", action_id="stop_here"),
+        ]
+    )
+    row = _assemble(ctx)
+    assert row.constraint_resolutions == (
+        {"constraint": "tool_iteration_limit", "action_id": "continue_10"},
+        {"constraint": "context_compression", "action_id": "stop_here"},
+    )
+
+
 def test_reply_overlap_partial() -> None:
     """FRE-515: half the distinct content tokens contained → overlap 0.5."""
     summary = "alpha_token beta_token"

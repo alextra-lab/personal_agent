@@ -7,8 +7,22 @@ from uuid import uuid4
 import pytest
 
 import personal_agent.orchestrator.executor as ex
+from personal_agent.governance.models import Mode
+from personal_agent.orchestrator.channels import Channel
+from personal_agent.orchestrator.types import ExecutionContext
 
 _TRANSPORT = "personal_agent.transport.agui.transport"
+
+
+def _ctx() -> ExecutionContext:
+    """A minimal execution context for ADR-0142 pause-accounting tests (FRE-1391)."""
+    return ExecutionContext(
+        session_id="s1",
+        trace_id="t1",
+        user_message="hi",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+    )
 
 
 @pytest.mark.asyncio
@@ -293,3 +307,122 @@ async def test_artifact_builder_pause_carries_computed_options(
     assert event.constraint == "artifact_builder"  # type: ignore[attr-defined]
     assert result == "m_b"
     assert result.resolution == "user_choice"
+
+
+class TestPauseAccounting:
+    """ADR-0142 pause accounting on ``ExecutionContext`` (FRE-1391)."""
+
+    def test_quiet_turn_reads_zero_not_absent(self) -> None:
+        """AC-4: a fresh ctx (no pause) reports explicit zeros, not None."""
+        ctx = _ctx()
+        assert ctx.pause_count == 0
+        assert ctx.credited_pause_seconds == 0.0
+        assert ctx.constraint_resolutions == []
+
+    @pytest.mark.asyncio
+    async def test_preference_bypass_records_no_pause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A preference bypass never pauses, so it must not be counted as one."""
+        ctx = _ctx()
+
+        async def fake_load(user_id: object, constraint: str, **_kw: object) -> str:
+            return "continue_10"
+
+        monkeypatch.setattr(ex, "_load_constraint_preference", fake_load)
+
+        await ex._maybe_pause_for_constraint(
+            session_id="s1",
+            trace_id="t1",
+            user_id=uuid4(),
+            constraint="tool_iteration_limit",
+            context="ctx",
+            ctx=ctx,
+        )
+
+        assert ctx.pause_count == 0
+        assert ctx.credited_pause_seconds == 0.0
+        assert ctx.constraint_resolutions == []
+
+    @pytest.mark.asyncio
+    async def test_two_pauses_produce_two_entries_in_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-2: two pauses append two entries, in order — a scalar would overwrite the first."""
+        ctx = _ctx()
+
+        async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
+            return None
+
+        decisions = iter(
+            [
+                {"decision": "continue_10", "resolution": "user_choice"},
+                {"decision": "stop_here", "resolution": "timeout_default"},
+            ]
+        )
+
+        async def fake_push(**kwargs: object) -> dict[str, str]:
+            return next(decisions)
+
+        async def fake_emit(**kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(ex, "_load_constraint_preference", fake_load)
+        monkeypatch.setattr(f"{_TRANSPORT}.register_and_push_constraint", fake_push)
+        monkeypatch.setattr(f"{_TRANSPORT}.emit_constraint_resolved", fake_emit)
+
+        await ex._maybe_pause_for_constraint(
+            session_id="s1",
+            trace_id="t1",
+            user_id=uuid4(),
+            constraint="tool_iteration_limit",
+            context="first pause",
+            ctx=ctx,
+        )
+        await ex._maybe_pause_for_constraint(
+            session_id="s1",
+            trace_id="t1",
+            user_id=uuid4(),
+            constraint="context_compression",
+            context="second pause",
+            ctx=ctx,
+        )
+
+        assert [r.constraint for r in ctx.constraint_resolutions] == [
+            "tool_iteration_limit",
+            "context_compression",
+        ]
+        assert [r.action_id for r in ctx.constraint_resolutions] == [
+            "continue_10",
+            "stop_here",
+        ]
+        assert ctx.pause_count == 2
+        assert ctx.credited_pause_seconds >= 0.0
+
+    @pytest.mark.asyncio
+    async def test_connection_lost_still_records_the_pause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The defensive connection_lost early return must not skip accounting."""
+        ctx = _ctx()
+
+        async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
+            return None
+
+        async def fake_push(**kwargs: object) -> dict[str, str]:
+            return {"decision": "finish_now", "resolution": "connection_lost"}
+
+        monkeypatch.setattr(ex, "_load_constraint_preference", fake_load)
+        monkeypatch.setattr(f"{_TRANSPORT}.register_and_push_constraint", fake_push)
+
+        await ex._maybe_pause_for_constraint(
+            session_id="s1",
+            trace_id="t1",
+            user_id=uuid4(),
+            constraint="tool_iteration_limit",
+            context="ctx",
+            ctx=ctx,
+        )
+
+        assert ctx.pause_count == 1
+        assert ctx.constraint_resolutions[0].action_id == "finish_now"

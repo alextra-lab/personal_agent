@@ -157,6 +157,25 @@ class ToolResultPin:
 
 
 @dataclass(frozen=True)
+class ConstraintResolutionRecord:
+    """One resolved constraint pause within a turn (ADR-0142 D3/D4a, FRE-1391).
+
+    ``ExecutionContext.constraint_resolutions`` holds one of these per pause, in the
+    order they resolved — a list, because D4a permits several pauses in one turn and a
+    scalar field would silently record only the last one.
+
+    Attributes:
+        constraint: Which constraint raised the pause.
+        action_id: The resolved action identifier applied — a user choice, a timeout
+            default, or the no-client safe default. A preference-bypassed decision never
+            reaches this list: no pause occurred, so there is nothing to record here.
+    """
+
+    constraint: str
+    action_id: str
+
+
+@dataclass(frozen=True)
 class AttachmentRef:
     """Structured reference to a completed upload (FRE-661 / ADR-0101 §2, §8a).
 
@@ -339,6 +358,18 @@ class ExecutionContext:
     # ADR-0076: extra iterations granted when the user picks "Continue" at a
     # tool_iteration_limit constraint pause. Added on top of the resolved max.
     tool_iteration_bonus: int = 0
+    # ADR-0142 (FRE-1391): the post-grant tool-iteration ceiling this turn's loop actually
+    # used, stamped by _resolve_max_iterations on every call so the last stamp before turn
+    # end reflects any bonus granted mid-turn. None until the loop resolves it once.
+    effective_tool_iteration_ceiling: int | None = None
+    # ADR-0142 (FRE-1391): one entry per constraint pause this turn raised, in the order
+    # they resolved. See ConstraintResolutionRecord for why this is a list, not a scalar.
+    constraint_resolutions: list[ConstraintResolutionRecord] = field(default_factory=list)
+    # ADR-0142 (FRE-1391): pause accounting the future D4a credited-pause bound will read.
+    # Both start at an explicit zero rather than None, so a quiet turn's row can be told
+    # apart from one where the accounting never ran.
+    credited_pause_seconds: float = 0.0
+    pause_count: int = 0
     # ADR-0076: accumulated LLM spend for this turn (USD), surfaced live via the
     # turn_status STATE_DELTA so the user sees cost as it accrues.
     turn_cost_usd: float = 0.0

@@ -89,13 +89,21 @@ class RouteTraceRow:
         fallback_triggered: Whether a sub-agent/phase failure escalated to the primary.
         error_type: Exception class name if the turn errored, else ``None``.
         error_class: Classified-error category if available, else ``None``.
+        effective_tool_iteration_ceiling: The post-grant tool-iteration ceiling this
+            turn's loop actually used (``_resolve_max_iterations``) — ``base +
+            tool_iteration_bonus + grounding_retrieval_grant``, not the configured
+            per-type or global setting. ``None`` if the tool loop never ran (ADR-0142
+            AC-1, FRE-1391).
+        constraint_resolutions: One entry per constraint pause this turn raised, in
+            order, each naming the constraint and the resolved ``action_id``. Empty
+            when no pause occurred (ADR-0142 AC-2, FRE-1391).
     """
 
     trace_id: UUID
     session_id: UUID | None
     task_id: UUID | None = None
     created_at: datetime | None = None
-    schema_version: int = 1
+    schema_version: int = 2
 
     # Stimulus (PII-gated)
     user_message_chars: int = 0
@@ -152,3 +160,7 @@ class RouteTraceRow:
     fallback_triggered: bool = False
     error_type: str | None = None
     error_class: str | None = None
+
+    # ADR-0142 instrumentation (FRE-1391)
+    effective_tool_iteration_ceiling: int | None = None
+    constraint_resolutions: Sequence[Mapping[str, object]] = field(default_factory=tuple)

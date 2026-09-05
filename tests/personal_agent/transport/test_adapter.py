@@ -133,7 +133,13 @@ class TestPhaseEvents:
         assert result["data"]["phase"] == "planning"
 
     def test_phase_end(self) -> None:
-        event = PhaseEndEvent(phase=Phase.EXPANSION, phase_id="p0", session_id="s", parent_id=None)
+        event = PhaseEndEvent(
+            phase=Phase.EXPANSION,
+            phase_id="p0",
+            session_id="s",
+            parent_id=None,
+            ended_at="2026-07-25T10:00:05+00:00",
+        )
         result = to_agui_event(event, seq=9)
         assert result["type"] == "PHASE_END"
         assert result["session_id"] == "s"
@@ -143,6 +149,7 @@ class TestPhaseEvents:
             "phase_id": "p0",
             "parent_id": None,
             "ok": True,
+            "ended_at": "2026-07-25T10:00:05+00:00",
         }
 
     def test_phase_end_ok_false(self) -> None:

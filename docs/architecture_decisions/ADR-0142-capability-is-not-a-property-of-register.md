@@ -146,7 +146,18 @@ Context describes, and **no telemetry signal detects it**, because irrelevant re
 novel. A design that triggered on a novelty signal would let exactly its own motivating failure run
 free, and worse, would read that failure's high novelty as evidence of productive work.
 
-So spend is the trigger, because spend is the only thing that is true of both forms.
+So spend is the trigger, because spend is the only observable that both **expensive** forms share.
+
+**Spend is tool iteration count, not cost.** A count is legible to the user reading the card and
+needs no accounting machinery. Token and currency accounting belong to the cost gate and to
+FRE-1382's budget, not to this control. The consequence is accepted: twenty cheap calls and twenty
+expensive ones trip the same threshold.
+
+**Known limitation — cheap drift stays invisible.** A turn that makes four irrelevant calls and stops
+has neither redundancy nor threshold-level spend. Nothing here detects it, and nothing detects it
+today either: the ceiling only acts above the limit, and the loop gate only blocks repeated
+signatures and identical outputs. This ADR does not regress that case and does not fix it. It is
+recorded so that a future reader does not mistake the spend threshold for complete drift coverage.
 
 **Novelty is evidence carried by the question, not the trigger for it.** The loop gate already hashes
 tool output for its identity check, and that hash is exact-match, so near-duplicates pass. Widening
@@ -175,16 +186,23 @@ So the threshold's output is a question, not a verdict. The mechanism's job drop
 whether this turn deserves more* to *know when to ask*. That is a materially weaker requirement, and
 a spend count meets it where no inference could meet the stronger one.
 
-**The pause fires at most twice per turn**, and this is a decision, not a hope: once at the spend
-threshold, once at the ceiling (the existing `tool_iteration_limit` pause). A turn granted a
-continuation does not re-ask at the same threshold. Without this bound D4a's deadline credit is
-unbounded, so the cardinality is load-bearing and is stated here rather than left to a risk note.
+**The spend-threshold pause fires at most once per turn.** A turn granted a continuation does not
+re-ask at the same threshold.
+
+That is the only cardinality claim this ADR makes, and an earlier revision wrongly made a wider one.
+The existing `tool_iteration_limit` pause **recurs by design**: accepting "Continue (10 more)" raises
+the ceiling, and the ceiling can be reached again. That recurrence is correct — each repetition is a
+fresh, explicit grant from the user — so it must not be capped by a cardinality rule. What bounds it
+is D4a's creditable-pause limit and lifetime cap, which apply to every pause in the turn regardless
+of which constraint raised it. Pause cardinality is therefore not the safety mechanism, and this ADR
+does not rely on it being one.
 
 **This is also the escalation trigger for demonstrated-need routing.** A turn that has spent real
-work and is still returning novel results has demonstrated need in a way no pre-turn classifier can
-predict from a ten-word message. The spend threshold and the escalation trigger are the same
-crossing, read for opposite purposes. They are decided together here so that they cannot disagree
-later.
+work has demonstrated need in a way no pre-turn classifier can predict from a ten-word message.
+Demonstrated need is the spend crossing, and nothing else — novelty does not enter the system's
+decision at any point. It is shown on the card so the **user** can weigh it. The spend threshold and
+the escalation trigger are the same crossing, read for opposite purposes. They are decided together
+here so that they cannot disagree later.
 
 Demonstrated-need escalation is not built by this ADR. Today `ctx.expansion_strategy` comes from the
 gateway and from nowhere else, and it is consumed before the tool loop starts, through two dispatch
@@ -216,8 +234,17 @@ Two bounds therefore accompany the credit:
 - **An absolute lifetime cap**, `orchestrator_turn_lifetime_seconds`, proposed at 1800. It is
   wall-clock from `turn_started_monotonic`, it is never extended by anything, and it terminates the
   turn through the existing synthesis path. The work budget bounds work; this bounds the clock.
-- **A creditable-pause limit**, proposed at 3 per turn. Pauses beyond it still function, and are
-  still offered, but their wait is charged to the work budget as it is today.
+- **A creditable-pause limit**, proposed at 3 per turn. The limit counts **every** pause in the turn,
+  whichever constraint raised it — attachment cost, artifact selection, compression, the iteration
+  limit, and this ADR's spend threshold all draw on the same three credits. Pauses beyond the limit
+  still function and are still offered, but their wait is charged to the work budget as it is today.
+
+**The cap preempts a pause that is already waiting.** A pause is bounded by the lesser of its own
+timeout and the lifetime remaining. When the lifetime cap is reached while a pause is in flight, the
+pause resolves immediately to its safe default and the turn proceeds to synthesis. Without this, a
+pause beginning at 1790 seconds would wait its full 180-second timeout and carry the turn past a cap
+described as unextendable. The precedent is FRE-973, which already declines to open a pause when the
+turn budget is exhausted; this extends the same reasoning to a pause already open.
 
 Both numbers are proposals open to tuning during implementation. The structure — a work budget, an
 unextendable lifetime cap, and a cap on how many waits may be credited — is the decision.
@@ -384,7 +411,8 @@ condition trace 515625b3 documents.
 | The novelty measure is wrong, so the card shows misleading evidence | Low | It decorates a question rather than deciding it. A wrong measure degrades the card and never the bound. This is why D2 moved it off the trigger. |
 | Ask-fatigue drives the owner to disable the pause | Medium | D4b prevents a stored preference for this constraint, so the pressure surfaces as a complaint rather than as a silent unbounded grant. If it becomes intolerable, the threshold is wrong and AC-2's measurement is the place to fix it. |
 | Expansion is opened before sub-agents can use it | High | FRE-1389 (sub-agents hold no tools) is a precondition. A research arm dispatched to a toolless sub-agent cannot search, so opening the lane first would measure a mechanism whose benefit is unbuilt. |
-| Extending the deadline across pauses lets a turn live far beyond 900 seconds of clock | High | D4a pairs the credit with two bounds stated as decisions rather than intentions: an unextendable `orchestrator_turn_lifetime_seconds` cap, and a creditable-pause limit. D3 additionally caps this ADR's own pause at two per turn. AC-7 tests the composition by taking three pauses. |
+| Extending the deadline across pauses lets a turn live far beyond 900 seconds of clock | High | D4a pairs the credit with two bounds stated as decisions rather than intentions: an unextendable `orchestrator_turn_lifetime_seconds` cap that preempts a waiting pause, and a turn-wide creditable-pause limit that every constraint draws on. AC-7 exceeds the limit deliberately; AC-8 tests preemption. |
+| Cheap drift — a few irrelevant calls — is still undetected | Low | Stated as a limitation in D2 rather than mitigated. It is unchanged from today's behaviour, and the cost of the case is bounded by its own cheapness. |
 | The spend threshold and a later escalation trigger disagree | Medium | D3 decides them as one crossing. This ADR is the record that they share a definition. |
 
 ---
@@ -396,8 +424,11 @@ condition trace 515625b3 documents.
 - `src/personal_agent/config/settings.py` — delete `orchestrator_max_tool_iterations_by_task_type`;
   add the spend threshold, `orchestrator_turn_lifetime_seconds`, and the creditable-pause limit.
 - `src/personal_agent/orchestrator/executor.py` — `_resolve_max_iterations` (D1);
-  `_turn_deadline_remaining`, the lifetime cap and the `WAITING_FOR_CHOICE` span (D4a); the spend
-  check and its pause call site (D3).
+  `_turn_deadline_remaining`, the lifetime cap, pause preemption and the `WAITING_FOR_CHOICE` span
+  (D4a); the spend check and its pause call site (D3). Preemption belongs in
+  `_maybe_pause_for_constraint`, which today takes `timeout_seconds` but no `ExecutionContext`, so it
+  cannot see the turn's remaining lifetime. Passing the context, or the remaining budget, is part of
+  the work.
 - `src/personal_agent/request_gateway/decomposition.py` — delete the `CONVERSATIONAL` branch (D1).
 - `src/personal_agent/orchestrator/expansion_controller.py` — take the minimum of `_MAX_TASKS` and
   `governance.expansion_budget` (D2). The budget reaches only the gateway log today
@@ -421,7 +452,9 @@ traffic.
 fields do not exist today and several criteria below name them:
 
 - `RouteTraceRow` carries no effective tool ceiling and no constraint resolution. Both are added, so
-  AC-1 and AC-5 are answerable from the ledger rather than by inference.
+  AC-1 and AC-5 are answerable from the ledger rather than by inference. The resolution field is a
+  **list, one entry per pause**, because D4a permits several pauses in one turn and a scalar would
+  silently record only one of them.
 - The `WAITING_FOR_CHOICE` span emits a timestamped start and an untimestamped paired end
   (`transport/agui/transport.py`, `transport/events.py`). The end is timestamped, so a pause has a
   measurable duration.
@@ -455,9 +488,12 @@ Adjudicated on FRE-1288 once the implementation chain has landed and deployed.
   decision. · **Check:** run a seeded probe that issues distinct queries past the threshold; assert a
   `WAITING_FOR_CHOICE` span with non-zero duration, a recorded resolution naming the chosen
   `action_id`, and that the first tool call after the threshold is timestamped after that resolution.
-  · *Fails if* the pause event is emitted while execution continues, if the span duration is zero, or
-  if the turn reaches `orchestrator_task_timeout_seconds` with no pause offered. An emit-and-continue
-  implementation fails on the timestamp ordering.
+  The four timestamps come from the phase span start and its newly added end, from
+  `constraint_decision_received`, and from `tool_call_started` — not from `RouteTraceRow`, which
+  records the resolution but is not the ordering instrument. · *Fails if* the pause event is emitted
+  while execution continues, if the span duration is zero, or if the turn reaches
+  `orchestrator_task_timeout_seconds` with no pause offered. An emit-and-continue implementation fails
+  on the timestamp ordering.
 
 - **AC-3** — Human wait time does not consume the turn's working budget. · **Check:** two-level. In
   process, hold the `ExecutionContext` and assert `_turn_deadline_remaining(ctx)` is unchanged, within
@@ -487,12 +523,23 @@ Adjudicated on FRE-1288 once the implementation chain has landed and deployed.
   each spawned four — **or if the window cannot be populated**, which means expansion is not running
   and the criterion has proved nothing.
 
-- **AC-7** — A turn's total wall-clock lifetime is bounded even when it pauses repeatedly. · **Check:**
-  run a probe that takes three or more pauses, letting each reach the 180-second timeout; assert the
-  turn terminates at or before `orchestrator_turn_lifetime_seconds`, and that its credited-pause total
-  stops increasing after the creditable-pause limit. · *Fails if* total lifetime exceeds the cap, or if
-  every pause is credited without limit — the unbounded composition of D4a and D3 that this criterion
-  exists to catch.
+- **AC-7** — A turn's total wall-clock lifetime is bounded even when it pauses repeatedly, and
+  crediting stops at the limit. · **Check:** run a probe that takes **`N + 1` pauses**, where `N` is
+  the configured creditable-pause limit, letting each reach its timeout. Exceeding the limit needs
+  more pauses than the spend threshold supplies on its own, so the probe composes them: the spend
+  pause once, plus repeated `tool_iteration_limit` pauses, which recur on each accepted "Continue".
+  Assert the turn terminates at or before `orchestrator_turn_lifetime_seconds`, and that the
+  credited-pause total equals the sum of the first `N` pause durations and not of all `N + 1`. ·
+  *Fails if* total lifetime exceeds the cap, or if the credited total includes the `N + 1`-th pause —
+  the unbounded composition of D4a and D3 that this criterion exists to catch. Both `N` and the pause
+  timeout are read from configuration at check time, never hard-coded, because D4a declares both
+  tunable.
+
+- **AC-8** — The lifetime cap preempts a pause that is already waiting. · **Check:** start a pause
+  with less time remaining to `orchestrator_turn_lifetime_seconds` than the pause timeout, and do not
+  answer it; assert the pause resolves to its safe default at the cap rather than at its own timeout,
+  and that the turn ends at the cap. · *Fails if* the turn survives past the cap by the difference
+  between the two, which is the case an unpreemptable pause produces.
 
 **Where these are adjudicated.** On FRE-1288, once the implementation chain has landed and deployed —
 not at merge of this ADR, and not by any single implementation ticket.
@@ -540,3 +587,16 @@ criteria admitted a broken implementation** and AC-3 had no measurement seam; al
 AC-7 was added for the lifetime bound, and the instrumentation the criteria depend on is now named in
 the Implementation Notes. Two factual corrections: `memory_recall` is 8, not 25, and expansion has two
 pre-tool-loop dispatch paths rather than one.
+
+Revised again after Codex review, round 2, which found that three of round 1's own repairs were
+defective. **The "at most twice per turn" cardinality claim was false** — the `tool_iteration_limit`
+pause recurs by design, because each accepted "Continue" raises the ceiling. Cardinality is no longer
+claimed as a safety mechanism; D4a's two bounds carry that weight, and the creditable-pause limit is
+explicitly turn-wide across all constraints. **The lifetime cap had no preemption semantics**, so a
+pause opening near the cap would have waited its full timeout and carried the turn past it; the cap
+now bounds a pause in flight, and AC-8 tests it. **AC-7 was vacuous**, asserting three pauses against
+a limit of three and hard-coding two values D4a declares tunable; it now takes `N + 1` pauses read
+from configuration and names where the extra pauses come from. Three clarifications: spend is defined
+as iteration count and not cost, cheap drift is recorded as an accepted limitation rather than
+implied to be covered, and novelty is stated to play no part in the system's own decision after D3
+had described it as part of demonstrated need.

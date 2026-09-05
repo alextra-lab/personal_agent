@@ -101,6 +101,7 @@ def load_governance_config(config_dir: Path | str | None = None) -> GovernanceCo
         "transition_rules": modes_data.get("transition_rules", {}),
         "tool_categories": tools_data.get("tool_categories", {}),
         "tools": tools_data.get("tools", {}),
+        "sub_agent_tools": tools_data.get("sub_agent_tools", []),
         "mode_constraints": models_data.get("mode_constraints", {}),
         "safety": safety_data,
     }

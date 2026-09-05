@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from personal_agent.governance.models import Mode
 from personal_agent.llm_client.types import LLMServerError, ModelRole
 from personal_agent.orchestrator.expansion_controller import (
     ExpansionController,
@@ -53,6 +54,7 @@ def _make_sub_agent_result(
     success: bool = True,
     summary: str = "Result summary",
     cost_usd: float = 0.0,
+    denied_tools: tuple[str, ...] = (),
 ) -> SubAgentResult:
     return SubAgentResult(
         task_id=uuid4(),
@@ -65,6 +67,7 @@ def _make_sub_agent_result(
         success=success,
         error=None if success else "Timeout",
         cost_usd=cost_usd,
+        denied_tools=denied_tools,
     )
 
 
@@ -693,6 +696,179 @@ class TestSerializedDispatch:
         assert all(r.success for r in results)
         assert all(r.error is None for r in results)
         assert expansion_result.degraded is False
+
+
+class TestSubAgentToolGrant:
+    """FRE-1388 — a sub-agent's requested tools are filtered against the
+
+    sub-agent tool principal's grant set before dispatch. Drives
+    ``_run_dispatch`` with a hand-built plan carrying real tool names
+    (bypassing the planner-JSON path, which always zeroes ``tools`` per
+    FRE-884) so the grant filter has something real to refuse — a seeded
+    negative, not a vacuous check against an empty request (AC-3).
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @staticmethod
+    def _one_task_plan(tools: list[str]) -> Any:
+        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
+
+        return ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[PlanTask(name="task_0", goal="Goal for task 0", tools=tools)],
+        )
+
+    @pytest.mark.asyncio
+    async def test_tool_outside_grant_set_is_stripped_before_dispatch(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-2/AC-3: bash (outside the grant set) is refused; run_python (granted) passes."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan(["bash", "run_python"])
+        captured_specs: list[Any] = []
+
+        async def _capture_spec(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            captured_specs.append(spec)
+            # Mirrors sub_agent.run_sub_agent's real contract: denied_tools is
+            # threaded from the spec into every terminal result (tested directly
+            # in test_sub_agent.py) — echoed here since run_sub_agent is mocked.
+            return _make_sub_agent_result("task_0", denied_tools=spec.denied_tools)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_capture_spec,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-tool-grant",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert len(captured_specs) == 1
+        spec = captured_specs[0]
+        assert spec.tools == ["run_python"]
+        assert spec.denied_tools == ("bash",)
+        assert results[0].denied_tools == ("bash",)
+
+    @pytest.mark.asyncio
+    async def test_denial_is_legible_in_the_synthesis_context(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-4: the refusal reaches the primary's report, not only a log line."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan(["bash"])
+
+        async def _echo_denial(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            return _make_sub_agent_result("task_0", denied_tools=spec.denied_tools)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_echo_denial,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-tool-grant-synth",
+                messages=[],
+                result=ExpansionResult(),
+            )
+            context = controller._build_synthesis_context(plan=plan, sub_results=results)
+
+        assert "bash" in context
+        assert "not granted" in context
+
+    @pytest.mark.asyncio
+    async def test_alert_mode_denies_the_grant_set_entirely(
+        self, controller: ExpansionController
+    ) -> None:
+        """Owner directive: sub-agents hold no tools in ALERT — even run_python."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan(["run_python"])
+        captured_specs: list[Any] = []
+
+        async def _capture_spec(**kwargs: Any) -> SubAgentResult:
+            captured_specs.append(kwargs["spec"])
+            return _make_sub_agent_result("task_0")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.ALERT,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_capture_spec,
+            ),
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-tool-grant-alert",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert captured_specs[0].tools == []
+        assert captured_specs[0].denied_tools == ("run_python",)
+
+    @pytest.mark.asyncio
+    async def test_no_tools_requested_leaves_spec_and_synthesis_unaffected(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-5: today's real shape (planner never requests tools) is unchanged."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = self._one_task_plan([])
+        captured_specs: list[Any] = []
+
+        async def _capture_spec(**kwargs: Any) -> SubAgentResult:
+            captured_specs.append(kwargs["spec"])
+            return _make_sub_agent_result("task_0")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_capture_spec,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-tool-grant-noop",
+                messages=[],
+                result=ExpansionResult(),
+            )
+            context = controller._build_synthesis_context(plan=plan, sub_results=results)
+
+        assert captured_specs[0].tools == []
+        assert captured_specs[0].denied_tools == ()
+        assert "denied" not in context.lower()
 
 
 class TestSynthesisContextExcludesFullOutput:

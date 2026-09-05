@@ -24,7 +24,9 @@ from typing import Any
 
 import structlog
 
-from personal_agent.config import get_settings
+from personal_agent.brainstem import get_current_mode
+from personal_agent.config import get_settings, load_governance_config
+from personal_agent.governance.sub_agent_tools import evaluate_sub_agent_tool_grant
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.observability.topology import report_degradation
 from personal_agent.orchestrator.expansion_types import (
@@ -430,6 +432,28 @@ class ExpansionController:
             trace_id=trace_id,
         )
 
+        # FRE-1388: a sub-agent is a distinct governance principal from the
+        # primary. task.tools is model-authored (the planner's output) and is
+        # filtered against the sub-agent tool grant set here — never passed
+        # through unfiltered, and never checked against the primary's own
+        # per-tool `allowed_in_modes`.
+        current_mode = get_current_mode()
+        governance_config = load_governance_config()
+        grants = [
+            evaluate_sub_agent_tool_grant(task.tools, current_mode, governance_config)
+            for task in plan.tasks
+        ]
+        for task, grant in zip(plan.tasks, grants, strict=True):
+            if grant.denied:
+                logger.warning(
+                    "sub_agent_tool_denied",
+                    task_name=task.name,
+                    denied_tools=list(grant.denied),
+                    reason=grant.denial_reason,
+                    mode=current_mode.value,
+                    trace_id=trace_id,
+                )
+
         specs = [
             SubAgentSpec(
                 task=task.goal,
@@ -445,11 +469,12 @@ class ExpansionController:
                 # deleted, just no longer read here.
                 timeout_seconds=settings.worker_timeout_seconds,
                 hard_deadline_seconds=settings.worker_hard_deadline_seconds,
-                tools=task.tools,
+                tools=list(grant.granted),
                 background=(f"Sub-task: {task.name}. Constraints: {', '.join(task.constraints)}"),
                 mode=task.mode,
+                denied_tools=grant.denied,
             )
-            for task in plan.tasks
+            for task, grant in zip(plan.tasks, grants, strict=True)
         ]
 
         dispatch_start = time.monotonic()
@@ -562,6 +587,14 @@ class ExpansionController:
         for r in sub_results:
             status = "OK" if r.success else f"FAILED: {r.error}"
             parts.append(f"### {r.spec_task} [{status}]\n{r.summary}\n\n")
+            if r.denied_tools:
+                # FRE-1388 AC-4: denial is deterministic and lands in the report
+                # itself, not only a log line — the recovery path is the primary
+                # re-planning with a different grant, so it must see this here.
+                parts.append(
+                    f"*Tool access denied:* {', '.join(r.denied_tools)} was requested "
+                    "but not granted to sub-agents; this sub-task ran without it.\n\n"
+                )
 
         if any(not r.success for r in sub_results):
             failed = [r.spec_task for r in sub_results if not r.success]

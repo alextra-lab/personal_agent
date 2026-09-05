@@ -29,6 +29,17 @@ def _spec(
     )
 
 
+def _spec_with_denied_tools(denied_tools: tuple[str, ...], timeout: float = 30.0) -> SubAgentSpec:
+    return SubAgentSpec(
+        task="test task",
+        context=[{"role": "user", "content": "do the thing"}],
+        output_format="text",
+        max_tokens=1024,
+        timeout_seconds=timeout,
+        denied_tools=denied_tools,
+    )
+
+
 def _llm_response(content: str, tool_calls: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Minimal LLMResponse-shaped dict (real respond returns this; mocks return str)."""
     return {
@@ -60,6 +71,42 @@ class TestRunSubAgent:
         assert isinstance(result.task_id, UUID)
         assert result.duration_ms >= 0
         assert result.tools_used == []
+
+    @pytest.mark.asyncio
+    async def test_denied_tools_threads_from_spec_into_result_on_success(self) -> None:
+        """FRE-1388: a refusal recorded on the spec survives into the result
+
+        the primary reads — not just a log line at the point of refusal.
+        """
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="Sub-agent analysis result")
+
+        result = await run_sub_agent(
+            spec=_spec_with_denied_tools(("bash",)),
+            llm_client=mock_client,
+            trace_id="test-trace",
+        )
+        assert result.success is True
+        assert result.denied_tools == ("bash",)
+
+    @pytest.mark.asyncio
+    async def test_denied_tools_threads_into_result_on_timeout(self) -> None:
+        """FRE-1388: the refusal survives a killed sub-agent too."""
+        mock_client = AsyncMock()
+
+        async def slow_respond(*args: object, **kwargs: object) -> str:
+            await asyncio.sleep(10)
+            return "too late"
+
+        mock_client.respond = slow_respond
+
+        result = await run_sub_agent(
+            spec=_spec_with_denied_tools(("bash",), timeout=0.1),
+            llm_client=mock_client,
+            trace_id="test-trace",
+        )
+        assert result.success is False
+        assert result.denied_tools == ("bash",)
 
     @pytest.mark.asyncio
     async def test_llm_error_returns_failure(self) -> None:

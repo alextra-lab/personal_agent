@@ -56,6 +56,19 @@ def test_index_prefix_is_captures_family() -> None:
     assert "-captures" in SUBAGENT_CAPTURES_INDEX_PREFIX
 
 
+def test_tools_denied_defaults_to_empty_list() -> None:
+    """FRE-1388: a capture with no denial keeps today's shape (default empty)."""
+    cap = _capture()
+    assert cap.tools_denied == []
+
+
+def test_tools_denied_records_a_refusal() -> None:
+    """FRE-1388: a refused tool is visible on the audit record itself."""
+    cap = _capture(tools_granted=["run_python"], tools_denied=["bash"])
+    assert cap.tools_denied == ["bash"]
+    assert cap.tools_granted == ["run_python"]
+
+
 def test_frozen() -> None:
     """The record is immutable (ConfigDict frozen=True)."""
     cap = _capture()

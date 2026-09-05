@@ -69,6 +69,16 @@ class TestSubAgentSpec:
         assert spec.tools == []
         assert isinstance(spec.tools, list)
 
+    def test_default_denied_tools_is_empty_tuple(self) -> None:
+        """FRE-1388: default denied_tools is empty — no denial unless recorded."""
+        spec = SubAgentSpec(task="task", context=[])
+        assert spec.denied_tools == ()
+
+    def test_denied_tools_explicit_value(self) -> None:
+        """FRE-1388: a caller can record which requested tools were refused."""
+        spec = SubAgentSpec(task="task", context=[], denied_tools=("bash",))
+        assert spec.denied_tools == ("bash",)
+
 
 # ---------------------------------------------------------------------------
 # SubAgentResult
@@ -138,3 +148,13 @@ class TestSubAgentResult:
         result = self._make_result(token_count=512, duration_ms=1234.5)
         assert result.token_count == 512
         assert result.duration_ms == 1234.5
+
+    def test_default_denied_tools_is_empty_tuple(self) -> None:
+        """FRE-1388: default denied_tools is empty — no denial unless recorded."""
+        result = self._make_result()
+        assert result.denied_tools == ()
+
+    def test_denied_tools_explicit_value(self) -> None:
+        """FRE-1388: a refusal is carried on the result, not just logged."""
+        result = self._make_result(denied_tools=("bash",))
+        assert result.denied_tools == ("bash",)

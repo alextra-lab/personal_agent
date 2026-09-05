@@ -90,6 +90,9 @@ class TestAppConfig:
         assert config.log_format == "json"
         assert config.llm_timeout_seconds == 120
         assert config.orchestrator_max_concurrent_tasks == 5
+        # FRE-1413: must cover a thinking-capable PRIMARY planner's full think,
+        # not the retired thinking-disabled SUB_AGENT call this was sized for.
+        assert config.planner_timeout_seconds == 600.0
 
     def test_app_config_from_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test AppConfig reads from environment variables.

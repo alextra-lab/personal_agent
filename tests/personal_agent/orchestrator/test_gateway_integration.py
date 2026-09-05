@@ -223,6 +223,147 @@ class TestExpansionCostRollup:
         assert progress_calls == [pytest.approx(0.0), pytest.approx(0.0)]
 
 
+class TestExpansionFallbackVisibleInTurnRecord:
+    """FRE-1413 AC-4 — a fallback plan must reach the turn's own record.
+
+    A keyword-split fallback plan must reach the turn's own record, not only a
+    structlog line a reader would need this trace_id to find. ``ctx.steps`` is
+    that record: it is what ``OrchestratorResult["steps"]`` returns to the
+    caller (``execute_task_safe``), the same channel already used for
+    tool-call and error visibility.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fallback_plan_adds_a_step(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A fallback (keyword-split) plan adds a ctx.steps entry a reader can see."""
+        import personal_agent.orchestrator.executor as ex
+        from personal_agent.orchestrator.channels import Channel
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.types import ExecutionContext, TaskState
+        from personal_agent.telemetry.trace import TraceContext
+
+        gw = GatewayOutput(
+            intent=IntentResult(
+                task_type=TaskType.CONVERSATIONAL,
+                complexity=Complexity.SIMPLE,
+                confidence=0.9,
+                signals=[],
+            ),
+            governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
+            decomposition=DecompositionResult(
+                strategy=DecompositionStrategy.HYBRID,
+                reason="test",
+                constraints={"max_sub_agents": 2},
+            ),
+            context=AssembledContext(
+                messages=[{"role": "user", "content": "build X and Y"}],
+                memory_context=None,
+                tool_definitions=None,
+            ),
+            session_id="s1",
+            trace_id="t1",
+        )
+        ctx = ExecutionContext(
+            session_id="s1",
+            trace_id="t1",
+            user_message="build X and Y",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=gw,
+        )
+
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=True),
+            sub_agent_results=[],
+            synthesis_context="SYN",
+        )
+        controller = MagicMock()
+        controller.execute = AsyncMock(return_value=exp_result)
+        monkeypatch.setattr(
+            "personal_agent.orchestrator.expansion_controller.ExpansionController",
+            lambda: controller,
+        )
+        monkeypatch.setattr(
+            "personal_agent.llm_client.factory.get_llm_client",
+            lambda role_name=None: MagicMock(),
+        )
+
+        session_manager = MagicMock()
+        session_manager.get_session = MagicMock(return_value=None)
+        trace_ctx = TraceContext(trace_id="t1", session_id="s1")
+
+        state = await ex.step_init(ctx, session_manager, trace_ctx)
+
+        assert state == TaskState.LLM_CALL
+        fallback_steps = [s for s in ctx.steps if s.get("metadata", {}).get("planner_fallback")]
+        assert len(fallback_steps) == 1
+
+    @pytest.mark.asyncio
+    async def test_real_plan_adds_no_fallback_step(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A real (non-fallback) plan must not add the fallback-visibility step."""
+        import personal_agent.orchestrator.executor as ex
+        from personal_agent.orchestrator.channels import Channel
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.types import ExecutionContext, TaskState
+        from personal_agent.telemetry.trace import TraceContext
+
+        gw = GatewayOutput(
+            intent=IntentResult(
+                task_type=TaskType.CONVERSATIONAL,
+                complexity=Complexity.SIMPLE,
+                confidence=0.9,
+                signals=[],
+            ),
+            governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
+            decomposition=DecompositionResult(
+                strategy=DecompositionStrategy.HYBRID,
+                reason="test",
+                constraints={"max_sub_agents": 2},
+            ),
+            context=AssembledContext(
+                messages=[{"role": "user", "content": "build X and Y"}],
+                memory_context=None,
+                tool_definitions=None,
+            ),
+            session_id="s1",
+            trace_id="t1",
+        )
+        ctx = ExecutionContext(
+            session_id="s1",
+            trace_id="t1",
+            user_message="build X and Y",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=gw,
+        )
+
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[],
+            synthesis_context="SYN",
+        )
+        controller = MagicMock()
+        controller.execute = AsyncMock(return_value=exp_result)
+        monkeypatch.setattr(
+            "personal_agent.orchestrator.expansion_controller.ExpansionController",
+            lambda: controller,
+        )
+        monkeypatch.setattr(
+            "personal_agent.llm_client.factory.get_llm_client",
+            lambda role_name=None: MagicMock(),
+        )
+
+        session_manager = MagicMock()
+        session_manager.get_session = MagicMock(return_value=None)
+        trace_ctx = TraceContext(trace_id="t1", session_id="s1")
+
+        state = await ex.step_init(ctx, session_manager, trace_ctx)
+
+        assert state == TaskState.LLM_CALL
+        fallback_steps = [s for s in ctx.steps if s.get("metadata", {}).get("planner_fallback")]
+        assert fallback_steps == []
+
+
 class TestEnforcedExpansionClientRole:
     """FRE-958 / FRE-1390 regression guard.
 

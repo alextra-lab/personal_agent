@@ -53,7 +53,7 @@ const RATING_OK_DEFAULT = 2;
 // Hook return type
 // --------------------------------------------------------------------------
 
-export interface UseSSEStreamReturn {
+export interface UseAgentStreamReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
   activeTools: ToolCall[];
@@ -135,7 +135,7 @@ export interface UseSSEStreamReturn {
  * - Reconnect replay via seq numbers and localStorage persistence.
  * - REPLAY_GAP fallback to full session history API.
  */
-export function useSSEStream(): UseSSEStreamReturn {
+export function useAgentStream(): UseAgentStreamReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
@@ -699,8 +699,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       // overwritten by the first turn_status of the new turn (ADR-0076).
 
       // 1. Connect WebSocket BEFORE sending the message so we don't miss
-      //    events from the background task. The old SSE flow had the same
-      //    ordering requirement.
+      //    events from the background task.
       streamRef.current = connectWebSocket(
         sessionId,
         handleEvent,

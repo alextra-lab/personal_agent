@@ -30,6 +30,13 @@ repos:
         files: ^src/personal_agent/.*\.py$
         pass_filenames: false
         args: [src/personal_agent/]
+      - id: check-transport-envelope-identity
+        name: ADR-0074 joinability at the transport boundary (FRE-427)
+        entry: uv run python scripts/check_transport_envelope_identity.py
+        language: system
+        files: ^src/personal_agent/.*\.py$
+        pass_filenames: false
+        args: [src/personal_agent/]
       - id: check-evidence-truncation
         name: ADR-0125 D5/AC-5 no silent truncation on an evidence path
         entry: uv run python scripts/check_evidence_truncation.py

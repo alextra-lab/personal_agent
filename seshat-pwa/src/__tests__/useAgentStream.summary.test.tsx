@@ -4,10 +4,10 @@
  *
  * Design note (codex plan review, 2026-07-30): `phases`/`activeTools` are NOT
  * cleared by these handlers — that would have broken 8 pre-existing tests in
- * useSSEStream.phases.test.tsx for no functional gain, since StreamingChat
+ * useAgentStream.phases.test.tsx for no functional gain, since StreamingChat
  * gates the live footer's rendering on `isTurnCollapsed(messages)` instead
  * (see lib/phase-summary.ts). This file asserts the summary-attach behavior
- * only; useSSEStream.phases.test.tsx's terminal-state resolution tests are
+ * only; useAgentStream.phases.test.tsx's terminal-state resolution tests are
  * untouched.
  */
 
@@ -37,7 +37,7 @@ vi.mock('@/lib/uuid', () => ({
   generateUUID: vi.fn(() => 'test-uuid'),
 }));
 
-import { useSSEStream } from '@/hooks/useSSEStream';
+import { useAgentStream } from '@/hooks/useAgentStream';
 import { connectWebSocket } from '@/lib/agui-client';
 
 const mockConnect = connectWebSocket as Mock;
@@ -49,7 +49,7 @@ function pushEvent(event: object): void {
   });
 }
 
-async function startTurn(hook: ReturnType<typeof renderHook<ReturnType<typeof useSSEStream>, unknown>>): Promise<void> {
+async function startTurn(hook: ReturnType<typeof renderHook<ReturnType<typeof useAgentStream>, unknown>>): Promise<void> {
   await act(async () => {
     await hook.result.current.sendMessage('hello', 'session-1', 'local');
   });
@@ -92,9 +92,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('useSSEStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () => {
+describe('useAgentStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () => {
   it('DONE attaches a completed summary with phase durations and deduped tools to the last assistant message', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({ type: 'TEXT_DELTA', data: { text: 'hi' }, seq: 1 });
@@ -115,13 +115,13 @@ describe('useSSEStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () =>
     expect(assistant?.phaseSummary?.tools).toEqual(['perplexity_query']);
 
     // Design change (codex review): live state is NOT cleared — it resolves
-    // in place exactly as useSSEStream.phases.test.tsx already asserts.
+    // in place exactly as useAgentStream.phases.test.tsx already asserts.
     expect(hook.result.current.phases).toHaveLength(1);
     expect(hook.result.current.phases[0].state).toBe('completed');
   });
 
   it('DONE with phase events but zero TEXT_DELTA (artifact-only turn) appends a placeholder assistant message, marked complete', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent(phaseStart(1, { phase_id: 'p1', phase: 'artifact_build', started_at: '2026-07-30T10:00:00.000Z' }));
@@ -139,7 +139,7 @@ describe('useSSEStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () =>
   });
 
   it('CANCELLED before any TEXT_DELTA appends a placeholder assistant message carrying the summary (AC-9a)', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-30T10:00:00.000Z' }));
@@ -154,7 +154,7 @@ describe('useSSEStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () =>
   });
 
   it('RUN_ERROR after a realistic PHASE_END(ok:false) then RUN_ERROR ordering attaches an error summary (AC-9b)', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
 
     pushEvent({ type: 'TEXT_DELTA', data: { text: 'partial' }, seq: 1 });
@@ -173,7 +173,7 @@ describe('useSSEStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () =>
   });
 
   it('DONE with zero phases and zero tools attaches no summary and creates no placeholder', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent({ type: 'DONE', seq: null });
     const assistant = hook.result.current.messages.find((m) => m.role === 'assistant');
@@ -181,7 +181,7 @@ describe('useSSEStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () =>
   });
 
   it('CANCELLED with zero phases and zero tools attaches no summary and creates no placeholder', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent({ type: 'CANCELLED', seq: null });
     const assistant = hook.result.current.messages.find((m) => m.role === 'assistant');
@@ -189,7 +189,7 @@ describe('useSSEStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () =>
   });
 
   it('RUN_ERROR with zero phases and zero tools attaches no summary and creates no placeholder', async () => {
-    const hook = renderHook(() => useSSEStream());
+    const hook = renderHook(() => useAgentStream());
     await startTurn(hook);
     pushEvent({
       type: 'RUN_ERROR',

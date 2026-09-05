@@ -27,7 +27,7 @@ from uuid import uuid4
 import pytest
 
 import personal_agent.transport.agui.transport as transport_mod
-from personal_agent.transport.agui.ws_endpoint import get_event_queue
+from personal_agent.transport.agui.ws_endpoint import DONE_SENTINEL_TYPE, get_event_queue
 from personal_agent.transport.events import StateUpdateEvent, TextDeltaEvent
 
 
@@ -59,7 +59,7 @@ class _SharedSeqBuffer:
         """Assign the next shared seq at entry, then sleep (lower seq sleeps longer)."""
         type(self).counter += 1
         seq = type(self).counter
-        type(self).rows.append({"seq": seq, "event_type": event_type})
+        type(self).rows.append({"seq": seq, "event_type": event_type, "payload": dict(payload)})
         # Lower seq sleeps longer → it resumes (and enqueues) after the higher
         # seq, reproducing the cross-connection resume inversion.
         await asyncio.sleep(0.05 if seq == 1 else 0.0)
@@ -133,15 +133,19 @@ async def test_emit_done_sentinel_follows_a_concurrent_emit(
             StateUpdateEvent(key="turn_status", value={"x": 1}, session_id=session_id),
             session_id,
         ),
-        transport_mod.emit_done(session_id),
+        transport_mod.emit_done(session_id, trace_id="trace-abc"),
     )
 
     enqueued = _drain(get_event_queue(session_id))
-    # Exactly one seq-bearing event and one None sentinel, sentinel last.
-    assert enqueued[-1] is None
-    seq_items = [item for item in enqueued if item is not None]
+    # Exactly one seq-bearing event and one close sentinel, sentinel last.
+    sentinel = enqueued[-1]
+    assert sentinel is not None and sentinel.get("type") == DONE_SENTINEL_TYPE
+    assert sentinel["trace_id"] == "trace-abc"
+    seq_items = [item for item in enqueued if item is not sentinel]
     assert len(seq_items) == 1
-    # DONE row persisted with the highest seq (serialised after the live emit).
+    # DONE row persisted with the highest seq (serialised after the live emit),
+    # and carries the turn's trace_id (FRE-427) so reconnect replay is joinable.
     done_rows = [r for r in _SharedSeqBuffer.rows if r["event_type"] == "DONE"]
     assert done_rows, "emit_done must persist a DONE row"
     assert done_rows[-1]["seq"] == max(r["seq"] for r in _SharedSeqBuffer.rows)
+    assert done_rows[-1]["payload"]["trace_id"] == "trace-abc"

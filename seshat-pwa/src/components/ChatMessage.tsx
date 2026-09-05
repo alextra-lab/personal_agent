@@ -131,7 +131,7 @@ export function ChatMessage({ message, sessionId }: ChatMessageProps) {
       <MarkdownContent content={message.content} />
 
       {/* Tool call badges — message.toolCalls is not populated by the live
-          stream today (useSSEStream routes tool state through activeTools /
+          stream today (useAgentStream routes tool state through activeTools /
           phaseSummary.tools instead); kept for a hydration/history shape
           that does carry it. */}
       {message.toolCalls && message.toolCalls.length > 0 && (

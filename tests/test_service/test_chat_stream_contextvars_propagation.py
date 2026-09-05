@@ -1,7 +1,7 @@
-"""ADR-0107 D5: the streaming (SSE) chat path binds structlog.contextvars too.
+"""ADR-0107 D5: the streaming (WS) chat path binds structlog.contextvars too.
 
 Mirrors ``test_chat_contextvars_propagation.py`` for the
-``_process_chat_stream_background`` fire-and-forget task, which is the SSE/AG-UI
+``_process_chat_stream_background`` fire-and-forget task, which is the WS/AG-UI
 counterpart to the non-streaming ``/chat`` endpoint and binds/clears
 independently.
 """

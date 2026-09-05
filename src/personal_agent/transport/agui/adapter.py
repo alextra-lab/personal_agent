@@ -140,6 +140,7 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
         case ConstraintPauseEvent(
             request_id=request_id,
             session_id=sid,
+            trace_id=trace_id,
             constraint=constraint,
             context=ctx,
             options=opts,
@@ -150,6 +151,7 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                 "type": "CONSTRAINT_PAUSE",
                 "request_id": request_id,
                 "session_id": sid,
+                "trace_id": trace_id,
                 "data": {
                     "constraint": constraint,
                     "context": ctx,
@@ -175,10 +177,11 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                     "resolution": resolution,
                 },
             }
-        case CancelledEvent(session_id=sid, reason=reason):
+        case CancelledEvent(session_id=sid, trace_id=trace_id, reason=reason):
             envelope = {
                 "type": "CANCELLED",
                 "session_id": sid,
+                "trace_id": trace_id,
                 "data": {"reason": reason},
             }
         case ClassifiedErrorEvent(

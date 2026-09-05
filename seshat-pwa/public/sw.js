@@ -5,13 +5,13 @@
  *   - Precache the app shell ('/', manifest) for offline boot.
  *   - Network-first for HTML and Next.js build outputs (so deploys reach the
  *     installed PWA without manual cache eviction). Falls back to cache offline.
- *   - Network-only for the API (/stream, /chat, /api/*).
+ *   - Network-only for the API (/chat, /api/*).
  *
  * Bump CACHE_NAME on every PWA deploy that changes the shell so the
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v53-dependabot-security-floors';
+const CACHE_NAME = 'seshat-v54-drop-dead-stream-bypass';
 
 const PRECACHE_URLS = [
   '/',
@@ -41,7 +41,7 @@ self.addEventListener('activate', (event) => {
 });
 
 // Fetch strategy:
-//   - /stream, /chat, /api/* → bypass the SW entirely (network-only)
+//   - /chat, /api/* → bypass the SW entirely (network-only)
 //   - everything else → network-first, fall back to cache on failure.
 //     Successful network responses are stored in the cache so the PWA still
 //     boots offline. This avoids the iOS-PWA bug where a cache-first shell
@@ -50,7 +50,6 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   if (
-    url.pathname.startsWith('/stream') ||
     url.pathname.startsWith('/chat') ||
     url.pathname.startsWith('/api/')
   ) {

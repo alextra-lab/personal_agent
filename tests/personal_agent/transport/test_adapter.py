@@ -6,7 +6,9 @@ import json
 
 from personal_agent.transport.agui.adapter import serialize_event, to_agui_event
 from personal_agent.transport.events import (
+    CancelledEvent,
     ClassifiedErrorEvent,
+    ConstraintPauseEvent,
     InterruptEvent,
     Phase,
     PhaseEndEvent,
@@ -287,3 +289,32 @@ class TestClassifiedErrorEventAdapter:
         parsed = json.loads(raw)
         assert parsed["type"] == "RUN_ERROR"
         assert parsed["data"]["category"] == "model_server"
+
+
+class TestTurnTerminalEventsCarryTraceId:
+    """FRE-427: a turn-terminal envelope must not drop an identity its internal
+    event dataclass already carries — regression guard for the adapter silently
+    dropping ``trace_id`` on CANCELLED / CONSTRAINT_PAUSE (both dataclasses
+    declare the field; the wire conversion just never forwarded it).
+    """
+
+    def test_cancelled_carries_trace_id(self) -> None:
+        event = CancelledEvent(session_id="s1", trace_id="t1", reason="user_cancel")
+        env = to_agui_event(event)
+        assert env["type"] == "CANCELLED"
+        assert env["trace_id"] == "t1"
+
+    def test_constraint_pause_carries_trace_id(self) -> None:
+        event = ConstraintPauseEvent(
+            request_id="r1",
+            session_id="s1",
+            trace_id="t1",
+            constraint="tool_iteration_limit",
+            context="Tool iteration limit reached.",
+            options=["continue", "stop"],
+            default_option="stop",
+            expires_at="2026-09-05T12:00:00+00:00",
+        )
+        env = to_agui_event(event)
+        assert env["type"] == "CONSTRAINT_PAUSE"
+        assert env["trace_id"] == "t1"

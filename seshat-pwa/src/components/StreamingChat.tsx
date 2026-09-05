@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { getSession, getSessionMessages, setSessionSelection, type UploadedAttachment } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
 import { LAST_SESSION_KEY } from '@/lib/session';
-import { useSSEStream } from '@/hooks/useSSEStream';
+import { useAgentStream } from '@/hooks/useAgentStream';
 import { useSessionConfig } from '@/hooks/useSessionConfig';
 
 import { resolutionLabel } from '@/lib/constraint-options';
@@ -144,7 +144,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     sendUserCancel,
     seedMessages,
     seedTurnStatus,
-  } = useSSEStream();
+  } = useAgentStream();
 
   // Reconcile the picker when the server broadcasts a selection change to the
   // active socket (ADR-0121 §4 — e.g. a change made elsewhere, or the live

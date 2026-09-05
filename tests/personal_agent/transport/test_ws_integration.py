@@ -93,6 +93,27 @@ class TestEventDelivery:
         assert msg["type"] == "DONE"
         assert msg["seq"] is None
 
+    def test_live_done_frame_carries_trace_id(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """FRE-427: the live (non-reconnect) DONE frame must carry trace_id.
+
+        Regression guard for the bug that broke the rating control's join —
+        the client received ``{"type": "DONE"}`` with no way to identify which
+        turn had just completed.
+        """
+        client, _ = harness
+        session_id = str(uuid4())
+
+        with ws_connect(client, session_id) as ws:
+            client.post(
+                "/__test/done", params={"session_id": session_id, "trace_id": "trace-live-1"}
+            )
+            msg = ws.receive_json()
+
+        assert msg["type"] == "DONE"
+        assert msg["trace_id"] == "trace-live-1"
+
 
 # ── Constraint round-trip ─────────────────────────────────────────────────────
 

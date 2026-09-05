@@ -523,17 +523,18 @@ Adjudicated on FRE-1288 once the implementation chain has landed and deployed.
   each spawned four — **or if the window cannot be populated**, which means expansion is not running
   and the criterion has proved nothing.
 
-- **AC-7** — A turn's total wall-clock lifetime is bounded even when it pauses repeatedly, and
-  crediting stops at the limit. · **Check:** run a probe that takes **`N + 1` pauses**, where `N` is
-  the configured creditable-pause limit, letting each reach its timeout. Exceeding the limit needs
-  more pauses than the spend threshold supplies on its own, so the probe composes them: the spend
-  pause once, plus repeated `tool_iteration_limit` pauses, which recur on each accepted "Continue".
-  Assert the turn terminates at or before `orchestrator_turn_lifetime_seconds`, and that the
-  credited-pause total equals the sum of the first `N` pause durations and not of all `N + 1`. ·
-  *Fails if* total lifetime exceeds the cap, or if the credited total includes the `N + 1`-th pause —
-  the unbounded composition of D4a and D3 that this criterion exists to catch. Both `N` and the pause
-  timeout are read from configuration at check time, never hard-coded, because D4a declares both
-  tunable.
+- **AC-7** — Crediting stops at the creditable-pause limit. · **Check:** run a probe that takes
+  **`N + 1` pauses**, where `N` is the configured creditable-pause limit read at check time. Exceeding
+  the limit needs more pauses than the spend threshold supplies alone, so the probe composes them: the
+  spend pause once, then repeated `tool_iteration_limit` pauses. **Every pause is answered after a
+  deliberate delay `d`, and none is allowed to time out** — the iteration-limit pause must be answered
+  with `continue_10`, because its safe default on timeout is `finish_now`, which ends the tool loop
+  and would prevent the next pause from ever occurring. Credit accrues on waiting, not on the choice
+  made, so answering does not weaken the check. Choose `d` so that `(N + 1) × d` plus the probe's work
+  sits well inside `orchestrator_turn_lifetime_seconds`, keeping this criterion independent of the
+  preemption AC-8 tests. Assert the credited-pause total is `N × d` within tolerance, not
+  `(N + 1) × d`. · *Fails if* the credited total includes the `N + 1`-th wait — the unbounded
+  composition of D4a and D3 that this criterion exists to catch.
 
 - **AC-8** — The lifetime cap preempts a pause that is already waiting. · **Check:** start a pause
   with less time remaining to `orchestrator_turn_lifetime_seconds` than the pause timeout, and do not
@@ -600,3 +601,15 @@ from configuration and names where the extra pauses come from. Three clarificati
 as iteration count and not cost, cheap drift is recorded as an accepted limitation rather than
 implied to be covered, and novelty is stated to play no part in the system's own decision after D3
 had described it as part of demonstrated need.
+
+Revised a third time after Codex review, round 3, which cleared every other repair and found one
+blocking defect in round 2's own AC-7 rewrite. **The probe it described could not be built.** AC-7
+required every pause to reach its timeout while also requiring repeated `tool_iteration_limit`
+pauses, but that constraint's safe default on timeout is `finish_now`, which ends the tool loop, so
+the first timed-out pause would prevent the second. AC-7 now answers each pause after a deliberate
+delay instead of timing out, which is sound because credit accrues on waiting rather than on the
+choice made. The same change removes a second finding: the probe's delay is chosen to sit inside the
+lifetime cap, so AC-7 no longer depends on an unstated feasibility relationship between three
+independently tunable values, and it stays separable from the preemption AC-8 tests.
+
+Round 3 reported no other blocking finding.

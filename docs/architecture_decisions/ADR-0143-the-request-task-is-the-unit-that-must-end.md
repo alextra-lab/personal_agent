@@ -122,8 +122,12 @@ make enumeration lie. The registry attaches one done callback that logs `chat_st
 with `trace_id`, `session_id`, elapsed seconds from `started_at`, and
 `outcome ∈ {completed, timed_out, cancelled, failed}`. `timed_out` is stage one firing;
 `cancelled` is any other cancellation, including shutdown; `failed` is an exception. The callback
-handles `CancelledError` explicitly — `task.result()` inside `except Exception` does not. A leaked
-task that later ends still fires the callback, so a leak that resolves is visible too.
+handles `CancelledError` explicitly — `task.result()` inside `except Exception` does not. The
+outcome is read from the registry record first and derived from the task only if the record has
+none: the registry stamps `timed_out` on the record the moment the stage-one deadline passes, so
+a task whose cancellation was swallowed and which ends minutes later still reports `timed_out`,
+never `completed`. A leaked task that later ends fires the callback with `was_leaked=true`, so a
+leak that resolves is visible and distinguishable.
 
 The registry is process-local, like `_active_connections` and `_session_emit_locks`. Seshat runs
 one worker; this ADR does not make it service-wide. On lifespan shutdown the registry cancels
@@ -141,8 +145,11 @@ forgiven. A validator requires the setting to exceed `orchestrator_turn_lifetime
 proposed default is that value plus 300 seconds, so the orchestrator's cap fires first on a
 long-but-live turn and this bound fires only when something below it did not return. The timeout
 wraps the existing `try` body; a dedicated `except TimeoutError` sits before the existing
-`except Exception`, records `outcome=timed_out` on the registry record, and pushes the same
-error delta the existing handler does. The `finally` then runs the bounded close (D3a).
+`except Exception` and checks the timeout context's `expired()` — only then is the outcome
+`timed_out` and the same error delta the existing handler pushes is pushed. A `TimeoutError`
+raised by a tool, a provider or a database before the deadline is not the service bound firing;
+it falls through to the existing handler and is `failed`. The `finally` then runs the bounded
+close (D3a).
 
 This stage is cooperative and this ADR says so. Cancellation runs every `finally` on the way out,
 and a `finally` that awaits — `observe_topology`'s exit does, `emit_done` does — can itself block.
@@ -166,26 +173,32 @@ arbiter.
   `reason=persist_timeout` truthfully. A timeout that fires after the append committed but before
   it returned leaves a DONE row **and** a degraded record; that is accepted and AC-6 is written to
   allow it. On exception or timeout the degraded path runs.
-- *(b) The degraded path closes outside the lock, and says why.* It has its own budget of one
-  `service_request_close_timeout_seconds`, shared by everything it does. It first checks the
-  registry for a **newer** live record on the same session; if one exists it does not touch the
-  connection, because the transport is session-scoped (one connection, one queue, one sender per
-  session — `ws_endpoint.py:91`, `:577`) and closing it would strand the newer turn. It logs
-  `transport.done_degraded` with `reason=superseded` and stops. Otherwise it pushes the close
-  sentinel — which carries the trace id, as today — with `await queue.put(...)` under the budget,
-  never `put_nowait` (a full queue drops the sentinel today, `transport.py:312`), but **only if the
-  session has an active connection**: a sentinel queued with no sender would sit in the session
-  queue and close the next connection on sight. With no connection it logs
-  `reason=no_connection` and stops; the reconnecting client replays a series with no DONE for
-  that trace and shows the turn as open until its next message — the known degraded state, named
-  so it can be counted. If the put times out it closes the socket directly through
-  `get_active_connection` under what remains of the budget and logs `reason=queue_timeout`. A
-  raw close does not carry the DONE frame; the client sees a closed socket and reconnects, which
-  is the same degraded state. The policy is explicit: **in the degraded path, closure beats
-  ordering.** The sentinel carries no `seq`, so the persisted series is untouched; a sequenced
-  event still queued behind it reaches the client on the next replay, not live. The reason
-  logged is the first failure; a later step's failure is logged as a second
-  `transport.done_degraded` line with its own reason, so the sequence is readable.
+- *(b) The degraded path closes outside the lock, and says why.* It has one budget of
+  `service_request_close_timeout_seconds`, split in two: the sentinel put gets the first half,
+  and the second half is **reserved** for the raw socket close so the fallback always has time
+  left. It begins with one synchronous section — no await inside it — that does three things
+  together: it reads the registry for a **newer** live record on the same session, it captures
+  the session's active connection **and that connection's generation** (a counter the transport
+  increments on every connect; `_active_connections` is keyed by session only, `ws_endpoint.py:91`,
+  and a reconnect replaces the entry, `:682`), and it decides. If a newer record exists it does
+  not touch the connection, because the transport is session-scoped (one connection, one queue,
+  one sender per session — `:91`, `:577`) and closing it would strand the newer turn; it logs
+  `transport.done_degraded` with `reason=superseded` and stops. If there is no active connection
+  it logs `reason=no_connection` and stops: a sentinel queued with no sender would sit in the
+  session queue and close the next connection on sight, and the reconnecting client instead
+  replays a series with no DONE for that trace and shows the turn as open until its next message
+  — the known degraded state, named so it can be counted. Otherwise it pushes the close sentinel
+  — which carries the trace id, as today — with `await queue.put(...)` under the first half of
+  the budget, never `put_nowait` (a full queue drops the sentinel today, `transport.py:312`). If
+  the put times out it closes the socket directly under the reserved half, through a transport
+  call that takes the captured generation and is a no-op with a log line if the generation has
+  changed — so a reconnect between capture and close can never be closed by a stale deadline —
+  and logs `reason=queue_timeout`. A raw close does not carry the DONE frame; the client sees a
+  closed socket and reconnects, which is the same degraded state. The policy is explicit: **in
+  the degraded path, closure beats ordering.** The sentinel carries no `seq`, so the persisted
+  series is untouched; a sequenced event still queued behind it reaches the client on the next
+  replay, not live. The reason logged is the first failure; a later step's failure is logged as
+  a second `transport.done_degraded` line with its own reason, so the sequence is readable.
 - *(c) The registry arms the deadline independently of the task.* At insertion, the registry
   schedules a close for `started_at + lifetime + close`. If `close_once` has not been won by then,
   the registry runs the degraded path of (b) for that trace itself, marks the record `leaked`,
@@ -377,8 +390,8 @@ orders them.
 - `src/personal_agent/transport/agui/transport.py` — `emit_done` gains the close timeout over
   lock and append with the acquired-lock state, the `close_once` call, and the degraded path with
   its reasons (D3a, D3b).
-- `src/personal_agent/transport/agui/ws_endpoint.py` — the bounded direct socket close used by
-  `reason=queue_timeout`.
+- `src/personal_agent/transport/agui/ws_endpoint.py` — the per-connection generation counter
+  and the bounded, generation-checked direct socket close used by `reason=queue_timeout`.
 - `src/personal_agent/config/settings.py` — two new settings with the ordering validator (D2, D3);
   the corrected description (D4).
 - `src/personal_agent/orchestrator/executor.py` — the pre-step lifetime check at the driver
@@ -414,28 +427,37 @@ is asserted separately where it matters.
   Assert: `chat_stream.task_ended` is logged with `outcome=timed_out` and the trace id; the close
   sentinel was dequeued by the sender and the registry's `close_once` was won by the task's own
   `emit_done` (not the deadline); the registry holds no record for the trace by 4 s after
-  `started_at`; no `task_leaked` line exists. · *Fails if* the outcome is anything but
-  `timed_out`, the close was won by the deadline, the record remains, or a leak is logged — a
-  registry deadline alone cannot pass this.
+  `started_at`; no `task_leaked` line exists. A second case seeds a tool that raises
+  `asyncio.TimeoutError` itself, well inside the deadline, and asserts `outcome=failed`. · *Fails
+  if* the first case's outcome is anything but `timed_out`, the close was won by the deadline,
+  the record remains, a leak is logged, or the second case reports `timed_out` — a registry
+  deadline alone cannot pass the first, and a blanket `except TimeoutError` cannot pass the
+  second.
 - **AC-2 — A close path whose lock or persistence is unavailable still closes within one close
   budget, and the task ends.** · **Check:** settings 30 / 60 / 1. (a) Patch the point between
   the reply push and `emit_done` to acquire the session's emit lock and never release it, so
   earlier phase emits are unaffected; run a normal turn. (b) Seed `SessionEventBuffer.append`
-  with a cooperative block only when `event_type == "DONE"`; run a normal turn. In both: assert
-  the sentinel is dequeued within 2 s of the executor returning; `transport.done_degraded` is
-  logged with `reason=lock_timeout` (a) or `reason=persist_timeout` (b); `chat_stream.task_ended`
-  is logged with `outcome=completed`; the registry holds no record. · *Fails if* the close waits
-  on the lock or the append, the reason is wrong, or the task does not end — an implementation
-  that bounds only the append passes (b) and fails (a).
+  with a cooperative block only when `event_type == "DONE"`; run a normal turn. (c) Fill the
+  session queue to its bound and hold the sender so it does not drain; run a normal turn. In (a)
+  and (b): assert the sentinel is dequeued within 2 s of the executor returning and
+  `transport.done_degraded` is logged with `reason=lock_timeout` (a) or `reason=persist_timeout`
+  (b). In (c): assert no sentinel is dequeued, the socket is closed within 2 s of the executor
+  returning, and `reason=queue_timeout` is logged. In all three: `chat_stream.task_ended` is
+  logged with `outcome=completed` and the registry holds no record. · *Fails if* the close waits
+  on the lock, the append or the queue, the reason is wrong, or the task does not end — an
+  implementation that bounds only the append passes (b) and fails (a); one with no raw-close
+  fallback passes (a) and (b) and fails (c).
 - **AC-3 — Stage two closes the stream around a task that suppresses cancellation, and keeps the
   leak.** · **Check:** settings 1 / 3 / 1. Register a tool whose executor is a *suppressing*
   block; send a turn that calls it. Assert: a terminal signal reaches the client by 5 s after
   `started_at` (`lifetime + 2 × close`); `chat_stream.task_leaked` is logged for the trace;
   the registry record exists with `state=leaked` at 6 s and the task is still alive;
-  `request_tasks_gauge.leaked` is 1. Then release the block and assert `task_ended` fires and
-  the record is removed. · *Fails if* no terminal signal by 5 s, the record is missing at 6 s,
-  the gauge is 0, or the late `task_ended` does not fire — the exact gap FRE-1403 named, with a
-  tool that ignores cancellation, and the leak accounted for on both ends.
+  `request_tasks_gauge.leaked` is 1. Then release the block and assert `task_ended` fires with
+  `outcome=timed_out` and `was_leaked=true`, the record is removed, and the gauge returns to 0.
+  · *Fails if* no terminal signal by 5 s, the record is missing at 6 s, the gauge is 0, the late
+  `task_ended` does not fire, or it reports `completed` — the exact gap FRE-1403 named, with a
+  tool that ignores cancellation, the leak accounted for on both ends, and a swallowed
+  cancellation unable to launder the outcome.
 - **AC-4 — The driver loop stops at the cap before any step, and the turn ends with a reply.**
   · **Check:** unit test parametrized over every non-terminal `TaskState` except `SYNTHESIS`.
   Advance a fake monotonic clock past `orchestrator_turn_lifetime_seconds` before the loop
@@ -458,14 +480,18 @@ is asserted separately where it matters.
   is silent.** · **Check:** daily, for the 7 days after deploy, over the trailing 24 hours (inside
   the session-event retention window). Join `chat_stream.launched` (ES) to
   `chat_stream.task_ended` and `chat_stream.task_leaked` (ES) on `trace_id`. Require: every
-  launched trace has a `task_ended` or a `task_leaked`; every `task_ended` has elapsed ≤
-  `lifetime + 2 × close`; every launched trace has at least one of {a DONE row in
-  `session_events` with that trace id, a `transport.done_degraded` line with that trace id}; and
+  launched trace has a `task_ended` or a `task_leaked`; every `task_ended` **without**
+  `was_leaked=true` has elapsed ≤ `lifetime + 2 × close` (a leaked task may end whenever it
+  ends, and says so); every launched trace has at least one of {a DONE row in `session_events`
+  with that trace id, a `transport.done_degraded` line with that trace id}; and
   `request_tasks_gauge.leaked` is 0 at the end of the window. Report the degraded count by
-  reason. · *Fails if* any launched trace lacks an ending, any elapsed exceeds the bound, any
-  trace has neither terminal marker, or a leak is present. This criterion reads telemetry, and
-  says so: the seeded tests above are the behavioural proof; this one proves the telemetry the
-  next investigation will depend on is complete.
+  reason. · *Fails if* any launched trace lacks an ending, any never-leaked elapsed exceeds the
+  bound, any trace has neither terminal marker, or a leak is present. This criterion reads
+  telemetry, and says so: it can be satisfied by fabricated log lines, which is why every
+  terminal branch — normal DONE, lock timeout, persist timeout, queue timeout, supersession,
+  no-connection, shutdown — is seeded and asserted at the socket or sender in AC-1, AC-2, AC-3,
+  AC-7 and AC-8. This one proves the telemetry the next investigation will depend on is
+  complete.
 - **AC-7 — Shutdown closes live streams first, then ends what it can, within one close budget.**
   · **Check:** settings 30 / 60 / 1. Start two turns: one whose tool is a cooperative block, one
   whose tool is a suppressing block. Trigger lifespan shutdown. Assert shutdown returns within
@@ -473,6 +499,18 @@ is asserted separately where it matters.
   the first; `task_leaked` was logged for the second and its record has `state=leaked`. · *Fails
   if* shutdown blocks past 2 s, either socket is left open, the cooperative task is reported
   leaked, or the suppressing task is reported ended.
+- **AC-8 — A stale deadline never closes a connection it does not own.** · **Check:** settings
+  1 / 2 / 1. (a) Start turn A with a suppressing tool; before A's deadline, start turn B on the
+  same session (B owns the connection now). Let A's deadline fire. Assert B's socket stays open,
+  B completes normally with its own DONE, and A logs `reason=superseded` and `task_leaked`.
+  (b) Start turn A with a suppressing tool and no turn B; patch the transport so that a
+  reconnect (new generation) happens between the degraded path's capture and its raw close.
+  Assert the new connection's socket stays open and the close logs a generation mismatch.
+  (c) Start turn A with a suppressing tool and disconnect the client before A's deadline.
+  Assert no sentinel is enqueued, `reason=no_connection` is logged, and a subsequent connect's
+  sender is not closed on sight. · *Fails if* B's socket closes in (a), the replacement socket
+  closes in (b), or the next connection closes immediately in (c) — an implementation that
+  always closes `get_active_connection(session_id)` fails all three.
 
 The D4 description correction is an obligation of its implementation ticket, checked there. It is
 not a criterion here: correct prose proves nothing about enforcement, and AC-4 proves the
@@ -524,7 +562,11 @@ separate tickets and are not decisions of this ADR. Codex round 1 turned a singl
 bound into the two-stage design and rewrote every criterion so a half-finished implementation
 cannot pass it. Round 2 found the contradiction between "must end" and a task that suppresses
 cancellation, and the races between three close actors; the Decision now states the runtime
-fact, keeps leaked records, and routes every close through one arbiter.
+fact, keeps leaked records, and routes every close through one arbiter. Round 3 found eight
+residuals in the degraded path and the criteria — a raw close with no budget left, a stale
+deadline able to close a replacement connection, an inner `TimeoutError` misreported as the
+service bound, a leaked task able to launder its outcome, and two terminal branches no test
+seeded — applied here without a fourth round; the PR description carries the round log.
 
 ---
 

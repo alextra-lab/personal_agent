@@ -252,17 +252,25 @@ class TestNoProbeExceedsLifetimeCap:
     async def test_total_elapsed_across_limit_and_preemption_stays_under_cap(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Composing the limit (AC-2/3) and preemption (AC-4) probes in one turn."""
+        """Two quick answered pauses exhaust the limit, then a third is preempted."""
         monkeypatch.setattr(settings, "orchestrator_task_timeout_seconds", 900)
-        monkeypatch.setattr(settings, "orchestrator_turn_lifetime_seconds", 2)
-        monkeypatch.setattr(settings, "orchestrator_creditable_pause_limit", 1)
+        monkeypatch.setattr(settings, "orchestrator_turn_lifetime_seconds", 1.0)
+        monkeypatch.setattr(settings, "orchestrator_creditable_pause_limit", 2)
         monkeypatch.setattr(settings, "constraint_pause_timeout_seconds", 180.0)
         _patch_no_preference(monkeypatch)
 
-        async def fake_push(**kwargs: object) -> dict[str, str]:
-            import asyncio
+        import asyncio
 
-            await asyncio.sleep(0.05)
+        call_count = {"n": 0}
+
+        async def fake_push(**kwargs: object) -> dict[str, str]:
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                # Two quick, genuinely answered pauses -- both under the limit.
+                await asyncio.sleep(0.05)
+                return {"decision": "continue_10", "resolution": "user_choice"}
+            # The third rides out its (already lifetime-capped) timeout.
+            await asyncio.sleep(float(kwargs["timeout_seconds"]))  # type: ignore[arg-type]
             return {"decision": "finish_now", "resolution": "timeout_default"}
 
         async def fake_emit(**kwargs: object) -> None:
@@ -286,8 +294,11 @@ class TestNoProbeExceedsLifetimeCap:
                 break
         elapsed = time.monotonic() - start
 
+        assert ctx.pause_count == 3
+        # Only the first 2 (the limit) are credited; the 3rd is not.
+        assert ctx.credited_pause_seconds == pytest.approx(0.1, abs=0.1)
         assert ctx.turn_stopped_early is True
-        assert elapsed <= settings.orchestrator_turn_lifetime_seconds + 0.5
+        assert elapsed <= settings.orchestrator_turn_lifetime_seconds + 0.3
 
 
 def _mock_session() -> object:

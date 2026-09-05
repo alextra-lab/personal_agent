@@ -293,7 +293,10 @@ async def _report_turn_progress(ctx: "ExecutionContext") -> None:
     provider-reported input-token count of the latest completed primary model call —
     over the pre-call ``estimate_messages_tokens`` heuristic, which excludes the
     assembled system prompt and so under-counts by an order of magnitude. The estimate
-    is used only before the first model call of the turn resolves.
+    is used only before the first primary model call of the turn resolves — including
+    the reports emitted around HYBRID/DECOMPOSE expansion, whose planner/sub-agent
+    calls never touch ``last_prompt_tokens``, so the estimate still applies there until
+    the primary's own synthesis call resolves.
 
     Best-effort: a telemetry emission must never break the execution loop.
 

@@ -796,25 +796,27 @@ Which model runs sub-agents is a design variable:
 - **Research question**: Does sub-agent quality degrade meaningfully with a
   smaller model? Testable. Telemetry will answer this.
 
-### 4.7 Sub-Agent Concurrency Model
+### 4.7 Sub-Agent Dispatch Model
 
 Sub-agents execute as `asyncio.Task` instances within the existing service
-process. They integrate with the ADR-0029 concurrency controller:
+process, one task at a time (FRE-1380, FRE-1381: both the enforced-mode and
+the autonomous-mode fan-out are sequential). slm_server's own concurrency
+benchmark showed aggregate throughput rising only ~19% from concurrency 1->3
+while per-request throughput fell 2.57x, so concurrent dispatch never bought
+the wall-clock win it appeared to. Sub-agents exist for context isolation --
+a digest reaches synthesis, never the full transcript -- a property
+sequential dispatch preserves identically.
 
-- Each sub-agent inference call acquires a concurrency slot before executing.
-- The brainstem's `expansion_budget` determines maximum concurrent sub-agents,
-  but the concurrency controller's `max_concurrency` per model is the hard
-  limit. If the 35B model has `max_concurrency: 1`, sub-agents execute
-  sequentially regardless of expansion_budget.
+- Each sub-agent inference call still integrates with the ADR-0029
+  concurrency controller, but dispatch never issues more than one call at a
+  time, so the controller's `max_concurrency` limit is not a binding
+  constraint for sub-agents.
 - Sub-agent tasks respect the same timeout and cancellation mechanisms as
   regular inference calls.
 - If the user sends a new message while sub-agents are running, the new
   request is queued behind active inference. The user receives a response
   once their request reaches the front of the queue. Sub-agent results from
   the previous expansion are still collected and available for synthesis.
-- Future optimization: route simple sub-agent tasks to the 9B model (which
-  has its own concurrency slot), enabling true parallelism with the 35B
-  primary. This is a Slice 2/3 experiment.
 
 ### 4.8 Brainstem Expansion Signals
 
@@ -824,11 +826,11 @@ The brainstem gains two new signals:
 
 Brainstem evaluates current GPU utilization, available memory headroom, active
 inference count (concurrency controller), and recent error rate. Produces
-`expansion_budget: int` -- how many concurrent sub-agents are safe to run.
+`expansion_budget: int` -- how many sub-agents are safe to run in this
+expansion (dispatched sequentially, not concurrently -- FRE-1380).
 
 - 0: force SINGLE, system under pressure.
-- 1: one sub-agent at a time (sequential expansion).
-- 2-3: parallel sub-agents permitted.
+- 1 or more: sequential sub-agent dispatch, one task at a time.
 
 **Contraction Trigger:**
 
@@ -1466,7 +1468,7 @@ concrete tasks during implementation planning.
 | **ADR-0024** (Session Graph) | Unchanged |
 | **ADR-0025** (Memory Recall) | Unchanged. Mechanism moves into gateway Stage 4 |
 | **ADR-0026** (search_memory tool) | Unchanged |
-| **ADR-0029** (Concurrency Control) | Unchanged. Even more important with sub-agent spawning |
+| **ADR-0029** (Concurrency Control) | Unchanged. Sub-agent dispatch is sequential (FRE-1380), so it does not add concurrent load beyond regular inference |
 
 ### 9.3 Phase Structure -- Revised
 

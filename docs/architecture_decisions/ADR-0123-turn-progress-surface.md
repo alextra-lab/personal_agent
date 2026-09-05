@@ -78,7 +78,7 @@ Ship a **turn progress surface**: an ephemeral, live view of what the turn is do
 **phase model** that finally includes inference, and built so that **unknown always looks unknown**.
 Seven parts.
 
-*(Amended after codex review — see Status Updates: the phase model carries concurrent children rather
+*(Amended after codex review — see Status Updates: the phase model carries children rather
 than claiming a single active activity, and human waits are an explicit phase excluded from the
 silence metric.)*
 
@@ -87,8 +87,9 @@ silence metric.)*
 The organizing question is granularity: every tool call, or coarse phases? Neither alone.
 
 **A phase is the unit of the surface.** At any instant the turn has exactly one *active phase*,
-named in language a waiting human can read. A phase may contain **concurrent children** — see
-"concurrency" below, which is not an edge case but the normal shape of expansion turns:
+named in language a waiting human can read. A phase may contain **children** — concurrent for
+tool dispatch, sequential for sub-agent fan-out (FRE-1380) — see below, which is not an edge case
+but the normal shape of expansion turns:
 
 | Phase | Derived from | Example line |
 |---|---|---|
@@ -109,21 +110,28 @@ detail inside a phase stops it degenerating into a meaningless spinner. Anything
 call (individual LLM tokens of internal reasoning, per-chunk retrieval) is **noise** and is
 deliberately excluded (§4).
 
-**Concurrency: one active phase, N concurrent children.** "Exactly one active phase" would be false
-as a claim about the underlying work — `expansion_controller.py:404-419` dispatches sub-agents
-through `asyncio.gather`, genuinely concurrently, and `tools_dispatched_parallel`
-(`executor.py:4515`) does the same for tools. The model accommodates this without abandoning the
-narrative unit: **the phase is the parent; concurrent activities are its children**, each with its
-own running/completed state and elapsed time.
+**One active phase, N children — concurrent for tools, sequential for sub-agents (FRE-1380).**
+"Exactly one active phase" would be false as a claim about the underlying work —
+`tools_dispatched_parallel` (`executor.py:4515`) dispatches tool calls through `asyncio.gather`,
+genuinely concurrently. Sub-agent dispatch (`expansion_controller.py`'s `_run_dispatch`) is
+sequential, one task at a time. The model accommodates both shapes without abandoning the
+narrative unit: **the phase is the parent; its children are its activities**, each with its own
+running/completed state and elapsed time.
 
-*Researching — 3 running*
-  · *sub-agent: pricing history — 12 s*
+*Researching — 3 running* (tool dispatch, concurrent)
+  · *searching the web — pricing history — 12 s*
+  · *searching the web — competitor set — 8 s* ✓
+  · *searching the web — regulatory context — 12 s*
+
+*Researching — 2 of 3 done* (sub-agent fan-out, sequential)
+  · *sub-agent: pricing history — 12 s* ✓
   · *sub-agent: competitor set — 8 s* ✓
-  · *sub-agent: regulatory context — 12 s*
+  · *sub-agent: regulatory context — running*
 
-The parent phase ends when its last child does. This keeps one readable headline while reporting the
-concurrency honestly — and it means a fan-out turn does not present as a single opaque "Thinking"
-for its whole duration. AC-8 asserts it.
+The parent phase ends when its last child does. This keeps one readable headline while reporting
+each shape honestly — and it means a fan-out turn does not present as a single opaque "Thinking"
+for its whole duration, whether its children run side by side or one after another. AC-8 asserts
+it.
 
 **Human waits are a phase too, and they are not silence.** When the turn pauses for a decision — the
 ADR-0122 turn-start builder card, a tool approval, the attachment-cost gate — the surface shows an
@@ -377,9 +385,10 @@ pause survive a disconnect via the existing timeout-and-replay path, and accept 
 - **Client-side elapsed timers depend on server timestamps**, introducing a clock-skew surface that
   did not exist before. Bounded — it affects a displayed duration, never correctness.
 - **It does not make anything faster**, and there is a risk of it being read as though it did (§4).
-- **The phase model must track the pipeline's real concurrency**, so expansion fan-out and parallel
-  tool dispatch each need a child representation rather than a single line. That is more client state
-  than a flat list, and it is the part most likely to drift as the pipeline changes.
+- **The phase model must track the pipeline's real shape**, so expansion fan-out (sequential,
+  FRE-1380) and parallel tool dispatch each need a child representation rather than a single line.
+  That is more client state than a flat list, and it is the part most likely to drift as the
+  pipeline changes.
 
 ### Risks and Mitigations
 
@@ -392,7 +401,7 @@ pause survive a disconnect via the existing timeout-and-replay path, and accept 
 | Progress emission failure breaks a turn | **High** | Best-effort emission, identical posture to `turn_status` (`projector.py:14`); AC-6 asserts a turn completes with emission forced to fail |
 | The surface is read as a performance fix and latency work is deprioritised | Low | Stated explicitly as out of scope (§4); the collapsed summary (§7) in fact makes latency *more* visible, not less |
 | Phase detail leaks prompt-shaped internals to the user | Low | Only phase names and tool names are surfaced; no inference output for internal steps (§3) |
-| A fan-out turn presents as one opaque phase for minutes | Medium | Parent/child model (§1); AC-8 asserts three concurrent sub-agents render as three children with independent lifecycles |
+| A fan-out turn presents as one opaque phase for minutes | Medium | Parent/child model (§1); AC-8 asserts three sub-agents render as three children with independent lifecycles |
 | A phase spins forever after a cancel or error | Medium | Terminal states resolve the active phase (`CANCELLED`/`RUN_ERROR`/`DONE` already modelled client-side); AC-9 |
 | The AC-2 gap clock penalises time spent waiting on the user | Low | `Waiting for your choice` intervals are excluded from the gap computation (§1) |
 
@@ -433,7 +442,7 @@ continuity; a live check on the deployed stack driving a real artifact build and
 sequence end to end.
 
 **Sequencing (one PR each):**
-1. **Phase events on the transport** — event types (parent phases + concurrent children + the
+1. **Phase events on the transport** — event types (parent phases + children + the
    `Waiting for your choice` phase), adapter dispatch, best-effort emission, and the emitters at the
    planning / sub-agent / synthesis boundaries and around the ADR-0122 pause. No UI yet; AC-1, AC-2,
    AC-6, AC-8 provable from the event stream alone.
@@ -441,7 +450,7 @@ sequence end to end.
    distinct state, forbid warning states derived from unreceived data. Independently valuable and
    independently testable; AC-4. Coordinate with FRE-928 criterion 4.
 3. **The live phase surface** — generalize `ToolIndicator` into the phase view with elapsed time,
-   escalating candour, and concurrent children; reconnect via state replacement; terminal
+   escalating candour, and children; reconnect via state replacement; terminal
    cancel/error handling. AC-3, AC-5, AC-9.
 4. **Collapsed per-turn summary** in the transcript. **(Seam ticket, AC-7.)**
 
@@ -515,13 +524,14 @@ sequence end to end.
   path to raise on every call; the turn still completes and returns its normal response, and the
   failure is logged. *Fails if* a turn errors, hangs, or returns degraded output because a cosmetic
   emission failed — the best-effort posture `turn_status` already holds (`projector.py:14`).
-- **AC-8 — Concurrent work is reported as concurrent, not collapsed into one opaque phase.**
-  *Check:* drive an expansion turn that fans out to **three** sub-agents via
-  `expansion_controller.py:404-419`. The surface shows one active parent phase with **three**
-  children, each with its own running/completed state; as each finishes, its child resolves
-  independently; the parent ends only when the **last** child does. *Fails if* the three appear as a
-  single undifferentiated phase, if the parent ends when the first child does, or if only one child
-  is represented — any of which would present a multi-minute fan-out as one opaque "Thinking".
+- **AC-8 — Fan-out is reported as N children, not collapsed into one opaque phase.** *Check:*
+  drive an expansion turn that fans out to **three** sub-agents via `expansion_controller.py`'s
+  `_run_dispatch` (sequential, one task at a time — FRE-1380). The surface shows one active parent
+  phase with **three** children, each with its own running/completed state; as each finishes, its
+  child resolves independently; the parent ends only when the **last** child does. *Fails if* the
+  three appear as a single undifferentiated phase, if the parent ends before the last child
+  finishes, or if only one child is represented — any of which would present a multi-minute
+  fan-out as one opaque "Thinking".
 - **AC-9 — Cancel and error terminate the surface honestly.** *Check:* (a) cancel a turn mid-phase —
   the active phase resolves to a **cancelled** state, no phase is left spinning, and the collapsed
   summary records the turn as cancelled with the phases that had run; (b) force a turn to fail
@@ -682,10 +692,13 @@ existing instance, so the two are coordinated to fix it once.
 holds. Eight blocking findings, all accepted.
 
 *Two were design gaps that changed the model.* **Concurrency:** "exactly one active phase" was false
-as a claim about the work — `expansion_controller.py:404-419` fans sub-agents out through
-`asyncio.gather`, and `tools_dispatched_parallel` does the same for tools. The model now carries one
-parent phase with N concurrent children (§1, AC-8); without this a multi-minute fan-out would have
+as a claim about the work — at the time, `expansion_controller.py` fanned sub-agents out through
+`asyncio.gather`, and `tools_dispatched_parallel` did the same for tools. The model now carries one
+parent phase with N children (§1, AC-8); without this a multi-minute fan-out would have
 presented as a single opaque "Thinking", which is the exact failure the ADR exists to remove.
+*(FRE-1380, 2026-09-04: sub-agent dispatch was later serialized — the parent/child model and AC-8
+still hold, but the sub-agent children now run sequentially, not through `asyncio.gather`. Tool
+dispatch via `tools_dispatched_parallel` is unaffected and remains concurrent. See §1.)*
 **Human waits:** the ADR-0122 turn-start card now pauses the turn at its very start, and the ADR had
 not said whether that counts as a phase or whether the silence clock runs during it. It is an
 explicit `Waiting for your choice` phase, and its interval is **excluded** from AC-2 — a gap the user

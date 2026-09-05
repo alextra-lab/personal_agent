@@ -56,7 +56,7 @@ Introduce an **execution-profile decision axis** evaluated deterministically in 
 
 ### How it composes with HYBRID / DECOMPOSE / sub-agent tool calls (the governing constraint)
 
-A turn is a **tree of model calls**: SINGLE (~95% of traffic) is just the root reasoning call; HYBRID is the root + N concurrent `sub_agent` workers; DECOMPOSE is a sequence of sub-tasks; DELEGATE hands off a structured package. The gateway runs **once, pre-LLM** — it knows the *strategy* but **the sub-agents and their tool-call depth are discovered mid-turn and do not exist at gateway time.**
+A turn is a **tree of model calls**: SINGLE (~95% of traffic) is just the root reasoning call; HYBRID is the root + N sequential `sub_agent` workers (FRE-1380); DECOMPOSE is a sequence of sub-tasks; DELEGATE hands off a structured package. The gateway runs **once, pre-LLM** — it knows the *strategy* but **the sub-agents and their tool-call depth are discovered mid-turn and do not exist at gateway time.**
 
 This ADR therefore draws a hard boundary:
 

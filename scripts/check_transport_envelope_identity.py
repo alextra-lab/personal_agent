@@ -46,8 +46,13 @@ from pathlib import Path
 
 DONE_TYPE_VALUE = "DONE"
 TURN_STATUS_EMITTER_NAME = "emit_turn_status"
-ADAPTER_FILENAME = "adapter.py"
-EVENTS_FILENAME = "events.py"
+# Matched by path suffix, not bare filename — the repo has more than one
+# ``events.py`` (e.g. ``telemetry/events.py``, a plain constants module with no
+# dataclasses); matching on ``.name`` alone previously picked whichever one
+# sorted first and silently emptied the trace_id-bearing class set, defusing
+# ``adapter_drops_trace_id`` entirely (FRE-427 follow-up).
+ADAPTER_SUFFIX = "transport/agui/adapter.py"
+EVENTS_SUFFIX = "transport/events.py"
 # A marker only counts with a non-empty reason after the colon.
 TRACE_ALLOW_RE = re.compile(r"^trace-allow:\s*\S")
 
@@ -241,8 +246,8 @@ def lint_adapter_completeness(
 def _lint_tree(root: Path, *, strict: bool) -> list[Violation]:
     files = [root] if root.is_file() else sorted(root.rglob("*.py"))
     violations: list[Violation] = []
-    events_path = next((f for f in files if f.name == EVENTS_FILENAME), None)
-    adapter_path = next((f for f in files if f.name == ADAPTER_FILENAME), None)
+    events_path = next((f for f in files if f.as_posix().endswith(EVENTS_SUFFIX)), None)
+    adapter_path = next((f for f in files if f.as_posix().endswith(ADAPTER_SUFFIX)), None)
     for f in files:
         violations.extend(lint_file(f, strict=strict))
     if events_path is not None and adapter_path is not None:

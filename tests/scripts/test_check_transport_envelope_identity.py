@@ -14,7 +14,11 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from scripts.check_transport_envelope_identity import lint_adapter_completeness, lint_file
+from scripts.check_transport_envelope_identity import (
+    _lint_tree,
+    lint_adapter_completeness,
+    lint_file,
+)
 
 
 def test_done_literal_without_trace_id_is_flagged(tmp_path: Path) -> None:
@@ -207,3 +211,48 @@ def test_adapter_trace_allow_suppresses_a_marked_case(tmp_path: Path) -> None:
     )
     assert lint_adapter_completeness(events, adapter) == []
     assert lint_adapter_completeness(events, adapter, strict=True) != []
+
+
+# ── Tree discovery must resolve the real events.py / adapter.py, not just any
+# file with that basename (the repo also has telemetry/events.py) ──────────
+
+
+def test_lint_tree_resolves_events_by_path_not_bare_filename(tmp_path: Path) -> None:
+    """A same-named decoy ``events.py`` elsewhere in the tree must not shadow
+    ``transport/events.py`` — regression guard for a bug where ``_lint_tree``
+    matched on bare filename, picked whichever ``events.py`` sorted first
+    (alphabetically, ``telemetry`` < ``transport``), and silently emptied the
+    trace_id-bearing class set, defusing ``adapter_drops_trace_id`` entirely.
+    """
+    # Decoy: a same-named events.py with no dataclasses, sorting before the
+    # real one (mirrors telemetry/events.py preceding transport/events.py).
+    decoy_dir = tmp_path / "telemetry"
+    decoy_dir.mkdir()
+    (decoy_dir / "events.py").write_text("TASK_OUTCOME_COMPLETED = 'completed'\n")
+
+    transport_dir = tmp_path / "transport"
+    transport_dir.mkdir()
+    (transport_dir / "events.py").write_text(_EVENTS_SRC)
+
+    agui_dir = transport_dir / "agui"
+    agui_dir.mkdir()
+    (agui_dir / "adapter.py").write_text(
+        textwrap.dedent(
+            """
+            from events import CancelledEvent, TextDeltaEvent
+
+            def to_agui_event(event):
+                match event:
+                    case TextDeltaEvent(text=text, session_id=sid):
+                        envelope = {"type": "TEXT_DELTA", "data": {"text": text}, "session_id": sid}
+                    case CancelledEvent(session_id=sid, reason=reason):
+                        envelope = {"type": "CANCELLED", "session_id": sid, "data": {"reason": reason}}
+                return envelope
+            """
+        )
+    )
+
+    violations = _lint_tree(tmp_path, strict=False)
+    assert [(v.kind, v.detail) for v in violations] == [
+        ("adapter_drops_trace_id", "CancelledEvent")
+    ]

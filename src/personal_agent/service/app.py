@@ -554,9 +554,9 @@ async def _process_chat_stream_background(
         )
     finally:
         # Persist DONE to Postgres (so reconnect replay delivers it) then push
-        # the None sentinel to close the live WS drain loop — serialized under
-        # the per-session emit lock so the DONE seq + sentinel stay ordered
-        # behind every prior live emit (FRE-518).
+        # the trace_id-bearing close sentinel to close the live WS drain loop —
+        # serialized under the per-session emit lock so the DONE seq + sentinel
+        # stay ordered behind every prior live emit (FRE-518).
         from personal_agent.transport.agui.transport import emit_done  # noqa: E402
 
         await emit_done(session_id, trace_id)

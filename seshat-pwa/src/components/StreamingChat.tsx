@@ -253,14 +253,18 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         // it stays the cold-lane "—" until a live turn_status resolves it. Merge
         // onto whatever is current (an updater, not a plain value) rather than
         // overwriting outright: a live turn_status can resolve a real ceiling
-        // before this REST call returns, and this must not null it back out.
-        seedTurnStatus((prev) => ({
-          ...(prev ?? COLD_SESSION_TURN_STATUS),
-          tool_iteration: restoredTool.tool_iteration,
-          tool_iteration_max: restoredTool.tool_iteration_max,
-          turn_cost_usd: s.cost_usd ?? 0,
-          session_cost_usd: s.cost_usd ?? 0,
-        }));
+        // (or, for tools, a real count — two turns can run concurrently on one
+        // session) before this REST call returns, and this must not stomp it.
+        seedTurnStatus((prev) => {
+          const base = prev ?? COLD_SESSION_TURN_STATUS;
+          return {
+            ...base,
+            tool_iteration: base.tool_iteration ?? restoredTool.tool_iteration,
+            tool_iteration_max: base.tool_iteration_max ?? restoredTool.tool_iteration_max,
+            turn_cost_usd: s.cost_usd ?? 0,
+            session_cost_usd: s.cost_usd ?? 0,
+          };
+        });
       })
       .catch(() => {
         // Keep the cached pill on a transient fetch error.

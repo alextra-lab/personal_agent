@@ -1044,7 +1044,10 @@ class TurnProgressEvent(EventBase):
     Attributes:
         tool_iteration: Current tool-execution iteration count.
         tool_iteration_max: Resolved per-turn tool-iteration cap.
-        context_tokens: Estimated tokens currently in the turn's context window.
+        context_tokens: The latest completed primary model call's real,
+            provider-reported input-token count (FRE-1326); falls back to the
+            ``estimate_messages_tokens`` heuristic only before the turn's first model
+            call has resolved with usage data.
         context_max: Resolved context-window token budget.
         topology: Active topology label when known.
     """

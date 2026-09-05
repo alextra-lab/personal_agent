@@ -1359,6 +1359,64 @@ class TestSubAgentGapRedispatch:
 
         assert sum(r.cost_usd for r in results) == pytest.approx(0.03)
 
+    @pytest.mark.asyncio
+    async def test_gap_for_an_already_denied_requested_tool_is_not_retried(
+        self, controller: ExpansionController
+    ) -> None:
+        """A partially-granted task's gap must compare against what was actually
+
+        GRANTED (spec.tools), not merely requested (task.tools) — a gap for a
+        tool the planner already asked for and governance already denied must
+        not spend a retry re-asking the same, unchanged question.
+        """
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
+
+        # bash was requested but denied; run_python was requested and granted.
+        plan = ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[PlanTask(name="task_0", goal="Goal for task 0", tools=["bash", "run_python"])],
+        )
+        calls: list[Any] = []
+
+        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            calls.append(spec)
+            return _make_sub_agent_result(
+                "task_0", denied_tools=spec.denied_tools, refused_tool_attempts=("bash",)
+            )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                # bash is never in the sub-agent grant surface — always denied.
+                return_value=self._hermetic_config(["run_python"]),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=self._stub_registry_knowing("run_python", "bash"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_dispatch,
+            ),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="t-gap-already-denied",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert calls[0].tools == ["run_python"]
+        assert len(calls) == 1  # no retry — bash was already, and still, denied
+        assert len(results) == 1
+
 
 class TestSynthesisContextExcludesFullOutput:
     """FRE-1380 AC-4 (lock half) — synthesis is built from digests only.

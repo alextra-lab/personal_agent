@@ -765,7 +765,13 @@ class ExpansionController:
         (new_grant,) = _compute_sub_agent_grants(
             [replace(task, tools=list(dict.fromkeys([*task.tools, *gap_names])))], trace_id
         )
-        newly_grantable = set(new_grant.granted) - set(task.tools)
+        # Compare against spec.tools (what was ACTUALLY granted before this
+        # retry), not task.tools (what the planner merely requested) — granted
+        # is always a subset of requested, so a name denied in the original
+        # request would otherwise be excluded from this check for free and
+        # mask a real expansion on the rare case governance state itself
+        # changes between the original dispatch and this redispatch check.
+        newly_grantable = set(new_grant.granted) - set(spec.tools)
         if not newly_grantable:
             return None
 

@@ -589,6 +589,7 @@ async def run_sub_agent(
     concurrency_controller: Any | None = None,
     session_id: str | None = None,
     eval_mode: bool = False,
+    max_deadline_seconds: float | None = None,
 ) -> SubAgentResult:
     """Execute a single sub-agent inference call.
 
@@ -600,6 +601,12 @@ async def run_sub_agent(
         session_id: Originating session id for cost attribution (ADR-0074).
         eval_mode: True when the parent turn originated from an eval run; stamped
             onto the per-sub-agent audit record for EVAL provenance (FRE-523).
+        max_deadline_seconds: Caller-supplied ceiling on the outer ``wait_for``
+            deadline (FRE-1397) — a dispatcher with a shrinking turn budget
+            passes what is actually left so a serialized fan-out cannot
+            outlive the turn. Only ever shrinks ``_effective_hard_deadline``'s
+            own result via ``min()``, never extends it. ``None`` (the
+            default) leaves that deadline exactly as computed today.
 
     Returns:
         SubAgentResult with summary, metrics, and success status.
@@ -668,6 +675,8 @@ async def run_sub_agent(
         # single-call sizing alone would kill a genuine multi-round loop before it ever
         # reached its own cap.
         hard_deadline = _effective_hard_deadline(spec)
+        if max_deadline_seconds is not None:
+            hard_deadline = min(hard_deadline, max_deadline_seconds)
         response_content, stated_tool_gap = await asyncio.wait_for(
             _run_tool_loop(
                 state, spec, llm_client, tool_defs, tool_layer, loaded_skills, trace_id, session_id

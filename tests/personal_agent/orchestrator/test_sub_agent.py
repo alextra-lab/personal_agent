@@ -404,6 +404,68 @@ class TestEffectiveHardDeadline:
         assert _effective_hard_deadline(spec) == 1000.0
 
 
+class TestMaxDeadlineSecondsOverride:
+    """FRE-1397 — a dispatcher can shrink a sub-agent's own deadline to fit
+
+    whatever remains of the turn's budget, without touching
+    ``_effective_hard_deadline`` itself (every existing caller/test of that
+    function is unaffected).
+    """
+
+    @pytest.mark.asyncio
+    async def test_smaller_cap_wins_over_effective_deadline(self) -> None:
+        mock_client = AsyncMock()
+
+        async def hangs(*args: object, **kwargs: object) -> str:
+            await asyncio.sleep(10)
+            return "too late"
+
+        mock_client.respond = hangs
+
+        result = await run_sub_agent(
+            spec=_spec(timeout=0.05, hard_deadline=5.0),
+            llm_client=mock_client,
+            trace_id="test-trace",
+            max_deadline_seconds=0.2,
+        )
+        assert result.success is False
+        assert result.duration_ms == pytest.approx(200, abs=100)
+
+    @pytest.mark.asyncio
+    async def test_cap_never_extends_the_effective_deadline(self) -> None:
+        """A cap larger than the spec's own deadline is a no-op — min(), never max()."""
+        mock_client = AsyncMock()
+
+        async def hangs(*args: object, **kwargs: object) -> str:
+            await asyncio.sleep(10)
+            return "too late"
+
+        mock_client.respond = hangs
+
+        result = await run_sub_agent(
+            spec=_spec(timeout=0.05, hard_deadline=0.2),
+            llm_client=mock_client,
+            trace_id="test-trace",
+            max_deadline_seconds=5.0,
+        )
+        assert result.success is False
+        assert result.duration_ms == pytest.approx(200, abs=100)
+
+    @pytest.mark.asyncio
+    async def test_none_preserves_todays_behavior(self) -> None:
+        """Default (no cap) leaves the spec's own deadline exactly as computed today."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="ok")
+
+        result = await run_sub_agent(
+            spec=_spec(timeout=0.05, hard_deadline=0.3),
+            llm_client=mock_client,
+            trace_id="test-trace",
+            max_deadline_seconds=None,
+        )
+        assert result.success is True
+
+
 class TestSubAgentToolLoop:
     """FRE-1389 — the sub-agent's own bounded tool loop."""
 

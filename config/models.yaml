@@ -51,9 +51,12 @@ providers:
     placement: local
     # 2026-09-04: raised 2 -> 3 to match slm_server's `--parallel 3` on the single
     # served model. At 2 the expansion controller's 4-way fan-out could only ever
-    # place 2 sub-agents; the other 2 sat in the client queue and hit
-    # sub_agent_timeout_seconds (60s) without acquiring a slot. Deterministic 50%
+    # place 2 sub-agents; the other 2 sat in the client queue and timed out at the
+    # then-current 60s per-worker budget without acquiring a slot. Deterministic 50%
     # sub-agent loss, observed live 2026-09-04 03:50.
+    # The setting that budget came from (`sub_agent_timeout_seconds`) was deleted by
+    # FRE-1381 along with the autonomous path that was its only reader; the observation
+    # above still stands, and fan-out is sequential since FRE-1380 (FRE-1400 sweep).
     max_concurrency: 3
     summary: "Owner's Mac GPU via the CF-Access tunnel (llama.cpp + MLX)"
   ovh:

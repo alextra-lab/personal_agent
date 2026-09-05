@@ -2846,6 +2846,35 @@ def _emit_conversation_context_loaded(
     )
 
 
+def _fallback_reply_from_sub_agent_results(
+    ctx: ExecutionContext, *, lead: str | None = None
+) -> str:
+    """Render gathered sub-agent results when a deadline stop lands before synthesis (FRE-1397).
+
+    ``ctx.sub_agent_results`` lives outside ``ctx.tool_results`` (expansion is
+    a separate path from the primary's own tool loop) — without this, a
+    deadline stop landing right after an expansion dispatch reported "no
+    results gathered" despite real sub-agent output already sitting in
+    ``ctx``.
+
+    Args:
+        ctx: Execution context whose ``sub_agent_results``/``expansion_skipped_tasks``
+            are inspected.
+        lead: Optional opening line; overrides the default framing.
+    """
+    default_lead = (
+        "I reached my time budget before synthesizing the sub-task results. "
+        "Here is what each sub-task found:"
+    )
+    lines: list[str] = [lead if lead is not None else default_lead]
+    for r in ctx.sub_agent_results or []:
+        status = "done" if r.success else f"failed ({r.error})"
+        lines.append(f"- {r.spec_task} [{status}]: {r.summary}")
+    if ctx.expansion_skipped_tasks:
+        lines.append("- Not run (time budget exhausted): " + ", ".join(ctx.expansion_skipped_tasks))
+    return "\n".join(lines)
+
+
 def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None = None) -> str:
     """Build a safe, user-facing reply when the model fails to synthesize after tools.
 
@@ -2856,6 +2885,8 @@ def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None
             framing (e.g. "The model call failed, but here's what I gathered:").
     """
     if not ctx.tool_results:
+        if ctx.sub_agent_results or ctx.expansion_skipped_tasks:
+            return _fallback_reply_from_sub_agent_results(ctx, lead=lead)
         return (
             "I couldn't produce a final answer. Try rephrasing your request or being more specific."
         )
@@ -2879,19 +2910,23 @@ def _salvage_partial_reply(
 ) -> "ClassifiedError":
     """Populate ``ctx.final_reply`` from gathered ``tool_results``, if any (FRE-398/FRE-973).
 
-    No-op if ``ctx.tool_results`` is empty (nothing to salvage) or if
-    ``ctx.final_reply`` is already set (never overwrite an existing reply —
-    idempotent to call more than once for the same failure).
+    No-op if both ``ctx.tool_results`` and ``ctx.sub_agent_results`` are empty
+    (nothing to salvage, FRE-1397) or if ``ctx.final_reply`` is already set
+    (never overwrite an existing reply — idempotent to call more than once
+    for the same failure).
 
     Args:
-        ctx: Execution context whose ``tool_results`` / ``final_reply`` are inspected.
+        ctx: Execution context whose ``tool_results`` / ``sub_agent_results`` /
+            ``final_reply`` are inspected.
         classified: The error classification for this failure.
         lead: Opening line for the salvaged summary (context-appropriate framing).
 
     Returns:
         ``classified``, marked ``partial=True`` when a reply was actually salvaged.
     """
-    if ctx.tool_results and not ctx.final_reply:
+    if (
+        ctx.tool_results or ctx.sub_agent_results or ctx.expansion_skipped_tasks
+    ) and not ctx.final_reply:
         from personal_agent.error_classification import with_partial
 
         ctx.final_reply = (
@@ -2914,7 +2949,7 @@ def _stop_turn_for_deadline(ctx: ExecutionContext) -> None:
     an ``error`` one.
     """
     budget = settings.orchestrator_task_timeout_seconds
-    if ctx.tool_results:
+    if ctx.tool_results or ctx.sub_agent_results or ctx.expansion_skipped_tasks:
         ctx.final_reply = _fallback_reply_from_tool_results(
             ctx,
             lead=(
@@ -2948,7 +2983,7 @@ def _stop_turn_for_lifetime_cap(ctx: ExecutionContext) -> None:
     stop apart from a work-budget stop — the two consumed different budgets.
     """
     budget = settings.orchestrator_turn_lifetime_seconds
-    if ctx.tool_results:
+    if ctx.tool_results or ctx.sub_agent_results or ctx.expansion_skipped_tasks:
         ctx.final_reply = _fallback_reply_from_tool_results(
             ctx,
             lead=(
@@ -2981,7 +3016,7 @@ def _stop_turn_for_cancel(ctx: ExecutionContext) -> None:
     exactly what the old ``force_synthesis_from_limit`` / ``TaskState.LLM_CALL``
     path this replaces used to do.
     """
-    if ctx.tool_results:
+    if ctx.tool_results or ctx.sub_agent_results or ctx.expansion_skipped_tasks:
         ctx.final_reply = _fallback_reply_from_tool_results(
             ctx,
             lead="Stopped — here's what was gathered before the stop:",
@@ -4971,6 +5006,15 @@ async def step_init(
             # live during the (potentially multi-minute) expansion window. Cost itself
             # climbs from turn.model_call_completed events, not a per-loop accumulator.
             await _report_turn_progress(ctx)
+            # FRE-1397: an ABSOLUTE deadline, computed once, here, before the
+            # planner phase inside execute() runs — never a duration re-added
+            # to time.monotonic() later, which would silently hand dispatch
+            # back whatever time the planner call itself spent. Bounded by the
+            # tighter of the two turn caps, mirroring step_llm_call's own
+            # min(_turn_deadline_remaining, _turn_lifetime_remaining) (FRE-1392).
+            _expansion_turn_deadline = time.monotonic() + min(
+                _turn_deadline_remaining(ctx), _turn_lifetime_remaining(ctx)
+            )
             expansion_result = await controller.execute(
                 query=get_text_content(ctx.messages[-1].get("content", "")) if ctx.messages else "",
                 strategy=gw.decomposition.strategy.value.upper(),
@@ -4981,14 +5025,20 @@ async def step_init(
                 constraints=ctx.expansion_constraints,
                 session_id=ctx.session_id,
                 eval_mode=ctx.eval_mode,
+                turn_deadline_monotonic=_expansion_turn_deadline,
             )
 
             ctx.expansion_plan = expansion_result.plan
             ctx.sub_agent_results = expansion_result.sub_agent_results
             ctx.expansion_phase_results = expansion_result.phase_results
+            ctx.expansion_skipped_tasks = expansion_result.skipped_tasks
 
-            # Build synthesis context and append to messages
-            if expansion_result.sub_agent_results:
+            # Build synthesis context and append to messages. FRE-1397: also
+            # fires when every task was skipped for turn-budget exhaustion
+            # (sub_agent_results empty but skipped_tasks not) — otherwise the
+            # primary never learns dispatch produced nothing, and the "not
+            # run" report from AC-3 would be silently discarded here.
+            if expansion_result.sub_agent_results or expansion_result.skipped_tasks:
                 synthesis_msg = {
                     "role": "user",
                     "content": (

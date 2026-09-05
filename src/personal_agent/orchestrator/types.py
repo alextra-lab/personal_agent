@@ -481,6 +481,11 @@ class ExecutionContext:
     sub_agent_results: list["SubAgentResult"] | None = None
     expansion_plan: "ExpansionPlan | None" = None
     expansion_phase_results: list["PhaseResult"] = field(default_factory=list)
+    # FRE-1397: plan task names never dispatched because the turn's remaining
+    # budget was already exhausted when their turn came up in the serialized
+    # fan-out — read by the turn-deadline fallback so it never reports "no
+    # results gathered" while sub-agent work sits uncounted.
+    expansion_skipped_tasks: list[str] = field(default_factory=list)
 
     # --- Phase B skill routing (FRE-skill-routing) ---
     # Tracks which skill bodies have been read_skill'd this conversation for dedup.

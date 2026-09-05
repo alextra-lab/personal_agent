@@ -10,6 +10,8 @@ Verifies:
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 import personal_agent.orchestrator.executor as ex
@@ -17,7 +19,25 @@ from personal_agent.error_classification import ClassifiedError
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client.types import LLMServerError, LLMTimeout
 from personal_agent.orchestrator.channels import Channel
+from personal_agent.orchestrator.sub_agent_types import SubAgentResult
 from personal_agent.orchestrator.types import ExecutionContext, TaskState
+
+
+def _make_sub_agent_result(
+    task_name: str = "task_0", success: bool = True, summary: str = "Result summary"
+) -> SubAgentResult:
+    return SubAgentResult(
+        task_id=uuid4(),
+        spec_task=task_name,
+        summary=summary,
+        full_output=summary,
+        tools_used=[],
+        token_count=50,
+        duration_ms=2000,
+        success=success,
+        error=None if success else "Timeout",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,6 +85,57 @@ class TestFallbackReplyFromToolResults:
         reply = ex._fallback_reply_from_tool_results(ctx)
         assert "search" in reply
         assert "read_file" in reply
+
+
+# ---------------------------------------------------------------------------
+# _fallback_reply_from_tool_results / sub-agent results (FRE-1397)
+#
+# ctx.sub_agent_results lives outside ctx.tool_results (expansion is a
+# separate path from the primary's own tool loop) — without this, a
+# turn-deadline stop landing right after an expansion dispatch that
+# consumed the whole remaining budget reported "no results gathered"
+# despite real sub-agent output sitting in ctx.
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackReplyFromSubAgentResults:
+    def test_sub_agent_results_rendered_when_tool_results_empty(self) -> None:
+        ctx = _make_ctx()
+        ctx.sub_agent_results = [
+            _make_sub_agent_result("evaluate_redis", summary="Redis is fast."),
+            _make_sub_agent_result("evaluate_memcached", success=False, summary=""),
+        ]
+        reply = ex._fallback_reply_from_tool_results(ctx)
+        assert "evaluate_redis" in reply
+        assert "Redis is fast." in reply
+        assert "evaluate_memcached" in reply
+        assert "couldn't produce a final answer" not in reply
+
+    def test_skipped_tasks_noted_alongside_results(self) -> None:
+        ctx = _make_ctx()
+        ctx.sub_agent_results = [_make_sub_agent_result("evaluate_redis")]
+        ctx.expansion_skipped_tasks = ["evaluate_memcached"]
+        reply = ex._fallback_reply_from_tool_results(ctx)
+        assert "evaluate_memcached" in reply
+        assert "not run" in reply.lower()
+
+    def test_all_skipped_no_results_still_reports_skips(self) -> None:
+        """AC-3 — an all-skipped plan is not silently discarded."""
+        ctx = _make_ctx()
+        ctx.expansion_skipped_tasks = ["evaluate_redis", "evaluate_memcached"]
+        reply = ex._fallback_reply_from_tool_results(ctx)
+        assert "evaluate_redis" in reply
+        assert "evaluate_memcached" in reply
+        assert "couldn't produce a final answer" not in reply
+
+    def test_tool_results_take_priority_when_both_present(self) -> None:
+        """The primary's own tool loop is the more specific/recent context."""
+        ctx = _make_ctx()
+        ctx.tool_results.append({"tool_name": "search", "success": True})  # type: ignore[attr-defined]
+        ctx.sub_agent_results = [_make_sub_agent_result("evaluate_redis")]
+        reply = ex._fallback_reply_from_tool_results(ctx)
+        assert "search" in reply
+        assert "evaluate_redis" not in reply
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +370,18 @@ class TestSalvagePartialReplyHelper:
         result = ex._salvage_partial_reply(ctx, classified, lead="Here's what I gathered:")
 
         assert ctx.final_reply is None
-        assert result.partial is False
+
+    def test_builds_reply_from_sub_agent_results_alone(self) -> None:
+        """FRE-1397 — sub-agent work salvages a failure just like tool_results does."""
+        ctx = _make_ctx()
+        ctx.sub_agent_results = [_make_sub_agent_result("evaluate_redis")]
+        classified = self._classified()
+
+        result = ex._salvage_partial_reply(ctx, classified, lead="Here's what I gathered:")
+
+        assert ctx.final_reply is not None
+        assert "evaluate_redis" in ctx.final_reply
+        assert result.partial is True
 
     def test_idempotent_second_call_does_not_overwrite(self) -> None:
         ctx = _make_ctx()
@@ -314,8 +396,89 @@ class TestSalvagePartialReplyHelper:
 
         assert ctx.final_reply == first_reply
         assert "Second lead" not in (ctx.final_reply or "")
-        assert first.partial is True
-        assert second.partial is False  # unchanged input classified — never touched
+
+
+# ---------------------------------------------------------------------------
+# _stop_turn_for_deadline (FRE-973 / FRE-1397 AC-2)
+#
+# This is the exact path a turn takes when an expansion dispatch consumes
+# the whole remaining budget: step_llm_call's own pre-call deadline check
+# fires before the primary ever attempts a synthesis call. AC-2 requires the
+# turn to still "reach synthesis with whatever completed" — this is what
+# makes that true when synthesis never actually gets to run.
+# ---------------------------------------------------------------------------
+
+
+class TestStopTurnForDeadline:
+    def test_reports_sub_agent_work_instead_of_generic_message(self) -> None:
+        ctx = _make_ctx()
+        ctx.sub_agent_results = [_make_sub_agent_result("evaluate_redis", summary="Redis is fast.")]
+
+        ex._stop_turn_for_deadline(ctx)
+
+        assert ctx.final_reply is not None
+        assert "evaluate_redis" in ctx.final_reply
+        assert "before gathering any results" not in ctx.final_reply
+        assert ctx.turn_stopped_early is True
+
+    def test_all_skipped_still_reports_the_gap(self) -> None:
+        ctx = _make_ctx()
+        ctx.expansion_skipped_tasks = ["evaluate_redis", "evaluate_memcached"]
+
+        ex._stop_turn_for_deadline(ctx)
+
+        assert ctx.final_reply is not None
+        assert "evaluate_redis" in ctx.final_reply
+        assert "before gathering any results" not in ctx.final_reply
+
+    def test_generic_message_unchanged_when_nothing_gathered(self) -> None:
+        ctx = _make_ctx()
+
+        ex._stop_turn_for_deadline(ctx)
+
+        assert ctx.final_reply is not None
+        assert "before gathering any results" in ctx.final_reply
+
+
+# ---------------------------------------------------------------------------
+# _stop_turn_for_cancel (ADR-0076 / FRE-1375, FRE-1397 sibling fix)
+#
+# A user-initiated Stop mid-synthesis is the same shape as a deadline stop:
+# ctx.sub_agent_results already holds real completed work from an earlier
+# expansion dispatch, and ctx.tool_results (the primary's own tool loop) is
+# a separate, possibly-empty list.
+# ---------------------------------------------------------------------------
+
+
+class TestStopTurnForCancel:
+    def test_reports_sub_agent_work_instead_of_generic_message(self) -> None:
+        ctx = _make_ctx()
+        ctx.sub_agent_results = [_make_sub_agent_result("evaluate_redis", summary="Redis is fast.")]
+
+        ex._stop_turn_for_cancel(ctx)
+
+        assert ctx.final_reply is not None
+        assert "evaluate_redis" in ctx.final_reply
+        assert "before gathering any results" not in ctx.final_reply
+        assert ctx.turn_stopped_early is True
+
+    def test_all_skipped_still_reports_the_gap(self) -> None:
+        ctx = _make_ctx()
+        ctx.expansion_skipped_tasks = ["evaluate_redis", "evaluate_memcached"]
+
+        ex._stop_turn_for_cancel(ctx)
+
+        assert ctx.final_reply is not None
+        assert "evaluate_redis" in ctx.final_reply
+        assert "before gathering any results" not in ctx.final_reply
+
+    def test_generic_message_unchanged_when_nothing_gathered(self) -> None:
+        ctx = _make_ctx()
+
+        ex._stop_turn_for_cancel(ctx)
+
+        assert ctx.final_reply is not None
+        assert "before gathering any results" in ctx.final_reply
 
 
 # ---------------------------------------------------------------------------

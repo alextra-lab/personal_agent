@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 
 import Link from 'next/link';
@@ -175,16 +175,20 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     }
   }, [serverSelection, refetchConfig]);
 
+  // FRE-1401: reset the status bar the instant the session changes, before the
+  // browser paints — a layout effect (not a passive one) so a session switch
+  // never carries the previous session's ctx/cost/tools reading, even for one
+  // rendered frame.
+  useLayoutEffect(() => {
+    if (!sessionId) return;
+    seedTurnStatus(COLD_SESSION_TURN_STATUS);
+  }, [sessionId, seedTurnStatus]);
+
   // Hydrate message history from the backend when the session changes.
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
     setIsLoadingHistory(true);
-
-    // FRE-1401: reset the status bar the instant the session changes, before either
-    // REST call below resolves — a session switch must never carry the previous
-    // session's ctx/cost/tools reading, even for one render.
-    seedTurnStatus(COLD_SESSION_TURN_STATUS);
 
     getSessionMessages(sessionId)
       .then((serverMsgs) => {
@@ -246,14 +250,17 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         // FRE-1401: restore cost + tools only. The context ceiling is resolved
         // per-turn by the live projector (ADR-0092 §D3, process-local) and must
         // never be rehydrated from a durable source (owner decision, FRE-1401) —
-        // it stays the cold-lane "—" until a live turn_status resolves it.
-        seedTurnStatus({
-          ...COLD_SESSION_TURN_STATUS,
+        // it stays the cold-lane "—" until a live turn_status resolves it. Merge
+        // onto whatever is current (an updater, not a plain value) rather than
+        // overwriting outright: a live turn_status can resolve a real ceiling
+        // before this REST call returns, and this must not null it back out.
+        seedTurnStatus((prev) => ({
+          ...(prev ?? COLD_SESSION_TURN_STATUS),
           tool_iteration: restoredTool.tool_iteration,
           tool_iteration_max: restoredTool.tool_iteration_max,
           turn_cost_usd: s.cost_usd ?? 0,
           session_cost_usd: s.cost_usd ?? 0,
-        });
+        }));
       })
       .catch(() => {
         // Keep the cached pill on a transient fetch error.

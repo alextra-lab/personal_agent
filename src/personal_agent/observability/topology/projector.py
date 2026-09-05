@@ -342,18 +342,26 @@ class TurnObservationProjector:
         self._events_by_type[name] = self._events_by_type.get(name, 0) + 1
         self._maybe_emit_rolling()
 
-        # FRE-1401: a straggler for a trace already popped at completion — drop it
-        # outright rather than let ``_observation`` recreate a ceiling-absent
-        # observation and re-emit over the turn's last good ``turn_status``.
-        if event.trace_id in self._completed_traces:
-            return
+        # FRE-1401: a straggler for a trace already popped at completion. Per-trace
+        # events are dropped outright — letting ``_observation`` recreate one would
+        # publish a fabricated "ceiling lost" reading over the turn's last good
+        # ``turn_status``. A durable session-level compaction marker (A/B/D) still
+        # folds into ``SessionAggregate`` below even for a completed trace (its
+        # count must not undercount just because it arrived late) but likewise
+        # never re-triggers an emit for the popped trace — the roll-up becomes
+        # visible on the session's next natural emit.
+        trace_completed = event.trace_id in self._completed_traces
 
         if isinstance(event, TopologyEnteredEvent):
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.topology = event.topology
         elif isinstance(event, TurnProgressEvent):
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
@@ -370,6 +378,8 @@ class TurnObservationProjector:
             # stale/reordered best-effort tick can never drop the surfaced count. Entries
             # persist until TurnCompletedEvent pops the whole trace (do not pop per sub-agent
             # — removing both numerator and denominator would mask completed work).
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
@@ -380,6 +390,8 @@ class TurnObservationProjector:
                 obs.sub_agent_iteration_max.get(event.task_id, 0), event.iteration_max
             )
         elif isinstance(event, ModelCallCompletedEvent):
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
@@ -390,37 +402,51 @@ class TurnObservationProjector:
             if event.topology is not None:
                 obs.topology = event.topology
         elif isinstance(event, TurnDegradedEvent):
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.degraded = True
             obs.degradations.append(f"{event.where}: {event.reason}")
         elif isinstance(event, CompactionBMarkerEvent):
-            # ADR-0092 §D6: fold B (within-session compression) into the session aggregate.
+            # ADR-0092 §D6: fold B (within-session compression) into the session
+            # aggregate — even for a completed trace (FRE-1401), so a late marker
+            # is never lost. Only the per-trace observation/emit is skipped then.
             sess = await self._ensure_session(event.session_id)
-            obs = self._observation(event.trace_id, event.session_id)
-            obs.events_received += 1
             sess.compaction_b_ids.add(event.fact_id)
-        elif isinstance(event, CompactionDMarkerEvent):
-            # ADR-0092 §D7: fold D (frozen cache reset) into the session aggregate.
-            sess = await self._ensure_session(event.session_id)
+            if trace_completed:
+                return
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
+        elif isinstance(event, CompactionDMarkerEvent):
+            # ADR-0092 §D7: fold D (frozen cache reset) into the session aggregate —
+            # same completed-trace exception as CompactionBMarkerEvent above.
+            sess = await self._ensure_session(event.session_id)
             sess.compaction_d_ids.add(event.fact_id)
+            if trace_completed:
+                return
+            obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
         elif isinstance(event, CompactionAMarkerEvent):
             # ADR-0092 §D5: fold A (gateway budget compaction) into the session aggregate.
             # Updates both the persistent quality_alert_ids count and the transient
             # quality_alert dict; the transient field is cleared at the next clean turn.
+            # Same completed-trace exception as the B/D markers above.
             sess = await self._ensure_session(event.session_id)
-            obs = self._observation(event.trace_id, event.session_id)
-            obs.events_received += 1
-            obs.compaction_a_fired = True
             sess.quality_alert_ids.add(event.fact_id)
             sess.quality_alert = {
                 "severity": event.severity,
                 "phases_fired": list(event.phases_fired),
             }
+            if trace_completed:
+                return
+            obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
+            obs.compaction_a_fired = True
         elif isinstance(event, TurnCompletedEvent):
+            if trace_completed:
+                return
             # FRE-557: was the full lifecycle observed, or is this obs about to be freshly
             # created (evicted mid-turn / never-seen-until-completion)? Captured before
             # _observation so the health doc can flag untrustworthy counters.

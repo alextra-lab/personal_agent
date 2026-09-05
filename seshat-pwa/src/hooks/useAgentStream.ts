@@ -109,7 +109,7 @@ export interface UseAgentStreamReturn {
   clearMessages: () => void;
   /** Replace the message list with a server-hydrated history. */
   seedMessages: (msgs: ChatMessage[]) => void;
-  seedTurnStatus: (status: TurnStatus) => void;
+  seedTurnStatus: (status: TurnStatus | ((prev: TurnStatus | null) => TurnStatus)) => void;
   /**
    * True while the WebSocket was lost mid-turn and we are waiting to reconnect.
    * The UI shows a "Reconnecting…" banner while this is set (FRE-236).
@@ -841,9 +841,15 @@ export function useAgentStream(): UseAgentStreamReturn {
 
   // FRE-426: seed the status bar from server state on mount/switch so the
   // context + cost meters are populated before the first live turn_status.
-  const seedTurnStatus = useCallback((status: TurnStatus) => {
-    setTurnStatus(status);
-  }, []);
+  // FRE-1401: also accepts an updater so a late REST hydration can merge onto
+  // whatever is current (e.g. a live turn_status that already resolved a real
+  // ceiling) instead of unconditionally overwriting it.
+  const seedTurnStatus = useCallback(
+    (status: TurnStatus | ((prev: TurnStatus | null) => TurnStatus)) => {
+      setTurnStatus(status);
+    },
+    [],
+  );
 
   return {
     messages,

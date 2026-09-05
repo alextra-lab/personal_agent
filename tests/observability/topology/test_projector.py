@@ -1028,3 +1028,34 @@ async def test_completed_traces_bounded(monkeypatch: pytest.MonkeyPatch) -> None
     assert "t-1" not in proj._completed_traces
     assert "t-2" in proj._completed_traces
     assert "t-3" in proj._completed_traces
+
+
+async def test_late_compaction_marker_on_completed_trace_still_folds_into_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A B/D/A marker arriving after its trace completed must not undercount —
+    only the per-trace observation/emit is suppressed (FRE-1401 finding: a
+    blanket drop would silently lose a late-first-seen compaction fact).
+    """
+    from personal_agent.events.models import CompactionBMarkerEvent
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.05
+        )
+    )
+    emitted_before_marker = len(emitted)
+
+    # The B marker for t-1 arrives late — after t-1 has already completed.
+    await proj.handle(
+        CompactionBMarkerEvent(trace_id="t-1", session_id="s-1", trigger="soft", fact_id="late-b-1")
+    )
+
+    # No new emit for the popped trace...
+    assert len(emitted) == emitted_before_marker
+    # ...but the fact is not lost — it surfaces on the session's next natural emit.
+    await proj.handle(TopologyEnteredEvent(trace_id="t-2", session_id="s-1", topology="primary"))
+    assert emitted[-1]["compaction_count"] == 1

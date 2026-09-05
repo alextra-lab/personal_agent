@@ -171,6 +171,130 @@ async def test_execute_simple_task(mock_client_class) -> None:
 
 @patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
+async def test_last_prompt_tokens_captured_from_response_usage(mock_client_class) -> None:
+    """FRE-1326: ctx.last_prompt_tokens is captured from the real response usage."""
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.side_effect = [
+        {
+            "role": "assistant",
+            "content": "Hello! I'm doing well.",
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 41600, "prompt_tokens": 41520, "completion_tokens": 80},
+            "raw": {},
+        },
+    ]
+    session_manager = SessionManager()
+    session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
+
+    trace_ctx = TraceContext.new_trace()
+    ctx = ExecutionContext(
+        session_id=session_id,
+        trace_id=trace_ctx.trace_id,
+        user_message="Hello, how are you?",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+    )
+
+    await execute_task_safe(ctx, session_manager)
+
+    assert ctx.last_prompt_tokens == 41520
+
+
+@patch("personal_agent.llm_client.factory.get_llm_client")
+@pytest.mark.asyncio
+async def test_last_prompt_tokens_sticky_across_zero_usage_response(mock_client_class) -> None:
+    """FRE-1326: a later response with missing/zero usage must not clobber the last
+
+    good reading; a later response with a *different positive* count must overwrite it.
+    """
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.side_effect = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "name": "system_metrics_snapshot", "arguments": "{}"}],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 41600, "prompt_tokens": 41520, "completion_tokens": 80},
+            "raw": {},
+        },
+        {
+            "role": "assistant",
+            "content": "Done.",
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {},  # missing usage — must not reset last_prompt_tokens to 0
+            "raw": {},
+        },
+    ]
+    session_manager = SessionManager()
+    session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
+
+    trace_ctx = TraceContext.new_trace()
+    ctx = ExecutionContext(
+        session_id=session_id,
+        trace_id=trace_ctx.trace_id,
+        user_message="Check system metrics",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+    )
+
+    await execute_task_safe(ctx, session_manager)
+
+    assert ctx.last_prompt_tokens == 41520
+
+
+@patch("personal_agent.llm_client.factory.get_llm_client")
+@pytest.mark.asyncio
+async def test_last_prompt_tokens_overwritten_by_later_positive_value(mock_client_class) -> None:
+    """FRE-1326: a later response with a different positive prompt_tokens count
+
+    replaces the earlier value — stickiness must not become staleness.
+    """
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.side_effect = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "name": "system_metrics_snapshot", "arguments": "{}"}],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 41600, "prompt_tokens": 41520, "completion_tokens": 80},
+            "raw": {},
+        },
+        {
+            "role": "assistant",
+            "content": "Done.",
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 55200, "prompt_tokens": 55000, "completion_tokens": 200},
+            "raw": {},
+        },
+    ]
+    session_manager = SessionManager()
+    session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
+
+    trace_ctx = TraceContext.new_trace()
+    ctx = ExecutionContext(
+        session_id=session_id,
+        trace_id=trace_ctx.trace_id,
+        user_message="Check system metrics",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+    )
+
+    await execute_task_safe(ctx, session_manager)
+
+    assert ctx.last_prompt_tokens == 55000
+
+
+@patch("personal_agent.llm_client.factory.get_llm_client")
+@pytest.mark.asyncio
 async def test_execute_task_with_code_channel(mock_client_class) -> None:
     """Test executing a task with CODE_TASK channel."""
     mock_client = AsyncMock()

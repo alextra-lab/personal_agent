@@ -342,6 +342,12 @@ class ExecutionContext:
     # ADR-0076: accumulated LLM spend for this turn (USD), surfaced live via the
     # turn_status STATE_DELTA so the user sees cost as it accrues.
     turn_cost_usd: float = 0.0
+    # FRE-1326: the real, provider-reported input-token count from the most recently
+    # completed primary model call this turn (step_llm_call sets this from
+    # response["usage"]["prompt_tokens"] when positive). Sticky across tool-loop
+    # iterations within a turn; _report_turn_progress prefers this over the pre-call
+    # estimate once a call has resolved with real usage.
+    last_prompt_tokens: int = 0
 
     # Memory enrichment (Phase 2.2)
     memory_context: list[dict[str, Any]] | None = None  # Retrieved conversations for context

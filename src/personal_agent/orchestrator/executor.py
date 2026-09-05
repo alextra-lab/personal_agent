@@ -289,6 +289,15 @@ async def _report_turn_progress(ctx: "ExecutionContext") -> None:
     ``turn_status`` directly (ADR-0088 D4). Live cost is carried separately on
     ``turn.model_call_completed`` from the cost boundary (D3).
 
+    FRE-1326: ``context_tokens`` prefers ``ctx.last_prompt_tokens`` — the real,
+    provider-reported input-token count of the latest completed primary model call —
+    over the pre-call ``estimate_messages_tokens`` heuristic, which excludes the
+    assembled system prompt and so under-counts by an order of magnitude. The estimate
+    is used only before the first primary model call of the turn resolves — including
+    the reports emitted around HYBRID/DECOMPOSE expansion, whose planner/sub-agent
+    calls never touch ``last_prompt_tokens``, so the estimate still applies there until
+    the primary's own synthesis call resolves.
+
     Best-effort: a telemetry emission must never break the execution loop.
 
     Args:
@@ -307,7 +316,7 @@ async def _report_turn_progress(ctx: "ExecutionContext") -> None:
                 session_id=str(ctx.session_id),
                 tool_iteration=ctx.tool_iteration_count,
                 tool_iteration_max=_resolve_max_iterations(ctx),
-                context_tokens=estimate_messages_tokens(ctx.messages),
+                context_tokens=ctx.last_prompt_tokens or estimate_messages_tokens(ctx.messages),
                 context_max=_resolve_context_max(),
                 topology=ctx.topology,
             ),
@@ -6068,6 +6077,11 @@ async def step_llm_call(
         # cost_live_usd for primary turns (ADR-0088 D3); the live meter itself climbs from
         # turn.model_call_completed events. Report progress so tool/context refresh.
         ctx.turn_cost_usd += float(response.get("cost_usd") or 0.0)
+        # FRE-1326: capture the real, provider-reported input-token count for the
+        # status-bar context meter. Guarded on truthy — a response that genuinely omits
+        # usage must not clobber a good prior reading with 0.
+        if prompt_tokens:
+            ctx.last_prompt_tokens = prompt_tokens
         await _report_turn_progress(ctx)
 
         log.info(

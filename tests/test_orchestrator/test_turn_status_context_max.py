@@ -46,3 +46,25 @@ def test_context_max_differs_cloud_vs_local() -> None:
 
     assert cloud_max == 200000
     assert cloud_max != local_max
+
+
+def test_context_max_resolves_current_default_primary_binding() -> None:
+    """FRE-1326 AC-2: with no per-turn selection override (the live default path),
+
+    the meter resolves *today's actual bound primary* (``config/model_roles.yaml``'s
+    ``primary`` binding), not a value that merely happens to match by coincidence.
+    The two prior tests above prove the mechanism generalizes across an old pair
+    (Sonnet 200K vs. the retired ``qwen3.6-35b-thinking`` 131K); this one anchors it
+    to the deployment actually bound today.
+    """
+    from personal_agent.config.model_loader import resolve_role_target
+
+    default_key, default_def = resolve_role_target("primary")
+    assert default_def is not None
+    expected = load_model_config().models[default_key].context_length
+
+    assert _resolve_context_max() == expected
+    # Today's bound primary (2026-08-28 swap) — pin the key so this test fails loudly,
+    # not silently, the next time the primary binding changes.
+    assert default_key == "qwen3.8-flash-next"
+    assert expected == 262144

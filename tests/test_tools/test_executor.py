@@ -305,6 +305,81 @@ async def test_execute_tool_with_path_validation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", list(Mode))
+async def test_check_permissions_empty_allowed_in_modes_denies_every_mode(
+    mode, governance_config, trace_ctx
+) -> None:
+    """FRE-1358 AC-1: a policy with allowed_in_modes=[] permits no mode.
+
+    Before the fix, the mode check read tool_def.allowed_modes and ignored
+    the policy's allowed_in_modes entirely, so this passed in NORMAL and
+    DEGRADED (tool_def.allowed_modes below) despite the policy naming no
+    mode at all.
+    """
+    from personal_agent.governance.models import ToolPolicy
+    from personal_agent.tools.executor import _check_permissions
+    from personal_agent.tools.types import ToolDefinition, ToolParameter
+
+    tool_def = ToolDefinition(
+        name="fre_1358_probe_disabled",
+        description="Probe tool disabled in every mode",
+        category="read_only",
+        parameters=[],
+        risk_level="low",
+        allowed_modes=["NORMAL", "DEGRADED"],
+    )
+    governance_config.tools["fre_1358_probe_disabled"] = ToolPolicy(
+        category="read_only",
+        allowed_in_modes=[],
+    )
+
+    result = await _check_permissions(
+        tool_name="fre_1358_probe_disabled",
+        tool_def=tool_def,
+        arguments={},
+        current_mode=mode,
+        governance_config=governance_config,
+        transport=None,
+        trace_ctx=trace_ctx,
+    )
+
+    assert result.allowed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", list(Mode))
+async def test_check_permissions_mcp_tool_uses_policy_not_hardcoded_default(
+    mode, governance_config, trace_ctx
+) -> None:
+    """FRE-1358 AC-2: an MCP tool's enforced modes equal its policy's allowed_in_modes,
+    not the hardcoded ["NORMAL", "DEGRADED"] set at MCP conversion time.
+    """
+    from personal_agent.governance.models import ToolPolicy
+    from personal_agent.mcp.types import mcp_tool_to_definition
+    from personal_agent.tools.executor import _check_permissions
+
+    tool_def = mcp_tool_to_definition({"name": "fre_1358_probe_mcp", "description": "Probe"})
+    assert tool_def.allowed_modes == ["NORMAL", "DEGRADED"]  # the hardcoded default
+
+    governance_config.tools["mcp_fre_1358_probe_mcp"] = ToolPolicy(
+        category="mcp",
+        allowed_in_modes=["ALERT"],
+    )
+
+    result = await _check_permissions(
+        tool_name="mcp_fre_1358_probe_mcp",
+        tool_def=tool_def,
+        arguments={},
+        current_mode=mode,
+        governance_config=governance_config,
+        transport=None,
+        trace_ctx=trace_ctx,
+    )
+
+    assert result.allowed is (mode == Mode.ALERT)
+
+
+@pytest.mark.asyncio
 async def test_approval_ui_disabled_warning(governance_config) -> None:
     """approval_ui_disabled_proceeding is logged and the call is allowed when UI is off."""
     from unittest.mock import MagicMock, patch

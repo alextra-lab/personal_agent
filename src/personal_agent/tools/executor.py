@@ -178,13 +178,19 @@ async def _check_permissions(
     Returns:
         PermissionResult indicating if execution is allowed.
     """
-    # 1. Mode check
+    # 1. Mode check. The governance policy's allowed_in_modes is authoritative when a
+    # policy is configured for this tool (ADR-0063 §D1, FRE-1358) — an empty list means
+    # "allowed nowhere", not "unset". tool_def.allowed_modes is the fallback for tools
+    # with no governance entry.
     mode_str = current_mode.value
-    if mode_str not in tool_def.allowed_modes:
+    tool_policy = governance_config.tools.get(tool_name)
+    if tool_policy is not None:
+        if mode_str not in tool_policy.allowed_in_modes:
+            return PermissionResult(allowed=False, reason=f"Tool not allowed in {mode_str} mode")
+    elif mode_str not in tool_def.allowed_modes:
         return PermissionResult(allowed=False, reason=f"Tool not allowed in {mode_str} mode")
 
     # Check tool policy for forbidden modes
-    tool_policy = governance_config.tools.get(tool_name)
     if tool_policy and mode_str in tool_policy.forbidden_in_modes:
         return PermissionResult(allowed=False, reason=f"Tool forbidden in {mode_str} mode")
 

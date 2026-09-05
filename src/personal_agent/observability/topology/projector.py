@@ -63,6 +63,10 @@ _MAX_TRACKED_TRACES = 2000
 # exceed a handful; 2000 matches the per-trace cap so eviction is consistent.
 _MAX_TRACKED_SESSIONS = 2000
 
+# FRE-1401: bound on remembered completed trace ids (see ``_completed_traces``), same
+# rationale and cap as ``_MAX_TRACKED_TRACES``.
+_MAX_COMPLETED_TRACES = 2000
+
 # FRE-557 projector-health rolling counter cadence: emit a rolling snapshot every N events
 # OR every T seconds of activity (whichever first), so low-volume instances still heartbeat.
 # Process-local + reset on restart — an operational gauge, not a durable counter.
@@ -234,6 +238,12 @@ class TurnObservationProjector:
         self._by_trace: dict[str, TurnObservation] = {}
         # ADR-0092 §D4: session-scoped aggregate map (persists across turns).
         self._by_session: dict[str, SessionAggregate] = {}
+        # FRE-1401: trace ids already popped at ``turn.completed`` (insertion-ordered,
+        # LRU-evicted like ``_by_trace``). A straggler event for one of these arriving
+        # after the pop must not recreate a fresh ``TurnObservation`` — a fresh one is
+        # born with ``context_max=None`` (:209) and would publish a fabricated
+        # "ceiling lost" reading over the turn's last good, already-displayed state.
+        self._completed_traces: dict[str, None] = {}
         self._hydration_source = hydration_source
         # FRE-557 global rolling counters (process-local; reset on restart).
         self._events_received_total: int = 0
@@ -311,6 +321,13 @@ class TurnObservationProjector:
             self._by_trace[trace_id] = obs
         return obs
 
+    def _mark_completed(self, trace_id: str) -> None:
+        """Remember a popped trace so a later straggler for it is dropped (FRE-1401)."""
+        if len(self._completed_traces) >= _MAX_COMPLETED_TRACES:
+            oldest = next(iter(self._completed_traces))
+            self._completed_traces.pop(oldest)
+        self._completed_traces[trace_id] = None
+
     async def handle(self, event: EventBase) -> None:
         """Dispatch a ``stream:turn.observed`` event and emit the live ``turn_status``.
 
@@ -324,6 +341,12 @@ class TurnObservationProjector:
         name = type(event).__name__
         self._events_by_type[name] = self._events_by_type.get(name, 0) + 1
         self._maybe_emit_rolling()
+
+        # FRE-1401: a straggler for a trace already popped at completion — drop it
+        # outright rather than let ``_observation`` recreate a ceiling-absent
+        # observation and re-emit over the turn's last good ``turn_status``.
+        if event.trace_id in self._completed_traces:
+            return
 
         if isinstance(event, TopologyEnteredEvent):
             sess = await self._ensure_session(event.session_id)
@@ -425,6 +448,7 @@ class TurnObservationProjector:
                 sess.quality_alert = None
             await self._emit(obs)
             self._by_trace.pop(event.trace_id, None)
+            self._mark_completed(event.trace_id)
             return
         else:
             return

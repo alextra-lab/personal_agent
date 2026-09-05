@@ -63,6 +63,10 @@ _MAX_TRACKED_TRACES = 2000
 # exceed a handful; 2000 matches the per-trace cap so eviction is consistent.
 _MAX_TRACKED_SESSIONS = 2000
 
+# FRE-1401: bound on remembered completed trace ids (see ``_completed_traces``), same
+# rationale and cap as ``_MAX_TRACKED_TRACES``.
+_MAX_COMPLETED_TRACES = 2000
+
 # FRE-557 projector-health rolling counter cadence: emit a rolling snapshot every N events
 # OR every T seconds of activity (whichever first), so low-volume instances still heartbeat.
 # Process-local + reset on restart — an operational gauge, not a durable counter.
@@ -234,6 +238,12 @@ class TurnObservationProjector:
         self._by_trace: dict[str, TurnObservation] = {}
         # ADR-0092 §D4: session-scoped aggregate map (persists across turns).
         self._by_session: dict[str, SessionAggregate] = {}
+        # FRE-1401: trace ids already popped at ``turn.completed`` (insertion-ordered,
+        # LRU-evicted like ``_by_trace``). A straggler event for one of these arriving
+        # after the pop must not recreate a fresh ``TurnObservation`` — a fresh one is
+        # born with ``context_max=None`` (:213) and would publish a fabricated
+        # "ceiling lost" reading over the turn's last good, already-displayed state.
+        self._completed_traces: dict[str, None] = {}
         self._hydration_source = hydration_source
         # FRE-557 global rolling counters (process-local; reset on restart).
         self._events_received_total: int = 0
@@ -311,6 +321,13 @@ class TurnObservationProjector:
             self._by_trace[trace_id] = obs
         return obs
 
+    def _mark_completed(self, trace_id: str) -> None:
+        """Remember a popped trace so a later straggler for it is dropped (FRE-1401)."""
+        if len(self._completed_traces) >= _MAX_COMPLETED_TRACES:
+            oldest = next(iter(self._completed_traces))
+            self._completed_traces.pop(oldest)
+        self._completed_traces[trace_id] = None
+
     async def handle(self, event: EventBase) -> None:
         """Dispatch a ``stream:turn.observed`` event and emit the live ``turn_status``.
 
@@ -325,12 +342,26 @@ class TurnObservationProjector:
         self._events_by_type[name] = self._events_by_type.get(name, 0) + 1
         self._maybe_emit_rolling()
 
+        # FRE-1401: a straggler for a trace already popped at completion. Per-trace
+        # events are dropped outright — letting ``_observation`` recreate one would
+        # publish a fabricated "ceiling lost" reading over the turn's last good
+        # ``turn_status``. A durable session-level compaction marker (A/B/D) still
+        # folds into ``SessionAggregate`` below even for a completed trace (its
+        # count must not undercount just because it arrived late) but likewise
+        # never re-triggers an emit for the popped trace — the roll-up becomes
+        # visible on the session's next natural emit.
+        trace_completed = event.trace_id in self._completed_traces
+
         if isinstance(event, TopologyEnteredEvent):
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.topology = event.topology
         elif isinstance(event, TurnProgressEvent):
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
@@ -347,6 +378,8 @@ class TurnObservationProjector:
             # stale/reordered best-effort tick can never drop the surfaced count. Entries
             # persist until TurnCompletedEvent pops the whole trace (do not pop per sub-agent
             # — removing both numerator and denominator would mask completed work).
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
@@ -357,6 +390,8 @@ class TurnObservationProjector:
                 obs.sub_agent_iteration_max.get(event.task_id, 0), event.iteration_max
             )
         elif isinstance(event, ModelCallCompletedEvent):
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
@@ -367,37 +402,51 @@ class TurnObservationProjector:
             if event.topology is not None:
                 obs.topology = event.topology
         elif isinstance(event, TurnDegradedEvent):
+            if trace_completed:
+                return
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.degraded = True
             obs.degradations.append(f"{event.where}: {event.reason}")
         elif isinstance(event, CompactionBMarkerEvent):
-            # ADR-0092 §D6: fold B (within-session compression) into the session aggregate.
+            # ADR-0092 §D6: fold B (within-session compression) into the session
+            # aggregate — even for a completed trace (FRE-1401), so a late marker
+            # is never lost. Only the per-trace observation/emit is skipped then.
             sess = await self._ensure_session(event.session_id)
-            obs = self._observation(event.trace_id, event.session_id)
-            obs.events_received += 1
             sess.compaction_b_ids.add(event.fact_id)
-        elif isinstance(event, CompactionDMarkerEvent):
-            # ADR-0092 §D7: fold D (frozen cache reset) into the session aggregate.
-            sess = await self._ensure_session(event.session_id)
+            if trace_completed:
+                return
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
+        elif isinstance(event, CompactionDMarkerEvent):
+            # ADR-0092 §D7: fold D (frozen cache reset) into the session aggregate —
+            # same completed-trace exception as CompactionBMarkerEvent above.
+            sess = await self._ensure_session(event.session_id)
             sess.compaction_d_ids.add(event.fact_id)
+            if trace_completed:
+                return
+            obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
         elif isinstance(event, CompactionAMarkerEvent):
             # ADR-0092 §D5: fold A (gateway budget compaction) into the session aggregate.
             # Updates both the persistent quality_alert_ids count and the transient
             # quality_alert dict; the transient field is cleared at the next clean turn.
+            # Same completed-trace exception as the B/D markers above.
             sess = await self._ensure_session(event.session_id)
-            obs = self._observation(event.trace_id, event.session_id)
-            obs.events_received += 1
-            obs.compaction_a_fired = True
             sess.quality_alert_ids.add(event.fact_id)
             sess.quality_alert = {
                 "severity": event.severity,
                 "phases_fired": list(event.phases_fired),
             }
+            if trace_completed:
+                return
+            obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
+            obs.compaction_a_fired = True
         elif isinstance(event, TurnCompletedEvent):
+            if trace_completed:
+                return
             # FRE-557: was the full lifecycle observed, or is this obs about to be freshly
             # created (evicted mid-turn / never-seen-until-completion)? Captured before
             # _observation so the health doc can flag untrustworthy counters.
@@ -425,6 +474,7 @@ class TurnObservationProjector:
                 sess.quality_alert = None
             await self._emit(obs)
             self._by_trace.pop(event.trace_id, None)
+            self._mark_completed(event.trace_id)
             return
         else:
             return

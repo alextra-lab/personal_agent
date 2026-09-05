@@ -254,11 +254,15 @@ test.describe('RUN_ERROR error card', () => {
 // ---------------------------------------------------------------------------
 // Regression guard for the real bug (trace 0b959afd, 2026-06-17): navigating
 // from the conversation to the artifact view and back reset the meter to 0.
-// FRE-573 fixed this via localStorage persist (DONE) + seedTurnStatus restore.
+// FRE-573 fixed this via localStorage persist (DONE) + seedTurnStatus restore
+// (cost + tools). FRE-1401 (2026-09-05) removed the context-ceiling half of
+// that restore: a stale numerator beside a real ceiling reads as "plenty of
+// room", so after a remount the ctx lane is the cold-lane "—/—" until a live
+// turn_status resolves it again — only cost and tools survive the remount.
 // ---------------------------------------------------------------------------
 
 test.describe('TurnStatusBar remount resilience', () => {
-  test('session lane and engagement lane survive artifact → conversation view-switch', async ({
+  test('cost and engagement lanes survive artifact → conversation view-switch; ctx lane does not rehydrate (FRE-1401)', async ({
     page,
   }) => {
     // Base REST stubs (GET /sessions/{id} → 404 by default).
@@ -353,12 +357,148 @@ test.describe('TurnStatusBar remount resilience', () => {
     await page.goto(CHAT_URL);
     await page.waitForSelector('[placeholder="Message Seshat..."]');
 
-    // Session lane must be restored from FRE-426 hydration, not reset to 0.
+    // Cost is restored from FRE-426 hydration, not reset to 0.
     await expect(page.getByText('$0.47')).toBeVisible();
-    await expect(page.getByText(/25%/)).toBeVisible();
+    // FRE-1401: the ctx ceiling is NOT rehydrated on remount — it reads the cold-lane
+    // "—/—" until a live turn_status resolves it, never the stale 25% from before.
+    await expect(page.getByText('—/—', { exact: true })).toBeVisible();
+    await expect(page.getByText(/25%/)).not.toBeVisible();
 
     // Engagement lane must be restored from localStorage, not show 0/6.
     await expect(page.getByText(/tools 4\/6/)).toBeVisible();
     await expect(page.getByText(/tools 0\/6/)).not.toBeVisible({ timeout: 1_000 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Session switch does not leak the other session's ctx reading (FRE-1401 AC-3)
+// ---------------------------------------------------------------------------
+// The exact sequence the owner performed: leave a session mid-thread with a real
+// ctx reading, open a different session, then return — via the in-app session
+// drawer (router.push, no page reload), not a full navigation. A React-state
+// carry-over bug let the returning session show the OTHER session's numerator
+// beside a freshly-cold ceiling. The fix resets the meter the instant sessionId
+// changes, so neither session ever shows a reading that isn't its own.
+// ---------------------------------------------------------------------------
+
+const SESSION_B = '00000000-0000-0000-0000-0000000000ac3';
+
+test.describe('Session switch resets the status bar (FRE-1401 AC-3)', () => {
+  test("switching away and back never shows the other session's ctx reading", async ({
+    page,
+  }) => {
+    await stubRest(page, TEST_SESSION);
+    await stubRest(page, SESSION_B);
+
+    // Drives the session-switcher drawer's SessionList.
+    await page.route(`http://localhost:9000/api/v1/sessions?*`, (route) =>
+      route.fulfill({
+        json: [
+          {
+            session_id: TEST_SESSION,
+            title: 'Session Alpha',
+            mode: 'local',
+            channel: null,
+            message_count: 2,
+            turn_count: 1,
+            created_at: new Date().toISOString(),
+            last_active_at: new Date().toISOString(),
+          },
+          {
+            session_id: SESSION_B,
+            title: 'Session Bravo',
+            mode: 'local',
+            channel: null,
+            message_count: 1,
+            turn_count: 1,
+            created_at: new Date().toISOString(),
+            last_active_at: new Date().toISOString(),
+          },
+        ],
+      }),
+    );
+
+    const { wsReady: wsReadyA } = await stubWebSocket(page, TEST_SESSION);
+    const { wsReady: wsReadyB } = await stubWebSocket(page, SESSION_B);
+
+    await page.goto(CHAT_URL);
+    await page.waitForSelector('[placeholder="Message Seshat..."]');
+
+    await sendChatMessage(page, 'check status');
+    const wsA = await wsReadyA;
+
+    serverSend(wsA, {
+      type: 'STATE_DELTA',
+      data: {
+        key: 'turn_status',
+        value: {
+          context_tokens: 25000,
+          context_max: 100000,
+          tool_iteration: 3,
+          tool_iteration_max: 10,
+          turn_cost_usd: 0.05,
+          trace_id: 'trace-a',
+          session_cost_usd: 0.12,
+          session_context_tokens: 25000,
+          compaction_count: 0,
+          cache_reset_count: 0,
+          quality_alert_count: 0,
+          quality_alert: null,
+        },
+      },
+      session_id: TEST_SESSION,
+      seq: 1,
+    });
+
+    // Real reading visible on session Alpha.
+    await expect(page.getByText(/25K\/100K 25%/)).toBeVisible();
+
+    // Switch to session Bravo via the drawer — in-app navigation, no page reload.
+    await page.getByLabel('Open session list').click();
+    await page.getByRole('button', { name: /Session Bravo/ }).click();
+    await page.waitForURL(`**/c/${SESSION_B}`);
+
+    // Bravo must never show Alpha's reading — it has no live turn_status of its own.
+    await expect(page.getByText(/25K\/100K 25%/)).not.toBeVisible();
+    await expect(page.getByText('—/—', { exact: true })).toBeVisible();
+
+    // Give Bravo its own live reading (sending a message opens its WebSocket),
+    // then switch back to Alpha.
+    await sendChatMessage(page, 'bravo status');
+    const wsB = await wsReadyB;
+    serverSend(wsB, {
+      type: 'STATE_DELTA',
+      data: {
+        key: 'turn_status',
+        value: {
+          context_tokens: 5000,
+          context_max: 50000,
+          tool_iteration: 1,
+          tool_iteration_max: 5,
+          turn_cost_usd: 0.01,
+          trace_id: 'trace-b',
+          session_cost_usd: 0.02,
+          session_context_tokens: 5000,
+          compaction_count: 0,
+          cache_reset_count: 0,
+          quality_alert_count: 0,
+          quality_alert: null,
+        },
+      },
+      session_id: SESSION_B,
+      seq: 1,
+    });
+    await expect(page.getByText(/5\.0K\/50K 10%/)).toBeVisible();
+
+    await page.getByLabel('Open session list').click();
+    await page.getByRole('button', { name: /Session Alpha/ }).click();
+    await page.waitForURL(`**/c/${TEST_SESSION}`);
+
+    // Returning to Alpha shows the cold-lane dash — never Alpha's own stale
+    // pre-switch reading (no live turn_status has fired for it in this mount)
+    // and never Bravo's reading either.
+    await expect(page.getByText('—/—', { exact: true })).toBeVisible();
+    await expect(page.getByText(/25K\/100K 25%/)).not.toBeVisible();
+    await expect(page.getByText(/5\.0K\/50K 10%/)).not.toBeVisible();
   });
 });

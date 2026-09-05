@@ -91,9 +91,10 @@ export function TurnStatusBar({ status }: TurnStatusBarProps) {
             />
           </div>
           <span className={`font-mono flex-shrink-0 ${ctxLabel}`}>
+            {/* FRE-1401: absent ceiling → absent numerator too, never a stale figure. */}
             {ctxMax !== null
               ? `${formatTokens(sessionCtxTokens)}/${formatTokens(ctxMax)} ${ctxPct}%`
-              : `${formatTokens(sessionCtxTokens)}/${UNKNOWN}`}
+              : `${UNKNOWN}/${UNKNOWN}`}
           </span>
         </div>
         <span className="font-mono flex-shrink-0 text-ink-muted">

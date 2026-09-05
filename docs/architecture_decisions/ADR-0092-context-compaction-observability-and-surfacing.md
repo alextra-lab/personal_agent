@@ -52,6 +52,8 @@ A session-cumulative cost field, **rolled up idempotently by `trace_id`** (not b
 
 The session lane carries the **latest** `context_tokens` forward across turns (no reset-to-0 on new input). Because `context_tokens` already reflects current working-window occupancy, it *grows* as history accumulates and *drops* when a compaction trims the window — the compaction signals (D5–D7) explain the drop. No new high-water arithmetic is required; "persist the last value across turns" is the whole change.
 
+**Process-local correction (FRE-1401, 2026-09-05).** "Carries forward across turns" holds only **within one gateway process lifetime** — `SessionAggregate.context_tokens` is in-memory (D4), so it does not survive a gateway restart, and it is not rehydrated on a cold session touch. This was previously undocumented and read as if the carry were durable, which a stale PWA numerator beside a correctly-absent `context_max` seemed to confirm (a real-looking figure next to "—" reads as "plenty of room"). **Owner decision:** the cold lane renders "—" for both halves; the client does **not** rehydrate the numerator from a durable source (no per-session input-token high-water mark exists in `api_costs` or the message rows today, and inventing one is a separable, larger change that can be revisited later). Contrast D2: cost genuinely does hydrate from `api_costs` on first touch — D3's carry is deliberately narrower and stays in-memory only.
+
 ### D4 — Projector session-state lifecycle + substrate hydration
 
 The projector gains a second map, `_by_session: dict[session_id, SessionAggregate]`, **alongside** the per-trace map. The per-trace map is unchanged (still evicted at `turn.completed`); the session map **survives across turns**.

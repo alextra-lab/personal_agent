@@ -191,15 +191,39 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
 
 
 def _turn_deadline_remaining(ctx: "ExecutionContext") -> float:
-    """Seconds left in this turn's wall-clock budget (FRE-973).
+    """Seconds left in this turn's work budget (FRE-973, credited per ADR-0142 D4a).
 
     May be negative once the budget is exhausted. Checked at the LLM-call seam
     in step_llm_call (bounds an in-flight call to whatever remains) and in
     step_tool_execution's iteration-limit gate (skips the interactive
     "continue?" pause once there is no time left to spend asking).
+
+    ``credited_pause_seconds`` is added back so a human's wait on a pause card
+    does not itself consume the work budget — otherwise
+    ``orchestrator_task_timeout_seconds`` would be spent partly on generation
+    and partly on however long the user took to answer a prompt. Bounded
+    separately by :func:`_turn_lifetime_remaining`, which this credit can
+    never push past.
     """
     return (
-        ctx.turn_started_monotonic + settings.orchestrator_task_timeout_seconds
+        ctx.turn_started_monotonic
+        + settings.orchestrator_task_timeout_seconds
+        + ctx.credited_pause_seconds
+    ) - time.monotonic()
+
+
+def _turn_lifetime_remaining(ctx: "ExecutionContext") -> float:
+    """Seconds left in this turn's absolute lifetime cap (ADR-0142 D4a).
+
+    Unlike :func:`_turn_deadline_remaining`, never extended by anything —
+    not a credited pause, not an iteration-limit grant. Bounds the clock;
+    ``_turn_deadline_remaining`` bounds the work. A pause already waiting
+    when this reaches zero is preempted to its safe default
+    (``_maybe_pause_for_constraint``); an in-flight LLM call is bounded by
+    the lesser of the two (step_llm_call).
+    """
+    return (
+        ctx.turn_started_monotonic + settings.orchestrator_turn_lifetime_seconds
     ) - time.monotonic()
 
 
@@ -691,10 +715,14 @@ async def _maybe_pause_for_constraint(
             choice is persisted. Used for the ``attachment_cost`` (spend)
             confirmation so a remembered "always proceed" can never silently spend
             (ADR-0101 §8b / FRE-691). Defaults to ``True`` (all other constraints).
-        ctx: The turn's execution context, for ADR-0142 pause accounting (FRE-1391) —
-            ``pause_count``, ``credited_pause_seconds`` and ``constraint_resolutions``
-            are updated for a genuine pause only, never for a preference bypass (which
-            never waits). ``None`` skips accounting (e.g. a caller with no ctx in scope).
+        ctx: The turn's execution context, for ADR-0142 pause accounting (FRE-1391)
+            and the D4a lifetime cap (FRE-1392) — ``pause_count``,
+            ``credited_pause_seconds`` and ``constraint_resolutions`` are updated
+            for a genuine pause only, never for a preference bypass (which never
+            waits); the pause's own ``timeout_seconds`` is also capped to the
+            turn's remaining lifetime, and the turn is stopped early
+            (``ctx.turn_stopped_early``) if the cap binds before or during the
+            wait. ``None`` skips both — a caller with no ctx in scope.
 
     Returns:
         A :class:`~personal_agent.orchestrator.constraint_options.ConstraintDecision`
@@ -742,8 +770,32 @@ async def _maybe_pause_for_constraint(
     #    computed-options constraint (artifact_builder, ADR-0122 §3) rather than
     #    KeyError-ing the static registry — then register the waiter and push.
     opts, default_id = resolve_options_and_default(constraint)
+
+    # ADR-0142 D4a (FRE-1392): a pause is bounded by the lesser of its own
+    # timeout and the turn's remaining lifetime — the lifetime cap is never
+    # extended, so it must win when it is the tighter bound. If the cap is
+    # already reached, don't open a pause with nothing left to spend (same
+    # precedent as FRE-973's existing deadline auto-decline).
+    _lifetime_remaining = _turn_lifetime_remaining(ctx) if ctx is not None else None
+    _effective_timeout = (
+        timeout_seconds
+        if _lifetime_remaining is None
+        else min(timeout_seconds, max(_lifetime_remaining, 0.0))
+    )
+    if _effective_timeout <= 0:
+        log.info(
+            "constraint_lifetime_cap_already_exceeded",
+            constraint=constraint,
+            default_option=default_id,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        if ctx is not None:
+            _stop_turn_for_lifetime_cap(ctx)
+        return ConstraintDecision(default_id, "lifetime_cap_exceeded")
+
     request_id = str(uuid4())
-    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)).isoformat()
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=_effective_timeout)).isoformat()
     log.info(
         "constraint_pause_emitted",
         constraint=constraint,
@@ -778,7 +830,7 @@ async def _maybe_pause_for_constraint(
                 default_option=default_id,
                 created_at=time.monotonic(),
             ),
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_effective_timeout,
         )
     _pause_duration_seconds = time.monotonic() - _pause_started_monotonic
 
@@ -803,13 +855,34 @@ async def _maybe_pause_for_constraint(
         )
         return ConstraintDecision(default_id, "connection_lost")
 
+    # ADR-0142 D4a (FRE-1392): detect a lifetime-cap preemption two ways.
+    # (a) The logical signal — this wait's timeout was capped below its own
+    #     timeout_seconds AND it resolved via that (shortened) timeout, rather
+    #     than a genuine answer. (b) A direct clock recheck — the waiter's
+    #     timeout and a landing user answer race independently
+    #     (ws_endpoint.py), so a decision can arrive as "user_choice"
+    #     microseconds after the cap; (a) alone would miss that. The wait was
+    #     already bounded to at most _effective_timeout, so (b) only fires at
+    #     (or a hair past) the cap.
+    if ctx is not None and (
+        (_effective_timeout < timeout_seconds and resolution == "timeout_default")
+        or _turn_lifetime_remaining(ctx) <= 0
+    ):
+        _stop_turn_for_lifetime_cap(ctx)
+
     # ADR-0142 (FRE-1391): a pause happened here, whatever it resolves to — record it
     # before any further early return so accounting cannot be short-circuited. A
     # preference bypass never reaches this line (it returns above), so this is
     # pause-only by construction.
     if ctx is not None:
+        # ADR-0142 D4a (FRE-1392): only the first orchestrator_creditable_pause_limit
+        # pauses this turn credit their wait back to the work budget — checked
+        # before incrementing so the limit is turn-wide (every constraint draws on
+        # the same counter), not per-constraint. Pauses beyond it still function
+        # and are still offered; their wait is simply not credited.
+        if ctx.pause_count < settings.orchestrator_creditable_pause_limit:
+            ctx.credited_pause_seconds += _pause_duration_seconds
         ctx.pause_count += 1
-        ctx.credited_pause_seconds += _pause_duration_seconds
         ctx.constraint_resolutions.append(
             ConstraintResolutionRecord(constraint=constraint, action_id=action_id)
         )
@@ -2864,6 +2937,40 @@ def _stop_turn_for_deadline(ctx: ExecutionContext) -> None:
     ctx.turn_stopped_early = True
 
 
+def _stop_turn_for_lifetime_cap(ctx: ExecutionContext) -> None:
+    """Populate ``ctx.final_reply`` for a graceful lifetime-cap stop (ADR-0142 D4a).
+
+    Called when ``settings.orchestrator_turn_lifetime_seconds`` — the absolute,
+    unextendable wall-clock cap — is reached, whether between rounds or while a
+    constraint pause is in flight (in which case the pause has already resolved
+    to its safe default; this only supplies the turn's final reply). Distinct
+    from :func:`_stop_turn_for_deadline` so telemetry can tell a lifetime-cap
+    stop apart from a work-budget stop — the two consumed different budgets.
+    """
+    budget = settings.orchestrator_turn_lifetime_seconds
+    if ctx.tool_results:
+        ctx.final_reply = _fallback_reply_from_tool_results(
+            ctx,
+            lead=(
+                f"This turn was stopped early — it exceeded its {budget}s lifetime "
+                "cap. Here's what was gathered so far:"
+            ),
+        )
+    else:
+        ctx.final_reply = (
+            f"This turn was stopped early — it exceeded its {budget}s lifetime cap "
+            "before gathering any results."
+        )
+    ctx.steps.append(
+        {
+            "type": "warning",
+            "description": "Turn lifetime cap exceeded; stopping early",
+            "metadata": {"budget_seconds": budget},
+        }
+    )
+    ctx.turn_stopped_early = True
+
+
 def _stop_turn_for_cancel(ctx: ExecutionContext) -> None:
     """Populate ``ctx.final_reply`` for a user-initiated Stop (ADR-0076 / FRE-1375).
 
@@ -3319,6 +3426,11 @@ async def _maybe_confirm_attachment_cost(
         allow_preference=False,
         ctx=ctx,
     )
+    # ADR-0142 D4a (FRE-1392): the lifetime cap can bind while this pause is in
+    # flight — stop immediately rather than logging/persisting pending-confirmation
+    # state for a turn that is already ending.
+    if ctx.turn_stopped_early:
+        return False
     log.info(
         "attachment_cost_gate_decision",
         trace_id=ctx.trace_id,
@@ -4456,6 +4568,11 @@ async def _maybe_resolve_artifact_builder(ctx: ExecutionContext) -> None:
         context="Choose the model to build this artifact.",
         ctx=ctx,
     )
+    # ADR-0142 D4a (FRE-1392): the lifetime cap can bind while this pause is in
+    # flight — skip resolving a deployment/budget for a turn that is already
+    # ending, and let step_init's own check route straight to synthesis.
+    if ctx.turn_stopped_early:
+        return
     ctx.artifact_builder_resolution = decision
     set_artifact_builder_resolution(decision)
     log.info(
@@ -4657,6 +4774,10 @@ async def step_init(
     # (§3d, AC-14 a/d). Also derives the resolved deployment's effective output
     # budget and context window for the planning step (§5/T6).
     await _maybe_resolve_artifact_builder(ctx)
+    # ADR-0142 D4a (FRE-1392): the lifetime cap can bind during the pause above —
+    # stop here rather than entering the gateway-driven/legacy routing below.
+    if ctx.turn_stopped_early:
+        return TaskState.SYNTHESIS
 
     # --- Gateway-driven path: skip inline routing and memory ---
     if ctx.gateway_output is not None:
@@ -5223,6 +5344,11 @@ async def step_llm_call(
             ),
             ctx=ctx,
         )
+        # ADR-0142 D4a (FRE-1392): the lifetime cap can bind while this pause is
+        # in flight — stop straight to synthesis rather than compressing or
+        # continuing into another LLM call for a turn that is already ending.
+        if ctx.turn_stopped_early:
+            return TaskState.SYNTHESIS
         if _compress_action == "stop_here":
             log.info(
                 "context_compression_declined",
@@ -5948,16 +6074,31 @@ async def step_llm_call(
         # Cloudflare 524 on a single 251s call, with an iteration-count-only gate
         # that never tripped). If the budget is already gone, don't even attempt
         # the call — stop and salvage what's gathered so far.
+        # ADR-0142 D4a (FRE-1392): also bound this call to the absolute lifetime
+        # cap — never extended by a credited pause, unlike _deadline_remaining —
+        # so the tighter of the two always wins.
         _deadline_remaining = _turn_deadline_remaining(ctx)
-        if _deadline_remaining <= 0:
-            log.warning(
-                "turn_wall_clock_budget_exhausted",
-                trace_id=ctx.trace_id,
-                session_id=ctx.session_id,
-                span_id=span_id,
-                budget_seconds=settings.orchestrator_task_timeout_seconds,
-            )
-            _stop_turn_for_deadline(ctx)
+        _lifetime_remaining = _turn_lifetime_remaining(ctx)
+        _remaining = min(_deadline_remaining, _lifetime_remaining)
+        if _remaining <= 0:
+            if _lifetime_remaining <= _deadline_remaining:
+                log.warning(
+                    "turn_lifetime_cap_exhausted",
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                    span_id=span_id,
+                    budget_seconds=settings.orchestrator_turn_lifetime_seconds,
+                )
+                _stop_turn_for_lifetime_cap(ctx)
+            else:
+                log.warning(
+                    "turn_wall_clock_budget_exhausted",
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                    span_id=span_id,
+                    budget_seconds=settings.orchestrator_task_timeout_seconds,
+                )
+                _stop_turn_for_deadline(ctx)
             # ADR-0074 §I3: pair the STEP_PLANNING_STARTED emitted above this try
             # with a completion, matching the success/error exits below.
             log.info(
@@ -6010,7 +6151,7 @@ async def step_llm_call(
                 )
                 _cancel_event = _get_cancel_event(ctx.session_id) if ctx.session_id else None
                 if _cancel_event is None:
-                    response = await asyncio.wait_for(_respond_coro, timeout=_deadline_remaining)
+                    response = await asyncio.wait_for(_respond_coro, timeout=_remaining)
                 else:
                     # ADR-0076 / FRE-1375: race the call against the user's cancel
                     # event too, so Stop aborts an in-flight generation instead of
@@ -6026,7 +6167,7 @@ async def step_llm_call(
                     try:
                         done, _pending = await asyncio.wait(
                             _race_tasks,
-                            timeout=_deadline_remaining,
+                            timeout=_remaining,
                             return_when=asyncio.FIRST_COMPLETED,
                         )
                     finally:
@@ -6068,14 +6209,27 @@ async def step_llm_call(
                     else:
                         raise TimeoutError
         except TimeoutError:
-            log.warning(
-                "turn_wall_clock_budget_exceeded_mid_call",
-                trace_id=ctx.trace_id,
-                session_id=ctx.session_id,
-                span_id=span_id,
-                budget_seconds=settings.orchestrator_task_timeout_seconds,
-            )
-            _stop_turn_for_deadline(ctx)
+            # ADR-0142 D4a (FRE-1392): the same tighter-bound reasoning as the
+            # pre-call gate above — the call was bounded by _remaining, so a
+            # timeout here means whichever of the two was the binding one fired.
+            if _lifetime_remaining <= _deadline_remaining:
+                log.warning(
+                    "turn_lifetime_cap_exceeded_mid_call",
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                    span_id=span_id,
+                    budget_seconds=settings.orchestrator_turn_lifetime_seconds,
+                )
+                _stop_turn_for_lifetime_cap(ctx)
+            else:
+                log.warning(
+                    "turn_wall_clock_budget_exceeded_mid_call",
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                    span_id=span_id,
+                    budget_seconds=settings.orchestrator_task_timeout_seconds,
+                )
+                _stop_turn_for_deadline(ctx)
             # ADR-0074 §I3: pair the STEP_PLANNING_STARTED emitted above this try
             # with a completion, matching the success/error exits below.
             log.info(
@@ -6327,7 +6481,8 @@ async def step_tool_execution(
         # FRE-973: unless the turn's wall-clock budget is already exhausted —
         # there's no time left to spend asking, so treat it as an automatic
         # decline rather than pausing for a decision the turn can't act on.
-        if _turn_deadline_remaining(ctx) <= 0:
+        # ADR-0142 D4a (FRE-1392): same treatment for the absolute lifetime cap.
+        if min(_turn_deadline_remaining(ctx), _turn_lifetime_remaining(ctx)) <= 0:
             log.info(
                 "tool_iteration_limit_pause_skipped_deadline_exceeded",
                 trace_id=ctx.trace_id,
@@ -6344,6 +6499,11 @@ async def step_tool_execution(
                 context=f"Reached {ctx.tool_iteration_count} tool calls on this turn.",
                 ctx=ctx,
             )
+        # ADR-0142 D4a (FRE-1392): the lifetime cap can bind while this pause is
+        # in flight — stop straight to synthesis rather than granting a bonus or
+        # routing back through LLM_CALL for a turn that is already ending.
+        if ctx.turn_stopped_early:
+            return TaskState.SYNTHESIS
         if action_id == "continue_10":
             ctx.tool_iteration_bonus += 10
             log.info(

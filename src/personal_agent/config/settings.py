@@ -218,6 +218,27 @@ class AppConfig(BaseSettings):
             "clip legitimate long turns, e.g. multi-minute artifact builds) to 900."
         ),
     )
+    orchestrator_turn_lifetime_seconds: int = Field(
+        default=1800,
+        ge=1,
+        description=(
+            "ADR-0142 D4a: absolute wall-clock cap on a turn, from turn_started_monotonic. "
+            "Never extended by anything — including a credited pause — unlike "
+            "orchestrator_task_timeout_seconds. A pause in flight when this cap is reached "
+            "resolves immediately to its safe default and the turn proceeds to synthesis."
+        ),
+    )
+    orchestrator_creditable_pause_limit: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "ADR-0142 D4a: turn-wide cap (across every constraint, not per-constraint) on "
+            "how many pauses may credit their wait back to orchestrator_task_timeout_seconds. "
+            "Pauses beyond the limit still function and are still offered; their wait is "
+            "charged to the work budget as it was before D4a. Prevents "
+            "'900s of work + N x 180s of waiting' with no bound on N."
+        ),
+    )
     orchestrator_max_tool_iterations: int = Field(
         default=25,
         ge=0,

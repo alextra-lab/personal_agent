@@ -81,6 +81,7 @@ from personal_agent.orchestrator.routing import is_memory_recall_query
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 from personal_agent.orchestrator.types import (
+    ConstraintResolutionRecord,
     ExecutionContext,
     OrchestratorResult,
     OrchestratorStep,
@@ -180,7 +181,13 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
         by_type = settings.orchestrator_max_tool_iterations_by_task_type
         if task_type_val in by_type:
             base = min(by_type[task_type_val], global_max)
-    return base + ctx.tool_iteration_bonus + ctx.grounding_retrieval_grant
+    resolved = base + ctx.tool_iteration_bonus + ctx.grounding_retrieval_grant
+    # ADR-0142 (FRE-1391): stamp the post-grant value actually used, so the route-trace
+    # ledger records what ran rather than what was configured (AC-1). Re-stamped on
+    # every call — including the reflection-cadence check on a tool-free turn — so the
+    # last call before turn end reflects any bonus granted mid-turn.
+    ctx.effective_tool_iteration_ceiling = resolved
+    return resolved
 
 
 def _turn_deadline_remaining(ctx: "ExecutionContext") -> float:
@@ -656,6 +663,7 @@ async def _maybe_pause_for_constraint(
     context: str,
     timeout_seconds: float | None = None,
     allow_preference: bool = True,
+    ctx: "ExecutionContext | None" = None,
 ) -> "ConstraintDecision":
     """Pause and ask the user, or apply a stored preference (ADR-0076).
 
@@ -683,6 +691,10 @@ async def _maybe_pause_for_constraint(
             choice is persisted. Used for the ``attachment_cost`` (spend)
             confirmation so a remembered "always proceed" can never silently spend
             (ADR-0101 §8b / FRE-691). Defaults to ``True`` (all other constraints).
+        ctx: The turn's execution context, for ADR-0142 pause accounting (FRE-1391) —
+            ``pause_count``, ``credited_pause_seconds`` and ``constraint_resolutions``
+            are updated for a genuine pause only, never for a preference bypass (which
+            never waits). ``None`` skips accounting (e.g. a caller with no ctx in scope).
 
     Returns:
         A :class:`~personal_agent.orchestrator.constraint_options.ConstraintDecision`
@@ -745,6 +757,7 @@ async def _maybe_pause_for_constraint(
     # surface an explicit WAITING_FOR_CHOICE phase so the wait is honest and its
     # interval is excludable from the AC-2 silence clock. Only the actual pause is
     # wrapped; a stored-preference bypass returns above and never reaches this.
+    _pause_started_monotonic = time.monotonic()
     async with phase_span(session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=constraint):
         payload = await register_and_push_constraint(
             session_id=session_id,
@@ -767,6 +780,7 @@ async def _maybe_pause_for_constraint(
             ),
             timeout_seconds=timeout_seconds,
         )
+    _pause_duration_seconds = time.monotonic() - _pause_started_monotonic
 
     action_id = str(payload.get("decision", default_id))
     resolution = str(payload.get("resolution", "user_choice"))
@@ -776,6 +790,9 @@ async def _maybe_pause_for_constraint(
     # (a disconnect leaves the waiter pending to ride its timeout), so this path is
     # unreachable via the pause transport. Kept because the resolution Literal still
     # admits it — but it is no longer "the no-WS path", which now times out instead.
+    # ADR-0142 (FRE-1391): checked before pause accounting — this branch stands for an
+    # immediate no-client default, not a resolved wait, so it must not be credited as
+    # one if it is ever reached.
     if resolution == "connection_lost":
         log.info(
             "constraint_no_ws_default_applied",
@@ -785,6 +802,17 @@ async def _maybe_pause_for_constraint(
             session_id=session_id,
         )
         return ConstraintDecision(default_id, "connection_lost")
+
+    # ADR-0142 (FRE-1391): a pause happened here, whatever it resolves to — record it
+    # before any further early return so accounting cannot be short-circuited. A
+    # preference bypass never reaches this line (it returns above), so this is
+    # pause-only by construction.
+    if ctx is not None:
+        ctx.pause_count += 1
+        ctx.credited_pause_seconds += _pause_duration_seconds
+        ctx.constraint_resolutions.append(
+            ConstraintResolutionRecord(constraint=constraint, action_id=action_id)
+        )
 
     log.info(
         "constraint_decision_received",
@@ -3289,6 +3317,7 @@ async def _maybe_confirm_attachment_cost(
             f"${estimate:.4f}. Proceed on cloud, or keep it local and free?"
         ),
         allow_preference=False,
+        ctx=ctx,
     )
     log.info(
         "attachment_cost_gate_decision",
@@ -4425,6 +4454,7 @@ async def _maybe_resolve_artifact_builder(ctx: ExecutionContext) -> None:
         user_id=ctx.user_id,
         constraint="artifact_builder",
         context="Choose the model to build this artifact.",
+        ctx=ctx,
     )
     ctx.artifact_builder_resolution = decision
     set_artifact_builder_resolution(decision)
@@ -5191,6 +5221,7 @@ async def step_llm_call(
                 f"({_tokens:,} / {_max_tokens:,} tokens). "
                 "Compressing will summarise older turns."
             ),
+            ctx=ctx,
         )
         if _compress_action == "stop_here":
             log.info(
@@ -6311,6 +6342,7 @@ async def step_tool_execution(
                 user_id=ctx.user_id,
                 constraint="tool_iteration_limit",
                 context=f"Reached {ctx.tool_iteration_count} tool calls on this turn.",
+                ctx=ctx,
             )
         if action_id == "continue_10":
             ctx.tool_iteration_bonus += 10

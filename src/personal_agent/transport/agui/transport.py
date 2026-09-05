@@ -487,6 +487,7 @@ async def emit_phase_end(
     phase_id: str,
     parent_id: str | None = None,
     ok: bool = True,
+    ended_at: str | None = None,
 ) -> None:
     """Persist + enqueue a ``PHASE_END`` event (ADR-0123 §2).
 
@@ -499,9 +500,15 @@ async def emit_phase_end(
         parent_id: Parent phase id when this ended a concurrent child.
         ok: ``False`` when the phase ended because the wrapped work raised
             (FRE-936 / AC-9(b)); see :class:`~personal_agent.transport.events.PhaseEndEvent`.
+        ended_at: ISO-8601 UTC server timestamp of the phase end (ADR-0142, FRE-1391).
+            Defaults to ``datetime.now(UTC)`` at call time when omitted, so every
+            ``PhaseEndEvent`` this function emits carries a stamp — a pause has no
+            measurable duration without one.
     """
     if not session_id:
         return
+    if ended_at is None:
+        ended_at = datetime.now(UTC).isoformat()
     # Capture tracked-ness before removal: an untracked (rejected) session must not emit a
     # snapshot at all, else it would assert a false authoritative empty state (FRE-986).
     was_tracked = session_id in _phase_registry
@@ -514,6 +521,7 @@ async def emit_phase_end(
                 session_id=session_id,
                 parent_id=parent_id,
                 ok=ok,
+                ended_at=ended_at,
             ),
             session_id,
         )

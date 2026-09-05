@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS route_traces (
     session_id UUID,
     task_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    schema_version SMALLINT NOT NULL DEFAULT 1,
+    schema_version SMALLINT NOT NULL DEFAULT 2,
 
     -- Stimulus (PII-gated)
     user_message_chars INTEGER NOT NULL DEFAULT 0,
@@ -185,6 +185,11 @@ CREATE TABLE IF NOT EXISTS route_traces (
     fallback_triggered BOOLEAN NOT NULL DEFAULT FALSE,
     error_type VARCHAR(80),
     error_class VARCHAR(40),
+
+    -- ADR-0142 instrumentation (FRE-1391): the post-grant tool-iteration ceiling the
+    -- loop actually used, and one entry per constraint pause this turn raised.
+    effective_tool_iteration_ceiling INTEGER,
+    constraint_resolutions JSONB,
 
     -- ADR-0088 seam key (FRE-513): per-topology idempotency. NULLS NOT DISTINCT so the
     -- turn-level write (task_id NULL) still collapses to one row per trace_id.

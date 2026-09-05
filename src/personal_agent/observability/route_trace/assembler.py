@@ -349,4 +349,10 @@ def assemble_route_trace(
         fallback_triggered=orchestration_event == "fallback_triggered",
         error_type=type(error).__name__ if error is not None else None,
         error_class=getattr(classified, "category", None),
+        # ADR-0142 instrumentation (FRE-1391)
+        effective_tool_iteration_ceiling=getattr(ctx, "effective_tool_iteration_ceiling", None),
+        constraint_resolutions=tuple(
+            {"constraint": r.constraint, "action_id": r.action_id}
+            for r in getattr(ctx, "constraint_resolutions", None) or ()
+        ),
     )

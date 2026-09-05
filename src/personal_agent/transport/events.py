@@ -145,6 +145,10 @@ class PhaseEndEvent:
             without this flag a failed phase is wire-identical to a
             successful one, and the client would render a green check for
             work that just failed.
+        ended_at: ISO-8601 UTC server timestamp of the phase end (ADR-0142,
+            FRE-1391). Paired with :class:`PhaseStartEvent`'s ``started_at`` so a
+            ``WAITING_FOR_CHOICE`` phase has a measurable duration — without it,
+            end minus start cannot be computed for a human pause at all.
     """
 
     phase: Phase
@@ -152,6 +156,7 @@ class PhaseEndEvent:
     session_id: str
     parent_id: str | None = None
     ok: bool = True
+    ended_at: str | None = None  # ISO-8601 UTC
 
 
 @dataclass(frozen=True)

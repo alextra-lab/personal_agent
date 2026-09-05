@@ -67,6 +67,21 @@ class TestEmitHelpers:
         assert recorder[0].phase is Phase.SYNTHESIS
         assert recorder[0].ok is True
 
+    async def test_emit_phase_end_stamps_ended_at_when_omitted(self, recorder: list[Any]) -> None:
+        """ADR-0142 AC-3 (FRE-1391): the end is never absent, even when the caller omits it."""
+        await emit_phase_end(session_id="s1", phase=Phase.WAITING_FOR_CHOICE, phase_id="p1")
+        assert isinstance(recorder[0].ended_at, str)
+        assert recorder[0].ended_at != ""
+
+    async def test_emit_phase_end_honours_explicit_ended_at(self, recorder: list[Any]) -> None:
+        await emit_phase_end(
+            session_id="s1",
+            phase=Phase.WAITING_FOR_CHOICE,
+            phase_id="p1",
+            ended_at="2026-07-25T10:00:05+00:00",
+        )
+        assert recorder[0].ended_at == "2026-07-25T10:00:05+00:00"
+
     async def test_emit_phase_end_explicit_ok_false(self, recorder: list[Any]) -> None:
         await emit_phase_end(session_id="s1", phase=Phase.PLANNING, phase_id="p1", ok=False)
         assert recorder[0].ok is False
@@ -116,6 +131,14 @@ class TestPhaseSpan:
         # ADR-0123 AC-9(b) / FRE-936: a clean exit reports ok=True, so the client
         # can tell this phase actually succeeded rather than merely "ended".
         assert recorder[1].ok is True
+
+    async def test_span_end_is_timestamped_after_start(self, recorder: list[Any]) -> None:
+        """ADR-0142 AC-3 (FRE-1391): a WAITING_FOR_CHOICE span has a measurable duration."""
+        async with phase_span(session_id="s1", phase=Phase.WAITING_FOR_CHOICE, detail="c"):
+            pass
+        started_at, ended_at = recorder[0].started_at, recorder[1].ended_at
+        assert ended_at is not None
+        assert ended_at >= started_at  # ISO-8601 UTC timestamps sort lexically
 
     async def test_end_fires_on_exception(self, recorder: list[Any]) -> None:
         with pytest.raises(ValueError):

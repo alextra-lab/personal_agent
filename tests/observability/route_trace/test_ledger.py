@@ -77,8 +77,8 @@ async def test_write_issues_idempotent_insert() -> None:
     # ADR-0088 seam key: per-topology rows are keyed by (trace_id, task_id), so the
     # idempotency conflict target migrated from (trace_id) to (trace_id, task_id).
     assert "ON CONFLICT (trace_id, task_id) DO NOTHING" in sql
-    # 41 bound parameters follow the SQL string.
-    assert len(conn.execute.call_args.args) == 42
+    # 43 bound parameters follow the SQL string.
+    assert len(conn.execute.call_args.args) == 44
     # Identity params are passed first, as UUIDs; task_id is the third bound param.
     assert conn.execute.call_args.args[1] == row.trace_id
     assert conn.execute.call_args.args[2] == row.session_id
@@ -158,6 +158,8 @@ def _record(**overrides: object) -> dict[str, object]:
         fallback_triggered=False,
         error_type=None,
         error_class=None,
+        effective_tool_iteration_ceiling=None,
+        constraint_resolutions=None,
     )
     base.update(overrides)
     return base

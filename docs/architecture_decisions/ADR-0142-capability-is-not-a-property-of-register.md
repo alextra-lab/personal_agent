@@ -13,9 +13,10 @@
 
 Stage 4 classifies every user message into a `TaskType`. That label then decides two things the
 user never asked about: how many tool iterations the turn may spend, and whether the turn may
-expand into sub-agents at all. A turn labelled `conversational` is capped at 6 iterations against
-25 for every other type, and `decomposition.py:103` returns `SINGLE` for it unconditionally, with
-the reason string `conversational_always_single`. Complexity is computed and then never consulted.
+expand into sub-agents at all. A turn labelled `conversational` is capped at 6 iterations, against
+8 for `memory_recall` and 25 for analysis, planning, tool_use, delegation and self_improve.
+`decomposition.py:103` returns `SINGLE` for it unconditionally, with the reason string
+`conversational_always_single`. Complexity is computed and then never consulted.
 
 FRE-1288 filed this as a claim about tone. The measurements say something narrower and worse.
 
@@ -134,16 +135,31 @@ of its per-strategy constant and the live budget. This is FRE-1382, and it becom
 D1 rather than a later improvement, because D1 removes the only thing currently bounding fan-out for
 this population.
 
-**Per-turn tool cost is bounded by a drift signal.** The signal is **novelty of retrieved content**.
-The loop gate already hashes tool output for its identity check, but that hash is exact-match, so
-near-duplicates pass. The drift signal widens the existing instrument: a turn whose recent results
-repeat information already gathered is drifting, even when its queries differ.
+**Per-turn tool cost is bounded by a spend threshold that raises a question.** When a turn's tool
+iterations cross a configured threshold below the ceiling, the turn pauses and asks (D3).
 
-**Near-duplicate rates on real traffic are unmeasured.** No claim is made here about the threshold or
-about how often the signal fires. Establishing both is the first implementation ticket's work, and
-the signal ships observable-only until that measurement exists.
+**The trigger is spend, not drift.** This is deliberate, and an earlier draft of this ADR had it the
+wrong way round. Drift has two forms. One is **redundancy** — the same information gathered again
+under different queries. The other is **irrelevance** — twenty distinct, non-repeating, individually
+reasonable results that do not answer the question. That second form is the failure this ADR's
+Context describes, and **no telemetry signal detects it**, because irrelevant results are perfectly
+novel. A design that triggered on a novelty signal would let exactly its own motivating failure run
+free, and worse, would read that failure's high novelty as evidence of productive work.
 
-### D3 — The drift signal raises a constraint pause; it does not kill and it does not merely log
+So spend is the trigger, because spend is the only thing that is true of both forms.
+
+**Novelty is evidence carried by the question, not the trigger for it.** The loop gate already hashes
+tool output for its identity check, and that hash is exact-match, so near-duplicates pass. Widening
+it to detect near-duplicates gives the pause something concrete to show — for example, that the last
+six calls returned two new sources. The user reads that alongside the question. It informs the
+answer; it does not decide it.
+
+**Near-duplicate rates on real traffic are unmeasured.** No claim is made here about how often the
+novelty measure fires or what its threshold is. Because it only decorates a question, being wrong
+about it degrades the card's usefulness rather than the turn's bound. The spend threshold is what
+must be right, and it is a count, not an inference.
+
+### D3 — Crossing the spend threshold raises a constraint pause; it does not kill and it does not merely log
 
 A drifting turn and a genuinely hard research turn read identically on every available observable —
 iterations consumed, context growth, elapsed time, distinct searches. No threshold separates them,
@@ -155,27 +171,56 @@ reconnect (FRE-928), surfaces a `WAITING_FOR_CHOICE` phase so the wait is honest
 safe default when no client answers. The PWA renders it as a `DecisionCard`. It is already wired to
 the iteration ceiling.
 
-So the drift signal's output is a question, not a verdict. Its job drops from *decide whether this
-turn deserves more* to *know when to ask*. That is a materially weaker requirement, and signals that
-exist today can meet it where none could meet the stronger one.
+So the threshold's output is a question, not a verdict. The mechanism's job drops from *decide
+whether this turn deserves more* to *know when to ask*. That is a materially weaker requirement, and
+a spend count meets it where no inference could meet the stronger one.
+
+**The pause fires at most twice per turn**, and this is a decision, not a hope: once at the spend
+threshold, once at the ceiling (the existing `tool_iteration_limit` pause). A turn granted a
+continuation does not re-ask at the same threshold. Without this bound D4a's deadline credit is
+unbounded, so the cardinality is load-bearing and is stated here rather than left to a risk note.
 
 **This is also the escalation trigger for demonstrated-need routing.** A turn that has spent real
 work and is still returning novel results has demonstrated need in a way no pre-turn classifier can
-predict from a ten-word message. The drift detector and the escalation trigger are one instrument
-read with opposite sign. They are decided together here so that they cannot disagree later.
+predict from a ten-word message. The spend threshold and the escalation trigger are the same
+crossing, read for opposite purposes. They are decided together here so that they cannot disagree
+later.
 
-Demonstrated-need escalation is not built by this ADR. Expansion is entered once today, at
-`executor.py:4780`, from the gateway's strategy, before the tool loop starts. There is no mid-turn
-entry. D3 fixes the *signal* and its *output surface* so that building the entry later is a wiring
-change rather than a second design.
+Demonstrated-need escalation is not built by this ADR. Today `ctx.expansion_strategy` comes from the
+gateway and from nowhere else, and it is consumed before the tool loop starts, through two dispatch
+paths rather than one — `ExpansionController.execute` in enforced mode (`executor.py:4786`) and
+`execute_hybrid` in autonomous mode (`executor.py:6134`). No mid-turn upgrade path exists on either.
+D3 fixes the *trigger* and its *output surface* so that adding one later is a wiring change rather
+than a second design. That both dispatch paths would need the wiring is recorded here so the later
+estimate is not taken against a single seam.
 
 ### D4 — Pause economics
 
-**D4a — Human wait time does not consume the turn.** `turn_started_monotonic` is stamped once at
-context creation and never adjusted, so `_turn_deadline_remaining` charges a pause to the turn's
-900-second budget. At the 180-second default pause timeout, one unanswered pause spends 20% of the
-turn. Two spend 40%. The deadline is extended by the duration of each `WAITING_FOR_CHOICE` interval,
-so the budget measures work and not human latency.
+**D4a — Human wait time does not consume the turn, and a second bound stops that becoming
+unbounded.** `turn_started_monotonic` is stamped once at context creation and never adjusted, so
+`_turn_deadline_remaining` charges a pause to the turn's 900-second budget. At the 180-second default
+pause timeout, one unanswered pause spends 20% of the turn. Two spend 40%.
+
+The deadline is extended by the duration of each `WAITING_FOR_CHOICE` interval, so
+`orchestrator_task_timeout_seconds` becomes a **work** budget rather than a wall-clock one.
+
+That change alone is unsafe, and this ADR is the reason it does not ship alone. Pauses already recur
+in production — attachment cost (`executor.py:3273`), artifact-builder selection (`4413`), context
+compression (`5181`), and the iteration limit (`6413`), which grants 10 more iterations on every
+"Continue". Crediting each one back turns turn lifetime into `900s of work + N × 180s of waiting`
+with no bound on N. A turn at 800s elapsed that takes one unanswered 180-second pause would otherwise
+live to roughly 1,080 seconds, and nothing stops the next one.
+
+Two bounds therefore accompany the credit:
+
+- **An absolute lifetime cap**, `orchestrator_turn_lifetime_seconds`, proposed at 1800. It is
+  wall-clock from `turn_started_monotonic`, it is never extended by anything, and it terminates the
+  turn through the existing synthesis path. The work budget bounds work; this bounds the clock.
+- **A creditable-pause limit**, proposed at 3 per turn. Pauses beyond it still function, and are
+  still offered, but their wait is charged to the work budget as it is today.
+
+Both numbers are proposals open to tuning during implementation. The structure — a work budget, an
+unextendable lifetime cap, and a cap on how many waits may be credited — is the decision.
 
 **D4b — An expansion or drift grant may not be remembered.** The pause helper accepts
 `allow_preference=False` precisely so that a remembered "always proceed" can never silently spend
@@ -249,33 +294,52 @@ failure (a regex matched the wrong substring) for an illegible one. The length-g
 drafted, measured and dropped in the FRE-1377 study: every substantive disagreement in the sample sat
 in messages under 15 words, so the gate selects the wrong population.
 
-### Option 4: Make the drift signal a terminator
+### Option 4: Trigger on a novelty signal rather than on spend
 
-**Description:** Ship the novelty signal as an automatic kill. A turn whose recent results stop
-returning new information is cut and forced to synthesise.
+**Description:** Detect drift directly. Widen the loop gate's exact-match output hash to catch
+near-duplicates, and raise the pause when a turn's recent results stop returning new information.
+
+**Pros:**
+- Targets drift itself rather than a proxy for it, so healthy expensive turns are never interrupted.
+- Reuses an instrument that already exists, and reads it at no inference cost.
+
+**Why Rejected — and this ADR shipped it in an earlier draft before catching the inversion.** Drift
+has two forms. Redundancy is detectable this way. Irrelevance is not: twenty distinct, non-repeating,
+useless results are perfectly novel. Irrelevance is the failure this ADR's Context describes, so a
+novelty trigger would let the motivating case run free while stopping the milder one. Worse, D3 reads
+sustained work as evidence of genuine need, so high novelty on a useless turn would read as a reason
+to *grant* more. The signal survives as evidence carried by the card, where being wrong costs
+usefulness rather than the bound.
+
+### Option 5: Make the threshold a terminator instead of a question
+
+**Description:** When the spend threshold is crossed, cut the turn and force synthesis. No pause, no
+user involvement.
 
 **Pros:**
 - Works headless, where no user is reachable.
-- Bounds cost with no human in the loop and no transport dependency.
+- Bounds cost with no transport dependency and no human latency.
+- It is what the 6-iteration cap effectively does today for 78% of traffic.
 
-**Why Rejected:** The threshold has never been measured against real traffic, and the signal cannot
-distinguish a drifting turn from a hard one. Terminating on an unvalidated threshold kills good turns,
-and it does so invisibly — the class of failure this project has repeatedly paid for. The pause
-achieves the same bound while routing the ambiguity to the only party that can resolve it. D4c keeps
-the terminator available where no one can be asked.
+**Why Rejected:** It is the current behaviour, and the current behaviour is the defect. A hard
+research question and a drifting one cross the same threshold, and terminating both is precisely the
+allocation error this ADR exists to correct — merely relocated from the classifier to a counter. The
+pause achieves the same bound while routing the ambiguity to the only party who can resolve it. D4c
+keeps the terminator where no one can be asked.
 
-### Option 5: Ship the drift signal observable-only and stop there
+### Option 6: Ship the measurement only and decide later
 
-**Description:** Emit the novelty measurement as telemetry, change no behaviour, and decide later.
+**Description:** Emit the spend and novelty measurements as telemetry, change no behaviour, and
+revisit once the data exists.
 
 **Pros:**
 - Zero behavioural risk.
 - Produces the threshold measurement D2 admits is missing.
 
-**Why Rejected:** Not rejected as a step — D2 requires exactly this before the pause arms. Rejected as
-the *end state*, because D1 removes the current brake on the same schedule. A pure observer would
-leave 78% of traffic with a 25-iteration ceiling and no drift control other than the 900-second wall,
-which is the condition trace 515625b3 documents.
+**Why Rejected:** Not rejected as a step — the novelty measure ships this way. Rejected as the *end
+state*, because D1 removes the current brake on the same schedule. A pure observer would leave 78% of
+traffic with a 25-iteration ceiling and no control other than the 900-second wall, which is the
+condition trace 515625b3 documents.
 
 ---
 
@@ -289,10 +353,10 @@ which is the condition trace 515625b3 documents.
   being computed and discarded.
 - `governance.expansion_budget` becomes a working load-shed signal rather than a boolean, so
   brainstem pressure actually reduces fan-out.
-- Drift acquires a control for the first time. Today no mechanism detects a turn making twenty
-  distinct useless calls.
+- A turn that spends heavily acquires a control for the first time. Today nothing intervenes between
+  the iteration ceiling and the 900-second wall.
 - The turn deadline starts measuring work rather than work plus human latency, which also improves
-  every existing ADR-0076 pause.
+  every existing ADR-0076 pause, and it gains an explicit lifetime bound it never had.
 - The classifier's job narrows to what its own docstring claims, which makes the next router change
   smaller.
 
@@ -315,12 +379,13 @@ which is the condition trace 515625b3 documents.
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| The novelty threshold is wrong and the pause fires on healthy turns | High | D2 ships the signal observable-only first; the threshold is set from measured near-duplicate rates before the pause arms. AC-2 seeds a known-drifting turn rather than waiting for one. |
-| Cost rises materially once 78% of traffic gets a 25-iteration ceiling | High | D2's brainstem budget binds fan-out; the drift pause bounds iterations. AC-6 asserts the budget is respected rather than assumed. |
+| The spend threshold is set too low and the pause fires on healthy turns | High | The threshold is a count, not an inference, and it is tunable without redesign. The recent-window distribution (average 1.42 iterations, 13 of 504 turns at or above 6) sizes it before it arms. AC-2 seeds a known high-spend turn rather than waiting for one. |
+| Cost rises materially once 78% of traffic gets a 25-iteration ceiling | High | D2's brainstem budget binds fan-out; the spend-threshold pause bounds iterations. AC-6 asserts the budget is respected rather than assumed, on a window that must contain real expansions. |
+| The novelty measure is wrong, so the card shows misleading evidence | Low | It decorates a question rather than deciding it. A wrong measure degrades the card and never the bound. This is why D2 moved it off the trigger. |
 | Ask-fatigue drives the owner to disable the pause | Medium | D4b prevents a stored preference for this constraint, so the pressure surfaces as a complaint rather than as a silent unbounded grant. If it becomes intolerable, the threshold is wrong and AC-2's measurement is the place to fix it. |
 | Expansion is opened before sub-agents can use it | High | FRE-1389 (sub-agents hold no tools) is a precondition. A research arm dispatched to a toolless sub-agent cannot search, so opening the lane first would measure a mechanism whose benefit is unbuilt. |
-| Extending the deadline across pauses lets a turn live far beyond 900 seconds of clock | Medium | The extension is bounded by the pause timeout (180s default) times the number of pauses, and the drift constraint may pause at most once per turn under D3. |
-| The drift detector and a later escalation trigger disagree | Medium | D3 decides them as one instrument. This ADR is the record that they share a definition. |
+| Extending the deadline across pauses lets a turn live far beyond 900 seconds of clock | High | D4a pairs the credit with two bounds stated as decisions rather than intentions: an unextendable `orchestrator_turn_lifetime_seconds` cap, and a creditable-pause limit. D3 additionally caps this ADR's own pause at two per turn. AC-7 tests the composition by taking three pauses. |
+| The spend threshold and a later escalation trigger disagree | Medium | D3 decides them as one crossing. This ADR is the record that they share a definition. |
 
 ---
 
@@ -328,28 +393,46 @@ which is the condition trace 515625b3 documents.
 
 **Files affected:**
 
-- `src/personal_agent/config/settings.py` — delete `orchestrator_max_tool_iterations_by_task_type`.
+- `src/personal_agent/config/settings.py` — delete `orchestrator_max_tool_iterations_by_task_type`;
+  add the spend threshold, `orchestrator_turn_lifetime_seconds`, and the creditable-pause limit.
 - `src/personal_agent/orchestrator/executor.py` — `_resolve_max_iterations` (D1);
-  `_turn_deadline_remaining` and the `WAITING_FOR_CHOICE` span (D4a); the drift check and its pause
-  call site (D3).
+  `_turn_deadline_remaining`, the lifetime cap and the `WAITING_FOR_CHOICE` span (D4a); the spend
+  check and its pause call site (D3).
 - `src/personal_agent/request_gateway/decomposition.py` — delete the `CONVERSATIONAL` branch (D1).
 - `src/personal_agent/orchestrator/expansion_controller.py` — take the minimum of `_MAX_TASKS` and
-  `governance.expansion_budget` (D2).
-- `src/personal_agent/orchestrator/loop_gate.py` — the novelty signal, widening the existing output
-  hash (D2, D3).
+  `governance.expansion_budget` (D2). The budget reaches only the gateway log today
+  (`request_gateway/pipeline.py`), so plumbing it to the controller is part of the work.
+- `src/personal_agent/orchestrator/loop_gate.py` — the near-duplicate novelty measure, widening the
+  existing exact-match output hash. Evidence for the card only (D2).
 - `src/personal_agent/orchestrator/constraint_options.py` — a new constraint entry with
   `allow_preference=False` (D3, D4b).
-- `src/personal_agent/orchestrator/types.py` — accumulated pause duration on `ExecutionContext`
-  (D4a).
+- `src/personal_agent/orchestrator/types.py` — credited pause duration and pause count on
+  `ExecutionContext` (D3, D4a).
+- `src/personal_agent/observability/route_trace/types.py` — the effective ceiling and the constraint
+  resolution (AC-1, AC-5).
+- `src/personal_agent/transport/events.py`, `transport/agui/transport.py` — timestamp the
+  `WAITING_FOR_CHOICE` span end (AC-3).
 
-**Sequence.** FRE-1389 and FRE-1382 land before D1. The drift signal ships observable-only, its
-threshold is measured, and only then does D1 remove the ceiling. Removing the ceiling before the
-drift pause arms leaves the 900-second deadline as the sole bound on 78% of traffic.
+**Sequence.** FRE-1389 and FRE-1382 land before D1. The spend-threshold pause arms before D1 removes
+the ceiling. Removing the ceiling first leaves the 900-second deadline as the sole bound on 78% of
+traffic.
+
+**Instrumentation this ADR requires, because its criteria are not checkable without it.** Three
+fields do not exist today and several criteria below name them:
+
+- `RouteTraceRow` carries no effective tool ceiling and no constraint resolution. Both are added, so
+  AC-1 and AC-5 are answerable from the ledger rather than by inference.
+- The `WAITING_FOR_CHOICE` span emits a timestamped start and an untimestamped paired end
+  (`transport/agui/transport.py`, `transport/events.py`). The end is timestamped, so a pause has a
+  measurable duration.
+- `ExecutionContext` accumulates credited pause duration and a pause count, which AC-3 and AC-7 read.
+
+Adding instrumentation to make a criterion checkable is part of the work, not a precondition of it.
+Recorded here so that no implementation ticket discovers the gap at adjudication time.
 
 **Testing strategy.** Unit tests for `_resolve_max_iterations` returning a task-type-independent
 ceiling, for the expansion-budget minimum, and for the deadline arithmetic across a simulated pause.
-A seeded drifting fixture is required — a clean corpus cannot demonstrate that a drift detector
-detects anything.
+A seeded high-spend fixture is required — a clean corpus cannot demonstrate that a threshold fires.
 
 ---
 
@@ -359,36 +442,57 @@ detects anything.
 
 Adjudicated on FRE-1288 once the implementation chain has landed and deployed.
 
-- **AC-1** — The same question, submitted with and without a leading steering verb, resolves to the
-  same effective tool ceiling and the same decomposition strategy. · **Check:** submit both phrasings
-  of the F19 General Product Safety question; compare `task_type`, the recorded effective ceiling, and
-  `strategy` on the two `route_traces` rows. · *Fails if* the prefixed form receives a different
-  ceiling or a different strategy, which means register still allocates capability.
+- **AC-1** — The effective tool ceiling is independent of the task type, across the whole deployed
+  population and not merely on a chosen pair. · **Check:** over a deployed window of at least 200
+  turns spanning at least three distinct `task_type` values, group `route_traces` by `task_type` and
+  compare the recorded effective ceiling; then submit both phrasings of the F19 General Product
+  Safety question and compare their ceiling and `strategy`. · *Fails if* any two task types show
+  different ceilings, or if the steering-verb phrasing receives a different ceiling or strategy. A
+  ceiling that still branches on type fails the population check even when a single pair happens to
+  agree.
 
-- **AC-2** — A turn that is drifting is stopped by a question, before the wall-clock deadline. ·
-  **Check:** run a seeded probe that issues distinct queries returning near-duplicate content; assert
-  a `constraint_pause_emitted` event carrying the drift constraint appears, and that the turn ends
-  without reaching `orchestrator_task_timeout_seconds`. · *Fails if* the probe reaches the 900-second
-  deadline, or terminates through `force_synthesis_from_limit` with no pause offered.
+- **AC-2** — A turn crossing the spend threshold actually blocks on the user, and resumes only on a
+  decision. · **Check:** run a seeded probe that issues distinct queries past the threshold; assert a
+  `WAITING_FOR_CHOICE` span with non-zero duration, a recorded resolution naming the chosen
+  `action_id`, and that the first tool call after the threshold is timestamped after that resolution.
+  · *Fails if* the pause event is emitted while execution continues, if the span duration is zero, or
+  if the turn reaches `orchestrator_task_timeout_seconds` with no pause offered. An emit-and-continue
+  implementation fails on the timestamp ordering.
 
-- **AC-3** — Human wait time does not consume the turn's working budget. · **Check:** on a turn
-  containing a `WAITING_FOR_CHOICE` span of duration *d*, compare the deadline remaining immediately
-  before and immediately after the span. · *Fails if* the remaining budget decreased by approximately
-  *d* rather than staying level, which means the pause is still charged to the turn.
+- **AC-3** — Human wait time does not consume the turn's working budget. · **Check:** two-level. In
+  process, hold the `ExecutionContext` and assert `_turn_deadline_remaining(ctx)` is unchanged, within
+  tolerance, either side of a simulated pause of duration *d*. On a deployed turn, assert the recorded
+  credited-pause total equals the sum of that turn's `WAITING_FOR_CHOICE` span durations. · *Fails if*
+  the in-process remaining budget decreased by approximately *d*, or if the deployed credited total is
+  zero on a turn that demonstrably paused.
 
-- **AC-4** — A stored preference cannot silently grant unbounded capability. · **Check:** store a
-  preference for every constraint the user is able to store, then run the AC-2 drift probe; assert the
-  drift pause is still raised. · *Fails if* the probe proceeds past the drift point without asking.
+- **AC-4** — A stored preference cannot silently grant unbounded capability, even when one is present
+  in storage. · **Check:** write a preference row for the spend-threshold constraint **directly to the
+  preference store**, bypassing whatever API-level guard rejects it, then run the AC-2 probe; assert
+  the pause is still raised and no `constraint_preference_applied` event names this constraint. ·
+  *Fails if* the probe proceeds past the threshold without asking. Seeding at the storage layer is the
+  point: an implementation that merely declines to *write* the preference, while still *honouring* a
+  row that exists, passes an API-level test and fails this one.
 
-- **AC-5** — A headless drifting turn terminates at the baseline, not at the deadline. · **Check:** run
-  the AC-2 probe over the CLI with no WebSocket attached; assert it resolves through the safe default
-  and its `route_traces` row records the no-client resolution. · *Fails if* it reaches the 900-second
-  deadline, or if it escalates without a client having answered.
+- **AC-5** — A headless high-spend turn terminates at the baseline, not at the deadline. · **Check:**
+  run the AC-2 probe over the CLI with no WebSocket attached; assert it resolves through the safe
+  default and its `route_traces` row records that resolution as no-client. · *Fails if* it reaches the
+  900-second deadline, or if it escalates without a client having answered.
 
-- **AC-6** — No turn spawns more sub-agents than its live expansion budget permits. · **Check:** over a
-  deployed window, join each expansion turn's `governance.expansion_budget` to its dispatched
-  sub-agent count. · *Fails if* any turn's sub-agent count exceeds its budget — the condition measured
-  on 2026-09-04, where two turns carrying `budget=1` each spawned four.
+- **AC-6** — No turn spawns more sub-agents than its live expansion budget permits, measured on a
+  population that actually expanded. · **Check:** over a deployed window containing at least 20 turns
+  whose strategy is not `SINGLE` and at least 5 carrying `expansion_budget < 3`, join each turn's
+  `governance.expansion_budget` to its dispatched sub-agent count. · *Fails if* any turn's sub-agent
+  count exceeds its budget — the condition measured on 2026-09-04, where two turns carrying `budget=1`
+  each spawned four — **or if the window cannot be populated**, which means expansion is not running
+  and the criterion has proved nothing.
+
+- **AC-7** — A turn's total wall-clock lifetime is bounded even when it pauses repeatedly. · **Check:**
+  run a probe that takes three or more pauses, letting each reach the 180-second timeout; assert the
+  turn terminates at or before `orchestrator_turn_lifetime_seconds`, and that its credited-pause total
+  stops increasing after the creditable-pause limit. · *Fails if* total lifetime exceeds the cap, or if
+  every pause is credited without limit — the unbounded composition of D4a and D3 that this criterion
+  exists to catch.
 
 **Where these are adjudicated.** On FRE-1288, once the implementation chain has landed and deployed —
 not at merge of this ADR, and not by any single implementation ticket.
@@ -400,7 +504,7 @@ not at merge of this ADR, and not by any single implementation ticket.
 - [ADR-0076](ADR-0076-adaptive-constraint-governance.md) — adaptive constraint governance; supplies
   the pause mechanism D3 and D4 build on
 - [ADR-0063](ADR-0063-primitive-tools-action-boundary-governance.md) §D5 — the tool loop gate whose
-  output hash D2's novelty signal widens
+  exact-match output hash D2's novelty measure widens
 - [ADR-0138](ADR-0138-the-model-may-generate-but-may-not-assert.md) — the grounding contract FRE-1288
   was broken out of; explicitly does not cover capability allocation
 - [ADR-0101](ADR-0101-agent-vision-ingestion.md) §8b — the `allow_preference=False` precedent D4b
@@ -424,3 +528,15 @@ not at merge of this ADR, and not by any single implementation ticket.
 decision needed. The owner set the target as demonstrated-need routing, reached through the
 capability-decoupling step, and raised runaway-loop control as the gap the first draft had not
 covered. D3 and D4 exist because of that challenge.
+
+Revised the same day after Codex review, round 1. Three changes of substance. **D2's trigger was
+inverted**: it fired on a novelty signal, which cannot see the irrelevance form of drift that the
+Context describes, and which D3 would have read as evidence of productive work. Spend is now the
+trigger and novelty is evidence carried by the card. **D4a was unbounded**: crediting every pause
+back to the deadline made turn lifetime `900s + N × 180s` with no bound on N, and the one-shot claim
+that would have contained it existed only in a risk table. An unextendable lifetime cap and a
+creditable-pause limit are now decisions, and D3 states its own pause cardinality. **Four of six
+criteria admitted a broken implementation** and AC-3 had no measurement seam; all six were rewritten,
+AC-7 was added for the lifetime bound, and the instrumentation the criteria depend on is now named in
+the Implementation Notes. Two factual corrections: `memory_recall` is 8, not 25, and expansion has two
+pre-tool-loop dispatch paths rather than one.

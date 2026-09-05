@@ -3016,7 +3016,7 @@ def _stop_turn_for_cancel(ctx: ExecutionContext) -> None:
     exactly what the old ``force_synthesis_from_limit`` / ``TaskState.LLM_CALL``
     path this replaces used to do.
     """
-    if ctx.tool_results:
+    if ctx.tool_results or ctx.sub_agent_results or ctx.expansion_skipped_tasks:
         ctx.final_reply = _fallback_reply_from_tool_results(
             ctx,
             lead="Stopped — here's what was gathered before the stop:",

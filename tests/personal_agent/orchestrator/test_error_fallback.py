@@ -441,6 +441,47 @@ class TestStopTurnForDeadline:
 
 
 # ---------------------------------------------------------------------------
+# _stop_turn_for_cancel (ADR-0076 / FRE-1375, FRE-1397 sibling fix)
+#
+# A user-initiated Stop mid-synthesis is the same shape as a deadline stop:
+# ctx.sub_agent_results already holds real completed work from an earlier
+# expansion dispatch, and ctx.tool_results (the primary's own tool loop) is
+# a separate, possibly-empty list.
+# ---------------------------------------------------------------------------
+
+
+class TestStopTurnForCancel:
+    def test_reports_sub_agent_work_instead_of_generic_message(self) -> None:
+        ctx = _make_ctx()
+        ctx.sub_agent_results = [_make_sub_agent_result("evaluate_redis", summary="Redis is fast.")]
+
+        ex._stop_turn_for_cancel(ctx)
+
+        assert ctx.final_reply is not None
+        assert "evaluate_redis" in ctx.final_reply
+        assert "before gathering any results" not in ctx.final_reply
+        assert ctx.turn_stopped_early is True
+
+    def test_all_skipped_still_reports_the_gap(self) -> None:
+        ctx = _make_ctx()
+        ctx.expansion_skipped_tasks = ["evaluate_redis", "evaluate_memcached"]
+
+        ex._stop_turn_for_cancel(ctx)
+
+        assert ctx.final_reply is not None
+        assert "evaluate_redis" in ctx.final_reply
+        assert "before gathering any results" not in ctx.final_reply
+
+    def test_generic_message_unchanged_when_nothing_gathered(self) -> None:
+        ctx = _make_ctx()
+
+        ex._stop_turn_for_cancel(ctx)
+
+        assert ctx.final_reply is not None
+        assert "before gathering any results" in ctx.final_reply
+
+
+# ---------------------------------------------------------------------------
 # execute_task's outer except now salvages too (FRE-973) — previously only
 # step_llm_call's own local except did, so an exception raised anywhere else
 # in the state-machine loop silently dropped ctx.tool_results.

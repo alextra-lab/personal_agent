@@ -241,7 +241,7 @@ class TurnObservationProjector:
         # FRE-1401: trace ids already popped at ``turn.completed`` (insertion-ordered,
         # LRU-evicted like ``_by_trace``). A straggler event for one of these arriving
         # after the pop must not recreate a fresh ``TurnObservation`` — a fresh one is
-        # born with ``context_max=None`` (:209) and would publish a fabricated
+        # born with ``context_max=None`` (:213) and would publish a fabricated
         # "ceiling lost" reading over the turn's last good, already-displayed state.
         self._completed_traces: dict[str, None] = {}
         self._hydration_source = hydration_source

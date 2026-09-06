@@ -64,8 +64,12 @@ interface StreamingChatProps {
  * Primary chat interface composing all sub-components.
  *
  * Session identity is driven by the URL param — this component never
- * mints or stores session IDs itself. Navigating to a new /c/{id} URL
- * causes a natural remount and state reset.
+ * mints or stores session IDs itself. Navigating to a new /c/{id} URL does
+ * NOT remount this component (same route pattern, so React reuses the
+ * instance and only the `sessionId` prop changes) — history and turn status
+ * are re-hydrated by the effects below, and `useAgentStream(sessionId)`
+ * closes any WebSocket left open for the session navigated away from
+ * (FRE-1414).
  *
  * Layout:
  * - Header: Seshat title + New button (safe-area aware)
@@ -162,7 +166,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     sendUserCancel,
     seedMessages,
     seedTurnStatus,
-  } = useAgentStream();
+  } = useAgentStream(sessionId);
 
   // Reconcile the picker when the server broadcasts a selection change to the
   // active socket (ADR-0121 §4 — e.g. a change made elsewhere, or the live

@@ -134,8 +134,15 @@ export interface UseAgentStreamReturn {
  * - Tool approval round-trips via WebSocket (replaces POST /approval).
  * - Reconnect replay via seq numbers and localStorage persistence.
  * - REPLAY_GAP fallback to full session history API.
+ *
+ * @param activeSessionId - The session currently displayed by the caller
+ * (e.g. the `/c/[sessionId]` route param). When this changes to a value
+ * other than the session the open WebSocket belongs to, FRE-1414: the stale
+ * connection is closed and its live-turn UI state is cleared, so a session
+ * switch made without sending a new message can never leave a straggling
+ * event from the abandoned session updating the newly displayed one.
  */
-export function useAgentStream(): UseAgentStreamReturn {
+export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
@@ -268,7 +275,14 @@ export function useAgentStream(): UseAgentStreamReturn {
   // Event dispatch
   // --------------------------------------------------------------------------
 
-  const handleEvent = useCallback((event: AGUIEvent) => {
+  const handleEvent = useCallback((event: AGUIEvent, ownerSessionId: string) => {
+    // FRE-1414: ownerSessionId is the session the delivering connection was
+    // opened for (captured at connectWebSocket() call time in sendMessage),
+    // not event.session_id — several control/terminal event types (PONG,
+    // DONE, REPLAY_GAP, REPLAY_COMPLETE) omit session_id on the wire, so the
+    // envelope field cannot be trusted as a gate. A mismatch here means the
+    // displayed session moved on since this connection was opened.
+    if (ownerSessionId !== currentSessionRef.current) return;
     if (event.seq != null) {
       if (event.seq <= maxHandledSeqRef.current) return;
       maxHandledSeqRef.current = event.seq;
@@ -702,7 +716,10 @@ export function useAgentStream(): UseAgentStreamReturn {
       //    events from the background task.
       streamRef.current = connectWebSocket(
         sessionId,
-        handleEvent,
+        // FRE-1414: bind this connection's events to the session it was
+        // opened for, so a later switch-away cannot have a straggling event
+        // read against whatever session is current at delivery time.
+        (event) => handleEvent(event, sessionId),
         () => {
           // WS error — connection may have dropped.
           // Reconnect logic is handled inside connectWebSocket.
@@ -750,6 +767,31 @@ export function useAgentStream(): UseAgentStreamReturn {
     },
     [handleEvent, updatePhases, updateTools],
   );
+
+  // FRE-1414: close/detach a stream left open for a session the caller has
+  // navigated away from. Without this, switching which session is displayed
+  // (without sending a new message on the new one) left the old session's
+  // WebSocket open and its live-turn UI (spinner, tools, phases, approval /
+  // interrupt / constraint cards) showing under the newly displayed session.
+  // No-op when activeSessionId is unset (callers that don't pass one) or
+  // already matches the open connection's session.
+  useEffect(() => {
+    if (activeSessionId === undefined) return;
+    if (streamRef.current === null) return;
+    if (currentSessionRef.current === activeSessionId) return;
+
+    streamRef.current.close();
+    streamRef.current = null;
+    currentSessionRef.current = '';
+    isStreamingRef.current = false;
+    setIsStreaming(false);
+    setIsReconnecting(false);
+    updateTools(() => []);
+    updatePhases(() => []);
+    setPendingApproval(null);
+    setPendingInterrupt(null);
+    setPendingConstraints([]);
+  }, [activeSessionId, updateTools, updatePhases]);
 
   const resolveInterrupt = useCallback((choice: string) => {
     // Send INTERRUPT_RESPONSE over WebSocket.

@@ -42,13 +42,16 @@ own typed exception.
 
 **The exact proxy value is not established, and this ADR does not assume one.** Cloudflare's 524
 page in the incident named a 120-second window. Cloudflare's current documentation gives a
-125-second default. The zone is terraform-managed, so its configured value is readable. D1 requires
-reading it rather than trusting either number.
+125-second default. The zone's configured value is readable from the zone itself. D1 requires
+reading it rather than trusting either number. The Cloudflare terraform that manages the tunnel
+lives outside this repository and declares no `proxy_read_timeout` resource, so the zone is the
+source, not this repo's tree.
 
 **A new risk sits under this, and it is untested.** The owner raised the served context window to
-262,144 tokens on 2026-09-05. Prefill time grows with input size. If a full-context prefill emits
-no bytes for longer than the proxy's gap bound, every such call fails at the proxy. The largest
-measured success carried 76,706 input tokens. Nothing measures the range above that.
+262,144 tokens on 2026-09-05, and the active primary deployment is `qwen3.8-flash-next`. Prefill
+time grows with input size. If a full-context prefill emits no bytes for longer than the proxy's
+gap bound, every such call fails at the proxy. The largest measured success carried 76,706 input
+tokens. Nothing measures the range above that.
 
 ### We cannot count our own requests to the origin
 
@@ -85,6 +88,12 @@ out the correct diagnosis.
 A health signal that stays green through a total generation stall is worse than no signal. It
 argued against the right answer.
 
+**Polling cannot fix this on its own.** The scheduled probe runs every 300 seconds
+(`slm_health_probe_interval_seconds`), and its cached verdict is fresh for 45 seconds
+(`slm_health_cache_ttl_seconds`), after which `get_cached_snapshot` returns `None`. So no verdict
+exists for 255 seconds of every cycle. A stall that our own timeout ends inside two minutes can
+begin and finish entirely between two ticks, and be seen by nobody.
+
 ---
 
 ## Decision
@@ -102,10 +111,11 @@ reading as a bound it never applies.
 
 Three inputs fix the value, and all three are read rather than assumed:
 
-1. **The proxy's configured value**, read from the terraform state that manages the zone. Neither
-   the 524 page's 120 seconds nor the documentation's 125-second default is taken as fact.
-2. **The observed maximum time to first byte**, measured across input sizes spanning to the full
-   262,144-token window.
+1. **The proxy's configured value, read from the live zone.** Neither the 524 page's 120 seconds
+   nor the documentation's 125-second default is taken as fact. The observed value and where it was
+   read are recorded with the change, because no file in this repository holds it.
+2. **The observed maximum time to first byte**, measured on the active primary deployment across
+   input sizes spanning to the full 262,144-token window.
 3. **A stated margin** between the two. The client and the proxy time different network legs from
    different start points, so the bound is verified through the deployed tunnel and not computed
    from a local clock alone.
@@ -115,23 +125,39 @@ architectural finding and this ADR must be revisited.** In that case the tunnel 
 full-context call at all, and no client-side setting repairs it. The measurement is therefore part
 of the decision, not a detail of its rollout.
 
-`default_timeout`'s own description names what it binds: a wall-clock budget that starts once the
-inference slot is held, covering stream creation and consumption, and not a gap.
+`default_timeout`'s own description names what it binds: a per-attempt wall-clock budget that
+starts once the inference slot is held, covering stream creation and consumption, and not a gap.
 
-### D2 — Two attempts, owned by us, and the contract is stated in origin requests
+### D2 — Two attempts, owned by us, for a named failure class only
 
-A failed local call is attempted exactly twice, separated by a backoff.
+**The contract is the number of requests the origin receives.** One failed call sends exactly two
+when the failure is retry-eligible. A test counts requests at the transport, at the same seam where
+FRE-1379 already asserts the background producers' `max_retries=0`.
 
-**The contract is the number of requests the origin receives.** One failed call sends exactly two.
-A test counts requests at the transport, at the same seam where FRE-1379 already asserts the
-background producers' `max_retries=0`.
+**litellm's retry budget cannot express this, so the local path stops using it.** Each attempt
+dispatches with `num_retries=0`, which the measured `2 * num_retries + 1` expansion makes exactly
+one request. The second attempt is a loop we own. This is the only construction that yields two.
 
-**litellm's retry budget cannot express this, so we stop using it for the local path.** Each
-attempt dispatches with `num_retries=0`, which the measured `2 * num_retries + 1` expansion makes
-exactly one request. The second attempt is a loop we own, in `_respond_local`, outside litellm.
-This is the only construction that yields two.
+**Where the loop sits.** The retry controller wraps the slot, not the reverse. Each attempt
+independently acquires its inference slot, registers with the D4 registry, dispatches under its own
+`asyncio.timeout(default_timeout)`, consumes, closes its stream, unregisters, and releases the slot.
+The backoff sleeps only after that unwind, holding no slot. A backoff that slept inside
+`request_slot` would occupy origin capacity while sending nothing.
 
-Reading configuration back is not evidence. The count is asserted by counting requests.
+**Only a fast failure is retried, and this is what keeps the budget honest.** Two classes qualify:
+
+- `LLMTimeout` raised by the **gap** bound — our sub-proxy read timeout, which fires in roughly two
+  minutes.
+- `LLMConnectionError` — a transport failure, bounded by `_LOCAL_NON_READ_TIMEOUT_S` at 10 seconds.
+
+Everything else goes straight to D3's card without a second attempt. A wall-clock expiry is not
+retried: the origin was answering, only too slowly, and a second full-length attempt cannot fit
+inside the turn. A 4xx, an `LLMInvalidResponse`, a rate limit and an application 5xx are not
+transport failures and a retry does not address them.
+
+That eligibility rule is what makes the arithmetic work. Two eligible attempts plus the backoff
+cost roughly four minutes, which leaves the 900-second turn deadline ample room for the card. Two
+600-second attempts would not.
 
 The backoff obeys two constraints:
 
@@ -143,7 +169,8 @@ The chosen value and the measurement behind it are recorded with the change.
 
 ### D3 — Retry exhaustion pauses the turn and asks the user
 
-When the second attempt fails, the turn does not end. It pauses and asks.
+When the second attempt fails, or when a non-eligible failure occurs, the turn does not end. It
+pauses and asks.
 
 **This reuses the ADR-0076 constraint pause. It builds no new mechanism.** That machinery already
 persists a pause across a dropped connection (FRE-928), credits the wait back to the turn budget
@@ -169,11 +196,15 @@ Six rules govern the pause:
 - **The client never asks. It raises.** `_respond_local` has no session, no user and no transport.
   The executor owns the turn, the session and the pause, so the executor owns the ask. The client's
   contract is unchanged: it raises a typed error.
-- **Only a local primary call, and only an unreachable-origin failure.** The pause binds
+- **Only a local primary call, and only an unreachable origin.** The pause binds
   `executor.py:6208`, but that call site serves cloud primaries too, and today every failure there
   falls through to the generic handler. A new branch precedes that handler. It fires only when the
-  dispatched deployment's provider is local **and** the error is `LLMTimeout`, `LLMConnectionError`
-  or `LLMServerError` — the origin-unreachable set. Every other failure keeps its current path.
+  dispatched deployment's provider is local **and** the error is `LLMTimeout` or
+  `LLMConnectionError`. **`LLMServerError` is deliberately excluded**: `_map_local_dispatch_error`
+  maps any 5xx there, so an application 500 from a healthy, reachable origin would otherwise raise
+  the card. A 5xx means the origin answered. A 524 is the one 5xx that means the opposite, and D1's
+  gap bound is what stops one from arriving — a 524 that still reaches the mapper is a D1 failure to
+  surface, not a case to fold in here.
 - **Never for a sub-agent.** `sub_agent.py:495` does not raise the card. Four failing sub-agents
   must never produce four cards. A sub-agent failure is already reported to the primary, which
   handles partial results.
@@ -187,24 +218,30 @@ Six rules govern the pause:
   partial primary content is discarded with the exception. The primary gains a sink, allocated
   **per attempt**, so text from a failed attempt is never concatenated into a later one.
 
-### D4 — The health check measures generation, and reads the live call before probing
+### D4 — Health is written by real traffic, and probed only when there is none
 
-`probe_slm_health` stops being a plain `GET`. It behaves in two modes.
+Two sources now write one verdict, and consumers read it.
 
-**No local generation in flight** — send one bounded, non-thinking completion request. A fast
-answer means `up`. A slow answer means `degraded`. No answer within the bound means `down`.
+**A failing call writes `down`.** When a local call's gap bound fires, the client has first-hand
+proof that the origin went silent. That call publishes a `down` verdict as it fails. This is what
+makes the stall observable at all: the scheduled probe runs every 300 seconds, and a stall our own
+timeout ends in two minutes fits entirely between two ticks. Observation must not depend on
+sampling a condition shorter than the sampling interval.
 
-**A local generation in flight** — send nothing. Read how long that call has gone without a byte.
-Below the threshold means `up`. Above it means `down`. With several calls in flight, the verdict
+**The scheduler probes only an idle box.** `probe_slm_health` stops being a plain `GET`. When no
+local generation is in flight it sends one bounded, non-thinking completion request: a fast answer
+means `up`, a slow answer means `degraded`, no answer within the bound means `down`. When a local
+generation **is** in flight it sends nothing and reads how long that call has gone without a byte —
+below the threshold means `up`, above it means `down`. With several calls in flight, the verdict
 follows the one silent longest.
 
-The second mode is what separates a wedged box from a busy one. A probe that always generates
-queues behind three legitimate long calls on a full box and reports `down` while the box is
-healthy. Reading the in-flight call removes that false alarm and never competes for a slot.
+That second mode is what separates a wedged box from a busy one. A probe that always generates
+queues behind three legitimate long calls and reports `down` while the box is healthy. Reading the
+in-flight call removes that false alarm and never competes for a slot.
 
-Six mechanics carry it:
+Seven mechanics carry it:
 
-- **Silence is measured from the request, not from the first byte.** `GenerationProgress` stamps
+- **Silence is measured from dispatch, not from the first byte.** `GenerationProgress` stamps
   `generation_started_monotonic` on the first chunk, so a call that has received nothing has no
   timestamp at all — and that is exactly the failure. The registry stamps at dispatch, and a call
   with no chunk yet has an age from then.
@@ -212,17 +249,23 @@ Six mechanics carry it:
   folds `delta.content` alone, by design. The stamp is a separate rule in the same loop: any chunk
   advances it, including a reasoning delta. A stamp that tracked content only reports a normal
   thinking phase as silence.
-- **A process-level registry of live local calls, keyed per attempt.** `GenerationProgress` is
-  caller-owned, so the probe cannot see it. A registry keyed by trace **and attempt** — a trace has
-  up to three attempts under D2 and D3 — holds the dispatch stamp and the last-byte stamp. A record
-  is inserted at dispatch, inside the slot, and removed in a `finally` that covers success, read
-  timeout, wall-clock timeout and cancellation. The registry is read only, never written, by the
-  probe.
-- **An availability check costs no generation.** `provider_health.is_provider_available` calls
-  `probe_slm_health` today, and it is reached from session API paths. Under a generating probe an
-  ordinary availability read becomes a model call. So the generating probe runs on the scheduler
-  only. It publishes its verdict to a cached snapshot, and `is_provider_available` reads that
-  cache.
+- **The registry key is globally unique, not an ordinal.** One trace holds many model calls — the
+  primary, each tool-loop round, each sub-agent — so `(trace_id, attempt)` collides. The key is the
+  model call's own `span_id`, already generated per call at `litellm_client.py:1568`, plus the
+  attempt ordinal within that call.
+- **Removal is structural, not enumerated.** The record is removed in a `finally` around the whole
+  attempt, so every exit is covered — success, cancellation, and any exception, including a
+  connection failure before the stream opens and an aggregation failure after it closes. The
+  existing stream-close `finally` is narrower and is not the right seam.
+- **An availability check costs no generation, and the verdict has a stated freshness policy.**
+  `provider_health.is_provider_available` calls `probe_slm_health` today, and session API paths
+  reach it. Under a generating probe an ordinary availability read becomes a model call. So
+  generation is confined to the scheduler and to the failing-call writer, and consumers read the
+  published verdict. Because the current 45-second cache TTL leaves no verdict for 255 seconds of
+  every 300-second cycle, the reader's policy is stated rather than left to a `None`: a `down`
+  verdict is honoured while it is fresh, and an absent or stale verdict reads as available. A cold
+  start must not block every local call, and a call that dispatches into a wedged origin discovers
+  it within the gap bound and writes the verdict itself.
 - **The probe never raises.** `probe_slm_health`'s documented contract is that it always returns a
   snapshot. Every new path — the registry read, the completion request, a malformed response —
   keeps it.
@@ -234,7 +277,7 @@ Six mechanics carry it:
 **This registry is not ADR-0143's registry, and the two must not be merged.** ADR-0143 D1 proposes
 a turn-level registry keyed by trace with a `started_at` stamp. Turn age cannot serve here: a
 healthy 541-second turn and a wedged one are the same age. The signal that separates them is time
-since the last byte, which lives one level down at the model call, and one trace holds several.
+since the last byte, which lives one level down at the model call, and one trace holds many.
 
 Both registries are process-local. That is sound only because Seshat runs one worker, the same
 invariant ADR-0143 D1 relies on. A move to multiple workers invalidates both.
@@ -309,20 +352,23 @@ policy the system cannot count is not a policy.
 **Why Rejected:** Rejected as the primary instrument, and kept as confirmation. A health verdict
 must not depend on a hung process describing itself accurately.
 
-### Option 5: Derive liveness only from live traffic, and never probe
+### Option 5: Shorten the probe interval until polling can catch a stall
 
-**Description:** Drop the probe. Judge health solely from the last-byte stamps of real calls.
+**Description:** Keep the probe as the only writer, and reduce
+`slm_health_probe_interval_seconds` below the gap bound so no stall fits between two ticks.
 
 **Pros:**
-- Zero added load. No slot ever consumed by monitoring.
-- Measures exactly the path that matters.
+- One writer, one code path, no new publisher.
+- Needs a settings change and nothing else.
 
 **Cons:**
-- An idle system is unobservable. No traffic means no verdict.
-- The first user after an idle period discovers the outage.
+- Every tick on an idle box costs a generation. At a sub-two-minute interval that is continuous
+  inference to observe nothing.
+- It still samples. A stall shorter than the new interval still escapes.
+- The failing call already holds the observation first-hand, so the polling is redundant work.
 
-**Why Rejected:** It covers only half the state space. D4 probes when idle and reads when busy,
-which covers both.
+**Why Rejected:** It pays continuously to rediscover something one call already knows. D4 lets real
+traffic write the verdict and keeps the probe for the idle case, where nothing else can speak.
 
 ---
 
@@ -334,7 +380,8 @@ which covers both.
 - One failed call costs two origin requests, and that number is asserted rather than configured.
 - A turn whose sub-agents succeeded returns their work, whatever the primary call does.
 - The primary call gains partial-content recovery, which only sub-agents have today.
-- The health check can observe a generation stall, which is the failure mode that actually occurs.
+- A generation stall is recorded by the call that suffers it, so detection no longer depends on
+  sampling a condition shorter than the sampling interval.
 - The 262,144-token context window gets its first time-to-first-byte measurement, and the zone's
   proxy timeout gets read rather than assumed. Both numbers are load-bearing and nobody holds them.
 
@@ -344,10 +391,11 @@ which covers both.
   costs inference.
 - The local path leaves litellm's retry handling and owns a loop instead. That is one more place
   where retry semantics live.
+- Health now has two writers. Their verdicts must not contradict each other.
 - A new constraint card is one more interaction the owner must answer, on a path that previously
   failed silently.
 - The last-byte stamp adds a write to the hot chunk loop, on every chunk of every local stream.
-- Two registries now hold per-trace state at two altitudes, both process-local. Their distinctness
+- Two registries now hold per-call state at two altitudes, both process-local. Their distinctness
   and the single-worker invariant both need maintaining.
 
 ### Risks and Mitigations
@@ -355,15 +403,18 @@ which covers both.
 | Risk | Severity | Mitigation |
 |---|---|---|
 | A full-context prefill exceeds the proxy's gap bound, so no client setting repairs the tunnel path | High | D1 makes the measurement part of the decision. The finding reopens this ADR rather than shipping a setting that cannot work |
-| The gap bound is set against an assumed proxy value and races it in production | High | D1 reads the configured value from terraform. AC-1 verifies the race through the deployed tunnel with a stated margin |
+| The gap bound is set against an assumed proxy value and races it in production | High | D1 reads the live zone value and records its source. AC-1 verifies the race through the deployed tunnel with a stated margin |
+| The backoff sleeps while holding an inference slot, occupying origin capacity for nothing | High | D2 places the loop outside `request_slot`. AC-2 asserts no slot is held across the backoff |
+| Retry eligibility is left as "a failed call", so a 4xx or a wall-clock expiry is retried | High | D2 names two eligible classes. AC-2 drives the non-eligible ones and asserts one request |
 | Silence is timed from the first byte, so a call that never produces one has no age | High | D4 stamps at dispatch. AC-6(b) fails if a chunkless call has no age |
 | The last-byte stamp counts `delta.content` only, so a thinking phase reads as a stall | High | AC-6(a) asserts a reasoning-only phase longer than the bound completes and stays `up` |
-| The human-authorized retry re-enters litellm's default budget and sends three requests | High | D3 fixes `num_retries=0` on that attempt. AC-2 counts it |
-| An availability check triggers a model call through `provider_health` | Medium | D4 confines generation to the scheduler and serves consumers a cached verdict. AC-8 fails on any completion from an availability read |
-| The registry leaks records on cancel or timeout, so a dead call reads as a live stall | Medium | Removal in a `finally` covering every exit. AC-7 drives all five exits |
+| A stall begins and ends between two 300-second ticks and is never recorded | High | D4 makes the failing call the writer. AC-9 fails if the record depends on a tick |
+| An application 500 from a healthy origin raises the retry card | High | D3 excludes `LLMServerError`. AC-3 drives that case and fails on a card |
+| The registry key collides across two model calls in one trace | Medium | Keyed on the per-call `span_id` plus attempt. AC-7 drives two calls sharing a trace and an ordinal |
+| An availability read blocks all local dispatch on a cold start, or honours a stale `down` | Medium | D4 states the policy: honour a fresh `down`, treat absent or stale as available. AC-8 drives all four states |
+| The registry leaks records on an exception the enumerated list missed | Medium | Removal is a `finally` around the whole attempt, not an enumeration. AC-7 drives exception exits |
 | A failed attempt's partial text is concatenated into a later attempt's reply | Medium | Per-attempt sink. AC-7 asserts it |
 | The probe's own query triggers thinking and times out, reporting a false `down` | Medium | AC-5(a) fails on an idle healthy box that does not read `up` |
-| The card appears for a cloud primary or once per failing sub-agent | Medium | D3 gates on local provider plus the origin-unreachable error set. AC-3 fails on either |
 | A configuration change silently restores automatic retry | Medium | AC-2 counts requests at the transport. AC-4(c) asserts no preference path bypasses the card |
 
 ---
@@ -372,69 +423,76 @@ which covers both.
 
 **Files affected:**
 
-- `src/personal_agent/llm_client/litellm_client.py` — the `read` arm (line 1517); the two-attempt
-  loop replacing `num_retries` on the local path (line 1527); the last-byte stamp in the chunk loop
-  (line 1600); registry insert and `finally` removal around the slot (line 1550).
+- `src/personal_agent/llm_client/litellm_client.py` — the `read` arm (line 1517); a two-attempt
+  controller wrapping `request_slot` (line 1550) with `num_retries=0` per attempt (line 1527); the
+  last-byte stamp in the chunk loop (line 1600); registry insert and `finally` removal around each
+  attempt; the failing-call health write.
 - `src/personal_agent/llm_client/types.py` — `GenerationProgress` gains a last-byte stamp.
 - `src/personal_agent/llm_client/` — the new in-flight local-call registry.
-- `src/personal_agent/llm_client/provider_health.py` — reads the cached verdict, never generates.
+- `src/personal_agent/llm_client/provider_health.py` — reads the published verdict under the stated
+  freshness policy, never generates.
+- `src/personal_agent/observability/slm_health/cache.py` — a second writer, and a reader that
+  distinguishes fresh, stale and absent.
 - `src/personal_agent/orchestrator/constraint_options.py` — the `model_unreachable` entry.
 - `src/personal_agent/orchestrator/executor.py` — a typed-error branch before the generic failure
   handler (line 6410), and a per-attempt `progress_sink` on the primary call (line 6208).
-- `src/personal_agent/observability/slm_health/probe.py` — the two-mode probe and the cached
-  verdict.
+- `src/personal_agent/observability/slm_health/probe.py` — the two-mode probe.
 - `config/models.yaml` — the probe's deployment entry; the measured gap bound;
   `default_timeout`'s corrected description.
 
 **Testing strategy.** The induced failures do not need a real outage. A fake origin that accepts a
 connection and never writes reproduces the silent-origin case exactly, at the transport, and is
-what AC-1's race, AC-2, AC-3 and AC-7 run against. AC-1's time-to-first-byte measurement and
+what AC-1's race, AC-2, AC-3, AC-7 and AC-9 run against. AC-1's time-to-first-byte measurement and
 AC-5(e) need the live stack, which legitimate long calls produce without wedging anything.
 
-**One obligation carries no acceptance criterion, deliberately.** D1 corrects
-`default_timeout`'s description. A description is not an outcome, and an existence-check on its
-text is exactly the kind of criterion the no-BS bar rejects. It is a review item on its
-implementation ticket, not an AC.
+**One obligation carries no acceptance criterion, deliberately.** D1 corrects `default_timeout`'s
+description. A description is not an outcome, and an existence-check on its text is exactly the kind
+of criterion the no-BS bar rejects. It is a review item on its implementation ticket, not an AC.
 
 **Dependencies.** None on ADR-0143, which remains `Proposed`. D4's registry is deliberately
 separate from ADR-0143 D1's turn registry, so neither blocks the other. Both assume one worker.
 
 **Sequencing.** D1's two measurements run first — the zone's configured value and time to first
-byte at full context. Their result decides whether D1 ships a value or reopens this ADR.
+byte at full context on `qwen3.8-flash-next`. Their result decides whether D1 ships a value or
+reopens this ADR.
 
 ---
 
 ## Verification / Acceptance Criteria
 
-- **AC-1 — On the deployed tunnel, our read timeout always fires before the proxy's, and no healthy
-  call trips it.** · **Check:** Read the zone's configured proxy read timeout from the terraform
-  state that manages it. Through the deployed tunnel, point one call at an origin that accepts and
-  never writes: assert the raised error is `LLMTimeout`, that it carries the call's trace_id, and
-  that it fires at least the stated margin before the zone's configured value. Separately record
-  time to first byte from the model-call span across input sizes spanning to 262,144 tokens. ·
+- **AC-1 — On the deployed tunnel, our read timeout always fires before the proxy's, and no call
+  inside the healthy gap envelope trips it.** · **Check:** Read the zone's configured proxy read
+  timeout from the live zone and record the value and its source. Through the deployed tunnel,
+  point one call at an origin that accepts and never writes: assert the raised error is
+  `LLMTimeout`, that it carries the call's trace_id, and that it fires at least the stated margin
+  before the zone's value. Separately record time to first byte and maximum inter-chunk gap from
+  the model-call span across input sizes spanning to 262,144 tokens on `qwen3.8-flash-next`. ·
   *Fails if* the error is not a typed `LLMTimeout`, if any 524 body reaches
-  `_map_local_dispatch_error`, if the margin is unstated or unmet against the value read from
-  terraform, or if any call the origin answers inside `default_timeout` is cut by the read arm.
+  `_map_local_dispatch_error`, if the margin is unstated or unmet against the value read from the
+  zone, or if the bound sits below the measured healthy gap envelope.
 
-- **AC-2 — One failed call sends exactly two requests, a human-authorized retry sends exactly one
-  more, and the gap between them is long enough to matter.** · **Check:** Count requests at the
-  transport against the never-writing origin, at the seam where FRE-1379 asserts the background
-  producers' `max_retries=0`. Assert the count is 2, and that the interval between them exceeds the
-  origin's recorded watchdog recovery time. Then answer `retry_once_more` and assert the count
-  rises by exactly 1. · *Fails if* any count differs, if the backoff is shorter than the recorded
-  recovery time, if two attempts plus the backoff leave no lifetime for the card, or if the
-  assertion reads a configuration value instead of counting requests.
+- **AC-2 — Exactly two requests for an eligible failure, exactly one for every other, and no slot
+  held across the backoff.** · **Check:** Count requests at the transport, at the seam where
+  FRE-1379 asserts the background producers' `max_retries=0`. Drive a gap timeout and a connection
+  failure: assert 2 requests each, that the interval between them exceeds the origin's recorded
+  watchdog recovery time, and that the inference slot is released for the whole backoff. Drive a
+  wall-clock expiry, a 4xx, an `LLMInvalidResponse`, a rate limit and an application 500: assert 1
+  request each. Then answer `retry_once_more` and assert the count rises by exactly 1. · *Fails if*
+  any count differs, if a slot is held during a backoff, if the backoff is shorter than the
+  recorded recovery time, or if the assertion reads a configuration value instead of counting
+  requests.
 
-- **AC-3 — A retry-exhausted local primary call asks the user, and the turn acts on the answer.** ·
-  **Check:** Induce origin silence on a turn whose sub-agents completed. Assert exactly one
-  `CONSTRAINT_PAUSE` for `model_unreachable`, whose context names the completed work. Answer
-  `retry_once_more` with an origin that then succeeds, and assert the turn replies with that
-  attempt's generated answer. Repeat, answer `stop_and_report`, and assert the reply carries both
-  the sub-agent output and the partial primary content held in the attempt's sink. Run the same
-  failure inside a sub-agent, and again with a cloud primary. · *Fails if* the turn ends before the
-  card, if a card appears for the sub-agent or the cloud primary, if a non-origin failure raises a
-  card, if `retry_once_more`'s outcome is discarded, or if `stop_and_report` returns a bare error
-  with the completed work dropped.
+- **AC-3 — A retry-exhausted local primary call asks the user, the turn acts on the answer, and
+  nothing else raises the card.** · **Check:** Induce origin silence on a turn whose sub-agents
+  completed. Assert exactly one `CONSTRAINT_PAUSE` for `model_unreachable`, whose context names the
+  completed work. Answer `retry_once_more` with an origin that then succeeds, and assert the turn
+  replies with that attempt's generated answer. Repeat, answer `stop_and_report`, and assert the
+  reply carries both the sub-agent output and the partial primary content held in the attempt's
+  sink. Then drive four negatives: the same failure inside a sub-agent, the same failure on a cloud
+  primary, an application 500 from a reachable local origin, and an `LLMInvalidResponse`. · *Fails
+  if* the turn ends before the card, if any of the four negatives raises a card, if
+  `retry_once_more`'s outcome is discarded, or if `stop_and_report` returns a bare error with the
+  completed work dropped.
 
 - **AC-4 — The card's fallbacks behave as declared, in all three.** · **Check:** (a) Let the card
   time out — assert `stop_and_report` applied. (b) Drop the socket and reconnect inside the
@@ -443,36 +501,48 @@ byte at full context. Their result decides whether D1 ships a value or reopens t
   timeout applies anything but the default, if a disconnect resolves the pause instead of waiting
   for reconnection or timeout, or if any preference path produces a silent retry.
 
-- **AC-5 — The probe's verdict tracks generation, in every state.** · **Check:** (a) Idle and
-  healthy → `up` within the probe's own bound. (b) Idle and slow → `degraded`. (c) Idle and
-  unanswering → `down`. (d) A local call in flight, silent past the threshold → `down` within one
-  scheduler interval, **and** the probe issued no request of its own. (e) The origin saturated by
-  legitimate long calls that are still streaming → `up` or `degraded`. · *Fails if* any state
-  returns another's verdict, if the probe generates while a call is in flight, or if (a) times out,
-  which shows the probe's query is thinking.
+- **AC-5 — The probe's verdict tracks generation, in every state, and costs the primary nothing.** ·
+  **Check:** (a) Idle and healthy → `up` within the probe's own bound. (b) Idle and slow →
+  `degraded`. (c) Idle and unanswering → `down`. (d) A local call in flight, silent past the
+  threshold → `down`, **and** the probe issued no request of its own. (e) The origin saturated by
+  legitimate long calls that are still streaming → `up` or `degraded`. (f) With a probe holding its
+  slot, dispatch a `USER_FACING` primary call and assert it acquires the primary's own slot without
+  waiting on the probe. · *Fails if* any state returns another's verdict, if the probe generates
+  while a call is in flight, if (a) times out — which shows the probe's query is thinking — or if
+  (f) blocks.
 
-- **AC-6 — Silence is measured from the request, and a thinking phase is not silence.** ·
-  **Check:** (a) Drive a primary call whose response opens with a reasoning phase longer than the
-  gap bound and emits no content deltas — assert the call completes and the probe reads `up`
-  throughout. (b) Read the registry for a call that has received no chunk at all — assert it
-  reports an age measured from dispatch. · *Fails if* the call in (a) is cut or reads `down`, which
-  shows the stamp advancing on `delta.content` only; or if (b) reports no age, or zero, before its
-  first byte.
+- **AC-6 — Silence is measured from dispatch, and a thinking phase is not silence.** · **Check:**
+  (a) Drive a primary call whose response opens with a reasoning phase longer than the gap bound
+  and emits no content deltas — assert the call completes and the verdict reads `up` throughout.
+  (b) Read the registry for a call that has received no chunk at all — assert it reports an age
+  measured from dispatch. · *Fails if* the call in (a) is cut or reads `down`, which shows the
+  stamp advancing on `delta.content` only; or if (b) reports no age, or zero, before its first
+  byte.
 
-- **AC-7 — The registry holds exactly the live attempts, and no attempt's text leaks into
-  another.** · **Check:** Drive concurrent local calls ending by each of five exits — success, read
-  timeout, wall-clock timeout, user cancel, and a human-authorized retry. Assert each attempt holds
-  its own key, that the registry is empty once all have ended, and that the reply after a
-  successful second attempt contains no text from the failed first. · *Fails if* any ended attempt
-  remains registered, if two attempts of one trace share a key, or if failed-attempt text appears
-  in a later reply.
+- **AC-7 — The registry holds exactly the live attempts, keyed uniquely, and no attempt's text
+  leaks into another.** · **Check:** Drive concurrent local calls ending by success, gap timeout,
+  wall-clock timeout, user cancel, a connection failure before the stream opens, and an aggregation
+  failure after it closes. Assert the registry is empty once all have ended. Drive two distinct
+  model calls under one trace_id, both at attempt 1, concurrently, and assert both are registered
+  and distinguishable. Assert the reply after a successful second attempt contains no text from the
+  failed first. · *Fails if* any ended attempt remains registered, if the two same-ordinal calls
+  collide or overwrite, or if failed-attempt text appears in a later reply.
 
-- **AC-8 — An availability check costs no generation, and no health path raises.** · **Check:**
-  Call `is_provider_available` for `slm_local` with the box idle, and assert no completion request
-  reaches the origin. Then force each new failure path — registry unavailable, completion request
-  rejected, malformed response — and assert `probe_slm_health` returns a snapshot every time. ·
-  *Fails if* an availability read triggers a completion, or if any path raises instead of returning
-  a `down` snapshot.
+- **AC-8 — An availability check costs no generation, follows the stated freshness policy, and
+  never raises.** · **Check:** Call `is_provider_available` for `slm_local` with the box idle and
+  assert no completion request reaches the origin. Then drive four verdict states — a fresh `down`,
+  a fresh `up`, a stale verdict past the TTL, and no verdict at all on a cold start — and assert
+  the return is `False`, `True`, `True`, `True` in that order. Then force each new failure path —
+  registry unavailable, completion request rejected, malformed response — and assert
+  `probe_slm_health` returns a snapshot every time. · *Fails if* an availability read triggers a
+  completion, if any of the four states returns the wrong answer, or if any path raises instead of
+  returning a snapshot.
+
+- **AC-9 — A stall shorter than the probe interval is still recorded.** · **Check:** With the
+  scheduler's 300-second probe disabled entirely, drive one local call into a silent origin and let
+  its gap bound fire. Assert a `down` verdict is published, attributed to that call's trace_id,
+  before any scheduled probe runs. · *Fails if* no verdict is published without a tick, which shows
+  the observation still depends on sampling a condition shorter than the sampling interval.
 
 **Where these are adjudicated.** On FRE-1398, this ADR's umbrella ticket, once the implementation
 chain has landed and deployed. Not at merge of this ADR, and not by any single implementation
@@ -494,6 +564,7 @@ ticket.
 - [FRE-1392](https://linear.app/frenchforest/issue/FRE-1392) — pause credit and the lifetime cap
   on a pause
 - ADR-0076 — the constraint pause and its action-ID registry
+- ADR-0083 — the SLM-health probe and its snapshot cache
 - ADR-0101 §8b — the `allow_preference=False` precedent for a decision that must not be remembered
 - ADR-0122 §3–§4 — `ConstraintDecision` and the computed-options widening
 - ADR-0132 D1 — Caddy holds the CF Access token; the probe constructs no credential
@@ -504,6 +575,9 @@ ticket.
   `_map_local_dispatch_error` (line 245), `_update_generation_progress` (line 316)
 - `src/personal_agent/llm_client/provider_health.py` — `is_provider_available`
 - `src/personal_agent/observability/slm_health/probe.py` — `probe_slm_health`
+- `src/personal_agent/observability/slm_health/cache.py` — `get_cached_snapshot`, 45-second TTL
+- `src/personal_agent/config/settings.py` — `slm_health_probe_interval_seconds` 300,
+  `slm_health_cache_ttl_seconds` 45
 - [Cloudflare Proxy Read Timeout](https://developers.cloudflare.com/api/resources/zones/subresources/settings/methods/get/)
   — defined as the maximum time between two read operations from origin
 - [Cloudflare Error 524](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/)

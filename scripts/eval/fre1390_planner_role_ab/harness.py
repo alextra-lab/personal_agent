@@ -98,13 +98,26 @@ def _extract_thinking(message: dict[str, Any]) -> str:
     return ""
 
 
-def _local_extra_body(disable_thinking: bool, thinking_budget_tokens: int | None) -> dict[str, Any]:
-    """Mirror ``litellm_client._local_extra_body``'s thinking-control wire shape."""
+def _local_extra_body(enable_thinking: bool | None) -> dict[str, Any]:
+    """Mirror the ``llamacpp_qwen`` branch of ``litellm_client._dialect_params``.
+
+    ADR-0145 D3a renamed the lever this reads: ``disable_thinking`` became
+    ``enable_thinking`` inside a mode. The ``thinking_budget`` branch that stood
+    beside it is gone rather than renamed — FRE-1430 F2 measured that field
+    wire-inert on this server, so mirroring it here reported a control the
+    harness never exercised.
+
+    Args:
+        enable_thinking: The resolved mode's lever. Only an explicit ``False``
+            sends the disabling block, matching the client: a mode that declares
+            ``true`` records thinking that was already on by omission.
+
+    Returns:
+        The non-standard parameter block for a llama.cpp request.
+    """
     extra_body: dict[str, Any] = {"cache_prompt": True}
-    if disable_thinking:
+    if enable_thinking is False:
         extra_body["chat_template_kwargs"] = {"enable_thinking": False}
-    elif thinking_budget_tokens is not None:
-        extra_body["thinking_budget"] = thinking_budget_tokens
     return extra_body
 
 
@@ -165,7 +178,7 @@ async def call_planner(
         "messages": messages,
         "max_tokens": 1024,
         "response_format": {"type": "json_object"},
-        **_local_extra_body(resolution.disable_thinking, resolution.thinking_budget_tokens),
+        **_local_extra_body(resolution.enable_thinking),
     }
     start = time.monotonic()
     try:

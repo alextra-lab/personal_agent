@@ -364,6 +364,170 @@ class TestExpansionFallbackVisibleInTurnRecord:
         assert fallback_steps == []
 
 
+class TestUnmeasuredClaimVisibleInTurnRecord:
+    """FRE-1417 AC-4 — a sub-agent that ran no tool cannot have measured what it
+    reports, and that flag must reach the turn's own record (``ctx.steps``, the
+    same ``OrchestratorResult["steps"]`` channel FRE-1413 established).
+    """
+
+    @staticmethod
+    def _base_gw_and_ctx() -> tuple[GatewayOutput, "ExecutionContext"]:
+        from personal_agent.orchestrator.channels import Channel
+        from personal_agent.orchestrator.types import ExecutionContext
+
+        gw = GatewayOutput(
+            intent=IntentResult(
+                task_type=TaskType.CONVERSATIONAL,
+                complexity=Complexity.SIMPLE,
+                confidence=0.9,
+                signals=[],
+            ),
+            governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
+            decomposition=DecompositionResult(
+                strategy=DecompositionStrategy.HYBRID,
+                reason="test",
+                constraints={"max_sub_agents": 2},
+            ),
+            context=AssembledContext(
+                messages=[{"role": "user", "content": "compare three ways to compute a median"}],
+                memory_context=None,
+                tool_definitions=None,
+            ),
+            session_id="s1",
+            trace_id="t1",
+        )
+        ctx = ExecutionContext(
+            session_id="s1",
+            trace_id="t1",
+            user_message="compare three ways to compute a median",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=gw,
+        )
+        return gw, ctx
+
+    @pytest.mark.asyncio
+    async def test_zero_tool_claim_is_flagged_tool_backed_claim_is_not(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One sub-agent fabricates a comparison with zero tool calls; a sibling
+        makes the same shape of claim but actually ran a tool. Only the first
+        reaches ctx.steps.
+        """
+        import personal_agent.orchestrator.executor as ex
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.sub_agent_types import SubAgentResult
+        from personal_agent.orchestrator.types import TaskState
+        from personal_agent.telemetry.trace import TraceContext
+
+        _, ctx = self._base_gw_and_ctx()
+
+        fabricating_task_id = uuid4()
+        tool_backed_task_id = uuid4()
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[
+                SubAgentResult(
+                    task_id=fabricating_task_id,
+                    spec_task="Compare the execution times of three median methods.",
+                    summary="Quickselect significantly outperforms the sorting-based algorithm.",
+                    full_output="Quickselect significantly outperforms the sorting-based algorithm.",
+                    tools_used=[],
+                    token_count=20,
+                    duration_ms=100.0,
+                    success=True,
+                ),
+                SubAgentResult(
+                    task_id=tool_backed_task_id,
+                    spec_task="Benchmark the hashing algorithms.",
+                    summary="Fastest algorithm: BLAKE2b-256, ~1.6x faster than SHA-256.",
+                    full_output="Fastest algorithm: BLAKE2b-256, ~1.6x faster than SHA-256.",
+                    tools_used=["run_python"],
+                    token_count=20,
+                    duration_ms=2000.0,
+                    success=True,
+                ),
+            ],
+            synthesis_context="SYN",
+        )
+        controller = MagicMock()
+        controller.execute = AsyncMock(return_value=exp_result)
+        monkeypatch.setattr(
+            "personal_agent.orchestrator.expansion_controller.ExpansionController",
+            lambda: controller,
+        )
+        monkeypatch.setattr(
+            "personal_agent.llm_client.factory.get_llm_client",
+            lambda role_name=None: MagicMock(),
+        )
+
+        session_manager = MagicMock()
+        session_manager.get_session = MagicMock(return_value=None)
+        trace_ctx = TraceContext(trace_id="t1", session_id="s1")
+
+        state = await ex.step_init(ctx, session_manager, trace_ctx)
+
+        assert state == TaskState.LLM_CALL
+        claim_steps = [s for s in ctx.steps if s.get("metadata", {}).get("unmeasured_claim")]
+        assert len(claim_steps) == 1
+        assert claim_steps[0]["metadata"]["task_id"] == str(fabricating_task_id)
+
+    @pytest.mark.asyncio
+    async def test_failed_partial_result_is_still_checked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A killed/errored sub-agent's partial summary still reaches synthesis
+        (expansion_controller), so a claim in it must still be checked.
+        """
+        import personal_agent.orchestrator.executor as ex
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.sub_agent_types import SubAgentResult
+        from personal_agent.orchestrator.types import TaskState
+        from personal_agent.telemetry.trace import TraceContext
+
+        _, ctx = self._base_gw_and_ctx()
+
+        killed_task_id = uuid4()
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[
+                SubAgentResult(
+                    task_id=killed_task_id,
+                    spec_task="Compare the execution times of three median methods.",
+                    summary="Quicker: NumPy's algorithm is fastest before the timeout hit.",
+                    full_output="Quicker: NumPy's algorithm is fastest before the timeout hit.",
+                    tools_used=[],
+                    token_count=15,
+                    duration_ms=85000.0,
+                    success=False,
+                    error="sub-agent timeout",
+                ),
+            ],
+            synthesis_context="SYN",
+        )
+        controller = MagicMock()
+        controller.execute = AsyncMock(return_value=exp_result)
+        monkeypatch.setattr(
+            "personal_agent.orchestrator.expansion_controller.ExpansionController",
+            lambda: controller,
+        )
+        monkeypatch.setattr(
+            "personal_agent.llm_client.factory.get_llm_client",
+            lambda role_name=None: MagicMock(),
+        )
+
+        session_manager = MagicMock()
+        session_manager.get_session = MagicMock(return_value=None)
+        trace_ctx = TraceContext(trace_id="t1", session_id="s1")
+
+        state = await ex.step_init(ctx, session_manager, trace_ctx)
+
+        assert state == TaskState.LLM_CALL
+        claim_steps = [s for s in ctx.steps if s.get("metadata", {}).get("unmeasured_claim")]
+        assert len(claim_steps) == 1
+        assert claim_steps[0]["metadata"]["task_id"] == str(killed_task_id)
+
+
 class TestEnforcedExpansionClientRole:
     """FRE-958 / FRE-1390 regression guard.
 

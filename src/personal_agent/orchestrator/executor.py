@@ -87,6 +87,7 @@ from personal_agent.orchestrator.types import (
     OrchestratorStep,
     TaskState,
 )
+from personal_agent.orchestrator.unmeasured_claim import detect_unmeasured_claim
 from personal_agent.telemetry import (
     LLM_STEP_COMPLETED,
     MODEL_CALL_ERROR,
@@ -5050,6 +5051,29 @@ async def step_init(
                         "metadata": {"planner_fallback": True},
                     }
                 )
+
+            # FRE-1417 AC-4: a sub-agent that executed no tools cannot have
+            # measured anything it reports — checked against every returned
+            # result (including a failed/partial one; its summary still
+            # reaches synthesis) so the claim is visible in
+            # OrchestratorResult["steps"], not only a log line.
+            for sub_result in expansion_result.sub_agent_results:
+                if detect_unmeasured_claim(sub_result.tools_used, sub_result.full_output):
+                    ctx.steps.append(
+                        {
+                            "type": "warning",
+                            "description": (
+                                f"Sub-agent task {sub_result.spec_task!r} made a "
+                                "performance claim but its own capture record shows "
+                                "zero tool executions — it could not have measured "
+                                "what it reported."
+                            ),
+                            "metadata": {
+                                "unmeasured_claim": True,
+                                "task_id": str(sub_result.task_id),
+                            },
+                        }
+                    )
 
             # Build synthesis context and append to messages. FRE-1397: also
             # fires when every task was skipped for turn-budget exhaustion

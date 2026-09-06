@@ -682,6 +682,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         check_vision_capabilities()
 
+        # Served-catalog drift guard (ADR-0145 D5): compare each local deployment's
+        # declared context_length/quantization against what its provider currently
+        # serves and warn-log a mismatch. Fire-and-forget, not awaited: the probe hits
+        # the owner's Mac over the SLM tunnel, which is not always on, and startup must
+        # never wait on (or fail over) a laptop being asleep.
+        from personal_agent.llm_client.provider_health import log_served_catalog_drift
+
+        asyncio.create_task(log_served_catalog_drift(), context=contextvars.Context())
+
         # Pre-flight: verify PostgreSQL is reachable before attempting any DB operations
         pg_host, pg_port = _parse_db_host_port(settings.database_url)
         await _preflight_check_tcp("PostgreSQL", pg_host, pg_port)

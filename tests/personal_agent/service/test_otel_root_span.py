@@ -223,6 +223,11 @@ async def test_startup_root_span_ac1_ac2(monkeypatch: pytest.MonkeyPatch) -> Non
         "personal_agent.observability.route_trace.get_route_trace_ledger",
         lambda: type("_FakeLedger", (), {"connect": _raise_startup_marker})(),
     )
+    # Fire-and-forget (FRE-1447, ADR-0145 D5) -- stub it here so this unrelated test
+    # never attempts a real network call against the placeholder SLM host baked into
+    # config/models.yaml. See test_lifespan_survives_unreachable_slm_host below for
+    # the dedicated AC-4 coverage of that guard's own non-blocking behavior.
+    monkeypatch.setattr("personal_agent.llm_client.provider_health.log_served_catalog_drift", _noop)
 
     from personal_agent.service.app import app, lifespan
 
@@ -254,3 +259,42 @@ async def test_startup_root_span_ac1_ac2(monkeypatch: pytest.MonkeyPatch) -> Non
         assert record.get("trace_id") == expected_trace_id
         assert record.get("span_id") == expected_span_id
         assert record.get("kind") == "system:startup"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_survives_unreachable_slm_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-4 (FRE-1447, ADR-0145 D5): an unreachable SLM host must never block startup.
+
+    Deliberately does NOT stub ``log_served_catalog_drift`` (unlike
+    ``test_startup_root_span_ac1_ac2`` above, which stubs it purely to keep an
+    unrelated test network-free): this test instead makes ``httpx`` itself raise on
+    every ``GET``, mirroring an unreachable owner's-Mac SLM host, and proves
+    ``lifespan()`` still reaches the same deterministic marker used above. The guard
+    is scheduled via ``asyncio.create_task`` and never awaited by ``lifespan()``, so
+    a hung or failing probe cannot add to (let alone block) startup.
+    """
+    import httpx
+
+    async def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def _raise_unreachable(*_args: object, **_kwargs: object) -> httpx.Response:
+        raise httpx.ConnectError("slm host unreachable")
+
+    monkeypatch.setattr(
+        "personal_agent.telemetry.otel_bootstrap.configure_tracing",
+        lambda **_kwargs: TracerProvider(),
+    )
+    monkeypatch.setattr("personal_agent.service.app._preflight_check_tcp", _noop)
+    monkeypatch.setattr("personal_agent.service.app.init_db", _noop)
+    monkeypatch.setattr(
+        "personal_agent.observability.route_trace.get_route_trace_ledger",
+        lambda: type("_FakeLedger", (), {"connect": _raise_startup_marker})(),
+    )
+    monkeypatch.setattr(httpx.AsyncClient, "get", _raise_unreachable)
+
+    from personal_agent.service.app import app, lifespan
+
+    with pytest.raises(_StartupMarker):
+        async with lifespan(app):
+            pass

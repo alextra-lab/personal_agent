@@ -21,10 +21,12 @@ can be down independent of any secret.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
 
+from personal_agent.config.config_guard import Finding
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import ModelConfig, Placement, ProviderDefinition
 from personal_agent.observability.slm_health import probe_slm_health
@@ -92,14 +94,30 @@ async def check_all_providers(
     return dict(zip(keys, results, strict=True))
 
 
-async def fetch_served_model_ids(base_url: str, *, trace_id: str | None = None) -> frozenset[str]:
-    """Return the model ids a local provider's ``/v1/models`` endpoint reports as served.
+@dataclass(frozen=True)
+class ServedModel:
+    """One model record from a local provider's ``/v1/models`` response (ADR-0145 D5).
 
-    This is the per-*model* liveness check :func:`check_all_providers`'s own
-    docstring says it is not (FRE-1415): a local provider's declared catalog
-    can be a strict superset of what the host currently serves — since
-    2026-09-03 the Mac SLM host holds exactly one model at a time, while the
-    catalog still declares several deployments under ``slm_local``.
+    ``context_length``/``quantization`` are ``None`` when the backend's response omits
+    them, or reports them under a type other than the expected one — llama.cpp reports
+    both today (:func:`check_served_catalog_drift`), but a future OpenAI-compatible
+    backend that does not is a silent absence, not a mismatch on a field it never
+    claimed.
+    """
+
+    id: str
+    context_length: int | None
+    quantization: str | None
+
+
+async def fetch_served_models(
+    base_url: str, *, trace_id: str | None = None
+) -> dict[str, ServedModel]:
+    """Return every model record a local provider's ``/v1/models`` endpoint reports as served.
+
+    The single parsing path for that endpoint — :func:`fetch_served_model_ids` derives
+    its id-only set from this function's result, rather than re-parsing the response
+    itself.
 
     Args:
         base_url: The provider's own resolved base URL (its
@@ -112,7 +130,7 @@ async def fetch_served_model_ids(base_url: str, *, trace_id: str | None = None) 
         trace_id: Optional trace id for log correlation.
 
     Returns:
-        The served model ids. Empty on ANY failure — a timeout, a non-2xx
+        ``model id -> ServedModel``. Empty on ANY failure — a timeout, a non-2xx
         status, or a response that does not match the expected
         ``{"data": [{"id": ...}, ...]}`` shape (missing/non-list ``data``, a
         non-object entry, or an entry with no non-empty string ``id``) — this
@@ -135,14 +153,18 @@ async def fetch_served_model_ids(base_url: str, *, trace_id: str | None = None) 
         data = body.get("data")
         if not isinstance(data, list):
             raise ValueError("'data' is missing or not a list")
-        ids: set[str] = set()
+        models: dict[str, ServedModel] = {}
         for entry in data:
             if not isinstance(entry, dict):
                 raise ValueError("a 'data' entry is not an object")
             entry_id = entry.get("id")
             if not isinstance(entry_id, str) or not entry_id:
                 raise ValueError("a 'data' entry has no non-empty string 'id'")
-            ids.add(entry_id)
+            models[entry_id] = ServedModel(
+                id=entry_id,
+                context_length=_as_int(entry.get("context_length")),
+                quantization=_as_str(entry.get("quantization")),
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "slm_served_models_probe_failed",
@@ -151,8 +173,43 @@ async def fetch_served_model_ids(base_url: str, *, trace_id: str | None = None) 
             error=str(exc),
             error_type=type(exc).__name__,
         )
-        return frozenset()
-    return frozenset(ids)
+        return {}
+    return models
+
+
+def _as_int(value: object) -> int | None:
+    """Coerce a JSON field to ``int``, or ``None`` if absent/wrong-typed.
+
+    ``bool`` is a subtype of ``int`` in Python, so it is excluded explicitly —
+    a stray ``"context_length": true`` must not parse as ``1``.
+    """
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _as_str(value: object) -> str | None:
+    """Coerce a JSON field to ``str``, or ``None`` if absent/wrong-typed."""
+    return value if isinstance(value, str) else None
+
+
+async def fetch_served_model_ids(base_url: str, *, trace_id: str | None = None) -> frozenset[str]:
+    """Return the model ids a local provider's ``/v1/models`` endpoint reports as served.
+
+    This is the per-*model* liveness check :func:`check_all_providers`'s own
+    docstring says it is not (FRE-1415): a local provider's declared catalog
+    can be a strict superset of what the host currently serves — since
+    2026-09-03 the Mac SLM host holds exactly one model at a time, while the
+    catalog still declares several deployments under ``slm_local``.
+
+    Args:
+        base_url: See :func:`fetch_served_models`.
+        trace_id: Optional trace id for log correlation.
+
+    Returns:
+        The served model ids — the key set of :func:`fetch_served_models`'s result.
+        Empty on ANY failure, this function never raises (AC-5); see
+        :func:`fetch_served_models` for the full failure/shape contract.
+    """
+    return frozenset((await fetch_served_models(base_url, trace_id=trace_id)).keys())
 
 
 async def check_local_served_ids(
@@ -190,3 +247,146 @@ async def check_local_served_ids(
 async def _empty_served_ids() -> frozenset[str]:
     """Return an empty served-id set — the no-``base_url`` fail-closed branch."""
     return frozenset()
+
+
+async def check_local_served_models(
+    config: ModelConfig, *, trace_id: str | None = None
+) -> dict[str, dict[str, ServedModel]]:
+    """Return ``local provider key -> {model id -> ServedModel}`` for every LOCAL provider.
+
+    The richer sibling of :func:`check_local_served_ids` — same fan-out-across-LOCAL-
+    providers shape, but keeping ``context_length``/``quantization`` instead of
+    discarding them, for :func:`check_served_catalog_drift` (ADR-0145 D5).
+
+    Args:
+        config: The loaded catalog.
+        trace_id: Optional trace id threaded into each provider's probe.
+
+    Returns:
+        A mapping covering every local provider key. A local provider with no
+        configured ``base_url`` maps to ``{}`` without probing — there is nowhere
+        to ask, so it fails closed the same as a probe failure.
+    """
+    local_keys = [
+        key for key, provider in config.providers.items() if provider.placement is Placement.LOCAL
+    ]
+    base_urls = [config.providers[key].base_url for key in local_keys]
+    results = await asyncio.gather(
+        *(
+            fetch_served_models(base_url, trace_id=trace_id) if base_url else _empty_served_models()
+            for base_url in base_urls
+        )
+    )
+    return dict(zip(local_keys, results, strict=True))
+
+
+async def _empty_served_models() -> dict[str, ServedModel]:
+    """Return an empty served-model map — the no-``base_url`` fail-closed branch."""
+    return {}
+
+
+async def check_served_catalog_drift(
+    config: ModelConfig, *, trace_id: str | None = None
+) -> list[Finding]:
+    """ADR-0145 D5 — compare each LOCAL deployment's declared facts against what is served.
+
+    Widens :func:`check_local_served_ids`'s id-only membership check to
+    ``context_length`` and ``quantization``, both of which have already drifted in
+    the live catalog (``config/models.yaml``'s ``qwen3.8-flash-next-instruct`` declares
+    ``quantization: "4bit"`` against a served ``"UD-IQ4_XS"``). A mismatch is reported,
+    never enforced — the SLM host is the owner's Mac and is not always on, so nothing
+    here may fail a boot (AC-4); that is why every finding is ``policy``, not
+    ``safety``, severity.
+
+    A deployment is skipped, producing no finding, when:
+
+    * it is not bound to a LOCAL provider (:meth:`ModelConfig.placement_of`) — no
+      served list exists for a cloud deployment.
+    * its id is absent from the served set for its provider — either the host is
+      unreachable right now (AC-5: :func:`fetch_served_models` fails closed to
+      ``{}`` on any probe failure, indistinguishable here from a genuine "not
+      currently loaded") or the id really is not served, which
+      :func:`~personal_agent.config.model_loader.role_candidates` already fails
+      closed on (FRE-1415) — a different, already-handled failure mode.
+    * the served record leaves a dimension ``None`` (the backend's response did
+      not carry it) — nothing to compare it against.
+
+    Args:
+        config: The loaded catalog.
+        trace_id: Optional trace id threaded into each provider's probe.
+
+    Returns:
+        One ``Finding`` per drifted dimension (AC-1, AC-2); ``[]`` when every
+        currently-served LOCAL deployment matches its declared facts (AC-3).
+    """
+    served_by_provider = await check_local_served_models(config, trace_id=trace_id)
+    findings: list[Finding] = []
+    for model_key, model_def in config.models.items():
+        if config.placement_of(model_key) is not Placement.LOCAL:
+            continue
+        served = served_by_provider.get(model_def.provider or "", {}).get(model_def.id)
+        if served is None:
+            continue
+        if served.context_length is not None and served.context_length != model_def.context_length:
+            findings.append(
+                Finding(
+                    check="served_context_length_drift",
+                    severity="policy",
+                    message=(
+                        f"deployment '{model_key}' (id {model_def.id!r}) declares "
+                        f"context_length={model_def.context_length}, served value is "
+                        f"{served.context_length}"
+                    ),
+                )
+            )
+        if served.quantization is not None and served.quantization != model_def.quantization:
+            findings.append(
+                Finding(
+                    check="served_quantization_drift",
+                    severity="policy",
+                    message=(
+                        f"deployment '{model_key}' (id {model_def.id!r}) declares "
+                        f"quantization={model_def.quantization!r}, served value is "
+                        f"{served.quantization!r}"
+                    ),
+                )
+            )
+    return findings
+
+
+async def log_served_catalog_drift(*, trace_id: str | None = None) -> None:
+    """Startup drift guard (ADR-0145 D5): warn-log catalog/served-model drift; never raises.
+
+    Loads the catalog itself and delegates to :func:`check_served_catalog_drift`.
+    Non-fatal by design, mirroring
+    :func:`~personal_agent.config.model_loader.check_vision_capabilities`: a config
+    gap, or a live probe finding one, must never down the gateway. Any failure to
+    load the catalog is swallowed and logged here; a probe failure is already
+    swallowed one layer down, inside :func:`fetch_served_models` (AC-5), and simply
+    yields no findings for the deployments it covers.
+
+    Args:
+        trace_id: Optional trace correlation id. Startup has no request context,
+            so this is normally None.
+    """
+    from personal_agent.config.model_loader import (
+        load_model_config,  # noqa: PLC0415 — avoid import cycle
+    )
+
+    try:
+        config = load_model_config()
+        findings = await check_served_catalog_drift(config, trace_id=trace_id)
+    except Exception as exc:  # noqa: BLE001 — startup diagnostic must never down the service
+        log.warning(
+            "served_catalog_drift_check_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            trace_id=trace_id,
+        )
+        return
+    if findings:
+        log.warning(
+            "served_catalog_drift",
+            findings=[str(finding) for finding in findings],
+            trace_id=trace_id,
+        )

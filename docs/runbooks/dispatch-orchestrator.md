@@ -373,6 +373,42 @@ This read is reliable *during and shortly after* processing a trigger, not as a 
 `--ledger-retention-days`, so don't rely on `--all` to answer this question more than a few ticks after
 the PR closed.
 
+### Dispatch notify ledger (FRE-1405) — the orchestrator's own stall/wedge/blocked alarms
+
+`scripts/dispatch/orchestrator.py`'s `Notifier` used to be a pure `structlog.warning` — a log line
+duplicating what every call site already logged, reaching no one. It is now
+`_trigger_ledger_notifier`, which surfaces the same 7 events (`dispatch_blocked`,
+`dispatch_stall`, `dispatch_delivery_exhausted`, `dispatch_seat_wedged`,
+`dispatch_seat_delivery_failing`, `dispatch_held_too_long`, and the new `dispatch_head_stalled`)
+as entries in **`telemetry/dispatch_notify_ledger.json`**, reusing `trigger_ledger.py`'s data
+model and CLI but through a **separate file** from `trigger_ledger.json` above — a second
+continuous writer to that file would race `gating_watcher.py` (no locking exists anywhere in
+`scripts/dispatch/`); single-writer-per-file keeps both race-free.
+
+Read it exactly like the trigger ledger: `python -m scripts.dispatch.trigger_ledger --ledger-file
+telemetry/dispatch_notify_ledger.json --unconsumed --json` (this is what `prime-master` runs at
+step 5b). Two differences from the trigger ledger above:
+
+- **Every entry is `surfaced`, never `pending`/`queued`/`sent`** — there is no command to send,
+  only a condition to report. `command` is always empty.
+- **Entries are consumed automatically, by the orchestrator, the tick the underlying condition
+  ends** — not by the owner. A `dispatch_stall` entry closes when the decision engine stops
+  saying `"stall"` for that stream (confirmed run, terminal clear, or the ticket's own grace
+  period); a `dispatch_seat_wedged`/`dispatch_head_stalled` entry closes when its counter resets;
+  `dispatch_blocked`/`dispatch_seat_delivery_failing`/`dispatch_held_too_long` close on the next
+  qualifying tick. So anything still listed under `--unconsumed` is a condition that is **true
+  right now**, not history — there is nothing to acknowledge or manually clear.
+- **The event id is stable** (`dispatch-notify:{event}:{stream}`), not a fresh id per call: a
+  persisting condition updates one entry in place rather than accumulating one per tick, so the
+  entry count never grows with how long a condition lasts.
+
+The new `dispatch_head_stalled` event covers a stream whose head ticket sits `In Progress`/`In
+Review` with **no** orchestrator record tracking it (`decide()`'s `"occupied-no-record"` reason,
+distinct from a healthy empty-backlog `"no-candidate"` skip) — the FRE-1288 incident shape, where
+a merged PR's ticket never advanced past `In Progress` and froze the whole stream for ~10 hours
+with nothing surfaced. `--head-stall-ticks`/`--head-stall-renotify-ticks` on `orchestrator.py`
+mirror the wedge flags' semantics exactly.
+
 **Reconciliation runs every tick**, immediately after the kill-switch check and before any new
 board decision — so "restart" and "the tick after a crash" are the same code path. Duplicate or
 replayed events dedupe against the ledger itself (folding in the trigger's own TTL window), so a

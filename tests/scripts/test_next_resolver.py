@@ -27,6 +27,7 @@ from scripts.dispatch.next_resolver import (
     eligible_candidates,
     fetch_board,
     fetch_issue_state,
+    is_occupied,
     main,
     resolve_next,
     stream_label,
@@ -150,6 +151,33 @@ def test_stale_terminal_blocker_is_not_skipped(terminal_state: str) -> None:
     result = resolve_next([issue], "build2")
     assert result is not None
     assert result.identifier == "FRE-7"
+
+
+# --- is_occupied (FRE-1405): the public split-out used to distinguish a
+# genuinely occupied head from a healthy empty backlog -----------------------
+
+
+def test_is_occupied_true_when_head_in_progress() -> None:
+    occupying = _issue(
+        "FRE-5",
+        "In Progress",
+        priority=2,
+        created_at="2026-01-01T00:00:00Z",
+        labels=frozenset({"stream:build2"}),
+    )
+    assert is_occupied([occupying], "build2") is True
+
+
+def test_is_occupied_false_when_no_matching_issue() -> None:
+    other_stream = _issue(
+        "FRE-5",
+        "In Progress",
+        priority=2,
+        created_at="2026-01-01T00:00:00Z",
+        labels=frozenset({"stream:build1"}),
+    )
+    assert is_occupied([other_stream], "build2") is False
+    assert is_occupied([], "build2") is False
 
 
 # --- Priority ordering ------------------------------------------------------
@@ -667,8 +695,8 @@ def test_stream_label_rejects_an_unknown_stream_for_non_cli_callers() -> None:
     ``orchestrator.py`` imports ``resolve_next``/``fetch_board`` directly and
     never crosses ``next_resolver.main()``. Every one of those paths labels
     through ``stream_label``, so the guard belongs there — otherwise the daemon
-    queries a nonexistent label and reports ``occupied-or-no-candidate``
-    forever, which is the silent-idle failure this whole change exists to stop.
+    queries a nonexistent label and reports ``no-candidate`` forever, which is
+    the silent-idle failure this whole change exists to stop.
     """
     with pytest.raises(ValueError, match="unknown dispatch stream"):
         stream_label("adrs")

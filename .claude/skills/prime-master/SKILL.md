@@ -19,6 +19,12 @@ unasked* (8) → *how I drive it* (9).
 5. **Trigger ledger** — `python -m scripts.dispatch.trigger_ledger --unconsumed --json`. Any
    entry is in-flight actuation that survived the clear: `pending` resolves on its own;
    `surfaced` demands owner attention. Nonzero exit is itself an anomaly — surface it.
+5b. **Dispatch notify ledger** (FRE-1405) — `python -m scripts.dispatch.trigger_ledger
+   --ledger-file telemetry/dispatch_notify_ledger.json --unconsumed --json`. A separate,
+   orchestrator-owned file (never `trigger_ledger.json` — a second continuous writer to that
+   file would race `gating_watcher.py`) carrying the dispatch daemon's own stall/wedge/blocked
+   conditions — every entry is `surfaced` and consumed automatically once its condition
+   resolves, so anything still listed is currently true, not historical.
 6. **Linear** — list `In Progress` · `In Review` · `Awaiting Deploy` · `Verify Failed` on
    FrenchForest.
 7. **Health** — `curl -s http://localhost:9001/health` + the deployed SHA. **Actuation health

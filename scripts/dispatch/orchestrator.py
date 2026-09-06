@@ -53,6 +53,7 @@ from urllib.parse import urlparse
 
 import structlog
 
+from scripts.dispatch import trigger_ledger
 from scripts.dispatch.launcher import (
     CommandRunner,
     execute_plan,
@@ -68,6 +69,7 @@ from scripts.dispatch.next_resolver import (
     IssueSnapshot,
     fetch_board,
     fetch_issue_state,
+    is_occupied,
     resolve_next,
 )
 from scripts.reconcile_board import load_linear_key
@@ -151,6 +153,23 @@ DEFAULT_WEDGE_TICKS: int = 2
 # frequent enough that a multi-hour wedge is unmissable, sparse enough that the
 # alert stays actionable rather than spammy.
 DEFAULT_WEDGE_RENOTIFY_TICKS: int = 12
+
+# Consecutive ``occupied-no-record`` ticks tolerated before surfacing a
+# head-stall (FRE-1405) — a stream's head ticket sits In Progress/In Review
+# with no orchestrator record tracking it, the shape that hid FRE-1288's
+# ten-hour stream freeze (a merged PR's ticket never advanced past In
+# Progress, so the busy guard held the stream occupied with nothing running).
+# Mirrors ``DEFAULT_WEDGE_TICKS``'s crossing-then-schedule shape exactly, for
+# the same reason: an equality-based crossing check is unsafe to persist
+# across a restart, and this condition can persist for hours.
+DEFAULT_HEAD_STALL_TICKS: int = 3
+
+# Re-notification cadence past the crossing tick (FRE-1405), mirroring
+# ``DEFAULT_WEDGE_RENOTIFY_TICKS`` for the same reason: this condition does
+# not self-clear on its own (only the owner advancing the stuck ticket, or the
+# backlog draining, ends it), so a single ping would go silent for the rest of
+# a multi-hour incident.
+DEFAULT_HEAD_STALL_RENOTIFY_TICKS: int = 12
 
 # Held-too-long escalation threshold (FRE-924). A ``surfaced`` manual card
 # (KEEP / manual-model-required / delivery-failed / seat-unhealthy) that stays
@@ -448,6 +467,25 @@ class WedgeState:
 
 
 @dataclasses.dataclass(frozen=True)
+class HeadStallState:
+    """Persisted per-stream consecutive-occupied-with-no-record tracking (FRE-1405).
+
+    A stream can be ``skip``/``occupied-no-record`` for many ticks without any
+    ``DispatchRecord`` ever anchoring it (the record was never written, or was
+    already cleared) — mirrors ``WedgeState``'s reason for existing as a
+    sibling persisted structure rather than a record field.
+
+    Attributes:
+        count: Consecutive ``occupied-no-record`` ticks observed this episode.
+        last_notified_count: The ``count`` value at which master was last
+            pinged this episode (0 = never notified this episode).
+    """
+
+    count: int
+    last_notified_count: int = 0
+
+
+@dataclasses.dataclass(frozen=True)
 class StreamDecision:
     """A pure, side-effect-free decision for one stream in one tick.
 
@@ -542,10 +580,22 @@ def decide(
 
 
 def _decide_no_record(stream: str, issues: Sequence[IssueSnapshot]) -> StreamDecision:
-    """Resolve NEXT for an untracked stream."""
+    """Resolve NEXT for an untracked stream.
+
+    ``skip`` carries one of two distinct reasons (FRE-1405): ``occupied-no-record``
+    — the stream's head ticket is In Progress/In Review with no orchestrator
+    record tracking it, the anomalous shape that hid FRE-1288's ten-hour
+    stream freeze — versus ``no-candidate``, a healthy empty backlog that can
+    persist indefinitely with zero alarm value. Only the former drives the
+    head-stall notifier (see ``_note_head_stall``); conflating the two into
+    one reason (the pre-FRE-1405 ``occupied-or-no-candidate``) would make that
+    counter fire on every idle stream.
+    """
+    if is_occupied(issues, stream):
+        return StreamDecision(stream, "skip", reason="occupied-no-record")
     nxt = resolve_next(issues, stream)
     if nxt is None:
-        return StreamDecision(stream, "skip", reason="occupied-or-no-candidate")
+        return StreamDecision(stream, "skip", reason="no-candidate")
     model = model_for_labels(nxt.labels)
     if model is None:
         return StreamDecision(stream, "skip", ticket=nxt.identifier, reason="no-tier-label")
@@ -820,6 +870,11 @@ def run_once(
     held_escalation_s: float = DEFAULT_HELD_ESCALATION_S,
     delivery_failures: dict[str, int] | None = None,
     seat_failure_threshold: int = DEFAULT_SEAT_FAILURE_THRESHOLD,
+    notify_ledger_path: Path | None = None,
+    head_stall_state: dict[str, HeadStallState] | None = None,
+    head_stall_ticks: int = DEFAULT_HEAD_STALL_TICKS,
+    head_stall_renotify_ticks: int = DEFAULT_HEAD_STALL_RENOTIFY_TICKS,
+    persist_head_stall: Callable[[dict[str, HeadStallState]], None] = lambda _state: None,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, DispatchRecord]:
     """Run one orchestration tick across ``streams``, mutating and returning state.
@@ -874,6 +929,20 @@ def run_once(
             so unlike the two ticket-keyed clocks it survives board churn.
         seat_failure_threshold: Consecutive dropped deliveries at which the seat
             itself is surfaced as unhealthy.
+        notify_ledger_path: Path to the orchestrator's own notify ledger
+            (FRE-1405) — where ``notifier`` writes and where the
+            consume-on-resolve helpers read/write. ``None`` (the default)
+            makes every resolve call a no-op, for callers that don't exercise
+            the notify-ledger path.
+        head_stall_state: Per-stream consecutive-occupied-with-no-record
+            tracking (FRE-1405), mutated in place across ticks; defaults to a
+            throwaway map when unused. Persisted via ``persist_head_stall``.
+        head_stall_ticks: Consecutive ``occupied-no-record`` ticks tolerated
+            before surfacing a head-stall.
+        head_stall_renotify_ticks: Ticks between re-notifications while a
+            head-stall persists past the crossing tick.
+        persist_head_stall: Persists ``head_stall_state`` after a mutation.
+            Defaults to a no-op, mirroring ``persist_wedge``.
         sleeper: The sleep seam used by the launcher's bounded delivery polls.
             Injected so a tick is fully unit-testable without wall-clocking —
             the delivery path polls for up to ten seconds per command.
@@ -889,6 +958,8 @@ def run_once(
         held_escalated = {}
     if delivery_failures is None:
         delivery_failures = {}
+    if head_stall_state is None:
+        head_stall_state = {}
     # De-dup while preserving order: a repeated ``--streams`` value must not
     # double-process a stream — and, since FRE-922, must not double-increment its
     # wedge counter and trip the threshold a tick early.
@@ -954,6 +1025,11 @@ def run_once(
             held_escalation_s=held_escalation_s,
             delivery_failures=delivery_failures,
             seat_failure_threshold=seat_failure_threshold,
+            notify_ledger_path=notify_ledger_path,
+            head_stall_state=head_stall_state,
+            head_stall_ticks=head_stall_ticks,
+            head_stall_renotify_ticks=head_stall_renotify_ticks,
+            persist_head_stall=persist_head_stall,
             sleeper=sleeper,
         )
     return state
@@ -980,6 +1056,11 @@ def _apply(
     held_escalation_s: float,
     delivery_failures: dict[str, int],
     seat_failure_threshold: int,
+    notify_ledger_path: Path | None,
+    head_stall_state: dict[str, HeadStallState],
+    head_stall_ticks: int,
+    head_stall_renotify_ticks: int,
+    persist_head_stall: Callable[[dict[str, HeadStallState]], None],
     sleeper: Callable[[float], None] = time.sleep,
 ) -> None:
     """Apply one decision's side effects (launch / notify / record mutation)."""
@@ -991,7 +1072,7 @@ def _apply(
     # per-episode count honest (a genuinely-busy or freed stream never carries a
     # stale count into a later episode).
     if decision.kind != "launch":
-        _reset_wedge(stream, wedge_state, persist_wedge)
+        _reset_wedge(stream, wedge_state, persist_wedge, notify_ledger_path, logger)
     # The held-too-long escalation is a per-episode one-shot latch (FRE-924). Any
     # decision other than ``hold`` ends the episode — the card was acted on
     # (``clear``) or the stream moved on — so drop the latch; a later surfaced
@@ -1000,6 +1081,40 @@ def _apply(
     # every other non-hold decision.
     if decision.kind != "hold":
         held_escalated.pop(stream, None)
+        # FRE-1405: resolve any surfaced ``dispatch_held_too_long`` notify-ledger
+        # entry the same tick the in-memory latch above is dropped. Unconditional
+        # (not gated on the pop's return value) — ``held_escalated`` is in-memory
+        # only and resets empty on every daemon restart, so a value-gated
+        # resolve would never fire for a genuine post-restart recovery.
+        if execute:
+            _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_held_too_long", stream)
+    # FRE-1405: ``dispatch_blocked`` is not scoped to any one ticket-keyed
+    # record, so it resolves whenever this stream is not even attempting a
+    # launch this tick (it cannot have been blocked this tick) — this is what
+    # lets it resolve even if the stream falls to a DIFFERENT decision kind
+    # the very tick the block clears, rather than only inside the "launch,
+    # not blocked" branch below. Execute-gated: a dry-run tick must not
+    # consume a real notification.
+    if execute and decision.kind != "launch":
+        _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_blocked", stream)
+    # FRE-1405: ``dispatch_stall`` resolves whenever the decision engine no
+    # longer says "stall" for this stream — this single guard subsumes both
+    # ``run_complete`` (the confirmed-run transition that actually ends the
+    # stall risk) and ``clear``, and additionally covers the pre-pickup-stall
+    # -> in-progress-grace ``"await"`` transition, which is neither. Ungated,
+    # matching the pre-existing ``"stall"`` case's own ungated-in-dry-run
+    # notify (an existing, out-of-scope inconsistency this ticket does not
+    # touch).
+    if decision.kind != "stall":
+        _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_stall", stream)
+    # FRE-1405: the head-stall counter tracks ONLY the anomalous
+    # ``skip``/``occupied-no-record`` condition — a healthy ``no-candidate``
+    # or ``no-tier-label`` skip must still reset/resolve it (the corrected
+    # predicate from codex round-2 review: `kind != "skip"` alone would miss
+    # a "no-candidate" skip following an "occupied-no-record" streak).
+    head_stalled = decision.kind == "skip" and decision.reason == "occupied-no-record"
+    if not head_stalled:
+        _reset_head_stall(stream, head_stall_state, persist_head_stall, notify_ledger_path, logger)
     match decision.kind:
         case "launch":
             assert decision.ticket is not None and decision.model is not None
@@ -1023,8 +1138,14 @@ def _apply(
                     # A blocked tick observes no wedge (it never probes the seat),
                     # so it must not leave a stale count — the confirmed-wedge
                     # increment is the ONLY path that skips the reset.
-                    _reset_wedge(stream, wedge_state, persist_wedge)
+                    _reset_wedge(stream, wedge_state, persist_wedge, notify_ledger_path, logger)
                     return  # no launch, no record — the stream stays eligible.
+                # FRE-1405: belt-and-suspenders with the top-of-_apply guard —
+                # this stream IS attempting a launch this tick and is NOT
+                # blocked, so any previously-surfaced ``dispatch_blocked``
+                # entry for it is resolved here too (harmless double-resolve;
+                # ``mark_consumed_if_present`` no-ops on the second call).
+                _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_blocked", stream)
             warm = find_warm_session(stream, runner) if decision.context_keep else None
             # FRE-913: probe the seat so a LIVE one is dispatched into in-session
             # rather than recreated. Only ``execute`` probes — a dry run must not
@@ -1079,6 +1200,21 @@ def _apply(
             new_record = _record_for_result(
                 stream, decision.ticket, result.outcome, now, attempts=attempts
             )
+            # FRE-1405: resolve any surfaced ``dispatch_seat_delivery_failing``
+            # entry BEFORE the final ``persist(state)`` below (crash-safety
+            # ordering — a crash between this and that persist would still
+            # leave the ledger consumed, and the next tick's ``launched``
+            # record naturally re-derives whatever comes next; the reverse
+            # order risks the delivery-record persisting first and the
+            # in-memory ``delivery_failures`` counter, reset empty on a
+            # restart, never re-crossing to retry the resolve). Unconditional
+            # on the outcome, not gated on ``delivery_failures.pop(...)``'s
+            # return value below (restart-safety, same reasoning as the
+            # held-too-long resolve above).
+            if result.outcome in _DELIVERY_SUCCESS_OUTCOMES:
+                _resolve_dispatch_notify(
+                    notify_ledger_path, logger, "dispatch_seat_delivery_failing", stream
+                )
             # FRE-923: the retry gave up. Announce it BEFORE committing the
             # ``surfaced`` record — persist-then-notify is exactly the window
             # FRE-922's review condemned: a crash in between leaves a record
@@ -1147,7 +1283,7 @@ def _apply(
                     persist_wedge=persist_wedge,
                 )
             else:
-                _reset_wedge(stream, wedge_state, persist_wedge)
+                _reset_wedge(stream, wedge_state, persist_wedge, notify_ledger_path, logger)
             # FRE-927: seat-scoped delivery health. A dropped delivery counts
             # against the SEAT, and only a delivery that genuinely landed clears
             # it. Every other outcome deliberately leaves the count ALONE:
@@ -1185,7 +1321,20 @@ def _apply(
                 state[stream] = dataclasses.replace(record, run_confirmed=True)
                 persist(state)
         case "clear":
-            if state.pop(stream, None) is not None:
+            cleared = state.pop(stream, None)
+            if cleared is not None:
+                # FRE-1405: resolve before persisting the cleared state — a
+                # crash between the two leaves the state file stale (the
+                # record still present), which naturally re-derives "clear"
+                # again next tick and safely retries both steps
+                # (``mark_consumed_if_present`` no-ops on the retry). The
+                # reverse order would persist the clear first and orphan the
+                # ledger entry forever if the process died right after.
+                # (``dispatch_stall``'s own entry is already resolved by the
+                # top-of-``_apply`` ``kind != "stall"`` guard above.)
+                _resolve_dispatch_notify(
+                    notify_ledger_path, logger, "dispatch_delivery_exhausted", stream
+                )
                 persist(state)
         case "stall":
             # FRE-1245: two distinct stall episodes can occur on the SAME
@@ -1275,7 +1424,26 @@ def _apply(
                 )
                 state[stream] = dataclasses.replace(record, phase="surfaced")
                 persist(state)
-        case _:  # await / skip — no state change.
+        case "skip":
+            # FRE-1405: only the anomalous ``occupied-no-record`` skip (a
+            # stream's head ticket occupied with no orchestrator record
+            # tracking it — the FRE-1288 incident shape) drives the head-stall
+            # counter; ``no-candidate``/``no-tier-label`` skips are healthy
+            # and were already excluded from ``head_stalled`` above. Gated on
+            # ``execute``, matching the majority of the other notify paths.
+            if execute and head_stalled:
+                _note_head_stall(
+                    stream,
+                    decision.ticket,
+                    head_stall_state,
+                    head_stall_ticks=head_stall_ticks,
+                    head_stall_renotify_ticks=head_stall_renotify_ticks,
+                    trace_id=trace_id,
+                    notifier=notifier,
+                    logger=logger,
+                    persist_head_stall=persist_head_stall,
+                )
+        case _:  # await — no state change.
             return
 
 
@@ -1283,9 +1451,18 @@ def _reset_wedge(
     stream: str,
     wedge_state: dict[str, WedgeState],
     persist_wedge: Callable[[dict[str, WedgeState]], None],
+    notify_ledger_path: Path | None,
+    logger: Logger,
 ) -> None:
-    """Clear a stream's persisted suspected-wedge state (episode end)."""
+    """Clear a stream's persisted suspected-wedge state (episode end).
+
+    Resolves the notify-ledger entry (FRE-1405) BEFORE persisting the cleared
+    wedge state — a crash between the two leaves the wedge state stale
+    (still counting), so the next tick's decision naturally re-derives
+    whether the episode is truly over and safely retries both steps.
+    """
     if wedge_state.pop(stream, None) is not None:
+        _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_seat_wedged", stream)
         persist_wedge(wedge_state)
 
 
@@ -1371,6 +1548,88 @@ def _note_wedge(
             )
     wedge_state[stream] = WedgeState(count, count if should_notify else last_notified)
     persist_wedge(wedge_state)
+
+
+def _reset_head_stall(
+    stream: str,
+    head_stall_state: dict[str, HeadStallState],
+    persist_head_stall: Callable[[dict[str, HeadStallState]], None],
+    notify_ledger_path: Path | None,
+    logger: Logger,
+) -> None:
+    """Clear a stream's persisted head-stall state (episode end) — mirrors ``_reset_wedge``.
+
+    Resolves the notify-ledger entry (FRE-1405) BEFORE persisting the cleared
+    state, for the same crash-safety reason as ``_reset_wedge``.
+    """
+    if head_stall_state.pop(stream, None) is not None:
+        _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_head_stalled", stream)
+        persist_head_stall(head_stall_state)
+
+
+def _note_head_stall(
+    stream: str,
+    ticket: str | None,
+    head_stall_state: dict[str, HeadStallState],
+    *,
+    head_stall_ticks: int,
+    head_stall_renotify_ticks: int,
+    trace_id: str,
+    notifier: Notifier,
+    logger: Logger,
+    persist_head_stall: Callable[[dict[str, HeadStallState]], None],
+) -> None:
+    """Count a consecutive ``occupied-no-record`` tick and keep surfacing it past the threshold.
+
+    Exact algorithm mirror of ``_note_wedge`` (FRE-1405) — same ``count >
+    head_stall_ticks`` crossing test, same ``count - last_notified_count >=
+    head_stall_renotify_ticks`` re-notify test, same notify-then-persist
+    ordering, same crash-safety rationale (see ``_note_wedge``'s docstring).
+    ``ticket`` is typically ``None`` here — the ``occupied-no-record``
+    condition names the stream, not a specific ticket the orchestrator would
+    dispatch next.
+
+    Args:
+        stream: The stalled stream.
+        ticket: The occupying ticket, when the decision named one (usually
+            ``None`` — see above).
+        head_stall_state: Per-stream persisted state, mutated in place.
+        head_stall_ticks: Consecutive ticks tolerated before surfacing.
+        head_stall_renotify_ticks: Ticks between re-notifications past the
+            crossing tick. Clamped to a minimum of 1.
+        trace_id: The tick's trace id.
+        notifier: The master-notification sink (pinged on the schedule above).
+        logger: Structured logger (warns every post-threshold tick).
+        persist_head_stall: Persists ``head_stall_state`` after this tick's
+            mutation.
+    """
+    head_stall_renotify_ticks = max(1, head_stall_renotify_ticks)
+    prior = head_stall_state.get(stream)
+    count = (prior.count if prior is not None else 0) + 1
+    last_notified = prior.last_notified_count if prior is not None else 0
+    should_notify = False
+    if count > head_stall_ticks:
+        logger.warning(
+            "dispatch_head_stalled",
+            trace_id=trace_id,
+            stream=stream,
+            ticket=ticket,
+            consecutive_ticks=count,
+            detail="stream head occupied (In Progress/In Review) with no orchestrator "
+            "record tracking it — the FRE-1288 shape (a merged PR's ticket never "
+            "advanced past In Progress, freezing the stream)",
+        )
+        should_notify = last_notified == 0 or count - last_notified >= head_stall_renotify_ticks
+        if should_notify:
+            notifier(
+                "dispatch_head_stalled",
+                trace_id=trace_id,
+                stream=stream,
+                ticket=ticket,
+                consecutive_ticks=count,
+            )
+    head_stall_state[stream] = HeadStallState(count, count if should_notify else last_notified)
+    persist_head_stall(head_stall_state)
 
 
 def _note_delivery_failure(
@@ -1630,13 +1889,116 @@ def save_wedge_state(path: Path, state: dict[str, WedgeState]) -> None:
     os.replace(tmp, path)
 
 
-def _structlog_notifier(logger: Logger) -> Notifier:
-    """A default notifier that emits a structlog warning."""
+def _head_stall_state_to_json(head_stall: HeadStallState) -> dict[str, object]:
+    """Serialize a head-stall-state record for the head-stall-state file."""
+    return dataclasses.asdict(head_stall)
+
+
+def load_head_stall_state(path: Path) -> dict[str, HeadStallState]:
+    """Load per-stream head-stall state (FRE-1405; empty if absent/invalid).
+
+    A record is dropped (not merely constructed) when it violates the shape a
+    healthy ``HeadStallState`` must have — same invariant checks as
+    ``load_wedge_state``, for the same reason (a corrupt
+    ``last_notified_count > count`` would silently suppress the re-notify
+    schedule forever).
+    """
+    if not path.exists():
+        return {}
+    try:
+        raw: object = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    state: dict[str, HeadStallState] = {}
+    for stream, value in raw.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            head_stall = HeadStallState(**value)
+        except TypeError:
+            continue
+        if (
+            not isinstance(head_stall.count, int)
+            or isinstance(head_stall.count, bool)
+            or head_stall.count < 0
+        ):
+            continue
+        if (
+            not isinstance(head_stall.last_notified_count, int)
+            or isinstance(head_stall.last_notified_count, bool)
+            or head_stall.last_notified_count < 0
+            or head_stall.last_notified_count > head_stall.count
+        ):
+            continue
+        state[stream] = head_stall
+    return state
+
+
+def save_head_stall_state(path: Path, state: dict[str, HeadStallState]) -> None:
+    """Persist the head-stall-state dict atomically (temp file + ``os.replace``)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({s: _head_stall_state_to_json(w) for s, w in state.items()}, indent=2)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(payload)
+    os.replace(tmp, path)
+
+
+def _trigger_ledger_notifier(ledger_path: Path, logger: Logger) -> Notifier:
+    """A notifier that surfaces the event as an entry in the orchestrator's own notify ledger.
+
+    Deliberately a SEPARATE file from ``trigger_ledger.py``'s own
+    ``_default_ledger_path()`` (``telemetry/trigger_ledger.json``, written by
+    ``gating_watcher.py`` and ``send_keys_whitelist.py``) — a second
+    continuous writer to that file would race it, since no locking exists
+    anywhere in this package (FRE-1405 codex plan-review finding).
+    Single-writer-per-file is what keeps that ledger race-free today; this
+    preserves it. Master reads this the same way, per
+    ``prime-master/SKILL.md`` step 5.
+
+    ``event_id`` is a stable ``dispatch-notify:{event}:{stream}`` key, not a
+    fresh UUID per call: re-notifying the same condition overwrites the same
+    ledger entry rather than accumulating one per call, which is what keeps a
+    persisting condition's entry count bounded regardless of how many ticks
+    it lasts (AC-4).
+    """
 
     def notify(event: str, **fields: object) -> None:
-        logger.warning(event, **fields)
+        stream = str(fields.get("stream", ""))
+        ticket = str(fields.get("ticket") or stream)
+        ledger = trigger_ledger.load_ledger(ledger_path, logger)
+        ledger = trigger_ledger.record_surfaced(
+            ledger,
+            event_id=f"dispatch-notify:{event}:{stream}",
+            source=event,
+            target_pane=stream,
+            ticket=ticket,
+            preconditions={k: str(v) for k, v in fields.items()},
+            now=time.time(),
+        )
+        trigger_ledger.save_ledger(ledger_path, ledger)
+        logger.info("dispatch_notify_surfaced", dispatch_event=event, stream=stream, ticket=ticket)
 
     return notify
+
+
+def _resolve_dispatch_notify(
+    ledger_path: Path | None, logger: Logger, event: str, stream: str
+) -> None:
+    """Close out `event`'s notify-ledger entry for `stream`, if one is open (FRE-1405).
+
+    A no-op when ``ledger_path`` is ``None`` — callers that don't exercise the
+    notify-ledger path (most existing tests) pass no path and get no side
+    effect, matching ``persist_wedge``'s "no-op default" pattern.
+    """
+    if ledger_path is None:
+        return
+    ledger = trigger_ledger.load_ledger(ledger_path, logger)
+    ledger = trigger_ledger.mark_consumed_if_present(
+        ledger, f"dispatch-notify:{event}:{stream}", time.time()
+    )
+    trigger_ledger.save_ledger(ledger_path, ledger)
 
 
 def _default_state_path() -> Path:
@@ -1647,6 +2009,20 @@ def _default_state_path() -> Path:
 def _default_wedge_state_path() -> Path:
     """Return the default wedge-state-file path under the repo's telemetry dir."""
     return Path("telemetry") / "dispatch_wedge_state.json"
+
+
+def _default_head_stall_state_path() -> Path:
+    """Return the default head-stall-state-file path under the repo's telemetry dir."""
+    return Path("telemetry") / "dispatch_head_stall_state.json"
+
+
+def _default_notify_ledger_path() -> Path:
+    """Return the default path for the orchestrator's own notify ledger (FRE-1405).
+
+    Deliberately separate from ``trigger_ledger.py``'s ``_default_ledger_path()``
+    — see ``_trigger_ledger_notifier``'s docstring.
+    """
+    return Path("telemetry") / "dispatch_notify_ledger.json"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1723,6 +2099,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         "(minimum 1; lower values are clamped).",
     )
     parser.add_argument(
+        "--notify-ledger-file",
+        default=str(_default_notify_ledger_path()),
+        help="Path to the orchestrator's own notify ledger master reads at priming (FRE-1405).",
+    )
+    parser.add_argument(
+        "--head-stall-ticks",
+        type=int,
+        default=DEFAULT_HEAD_STALL_TICKS,
+        help="Consecutive occupied-no-record ticks tolerated before surfacing a head stall.",
+    )
+    parser.add_argument(
+        "--head-stall-renotify-ticks",
+        type=int,
+        default=DEFAULT_HEAD_STALL_RENOTIFY_TICKS,
+        help="Ticks between re-notifications while a head stall persists past the crossing "
+        "tick (minimum 1; lower values are clamped).",
+    )
+    parser.add_argument(
+        "--head-stall-state-file",
+        default=str(_default_head_stall_state_path()),
+        help="Path to the persisted head-stall tracking file.",
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help="Check preconditions + RC liveness, report, and exit (for ExecStartPre).",
@@ -1742,9 +2141,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if alive else 1
 
     logger = structlog.get_logger(__name__)
-    notifier = _structlog_notifier(logger)
+    notify_ledger_path = Path(args.notify_ledger_file)
+    notifier = _trigger_ledger_notifier(notify_ledger_path, logger)
     state_path = Path(args.state_file)
     wedge_state_path = Path(args.wedge_state_file)
+    head_stall_state_path = Path(args.head_stall_state_file)
     kill_switch_path = Path(args.kill_switch_file)
     # held_escalated/delivery_failures stay in-memory across ticks within this
     # run, reset on restart (FRE-924/FRE-927 — out of scope for FRE-1077, which
@@ -1758,8 +2159,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         # safety for the wedge counter/notification schedule (FRE-1077) falls
         # out of this for free: the next tick after a restart reloads the last
         # persisted ``WedgeState`` from disk exactly as it would within one
-        # continuous run, no special-casing needed.
+        # continuous run, no special-casing needed. Same for ``head_stall_state``
+        # (FRE-1405).
         wedge_state = load_wedge_state(wedge_state_path)
+        head_stall_state = load_head_stall_state(head_stall_state_path)
         run_once(
             args.streams,
             state,
@@ -1782,6 +2185,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             held_escalation_s=args.held_escalation_timeout,
             delivery_failures=delivery_failures,
             seat_failure_threshold=args.seat_failure_threshold,
+            notify_ledger_path=notify_ledger_path,
+            head_stall_state=head_stall_state,
+            head_stall_ticks=args.head_stall_ticks,
+            head_stall_renotify_ticks=args.head_stall_renotify_ticks,
+            persist_head_stall=lambda st: save_head_stall_state(head_stall_state_path, st),
         )
 
     if args.loop:

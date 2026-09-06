@@ -241,6 +241,55 @@ def mark_surfaced(ledger: Ledger, event_id: str, now: float) -> Ledger:
     return updated
 
 
+def record_surfaced(
+    ledger: Ledger,
+    *,
+    event_id: str,
+    source: str,
+    target_pane: str,
+    ticket: str,
+    preconditions: Mapping[str, str],
+    now: float,
+) -> Ledger:
+    """Write (or overwrite) an entry that needs owner attention, no actuation attempted.
+
+    Unlike ``record_pending``, this sets ``surfaced_at`` immediately: there is
+    no command to send, so the entry must never enter ``reconcile()``'s retry
+    path, which treats any non-terminal (``consumed_at is None and
+    surfaced_at is None``) entry as a dropped actuation and calls
+    ``execute_pending`` on it. ``command`` is always empty. Calling this again
+    with the same ``event_id`` replaces the entry in place — the caller is
+    expected to use a stable, per-episode key so a persisting condition
+    updates one entry rather than accumulating one per call.
+    """
+    updated = dict(ledger)
+    updated[event_id] = LedgerEntry(
+        event_id=event_id,
+        source=source,
+        target_pane=target_pane,
+        ticket=ticket,
+        command="",
+        preconditions=dict(preconditions),
+        created_at=now,
+        surfaced_at=now,
+    )
+    return updated
+
+
+def mark_consumed_if_present(ledger: Ledger, event_id: str, now: float) -> Ledger:
+    """Close out ``event_id`` if it exists; a no-op otherwise.
+
+    ``mark_consumed`` raises on an absent key (by design — every other caller
+    knows the entry it is closing exists). A resolve-on-episode-end caller
+    does not: the episode may have ended before any entry was ever written
+    (e.g. a condition that never crossed its own notify threshold), so
+    "already absent" and "just closed" must be equally unremarkable.
+    """
+    if event_id not in ledger:
+        return ledger
+    return mark_consumed(ledger, event_id, now)
+
+
 def mark_transport(ledger: Ledger, event_id: str, transport: Transport) -> Ledger:
     """Record which transport actually delivered an entry (FRE-872, ADR-0116).
 

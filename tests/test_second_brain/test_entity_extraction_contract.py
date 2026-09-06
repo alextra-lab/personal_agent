@@ -790,8 +790,11 @@ class TestCloudPathTemperature:
         """The cloud call forwards model_def.temperature as an explicit kwarg."""
         from types import SimpleNamespace
 
+        mock_mode = SimpleNamespace(temperature=0.0, resolved_reasoning_effort=None)
         mock_model_def = SimpleNamespace(
-            provider="openai", id="gpt-5.4-mini", temperature=0.0, reasoning_effort=None
+            provider="openai",
+            id="gpt-5.4-mini",
+            resolve_mode=lambda: mock_mode,
         )
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
@@ -946,8 +949,11 @@ class TestModelOverrideAndCallStats:
         """No override: the cloud call forwards model_def.reasoning_effort from config."""
         from types import SimpleNamespace
 
+        mock_mode = SimpleNamespace(temperature=0.0, resolved_reasoning_effort="high")
         model_def = SimpleNamespace(
-            provider="openai", id="gpt-5.4-mini", temperature=0.0, reasoning_effort="high"
+            provider="openai",
+            id="gpt-5.4-mini",
+            resolve_mode=lambda: mock_mode,
         )
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,

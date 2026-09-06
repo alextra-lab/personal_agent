@@ -203,15 +203,16 @@ _BEHAVIOUR_FIELDS: tuple[str, ...] = (
     "max_concurrency",
     "min_concurrency",
     "default_timeout",
-    "temperature",
-    "top_p",
-    "top_k",
-    "min_p",
-    "presence_penalty",
-    "repetition_penalty",
-    "reasoning_effort",
-    "disable_thinking",
-    "thinking_budget_tokens",
+    # ADR-0145 D3a: the nine top-level sampler/thinking fields above this
+    # comment (temperature, top_p, top_k, min_p, presence_penalty,
+    # repetition_penalty, reasoning_effort, disable_thinking,
+    # thinking_budget_tokens) left ModelDefinition and moved into modes: — the
+    # only declarative home for them now, in the model's own dialect
+    # vocabulary. `dialect` and `modes` replace them here so this golden still
+    # catches a role silently resolving to different sampler/thinking
+    # behaviour.
+    "dialect",
+    "modes",
     "quantization",
     "supports_function_calling",
     "supports_vision",

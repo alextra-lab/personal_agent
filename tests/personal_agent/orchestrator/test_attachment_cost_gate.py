@@ -22,9 +22,13 @@ from personal_agent.llm_client.cost_estimator import estimate_reservation_for_ca
 from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
+    ModeSpec,
     Placement,
     ProviderDefinition,
 )
+
+#: Trivial mode (ADR-0145 D3a) — this suite tests the cost gate, not dialect vocabulary.
+_TRIVIAL_MODES = {"default": ModeSpec()}
 from personal_agent.llm_client.pricing import register_model_pricing
 from personal_agent.orchestrator import executor as executor_mod
 from personal_agent.orchestrator.attachment_cost import estimate_attachment_cloud_cost_usd
@@ -55,6 +59,7 @@ def _cloud_def(input_price: float = 0.000003) -> ModelDefinition:
     return ModelDefinition(
         id="claude-sonnet-4-6",
         provider="anthropic",
+        dialect="anthropic_adaptive",
         max_tokens=32768,
         context_length=200000,
         max_concurrency=10,
@@ -62,6 +67,8 @@ def _cloud_def(input_price: float = 0.000003) -> ModelDefinition:
         supports_vision=True,
         input_cost_per_token=input_price,
         output_cost_per_token=0.000015,
+        modes=_TRIVIAL_MODES,
+        default_mode="default",
     )
 
 
@@ -185,10 +192,13 @@ async def test_local_routing_is_free_and_ungated(monkeypatch: pytest.MonkeyPatch
     local_def = ModelDefinition(
         id="qwen-local",
         provider="slm_local",
+        dialect="llamacpp_qwen",
         context_length=40000,
         max_concurrency=1,
         default_timeout=120,
         supports_vision=True,
+        modes=_TRIVIAL_MODES,
+        default_mode="default",
     )
     _patch_routing(monkeypatch, local_def, key="primary")
     pause = AsyncMock(return_value="keep_local")

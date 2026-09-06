@@ -1099,9 +1099,10 @@ async def extract_entities_and_relationships(
     else:
         entity_extraction_role = resolve_role_model_key("entity_extraction")
         model_def = model_config.models.get(entity_extraction_role)
+        resolved_mode = model_def.resolve_mode() if model_def else None
         provider = model_def.provider if model_def else None
-        eff_reasoning_effort = model_def.reasoning_effort if model_def else None
-        eff_temperature = model_def.temperature if model_def else None
+        eff_reasoning_effort = resolved_mode.resolved_reasoning_effort if resolved_mode else None
+        eff_temperature = resolved_mode.temperature if resolved_mode else None
         eff_model_id = model_def.id if model_def else entity_extraction_role
 
     prompt = _build_extraction_prompt(user_message, assistant_response)

@@ -21,7 +21,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from personal_agent.llm_client.models import ModelConfig, ModelDefinition, ProviderDefinition
+from personal_agent.llm_client.models import (
+    ModelConfig,
+    ModelDefinition,
+    ModeSpec,
+    ProviderDefinition,
+)
+
+#: Trivial mode (ADR-0145 D3a) — this suite tests provider/served-id availability,
+#: not dialect vocabulary.
+_TRIVIAL_MODES = {"default": ModeSpec()}
 from personal_agent.llm_client.provider_health import (
     ServedModel,
     check_all_providers,
@@ -153,9 +162,12 @@ async def test_check_all_providers_returns_one_entry_per_provider():
             "m": ModelDefinition(
                 id="m",
                 provider="slm_local",
+                dialect="llamacpp_qwen",
                 context_length=100,
                 max_concurrency=1,
                 default_timeout=10,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             )
         },
     )
@@ -317,9 +329,12 @@ async def test_check_local_served_ids_covers_only_local_providers():
             "m": ModelDefinition(
                 id="unsloth/qwen3.8-flash-next",
                 provider="slm_local",
+                dialect="llamacpp_qwen",
                 context_length=100,
                 max_concurrency=1,
                 default_timeout=10,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             )
         },
     )
@@ -344,9 +359,12 @@ async def test_check_local_served_ids_missing_base_url_fails_closed():
             "m": ModelDefinition(
                 id="m",
                 provider="slm_local",
+                dialect="llamacpp_qwen",
                 context_length=100,
                 max_concurrency=1,
                 default_timeout=10,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             )
         },
     )
@@ -453,9 +471,12 @@ async def test_check_local_served_models_covers_only_local_providers():
             "m": ModelDefinition(
                 id="unsloth/qwen3.8-flash-next",
                 provider="slm_local",
+                dialect="llamacpp_qwen",
                 context_length=100,
                 max_concurrency=1,
                 default_timeout=10,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             )
         },
     )
@@ -483,9 +504,12 @@ async def test_check_local_served_models_missing_base_url_fails_closed():
             "m": ModelDefinition(
                 id="m",
                 provider="slm_local",
+                dialect="llamacpp_qwen",
                 context_length=100,
                 max_concurrency=1,
                 default_timeout=10,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             )
         },
     )
@@ -503,10 +527,13 @@ def _local_config(**model_overrides: object) -> ModelConfig:
     defaults: dict[str, object] = {
         "id": "unsloth/qwen3.8-flash-next",
         "provider": "slm_local",
+        "dialect": "llamacpp_qwen",
         "context_length": 131072,
         "quantization": "4bit",
         "max_concurrency": 1,
         "default_timeout": 10,
+        "modes": _TRIVIAL_MODES,
+        "default_mode": "default",
     }
     defaults.update(model_overrides)
     return ModelConfig(
@@ -647,10 +674,13 @@ async def test_check_served_catalog_drift_skips_cloud_deployments():
             "sonnet": ModelDefinition(
                 id="unsloth/qwen3.8-flash-next",
                 provider="anthropic",
+                dialect="anthropic_adaptive",
                 context_length=1,
                 quantization="not-a-real-quant",
                 max_concurrency=1,
                 default_timeout=10,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             )
         },
     )

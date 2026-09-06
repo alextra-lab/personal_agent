@@ -171,8 +171,9 @@ def configure_dspy_lm(
         # undeclared here. Passed as a plain kwarg; dspy.LM forwards its extra
         # kwargs to litellm.
         lm_kwargs: dict[str, Any] = {}
-        if model_def.reasoning_effort is not None:
-            lm_kwargs["reasoning_effort"] = model_def.reasoning_effort
+        resolved_effort = model_def.resolve_mode().resolved_reasoning_effort
+        if resolved_effort is not None:
+            lm_kwargs["reasoning_effort"] = resolved_effort
 
         return dspy.LM(
             model=litellm_model,

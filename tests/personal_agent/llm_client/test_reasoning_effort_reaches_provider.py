@@ -24,11 +24,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests._helpers.litellm_capability import pinned_litellm_capabilities
-
 from personal_agent.config import load_model_config
 from personal_agent.config.config_guard import reasoning_wire_shape
 from personal_agent.llm_client.types import ModelRole
+from tests._helpers.litellm_capability import pinned_litellm_capabilities
 from tests._helpers.trace import make_test_ctx
 
 
@@ -135,13 +134,14 @@ class TestNonAnthropicVocabulary:
         """Driven from the loaded catalog, not from hardcoded transformer inputs."""
         config = load_model_config()
         definition = config.models["gpt-5.4-mini"]
-        assert definition.reasoning_effort is not None, "FRE-1007: must be declared"
+        mode = definition.resolve_mode()
+        assert mode.resolved_reasoning_effort is not None, "FRE-1007: must be declared"
 
         shape, error = reasoning_wire_shape(
             definition.id,
             definition.provider or "",
-            {"temperature": definition.temperature},
-            definition.reasoning_effort,
+            {"temperature": mode.temperature},
+            mode.resolved_reasoning_effort,
         )
         assert error is None
         # OpenAI's vocabulary: a flat parameter, no thinking block anywhere.

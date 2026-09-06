@@ -32,6 +32,7 @@ from personal_agent.llm_client import litellm_client as litellm_client_module
 from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
+    ModeSpec,
     Placement,
     ProviderDefinition,
     ToolCallingStrategy,
@@ -71,13 +72,19 @@ def _local_catalog() -> ModelConfig:
         "context_length": 131072,
         "max_concurrency": 1,
         "endpoint": LOCAL_BASE_URL,
+        "tool_calling_strategy": ToolCallingStrategy.NATIVE,
+    }
+    # ADR-0145 D3a: sampler/thinking values live only in modes: now, in the
+    # dialect's own vocabulary. `repeat_penalty` is llama.cpp's real wire name
+    # (FRE-1430 F2); `_local_extra_body` still sends the literal wire key
+    # `repetition_penalty` regardless (unchanged — the rename is FRE-1438).
+    common_mode = {
         "temperature": 0.6,
         "top_p": 0.95,
         "top_k": 20,
         "min_p": 0.0,
         "presence_penalty": 0.0,
-        "repetition_penalty": 1.0,
-        "tool_calling_strategy": ToolCallingStrategy.NATIVE,
+        "repeat_penalty": 1.0,
     }
     return ModelConfig(
         providers={
@@ -86,23 +93,28 @@ def _local_catalog() -> ModelConfig:
                 auth_env=None,
                 placement=Placement.LOCAL,
                 max_concurrency=2,
+                dialect="llamacpp_qwen",
             )
         },
         models={
-            # The primary's shape: a thinking budget, and NO max_tokens —
-            # omit-means-unbounded (ADR-0141 D5).
+            # The primary's shape: thinking left on, no cap, and NO max_tokens —
+            # omit-means-unbounded (ADR-0141 D5). `thinking_budget_tokens` used
+            # to be declared here; it is gone (FRE-1430 F2 found it wire-inert;
+            # dropped from the schema entirely, FRE-1423).
             BUDGET_KEY: ModelDefinition(
                 id="unsloth/qwen3.6-35-A3B",
                 default_timeout=600,
-                thinking_budget_tokens=32768,
+                default_mode="default",
+                modes={"default": ModeSpec(enable_thinking=True, **common_mode)},
                 **common,
             ),
             # The sub-agent's shape: thinking hard-disabled, bounded output.
             DISABLE_KEY: ModelDefinition(
                 id="unsloth/qwen3.6-35-A3B-Instruct",
                 default_timeout=90,
-                disable_thinking=True,
                 max_tokens=2048,
+                default_mode="default",
+                modes={"default": ModeSpec(enable_thinking=False, **common_mode)},
                 **common,
             ),
         },
@@ -375,7 +387,11 @@ class TestWireShape:
         assert body["min_p"] == 0.0
         assert body["repetition_penalty"] == 1.0
         assert body["cache_prompt"] is True
-        assert body["thinking_budget"] == 32768
+        assert "thinking_budget" not in body, (
+            "thinking_budget is gone from the schema entirely (FRE-1430 F2 found "
+            "it wire-inert on llama.cpp; FRE-1423 tracks the retirement) — "
+            "enable_thinking is the only real local thinking lever now (F16)."
+        )
 
     @pytest.mark.asyncio
     async def test_budget_shape_sends_no_thinking_disable(self) -> None:

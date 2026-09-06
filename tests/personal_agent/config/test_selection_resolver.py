@@ -19,6 +19,7 @@ from personal_agent.config.model_loader import (
 from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
+    ModeSpec,
     ProviderDefinition,
     RoleBinding,
 )
@@ -29,12 +30,20 @@ _OPEN_ALT = "claude_sonnet"  # a non-default, kind=llm, valid primary candidate
 _EMBED_DEFAULT = "embedding"
 _RERANK_DEFAULT = "reranker"
 
+#: Trivial mode (ADR-0145 D3a) — this suite tests selection resolution, not
+#: dialect vocabulary.
+_TRIVIAL_MODES = {"default": ModeSpec()}
+
 
 def _config() -> ModelConfig:
     return ModelConfig(
         providers={
-            "slm_local": ProviderDefinition(placement="local", max_concurrency=2),
-            "anthropic": ProviderDefinition(placement="cloud", max_concurrency=50),
+            "slm_local": ProviderDefinition(
+                placement="local", max_concurrency=2, dialect="llamacpp_qwen"
+            ),
+            "anthropic": ProviderDefinition(
+                placement="cloud", max_concurrency=50, dialect="anthropic_adaptive"
+            ),
             "ovh": ProviderDefinition(placement="cloud", max_concurrency=50),
             "voyage": ProviderDefinition(placement="cloud", max_concurrency=50),
         },
@@ -45,6 +54,8 @@ def _config() -> ModelConfig:
                 context_length=131072,
                 max_concurrency=1,
                 default_timeout=600,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             _OPEN_ALT: ModelDefinition(
                 id="claude-sonnet-5",
@@ -52,6 +63,8 @@ def _config() -> ModelConfig:
                 context_length=200000,
                 max_concurrency=10,
                 default_timeout=180,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             "gpt-5.4-mini": ModelDefinition(
                 id="gpt-5.4-mini",
@@ -59,6 +72,8 @@ def _config() -> ModelConfig:
                 context_length=128000,
                 max_concurrency=10,
                 default_timeout=60,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             _EMBED_DEFAULT: ModelDefinition(
                 id="Qwen3-Embedding-8B",

@@ -134,8 +134,15 @@ export interface UseAgentStreamReturn {
  * - Tool approval round-trips via WebSocket (replaces POST /approval).
  * - Reconnect replay via seq numbers and localStorage persistence.
  * - REPLAY_GAP fallback to full session history API.
+ *
+ * @param activeSessionId - The session currently displayed by the caller
+ * (e.g. the `/c/[sessionId]` route param). When this changes to a value
+ * other than the session the open WebSocket belongs to, FRE-1414: the stale
+ * connection is closed and its live-turn UI state is cleared, so a session
+ * switch made without sending a new message can never leave a straggling
+ * event from the abandoned session updating the newly displayed one.
  */
-export function useAgentStream(): UseAgentStreamReturn {
+export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
@@ -188,6 +195,13 @@ export function useAgentStream(): UseAgentStreamReturn {
   // truth; updatePhases/updateTools keep `phases`/`activeTools` state in step.
   const phasesRef = useRef<PhaseNode[]>([]);
   const activeToolsRef = useRef<ToolCall[]>([]);
+  // FRE-1414: mirrors the `activeSessionId` prop synchronously on every
+  // render (not just after effects flush), so handleEvent can reject a
+  // stale event the instant the displayed session changes — closing the
+  // window between commit and the passive cleanup effect below actually
+  // detaching the old connection.
+  const activeSessionIdRef = useRef<string | undefined>(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
 
   const updatePhases = useCallback((fn: (prev: PhaseNode[]) => PhaseNode[]): PhaseNode[] => {
     const next = fn(phasesRef.current);
@@ -268,7 +282,30 @@ export function useAgentStream(): UseAgentStreamReturn {
   // Event dispatch
   // --------------------------------------------------------------------------
 
-  const handleEvent = useCallback((event: AGUIEvent) => {
+  const handleEvent = useCallback((event: AGUIEvent, ownerSessionId: string) => {
+    // FRE-1414: ownerSessionId is the session the delivering connection was
+    // opened for (captured at connectWebSocket() call time in sendMessage),
+    // not event.session_id — several control/terminal event types (PONG,
+    // DONE, REPLAY_GAP, REPLAY_COMPLETE) omit session_id on the wire, so the
+    // envelope field cannot be trusted as a gate. A mismatch here means the
+    // displayed session moved on since this connection was opened.
+    if (ownerSessionId !== currentSessionRef.current) return;
+    // FRE-1414: also reject against the *displayed* session synchronously —
+    // activeSessionIdRef is updated during render, ahead of the passive
+    // cleanup effect that closes the stale connection. Without this, an
+    // event delivered in the brief window between a session switch's commit
+    // and that effect running would still pass the check above (which only
+    // updates once the effect fires) and leak into the new session's UI.
+    if (activeSessionIdRef.current !== undefined && ownerSessionId !== activeSessionIdRef.current) return;
+    // Known, deliberately-deferred edge case: these checks compare session
+    // ids, not connection instances. A→B→A followed by a new send on A
+    // reuses the same session id, so a stale in-flight frame from the FIRST
+    // A connection that survives past its own .close() (a narrow browser
+    // WS-delivery timing question, not something this codebase controls)
+    // could still pass both checks above once a second A connection is
+    // current. A monotonic per-connection generation token would close this
+    // fully; not added here as the trigger requires that specific
+    // revisit-and-resend sequence plus a leftover frame surviving close().
     if (event.seq != null) {
       if (event.seq <= maxHandledSeqRef.current) return;
       maxHandledSeqRef.current = event.seq;
@@ -525,6 +562,10 @@ export function useAgentStream(): UseAgentStreamReturn {
         const sessionId = currentSessionRef.current;
         if (sessionId) {
           void getSessionMessages(sessionId).then((serverMsgs) => {
+            // FRE-1414: the fetch is async — if the displayed session moved
+            // on while it was in flight, applying it now would overwrite
+            // the newly displayed session's messages with this stale one's.
+            if (currentSessionRef.current !== sessionId) return;
             const hydrated: ChatMessage[] = serverMsgs.map((m) => ({
               id: generateUUID(),
               role: m.role as 'user' | 'assistant',
@@ -702,7 +743,10 @@ export function useAgentStream(): UseAgentStreamReturn {
       //    events from the background task.
       streamRef.current = connectWebSocket(
         sessionId,
-        handleEvent,
+        // FRE-1414: bind this connection's events to the session it was
+        // opened for, so a later switch-away cannot have a straggling event
+        // read against whatever session is current at delivery time.
+        (event) => handleEvent(event, sessionId),
         () => {
           // WS error — connection may have dropped.
           // Reconnect logic is handled inside connectWebSocket.
@@ -728,6 +772,11 @@ export function useAgentStream(): UseAgentStreamReturn {
       try {
         await sendChatMessage({ message: text, sessionId, primarySelection, clientMsgId, attachments });
       } catch (err) {
+        // FRE-1414: the POST can reject well after a later sendMessage() for
+        // a different session has become current — closing "the" streamRef
+        // and mutating isStreaming/messages here unconditionally would tear
+        // down and corrupt that newer, unrelated turn.
+        if (currentSessionRef.current !== sessionId) return;
         isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
         streamRef.current?.close();
@@ -750,6 +799,44 @@ export function useAgentStream(): UseAgentStreamReturn {
     },
     [handleEvent, updatePhases, updateTools],
   );
+
+  // FRE-1414: close/detach a stream left open for a session the caller has
+  // navigated away from, and clear every piece of state handleEvent set for
+  // that abandoned turn. Without this, switching which session is displayed
+  // (without sending a new message on the new one) left the old session's
+  // WebSocket open, and — even once the connection is closed — left its
+  // turn-scoped UI (spinner, tools, phases, approval/interrupt/constraint
+  // cards, transcript, and terminal-turn pills/cards) showing under the
+  // newly displayed session, since only the *next* sendMessage() ever reset
+  // them, and the ticket's own scenario is a switch with no next send.
+  // `turnStatus` is the one exception — StreamingChat's own useLayoutEffect
+  // already resets it synchronously (before paint) on every sessionId
+  // change, so duplicating that here would be redundant.
+  // No-op when activeSessionId is unset (callers that don't pass one) or
+  // already matches the open connection's session.
+  useEffect(() => {
+    if (activeSessionId === undefined) return;
+    if (streamRef.current === null) return;
+    if (currentSessionRef.current === activeSessionId) return;
+
+    streamRef.current.close();
+    streamRef.current = null;
+    currentSessionRef.current = '';
+    currentTurnTraceIdRef.current = '';
+    isStreamingRef.current = false;
+    setIsStreaming(false);
+    setIsReconnecting(false);
+    updateTools(() => []);
+    updatePhases(() => []);
+    setPendingApproval(null);
+    setPendingInterrupt(null);
+    setPendingConstraints([]);
+    setMessages([]);
+    setCancelled(false);
+    setResolvedConstraints([]);
+    setBudgetDenied(null);
+    setClassifiedError(null);
+  }, [activeSessionId, updateTools, updatePhases]);
 
   const resolveInterrupt = useCallback((choice: string) => {
     // Send INTERRUPT_RESPONSE over WebSocket.

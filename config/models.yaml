@@ -323,10 +323,10 @@ models:
     #
     # The 262144 window is NOT reachable today, and that is worth knowing before
     # anyone plans around it. Two ceilings bind first and both are below it:
-    # `conversation_max_history_messages` (10) slices session history in the
-    # hydration phase, before the gateway pipeline runs at all, so occupancy
-    # cannot grow; and `context_window_max_tokens` (96000) is a single GLOBAL
-    # budget, not per-model. Using a larger window needs the window policy
+    # `conversation_max_history_messages` (20, FRE-1427) slices session history
+    # in the hydration phase, before the gateway pipeline runs at all, so
+    # occupancy cannot grow; and `context_window_max_tokens` (48000, FRE-1427)
+    # is a single GLOBAL budget, not per-model. Using a larger window needs the window policy
     # decided AND that global ceiling made per-model -- a design change, not a
     # config edit. Declared as provider truth regardless, so the catalog does
     # not lie about the model.

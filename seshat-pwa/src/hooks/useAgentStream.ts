@@ -297,6 +297,15 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
     // and that effect running would still pass the check above (which only
     // updates once the effect fires) and leak into the new session's UI.
     if (activeSessionIdRef.current !== undefined && ownerSessionId !== activeSessionIdRef.current) return;
+    // Known, deliberately-deferred edge case: these checks compare session
+    // ids, not connection instances. A→B→A followed by a new send on A
+    // reuses the same session id, so a stale in-flight frame from the FIRST
+    // A connection that survives past its own .close() (a narrow browser
+    // WS-delivery timing question, not something this codebase controls)
+    // could still pass both checks above once a second A connection is
+    // current. A monotonic per-connection generation token would close this
+    // fully; not added here as the trigger requires that specific
+    // revisit-and-resend sequence plus a leftover frame surviving close().
     if (event.seq != null) {
       if (event.seq <= maxHandledSeqRef.current) return;
       maxHandledSeqRef.current = event.seq;

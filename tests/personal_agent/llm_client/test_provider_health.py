@@ -5,19 +5,27 @@ settings) — no live reachability probe, matching the existing
 ``/api/inference/status`` cloud branch and the ADR's own "endpoint reachable,
 required secret present" framing for a vendor-managed API. Local providers:
 a live SLM-tunnel health probe, reusing ``probe_slm_health``.
+
+``fetch_served_model_ids``/``check_local_served_ids`` (FRE-1415) are a second,
+independent dimension: per-*model* served-id membership, layered on top of the
+per-*provider* reachability above — a local provider can be reachable while
+still serving only a subset of its declared catalog.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
-from personal_agent.llm_client.models import ProviderDefinition
+from personal_agent.llm_client.models import ModelConfig, ModelDefinition, ProviderDefinition
 from personal_agent.llm_client.provider_health import (
     check_all_providers,
+    check_local_served_ids,
+    fetch_served_model_ids,
     is_provider_available,
 )
 
@@ -129,8 +137,6 @@ async def test_local_provider_unavailable_when_probe_down():
 @pytest.mark.asyncio
 async def test_check_all_providers_returns_one_entry_per_provider():
     """check_all_providers covers every declared provider, local and cloud."""
-    from personal_agent.llm_client.models import ModelConfig, ModelDefinition
-
     config = ModelConfig(
         providers={
             "slm_local": ProviderDefinition(placement="local", max_concurrency=2),
@@ -152,3 +158,194 @@ async def test_check_all_providers_returns_one_entry_per_provider():
     with patch(f"{_PKG}.probe_slm_health", new_callable=AsyncMock, return_value=_snapshot("up")):
         result = await check_all_providers(config, settings)
     assert result == {"slm_local": True, "anthropic": True}
+
+
+# ── fetch_served_model_ids — per-provider /v1/models probe (FRE-1415, AC-5) ───
+
+
+def _mock_client(resp: MagicMock | None = None, *, raise_exc: Exception | None = None):
+    """Patch ``httpx.AsyncClient`` so ``create_guarded_http_client`` returns a stub."""
+    mock_client_cls = patch("httpx.AsyncClient")
+    mock_cls = mock_client_cls.start()
+    mock_client = AsyncMock()
+    mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+    if raise_exc is not None:
+        mock_client.get = AsyncMock(side_effect=raise_exc)
+    else:
+        mock_client.get = AsyncMock(return_value=resp)
+    return mock_client_cls
+
+
+def _response(*, status_code: int = 200, body: object = None) -> MagicMock:
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status_code
+    if 200 <= status_code < 300:
+        resp.raise_for_status = MagicMock(return_value=None)
+    else:
+        resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("bad status", request=MagicMock(), response=resp)
+        )
+    if body is not None:
+        resp.json.return_value = body
+    else:
+        resp.json.side_effect = ValueError("not JSON")
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_parses_data_ids():
+    """A well-formed OpenAI-style {"data": [...]} body yields the served ids."""
+    body = {"data": [{"id": "unsloth/qwen3.8-flash-next"}, {"id": "unsloth/qwen3.6-35-A3B"}]}
+    patcher = _mock_client(_response(body=body))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset({"unsloth/qwen3.8-flash-next", "unsloth/qwen3.6-35-A3B"})
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_strips_url_trailing_slash():
+    """Base URL trailing slash does not produce a double slash before 'models'."""
+    patcher = _mock_client(_response(body={"data": []}))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1/", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_empty_data_is_genuinely_zero_served():
+    """{"data": []} is a well-formed response meaning zero models served — not a failure."""
+    patcher = _mock_client(_response(body={"data": []}))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_never_raises_on_timeout():
+    """A timeout fails closed to an empty frozenset, never propagates (AC-5)."""
+    patcher = _mock_client(raise_exc=httpx.TimeoutException("timed out"))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_never_raises_on_http_error():
+    """A non-2xx status fails closed to an empty frozenset (AC-5)."""
+    patcher = _mock_client(_response(status_code=503))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_never_raises_on_malformed_json():
+    """A non-JSON body fails closed to an empty frozenset (AC-5)."""
+    patcher = _mock_client(_response(body=None))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_missing_data_key_fails_closed():
+    """A body with no 'data' key at all is malformed, not a genuine empty list (AC-5)."""
+    patcher = _mock_client(_response(body={"unexpected": "shape"}))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_data_not_a_list_fails_closed():
+    """A non-list 'data' value is malformed (AC-5)."""
+    patcher = _mock_client(_response(body={"data": "not-a-list"}))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_fetch_served_model_ids_entry_missing_id_fails_closed():
+    """An entry with no (or a blank) 'id' field is malformed (AC-5)."""
+    patcher = _mock_client(_response(body={"data": [{"not_id": "x"}]}))
+    try:
+        result = await fetch_served_model_ids("https://slm.example.com/v1", trace_id="t")
+    finally:
+        patcher.stop()
+    assert result == frozenset()
+
+
+# ── check_local_served_ids — per-LOCAL-provider fan-out session_api uses ──────
+
+
+@pytest.mark.asyncio
+async def test_check_local_served_ids_covers_only_local_providers():
+    """Cloud providers never get a served-ids probe — they have no /v1/models concept."""
+    config = ModelConfig(
+        providers={
+            "slm_local": ProviderDefinition(
+                base_url="https://slm.example.com/v1", placement="local", max_concurrency=2
+            ),
+            "anthropic": ProviderDefinition(
+                auth_env="anthropic_api_key", placement="cloud", max_concurrency=50
+            ),
+        },
+        models={
+            "m": ModelDefinition(
+                id="unsloth/qwen3.8-flash-next",
+                provider="slm_local",
+                context_length=100,
+                max_concurrency=1,
+                default_timeout=10,
+            )
+        },
+    )
+    with patch(
+        f"{_PKG}.fetch_served_model_ids",
+        new_callable=AsyncMock,
+        return_value=frozenset({"unsloth/qwen3.8-flash-next"}),
+    ) as fetch_mock:
+        result = await check_local_served_ids(config, trace_id="t")
+    assert result == {"slm_local": frozenset({"unsloth/qwen3.8-flash-next"})}
+    fetch_mock.assert_awaited_once_with("https://slm.example.com/v1", trace_id="t")
+
+
+@pytest.mark.asyncio
+async def test_check_local_served_ids_missing_base_url_fails_closed():
+    """A local provider with no configured base_url probes to empty, not a crash."""
+    config = ModelConfig(
+        providers={
+            "slm_local": ProviderDefinition(base_url=None, placement="local", max_concurrency=2),
+        },
+        models={
+            "m": ModelDefinition(
+                id="m",
+                provider="slm_local",
+                context_length=100,
+                max_concurrency=1,
+                default_timeout=10,
+            )
+        },
+    )
+    with patch(f"{_PKG}.fetch_served_model_ids", new_callable=AsyncMock) as fetch_mock:
+        result = await check_local_served_ids(config, trace_id="t")
+    assert result == {"slm_local": frozenset()}
+    fetch_mock.assert_not_awaited()

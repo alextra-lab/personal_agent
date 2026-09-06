@@ -9,7 +9,7 @@ All configuration loaders live in the config/ module per ADR-0007.
 """
 
 import functools
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -21,6 +21,7 @@ from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
+    Placement,
     required_kind_for_role,
 )
 
@@ -478,15 +479,31 @@ def resolve_selected_deployment(role: str, selection: str | None, config: ModelC
 
 
 def role_candidates(
-    role: str, config: ModelConfig, provider_availability: Mapping[str, bool]
+    role: str,
+    config: ModelConfig,
+    provider_availability: Mapping[str, bool],
+    *,
+    served_model_ids: Mapping[str, Collection[str]],
 ) -> list[str]:
     """Return the selectable, available candidate deployment keys for a role (ADR-0121 §3/§6, AC-5).
 
     Authorization is the same intersection :func:`is_selectable_binding` enforces —
-    ``open`` (role-side) AND ``kind``-compatible (model-side) — with a third,
-    read-time-only condition layered on top: the deployment's provider must be
-    currently available. A pinned role always returns an empty list, so this is
+    ``open`` (role-side) AND ``kind``-compatible (model-side) — with two further,
+    read-time-only conditions layered on top: the deployment's provider must be
+    currently available, and, for a LOCAL deployment, its id must be confirmed
+    served (FRE-1415). A pinned role always returns an empty list, so this is
     safe to call for any role name without the caller pre-checking ``open``.
+
+    FRE-1415: before this, availability was checked per *provider* only — every
+    LOCAL deployment under one provider (e.g. ``slm_local``) inherited the same
+    reachability bit, so a host serving one model still showed every declared
+    local deployment as available. A LOCAL deployment is now additionally
+    gated on ``model.id`` — not the catalog key — being present in that
+    deployment's provider's served-id set, so two catalog keys that share one
+    served id (``disable_thinking`` variants) both stay available together
+    (AC-2) while an unloaded sibling does not (AC-1). CLOUD deployments are
+    unaffected (AC-3): a reachable cloud provider still offers its whole
+    declared catalog.
 
     Args:
         role: The role to compute candidates for.
@@ -496,20 +513,36 @@ def role_candidates(
             (:func:`personal_agent.llm_client.provider_health.check_all_providers`).
             A provider absent from this mapping is treated as unavailable
             (fail-closed).
+        served_model_ids: LOCAL provider key -> served model ids, from
+            :func:`personal_agent.llm_client.provider_health.check_local_served_ids`.
+            A LOCAL provider absent from this mapping — an unreachable host, a
+            probe failure, or simply never checked — fails every one of its
+            deployments closed (AC-4/AC-5): never a silent fall-through to
+            "everything available". Ignored entirely for CLOUD deployments.
 
     Returns:
-        Deployment keys whose ``kind`` matches the role's requirement and whose
-        provider is available — the exact set AC-5 asserts the picker may offer.
+        Deployment keys whose ``kind`` matches the role's requirement, whose
+        provider is available, and — for LOCAL deployments — whose id is
+        confirmed served — the exact set AC-1 through AC-5 assert the picker
+        may offer.
     """
     binding = config.roles.get(role)
     if binding is None or not binding.open:
         return []
     required = required_kind_for_role(role)
-    return [
-        key
-        for key, model in config.models.items()
-        if model.kind is required and provider_availability.get(model.provider or "", False)
-    ]
+    candidates: list[str] = []
+    for key, model in config.models.items():
+        if model.kind is not required:
+            continue
+        provider_key = model.provider or ""
+        if not provider_availability.get(provider_key, False):
+            continue
+        if config.placement_of(key) is Placement.LOCAL:
+            served = served_model_ids.get(provider_key)
+            if served is None or model.id not in served:
+                continue
+        candidates.append(key)
+    return candidates
 
 
 def resolve_active_attribution(

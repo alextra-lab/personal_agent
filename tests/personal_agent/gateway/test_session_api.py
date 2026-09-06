@@ -722,6 +722,7 @@ def test_patch_selection_404_when_other_user_owns_it() -> None:
 # ---------------------------------------------------------------------------
 
 _CHECK_ALL_PROVIDERS = "personal_agent.llm_client.provider_health.check_all_providers"
+_CHECK_LOCAL_SERVED_IDS = "personal_agent.llm_client.provider_health.check_local_served_ids"
 _SELECTION_GET_ALL = (
     "personal_agent.service.repositories.session_model_selection_repository."
     "SessionModelSelectionRepository.get_all"
@@ -736,6 +737,19 @@ _ALL_PROVIDERS_UP = {
     "voyage": True,
 }
 _LOCAL_DOWN = {**_ALL_PROVIDERS_UP, "slm_local": False}
+# Every id `config/models.yaml` declares under slm_local (FRE-1415) — used
+# wherever a test wants "the local host genuinely serves everything", so the
+# served-id dimension doesn't change tests that aren't about it.
+_ALL_LOCAL_SERVED = {
+    "slm_local": frozenset(
+        {"unsloth/qwen3.6-35-A3B", "unsloth/qwen3.8-flash-next", "Qwen/Qwen3-Reranker-4B-mxfp8"}
+    )
+}
+
+
+def _served_ids_patch(return_value: dict = _ALL_LOCAL_SERVED):
+    """Patch check_local_served_ids — every _CHECK_ALL_PROVIDERS site needs this too."""
+    return patch(_CHECK_LOCAL_SERVED_IDS, new_callable=AsyncMock, return_value=return_value)
 
 
 def test_get_session_config_basic_shape() -> None:
@@ -751,6 +765,7 @@ def test_get_session_config_basic_shape() -> None:
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         with TestClient(app, raise_server_exceptions=True) as client:
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
@@ -784,6 +799,7 @@ def test_get_session_config_ac5_candidates_exclude_down_provider_both_directions
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_LOCAL_DOWN)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         with TestClient(app, raise_server_exceptions=True) as client:
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
@@ -799,6 +815,67 @@ def test_get_session_config_ac5_candidates_exclude_down_provider_both_directions
     assert "reranker" not in candidates
 
 
+def test_get_session_config_fre1415_single_model_host_hides_unloaded_local_deployments() -> None:
+    """FRE-1415 AC-1/AC-2/AC-3 — the owner's exact reported scenario.
+
+    slm_local reachable, but the host serves only ``unsloth/qwen3.8-flash-next``.
+    Both catalog keys pointing at that id (AC-2) stay candidates; the other two
+    local deployments whose id is not served (AC-1) do not; cloud candidates are
+    untouched (AC-3).
+    """
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+    single_model_served = {"slm_local": frozenset({"unsloth/qwen3.8-flash-next"})}
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        stack.enter_context(_served_ids_patch(single_model_served))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    candidates = {c["key"] for c in resp.json()["roles"]["primary"]["candidates"]}
+    # AC-2: both flash-next variants — same served id, different disable_thinking.
+    assert "qwen3.8-flash-next" in candidates
+    assert "qwen3.8-flash-next-instruct" in candidates
+    # AC-1: the un-served 35b pair is excluded despite slm_local being reachable.
+    assert "qwen3.6-35b-thinking" not in candidates
+    assert "qwen3.6-35b-instruct" not in candidates
+    # AC-3: cloud candidates are unaffected by the local served-id filter.
+    assert {"claude_sonnet", "claude_haiku", "gpt-5.4-mini"} <= candidates
+
+
+def test_get_session_config_fre1415_served_ids_probe_failure_excludes_all_local() -> None:
+    """FRE-1415 AC-5 — a served-ids probe failure (empty frozenset) excludes every local candidate.
+
+    Never falls through to "everything available"; cloud candidates are unaffected.
+    """
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="local")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+        )
+        stack.enter_context(_served_ids_patch({"slm_local": frozenset()}))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
+
+    candidates = {c["key"] for c in resp.json()["roles"]["primary"]["candidates"]}
+    assert candidates == {"claude_sonnet", "claude_haiku", "gpt-5.4-mini", "qwen3.6-27b-ovh"}
+
+
 def test_get_session_config_pinned_role_has_no_candidates() -> None:
     """A pinned role never carries a candidates list at all (§6 structural half)."""
     db_session = AsyncMock()
@@ -812,6 +889,7 @@ def test_get_session_config_pinned_role_has_no_candidates() -> None:
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         with TestClient(app, raise_server_exceptions=True) as client:
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
@@ -840,6 +918,7 @@ def test_get_session_config_ac9_slice_reports_stored_selection_not_raw_default()
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         with TestClient(app, raise_server_exceptions=True) as client:
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
@@ -866,6 +945,7 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         with TestClient(app, raise_server_exceptions=True) as client:
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
@@ -873,7 +953,9 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
     roles = resp.json()["roles"]
     assert roles["primary"]["resolved"] == "qwen3.8-flash-next"
     assert roles["artifact_builder"]["resolved"] == "claude_sonnet"
-    assert roles["sub_agent"]["resolved"] == "qwen3.8-flash-next-instruct"  # 2026-09-03: one served model, instruct half
+    assert (
+        roles["sub_agent"]["resolved"] == "qwen3.8-flash-next-instruct"
+    )  # 2026-09-03: one served model, instruct half
 
 
 def test_get_session_config_selection_store_failure_logs_trace_id() -> None:
@@ -898,6 +980,7 @@ def test_get_session_config_selection_store_failure_logs_trace_id() -> None:
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         with structlog.testing.capture_logs() as captured:
             with TestClient(app, raise_server_exceptions=True) as client:
@@ -959,7 +1042,10 @@ def test_get_config_returns_resolved_default_for_every_role() -> None:
     `resolved`/`provenance` entirely, which is what drove the Observe page's
     em-dash-for-every-role bug.
     """
-    with patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP):
+    with (
+        patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP),
+        _served_ids_patch(),
+    ):
         app = FastAPI()
         app.include_router(create_gateway_router())
         with TestClient(app, raise_server_exceptions=True) as client:
@@ -995,6 +1081,7 @@ def test_get_config_resolved_matches_session_scoped_no_selection_default() -> No
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         with TestClient(app, raise_server_exceptions=True) as client:
             sessionless_resp = client.get("/api/v1/config", headers=_AUTH_HEADERS)
@@ -1206,6 +1293,7 @@ def test_get_session_includes_label_and_digest_when_graph_has_them() -> None:
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         app.state.knowledge_graph = mock_kg
         with TestClient(app, raise_server_exceptions=True) as client:
@@ -1246,6 +1334,7 @@ def test_get_session_adapter_delegation_is_real() -> None:
         stack.enter_context(
             patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
         )
+        stack.enter_context(_served_ids_patch())
         app = _build_app_with_db_factory(db_session)
         app.state.knowledge_graph = real_adapter
         with TestClient(app, raise_server_exceptions=True) as client:

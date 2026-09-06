@@ -378,7 +378,9 @@ role profile reaches the model list.
 | claude_haiku | anthropic | 30 | 64000 | 20 | False | – | – | – | – | – |
 | gpt-5.4-mini | openai | 60 | 8192 | 10 | False | – | none | 0.0 | – | – |
 
-Three classes fall out. **Budget** (timeout, max_tokens, concurrency): every entry, every provider.
+Three classes fall out. **Budget** (timeout, max_tokens): every entry, every provider.
+**Concurrency** is not in that class — it is a provider fact and a model-footprint fact, and the
+role's share of it is a priority, not a count (see P1).
 **Thinking**: one intent, two vocabularies — local `disable_thinking`, cloud `reasoning_effort`.
 `config_guard` already enforces the right one per placement and probes litellm for what an effort
 becomes on each model. Anthropic cannot express "off" (`none` is dropped by litellm, `models.py:305`).
@@ -415,14 +417,25 @@ sub_agent:
 eight-row map (F6). The picker then lists models only. `quantization` cannot disagree with itself.
 The wire id becomes unambiguous for local models.
 
-**Concurrency must move with the budget.** Today the controller keys one semaphore per catalog key
-(`concurrency.py:210–240`, `:410–420`), and the two entries carry `max_concurrency` 1 and 3 under a
-provider ceiling of 3. One entry means one limit: keep 1 and workers serialise behind the primary
-across sessions; raise to 3 and primaries run three-wide. `RoleBinding` has no `max_concurrency`
-field. So P1 adds it to the binding and keys the semaphore by role — `register_model`'s first
-parameter is already named `role` (`concurrency.py:212`); today it receives a catalog key. FRE-1380
-serialises workers *within* a turn only. Turns in different sessions run as independent tasks
-(`service/app.py:2561–2573`) and overlap today.
+**Concurrency is not role policy. Priority is.** (Corrected after the owner's challenge: a fixed
+count on a role cannot be right across providers — local serves 3 slots, cloud 50.) The controller
+already separates the two physical facts from the one policy. The **provider ceiling** is acquired
+first and is *"the binding constraint across every deployment it serves"* (`concurrency.py:166`).
+The **per-model sub-limit** beneath it means something only where a model's footprint is smaller
+than its provider's slots; with one served local model at 262K pooled KV the model *is* the
+provider, and the number is 3. And **`InferencePriority`** (`concurrency.py:57`: `CRITICAL`,
+`USER_FACING`, `ELEVATED`, `BACKGROUND`, `DEFERRED`) is what the semaphore wakes first. Today the
+primary passes `USER_FACING` (`executor.py:6217`), background roles pass `BACKGROUND`, and
+sub-agents pass nothing — so they default to `USER_FACING` and rank equal to the primary.
+
+So under P1 `max_concurrency` stays on the provider and the model. The single local entry carries
+`3`, the truth of the box. The role carries `priority`: `primary: USER_FACING`,
+`sub_agent: ELEVATED`, background roles `BACKGROUND`. A rank is valid on every provider; a count is
+not. What is lost is the old entry's "one primary at a time" — which only ever approximated "the
+primary goes first", and priority says that directly. Worst case is a primary sharing the box with
+two workers of another session (turns in different sessions run as independent tasks,
+`service/app.py:2561–2573`), which is today's state too. FRE-1380 serialises workers *within* a
+turn only.
 
 **`inherit` is a resolver value, not a YAML trick.** It must resolve centrally in
 `resolve_role_target` and `resolve_selected_deployment` (which today returns `binding.deployment`

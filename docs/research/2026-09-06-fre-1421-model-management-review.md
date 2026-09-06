@@ -393,6 +393,36 @@ declaration at all and pass: `qwen3.6-27b-ovh` declares neither local field (by 
 and `claude_haiku` declares no `reasoning_effort`. The guard enforces the property for two of the
 eight models a user can pick.
 
+### F16 — The served window is twice what any call has used, in both eras and on the owner's real threads.
+
+**Verdict:** POSITIVE. (Added 2026-09-06 07:15 at the owner's request, after the PR opened.)
+
+**Query (ES `model_call_completed`, role `primary`, local model, per call):**
+
+| era | window | n | p50 | p90 | p99 | max | calls ≥ 100K |
+|---|---|---|---|---|---|---|---|
+| 2026-08-01 → 09-03 | 131 072 | 31 | 17.6K | 39.7K | 80.7K | 91.0K | 0 |
+| 2026-09-03 → 09-06 | 262 144 | 95 | 16.7K | 46.0K | 77.6K | 91.3K | 0 |
+
+Doubling the window did not change what the harness sends. Both samples are provisional
+(FRE-1051), and the August one is small.
+
+**Query (Postgres `sessions.messages`, the owner's real threads, user + assistant text only,
+tokens ≈ chars ÷ 4):** the longest thread ever — 40 messages over nine days — is 17.3K tokens. A
+three-week health thread of 42 messages is 12.2K. Two Crete threads are 7.8K and 6.6K.
+
+**Query (Postgres `route_traces`, same sessions, per-turn `input_tokens` summed over the turn's
+calls):** the largest real turn is 105K — one `artifact_read` plus `artifact_draft`, three tool
+iterations, two sub-agents. A Crete research turn reached 83K on `web_search` + `fetch_url`. The
+health thread's *median* turn is 1.1K.
+
+The conversation is never the cost. Within-turn tool output in the primary is the whole variance,
+and nothing caps it. The harness's own budget knobs (`context_budget_max_tokens` 120 000,
+`context_window_max_tokens` 96 000, `conversation_max_history_messages` 10) are still calibrated
+to a 131K window and say so in their descriptions. Stage 7 overrides the first with the catalog's
+262 144 (`pipeline.py:81`, FRE-978), so the served window silently widened the one line nobody
+bounded.
+
 ---
 
 ## Proposals
@@ -540,6 +570,28 @@ per session.
 
 Whether a local primary *chooses* to delegate is unmeasured. The FRE-1416 nonce-probe shape tests
 it: a task that cannot fit in one context, and a digest that proves the split.
+
+### P10 — Serve the local model at 131 072, and move the four knobs with it.
+
+Owner-requested recommendation (F16). `--ctx-size 131072` on llama-server for
+`qwen3.8-flash-next`, down from 262 144. It is the window the harness was designed for, ran on
+until 2026-09-03, and never filled; it covers every real turn the owner has run, including the 105K
+artifact turn, with the 32K generation reserve intact; and it restores a ceiling that bites before a
+cold prefill (285 t/s) exceeds the 900 s turn deadline — at 262K that prefill is 920 s.
+
+The conversation policy behind it: **ten exchanges verbatim, older turns compacted, within-turn
+tool output in the primary capped, the rest to workers.** Derived worst case: 12K fixed + 40K
+conversation + 32K tool output + 24K digests + 32K generation = 140K. 131K is deliberately tight on
+the one line that has no enforcement, so the next artifact turn shows up near the ceiling instead
+of vanishing into slack.
+
+Move with it, in the same change: catalog `context_length` → 131 072 (P5 would catch the drift);
+`conversation_max_history_messages` 10 → 20; `context_window_max_tokens` 96 000 → 48 000;
+`context_budget_max_tokens` 120 000 → 98 304 (131 072 − 32 768); and the literal pins in
+`test_turn_status_context_max.py:69` and the FRE-1411 set. Read llama-server's `KV self size`
+line at both settings — that is the memory instrument this study did not have.
+
+If the owner later wants twenty exchanges verbatim, the honest window is 196 608, not 262 144.
 
 ---
 

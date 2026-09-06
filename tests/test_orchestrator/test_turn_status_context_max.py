@@ -67,4 +67,4 @@ def test_context_max_resolves_current_default_primary_binding() -> None:
     # Today's bound primary (2026-08-28 swap) — pin the key so this test fails loudly,
     # not silently, the next time the primary binding changes.
     assert default_key == "qwen3.8-flash-next"
-    assert expected == 262144
+    assert expected == 131072

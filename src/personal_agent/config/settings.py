@@ -514,12 +514,12 @@ class AppConfig(BaseSettings):
         ),
     )
     context_budget_max_tokens: int = Field(
-        default=120000,
+        default=98304,
         ge=2000,
         description=(
             "Maximum context budget limit. Aligned to the SLM context_length "
-            "(131K for Qwen3.6-35B-A3B) minus generation reserve, leaving ~11K "
-            "for system + tool definitions + thinking output."
+            "(131K for qwen3.8-flash-next, FRE-1427) minus the 32768 generation "
+            "reserve."
         ),
     )
     context_budget_generation_reserve_tokens: int = Field(
@@ -1012,18 +1012,21 @@ class AppConfig(BaseSettings):
 
     # Conversation continuity (Phase 2.6)
     conversation_max_history_messages: int = Field(
-        default=10,
+        default=20,
         ge=1,
         description="Maximum number of historical session messages to hydrate into orchestrator memory.",
     )
     context_window_max_tokens: int = Field(
-        default=96000,
+        default=48000,
         ge=500,
         description=(
             "Maximum context token budget for conversation messages before each LLM call. "
-            "Default leaves ~35k tokens of headroom against the primary Qwen3.6-35B-A3B's "
-            "131k thinking-mode window for system prompt, tool definitions, skill blocks, "
-            "memory slab, and response generation. Calibrate per model profile via env override."
+            "FRE-1427: down from 96000 now that the served window is 131072, not 262144 — "
+            "the freed KV budget buys conversation_max_history_messages depth (10 -> 20) "
+            "instead of a window ceiling real turns never reached. Leaves headroom against "
+            "the primary qwen3.8-flash-next's 131k window for system prompt, tool "
+            "definitions, skill blocks, memory slab, and response generation. Calibrate per "
+            "model profile via env override."
         ),
     )
     conversation_context_strategy: str = Field(

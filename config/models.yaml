@@ -170,7 +170,10 @@ models:
     # old at benchmark time.
     provider: slm_local
     id: "unsloth/qwen3.8-flash-next"
-    context_length: 262144       # Full --ctx-size. slm_server runs --kv-unified, which POOLS
+    context_length: 131072       # FRE-1427: down from 262144. Per-call max observed under the
+                                 # full window was 91.3K (Sept) vs 91.0K under a 131K window
+                                 # (Aug) — the larger window bought 0.3K of extra use. Full
+                                 # --ctx-size, still. slm_server runs --kv-unified, which POOLS
                                  # the KV cache across slots instead of partitioning it, so a
                                  # single request may use the whole window — do NOT divide by
                                  # --parallel. The real constraint is aggregate KV across
@@ -201,7 +204,7 @@ models:
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
   # ---------------------------------------------------------------------------
   # Owner collapsed slm_server to a single served model 2026-09-03 21:50: only
-  # `unsloth/qwen3.8-flash-next` is served now (port 8502, ctx 262144, UD-IQ4_XS).
+  # `unsloth/qwen3.8-flash-next` is served now (port 8502, ctx 131072, UD-IQ4_XS).
   # Both the reasoning and instruct roles therefore point at the SAME id, and the
   # only thing separating them is the per-request thinking control -- which
   # actually reaches llama.cpp for the first time as of ADR-0141 T2 (FRE-1365,
@@ -212,7 +215,9 @@ models:
   qwen3.8-flash-next-instruct:
     provider: slm_local
     id: "unsloth/qwen3.8-flash-next"
-    context_length: 262144       # Full --ctx-size. slm_server runs --kv-unified, which POOLS
+    context_length: 131072       # FRE-1427: same served id as qwen3.8-flash-next above, so it
+                                 # moves with it — same --ctx-size, same pooled KV cache. Full
+                                 # --ctx-size, still. slm_server runs --kv-unified, which POOLS
                                  # the KV cache across slots instead of partitioning it, so a
                                  # single request may use the whole window — do NOT divide by
                                  # --parallel. The real constraint is aggregate KV across

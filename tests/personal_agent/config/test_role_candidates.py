@@ -88,14 +88,14 @@ def _config() -> ModelConfig:
             _FLASH: ModelDefinition(
                 id=_FLASH_ID,
                 provider="slm_local",
-                context_length=262144,
+                context_length=131072,
                 max_concurrency=3,
                 default_timeout=600,
             ),
             _FLASH_INSTRUCT: ModelDefinition(
                 id=_FLASH_ID,
                 provider="slm_local",
-                context_length=262144,
+                context_length=131072,
                 max_concurrency=3,
                 default_timeout=90,
                 disable_thinking=True,

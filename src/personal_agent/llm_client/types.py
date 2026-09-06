@@ -209,3 +209,17 @@ class LLMInvalidResponse(LLMClientError):
     """Raised when LLM server returns invalid or unexpected response format."""
 
     pass
+
+
+class DialectParameterRejected(LLMClientError):
+    """Raised before dispatch when a call site passes a parameter the dialect rejects.
+
+    ADR-0145 D2 chose this over the obvious rule. Dropping the value with a log
+    would convert an invalid request into a quietly-succeeding one — the same
+    masked outcome ``drop_params`` was deliberately left off to prevent
+    (``litellm_client.py``). The declared dialect knows the value is invalid
+    *before* the call, so the client fails earlier and more precisely than the
+    provider does, and names the field, the dialect and the model.
+    """
+
+    pass

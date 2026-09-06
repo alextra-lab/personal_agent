@@ -98,13 +98,26 @@ def _extract_thinking(message: dict[str, Any]) -> str:
     return ""
 
 
-def _local_extra_body(disable_thinking: bool, thinking_budget_tokens: int | None) -> dict[str, Any]:
-    """Mirror ``litellm_client._local_extra_body``'s thinking-control wire shape."""
+def _local_extra_body(enable_thinking: bool | None) -> dict[str, Any]:
+    """Mirror the ``llamacpp_qwen`` branch of ``litellm_client._dialect_params``.
+
+    ADR-0145 D3a renamed the lever this reads: ``disable_thinking`` became
+    ``enable_thinking`` inside a mode. The ``thinking_budget`` branch that stood
+    beside it is gone rather than renamed — FRE-1430 F2 measured that field
+    wire-inert on this server, so mirroring it here reported a control the
+    harness never exercised.
+
+    Args:
+        enable_thinking: The resolved mode's lever. Only an explicit ``False``
+            sends the disabling block, matching the client: a mode that declares
+            ``true`` records thinking that was already on by omission.
+
+    Returns:
+        The non-standard parameter block for a llama.cpp request.
+    """
     extra_body: dict[str, Any] = {"cache_prompt": True}
-    if disable_thinking:
+    if enable_thinking is False:
         extra_body["chat_template_kwargs"] = {"enable_thinking": False}
-    elif thinking_budget_tokens is not None:
-        extra_body["thinking_budget"] = thinking_budget_tokens
     return extra_body
 
 
@@ -115,8 +128,12 @@ class RoleResolution:
     role: str
     deployment_key: str
     served_model_id: str
-    disable_thinking: bool
-    thinking_budget_tokens: int | None
+    #: ADR-0145 D3a moved sampler and thinking values into named modes. The two
+    #: fields reported here before — `disable_thinking` and
+    #: `thinking_budget_tokens` — no longer exist on the definition; the second
+    #: is gone for good, because FRE-1430 F2 measured it wire-inert.
+    mode: str
+    enable_thinking: bool | None
     endpoint: str
 
 
@@ -161,7 +178,7 @@ async def call_planner(
         "messages": messages,
         "max_tokens": 1024,
         "response_format": {"type": "json_object"},
-        **_local_extra_body(resolution.disable_thinking, resolution.thinking_budget_tokens),
+        **_local_extra_body(resolution.enable_thinking),
     }
     start = time.monotonic()
     try:
@@ -212,13 +229,13 @@ def render_markdown(resolutions: list[RoleResolution], results: list[PlannerCall
         "",
         "## AC-1 — live-resolved role binding",
         "",
-        "| role | deployment | served id | disable_thinking | thinking_budget_tokens |",
+        "| role | deployment | served id | mode | enable_thinking |",
         "|---|---|---|---|---|",
     ]
     for r in resolutions:
         lines.append(
             f"| {r.role} | {r.deployment_key} | {r.served_model_id} | "
-            f"{r.disable_thinking} | {r.thinking_budget_tokens} |"
+            f"{r.mode} | {r.enable_thinking} |"
         )
 
     lines += [
@@ -310,8 +327,8 @@ async def amain(args: argparse.Namespace) -> int:
                 role=role.value,
                 deployment_key=key,
                 served_model_id=model_def.id,
-                disable_thinking=bool(model_def.disable_thinking),
-                thinking_budget_tokens=model_def.thinking_budget_tokens,
+                mode=model_def.default_mode or "",
+                enable_thinking=model_def.resolve_mode().enable_thinking,
                 endpoint=endpoint.rstrip("/"),
             )
         )

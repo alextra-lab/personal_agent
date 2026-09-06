@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import copy
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -45,7 +46,7 @@ from personal_agent.llm_client.concurrency import (
     InferenceSlotTimeout,
     get_inference_concurrency_controller,
 )
-from personal_agent.llm_client.models import Placement
+from personal_agent.llm_client.models import Dialect, ModeSpec, Placement, dialect_accepts
 from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
     derive_fallback_prompt_identity,
@@ -65,7 +66,7 @@ from personal_agent.telemetry.events import MODEL_CALL_ERROR
 from personal_agent.telemetry.spans import model_call_span
 
 if TYPE_CHECKING:
-    from personal_agent.llm_client.models import ModelDefinition
+    from personal_agent.llm_client.models import ModelDefinition, ProviderDefinition
     from personal_agent.llm_client.types import GenerationProgress, LLMResponse, ModelRole, ToolCall
     from personal_agent.security import DomainGuard
     from personal_agent.telemetry.trace import TraceContext
@@ -182,48 +183,164 @@ def _build_guarded_client(
 _LOCAL_NON_READ_TIMEOUT_S = 10.0
 
 
-def _local_extra_body(model_def: ModelDefinition) -> dict[str, Any]:
-    """Build the non-standard parameter block for a local deployment.
+#: Call-site keyword names this client treats as dialect-governed parameters
+#: (ADR-0145 D2). Anything else a caller passes keeps its existing handling.
+_CALL_SITE_SAMPLERS: tuple[str, ...] = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p",
+    "presence_penalty",
+    "frequency_penalty",
+    "repeat_penalty",
+    "seed",
+)
 
-    Every key here is flattened into the **top level** of the request JSON by
-    the OpenAI SDK's ``extra_body`` mechanism. That flattening is the whole
-    point of ADR-0141: on the raw-httpx path the literal key ``extra_body``
-    went out on the wire and llama-server ignored the block entirely, so all
-    five controls were inert (measured 2026-09-03).
 
-    Reads the deployment's resolved default mode (ADR-0145 D3a) rather than
-    top-level fields, which no longer exist on :class:`ModelDefinition`. The
-    wire keys sent here are UNCHANGED by that migration — including
-    ``repetition_penalty``, which stays the literal key sent even though the
-    config field is now named ``repeat_penalty`` (FRE-1430 F2 found the old
-    name inert on this server; renaming the wire key itself is FRE-1438, not
-    this change).
+def _set_if_declared(params: dict[str, Any], key: str, value: Any) -> None:
+    """Write *value* under *key* only when the mode declared one."""
+    if value is not None:
+        params[key] = value
+
+
+def _dialect_params(dialect: Dialect, mode: ModeSpec) -> dict[str, Any]:
+    """Build the litellm parameter block a dialect's mode declares (ADR-0145 D3a).
+
+    Parameters come from the **dialect**, not from placement. The two dispatch
+    branches keep their transport differences — streaming, timeouts, egress —
+    and lose their parameter differences, which is what makes a catalog-declared
+    value mean the same thing on either path.
+
+    Each row below traces to ADR-0145 D3a's table and the FRE-1430 measurement
+    behind it. Three details are deliberate and each would otherwise read as an
+    oversight:
+
+    * ``llamacpp_qwen`` sends its non-standard keys under ``extra_body``, which
+      the OpenAI SDK flattens into the **top level** of the request JSON. That
+      flattening is the whole point of ADR-0141: on the raw-httpx path the
+      literal key ``extra_body`` went out on the wire and llama-server ignored
+      the block, so all five controls were inert (measured 2026-09-03).
+    * The wire key stays ``repetition_penalty`` even though the config field is
+      ``repeat_penalty``. FRE-1430 F2 found that key inert on that server;
+      correcting the wire name is FRE-1438, and doing it here would be a
+      behaviour change on the primary path inside a migration that promises none.
+    * ``chat_template_kwargs`` is sent only to disable thinking. The catalog's
+      ``enable_thinking: true`` modes record thinking that was already on by
+      omission, so sending the flag explicitly would be the change, not the
+      preservation. ``cache_prompt`` is a transport constant (FRE-433), not a
+      mode-declared sampler, and stays unconditional.
+
+    ``openai_gpt5``'s accepted set includes ``frequency_penalty`` because the
+    provider accepts it (ADR-0145 D3a), while litellm **raises** on it for that
+    model (FRE-1430 F5). No mode declares it. One that did would fail loudly at
+    dispatch, which is the wanted outcome and the reason ``drop_params`` is off.
 
     Args:
-        model_def: The local deployment's effective definition.
+        dialect: The model's resolved wire vocabulary.
+        mode: The resolved mode whose declared values become the block.
 
     Returns:
-        The parameter block for litellm's ``extra_body``.
+        Keyword arguments for ``litellm.acompletion``. The effort's forwarding
+        kwarg is **not** decided here — see
+        :meth:`LiteLLMClient._forwards_effort_natively`.
     """
-    mode = model_def.resolve_mode()
-    extra_body: dict[str, Any] = {
-        # Within-turn KV-cache prefix reuse. Current llama.cpp defaults this on,
-        # but older builds defaulted it off; sending it explicitly keeps the
-        # behaviour backend-version-independent (FRE-433 — cross-turn reuse is
-        # slot config, not this flag).
-        "cache_prompt": True,
-    }
-    if mode.top_k is not None:
-        extra_body["top_k"] = mode.top_k
-    if mode.min_p is not None:
-        extra_body["min_p"] = mode.min_p
-    if mode.repeat_penalty is not None:
-        extra_body["repetition_penalty"] = mode.repeat_penalty
+    params: dict[str, Any] = {}
+    match dialect:
+        case Dialect.LLAMACPP_QWEN:
+            extra_body: dict[str, Any] = {
+                # Within-turn KV-cache prefix reuse. Current llama.cpp defaults
+                # this on, but older builds defaulted it off; sending it keeps
+                # the behaviour backend-version-independent (FRE-433 —
+                # cross-turn reuse is slot config, not this flag).
+                "cache_prompt": True,
+            }
+            _set_if_declared(extra_body, "top_k", mode.top_k)
+            _set_if_declared(extra_body, "min_p", mode.min_p)
+            _set_if_declared(extra_body, "repetition_penalty", mode.repeat_penalty)
+            if mode.enable_thinking is False:
+                extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+            params["extra_body"] = extra_body
+            _set_if_declared(params, "temperature", mode.temperature)
+            _set_if_declared(params, "top_p", mode.top_p)
+            _set_if_declared(params, "presence_penalty", mode.presence_penalty)
+            _set_if_declared(params, "frequency_penalty", mode.frequency_penalty)
+            _set_if_declared(params, "seed", mode.seed)
+        case Dialect.OVH_QWEN:
+            _set_if_declared(params, "temperature", mode.temperature)
+            _set_if_declared(params, "top_p", mode.top_p)
+            _set_if_declared(params, "presence_penalty", mode.presence_penalty)
+            _set_if_declared(params, "frequency_penalty", mode.frequency_penalty)
+            _set_if_declared(params, "seed", mode.seed)
+            _set_if_declared(params, "reasoning_effort", mode.reasoning_effort)
+        case Dialect.OPENAI_GPT5:
+            _set_if_declared(params, "temperature", mode.temperature)
+            _set_if_declared(params, "top_p", mode.top_p)
+            _set_if_declared(params, "frequency_penalty", mode.frequency_penalty)
+            _set_if_declared(params, "seed", mode.seed)
+            _set_if_declared(params, "reasoning_effort", mode.reasoning_effort)
+        case Dialect.ANTHROPIC_ADAPTIVE:
+            # The lever is `effort` in the catalog and `reasoning_effort` on the
+            # call, because litellm's transformation is the wire here: it maps
+            # the kwarg onto `thinking: {type: adaptive}` + `output_config`.
+            _set_if_declared(params, "reasoning_effort", mode.effort)
+        case Dialect.ANTHROPIC_BUDGET:
+            _set_if_declared(params, "temperature", mode.temperature)
+            _set_if_declared(params, "top_p", mode.top_p)
+            _set_if_declared(params, "top_k", mode.top_k)
+            if mode.budget_tokens is not None:
+                # This dialect has no adaptive thinking and no effort parameter
+                # (FRE-1430 F6), so the native block is declared directly rather
+                # than routed through litellm's legacy effort mapping, which
+                # also rewrites max_tokens (F5).
+                params["thinking"] = {"type": "enabled", "budget_tokens": mode.budget_tokens}
+    return params
 
-    if mode.enable_thinking is False:
-        extra_body["chat_template_kwargs"] = {"enable_thinking": False}
 
-    return extra_body
+def _gate_call_site_params(
+    dialect: Dialect | None, params: Mapping[str, Any], *, model_id: str
+) -> dict[str, Any]:
+    """Refuse a call-site parameter the model's dialect rejects (ADR-0145 D2).
+
+    This is the one place where the obvious rule is the wrong one. Dropping the
+    value with a log would convert an invalid request into a quietly-succeeding
+    one — the same masked outcome ``drop_params`` is deliberately left off to
+    prevent, reached by a different route. The declared dialect lets the client
+    fail earlier and more precisely than the provider does, so it raises and
+    names the field, the dialect and the model.
+
+    A ``None`` dialect means the deployment is not catalog-backed (a direct
+    construction outside the factory). There is nothing to check against, so the
+    parameters pass ungated — ADR-0145 D3b's stated fallback, and today's
+    behaviour for that path.
+
+    Args:
+        dialect: The model's resolved dialect, or ``None`` when unknown.
+        params: Call-site parameter names and values. ``None`` values are not
+            overrides and are dropped rather than checked.
+        model_id: The provider's model id, for the error message.
+
+    Returns:
+        The declared subset of *params*, ready to override the mode's block.
+
+    Raises:
+        DialectParameterRejected: A parameter is outside the dialect's
+            vocabulary.
+    """
+    from personal_agent.llm_client.types import DialectParameterRejected  # noqa: PLC0415
+
+    supplied = {name: value for name, value in params.items() if value is not None}
+    if dialect is None:
+        return supplied
+    for name in supplied:
+        if not dialect_accepts(dialect, name):
+            raise DialectParameterRejected(
+                f"{name!r} is not accepted by dialect {dialect.value!r} "
+                f"(model {model_id!r}); refusing to dispatch it. The dialect's "
+                "accepted set is declared in ADR-0145 D3a and measured by "
+                "FRE-1430 F1. Sampler and thinking values belong in a mode on "
+                "the model, not at the call site."
+            )
+    return supplied
 
 
 def _exception_chain(exc: BaseException, *, limit: int = 8) -> list[BaseException]:
@@ -720,6 +837,96 @@ class LiteLLMClient:
 
         return load_model_config().models
 
+    def _resolve_dialect(self, provider_def: "ProviderDefinition | None") -> Dialect | None:
+        """This deployment's wire vocabulary, or ``None`` when it has none.
+
+        Args:
+            provider_def: The provider's catalog entry, already resolved by the
+                dispatch branch.
+
+        Returns:
+            The resolved :class:`Dialect`, or ``None`` for a client built
+            without a definition — a direct construction outside the factory,
+            which keeps the pre-ADR-0145 behaviour.
+        """
+        if self.model_def is None:
+            return None
+        return self.model_def.resolve_dialect(provider_def)
+
+    def _forwards_effort_natively(self) -> bool:
+        """Whether litellm's own map already carries ``reasoning_effort`` for this model.
+
+        ADR-0145 D3b splits the two questions litellm's map used to answer at
+        once. *Whether* to send the declared effort is now the dialect's
+        decision alone. This asks only *which kwarg carries it*: an SDK-mapped
+        provider needs nothing extra because litellm's transformation is the
+        wire, while a pass-through provider needs the escape hatch. Measured
+        (FRE-1430 F8): ``openai/gpt-5.4-mini`` answers ``True`` here and
+        ``ovhcloud/Qwen3.8-27B`` answers ``None``.
+
+        Returns:
+            ``True`` only when litellm positively reports support. An unknown
+            model returns ``False``, so the escape hatch is attached — the safe
+            direction, because it forwards a declaration that would otherwise
+            be dropped.
+        """
+        from personal_agent.llm_client.reasoning import (  # noqa: PLC0415
+            provider_reasoning_support,
+        )
+
+        return provider_reasoning_support(self.model_id, self.provider) is True
+
+    def _apply_undeclared_effort(
+        self,
+        litellm_kwargs: dict[str, Any],
+        call_site_effort: str | None,
+        *,
+        role: "ModelRole",
+        trace_id: str,
+    ) -> None:
+        """Deliver a reasoning effort for a deployment that declares no dialect.
+
+        The pre-ADR-0145 rule, kept for exactly the case the ADR keeps it for: a
+        client constructed outside the catalog, where nothing declares what the
+        model accepts. litellm's capability map is the only oracle available, so
+        it stays the oracle here and nowhere else.
+
+        Args:
+            litellm_kwargs: The call's keyword arguments, updated in place.
+            call_site_effort: The effort a caller passed, if any.
+            role: The model role, for the log line.
+            trace_id: The call's trace id.
+        """
+        from personal_agent.llm_client.reasoning import (  # noqa: PLC0415
+            provider_reasoning_support,
+        )
+
+        effort = call_site_effort if call_site_effort is not None else self.reasoning_effort
+        if effort is None:
+            return
+        if provider_reasoning_support(self.model_id, self.provider) is None:
+            # litellm holds no capability record for this model, so it would
+            # reject EVERY reasoning parameter — including `thinking`. That is
+            # an infrastructure condition, not a configuration error: the map is
+            # fetched from GitHub at import, and a host whose egress reaches the
+            # provider but not GitHub lands here with a config file that was
+            # verified in CI and never changed. Dropping every background
+            # producer's call over it is disproportionate, so the declared depth
+            # is omitted and the omission is made loud instead of silent — which
+            # is the property FRE-1007 actually cares about.
+            log.error(
+                "reasoning_declaration_undeliverable",
+                model=self._litellm_model,
+                declared_reasoning_effort=effort,
+                reason="litellm_has_no_capability_record_for_model",
+                remedy="ensure the litellm model cost map is reachable at import",
+                role=role.value,
+                trace_id=trace_id,
+                component="litellm_client",
+            )
+            return
+        litellm_kwargs["reasoning_effort"] = effort
+
     async def respond(
         self,
         role: ModelRole,
@@ -928,42 +1135,47 @@ class LiteLLMClient:
             litellm_kwargs["tool_choice"] = tool_choice
         if response_format is not None:
             litellm_kwargs["response_format"] = response_format
-        if temperature is not None:
-            litellm_kwargs["temperature"] = temperature
-        # FRE-766 wired the per-call hint; FRE-1007 added the deployment's declared
-        # value beneath it, because the producers that most needed one passed nothing.
-        # Per-call still wins — an explicit argument is a deliberate override of the
-        # declaration, not a competitor to it. drop_params is left off so a model that
-        # rejects the value surfaces an error rather than masking it; the config guard
-        # is what keeps a rejected combination from ever being declared.
-        effective_reasoning_effort = (
-            reasoning_effort if reasoning_effort is not None else self.reasoning_effort
+        # ── The parameter block (ADR-0145 D3a) ────────────────────────────
+        # The declared mode first, then the call site over it. FRE-766 wired the
+        # per-call hint and FRE-1007 put the declaration beneath it; the order is
+        # unchanged, because an explicit argument is a deliberate override of the
+        # declaration rather than a competitor to it. What changes is where the
+        # declaration comes from: the dialect, on both branches, instead of the
+        # local branch only.
+        dialect = self._resolve_dialect(provider_def)
+        if dialect is not None and self.model_def is not None:
+            litellm_kwargs.update(_dialect_params(dialect, self.model_def.resolve_mode()))
+        litellm_kwargs.update(
+            _gate_call_site_params(
+                dialect,
+                {
+                    # `temperature` is a named parameter of respond(), so it can
+                    # never also arrive in **kwargs — Python refuses the
+                    # duplicate. The other samplers have no named parameter and
+                    # were accepted-then-discarded before this change.
+                    **{
+                        name: kwargs.get(name)
+                        for name in _CALL_SITE_SAMPLERS
+                        if name != "temperature"
+                    },
+                    "temperature": temperature,
+                    "reasoning_effort": reasoning_effort,
+                },
+                model_id=self.model_id,
+            )
         )
-        if effective_reasoning_effort is not None:
-            from personal_agent.llm_client.reasoning import provider_reasoning_support
-
-            if provider_reasoning_support(self.model_id, self.provider) is None:
-                # litellm holds no capability record for this model, so it would
-                # reject EVERY reasoning parameter — including `thinking`. That is
-                # an infrastructure condition, not a configuration error: the map
-                # is fetched from GitHub at import, and a host whose egress reaches
-                # the provider but not GitHub lands here with a config file that
-                # was verified in CI and never changed. Dropping every background
-                # producer's call over it is disproportionate, so the declared
-                # depth is omitted and the omission is made loud instead of silent
-                # — which is the property FRE-1007 actually cares about.
-                log.error(
-                    "reasoning_declaration_undeliverable",
-                    model=self._litellm_model,
-                    declared_reasoning_effort=effective_reasoning_effort,
-                    reason="litellm_has_no_capability_record_for_model",
-                    remedy="ensure the litellm model cost map is reachable at import",
-                    role=role.value,
-                    trace_id=trace_id,
-                    component="litellm_client",
-                )
-            else:
-                litellm_kwargs["reasoning_effort"] = effective_reasoning_effort
+        if dialect is None:
+            self._apply_undeclared_effort(
+                litellm_kwargs, reasoning_effort, role=role, trace_id=trace_id
+            )
+        elif "reasoning_effort" in litellm_kwargs and not self._forwards_effort_natively():
+            # litellm's provider map has no `reasoning_effort` for ovhcloud at the
+            # provider level and cannot become right (FRE-1430 F8): the list is
+            # OpenAIGPTConfig's base list and the ovhcloud transformation adds
+            # nothing to it. This kwarg is the escape hatch litellm's own error
+            # text documents, and F9 measured the provider honouring the value
+            # once it is forwarded.
+            litellm_kwargs["allowed_openai_params"] = ["reasoning_effort"]
         if timeout_s is not None:
             litellm_kwargs["timeout"] = timeout_s
         if max_retries is not None:
@@ -1498,8 +1710,22 @@ class LiteLLMClient:
         )
         effective_max_retries = max_retries if max_retries is not None else settings.llm_max_retries
         local_mode = model_def.resolve_mode()
-        effective_temperature = temperature if temperature is not None else local_mode.temperature
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+
+        # ── The parameter block (ADR-0145 D3a) ────────────────────────────
+        # Same builder and same gate as the cloud branch. This branch keeps only
+        # its transport differences: streaming, the split httpx timeout, and the
+        # local error taxonomy.
+        # A local deployment that declares no dialect falls back to
+        # `llamacpp_qwen`, which is what the block this replaced always built:
+        # `_local_extra_body` was the llama.cpp vocabulary by construction, for
+        # every local placement. The fallback preserves that exactly rather than
+        # sending an empty block to a backend that has always been given one.
+        dialect = self._resolve_dialect(provider_def) or Dialect.LLAMACPP_QWEN
+        declared_params = _dialect_params(dialect, local_mode)
+        declared_params.update(
+            _gate_call_site_params(dialect, {"temperature": temperature}, model_id=self.model_id)
+        )
 
         litellm_kwargs: dict[str, Any] = {
             "model": self._litellm_model,
@@ -1528,20 +1754,15 @@ class LiteLLMClient:
             # background producers' `max_retries=0` (exactly one request) is
             # asserted at the transport rather than assumed.
             "num_retries": effective_max_retries,
-            # Flattened into the top level of the request JSON by the SDK.
-            "extra_body": _local_extra_body(model_def),
+            # `extra_body` is flattened into the top level of the request JSON
+            # by the SDK; the rest are ordinary litellm kwargs.
+            **declared_params,
         }
         if effective_max_tokens is not None:
             # Omitted entirely when the catalog declares none (ADR-0141 D5):
             # on llama.cpp the completion budget includes thinking, so a
             # default cap would truncate answers, not just bound them.
             litellm_kwargs["max_tokens"] = effective_max_tokens
-        if effective_temperature is not None:
-            litellm_kwargs["temperature"] = effective_temperature
-        if local_mode.top_p is not None:
-            litellm_kwargs["top_p"] = local_mode.top_p
-        if local_mode.presence_penalty is not None:
-            litellm_kwargs["presence_penalty"] = local_mode.presence_penalty
         if response_format is not None:
             litellm_kwargs["response_format"] = response_format
         if tools:

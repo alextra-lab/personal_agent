@@ -515,6 +515,12 @@ vocabulary, with `default_mode` naming which one a caller gets by default. See
 `ProviderDefinition.dialect`, `ModelDefinition.modes`/`default_mode`, and
 `personal_agent.llm_client.models.ModeSpec` for the current shape.
 
+A mode is the only **declarative** home for these values (ADR-0145 D3a): none belongs on a
+deployment entry or a role binding. A call site may still pass one to `respond()` as a
+deliberate per-call override, and since FRE-1440 that override is subject to the same
+dialect vocabulary — a field the dialect does not accept raises `DialectParameterRejected`
+before dispatch rather than being dropped with a log.
+
 #### Cloud model fields
 
 | Field | Type | Required | Description |

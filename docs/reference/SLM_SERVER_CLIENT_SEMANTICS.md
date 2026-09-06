@@ -193,11 +193,21 @@ above rather than restating it.
 the key arrives top-level on the wire as required. Before T2 it was wrapped one level too
 deep and inert — the defect that ADR-0141 exists to fix.
 
-**We must never send `reasoning_effort` to a local deployment, and the guard enforces it.**
+**We must never send `reasoning_effort` to a local deployment, and two layers enforce it.**
 FRE-1007's `reasoning_vocabulary_mismatch` finding rejects `reasoning_effort` on any
 local-placement deployment. Section 2 shows that rejection is not merely tidy: an invalid
 value returns HTTP 500 on Flash-Next. Verified 2026-09-04 — both local deployments resolve
-with `reasoning_effort=None`.
+with `reasoning_effort=None`. Since ADR-0145 D3a (FRE-1440) the client cannot send one
+either: `llamacpp_qwen`'s accepted field set has no `reasoning_effort`, so a call site that
+passes one raises `DialectParameterRejected` before dispatch.
+
+**The client builds this block from the dialect, not from placement (ADR-0145 D3a,
+FRE-1440).** `_dialect_params` in `llm_client/litellm_client.py` is the single builder for
+both dispatch branches. The two branches keep their transport differences — streaming, the
+split httpx timeout, the local error taxonomy — and share their parameter vocabulary. The
+wire keys this section documents are unchanged by that migration, `repetition_penalty`
+included: the config field is now named `repeat_penalty`, but correcting the wire name is
+FRE-1438.
 
 **`thinking_budget_tokens` was inert, and the gap it left is now closed (ADR-0145 D3a,
 FRE-1439).** Probed against Flash-Next 2026-09-04 (recorded on FRE-1362): a declared

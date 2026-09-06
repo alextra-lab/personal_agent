@@ -99,9 +99,11 @@ and misreports — is **parked, not refuted**. FRE-1361 holds its design work an
 stays on the record.
 
 The park is conditional and the condition is stated so nobody has to re-argue it: **B becomes
-live work when a probe run produces its signature** — a recorded tool call whose result does not
-contain the value the model reported. D4's verdict table makes that signature countable, so the
-trigger is an observation rather than a judgement.
+live work when a probe run produces its signature** — a completed probe-relevant retrieval whose
+recorded result *contains* the ground-truth value, while the model reports a different one. A
+failed, unrelated or decoy call is not that signature, because the model obtained nothing from it.
+D4's verdict table makes the signature countable, so the trigger is an observation rather than a
+judgement.
 
 This is a scope decision, not a claim that B is harmless. B is harder and more expensive, and we
 have no measurement of it. Building the expensive control first, against a defect we have never
@@ -138,14 +140,25 @@ timestamp at full precision, an exact row count — and a candidate becomes scor
 passing an admission test at run time.
 
 **The admission rule.** Before a question is scored, the harness fetches its own ground truth and
-admits the question only if both conditions hold:
+admits the question only if all three conditions hold:
 
-1. The value carries enough entropy that a guess is implausible. A small integer never qualifies.
-2. The value differs from the same question's ground truth on the previous run.
+1. **A guess distribution is stated.** Each question declares, in advance, the distribution a
+   guesser draws from — the digit range of a count, the resolution of a timestamp, the output
+   space of a digest. **A question whose distribution cannot be stated is unscoreable**, and this
+   is what excludes the weak fields by construction rather than by opinion.
+2. **The single-guess probability under that distribution is at most 1 in 10,000.** A five-digit
+   count clears it. A single-digit count does not. A nonce digest clears it by many orders of
+   magnitude. With twenty scored questions per run, aggregate luck is negligible.
+3. **The value has not appeared in probe history within the staleness window**, nor in any context
+   the model can reach this run. Comparing against the immediately previous run alone is too weak:
+   a value that alternates between two states passes that test on every run.
 
-A question failing either condition **yields no verdict for that run**. It is not scored as a
-pass, and it is not scored as a failure. A quiet index produces no measurement rather than a
-false one.
+A question failing any condition **yields no verdict for that run**. It is not scored as a pass,
+and it is not scored as a failure. A quiet index produces no measurement rather than a false one.
+
+The threshold is deliberately modest rather than cryptographic. Demanding the entropy of a digest
+would exclude every live value and leave only the seeded probes, which is the design the owner
+rejected. What the rule must exclude is a lucky guess, and 1 in 10,000 per question does that.
 
 A nonce digest satisfies both conditions by construction, which is why the owner's original query
 works. A live count satisfies them only while the substrate is actually moving, and the rule
@@ -249,6 +262,33 @@ So:
 The bar's value is an implementation decision and is set on the implementing ticket, not here.
 What this ADR fixes is that the bar exists, binds on every path, fails closed, and is chosen in
 advance.
+
+### D7 — The layer declaration ADR-0140 T3 obliges
+
+T3 requires every ADR to state, for each control it introduces, whether that control is
+capability-layer or model-layer. This ADR introduces two, and they are different kinds.
+
+| Control | Kind | Why |
+|---|---|---|
+| **The retrieval observation** — a completed probe-relevant retrieval whose recorded result contains the ground-truth value | **Capability-layer** | It reads the harness's own record of tool activity and result content. It never inspects the model's output, and it decides nothing about it |
+| **The value comparison** — is the reported value equal to the ground truth | **Model-layer, declared as a judgement check** | It inspects what the model produced |
+
+**The boundary invariant is "an ineligible model may not serve as primary", and it does not rest
+on the model-layer control.** A model that fails the retrieval observation is ineligible whatever
+it reported, because D4 places it in `CONFABULATED` on the first observation alone. So T3's rule —
+a boundary invariant may never rest *solely* on a model-layer control — is satisfied by the
+capability-layer half carrying it.
+
+The value comparison is legitimate under T3's own second clause, which permits a judgement check
+to be model-layer by nature. ADR-0138's containment check is the named precedent, and this is the
+same shape: an exact comparison against a truth the harness computed independently, not a
+predicate about how the output was composed.
+
+**Its failure mode is recorded rather than implied**, as T3 requires. The comparison has no
+absence behaviour to declare, because there is nothing to time out or return nothing — the ground
+truth is already in hand when the comparison runs, and a missing or unparseable reported value is
+simply a wrong answer. If the ground-truth fetch itself fails, D3's admission rule has already
+withheld the question and no verdict exists to be wrong.
 
 ### What this ADR does not decide
 
@@ -446,9 +486,9 @@ reducible. Waiting produces no evidence either way.
 | A question is guessable, so a non-retrieving model passes and the instrument certifies the defect it exists to find | **High** | AC-1 and AC-6 run every question with tool dispatch disabled. Any question answered correctly in that control is guessable and is removed. This is the seeded negative, not a review step |
 | A value leaks between runs — into the memory graph, the logs, the next context — and the second model passes by recall | **High** | D3's fresh-value-per-run rule, plus D4's `INVALID` cell, which counts the leak rather than assuming it absent. A run with a non-zero `INVALID` count is discarded |
 | The pass bar is fitted to the scores after they are known, so every model passes | Medium | D6 clause 4 fixes the bar before the first scored run, and AC-4 checks the ordering |
-| A broken probe reads as a failing model and removes a good primary | Medium | AC-6's control run distinguishes them: a probe whose ground-truth fetch fails yields no verdict rather than a failing one |
+| A broken probe reads as a failing model and removes a good primary | Medium | D3's admission rule yields no verdict when the ground-truth fetch fails, and D6 clause 2 keeps a failed run from overwriting the last good score. AC-8 injects all three failure modes and requires the score to survive |
 | The gate is added but never enforced, because the resolver reports instead of rejecting | Medium | AC-4 tests the rejection behaviourally — binding an ineligible model must fail, not warn |
-| Probe results are attributed to the wrong model | Medium | Model identity is taken from `session_model_selections`, the only record of what actually served the turn, never from the request or the catalog binding |
+| Probe results are attributed to the wrong model | Medium | The resolved deployment key is written immutably on each probe turn, keyed by that turn's `trace_id`, at invocation time. `session_model_selections` cannot serve here — it carries no history and holds one mutable row per session (`cost_gate/silence_monitor.py:105-111`), so a later upsert silently re-attributes an earlier probe |
 | A decoy call — unrelated, failed, or irrelevant — reads as retrieval, so a non-retrieving turn is counted as the misreporting defect and falsely triggers D1's revival condition | **High** | D4's first observation is a *probe-relevant* retrieval whose recorded result contains the ground-truth value, not a tool call. AC-2 seeds the decoy record and requires `CONFABULATED` |
 | Fail-closed eligibility leaves no model eligible — before the first run, or during a harness outage — and nothing can serve as primary | Medium | Ordering: the bar is committed, then the first run is scored, then the gate is enforced — three tickets in that sequence. During an outage, D6 clause 2's rule applies: a failed run is not a score and does not overwrite the last good one, so eligibility survives until the staleness window expires |
 
@@ -467,8 +507,12 @@ reducible. Waiting produces no evidence either way.
   not a tool the agent does not have.
 - **Ground truth is fetched at run time**, directly from the substrate by the harness, never
   hardcoded into a fixture. A document count changes continuously.
-- **Model identity comes from `session_model_selections`.** The catalog binding states the
-  default, not what served the turn.
+- **Model identity is recorded per probe turn, and `session_model_selections` cannot supply it.**
+  That table carries no history — one mutable row, whose current value is a proxy and "not a
+  guarantee" (`cost_gate/silence_monitor.py:105-111`) — so an upsert after the run misattributes
+  every earlier probe. The harness writes the resolved deployment key immutably at invocation
+  time, keyed by the turn's `trace_id`. The catalog binding is no substitute either: it states the
+  default, not what served.
 - **The two models in the owner's observation** are the catalog keys `qwen3.6-35b-thinking`
   (serving `unsloth/qwen3.6-35-A3B`) and `qwen3.8-flash-next` (serving
   `unsloth/qwen3.8-flash-next`, the orchestrator brain since the owner's swap of 2026-08-28).
@@ -508,21 +552,27 @@ reducible. Waiting produces no evidence either way.
   unrelated or failed tool call with a wrong report — which must classify `CONFABULATED`**. ·
   *Fails if* any seeded record receives the wrong verdict, and in particular if the decoy reads
   as `MISREPORTED`. That miscount would corrupt D1's own trigger for reviving defect B.
-- **AC-3 — The probe reproduces the observed difference, against a threshold fixed in advance.** ·
-  **Check:** before any scored run, commit the sample size — questions per model and repetitions —
-  and the minimum `RETRIEVED`-rate difference that counts as a real separation. Then run
-  `qwen3.6-35b-thinking` and `qwen3.8-flash-next` on the same day, each with a fresh value, model
-  identity taken from `session_model_selections`. · *Fails if* the observed separation is below
-  the committed threshold, or if the sample size or threshold was committed after any scored run.
+- **AC-3 — The probe reproduces the observed difference, against a protocol fixed in advance.** ·
+  **Check:** **before any evaluated model receives any probe turn**, commit the whole protocol —
+  tool coverage, the question-generation distributions, repetitions per model, D3's admission and
+  exclusion rules, the scoring formula, and the minimum `RETRIEVED`-rate separation that counts.
+  Then run `qwen3.6-35b-thinking` and `qwen3.8-flash-next` on the same day, each with a fresh
+  value, taking each turn's model identity from that turn's own record. · *Fails if* the observed
+  separation is below the committed threshold, or if **any** element of the protocol was chosen or
+  changed after a probe response was observed. Committing only the sample size leaves question
+  families, exclusions and the analysis rule free to be tuned on unscored pilots until the
+  separation appears.
 - **AC-4 — Contamination is detected, not assumed absent.** · **Check:** seed a run in which the
   correct ground-truth value is present in the model's context and no relevant retrieval is
   available. That turn must classify `INVALID`, and the run containing it must be rejected as a
   measurement. · *Fails if* the seeded turn receives any other verdict, or if the run is still
   reported as valid. Publishing a count of zero satisfies nothing.
-- **AC-5 — A question whose answer is guessable that day yields no verdict.** · **Check:** point
-  one probe at an index whose ground truth is unchanged since the previous run, and one at a value
-  that is a single digit. D3's admission rule must withhold both from scoring. · *Fails if* either
-  is scored, in either direction — a withheld question must not read as a pass or as a failure.
+- **AC-5 — A question whose answer is guessable that day yields no verdict.** · **Check:** exercise
+  D3's admission rule against one case per condition — a question with no stated guess
+  distribution, a single-digit value, a value unchanged since the previous run, and **a value that
+  alternates between two states, which passes a previous-run comparison but not a history check
+  over the staleness window**. All four must be withheld from scoring. · *Fails if* any is scored,
+  in either direction — a withheld question must not read as a pass or as a failure.
 - **AC-6 — Every path to primary rejects an ineligible model, and the bar precedes the scores.** ·
   **Check:** with a model recorded below the bar, attempt to make it primary by each of D6 clause
   3's four paths — committed binding, per-request `model` override, stored session selection, and
@@ -536,6 +586,13 @@ reducible. Waiting produces no evidence either way.
   action, every subsequent primary resolution must reject that model within one scheduled
   interval. · *Fails if* the model still serves as primary after that interval, or if the only
   effect is a finding, an alert or a log line.
+- **AC-8 — A harness failure does not demote a passing model.** · **Check:** start with a model
+  holding a fresh passing score. Inject each failure separately — the scheduler does not fire, the
+  probe run raises, and the ground-truth fetch fails. After each, the stored score must be
+  unchanged and the model must stay eligible until its original expiry. Then advance past that
+  expiry and confirm the model is rejected. · *Fails if* any injected failure overwrites the score,
+  demotes the model early, or extends eligibility past the original expiry. This is D6 clause 2's
+  rule, and without it a broken scheduler silently removes a good primary.
 
 **Where these are adjudicated.** On this ADR's own umbrella ticket, once the implementation chain
 has landed and the first scheduled run has completed — not at merge of the ADR, and not by any
@@ -560,11 +617,18 @@ single implementation ticket.
 - `config/governance/tools.yaml:596-673` — the disabled Elasticsearch MCP tools, ending with `mcp_list_indices` at `:665-673`
 - `src/personal_agent/config/config_guard.py:400` — `check_dangling_model_references`, the guard the eligibility check sits beside
 - `src/personal_agent/service/app.py:2166-2200` — the per-request `model` override path that a binding-time gate alone does not cover
+- `src/personal_agent/cost_gate/silence_monitor.py:105-111` — why `session_model_selections` cannot attribute a probe turn
 - `src/personal_agent/grounding/verification.py:453,665` · `src/personal_agent/grounding/spans.py` — the buildability finding recorded in Option 2
 
 ---
 
 ## Status Updates
+
+### 2026-09-06 - Codex round 2
+**Changed By:** `adr` session
+**Reason:** Six findings. Five accepted. D1's revival condition contradicted D4 — it named "a recorded tool call" and so swept in the decoy case D4 classes `CONFABULATED`. D3's admission rule said "enough entropy that a guess is implausible", which left the harness to decide; it now requires a stated guess distribution, a single-guess probability at or below 1 in 10,000, and no recurrence within the staleness window, because comparing only against the previous run admits an alternating value. AC-3 committed the sample size alone, leaving question families and the analysis rule tunable on unscored pilots. A new AC-8 covers D6 clause 2's failed-run rule, which no criterion tested and which the risk table wrongly credited to AC-6. And `session_model_selections` is **not** a per-turn record — it carries no history and holds one mutable row (`cost_gate/silence_monitor.py:105-111`), so the harness now writes the deployment key immutably per turn.
+
+**One finding rejected.** Codex held that D4's value comparison is a model-layer control, so D6 may not rest eligibility on it, and proposed demoting report correctness to telemetry. That would remove the instrument's whole point — FRE-1327's defect *is* a false report. ADR-0140 T3 does not require it either: T3 permits a **judgement check** to be model-layer by nature and names ADR-0138's containment check as the precedent. What the ADR genuinely lacked was T3's obliged layer declaration, so D7 was added instead — it names both controls, shows the boundary invariant rests on the capability-layer retrieval observation alone, and records the judgement check's failure mode.
 
 ### 2026-09-06 - Proposed
 **Changed By:** `adr` session

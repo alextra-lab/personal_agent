@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v56-ws-session-gate';
+const CACHE_NAME = 'seshat-v57-theme-init';
 
 const PRECACHE_URLS = [
   '/',

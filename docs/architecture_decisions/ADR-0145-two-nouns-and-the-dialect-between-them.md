@@ -116,8 +116,8 @@ not the three the FRE-1421 study named:
 | Artifact constraint options (`constraint_options.py:269`) | returns `binding.deployment` | same resolution. Hard-wired to `artifact_builder` today, so it is not a live break — it is proof that "the resolver is the only reader" is false, and the next role added to it would break silently |
 
 After D4 folds the `roles:` matrix into `bindings:`, `resolve_role_model_key`
-(`model_loader.py:291–322`) becomes a seventh, and `config/resolve.py:59–62` inherits the risk
-through it.
+(`model_loader.py:291–322`) becomes a seventh. `config/resolve.py:62` already routes through
+`resolve_role_target` and needs no separate handling.
 
 **The factory edit is the one that fixes the owner's actual complaint.**
 `get_current_selection("primary")` is already available at that call site. Today the primary
@@ -132,10 +132,26 @@ today**, and would stay decorative under D1 alone. `expansion_controller.py:629`
 `default_timeout` at `litellm_client.py:1494`. So the worker's real timeout is a setting, not the
 role.
 
-D2 says the role owns its budget. That is only true if the role is the **single** home for it, so
-this ADR removes `timeout_seconds=settings.worker_timeout_seconds` from the sub-agent dispatch path
-and lets the binding's `default_timeout` bind. `worker_hard_deadline_seconds` is a different,
-outer bound and stays.
+D2 says the role owns its budget. That is only true if the role is the **single** home for it. Three
+edits are needed, not one — deleting the settings read alone makes the timeout *worse*:
+
+1. **`SubAgentSpec.timeout_seconds` becomes `float | None`, defaulting to `None`**
+   (`sub_agent_types.py:69` declares `float = 120.0` today). `run_sub_agent` omits `timeout_s` when
+   it is `None`, so the client falls to the effective definition (`litellm_client.py:1494`). Without
+   this, removing `expansion_controller.py:629` leaves the spec's own 120 s default in place and the
+   worker's timeout moves from 60 s to 120 s — never to the role's 90 s.
+2. **`settings.worker_timeout_seconds` is removed**, not left dangling. Its only runtime reader is
+   the line being deleted; one test fixture pins it.
+3. **The hard deadline is derived from the effective timeout, not fixed.**
+   `_effective_hard_deadline` clamps the outer deadline to at least `spec.timeout_seconds`
+   (`sub_agent.py:186–188`), and `worker_hard_deadline_seconds` is documented as *"60s generation +
+   25s queue-wait absorption"* (`settings.py:581–590`). A role budget of 90 s against a fixed 85 s
+   deadline yields `max(85, 90) = 90`: the outer net collapses onto the generation timeout and the
+   25 s absorption disappears. The absorption becomes the setting, and the deadline becomes
+   `effective_timeout + absorption`, so the documented relationship survives any binding value.
+
+This is what "the role owns its budget" costs. A one-line deletion would have satisfied the sentence
+and silently doubled the worker timeout while disabling its safety net.
 
 `inherit` reproduces `defaults_by_primary`'s eight rows with zero rows. Seven of those eight were
 self-pairs, and the one non-self pair was the local thinking/instruct split this decision deletes.
@@ -197,11 +213,27 @@ Two obligations follow, and the second is the one that makes D2 safe:
 
 1. The reflection fallback is repaired as part of this chain, not left as a trap that fires the
    first time DSPy's path errors.
-2. **The dialect gate applies to call-site overrides, not only to the definition read.** A caller
-   passing a sampler the dialect does not accept is dropped with a log at the client, exactly as an
-   undeliverable thinking value is. Gating only the definition read would fix the path D2 opens and
-   leave the four existing call sites (`reflection.py:543`, `entity_extraction.py:1170`,
-   `context_compressor.py:259`, `skills.py:478`) able to send a rejected field.
+2. **The dialect gate applies to call-site overrides, not only to the definition read.** Gating only
+   the definition read would fix the path D2 opens and leave the four existing call sites
+   (`reflection.py:543`, `entity_extraction.py:1170`, `context_compressor.py:259`,
+   `skills.py:478`) able to send a rejected field.
+
+   **A rejected call-site sampler raises a typed error before dispatch. It is not dropped with a
+   log.** This is the one place where the obvious rule is the wrong one. `drop_params` is
+   deliberately left off (`litellm_client.py:931–934`) *"so a model that rejects the value surfaces
+   an error rather than masking it"*, and that decision is correct. Silently dropping a sampler at
+   our own client would convert an invalid request into a quietly-succeeding one — the same outcome
+   `drop_params` was refused for, reached by a different route. The dialect tells us the value is
+   invalid **before** the call, so we can fail earlier and more precisely than the provider does,
+   and name the field and the dialect.
+
+   The undeliverable-thinking path is not a counter-example. That value is omitted only when the
+   capability record is **absent** (`litellm_client.py:940–953`) — an unknown, not a known
+   rejection. Under D3b a declared dialect turns most of those unknowns into knowns, which shrinks
+   that branch rather than extending it.
+
+   The mode fallback in D2's table is a different thing again, and stays: a *missing* mode is
+   resolved to `default_mode` with a log, because no invalid value is being sent.
 
 ### D3 — A dialect is declared, not inferred. It is the guard's oracle too.
 
@@ -269,11 +301,23 @@ fields breaks every reader of them, and four sit outside the resolver and the cl
 |---|---|---|
 | `llm_client/factory.py:107`, `:122` | `model_def.reasoning_effort` | the resolved mode's thinking value |
 | `llm_client/dspy_adapter.py:138`, `:166`, `:174` | `reasoning_effort`, forwarded independently | the resolved mode, through the same helper as the client |
-| `second_brain/entity_extraction.py:1100–1104`, `:1170` | `reasoning_effort` and `temperature`, passed explicitly | the resolved mode; the explicit sampler override falls under the D2 dialect gate |
-| `captains_log/reflection.py:543` | passes `temperature` explicitly | see D2 — repaired, then gated |
+| `second_brain/entity_extraction.py:1100–1104` | `model_def.reasoning_effort` | the resolved mode |
 
-A reader missed here is a silent behaviour change, not a load error, because the field simply
-becomes absent.
+Two further classes are **not** definition readers and are handled elsewhere, but must move in the
+same change or they break:
+
+- **Call-site sampler overrides** — `reflection.py:543`, `entity_extraction.py:1170`,
+  `context_compressor.py:259`, `skills.py:478`. These pass a value to `respond()`; they never read
+  the definition. They fall under D2's dialect gate.
+- **Tests and harnesses that assert the removed fields** — `scripts/eval/.../harness.py:299`,
+  `:313`; `test_role_resolution_golden.py:47`, `:50`;
+  `test_reasoning_effort_reaches_provider.py:136–143`; `test_model_loader.py:502`, `:509`;
+  `test_reasoning_effort.py:128–143`. "Rebaseline the golden snapshot" does not cover these: they
+  assert field values, not a snapshot.
+
+A definition reader missed here is a silent behaviour change rather than a load error, because the
+field simply becomes absent. Removing the field from the model — rather than defaulting it — makes
+each remaining reader a `mypy` failure instead.
 
 #### D3b — The declared dialect is the reasoning oracle. litellm's map is consulted only where litellm is the wire.
 
@@ -373,8 +417,13 @@ Sub-agents pass no priority today, so they default to `USER_FACING` and rank equ
 **The priority is read from the binding and threaded to the slot, not hard-coded at the dispatch
 site.** A constant written into `sub_agent.py` would satisfy the sentence above while leaving
 `RoleBinding.priority` decorative — a second home for a fact the ADR says the role owns, which is
-the disease this document treats. The resolver returns it alongside the key and the definition, and
-`request_slot` receives it.
+the disease this document treats.
+
+**`resolve_role_target`'s signature does not change.** Returning priority as a third tuple element
+would break 26 call sites that unpack two, across `src/`, `tests/` and `scripts/` — a migration with
+no design content, taken on to avoid one lookup. The factory already loads the config and holds the
+binding at the point it builds the client (`factory.py:169–188`); it reads `binding.priority` there
+and hands it to the client, which passes it to `request_slot`.
 
 **The prediction, stated plainly rather than reassured away.** Today the thinking entry allows 1
 in flight and the instruct entry 3, on separate semaphores. Two primary turns in two different
@@ -556,6 +605,7 @@ absent. It had arrived.
 | A mode body is written in the wrong dialect and fails at call time | Medium | The loader validates every mode against its model's dialect at config load, the same way `kind` compatibility is validated today. AC-11 seeds two invalid bodies, because a validator never shown to reject anything is not a validator |
 | A reader of a removed top-level field is missed, and the parameter silently stops being sent | Medium | Four are named in D3a. Removing the field from the model rather than defaulting it makes each remaining reader a type error at `mypy` time, not a runtime absence |
 | The `captains_log` reflection fallback fires and raises, because it sends a temperature Sonnet 5 rejects | Medium | Repaired in this chain rather than recorded. AC-9 asserts that path specifically, since the ordinary primary path completes today and hides it |
+| The worker-timeout change lands half-done and doubles the worker budget to 120 s while disabling its outer deadline | **High** | Three coupled edits, named in D1. AC-13 asserts the effective timeout is the role's value and that the outer deadline still exceeds it — a "not 60" assertion would pass the broken state |
 | `inherit` is honoured in one path and not another | Medium | AC-4 exercises all four paths. A sentinel honoured inconsistently is worse than no sentinel |
 | The worker's mode is missing on a newly added model, and the sub-agent silently runs at the model's default (thinking on, billed) | Medium | D2's fallback is explicit and logged: no mode of that name → `default_mode`. The FRE-1007 guard extension covers every selectable entry, so an undeclared model is a load-time finding |
 | The boot reconciliation is noisy when the Mac is asleep, and the finding is ignored | Low | The probe already returns an empty set on any failure without raising. An unreachable host is not a drift finding — only a *served* value that disagrees is |
@@ -576,8 +626,10 @@ absent. It had arrived.
 | Other readers of the removed top-level fields | `llm_client/factory.py:107`, `:122` · `llm_client/dspy_adapter.py:138`, `:166`, `:174` · `second_brain/entity_extraction.py:1100–1104`, `:1170` · `captains_log/reflection.py:543` (also repaired — it sends a temperature Sonnet 5 rejects) |
 | Guard | `config/config_guard.py` — reasoning oracle by dialect; resolve `inherit` at `:1147`; walk every selectable `kind: llm` entry; boot reconciliation |
 | Health | `llm_client/provider_health.py:135–155` — return `context_length` and `quantization`, which the probe currently discards, and widen the comparison beyond `id` |
-| Concurrency | `orchestrator/sub_agent.py`, `orchestrator/expansion_controller.py:629` — thread the binding's priority to `request_slot`; drop `timeout_seconds=settings.worker_timeout_seconds` so the binding's `default_timeout` binds |
-| Other binding readers | `orchestrator/constraint_options.py:269` · `config/resolve.py:59–62` (transitive, after D4) |
+| Worker budget | `orchestrator/sub_agent_types.py:69` (`timeout_seconds` → `float \| None = None`) · `orchestrator/sub_agent.py:495` (omit `timeout_s` when `None`), `:186–188` (derive the deadline) · `orchestrator/expansion_controller.py:629–630` · `config/settings.py:563` (remove `worker_timeout_seconds`), `:581` (`worker_hard_deadline_seconds` → a queue-absorption value) · `tests/.../test_expansion_controller.py:318` |
+| Concurrency | `llm_client/factory.py` reads `binding.priority` and hands it to the client; `resolve_role_target`'s two-tuple signature is unchanged (26 call sites) |
+| Other binding readers | `orchestrator/constraint_options.py:269` |
+| Tests asserting removed fields | `test_role_resolution_golden.py:47`, `:50` · `test_reasoning_effort_reaches_provider.py:136–143` · `test_model_loader.py:502`, `:509` · `test_reasoning_effort.py:128–143` · `scripts/eval/.../harness.py:299`, `:313` — these assert field values, so the golden-snapshot rebaseline does not cover them |
 | Catalog | `config/models.yaml` (8 entries migrate, 2 delete), `config/model_roles.yaml` (two tables merge) |
 | Tests | delete `test_sub_agent_defaults_by_primary.py`; rebaseline the golden config snapshot |
 
@@ -600,46 +652,56 @@ are about what a provider does, and no test against config can answer that.
   the incident's HYBRID query. · **Check:** the turn returns an answer to the user; the trace carries
   **no** `model_call_error` with `LLMTimeout` (a timed-out call emits `model_call_error`, not
   `model_call_completed` — `litellm_client.py:1618`); and the synthesis call's observed completion
-  tokens exceed 2048, or the answer is complete on inspection. · *Fails if* it ends in `LLMTimeout`,
-  **or** if the answer truncates at 2048. A fix addressing only the timeout passes half of this and
-  is not a pass.
+  tokens exceed 2048. · *Fails if* it ends in `LLMTimeout`, **or** if the synthesis call's completion
+  tokens stop at 2048. A fix addressing only the timeout passes half of this and is not a pass. The
+  token count is the assertion — "the answer looks complete" is not falsifiable and is not accepted.
 
-- **AC-2 — A selected model cannot lower a role's budget, demonstrated at the call site, for both
-  budget-carrying roles.** · **Check:** assert the `timeout` and `max_tokens` values actually passed
-  into the client — for `primary` with a session selection that **differs** from the binding's
-  deployment, and for `sub_agent` under an `inherit` binding. · *Fails if* the assertion reads
-  configuration. Config proves a path exists; it never proves the path runs. *Also fails if* only
-  `primary` is covered: the sub-agent's timeout comes from a setting today (D1's correction), so a
-  `primary`-only assertion would pass while the worker's budget still ignores its role.
+- **AC-2 — A selected model cannot lower a role's budget, demonstrated at the dispatch boundary, for
+  both budget-carrying roles.** · **Check:** capture the final keyword arguments dispatched to
+  litellm (`litellm_client.py:1075`) and the effective timeout computed at `:1494` — for `primary`
+  with a session selection that **differs** from the binding's deployment, and for `sub_agent` under
+  an `inherit` binding. · *Fails if* the assertion reads configuration, or reads an intermediate
+  value rather than what was dispatched. *Also fails if* it asserts that `sub_agent` *passed* 90 at
+  `sub_agent.py:495`: the correct implementation passes **no** `timeout_s` there, so the assertion
+  must be on the effective timeout, not on the argument. *Also fails if* only `primary` is covered.
 
-- **AC-3 — Seeded negative: the role still binds when its budget is deliberately low, on a redirect.**
-  · **Check:** set `primary.max_tokens` and `primary.default_timeout` to small values, select a
-  model **other than** the binding's deployment, run a turn, and observe both bind. · *Fails if* the
+- **AC-3 — Seeded negative, in two separate arms, on a redirect.** · **Check (a):** set
+  `primary.default_timeout` deliberately low, select a model **other than** the binding's
+  deployment, and confirm the call ends in a timeout at that value. **(b):** set
+  `primary.max_tokens` low and confirm the response stops at that token count. · *Fails if* the
   selected model equals the binding's deployment — the current early-return satisfies that case and
-  proves nothing. *Also fails if* only `max_tokens` is asserted; the incident was a timeout.
+  proves nothing. *Also fails if* both are seeded in one call: a single short call cannot say
+  whether the timeout or the token cap ended it (`litellm_client.py:1494`, `:1531`), so one arm
+  would mask the other.
 
-- **AC-4 — `inherit` resolves in every path, not one.** · **Check:** exercise all six named in D1 —
-  `resolve_role_target`, `resolve_selected_deployment`, the catalog validator, the factory,
-  `config_guard.check_reasoning_declaration`, and `constraint_options` — each with an `inherit`
-  binding and a non-default primary selection. The guard arm asserts the sub-agent binding is
-  **still covered**, not merely that boot succeeds. · *Fails if* any path returns the literal string,
-  falls back to a static default, or skips the binding. A guard that silently stops checking a role
-  passes a naive test by staying quiet.
+- **AC-4 — `inherit` resolves in every path, including the one D4 creates.** · **Check:** exercise
+  all seven — `resolve_role_target`, `resolve_selected_deployment`, the catalog validator, the
+  factory, `config_guard.check_reasoning_declaration`, `constraint_options`, and
+  `resolve_role_model_key` once D4 folds the tables. Each with an `inherit` binding and a
+  non-default primary selection. The guard arm asserts the sub-agent binding is **still covered**,
+  not merely that boot succeeds. · *Fails if* any path returns the literal string, falls back to a
+  static default, or skips the binding. *Also fails if* only the six pre-D4 paths are exercised — a
+  half-finished D4 passes that. A guard that silently stops checking a role passes a naive test by
+  staying quiet.
 
-- **AC-5 — Concurrency across the collapse is measured, not reasoned about.** · **Check:**
-  `ConcurrencyController.get_status()` sampled during two deliberately overlapped sessions, reading
-  `active` per semaphore (`concurrency.py:369–380`); before and after the collapse. Not
-  `inference_slot_acquired`, which fires only after a 100 ms wait and carries no active count
-  (`concurrency.py:313–315`). · *Fails if* adjudicated from the configured `limit` rather than
-  observed `active`. The before-figure must show the local model semaphore reaching `active: 1` and
-  no higher, or the instrument is not measuring what D7 predicts.
+- **AC-5 — Concurrency across the collapse is measured, not reasoned about, in both directions.** ·
+  **Check:** `ConcurrencyController.get_status()` sampled during two deliberately overlapped
+  sessions, reading `active` per semaphore (`concurrency.py:369–380`); before and after the
+  collapse. Not `inference_slot_acquired`, which fires only after a 100 ms wait and carries no
+  active count (`concurrency.py:313–315`). · *Fails if* adjudicated from the configured `limit`
+  rather than observed `active`. The before-figure must show the local model semaphore reaching
+  `active: 1` and no higher, **and** the after-figure must show it reaching at least 2. A
+  before-only measurement cannot distinguish "the prediction held" from "the sessions never
+  actually overlapped".
 
-- **AC-6 — The picker offers one candidate per served artifact.** · **Check:** for `primary`, no two
-  candidates in the model-list response resolve to the same wire `id`. · *Fails if* two entries
-  share an id under any naming. There is no runtime "role profile" predicate to test —
-  `role_candidates` offers every kind-compatible model — so "no profile appears" is unfalsifiable
-  and a renamed duplicate would pass it. Shared-id collision is the property that actually broke
-  (FRE-1421 F12), and it is decidable.
+- **AC-6 — One candidate, and one catalog entry, per served artifact.** Two arms. · **Check (a):**
+  for `primary`, no two candidates in the model-list response resolve to the same wire `id`.
+  **(b):** no two entries under `models:` share an `id`. · *Fails if* two entries share an id under
+  any naming. *Also fails if* only (a) is checked: `role_candidates` filters on served ids and
+  provider availability (`model_loader.py:529–540`), so an undeleted duplicate can be hidden from
+  the picker while remaining in the catalog to drift again. There is no runtime "role profile"
+  predicate to test, so "no profile appears" is unfalsifiable; shared-id collision is the property
+  that actually broke (FRE-1421 F12), and it is decidable.
 
 - **AC-7 — Boot reconciliation reports every seeded drift dimension, and never blocks a boot.**
   Three arms, all required. · **Check (a):** seed a `quantization` that disagrees with the served
@@ -658,28 +720,37 @@ are about what a provider does, and no test against config can answer that.
   checked: the client can log a value and omit it (`litellm_client.py:940–953`), which is the
   present defect.
 
-- **AC-9 — No sampler reaches a dialect that rejects it, on any path.** · **Check:** assert the
-  parameter block built for a `claude_sonnet` call contains no `temperature`, `top_p` or `top_k` —
-  for the primary factory path **and** for the `captains_log` reflection fallback, which passes
-  `temperature=0.3` explicitly today (`reflection.py:543`). · *Fails if* adjudicated from a completed
-  Sonnet turn. The ordinary primary path sends no temperature at all
-  (`executor.py:6232`), so that turn completes today and would keep completing while the reflection
-  path still leaks — the criterion would pass over the live defect it exists to catch.
+- **AC-9 — No sampler reaches a dialect that rejects it, on any path.** · **Check:** capture the
+  final keyword arguments dispatched to litellm (`litellm_client.py:1075`) for a `claude_sonnet`
+  call and assert no `temperature`, `top_p` or `top_k` is present — for the primary factory path
+  **and** for the `captains_log` reflection fallback, which passes `temperature=0.3` explicitly
+  today (`reflection.py:543`). · *Fails if* adjudicated from a completed Sonnet turn: the ordinary
+  primary path sends no temperature at all (`executor.py:6232`), so that turn completes today and
+  would keep completing while the reflection path still leaks. *Also fails if* asserted against
+  `_dialect_params` alone — the cloud branch adds `temperature` separately
+  (`litellm_client.py:929`), so a unit test of the helper can pass while the dispatched call still
+  carries the field.
 
-- **AC-10 — A worker runs at its dialect's cheap mode, on all five dialects.** · **Check:** for one
-  primary per dialect, compare the sub-agent call's thinking against the same call at the model's
-  `default_mode` — billed reasoning tokens on OVH and OpenAI, thinking-block presence on the two
-  Anthropic dialects, `reasoning_content` length locally. · *Fails if* only a local and a cloud
-  primary are exercised: that covers two of five and can pass while three are wrong. *Also fails if*
-  one effort value is applied across dialects — `low` is correct on Sonnet 5 and wrong on the other
-  four.
+- **AC-10 — A worker runs at its dialect's cheap mode, on all five dialects, asserted on the wire.**
+  · **Check:** for one primary per dialect, capture the dispatched parameters for the sub-agent call
+  and assert the thinking value is the dialect's declared worker setting; then corroborate with the
+  outcome — billed reasoning tokens on OVH and OpenAI, thinking-block presence on the two Anthropic
+  dialects, `reasoning_content` length locally. · *Fails if* only a local and a cloud primary are
+  exercised: that covers two of five and can pass while three are wrong. *Also fails if* adjudicated
+  from the outcome alone — billed tokens are stochastic, and a cheap-looking result can arise from a
+  short prompt rather than from the mode that was sent.
 
-- **AC-11 — A mode written in the wrong dialect fails at load, not at call time.** · **Check:** seed
-  a mode body carrying `enable_thinking` on an `ovh_qwen` model, and a second carrying
-  `temperature` on `anthropic_adaptive`; both must be load-time failures naming the field and the
-  dialect. Then confirm a model declaring `modes` without a matching `default_mode` also fails. ·
-  *Fails if* the invalid body loads and surfaces as a provider 400 on the first turn. A validator
-  that only accepts valid input has not been shown to reject anything.
+- **AC-11 — An invalid mode fails at load, across every dialect, on both field and value.** ·
+  **Check:** for each of the five dialects, seed one mode body carrying a field that dialect does not
+  accept (for example `enable_thinking` on `ovh_qwen`, `temperature` on `anthropic_adaptive`), and
+  one carrying an out-of-domain value for a field it does accept (`reasoning_effort: xhigh` on
+  `ovh_qwen`, which the provider answers with a 422). Every one must be a load-time failure naming
+  the field and the dialect. Then confirm a model declaring `modes` without a matching
+  `default_mode` also fails. · *Fails if* the invalid body loads and surfaces as a provider 400 on
+  the first turn. *Also fails if* only two dialects are seeded, or only wrong-field cases: the
+  per-dialect effort domain is precisely what the current global `Literal` gets wrong
+  (`models.py:297` admits two values OVH rejects), so a field-only test leaves the original defect
+  in place.
 
 - **AC-12 — Priority is read from the binding and orders the queue under real contention.** ·
   **Check:** with the local model semaphore saturated, a `primary` request queued behind
@@ -687,6 +758,17 @@ are about what a provider does, and no test against config can answer that.
   outcome. · *Fails if* the priority is hard-coded at the dispatch site — the binding field would
   then be decorative and the second arm cannot move the result. *Also fails if* adjudicated from the
   enum value passed, rather than from acquisition order.
+
+- **AC-13 — The worker's timeout comes from its role, and its safety net still absorbs the queue
+  wait.** · **Check (a):** with the `sub_agent` binding at `default_timeout: 90`, the effective
+  timeout observed for a worker call is 90 — not 60 (today's setting) and not 120
+  (`SubAgentSpec`'s own default at `sub_agent_types.py:69`). **(b):** the outer deadline
+  `_effective_hard_deadline` computes (`sub_agent.py:186–188`) exceeds that timeout by the declared
+  absorption, so it can still fire. · *Fails if* only (a) is checked: deleting the settings read
+  alone yields 120, which is neither the old value nor the role's, and a test asserting merely "not
+  60" would pass it. *Also fails if* the outer deadline equals the generation timeout — the
+  `max()` clamp then makes the safety net inert, which is what a fixed 85 against a 90 s role budget
+  produces.
 
 **Where these are adjudicated.** On FRE-1426, this ADR's umbrella ticket, once the implementation
 chain has landed and deployed. Not at merge of the ADR, and not by any single implementation ticket,

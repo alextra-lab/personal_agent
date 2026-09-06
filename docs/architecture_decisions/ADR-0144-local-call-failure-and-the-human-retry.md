@@ -150,10 +150,21 @@ The backoff sleeps only after that unwind, holding no slot. A backoff that slept
   minutes.
 - `LLMConnectionError` — a transport failure, bounded by `_LOCAL_NON_READ_TIMEOUT_S` at 10 seconds.
 
-Everything else goes straight to D3's card without a second attempt. A wall-clock expiry is not
-retried: the origin was answering, only too slowly, and a second full-length attempt cannot fit
-inside the turn. A 4xx, an `LLMInvalidResponse`, a rate limit and an application 5xx are not
-transport failures and a retry does not address them.
+Everything else fails after one attempt. A wall-clock expiry is not retried: the origin was
+answering, only too slowly, and a second full-length attempt cannot fit inside the turn. A 4xx, an
+`LLMInvalidResponse`, a rate limit and an application 5xx are not transport failures, and a retry
+does not address them.
+
+**Retry eligibility and card eligibility are two different gates, and they are not the same set.**
+D2 decides whether a second attempt is made. D3 decides whether the user is asked. A wall-clock
+expiry is in D3's set and not in D2's. An application 5xx is in neither, and keeps the handling it
+has today.
+
+**The two timeouts are distinguished where they are raised, not after.** `LLMTimeout` is an empty
+subclass, so a propagated one carries no discriminator. It does not need to: the gap bound arrives
+as an `httpx` read timeout and the wall-clock bound as the `asyncio.timeout` expiry, and
+`_respond_local` sees both before mapping. The retry decision is made there. The propagated error
+records which bound fired as a field, for diagnosis only — no consumer branches on it.
 
 That eligibility rule is what makes the arithmetic work. Two eligible attempts plus the backoff
 cost roughly four minutes, which leaves the 900-second turn deadline ample room for the card. Two
@@ -196,15 +207,16 @@ Six rules govern the pause:
 - **The client never asks. It raises.** `_respond_local` has no session, no user and no transport.
   The executor owns the turn, the session and the pause, so the executor owns the ask. The client's
   contract is unchanged: it raises a typed error.
-- **Only a local primary call, and only an unreachable origin.** The pause binds
+- **Only a local primary call, and only an origin that produced no answer.** The pause binds
   `executor.py:6208`, but that call site serves cloud primaries too, and today every failure there
   falls through to the generic handler. A new branch precedes that handler. It fires only when the
-  dispatched deployment's provider is local **and** the error is `LLMTimeout` or
-  `LLMConnectionError`. **`LLMServerError` is deliberately excluded**: `_map_local_dispatch_error`
-  maps any 5xx there, so an application 500 from a healthy, reachable origin would otherwise raise
-  the card. A 5xx means the origin answered. A 524 is the one 5xx that means the opposite, and D1's
-  gap bound is what stops one from arriving — a 524 that still reaches the mapper is a D1 failure to
-  surface, not a case to fold in here.
+  dispatched deployment's provider is local **and** the error is `LLMTimeout` — either bound — or
+  `LLMConnectionError`. A wall-clock expiry raises the card even though D2 does not retry it: the
+  user still has no answer, and the choice is still theirs. **`LLMServerError` is deliberately
+  excluded**: `_map_local_dispatch_error` maps any 5xx there, so an application 500 from a healthy,
+  reachable origin would otherwise raise the card. A 5xx means the origin answered. A 524 is the one
+  5xx that means the opposite, and D1's gap bound is what stops one from arriving — a 524 that still
+  reaches the mapper is a D1 failure to surface, not a case to fold in here.
 - **Never for a sub-agent.** `sub_agent.py:495` does not raise the card. Four failing sub-agents
   must never produce four cards. A sub-agent failure is already reported to the primary, which
   handles partial results.
@@ -222,24 +234,48 @@ Six rules govern the pause:
 
 Two sources now write one verdict, and consumers read it.
 
-**A failing call writes `down`.** When a local call's gap bound fires, the client has first-hand
-proof that the origin went silent. That call publishes a `down` verdict as it fails. This is what
+**A failing call writes `down`, and a succeeding one writes `up`.** When a local call's gap bound
+fires, or its connection fails, the client has first-hand proof that the origin did not answer.
+That call publishes `down` as it fails. A local call that completes publishes `up`. This is what
 makes the stall observable at all: the scheduled probe runs every 300 seconds, and a stall our own
 timeout ends in two minutes fits entirely between two ticks. Observation must not depend on
 sampling a condition shorter than the sampling interval.
 
+Publishing is best-effort. A failed write is logged and never replaces the original `LLMTimeout` or
+`LLMConnectionError`, and never turns a health concern into a turn failure.
+
 **The scheduler probes only an idle box.** `probe_slm_health` stops being a plain `GET`. When no
 local generation is in flight it sends one bounded, non-thinking completion request: a fast answer
 means `up`, a slow answer means `degraded`, no answer within the bound means `down`. When a local
-generation **is** in flight it sends nothing and reads how long that call has gone without a byte —
-below the threshold means `up`, above it means `down`. With several calls in flight, the verdict
-follows the one silent longest.
+generation **is** in flight it sends nothing and reads the in-flight calls instead.
 
 That second mode is what separates a wedged box from a busy one. A probe that always generates
 queues behind three legitimate long calls and reports `down` while the box is healthy. Reading the
 in-flight call removes that false alarm and never competes for a slot.
 
-Seven mechanics carry it:
+**Two writers need one state model, and it has four rules.** The `slm_local` provider serves three
+concurrent requests, and a verdict written by one call must not misrepresent the others.
+
+1. **Progress outranks silence.** The box is generating if **any** in-flight call advanced its
+   last-byte stamp within the threshold. `down` requires that **no** in-flight call has progressed
+   within it. One stalled attempt beside a streaming sibling is not a wedged box, and the earlier
+   "longest silent wins" rule got that wrong.
+2. **The newer observation wins, and lateness is measured at observation.** Every verdict carries
+   the monotonic time the evidence was gathered, not the time it was written. The cache accepts a
+   write only when its observation time is newer than the stored one, so a slow probe that started
+   before a call failed cannot overwrite that call's fresher `down`. `SlmHealthSnapshot` gains that
+   stamp and the writer's identity.
+3. **`down` is sticky. Only positive evidence clears it.** A `down` does not expire. It is replaced
+   by a successful local call or a successful probe — evidence that the origin generated something.
+   The earlier policy let a `down` decay to available after the 45-second TTL, which re-admitted
+   dispatch to a still-dead origin and spent the next request rediscovering the same outage. `up`
+   and `degraded` still expire at the TTL.
+4. **A `down` shortens the probe interval until it clears.** Recovery needs positive evidence, and
+   at 300 seconds a wedged-then-recovered origin stays blocked far longer than it is broken. While
+   the verdict is `down`, the probe runs at a shorter interval. The box is idle by definition in
+   that state, so the probe costs one small generation per interval and competes with nothing.
+
+Seven mechanics carry the rest:
 
 - **Silence is measured from dispatch, not from the first byte.** `GenerationProgress` stamps
   `generation_started_monotonic` on the first chunk, so a call that has received nothing has no
@@ -251,21 +287,24 @@ Seven mechanics carry it:
   thinking phase as silence.
 - **The registry key is globally unique, not an ordinal.** One trace holds many model calls — the
   primary, each tool-loop round, each sub-agent — so `(trace_id, attempt)` collides. The key is the
-  model call's own `span_id`, already generated per call at `litellm_client.py:1568`, plus the
+  model call's own `span_id`, already generated per call at `litellm_client.py:1559`, plus the
   attempt ordinal within that call.
 - **Removal is structural, not enumerated.** The record is removed in a `finally` around the whole
   attempt, so every exit is covered — success, cancellation, and any exception, including a
   connection failure before the stream opens and an aggregation failure after it closes. The
   existing stream-close `finally` is narrower and is not the right seam.
-- **An availability check costs no generation, and the verdict has a stated freshness policy.**
+- **An availability check costs no generation, and reads under the state model above.**
   `provider_health.is_provider_available` calls `probe_slm_health` today, and session API paths
   reach it. Under a generating probe an ordinary availability read becomes a model call. So
-  generation is confined to the scheduler and to the failing-call writer, and consumers read the
-  published verdict. Because the current 45-second cache TTL leaves no verdict for 255 seconds of
-  every 300-second cycle, the reader's policy is stated rather than left to a `None`: a `down`
-  verdict is honoured while it is fresh, and an absent or stale verdict reads as available. A cold
-  start must not block every local call, and a call that dispatches into a wedged origin discovers
-  it within the gap bound and writes the verdict itself.
+  generation is confined to the scheduler and to real calls, and consumers read the published
+  verdict: an uncleared `down` is unavailable, a fresh `up` or `degraded` is available, and an
+  expired or absent verdict is available. That last case is the cold start, which must not block
+  every local call — and a call that dispatches into a wedged origin discovers it within the gap
+  bound and writes the verdict itself.
+- **The verdict is durable, not only cached.** The 45-second in-process cache serves dispatch
+  gating. A call-written verdict is also emitted as a health event through the existing
+  `agent-monitors-slm-health` path, so an outage that a later session must diagnose leaves a record
+  that outlives the cache entry.
 - **The probe never raises.** `probe_slm_health`'s documented contract is that it always returns a
   snapshot. Every new path — the registry read, the completion request, a malformed response —
   keeps it.
@@ -391,7 +430,11 @@ traffic write the verdict and keeps the probe for the idle case, where nothing e
   costs inference.
 - The local path leaves litellm's retry handling and owns a loop instead. That is one more place
   where retry semantics live.
-- Health now has two writers. Their verdicts must not contradict each other.
+- Health now has two writers and a four-rule state model. That is more machinery than a cached
+  probe result, and the ordering and stickiness rules must survive future edits.
+- A sticky `down` can block local dispatch for as long as the shortened probe interval, where the
+  old policy would have re-admitted a request. That is deliberate: the blocked interval is bounded
+  and observable, and the alternative spends real turns rediscovering a known outage.
 - A new constraint card is one more interaction the owner must answer, on a path that previously
   failed silently.
 - The last-byte stamp adds a write to the hot chunk loop, on every chunk of every local stream.
@@ -411,7 +454,12 @@ traffic write the verdict and keeps the probe for the idle case, where nothing e
 | A stall begins and ends between two 300-second ticks and is never recorded | High | D4 makes the failing call the writer. AC-9 fails if the record depends on a tick |
 | An application 500 from a healthy origin raises the retry card | High | D3 excludes `LLMServerError`. AC-3 drives that case and fails on a card |
 | The registry key collides across two model calls in one trace | Medium | Keyed on the per-call `span_id` plus attempt. AC-7 drives two calls sharing a trace and an ordinal |
-| An availability read blocks all local dispatch on a cold start, or honours a stale `down` | Medium | D4 states the policy: honour a fresh `down`, treat absent or stale as available. AC-8 drives all four states |
+| A proven `down` decays to available on the TTL, re-admitting dispatch to a dead origin | High | D4 rule 3 makes `down` sticky until positive evidence. AC-8 and AC-10 both fail on a decaying `down` |
+| A stalled call marks the provider `down` while a sibling streams | High | D4 rule 1: progress outranks silence. AC-5(f) fails on a `down` |
+| A slow probe's write overwrites a newer call-written `down` | Medium | D4 rule 2 orders on observation time, not write time. AC-5(h) fails if the stale write lands |
+| A sticky `down` blocks dispatch long after the origin recovers | Medium | D4 rule 4 shortens the probe interval while `down`. AC-10 fails if recovery needs a real call |
+| An availability read blocks every local call on a cold start | Medium | An absent verdict reads as available. AC-8's fifth state fails otherwise |
+| A failed health write masks the caller's real error | Medium | Publishing is best-effort. AC-8 asserts the original error survives |
 | The registry leaks records on an exception the enumerated list missed | Medium | Removal is a `finally` around the whole attempt, not an enumeration. AC-7 drives exception exits |
 | A failed attempt's partial text is concatenated into a later attempt's reply | Medium | Per-attempt sink. AC-7 asserts it |
 | The probe's own query triggers thinking and times out, reporting a false `down` | Medium | AC-5(a) fails on an idle healthy box that does not read `up` |
@@ -431,8 +479,12 @@ traffic write the verdict and keeps the probe for the idle case, where nothing e
 - `src/personal_agent/llm_client/` — the new in-flight local-call registry.
 - `src/personal_agent/llm_client/provider_health.py` — reads the published verdict under the stated
   freshness policy, never generates.
-- `src/personal_agent/observability/slm_health/cache.py` — a second writer, and a reader that
-  distinguishes fresh, stale and absent.
+- `src/personal_agent/observability/slm_health/cache.py` — observation-time ordering on write, a
+  sticky `down`, and a reader that distinguishes uncleared, fresh, expired and absent.
+- `src/personal_agent/observability/slm_health/snapshot.py` — `SlmHealthSnapshot` gains the
+  observation stamp and the writer's identity that rule 2 orders on.
+- `src/personal_agent/observability/slm_health/scheduler_runner.py` — the shortened interval while
+  the verdict is `down`.
 - `src/personal_agent/orchestrator/constraint_options.py` — the `model_unreachable` entry.
 - `src/personal_agent/orchestrator/executor.py` — a typed-error branch before the generic failure
   handler (line 6410), and a per-attempt `progress_sink` on the primary call (line 6208).
@@ -488,11 +540,12 @@ reopens this ADR.
   completed work. Answer `retry_once_more` with an origin that then succeeds, and assert the turn
   replies with that attempt's generated answer. Repeat, answer `stop_and_report`, and assert the
   reply carries both the sub-agent output and the partial primary content held in the attempt's
-  sink. Then drive four negatives: the same failure inside a sub-agent, the same failure on a cloud
-  primary, an application 500 from a reachable local origin, and an `LLMInvalidResponse`. · *Fails
-  if* the turn ends before the card, if any of the four negatives raises a card, if
-  `retry_once_more`'s outcome is discarded, or if `stop_and_report` returns a bare error with the
-  completed work dropped.
+  sink. Assert a wall-clock expiry also raises the card, after exactly one attempt. Then drive five
+  negatives: the same failure inside a sub-agent, the same failure on a cloud primary, an
+  application 500 from a reachable local origin, a 4xx, and an `LLMInvalidResponse`. · *Fails if*
+  the turn ends before the card, if a wall-clock expiry raises no card or raises one after two
+  attempts, if any of the five negatives raises a card, if `retry_once_more`'s outcome is discarded,
+  or if `stop_and_report` returns a bare error with the completed work dropped.
 
 - **AC-4 — The card's fallbacks behave as declared, in all three.** · **Check:** (a) Let the card
   time out — assert `stop_and_report` applied. (b) Drop the socket and reconnect inside the
@@ -505,11 +558,15 @@ reopens this ADR.
   **Check:** (a) Idle and healthy → `up` within the probe's own bound. (b) Idle and slow →
   `degraded`. (c) Idle and unanswering → `down`. (d) A local call in flight, silent past the
   threshold → `down`, **and** the probe issued no request of its own. (e) The origin saturated by
-  legitimate long calls that are still streaming → `up` or `degraded`. (f) With a probe holding its
-  slot, dispatch a `USER_FACING` primary call and assert it acquires the primary's own slot without
-  waiting on the probe. · *Fails if* any state returns another's verdict, if the probe generates
-  while a call is in flight, if (a) times out — which shows the probe's query is thinking — or if
-  (f) blocks.
+  legitimate long calls that are still streaming → `up` or `degraded`. (f) One stalled call beside
+  one still streaming, both in flight → not `down`. (g) With the provider semaphore at its full
+  capacity of 3 and a probe among the holders, dispatch a `USER_FACING` primary call and record its
+  slot-acquisition wait; repeat with three real calls instead. Assert the probe case waits no
+  longer. (h) Start a probe against a slow origin, and while it is in flight let a real call fail:
+  assert the probe's later write does not replace the call's `down`. · *Fails if* any state returns
+  another's verdict, if the probe generates while a call is in flight, if (a) times out — which
+  shows the probe's query is thinking — if (f) reports `down`, if (g) shows the probe adding
+  measurable wait, or if (h) lets the stale write land.
 
 - **AC-6 — Silence is measured from dispatch, and a thinking phase is not silence.** · **Check:**
   (a) Drive a primary call whose response opens with a reasoning phase longer than the gap bound
@@ -528,21 +585,34 @@ reopens this ADR.
   failed first. · *Fails if* any ended attempt remains registered, if the two same-ordinal calls
   collide or overwrite, or if failed-attempt text appears in a later reply.
 
-- **AC-8 — An availability check costs no generation, follows the stated freshness policy, and
-  never raises.** · **Check:** Call `is_provider_available` for `slm_local` with the box idle and
-  assert no completion request reaches the origin. Then drive four verdict states — a fresh `down`,
-  a fresh `up`, a stale verdict past the TTL, and no verdict at all on a cold start — and assert
-  the return is `False`, `True`, `True`, `True` in that order. Then force each new failure path —
-  registry unavailable, completion request rejected, malformed response — and assert
-  `probe_slm_health` returns a snapshot every time. · *Fails if* an availability read triggers a
-  completion, if any of the four states returns the wrong answer, or if any path raises instead of
-  returning a snapshot.
+- **AC-8 — An availability check costs no generation, follows the state model, and never raises.** ·
+  **Check:** Call `is_provider_available` for `slm_local` with the box idle and
+  assert no completion request reaches the origin. Then drive five verdict states — an uncleared
+  `down`, a `down` written longer than the TTL ago with nothing since, a fresh `up`, an `up` past
+  the TTL, and no verdict at all on a cold start — and assert the return is `False`, `False`,
+  `True`, `True`, `True` in that order. Then force each new failure path —
+  registry unavailable, completion request rejected, malformed response, health write rejected —
+  and assert
+  `probe_slm_health` returns a snapshot every time, and that a rejected health write never replaces
+  the caller's own error. · *Fails if* an availability read triggers a completion, if any of the
+  five states returns the wrong answer — the second is the one a decaying `down` fails — or if any
+  path raises instead of returning a snapshot.
 
-- **AC-9 — A stall shorter than the probe interval is still recorded.** · **Check:** With the
-  scheduler's 300-second probe disabled entirely, drive one local call into a silent origin and let
-  its gap bound fire. Assert a `down` verdict is published, attributed to that call's trace_id,
-  before any scheduled probe runs. · *Fails if* no verdict is published without a tick, which shows
-  the observation still depends on sampling a condition shorter than the sampling interval.
+- **AC-9 — A stall shorter than the probe interval is still recorded, from either evidence.** ·
+  **Check:** With the scheduler's 300-second probe disabled entirely, drive one local call into a
+  silent origin and let its gap bound fire. Assert a `down` verdict is published, attributed to
+  that call's trace_id, before any scheduled probe runs. Repeat with a refused connection instead
+  of a silent origin. · *Fails if* either case publishes no verdict without a tick, which shows the
+  observation still depends on sampling a condition shorter than the sampling interval.
+
+- **AC-10 — A `down` clears only on positive evidence, and recovery is detected without traffic.** ·
+  **Check:** Drive a local call into a silent origin so it publishes `down`. Send no further
+  traffic. Wait past the 45-second cache TTL and assert `is_provider_available` still returns
+  `False`. Then let the origin recover and assert the verdict flips to `up` from the probe alone,
+  within the shortened `down`-state interval and with no real call in between. Separately, publish
+  a `down`, then complete one successful local call, and assert the verdict is `up`. · *Fails if*
+  the `down` decays to available on the TTL alone, if recovery needs a real call to be noticed, or
+  if a successful call leaves the `down` standing.
 
 **Where these are adjudicated.** On FRE-1398, this ADR's umbrella ticket, once the implementation
 chain has landed and deployed. Not at merge of this ADR, and not by any single implementation

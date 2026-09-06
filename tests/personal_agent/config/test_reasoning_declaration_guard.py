@@ -23,8 +23,11 @@ from pathlib import Path
 import pytest
 
 from personal_agent.config.config_guard import (
+    _load_yaml,
     _project_default_mode,
+    _reachable_llm_deployment_keys,
     check_reasoning_declaration,
+    load_matrix,
     run_all_checks,
 )
 from tests._helpers.litellm_capability import pinned_litellm_capabilities
@@ -276,3 +279,67 @@ class TestProjectDefaultModeOntoPreD3aShape:
 
     def _project_default_mode_deployment(self, mode_body: dict[str, object]) -> dict[str, object]:
         return _project_default_mode(self._deployment({"default": mode_body}))
+
+
+class TestOpenSelectionWalksEverySelectableEntry:
+    """FRE-1441 AC-1/AC-2 (ADR-0145 D3b, FRE-1421 F15) — an `open` role's picker
+    offers every kind: llm catalog entry, not only the one its own binding
+    names. The guard used to walk only ``bindings:``, so a model reachable
+    solely through open selection — ``qwen3.8-27b-ovh``, which no binding
+    names — passed by never being asked.
+    """
+
+    def test_the_real_repos_eight_kind_llm_entries_are_all_reachable(self) -> None:
+        """AC-1 — every entry the primary picker can offer is in the walked set."""
+        catalog = _load_yaml(_REPO_ROOT / "config" / "models.yaml")
+        bindings = load_matrix(_REPO_ROOT).get("bindings")
+        assert isinstance(bindings, dict)
+        reachable = _reachable_llm_deployment_keys(catalog["models"], bindings)
+        assert reachable == {
+            "qwen3.6-35b-thinking",
+            "qwen3.8-flash-next",
+            "qwen3.8-flash-next-instruct",
+            "qwen3.6-35b-instruct",
+            "qwen3.8-27b-ovh",
+            "claude_sonnet",
+            "claude_haiku",
+            "gpt-5.4-mini",
+        }
+
+    def test_an_open_selectable_unbound_model_is_walked_and_clean(self) -> None:
+        """The walk must not false-flag a properly declared, unbound entry."""
+        assert check_reasoning_declaration(_FIXTURES / "open_selection_covered") == []
+
+    def test_an_open_selectable_unbound_model_fails_when_undeclared(self) -> None:
+        """AC-2 — the seeded negative: this is the exact model that passes today."""
+        messages = _checks(_FIXTURES / "open_selection_uncovered", "reasoning_declaration_missing")
+        assert len(messages) == 1
+        assert "qwen3.8-27b-ovh" in messages[0]
+
+
+class TestThinkingBudgetTokensNoLongerSatisfies:
+    """FRE-1441 AC-5 — ``thinking_budget_tokens`` left the local dialect under
+    ADR-0145 D3a and is no longer a declaration this guard accepts. Neither
+    schema declares the field any more, so only a raw-YAML read (this guard's
+    own, and the pre-D3a-shaped fixture below) can even carry it.
+    """
+
+    def test_a_local_deployment_declaring_only_the_stale_field_fails(self) -> None:
+        messages = _checks(
+            _FIXTURES / "stale_local_thinking_field", "reasoning_declaration_missing"
+        )
+        assert len(messages) == 1
+        assert "local_only" in messages[0]
+
+
+class TestAnthropicBudgetHasNoReasoningLever:
+    """FRE-1441 (ADR-0145 D3b/D6) — anthropic_budget (Claude Haiku's dialect) has
+    no field that expresses reasoning depth at all, so an undeclared thinking
+    value there is the vendor's own documented "no thinking" default, not the
+    unrequestable-default footgun this guard exists to catch on OVH. Walking
+    this model (it is open-selectable, like qwen3.8-27b-ovh) must not demand a
+    declaration the dialect cannot express.
+    """
+
+    def test_an_anthropic_budget_model_with_no_declaration_is_exempt(self) -> None:
+        assert check_reasoning_declaration(_FIXTURES / "anthropic_budget_exempt") == []

@@ -1,0 +1,9 @@
+# Fixture (FRE-1441, ADR-0145 D3b): `primary` is `open: true`, so its picker
+# offers every kind: llm entry — not only `local_primary`, the one this
+# binding names. `qwen3.8-27b-ovh` below is exactly that: no binding names it.
+roles:
+  primary: { all: local_primary }
+required_secrets:
+  local: []
+bindings:
+  primary: { deployment: local_primary, open: true }

@@ -305,14 +305,13 @@ class TestAC4RealCatalogEntriesAreBehaviourPreserving:
         assert mode.repeat_penalty == 1.0
 
     def test_qwen38_27b_ovh(self) -> None:
-        """No reasoning_effort before or after.
-
-        The provider default (xhigh, unrequestable per FRE-1430 F3) still
-        applies by omission, unchanged.
+        """FRE-1441 (ADR-0145 D3b): now declares `medium`, closing the gap the
+        reasoning guard left unwalked — the provider default (xhigh,
+        unrequestable per FRE-1430 F3) no longer applies by omission.
         """
         mode = load_model_config(_CATALOG).models["qwen3.8-27b-ovh"].resolve_mode()
         assert mode.temperature == 1.0
-        assert mode.reasoning_effort is None
+        assert mode.reasoning_effort == "medium"
 
     def test_claude_sonnet(self) -> None:
         """claude_sonnet's reasoning_effort: high becomes effort: high, same value."""

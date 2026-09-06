@@ -1,0 +1,32 @@
+# Fixture (FRE-1441, ADR-0145 D3b): the seeded negative (AC-2) — same shape as
+# open_selection_covered, minus qwen3.8-27b-ovh's reasoning_effort. No binding
+# names this key; before this ticket the guard never walked it and it passed
+# silently. A guard that does not fail here has not changed.
+providers:
+  slm_local: { auth: none, placement: local, max_concurrency: 2, dialect: llamacpp_qwen }
+  ovhcloud:
+    auth_env: managed_embedding_token
+    placement: cloud
+    max_concurrency: 50
+    dialect: ovh_qwen
+models:
+  local_primary:
+    id: "local/primary"
+    provider: slm_local
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 60
+    default_mode: default
+    modes:
+      default:
+        enable_thinking: true
+  qwen3.8-27b-ovh:
+    id: "Qwen3.8-27B"
+    provider: ovhcloud
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 60
+    default_mode: default
+    modes:
+      default:
+        temperature: 1.0

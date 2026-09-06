@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
 
     from personal_agent.config.settings import AppConfig
+    from personal_agent.llm_client.models import Dialect
 
 # model_loader.py imports from this module (resolve_role_model_key, ADR-0099
 # D1 stage 2) — this module must never import model_loader.py back, or that
@@ -903,8 +904,12 @@ def check_budget_role_coverage(root: Path) -> list[Finding]:
 #: Deployment fields that carry a reasoning declaration on the LOCAL dispatch
 #: path. The unified client sends these through litellm's ``extra_body``
 #: mechanism as chat-template arguments (ADR-0141 D4); ``reasoning_effort`` is
-#: never sent there.
-_LOCAL_REASONING_FIELDS: tuple[str, ...] = ("disable_thinking", "thinking_budget_tokens")
+#: never sent there. ``thinking_budget_tokens`` left this tuple under ADR-0145
+#: D3b: it left the local dialect entirely (measured wire-inert, FRE-1430 F2 /
+#: FRE-1423) and is no longer a field ``ModelDefinition`` or ``RoleBinding``
+#: declares — a leftover reference here would accept a raw-YAML value neither
+#: schema recognises any more, satisfying this guard while doing nothing.
+_LOCAL_REASONING_FIELDS: tuple[str, ...] = ("disable_thinking",)
 
 #: Deployment fields forwarded to litellm alongside the effort, which can make an
 #: otherwise-valid effort illegal. Mirrors
@@ -1005,6 +1010,31 @@ def _effective_reasoning(deployment: JSONDict, binding: JSONDict) -> JSONDict:
     return merged
 
 
+def _resolved_dialect(effective: JSONDict, provider_def: JSONDict) -> Dialect | None:
+    """The deployment's own dialect, or ``None`` when undeclared or unknown (ADR-0145 D3b).
+
+    Args:
+        effective: The deployment's effective configuration, already projected
+            onto the pre-D3a field names this check reads.
+        provider_def: The deployment's provider entry.
+
+    Returns:
+        The resolved :class:`~personal_agent.llm_client.models.Dialect`, or
+        ``None`` when no dialect is declared, or the declared string names none
+        that exists — an unknown dialect is the catalog loader's finding, not
+        this check's.
+    """
+    from personal_agent.llm_client.models import Dialect  # noqa: PLC0415
+
+    declared = effective.get("dialect") or provider_def.get("dialect")
+    if not isinstance(declared, str):
+        return None
+    try:
+        return Dialect(declared)
+    except ValueError:
+        return None
+
+
 def _dialect_declares_effort(effective: JSONDict, provider_def: JSONDict, effort: object) -> bool:
     """Whether the deployment's own dialect vouches for this effort (ADR-0145 D3b).
 
@@ -1027,22 +1057,46 @@ def _dialect_declares_effort(effective: JSONDict, provider_def: JSONDict, effort
     from personal_agent.llm_client.models import (  # noqa: PLC0415
         DIALECT_FIELDS,
         DIALECT_VALUE_DOMAINS,
-        Dialect,
     )
 
-    declared = effective.get("dialect") or provider_def.get("dialect")
-    if not isinstance(declared, str):
-        return False
-    try:
-        dialect = Dialect(declared)
-    except ValueError:
-        # An unknown dialect string is the catalog loader's finding, not this
-        # check's; falling through leaves the litellm probe to answer.
+    dialect = _resolved_dialect(effective, provider_def)
+    if dialect is None:
         return False
     if "reasoning_effort" not in DIALECT_FIELDS[dialect]:
         return False
     domain = DIALECT_VALUE_DOMAINS.get(dialect, {}).get("reasoning_effort")
     return domain is None or effort in domain
+
+
+def _dialect_has_no_reasoning_lever(effective: JSONDict, provider_def: JSONDict) -> bool:
+    """Whether the resolved dialect has no ``reasoning_effort``/``effort`` field at all.
+
+    True only for ``anthropic_budget`` (Claude Haiku): its lever is
+    ``budget_tokens``, and unlike every other dialect it has no field that
+    expresses reasoning depth at all — not even an explicit "off" value. So an
+    undeclared thinking value there is the vendor's own documented,
+    deterministic default (no ``thinking`` block sent — ADR-0145 D6's own
+    worker-mode row for this dialect: "thinking disabled"), not the
+    unrequestable-default footgun this guard exists to catch on OVH
+    (``xhigh``, FRE-1430 F3). A dialect this cannot resolve is NOT exempted —
+    it falls through so the missing-declaration finding still applies.
+
+    Args:
+        effective: The deployment's effective configuration, already projected
+            onto the pre-D3a field names this check reads.
+        provider_def: The deployment's provider entry.
+
+    Returns:
+        ``True`` only for a resolved dialect declaring neither
+        ``reasoning_effort`` nor ``effort`` in its accepted mode fields.
+    """
+    from personal_agent.llm_client.models import DIALECT_FIELDS  # noqa: PLC0415
+
+    dialect = _resolved_dialect(effective, provider_def)
+    if dialect is None:
+        return False
+    fields = DIALECT_FIELDS[dialect]
+    return "reasoning_effort" not in fields and "effort" not in fields
 
 
 def _check_one_reasoning_declaration(
@@ -1055,7 +1109,6 @@ def _check_one_reasoning_declaration(
     effort = effective.get("reasoning_effort")
     declares_local = (
         effective.get("disable_thinking") is True
-        or effective.get("thinking_budget_tokens") is not None
         or effective.get("_dialect_thinking_declared") is True
     )
 
@@ -1105,6 +1158,12 @@ def _check_one_reasoning_declaration(
         )
 
     if effort is None:
+        if _dialect_has_no_reasoning_lever(effective, provider_def):
+            # anthropic_budget (Claude Haiku): no field on this dialect expresses
+            # a reasoning depth at all, so omission is the vendor's own
+            # documented "no thinking" default rather than a choice nobody made
+            # (ADR-0145 D3b/D6) — nothing to declare, nothing to verify.
+            return findings
         return [
             *findings,
             Finding(
@@ -1199,8 +1258,70 @@ def _uses_tools(deployment: JSONDict) -> bool:
     return deployment.get("supports_function_calling", True) is True
 
 
+def _open_llm_roles(bindings: JSONDict) -> set[str]:
+    """Roles whose binding is ``open: true`` and requires ``kind: llm`` (ADR-0145 D3b).
+
+    Mirrors the authorization rule behind
+    :func:`personal_agent.config.model_loader.is_selectable_binding` (role-side
+    ``open`` AND model-side ``kind``) without a live
+    :class:`~personal_agent.config.model_loader.ModelConfig` — this module must
+    never import ``model_loader`` (see the note at the top of this file).
+
+    Args:
+        bindings: The ``bindings:`` mapping from ``config/model_roles.yaml``.
+
+    Returns:
+        The names of roles an end user may point at any ``kind: llm`` entry.
+    """
+    from personal_agent.llm_client.models import ModelKind, required_kind_for_role  # noqa: PLC0415
+
+    return {
+        role
+        for role, binding in bindings.items()
+        if isinstance(binding, dict)
+        and binding.get("open") is True
+        and required_kind_for_role(role) is ModelKind.LLM
+    }
+
+
+def _reachable_llm_deployment_keys(models: JSONDict, bindings: JSONDict) -> set[str]:
+    """Every ``kind: llm`` deployment key a real turn can reach (ADR-0145 D3b, FRE-1421 F15).
+
+    The bound set — one key per binding that names a ``kind: llm`` entry,
+    whatever that role's ``open`` policy — union the open-selectable set: when
+    at least one role is ``open`` to ``kind: llm``,
+    :func:`personal_agent.config.model_loader.role_candidates` offers that role
+    every ``kind: llm`` catalog entry, not only the one its own binding names
+    (``qwen3.8-27b-ovh`` reaches a real turn exactly this way, and no binding
+    names it). Live-only conditions (provider health, served-id confirmation)
+    are outside this check's remit; declaration correctness does not depend on
+    reachability at read time.
+
+    Args:
+        models: The ``models:`` mapping from ``config/models.yaml``.
+        bindings: The ``bindings:`` mapping from ``config/model_roles.yaml``.
+
+    Returns:
+        Deployment keys this check must validate.
+    """
+
+    def _is_llm(deployment: object) -> bool:
+        return isinstance(deployment, dict) and deployment.get("kind", "llm") == "llm"
+
+    bound = {
+        binding["deployment"]
+        for binding in bindings.values()
+        if isinstance(binding, dict)
+        and isinstance(binding.get("deployment"), str)
+        and _is_llm(models.get(binding["deployment"]))
+    }
+    if not _open_llm_roles(bindings):
+        return bound
+    return bound | {key for key, deployment in models.items() if _is_llm(deployment)}
+
+
 def check_reasoning_declaration(root: Path) -> list[Finding]:
-    """FRE-1007 — every role-bound llm deployment declares its reasoning depth, effectively.
+    """FRE-1007 — every selectable llm deployment declares its reasoning depth, effectively.
 
     The ticket's rule: a scheduled or background model call with no declared
     reasoning configuration must refuse to start — not warn, not default. The
@@ -1216,15 +1337,21 @@ def check_reasoning_declaration(root: Path) -> list[Finding]:
     So the check runs the declared value through litellm's own transformation for
     that exact model and requires a non-empty, non-raising result. Non-``llm``
     deployments (embedding, reranker) have no reasoning concept and are skipped by
-    kind; deployments no role binds are out of scope, since this is about
-    producers rather than the catalog at large.
+    kind.
+
+    ADR-0145 D3b / FRE-1421 F15: a bound-but-pinned deployment is checked WITH its
+    binding's own per-use overrides — the exact effective configuration a real
+    turn resolves. A deployment reachable only through an ``open`` role's picker
+    (:func:`_reachable_llm_deployment_keys`) has no such binding, so it is checked
+    bare; a user-selected substitute would carry none of another role's overrides
+    either.
 
     Args:
         root: Repository (or fixture) root holding ``config/``.
 
     Returns:
         One **safety** finding per violation — this fails CI and refuses boot,
-        rather than warning. Empty when every bound producer has declared.
+        rather than warning. Empty when every selectable deployment has declared.
     """
     catalog = _load_yaml(root / "config" / "models.yaml")
     matrix = load_matrix(root)
@@ -1236,6 +1363,7 @@ def check_reasoning_declaration(root: Path) -> list[Finding]:
     provider_rows: JSONDict = providers if isinstance(providers, dict) else {}
 
     findings: list[Finding] = []
+    checked: set[str] = set()
     for role, binding in sorted(bindings.items()):
         if not isinstance(binding, dict):
             continue
@@ -1256,6 +1384,22 @@ def check_reasoning_declaration(root: Path) -> list[Finding]:
                 role,
                 deployment_key,
                 _effective_reasoning(_project_default_mode(deployment), binding),
+                provider_def,
+            )
+        )
+        checked.add(deployment_key)
+
+    role_label = "/".join(sorted(_open_llm_roles(bindings)))
+    for deployment_key in sorted(_reachable_llm_deployment_keys(models, bindings) - checked):
+        deployment = models[deployment_key]
+        provider_def = provider_rows.get(str(deployment.get("provider") or ""))
+        if not isinstance(provider_def, dict):
+            continue
+        findings.extend(
+            _check_one_reasoning_declaration(
+                role_label,
+                deployment_key,
+                _effective_reasoning(_project_default_mode(deployment), {}),
                 provider_def,
             )
         )

@@ -332,6 +332,25 @@ class TestThinkingBudgetTokensNoLongerSatisfies:
         assert "local_only" in messages[0]
 
 
+class TestThinkingDisabledCheckIsNotTheDeclaredCheck:
+    """FRE-1441 self-review (feature-dev:code-reviewer) — `_dialect_thinking_declared`
+    is true for ANY explicit thinking choice (``enable_thinking: true`` included,
+    and any ``budget_tokens`` value), not only a disable. `thinking_disable_on_
+    tool_model` must key on the actual disable signal, or a Haiku deployment
+    correctly declaring `budget_tokens` (thinking ON, with a budget) on a
+    tool-using role would be false-flagged as though thinking were disabled.
+    """
+
+    def test_budget_tokens_with_tools_is_not_flagged_as_disabled(self) -> None:
+        assert not _checks(
+            _FIXTURES / "anthropic_budget_thinking_on_with_tools",
+            "thinking_disable_on_tool_model",
+        )
+        assert (
+            check_reasoning_declaration(_FIXTURES / "anthropic_budget_thinking_on_with_tools") == []
+        )
+
+
 class TestAnthropicBudgetHasNoReasoningLever:
     """FRE-1441 (ADR-0145 D3b/D6) — anthropic_budget (Claude Haiku's dialect) has
     no field that expresses reasoning depth at all, so an undeclared thinking

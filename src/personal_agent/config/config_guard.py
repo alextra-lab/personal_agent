@@ -1145,7 +1145,15 @@ def _check_one_reasoning_declaration(
         if effective.get(field) is not None
     }
 
-    if declares_local and _uses_tools(effective):
+    if effective.get("disable_thinking") is True and _uses_tools(effective):
+        # `declares_local` is deliberately NOT used here (FRE-1441 self-review):
+        # it is true whenever thinking was explicitly declared EITHER way
+        # (`_dialect_thinking_declared` covers `enable_thinking: true` and any
+        # `budget_tokens` value too), while this check exists only for the
+        # actual disable footgun. Reusing it would false-flag a Haiku deployment
+        # that correctly declares `budget_tokens` (thinking ON, with a budget)
+        # on a tool-using role — the opposite configuration this check exists
+        # to catch.
         findings.append(
             Finding(
                 "thinking_disable_on_tool_model",

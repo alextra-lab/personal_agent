@@ -38,6 +38,12 @@ PATTERNS = [
     (r"^\s*(import|from)\s+alembic\b", "alembic — project does not use Alembic; schema goes in docker/postgres/init.sql + migrations/"),
 ]
 
+# config/env_loader.py runs before AppConfig exists (it is what loads the .env
+# files AppConfig then reads), so its documented bootstrap os.getenv() reads are
+# exempt from that one rule — every other pattern still applies (FRE-1318).
+if path.endswith("src/personal_agent/config/env_loader.py"):
+    PATTERNS = [p for p in PATTERNS if "os.getenv" not in p[1]]
+
 violations = []
 for line_no, line in enumerate(payload.splitlines(), start=1):
     if line.lstrip().startswith("#"):

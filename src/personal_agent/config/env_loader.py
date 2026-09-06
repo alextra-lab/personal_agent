@@ -36,7 +36,9 @@ def get_environment() -> Environment:
 
     Note: This function uses os.getenv() directly because environment
     detection must happen before settings are loaded (chicken-and-egg problem).
-    This is the only acceptable use of direct environment variable access.
+    ``_integration_run`` and ``_running_under_pytest`` below read the same way, for
+    the same reason -- these three are the only acceptable direct
+    environment-variable reads in this module.
     """
     import os  # noqa: PLC0415
 
@@ -55,6 +57,35 @@ def get_environment() -> Environment:
 _env_loaded_for_root: Path | None = None
 
 
+def _integration_run() -> bool:
+    """Whether this run opted into real config via PERSONAL_AGENT_INTEGRATION=1.
+
+    Note: uses os.getenv() directly for the same bootstrap reason as
+    get_environment() -- this is read before settings exist.
+    """
+    import os  # noqa: PLC0415
+
+    return os.getenv("PERSONAL_AGENT_INTEGRATION") == "1"
+
+
+def _running_under_pytest() -> bool:
+    """Whether this process is a pytest run, as opposed to a standalone script.
+
+    ``APP_ENV=test`` alone is not a safe signal for "hermetic test run": several
+    scripts/eval/*/harness.py and scripts/study/config.py scripts set it too, purely
+    to satisfy FRE-375's substrate-redirection guard, while still making real LLM
+    calls that need ``.env``-sourced API keys. ``PYTEST_VERSION`` is set by pytest
+    itself, before any of this repo's code runs, so it distinguishes "under pytest"
+    from "APP_ENV=test set by a standalone script" (FRE-1318).
+
+    Note: uses os.getenv() directly for the same bootstrap reason as
+    get_environment() -- this is read before settings exist.
+    """
+    import os  # noqa: PLC0415
+
+    return os.getenv("PYTEST_VERSION") is not None
+
+
 def load_env_files(project_root: Path | None = None) -> None:
     """Load .env files in priority order (idempotent: only loads and logs once per process).
 
@@ -63,6 +94,16 @@ def load_env_files(project_root: Path | None = None) -> None:
     2. `.env.{environment}` (environment-specific)
     3. `.env.local` (local overrides, gitignored)
     4. `.env` (base configuration)
+
+    Skipped entirely when running under pytest with `environment ==
+    Environment.TEST`, unless `PERSONAL_AGENT_INTEGRATION=1` is set (FRE-1318): CI
+    never has a .env file, so a unit test run that loads the developer's real one
+    diverges from CI by construction, and closing that gap must not require a
+    marker on the individual test. Integration tests, which already set this flag,
+    opt back in to real config. Gating on pytest as well as the environment value
+    (rather than the environment alone) keeps this narrow to test runs -- standalone
+    scripts that set `APP_ENV=test` only for FRE-375 substrate redirection still get
+    their `.env`-sourced secrets.
 
     Args:
         project_root: Path to project root. If None, detects from current file location.
@@ -78,6 +119,15 @@ def load_env_files(project_root: Path | None = None) -> None:
 
     environment = get_environment()
     env_name = environment.value
+
+    if environment == Environment.TEST and _running_under_pytest() and not _integration_run():
+        _env_loaded_for_root = project_root
+        log.debug(
+            "env_files_skipped_hermetic_test",
+            environment=env_name,
+            project_root=str(project_root),
+        )
+        return
 
     # With override=False, first-loaded value wins. Load highest priority first.
     env_files = [

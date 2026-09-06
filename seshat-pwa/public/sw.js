@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v55-context-meter-cold-lane';
+const CACHE_NAME = 'seshat-v56-ws-session-gate';
 
 const PRECACHE_URLS = [
   '/',

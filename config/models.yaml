@@ -158,8 +158,8 @@ models:
     # entries are retained below, so reverting stays one line in each direction.
     #
     # The MBP holds only one model at this size (87 GiB), so qwen3.6-35-A3B and
-    # its -subagent sibling are disabled on the host; `sub_agent` moves to
-    # qwen3.6-27b-ovh (owner decision 2026-08-28) rather than self-pairing here,
+    # its -subagent sibling are disabled on the host; `sub_agent` moved to the
+    # OVH-managed entry (owner decision 2026-08-28) rather than self-pairing here,
     # which would serialise concurrent HYBRID sub-agents behind this single
     # llama-server at 21 t/s decode.
     #
@@ -296,12 +296,13 @@ models:
 
 
   # ── Managed Qwen (OVH AI Endpoints) ─────────────────────────────
-  qwen3.6-27b-ovh:
-    # Owner-directed 2026-08-05. The same Qwen3.6-27B, hosted by OVH instead of
-    # on the owner's Mac — added as a SELECTABLE alternative, not as the bound
-    # primary. `primary` stays on the local 35B; this appears in the PWA model
-    # picker because the primary binding is `open: true` and role_candidates
-    # offers every available llm-kind deployment.
+  qwen3.8-27b-ovh:
+    # Owner-directed 2026-08-05, moved to the 3.8 generation 2026-09-06 at the
+    # owner's request. Managed Qwen hosted by OVH instead of on the owner's Mac
+    # — a SELECTABLE alternative, not a bound role. No role binds this key; it
+    # appears in the PWA model picker because the primary binding is
+    # `open: true` and role_candidates offers every available llm-kind
+    # deployment.
     #
     # Motivation: the local 27B trial measured 66s on a single turn against a
     # ~40s median for the local 35B. The managed copy is expected to be
@@ -310,9 +311,9 @@ models:
     #
     # No api_base is needed: litellm ships a native `ovhcloud` provider whose
     # default base URL is byte-identical to the one declared above, so dispatch
-    # is `ovhcloud/Qwen3.6-27B` and the pricing registry keys on the same string.
+    # is `ovhcloud/Qwen3.8-27B` and the pricing registry keys on the same string.
     provider: ovhcloud
-    id: "Qwen3.6-27B"
+    id: "Qwen3.8-27B"
     # Provider truth, read from OVH's own model record rather than assumed.
     #
     # The 262144 window is NOT reachable today, and that is worth knowing before
@@ -342,21 +343,53 @@ models:
     # one local slot.
     max_concurrency: 25
     default_timeout: 300
-    # USD per token, quoted directly by OVH's model record (prompt / completion).
-    # Declared in the USD fields the pricing registry actually reads -- the EUR
-    # field used by the embedding entry is never read for chat models, so pricing
-    # here would silently register as zero if it were copied from that shape.
-    input_cost_per_token: 0.00000047     # $0.47/MTok
-    output_cost_per_token: 0.00000319    # $3.19/MTok
-    # Owner-directed 2026-08-05, "a good starting point". Matches the local
-    # primary so the two are comparable on this axis. It is the ONLY sampling
-    # parameter that reaches this model: the LiteLLM path sends temperature and
-    # not top_p, top_k, min_p, presence_penalty or repetition_penalty, so
-    # everything else runs at OVH's defaults. Declaring them here would read as
-    # configured while doing nothing -- the same trap as the thinking fields
-    # below. This model is therefore NOT parameter-comparable to the local one
-    # for evaluation purposes without a client change.
-    temperature: 0.6
+    # NOT copied from OVH's model record, and this is the one place the 3.8
+    # entry departs from "provider truth" -- deliberately, with the reason
+    # stated so a later reader does not "correct" it back.
+    #
+    # Read live 2026-09-06, the Qwen3.8-27B record reports pricing.prompt "0"
+    # and pricing.completion "0", while the model's own catalog page quotes
+    # EUR 0.4 /Mtok input and EUR 2.7 /Mtok output. The record was created
+    # 2026-09-03, so the zeros are far more likely an unpopulated launch-window
+    # record than a genuinely free model. Copying them would make every call
+    # bill at zero, which hides real spend from the cost gate -- the exact
+    # "silently register as zero" failure the outgoing entry's own comment
+    # warned about for a different reason.
+    #
+    # The declared values are carried forward from Qwen3.6-27B, which is sound
+    # arithmetic rather than a guess: that model's page quotes the SAME
+    # EUR 0.4 / EUR 2.7, and its populated record reports USD 0.00000047 /
+    # 0.00000319 -- an implied rate of ~1.18 applied to both figures. Same list
+    # price in, same conversion out.
+    #
+    # This fails SAFE. If the model really is free for now, the budget gate
+    # reserves more than it spends. Re-read the record once OVH populates it,
+    # and replace these with provider truth.
+    input_cost_per_token: 0.00000047     # $0.47/MTok (EUR 0.4 at the 3.6 entry's rate)
+    output_cost_per_token: 0.00000319    # $3.19/MTok (EUR 2.7 at the 3.6 entry's rate)
+    # 1.0 is the model card's THINKING-mode value, and thinking mode is the one
+    # this deployment actually runs in. Qwen3.8-27B ships with thinking ON by
+    # default, and it is disabled only through `enable_thinking` inside
+    # `chat_template_kwargs` -- an extra_body field the LiteLLM path does not
+    # send (see the note below). So we cannot select the instruct preset here
+    # even if we wanted it, and the thinking row is the honest one to follow.
+    #
+    # Card values, read 2026-09-06 from huggingface.co/Qwen/Qwen3.8-27B:
+    #   thinking  temperature 1.0, top_p 0.95, top_k 20, min_p 0.0, presence_penalty 0.0
+    #   instruct  temperature 0.7, top_p 0.80, top_k 20, min_p 0.0, presence_penalty 1.5
+    #
+    # This SUPERSEDES the outgoing 0.6, which was owner-directed 2026-08-05 as
+    # "a good starting point" chosen to match the then-local primary rather than
+    # read from a card.
+    #
+    # temperature stays the ONLY sampling parameter declared, because it is the
+    # only one that reaches this model: the LiteLLM path sends temperature and
+    # not top_p, top_k, min_p, presence_penalty or repetition_penalty. Declaring
+    # the other four would read as configured while doing nothing -- the same
+    # trap as the thinking fields below. Landing them properly is ADR work, not
+    # a config edit: FRE-1426 D3 puts a card's presets on the model as named
+    # `modes:`, with these exact numbers.
+    temperature: 1.0
     # PROVENANCE WARNING for the three capability flags below. OVH's models
     # endpoint returns exactly seven keys -- id, created, object, owned_by,
     # pricing, context_length, max_completion_tokens -- and no capability
@@ -366,9 +399,12 @@ models:
     # rather than inferring, which is how supports_vision was first set wrong.
     supports_function_calling: true
     tool_calling_strategy: "native"
-    # Console lists this model as Multimodal (also Function calling, Reasoning,
-    # Streaming; output formats raw_text / json_object / json_schema). Corrected
-    # from an initial fail-closed `false`, which was a guess, not a reading.
+    # OVH's own catalog page for Qwen3.8-27B lists Supported Features as
+    # Function calling, Multimodal, Reasoning and Streaming, with output
+    # formats raw_text / json_object / json_schema -- the identical set the
+    # console listed for Qwen3.6-27B, read 2026-09-06. Multimodal is what
+    # licenses `true` here. Confirm in the console if a vision turn misbehaves:
+    # this flag is the one that was first set wrong by inferring.
     supports_vision: true
     supports_pdf_document: false
     # NOTE: thinking_budget_tokens / disable_thinking are deliberately absent.

@@ -66,12 +66,12 @@ async def test_probe_passes_no_history_only_one_user_message(fake_client: _FakeC
 
 
 async def test_probe_pins_the_exact_requested_deployment(fake_client: _FakeClient) -> None:
-    await probe.classify_with_model("qwen3.6-27b-ovh", "How is your day going?")
-    assert fake_client.selection_at_call_time == "qwen3.6-27b-ovh"
+    await probe.classify_with_model("qwen3.8-27b-ovh", "How is your day going?")
+    assert fake_client.selection_at_call_time == "qwen3.8-27b-ovh"
 
 
 async def test_probe_selection_is_reset_after_the_call(fake_client: _FakeClient) -> None:
-    await probe.classify_with_model("qwen3.6-27b-ovh", "How is your day going?")
+    await probe.classify_with_model("qwen3.8-27b-ovh", "How is your day going?")
     assert get_current_selection(ModelRole.STUDY.value) is None
 
 

@@ -6,8 +6,8 @@ providers:
   ovhcloud:  { auth_env: managed_embedding_token, placement: cloud, max_concurrency: 50 }
   slm_local: { auth: none, placement: local, max_concurrency: 2 }
 models:
-  qwen3.6-27b-ovh:
-    id: "Qwen3.6-27B"
+  qwen3.8-27b-ovh:
+    id: "Qwen3.8-27B"
     provider: "ovhcloud"
     context_length: 262144
     max_concurrency: 25

@@ -122,7 +122,7 @@ class TestUnknownIsNotTheSameAsForbidden:
         """
         messages = _checks(_FIXTURES / "reasoning_undeclarable", "reasoning_declaration_missing")
         assert len(messages) == 1
-        assert "qwen3.6-27b-ovh" in messages[0]
+        assert "qwen3.8-27b-ovh" in messages[0]
 
     def test_verification_findings_are_policy_so_they_never_block_boot(self) -> None:
         """Only locally-decidable facts may refuse a boot."""

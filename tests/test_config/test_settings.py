@@ -315,6 +315,60 @@ class TestEnvFileLoading:
             if "TEST_VAR" in os.environ:
                 del os.environ["TEST_VAR"]
 
+    def test_env_files_skipped_by_default_in_test_environment(self, tmp_path: Path) -> None:
+        """FRE-1318: a unit test run must not load a developer's real .env.
+
+        CI never has a .env file, so a local run that loads one diverges from CI by
+        construction. ``APP_ENV=test`` (conftest's default for the whole suite) must
+        skip file loading with no marker required on the individual test.
+        """
+        (tmp_path / ".env").write_text("FRE_1318_TEST_VAR=from_dotenv\n")
+        original_app_env = os.environ.get("APP_ENV")
+        original_integration = os.environ.get("PERSONAL_AGENT_INTEGRATION")
+        os.environ["APP_ENV"] = "test"
+        os.environ.pop("PERSONAL_AGENT_INTEGRATION", None)
+        try:
+            from personal_agent.config.env_loader import load_env_files
+
+            load_env_files(tmp_path)
+            assert os.getenv("FRE_1318_TEST_VAR") is None
+        finally:
+            if original_app_env is not None:
+                os.environ["APP_ENV"] = original_app_env
+            else:
+                os.environ.pop("APP_ENV", None)
+            if original_integration is not None:
+                os.environ["PERSONAL_AGENT_INTEGRATION"] = original_integration
+            os.environ.pop("FRE_1318_TEST_VAR", None)
+
+    def test_env_files_loaded_when_integration_opt_in_set(self, tmp_path: Path) -> None:
+        """FRE-1318: PERSONAL_AGENT_INTEGRATION=1 is the escape hatch back to real .env.
+
+        Mirrors FRE-375's AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE posture, applied
+        to configuration instead of substrate — reuses the flag every integration
+        test already sets rather than adding a second one.
+        """
+        (tmp_path / ".env").write_text("FRE_1318_TEST_VAR=from_dotenv\n")
+        original_app_env = os.environ.get("APP_ENV")
+        original_integration = os.environ.get("PERSONAL_AGENT_INTEGRATION")
+        os.environ["APP_ENV"] = "test"
+        os.environ["PERSONAL_AGENT_INTEGRATION"] = "1"
+        try:
+            from personal_agent.config.env_loader import load_env_files
+
+            load_env_files(tmp_path)
+            assert os.getenv("FRE_1318_TEST_VAR") == "from_dotenv"
+        finally:
+            if original_app_env is not None:
+                os.environ["APP_ENV"] = original_app_env
+            else:
+                os.environ.pop("APP_ENV", None)
+            if original_integration is not None:
+                os.environ["PERSONAL_AGENT_INTEGRATION"] = original_integration
+            else:
+                os.environ.pop("PERSONAL_AGENT_INTEGRATION", None)
+            os.environ.pop("FRE_1318_TEST_VAR", None)
+
 
 class TestLoadAppConfig:
     """Test load_app_config function."""

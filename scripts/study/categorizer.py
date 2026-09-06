@@ -147,6 +147,10 @@ async def _call_llm(prompt: str, *, trace_id: str | None) -> dict[str, Any]:
         provider=model_def.provider or "anthropic",
         max_tokens=4096,
         budget_role="study",
+        # FRE-1440: the definition is what carries the dialect and the declared
+        # mode. Without it this catalog-backed call site lands on the
+        # no-dialect path and silently loses the entry's declared parameters.
+        model_def=model_def,
     )
     response = await client.respond(
         role=ModelRole.STUDY,

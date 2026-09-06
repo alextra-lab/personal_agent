@@ -176,6 +176,40 @@ DIALECT_VALUE_DOMAINS: dict[Dialect, dict[str, frozenset[str]]] = {
 }
 
 
+def dialect_accepts(dialect: Dialect, param: str) -> bool:
+    """Whether a **call-site** parameter name is in this dialect's vocabulary (ADR-0145 D2/D3a).
+
+    :data:`DIALECT_FIELDS` names the *configuration* fields a mode may set. One
+    of them is spelled differently at the call site: ``anthropic_adaptive``
+    declares ``effort`` in the catalog and takes ``reasoning_effort`` as the
+    kwarg, because litellm's transformation is the wire there and
+    ``reasoning_effort`` is the kwarg it transforms. The alias is one-way on
+    purpose — ``anthropic_budget``'s lever is ``budget_tokens``, so a call site
+    passing ``reasoning_effort`` to Haiku is rejected rather than quietly
+    routed through litellm's legacy budget mapping, which also rewrites
+    ``max_tokens`` (FRE-1430 F5).
+
+    This answers **field membership only**. Two dialects carry rules that
+    relate two fields to each other — ``openai_gpt5`` accepts temperature and
+    top_p only at effort ``none``, and ``anthropic_budget`` takes temperature
+    XOR top_p. Both are enforced on the declarative side by
+    :meth:`ModelConfig._llm_deployments_declare_valid_modes`, and a combination
+    assembled at a call site is refused by the provider itself, which is the
+    outcome ``drop_params: off`` exists to preserve.
+
+    Args:
+        dialect: The resolved dialect of the model being dispatched to.
+        param: The call-site keyword name (e.g. ``"temperature"``).
+
+    Returns:
+        ``True`` when the dialect accepts that parameter.
+    """
+    accepted = DIALECT_FIELDS[dialect]
+    if param == "reasoning_effort":
+        return "reasoning_effort" in accepted or "effort" in accepted
+    return param in accepted
+
+
 class ModelKind(str, Enum):
     """What a deployment *is* (ADR-0121 Layer 2).
 
@@ -568,6 +602,29 @@ class ModelDefinition(BaseModel):
             )
         return self.modes[key]
 
+    def resolve_dialect(self, provider_def: "ProviderDefinition | None") -> Dialect | None:
+        """Return this model's wire vocabulary: its own override, else its provider's.
+
+        The single source of the resolution rule, shared by catalog load
+        (:meth:`ModelConfig._llm_deployments_declare_valid_modes`) and the
+        dispatch path (``LiteLLMClient``), so the vocabulary the loader
+        validates against and the one the client builds from cannot drift.
+
+        Args:
+            provider_def: The model's provider entry, or ``None`` when the
+                provider is not declared in the catalog.
+
+        Returns:
+            The resolved :class:`Dialect`, or ``None`` when neither the model
+            nor its provider declares one. ``None`` is unreachable for a
+            ``kind: llm`` deployment loaded through :class:`ModelConfig`, which
+            refuses to load one; it is reachable for a definition constructed
+            outside the catalog.
+        """
+        if self.dialect is not None:
+            return self.dialect
+        return provider_def.dialect if provider_def is not None else None
+
     @model_validator(mode="after")
     def _min_max_concurrency(self) -> "ModelDefinition":
         """Ensure min_concurrency does not exceed max_concurrency."""
@@ -685,7 +742,7 @@ class ModelConfig(BaseModel):
                     "at least one entry and a default_mode naming it (ADR-0145 D3a)"
                 )
             provider_def = self.providers.get(definition.provider or "")
-            dialect = definition.dialect or (provider_def.dialect if provider_def else None)
+            dialect = definition.resolve_dialect(provider_def)
             if dialect is None:
                 raise ValueError(
                     f"deployment {key!r} has no dialect — declare one on the model "

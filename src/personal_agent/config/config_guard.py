@@ -1005,6 +1005,46 @@ def _effective_reasoning(deployment: JSONDict, binding: JSONDict) -> JSONDict:
     return merged
 
 
+def _dialect_declares_effort(effective: JSONDict, provider_def: JSONDict, effort: object) -> bool:
+    """Whether the deployment's own dialect vouches for this effort (ADR-0145 D3b).
+
+    True only when the dialect's thinking lever **is** ``reasoning_effort`` and
+    the declared value sits inside that dialect's own domain. Both Anthropic
+    dialects fail the first test — their levers are ``effort`` and
+    ``budget_tokens``, and litellm's transformation is what puts them on the
+    wire — so they keep the litellm probe that follows this check.
+
+    Args:
+        effective: The deployment's effective configuration, already projected
+            onto the pre-D3a field names this check reads.
+        provider_def: The deployment's provider entry.
+        effort: The declared effort value.
+
+    Returns:
+        ``True`` when the dialect is the authority for this value, so the
+        litellm probe would add nothing and can be skipped.
+    """
+    from personal_agent.llm_client.models import (  # noqa: PLC0415
+        DIALECT_FIELDS,
+        DIALECT_VALUE_DOMAINS,
+        Dialect,
+    )
+
+    declared = effective.get("dialect") or provider_def.get("dialect")
+    if not isinstance(declared, str):
+        return False
+    try:
+        dialect = Dialect(declared)
+    except ValueError:
+        # An unknown dialect string is the catalog loader's finding, not this
+        # check's; falling through leaves the litellm probe to answer.
+        return False
+    if "reasoning_effort" not in DIALECT_FIELDS[dialect]:
+        return False
+    domain = DIALECT_VALUE_DOMAINS.get(dialect, {}).get("reasoning_effort")
+    return domain is None or effort in domain
+
+
 def _check_one_reasoning_declaration(
     role: str, deployment_key: str, effective: JSONDict, provider_def: JSONDict
 ) -> list[Finding]:
@@ -1075,6 +1115,19 @@ def _check_one_reasoning_declaration(
                 "one explicitly; 'none' is the deliberate no-reasoning choice (FRE-1007).",
             ),
         ]
+
+    # ── The declared dialect answers first (ADR-0145 D3b) ────────────────────
+    # litellm's map is wrong about OVH at the *provider* level and cannot become
+    # right: its supported-parameter list for `ovhcloud` is OpenAIGPTConfig's
+    # base list, which has no `reasoning_effort`, and the transformation adds
+    # nothing to it (FRE-1430 F8). So the guard would report a correct
+    # declaration as unverified, or — the day litellm gains a cost-map row —
+    # as rejected. A declared dialect states what the provider accepts, and
+    # FRE-1430 F9 measured the provider honouring the value once the client
+    # forwards it. Where litellm's transformation *is* the wire (Anthropic), its
+    # map stays the oracle and the probe below still runs.
+    if _dialect_declares_effort(effective, provider_def, effort):
+        return findings
 
     from personal_agent.llm_client.reasoning import (  # noqa: PLC0415 — SDK stays behind the seam
         provider_reasoning_support,

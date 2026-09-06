@@ -115,8 +115,12 @@ class RoleResolution:
     role: str
     deployment_key: str
     served_model_id: str
-    disable_thinking: bool
-    thinking_budget_tokens: int | None
+    #: ADR-0145 D3a moved sampler and thinking values into named modes. The two
+    #: fields reported here before — `disable_thinking` and
+    #: `thinking_budget_tokens` — no longer exist on the definition; the second
+    #: is gone for good, because FRE-1430 F2 measured it wire-inert.
+    mode: str
+    enable_thinking: bool | None
     endpoint: str
 
 
@@ -212,13 +216,13 @@ def render_markdown(resolutions: list[RoleResolution], results: list[PlannerCall
         "",
         "## AC-1 — live-resolved role binding",
         "",
-        "| role | deployment | served id | disable_thinking | thinking_budget_tokens |",
+        "| role | deployment | served id | mode | enable_thinking |",
         "|---|---|---|---|---|",
     ]
     for r in resolutions:
         lines.append(
             f"| {r.role} | {r.deployment_key} | {r.served_model_id} | "
-            f"{r.disable_thinking} | {r.thinking_budget_tokens} |"
+            f"{r.mode} | {r.enable_thinking} |"
         )
 
     lines += [
@@ -310,8 +314,8 @@ async def amain(args: argparse.Namespace) -> int:
                 role=role.value,
                 deployment_key=key,
                 served_model_id=model_def.id,
-                disable_thinking=bool(model_def.disable_thinking),
-                thinking_budget_tokens=model_def.thinking_budget_tokens,
+                mode=model_def.default_mode or "",
+                enable_thinking=model_def.resolve_mode().enable_thinking,
                 endpoint=endpoint.rstrip("/"),
             )
         )

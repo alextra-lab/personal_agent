@@ -8,7 +8,7 @@ measures where they disagree. Feeds FRE-1288 with data.
 
 1. **Deterministic** — `classify_intent()` called directly. No I/O.
 2. **Probe** — a raw, stateless, single-turn LLM call per model
-   (`qwen3.6-35b-thinking`, `qwen3.6-27b-ovh`, `claude_sonnet`) with the taxonomy injected
+   (`qwen3.6-35b-thinking`, `qwen3.8-27b-ovh`, `claude_sonnet`) with the taxonomy injected
    and *no tools, no history*. Contamination-free by construction — there is nothing for
    `search_memory` to be.
 3. **Behavioral** (optional, `--behavioral`) — a live full turn through the **isolated eval

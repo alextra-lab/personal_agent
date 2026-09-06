@@ -409,7 +409,7 @@ class TestStage7BudgetResolvesActiveSelection:
     deployment at its full natural window (262,144), so no ``kind: llm``
     deployment left in
     the catalog is smaller than the static fallback (120000) any more — every
-    real chat-capable candidate (the local Qwen pair, ``qwen3.6-27b-ovh``,
+    real chat-capable candidate (the local Qwen pair, ``qwen3.8-27b-ovh``,
     ``claude_sonnet``/``claude_haiku``, ``gpt-5.4-mini`` at 128000) now exceeds
     it. ``resolve_active_context_length`` resolves purely off a deployment's
     ``context_length`` field regardless of ``kind`` (``config/model_loader.py``),

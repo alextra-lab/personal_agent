@@ -37,7 +37,7 @@ from personal_agent.telemetry.trace import SystemTraceContext
 log = structlog.get_logger(__name__)
 
 #: The three primaries FRE-1337 asks to compare (ticket "What to build").
-MODEL_KEYS: tuple[str, ...] = ("qwen3.6-35b-thinking", "qwen3.6-27b-ovh", "claude_sonnet")
+MODEL_KEYS: tuple[str, ...] = ("qwen3.6-35b-thinking", "qwen3.8-27b-ovh", "claude_sonnet")
 
 _VALID_TASK_TYPES = {member.value for member in TaskType}
 

@@ -21,7 +21,7 @@ _QWEN_FLASH_INSTRUCT = "qwen3.8-flash-next-instruct"
 _CLAUDE_SONNET = "claude_sonnet"
 _CLAUDE_HAIKU = "claude_haiku"
 _GPT_MINI = "gpt-5.4-mini"
-_QWEN_27B_OVH = "qwen3.6-27b-ovh"
+_QWEN_27B_OVH = "qwen3.8-27b-ovh"
 
 _EXPECTED_DEFAULTS_BY_PRIMARY = {
     # One entry per primary-eligible deployment. This key appeared twice until

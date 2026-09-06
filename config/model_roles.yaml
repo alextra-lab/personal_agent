@@ -163,7 +163,7 @@ bindings:
       qwen3.8-flash-next-instruct: qwen3.8-flash-next-instruct  # self-pair — it IS the instruct half of the single served model  # 2026-09-03: slm_server collapsed to one served model; the instruct sibling is the SAME id with disable_thinking. Supersedes the FRE-1319 cloud pairing, which routed sub_agent (and recall paraphrasing) to OpenAI.
       qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
       qwen3.6-35b-instruct: qwen3.6-35b-instruct  # self-pair — no cheaper local companion
-      qwen3.6-27b-ovh:      qwen3.6-27b-ovh       # self-pair — no cheaper OVH-hosted companion
+      qwen3.8-27b-ovh:      qwen3.8-27b-ovh       # self-pair — no cheaper OVH-hosted companion
       claude_sonnet:        claude_sonnet          # frontier primary -> itself (no cheaper same-family sub)
       claude_haiku:         claude_haiku           # self-pair — already the cheap Anthropic tier
       gpt-5.4-mini:         gpt-5.4-mini           # self-pair — no cheaper GPT tier in the catalog

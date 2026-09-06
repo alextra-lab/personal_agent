@@ -121,10 +121,11 @@ def _run_sample(days: int, min_output_chars: int) -> int:
             print(f"scanned:  {len(docs)} zero-tool-call captures since {since.isoformat()}")
             print(f"alerted:  {len(alerts)}")
             for doc in alerts:
+                # spec_task, like full_output, is derived from the user's real request —
+                # never printed verbatim; only identifiers and a digest cross this boundary.
                 digest = hashlib.sha256(str(doc.get("full_output", "")).encode()).hexdigest()
                 print(
-                    f"  trace_id={doc.get('trace_id')} task_id={doc.get('task_id')} "
-                    f"spec_task={doc.get('spec_task')!r} sha256={digest}"
+                    f"  trace_id={doc.get('trace_id')} task_id={doc.get('task_id')} sha256={digest}"
                 )
             return 0
         finally:
@@ -148,8 +149,11 @@ def _run_replay(trace_id: str, task_id: str) -> int:
                 print(f"no capture found for trace_id={trace_id} task_id={task_id}")
                 return 2
             full_output = str(doc.get("full_output", ""))
-            tools_used = doc.get("tools_used") or []
-            verdict = detect_unmeasured_claim(list(tools_used), full_output)  # type: ignore[arg-type]
+            raw_tools_used = doc.get("tools_used") or []
+            tools_used = (
+                [str(t) for t in raw_tools_used] if isinstance(raw_tools_used, list) else []
+            )
+            verdict = detect_unmeasured_claim(tools_used, full_output)
             digest = hashlib.sha256(full_output.encode()).hexdigest()
             print(f"trace_id:   {trace_id}")
             print(f"task_id:    {task_id}")

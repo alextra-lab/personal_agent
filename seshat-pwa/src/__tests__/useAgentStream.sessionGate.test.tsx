@@ -44,6 +44,10 @@ vi.mock('@/lib/uuid', () => ({
 }));
 
 import { useAgentStream } from '@/hooks/useAgentStream';
+import { getSessionMessages, sendChatMessage } from '@/lib/agui-client';
+
+const mockGetSessionMessages = getSessionMessages as Mock;
+const mockSendChatMessage = sendChatMessage as Mock;
 
 function renderStream(initialSessionId: string) {
   return renderHook(
@@ -54,6 +58,10 @@ function renderStream(initialSessionId: string) {
 
 beforeEach(() => {
   connections = {};
+  mockGetSessionMessages.mockReset();
+  mockGetSessionMessages.mockResolvedValue([]);
+  mockSendChatMessage.mockReset();
+  mockSendChatMessage.mockResolvedValue(undefined);
 });
 
 describe('useAgentStream — WS session gate (FRE-1414)', () => {
@@ -157,5 +165,136 @@ describe('useAgentStream — WS session gate (FRE-1414)', () => {
 
     // B is mid-turn — a stray DONE meant for A must not end it.
     expect(hookA.result.current.isStreaming).toBe(true);
+  });
+
+  it("switching away from A clears its transcript and terminal-turn cards (messages, cancelled, resolvedConstraints, budgetDenied, classifiedError)", async () => {
+    const hook = renderStream('session-a');
+    await act(async () => {
+      await hook.result.current.sendMessage('hi', 'session-a', 'local');
+    });
+
+    act(() => {
+      connections['session-a'].onEvent({ type: 'TEXT_DELTA', session_id: 'session-a', data: { text: 'partial reply' }, seq: 1 });
+      connections['session-a'].onEvent({
+        type: 'CONSTRAINT_RESOLVED',
+        request_id: 'req-a',
+        session_id: 'session-a',
+        data: { constraint: 'artifact_builder', action_id: 'fast', resolution: 'user_choice' },
+        seq: 2,
+      });
+      connections['session-a'].onEvent({ type: 'CANCELLED', session_id: 'session-a', data: {}, seq: 3 });
+    });
+    expect(hook.result.current.messages.length).toBeGreaterThan(0);
+    expect(hook.result.current.cancelled).toBe(true);
+    expect(hook.result.current.resolvedConstraints).toHaveLength(1);
+
+    hook.rerender({ activeSessionId: 'session-b' });
+
+    expect(hook.result.current.messages).toHaveLength(0);
+    expect(hook.result.current.cancelled).toBe(false);
+    expect(hook.result.current.resolvedConstraints).toHaveLength(0);
+    expect(hook.result.current.budgetDenied).toBeNull();
+    expect(hook.result.current.classifiedError).toBeNull();
+  });
+
+  it("a REPLAY_GAP rehydrate for A does not overwrite B's messages if it resolves after the switch", async () => {
+    let resolveHistory!: (msgs: unknown[]) => void;
+    mockGetSessionMessages.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveHistory = resolve; }),
+    );
+
+    const hook = renderStream('session-a');
+    await act(async () => {
+      await hook.result.current.sendMessage('hi', 'session-a', 'local');
+    });
+
+    // Triggers the in-flight getSessionMessages('session-a') fetch.
+    act(() => {
+      connections['session-a'].onEvent({ type: 'REPLAY_GAP', seq: null });
+    });
+
+    hook.rerender({ activeSessionId: 'session-b' });
+
+    // A's rehydrate finally resolves after the switch.
+    await act(async () => {
+      resolveHistory([{ role: 'assistant', content: 'A history', trace_id: 't1' }]);
+      await Promise.resolve();
+    });
+
+    expect(hook.result.current.messages).toHaveLength(0);
+  });
+
+  it("a delayed sendChatMessage rejection for A does not tear down B's newer connection or turn", async () => {
+    let rejectSend!: (err: unknown) => void;
+    mockSendChatMessage.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectSend = reject; }),
+    );
+
+    const hook = renderStream('session-a');
+    let sendAPromise!: Promise<void>;
+    act(() => {
+      sendAPromise = hook.result.current.sendMessage('hi', 'session-a', 'local');
+    });
+
+    hook.rerender({ activeSessionId: 'session-b' });
+    await act(async () => {
+      await hook.result.current.sendMessage('hi', 'session-b', 'local');
+    });
+    expect(hook.result.current.isStreaming).toBe(true);
+    expect(connections['session-b'].close).not.toHaveBeenCalled();
+
+    // A's original POST finally rejects, long after B's turn started.
+    await act(async () => {
+      rejectSend(new Error('network error'));
+      await sendAPromise;
+    });
+
+    expect(hook.result.current.isStreaming).toBe(true);
+    expect(connections['session-b'].close).not.toHaveBeenCalled();
+    expect(hook.result.current.messages.some((m) => m.content.includes('Error contacting Seshat'))).toBe(false);
+  });
+
+  it("does not stamp B's completed turn with A's trace_id after an abandoned mid-turn switch", async () => {
+    const hook = renderStream('session-a');
+    await act(async () => {
+      await hook.result.current.sendMessage('hi', 'session-a', 'local');
+    });
+
+    // A's turn_status resolves a trace_id, but DONE never arrives before the switch.
+    act(() => {
+      connections['session-a'].onEvent({
+        type: 'STATE_DELTA',
+        session_id: 'session-a',
+        data: {
+          key: 'turn_status',
+          value: {
+            context_tokens: 1,
+            context_max: 100,
+            tool_iteration: 0,
+            tool_iteration_max: 10,
+            turn_cost_usd: 0,
+            trace_id: 'trace-a',
+          },
+        },
+        seq: 1,
+      });
+    });
+
+    hook.rerender({ activeSessionId: 'session-b' });
+
+    await act(async () => {
+      await hook.result.current.sendMessage('hi', 'session-b', 'local');
+    });
+
+    // B produces an assistant reply, then a DONE with no trace_id of its own
+    // (no turn_status for B yet either) — must not fall back to A's stashed
+    // trace_id when stamping it.
+    act(() => {
+      connections['session-b'].onEvent({ type: 'TEXT_DELTA', session_id: 'session-b', data: { text: 'B reply' }, seq: 1 });
+      connections['session-b'].onEvent({ type: 'DONE', seq: null });
+    });
+
+    const assistant = hook.result.current.messages.find((m) => m.role === 'assistant');
+    expect(assistant?.traceId).not.toBe('trace-a');
   });
 });

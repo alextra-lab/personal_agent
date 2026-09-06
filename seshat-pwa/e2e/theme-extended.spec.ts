@@ -97,6 +97,11 @@ async function assertTextContrast(
   }
 }
 
+/** Escape regex metacharacters so a catalog key (e.g. containing `.`) matches literally. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 for (const scheme of ['light', 'dark'] as const) {
   test.describe(`FRE-1265 converted surfaces — ${scheme} mode`, () => {
     test.use({ viewport: { width: 390, height: 844 }, colorScheme: scheme });
@@ -244,67 +249,94 @@ for (const scheme of ['light', 'dark'] as const) {
       await assertTextContrast(container);
     });
 
-    test('ModelPicker is legible, closed and open', async ({ page }) => {
-      await stubRest(page);
-      await page.route(
-        `http://localhost:9000/api/v1/sessions/${TEST_SESSION}/config`,
-        (route) =>
-          route.fulfill({
-            json: {
-              session_id: TEST_SESSION,
-              roles: {
-                primary: {
-                  open: true,
-                  resolved: 'local-qwen',
-                  provenance: 'server-hydrated',
-                  candidates: [
-                    {
-                      key: 'local-qwen',
-                      id: 'local-qwen',
-                      provider: 'local',
-                      placement: 'local',
-                      kind: 'chat',
-                      status: 'available',
-                      summary: 'Local model',
-                      context_length: 32000,
-                      max_tokens: 4096,
-                      supports_vision: false,
-                      supports_pdf_document: false,
-                      input_cost_per_token: null,
-                      output_cost_per_token: null,
-                    },
-                    {
-                      key: 'cloud-opus',
-                      id: 'cloud-opus',
-                      provider: 'anthropic',
-                      placement: 'cloud',
-                      kind: 'chat',
-                      status: 'available',
-                      summary: 'Cloud model',
-                      context_length: 200000,
-                      max_tokens: 8192,
-                      supports_vision: true,
-                      supports_pdf_document: true,
-                      input_cost_per_token: 0.000003,
-                      output_cost_per_token: 0.000015,
-                    },
-                  ],
-                },
-              },
-              providers: [],
-            },
-          }),
-      );
-      await stubWebSocket(page);
-      await page.goto(CHAT_URL);
-      const trigger = page.getByLabel('Choose model');
-      await expect(trigger).toBeVisible();
-      await assertTextContrast(trigger);
+    test('ModelPicker is legible, closed and open, for every catalog entry', async ({ page }) => {
+      // Three candidates, not one — the closed trigger's label is whichever
+      // one is selected, and its text colour doesn't depend on *which* name
+      // is shown, so a future catalog entry that renders differently (a
+      // longer key, a different provider) must be covered too (FRE-1425 AC-2).
+      const candidates = [
+        {
+          key: 'local-qwen',
+          id: 'local-qwen',
+          provider: 'local',
+          placement: 'local',
+          kind: 'chat',
+          status: 'available',
+          summary: 'Local model',
+          context_length: 32000,
+          max_tokens: 4096,
+          supports_vision: false,
+          supports_pdf_document: false,
+          input_cost_per_token: null,
+          output_cost_per_token: null,
+        },
+        {
+          key: 'cloud-opus',
+          id: 'cloud-opus',
+          provider: 'anthropic',
+          placement: 'cloud',
+          kind: 'chat',
+          status: 'available',
+          summary: 'Cloud model',
+          context_length: 200000,
+          max_tokens: 8192,
+          supports_vision: true,
+          supports_pdf_document: true,
+          input_cost_per_token: 0.000003,
+          output_cost_per_token: 0.000015,
+        },
+        {
+          key: 'qwen3.6-35b-experimental-longtail',
+          id: 'qwen3.6-35b-experimental-longtail',
+          provider: 'local',
+          placement: 'local',
+          kind: 'chat',
+          status: 'available',
+          summary: 'Longer catalog key, truncated in the trigger',
+          context_length: 128000,
+          max_tokens: 8192,
+          supports_vision: false,
+          supports_pdf_document: false,
+          input_cost_per_token: null,
+          output_cost_per_token: null,
+        },
+      ];
 
-      await trigger.click();
-      const listbox = page.getByRole('listbox');
-      await expect(listbox).toBeVisible();
-      await assertTextContrast(listbox);
+      // The closed trigger's text colour doesn't depend on *which* candidate
+      // is resolved, so check every one by reloading with each in turn as
+      // the resolved model (FRE-1425 AC-2) — a fresh page load per candidate
+      // also re-exercises the theme-init race each time (AC-3).
+      for (const resolved of candidates) {
+        await stubRest(page);
+        await page.route(
+          `http://localhost:9000/api/v1/sessions/${TEST_SESSION}/config`,
+          (route) =>
+            route.fulfill({
+              json: {
+                session_id: TEST_SESSION,
+                roles: {
+                  primary: {
+                    open: true,
+                    resolved: resolved.key,
+                    provenance: 'server-hydrated',
+                    candidates,
+                  },
+                },
+                providers: [],
+              },
+            }),
+        );
+        await stubWebSocket(page);
+        await page.goto(CHAT_URL);
+        const trigger = page.getByLabel('Choose model');
+        await expect(trigger).toHaveText(new RegExp(escapeRegExp(resolved.key)));
+        await assertTextContrast(trigger);
+
+        await trigger.click();
+        const listbox = page.getByRole('listbox');
+        await expect(listbox).toBeVisible();
+        await assertTextContrast(listbox);
+      }
     });
 
     test('ArtifactsIndex is legible', async ({ page }) => {

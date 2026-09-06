@@ -150,6 +150,17 @@ edits are needed, not one — deleting the settings read alone makes the timeout
    25 s absorption disappears. The absorption becomes the setting, and the deadline becomes
    `effective_timeout + absorption`, so the documented relationship survives any binding value.
 
+   **The seam this needs, stated because the obvious implementation cannot work.** Once
+   `spec.timeout_seconds` is `None`, `_effective_hard_deadline` has no number to work from: it runs
+   before dispatch (`sub_agent.py:677`), while the definition fallback is resolved privately inside
+   the client (`litellm_client.py:1494`). Multiplying `None` by the iteration cap raises. So the
+   effective timeout must be resolved **once, at the sub-agent layer, before both uses**. The client
+   the worker already holds exposes its resolved default timeout;
+   `effective_timeout = spec.timeout_seconds or client.default_timeout_seconds` is computed there
+   and passed into `_effective_hard_deadline`. Dispatch still omits `timeout_s` when the spec
+   carries no override, so the client applies the same value it just reported. One number, resolved
+   in one place, used by the inner call and the outer net.
+
 This is what "the role owns its budget" costs. A one-line deletion would have satisfied the sentence
 and silently doubled the worker timeout while disabling its safety net.
 
@@ -278,7 +289,14 @@ claude_sonnet:
     worker:   { effort: low }
 ```
 
-**Modes are the only home for samplers and thinking.** The top-level sampler and thinking fields
+**A mode is the only *declarative* home for samplers and thinking.** There is a second source, and
+it is deliberate: a call site may pass an explicit sampler to `respond()`, as four do today. That
+override is not removed — it is subject to the same dialect gate (D2), and it wins over the mode
+for that one call. What the rule forbids is a *third* home in configuration: no sampler on a
+deployment entry, and none on a role binding. "Only home" without that qualification would
+contradict D2's own gate, which exists precisely because those overrides remain.
+
+The top-level sampler and thinking fields
 leave `ModelDefinition`. Every `kind: llm` entry declares `modes:` with at least one mode and a
 `default_mode` naming it. Eight entries migrate; the migration is mechanical, because each entry's
 current top-level values become its default mode's body.
@@ -764,11 +782,14 @@ are about what a provider does, and no test against config can answer that.
   timeout observed for a worker call is 90 — not 60 (today's setting) and not 120
   (`SubAgentSpec`'s own default at `sub_agent_types.py:69`). **(b):** the outer deadline
   `_effective_hard_deadline` computes (`sub_agent.py:186–188`) exceeds that timeout by the declared
-  absorption, so it can still fire. · *Fails if* only (a) is checked: deleting the settings read
-  alone yields 120, which is neither the old value nor the role's, and a test asserting merely "not
-  60" would pass it. *Also fails if* the outer deadline equals the generation timeout — the
-  `max()` clamp then makes the safety net inert, which is what a fixed 85 against a 90 s role budget
-  produces.
+  absorption, so it can still fire. **(c):** a worker spec carrying no timeout override computes a
+  deadline without raising — the `None` case D1's seam exists for. · *Fails if* only (a) is checked:
+  deleting the settings read alone yields 120, which is neither the old value nor the role's, and a
+  test asserting merely "not 60" would pass it. *Also fails if* the outer deadline equals the
+  generation timeout — the `max()` clamp then makes the safety net inert, which is what a fixed 85
+  against a 90 s role budget produces. *Also fails if* (c) is skipped: without the seam,
+  `_effective_hard_deadline` receives `None` and raises before any call is made, so (a) and (b)
+  would never run.
 
 **Where these are adjudicated.** On FRE-1426, this ADR's umbrella ticket, once the implementation
 chain has landed and deployed. Not at merge of the ADR, and not by any single implementation ticket,

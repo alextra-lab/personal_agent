@@ -48,6 +48,18 @@
   --accent-hover: 226 161 136; /* #e2a188 */
 }
 
+/* FRE-1425: THEME_INIT_SCRIPT (src/lib/theme.ts) adds this class for the two
+   animation frames spanning theme resolution. If a first frame ever paints
+   before that script corrects the `dark` class, every `transition-colors`
+   element would otherwise animate light→dark instead of snapping to it —
+   an animated frame can measure below WCAG AA even when the settled colour
+   passes. `!important` beats Tailwind's utility transitions regardless of
+   cascade-layer order. */
+.theme-init,
+.theme-init * {
+  transition: none !important;
+}
+
 /* --------------------------------------------------------------------------
    Scrollbar styling (WebKit — Chrome, Safari, Edge)
    -------------------------------------------------------------------------- */

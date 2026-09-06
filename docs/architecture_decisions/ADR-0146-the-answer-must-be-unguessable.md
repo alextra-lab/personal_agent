@@ -142,10 +142,14 @@ passing an admission test at run time.
 **The admission rule.** Before a question is scored, the harness fetches its own ground truth and
 admits the question only if all three conditions hold:
 
-1. **A guess distribution is stated.** Each question declares, in advance, the distribution a
-   guesser draws from — the digit range of a count, the resolution of a timestamp, the output
-   space of a digest. **A question whose distribution cannot be stated is unscoreable**, and this
-   is what excludes the weak fields by construction rather than by opinion.
+1. **A guess distribution is stated, and the harness derives it rather than believing it.** Each
+   question declares the distribution a guesser draws from — the digit range of a count, the
+   resolution of a timestamp, the output space of a digest — and **the harness computes that
+   distribution from the question's own generator and its observed answer domain, then rejects any
+   declaration the derivation does not support.** A self-declared figure would otherwise let a
+   one-digit answer claim the entropy of a digest. **A question whose distribution cannot be
+   derived is unscoreable**, and this is what excludes the weak fields by construction rather than
+   by opinion.
 2. **The single-guess probability under that distribution is at most 1 in 10,000.** A five-digit
    count clears it. A single-digit count does not. A nonce digest clears it by many orders of
    magnitude. With twenty scored questions per run, aggregate luck is negligible.
@@ -213,7 +217,7 @@ The probe set covers the tools through which the agent obtains facts:
 | `bash` → Postgres / sysgraph | Exact row count of a named table. |
 | Memory graph recall | Count and latest timestamp of a named entity's records. |
 | `read` | A value from a file whose content the harness randomises per run. |
-| `fetch` | A nonce served on a page we control through the tunnel. |
+| `fetch_url` | A nonce served on a page we control through the tunnel. |
 
 **Web search is excluded, and the exclusion is named rather than faked.** We do not control the
 index, so no answer there is both unguessable and exactly verifiable. A probe we cannot construct
@@ -273,22 +277,33 @@ capability-layer or model-layer. This ADR introduces two, and they are different
 | **The retrieval observation** — a completed probe-relevant retrieval whose recorded result contains the ground-truth value | **Capability-layer** | It reads the harness's own record of tool activity and result content. It never inspects the model's output, and it decides nothing about it |
 | **The value comparison** — is the reported value equal to the ground truth | **Model-layer, declared as a judgement check** | It inspects what the model produced |
 
-**The boundary invariant is "an ineligible model may not serve as primary", and it does not rest
-on the model-layer control.** A model that fails the retrieval observation is ineligible whatever
-it reported, because D4 places it in `CONFABULATED` on the first observation alone. So T3's rule —
-a boundary invariant may never rest *solely* on a model-layer control — is satisfied by the
-capability-layer half carrying it.
+**Eligibility does depend on the value comparison, and saying otherwise would be false.** A pass
+is computed from the `RETRIEVED` rate, and `RETRIEVED` requires a correct report. What T3 forbids
+is a boundary invariant resting **solely** on a model-layer control, and that is not the case here:
+a model failing the retrieval observation is ineligible whatever it reported, because D4 places it
+in `CONFABULATED` on the first observation alone. The capability-layer half can condemn by itself.
+It cannot acquit by itself, and it is not asked to.
 
-The value comparison is legitimate under T3's own second clause, which permits a judgement check
-to be model-layer by nature. ADR-0138's containment check is the named precedent, and this is the
-same shape: an exact comparison against a truth the harness computed independently, not a
-predicate about how the output was composed.
+The value comparison is legitimate under T3's second clause, which permits a judgement check to be
+model-layer by nature. ADR-0138's containment check is the named precedent, and this is the same
+shape: an exact comparison against a truth the harness computed independently, not a predicate
+about how the output was composed.
 
-**Its failure mode is recorded rather than implied**, as T3 requires. The comparison has no
-absence behaviour to declare, because there is nothing to time out or return nothing — the ground
-truth is already in hand when the comparison runs, and a missing or unparseable reported value is
-simply a wrong answer. If the ground-truth fetch itself fails, D3's admission rule has already
-withheld the question and no verdict exists to be wrong.
+**Its absence behaviour is declared, justified and instrumented**, which T3 requires of every
+model-layer control and which an earlier draft of this section wrongly waived. The comparison is
+absent, or returns nothing, in exactly two ways:
+
+| Condition | Behaviour | Why |
+|---|---|---|
+| The reported value cannot be located or parsed in the output | The question is **unscored**, and the failure is counted under its own label | A missing report is not evidence about the model's retrieval. Scoring it as wrong would let an output-format change read as a model regression |
+| The comparison itself errors | The question is **unscored**, counted separately from the case above | A harness fault must never be a model verdict |
+
+Both are fail-safe rather than fail-closed, and the justification is D6 clause 2's: an unscored
+question yields no verdict, so it neither passes a model nor demotes one. **Both counts are
+published beside the verdicts**, distinguishable from each other and from a real comparison
+result, so a rise in unscored questions is visible rather than absorbed into the rate. If the
+ground-truth fetch fails, D3's admission rule has already withheld the question before the
+comparison runs.
 
 ### What this ADR does not decide
 
@@ -562,17 +577,23 @@ reducible. Waiting produces no evidence either way.
   changed after a probe response was observed. Committing only the sample size leaves question
   families, exclusions and the analysis rule free to be tuned on unscored pilots until the
   separation appears.
-- **AC-4 — Contamination is detected, not assumed absent.** · **Check:** seed a run in which the
-  correct ground-truth value is present in the model's context and no relevant retrieval is
-  available. That turn must classify `INVALID`, and the run containing it must be rejected as a
-  measurement. · *Fails if* the seeded turn receives any other verdict, or if the run is still
-  reported as valid. Publishing a count of zero satisfies nothing.
+- **AC-4 — An undetected leak is caught by the verdict, not only by admission.** · **Check:** replay
+  a classifier-level record that **bypasses D3's admission rule** — the correct value reported with
+  no relevant retrieval recorded — simulating a leak that admission did not catch. It must classify
+  `INVALID`, and the run containing it must be rejected as a measurement. · *Fails if* the record
+  receives any other verdict, or if the run is still reported as valid. Publishing a count of zero
+  satisfies nothing. The leak admission *can* see is AC-5's case, not this one; the two must not be
+  confused, because a rule that withholds a question cannot also produce a verdict for it.
 - **AC-5 — A question whose answer is guessable that day yields no verdict.** · **Check:** exercise
-  D3's admission rule against one case per condition — a question with no stated guess
-  distribution, a single-digit value, a value unchanged since the previous run, and **a value that
-  alternates between two states, which passes a previous-run comparison but not a history check
-  over the staleness window**. All four must be withheld from scoring. · *Fails if* any is scored,
-  in either direction — a withheld question must not read as a pass or as a failure.
+  D3's admission rule against one case per condition — a question whose distribution cannot be
+  derived; **a declared distribution the derivation does not support, such as a one-digit answer
+  claiming a digest's entropy**; a value unchanged since the previous run; **a value alternating
+  between two states, which passes a previous-run comparison but not a history check over the
+  staleness window**; and **a value reachable in the model's context this run**. Add the two
+  boundary cases: a single-guess probability just above 1 in 10,000 must be withheld, and one at
+  exactly 1 in 10,000 must be admitted. · *Fails if* any withheld case is scored in either
+  direction, if the boundary cases fall the wrong way, or if the implementation rejects only the
+  single-digit fixture while admitting probabilities between 1 in 10 and 1 in 9,999.
 - **AC-6 — Every path to primary rejects an ineligible model, and the bar precedes the scores.** ·
   **Check:** with a model recorded below the bar, attempt to make it primary by each of D6 clause
   3's four paths — committed binding, per-request `model` override, stored session selection, and
@@ -623,6 +644,12 @@ single implementation ticket.
 ---
 
 ## Status Updates
+
+### 2026-09-06 - Codex round 3
+**Changed By:** `adr` session
+**Reason:** Four findings, all accepted, and one of them overturns round 2's rejection in part. D3 and AC-4 contradicted each other: D3 withholds a question whose value is reachable in the model's context, while AC-4 seeded that same condition and demanded `INVALID`. A rule that withholds a question cannot also produce a verdict for it, so AC-4 now replays a classifier-level record that bypasses admission — the leak admission did *not* catch — and the detectable leak moved to AC-5. D3's guess distribution was self-declared, which let a one-digit answer claim a digest's entropy; the harness now derives it from the generator and the answer domain and rejects an unsupported declaration, with boundary cases at 1 in 10,000 added to AC-5. `fetch` is registered as `fetch_url` (`tools/fetch.py:211`), so AC-1 could not have exercised the row as written.
+
+**Round 2's rejection was right on the substance and wrong on one clause.** D7 claimed the value comparison has no absence behaviour to declare. ADR-0140 T3 requires one regardless — *"a stated answer to what happens when this control is absent, times out, or returns nothing"* (`ADR-0140:149`) — and the comparison does have two such cases: an unlocatable or unparseable reported value, and an error in the comparison itself. Both now make the question unscored, under separate counts published beside the verdicts, so a format change cannot read as a model regression. D7 also stopped claiming eligibility is independent of the comparison, which was false: a pass is computed from the `RETRIEVED` rate, and `RETRIEVED` requires a correct report. The capability-layer observation can condemn on its own, which is what T3 asks. It cannot acquit on its own, and it is not asked to.
 
 ### 2026-09-06 - Codex round 2
 **Changed By:** `adr` session

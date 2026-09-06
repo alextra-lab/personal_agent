@@ -626,7 +626,10 @@ async def get_session_config(
     from personal_agent.config import load_model_config  # noqa: PLC0415
     from personal_agent.config import settings as _settings  # noqa: PLC0415
     from personal_agent.config.model_loader import role_candidates  # noqa: PLC0415
-    from personal_agent.llm_client.provider_health import check_all_providers  # noqa: PLC0415
+    from personal_agent.llm_client.provider_health import (  # noqa: PLC0415
+        check_all_providers,
+        check_local_served_ids,
+    )
     from personal_agent.service.repositories.session_repository import SessionRepository
 
     user_id = await _require_request_user_id(request, db)
@@ -649,7 +652,10 @@ async def get_session_config(
         raise not_found("session")
 
     config = load_model_config()
-    availability = await check_all_providers(config, _settings, trace_id=ctx.trace_id)
+    availability, served_model_ids = await asyncio.gather(
+        check_all_providers(config, _settings, trace_id=ctx.trace_id),
+        check_local_served_ids(config, trace_id=ctx.trace_id),
+    )
     stored_selections = await _fetch_selections(db, uuid, roles=None, ctx=ctx)
 
     roles: dict[str, Any] = {}
@@ -663,7 +669,9 @@ async def get_session_config(
         if binding.open:
             entry["candidates"] = [
                 _deployment_view(key, config.models[key], config)
-                for key in role_candidates(role, config, availability)
+                for key in role_candidates(
+                    role, config, availability, served_model_ids=served_model_ids
+                )
             ]
         roles[role] = entry
 
@@ -711,11 +719,17 @@ async def get_config(
     from personal_agent.config import load_model_config  # noqa: PLC0415
     from personal_agent.config import settings as _settings  # noqa: PLC0415
     from personal_agent.config.model_loader import role_candidates  # noqa: PLC0415
-    from personal_agent.llm_client.provider_health import check_all_providers  # noqa: PLC0415
+    from personal_agent.llm_client.provider_health import (  # noqa: PLC0415
+        check_all_providers,
+        check_local_served_ids,
+    )
 
     ctx = SystemTraceContext.new("session_api")
     config = load_model_config()
-    availability = await check_all_providers(config, _settings, trace_id=ctx.trace_id)
+    availability, served_model_ids = await asyncio.gather(
+        check_all_providers(config, _settings, trace_id=ctx.trace_id),
+        check_local_served_ids(config, trace_id=ctx.trace_id),
+    )
 
     roles: dict[str, Any] = {}
     for role, binding in config.roles.items():
@@ -728,7 +742,9 @@ async def get_config(
         if binding.open:
             entry["candidates"] = [
                 _deployment_view(key, config.models[key], config)
-                for key in role_candidates(role, config, availability)
+                for key in role_candidates(
+                    role, config, availability, served_model_ids=served_model_ids
+                )
             ]
         roles[role] = entry
 

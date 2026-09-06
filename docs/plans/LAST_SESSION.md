@@ -1,102 +1,89 @@
-# Last session — 2026-09-05 (full day, into 2026-09-06)
+# Last session — 2026-09-06 (early hours)
 
 ## Doing / discussing  (≤5 sentences)
-The owner asked Seshat to compare three ways to compute a median. The answer was confident, well
-structured, and fabricated. That question consumed the rest of the day and produced the first
-reproducible model-capability result this project has: on `qwen3.6-35b` the sub-agents invoke no
-tools, and on `qwen3.8-flash-next` they do. The live binding is `qwen3.8-flash-next` for both
-`primary` and `sub_agent`, and the deployed container matches `main` in every value. Nothing is
-half-merged.
+The owner selected the instruct model as their **main** model, to test that thinking was off. The
+turn failed at 90.001 seconds and the test never got an answer. That failure opened a
+model-management review, and the owner stopped all other model work for it. The study concluded
+that ADR-0121 was never finished, and the owner concurred: *"this is the way."* The next session
+implements that chain.
 
 ## What was decided and why
 
-**A fresh nonce is the only honest test of execution.** Telemetry cannot separate a model that ran
-code from one that described running code. `tool_call_completed` carries `success` and `tool_name`.
-`run_python_finished` carries `exit_code`. The scratch directory is empty. Master spent about an
-hour in that data and could not answer the owner's question. The probe answers it in ten minutes:
-generate a string that never existed, ask for its SHA-256, and hold the true digest. Priors are
-useless against a fresh input, so there is no partial credit. This is now FRE-1416, merged.
+**The 90-second failure was not a resolution bug, and calling it one wasted an hour.** The
+selection mechanism worked exactly as designed. The instruct catalog entry carries the sub-agent's
+budget — `default_timeout: 90`, `max_tokens: 2048` — so selecting it as primary imports a
+fail-fast worker's limits onto the main model. **Role policy lives on a deployment.** That is the
+defect, and the picker offering that entry as a model is what exposes it.
 
-**A passing primary says nothing about the sub-agent path, and the difference is the whole point.**
-The first probe routed SINGLE and passed. The owner said "but it did not use a subagent". The
-second probe uses the "three different ways, compare and evaluate" phrasing that routes HYBRID, and
-asks for three algorithms, so **each digest becomes a per-sub-agent proof**. A result lost between
-a worker and synthesis becomes visible instead of silent. Both shapes are needed. Do not infer one
-from the other.
+**Master's proposed fix was measured to do nothing, and how it failed matters more than the fix.**
+Master recommended moving `default_timeout` onto the role binding, plus a "one-line mitigation" of
+a primary-binding override. Explore ran `resolve_role_target` both ways at the deployed revision:
+the timeout stays 90 either way. The resolver drops binding overrides when the selected key
+differs from the binding's own deployment — **so overrides are dropped in exactly the case a
+selection exists for.** Master reasoned that dropping them was harmless because the deployment's
+own value would stand; true, and irrelevant, because the instruct deployment's own value *is* 90.
+**The reasoning checked the wrong half of the mechanism, and running the resolver was one command.**
 
-**The model is the variable, not the code.** The same grant, the same loop and an equally
-well-formed 4-task plan produced zero tool calls on `qwen3.6-35b` and three real executions on
-`qwen3.8-flash-next`. FRE-1388 and FRE-1389 work. The owner caught the fabrication by comparing
-quoted benchmark durations against the sub-agents' own lifetimes: the reported times were longer
-than the workers that reported them. **Nothing in the system made that comparison.** That check is
-FRE-1417, scoped narrowly on the owner's instruction, and it is the only open item from the
-incident that is not yet built.
+**Wrong instrument, in front of the owner.** Master cited `resolve --role primary` as proof the
+system honoured the owner's pick. That command reports the **default binding with no session
+selection applied** and says nothing about any particular turn. The owner caught the contradiction
+in the same paragraph. The right instrument is `session_model_selections`, the only record holding
+the catalog key — every other record (ES `model`, `sessions.primary_model_at_creation`) stores the
+shared wire id and cannot tell the two entries apart.
 
-**A catalog correction is not a binding change, and merging them together cost a day.** The swap to
-`qwen3.6-35b` needed two independent things: the bindings, and a corrected catalog description of
-what the backend serves. They travelled in one PR. When the swap was reverted, the correction was
-stranded with it, and `main` kept a stale model id that names a backend which no longer exists —
-FRE-1363's recorded blocker, and the exact shape of FRE-1317. PR #1061 was rescoped to the catalog
-alone and merged. **Split them next time.** The catalog says what the server serves; the bindings
-say what we point at. Only the second is a decision.
+**A catalog correction must never travel with a binding change.** A swap and a catalog fix shipped
+in one PR on 2026-09-05; the swap was reverted and the correction stranded with it, leaving `main`
+naming a backend that no longer exists. Unpicking it cost three PRs. Now in memory.
 
-**A test must not re-pin a constant it does not own.** Three tests broke on the corrected catalog.
-Two needed a genuinely smaller-window deployment, and PR #1067 had already chosen well:
-`gpt-5.4-mini` at 128000, and `embedding` at 32768 for Stage 7. That work was taken verbatim and
-credited. The third was re-pinned in #1067 from 131072 to 262144; it now reads the value from the
-catalog instead, the way its own sibling already did. **The distinction that governs this: a
-*binding* pin must stay literal, because catching the next swap is its entire job. A *catalog* value
-must not be, because it is not that test's subject.** The binding pin at
-`test_turn_status_context_max.py:69` is untouched and still bites.
+**`CACHE_NAME` was merged over a red baseline, deliberately, and the green that unblocked it is
+not a signal.** The PWA e2e job fails on a genuine WCAG contrast defect — computed 4.128 at best
+against 4.5 required — which has made `main` intermittently red since 2026-09-05 17:40. Branch
+protection refused `--admin`, so the intermittent job was re-run and passed. **A re-run passing
+does not mean the defect is gone**; only the margin varies, because the element is sampled
+mid-transition. Merging was still right: without the bump, installed clients keep serving cached
+v55 and never receive the session-gate fix.
 
-**`run_python` is the one tool that produces facts and the one we cannot audit.** The probe works
-around this by making the answer carry its own proof. It does not close the gap, and it only works
-on a question built for it. An ordinary turn remains unauditable after the fact. ADR-0138 D2
-compounds it: tool output is not an admissible citable source, so a fabricated "I executed it"
-passes the grounding contract untouched. Filed as FRE-1419, with the three decisions it needs —
-where the payload lives, the truncation policy, and the redaction rule — named rather than assumed.
+**A board state lied for thirty hours and master saw it twice before acting.** FRE-1328 sat in
+`Awaiting Deploy` whose only PR is docs-only and merged 2026-08-29 — there was never code to
+deploy. Its real blocker is an owner decision on ADR-0139's status, which ADR-0140 partly withdrew.
 
-## Where master was wrong, and what the shape was
+**Deferred close-out is a pattern, not an incident.** Three deploys from 2026-09-05 sat unclosed
+overnight. The cause each time is an interruption landing between the deploy and the close, and
+the close then never happens. Third instance after FRE-1375 and FRE-1390.
 
-Four errors, and three share one shape.
+**`Tier-3:Haiku` strands its seat.** Master mislabelled a new ticket that way and caught it before
+dispatch. Haiku 4.5 has no auto mode. Retiered to Sonnet.
 
-**A truncated view read as an absence.** Master reported "no DONE row exists, the `finally` never
-ran" from `ORDER BY seq DESC LIMIT 8`, which returned seq 33 down to 26. The DONE row is at seq 23.
-The whole FRE-1403 escalation rested on that. **This is the second time this exact shape has caught
-master**, and the ADR seat found it by checking rather than building on master's account. FRE-1403
-returned to Medium and the record was corrected in the description, not buried in a comment.
+## Worktrees — anything special
+Nothing unpushed anywhere; all four worktree branches match their remotes. The FRE-1377 commits
+flagged mid-session as possibly stranded are on `origin/main` — checked, not assumed.
 
-**A seat reported as working while wedged, three times.** Master read the resolver and
-`dispatch_state.json`. The truth was in `dispatch_execute`'s `launched=False outcome=seat-busy`.
-About two hours of Urgent work was lost. The instrument that answers "is this stream running" is
-the execute record, not the intent record. FRE-1405 exists because a stall the daemon detects only
-reaches a log line.
+## Sequence position + drift
+The owner called a **full stop** on model work at 05:00 so the study could run without tickets
+being advanced underneath it. Nine Approved tickets were held; the study then adjudicated them.
+FRE-966 and FRE-967 are blocked on the new ADR rather than cancelled, because cancelling is that
+ADR's own cleanup clause and the ADR is not yet accepted.
 
-**A credential declared dead without checking `pass`.** The owner asked "Why not?". The password
-was in `seshat/POSTGRES_PASSWORD` and worked. Master had used the false conclusion to skip the
-ADR-0074 joinability gate on a migration. The probe then ran green.
+**The Observability Foundation directive remains unstarted — fourth consecutive session.** It has
+been displaced each time by a live incident. Worth raising as a decision rather than drifting a
+fifth time.
 
-**A cause named twice, wrong both times.** First "the swap broke the planner", then "not the model,
-it is FRE-1390". The truth is both and neither: FRE-1390 created a latent 1024-token cap, and
-`qwen3.6-35b` was the first model whose plan did not fit inside it. **A latent defect plus a
-model-sensitive trigger reads as two competing causes and is one.** FRE-1413 removed the cap rather
-than raising it, and raised `planner_timeout_seconds` with it — otherwise token truncation becomes
-timeout truncation.
+## Answers for the fresh start
 
-The common shape in the first, second and fourth: **master answered from the instrument nearest to
-hand rather than the one that could see the failure.** That is the same finding as yesterday's
-health probe, one layer up.
-
-## State at handoff
-
-`primary` and `sub_agent` both resolve to `unsloth/qwen3.8-flash-next`. The container and `main`
-agree in every configuration value; the only differences are trailing comments. Health is 200 with
-database, Elasticsearch, Neo4j, second brain and MCP gateway all connected. The PWA serves
-`seshat-v55-context-meter-cold-lane`.
-
-Open and needing the owner: FRE-1406, FRE-1407, FRE-1408, FRE-1409, FRE-1410 and FRE-1419 are all
-in `Needs Approval` and all change `src/`. FRE-1408, FRE-1409 and FRE-1410 are the ADR-0143
-implementation chain and FRE-1403 is blocked on all three.
-
-PR #1067 is a draft on purpose. It holds 18 correct binding pins for whenever the swap returns.
-Do not merge it while the binding is `qwen3.8-flash-next`.
+- **What does the owner want next?** Implement the explore chain: model config and sub-agent
+  functionality. FRE-1426 is the ADR (`stream:adr`, Urgent, Approved) and is the adr stream's next
+  head.
+- **Why is FRE-1427 not dispatchable?** It has no stream label on purpose. It cannot land until
+  the owner serves `--ctx-size 131072` in `slm_server` and reports the `KV self size` line.
+  Landing first would make the catalog claim a window the backend does not serve — FRE-1317's
+  exact shape.
+- **What is at the gate?** PR #1071 (FRE-1417, the duration invariant). Untouched by master, not
+  half-merged. It is the first thing to gate.
+- **What is blocked on the owner?** FRE-1328 needs an ADR-0139 status decision. FRE-1427 needs the
+  backend change. FRE-1414's post-deploy check needs the owner's screen — iOS standalone has no
+  test coverage. Six tickets sit in `Needs Approval`, all `src/` changes.
+- **Is `main` green?** No, and do not treat a passing run as evidence it recovered. FRE-1425
+  carries the real defect and requires `main` itself green.
+- **Was the owner's thinking test ever answered?** No. `route_traces.thinking_enabled` has 805
+  rows and zero populated since 2026-06-07. FRE-1422 found the cause: the assembler never reads
+  the resolved definition.

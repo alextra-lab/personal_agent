@@ -222,7 +222,7 @@ cases:
       orchestration_event: delegate_called
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [read-write, list-directory]
+      skills: [read-write, list-directory, sequential-thinking]
       tools_any_of: [read]
     rubric:
       - "Bounded discovery offloaded; synthesis and explanation kept by the primary."

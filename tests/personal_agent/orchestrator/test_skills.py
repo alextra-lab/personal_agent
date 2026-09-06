@@ -335,3 +335,61 @@ class TestWebSearchSkill:
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         block = get_skill_block(message="Which brand of olive oil should I buy?")
         assert "web-search" in block or "SKILL: web-search" in block
+
+
+class TestSequentialThinkingSkill:
+    """FRE-1402: docs/skills/sequential-thinking.md replaces the removed
+    mcp_sequentialthinking MCP tool (ADR-0028:83, FRE-1358) with a skill doc.
+    """
+
+    def test_loaded_with_required_fields(self) -> None:
+        skills = get_all_skills()
+        assert "sequential-thinking" in skills, "'sequential-thinking' skill not found"
+        doc = skills["sequential-thinking"]
+        assert doc.description
+        assert doc.when_to_use
+        assert doc.nudge
+        assert doc.keywords
+
+    def test_declares_no_tools(self) -> None:
+        """AC-4: this is a prompt technique, not a tool — ADR-0028 ruled on that."""
+        doc = get_all_skills()["sequential-thinking"]
+        assert doc.tools == ()
+
+    def test_name_appears_in_compact_index(self) -> None:
+        from personal_agent.orchestrator.skills import assemble_skill_index
+
+        index = assemble_skill_index()
+        assert "sequential-thinking" in index, (
+            "sequential-thinking skill missing from assemble_skill_index() output — "
+            "this is the field model_decided/hybrid routing reads to self-select the "
+            "skill via read_skill() on a judgment call, so a missing index entry means "
+            "the primary model can never reach for it"
+        )
+
+    def test_cites_provenance(self) -> None:
+        """AC-5: the file must link the removal (FRE-1358) and the ruling (ADR-0028:83)."""
+        doc = get_all_skills()["sequential-thinking"]
+        assert "ADR-0028" in doc.body
+        assert "FRE-1358" in doc.body
+
+    def test_keyword_routes_an_explicit_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.orchestrator.skills import get_skill_block
+
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        block = get_skill_block(message="Walk me through this step by step.")
+        assert "sequential-thinking" in block or "SKILL: sequential-thinking" in block
+
+    def test_no_governance_entry_added(self) -> None:
+        """AC-4: no new tool entry — the fossil mcp_sequentialthinking entry from
+        FRE-1358 is untouched, and no new key was added for this skill.
+        """
+        import yaml
+
+        governance_path = (
+            Path(__file__).resolve().parents[3] / "config" / "governance" / "tools.yaml"
+        )
+        governance = yaml.safe_load(governance_path.read_text(encoding="utf-8"))
+        tools = governance["tools"]
+        assert "sequential-thinking" not in tools
+        assert "sequential_thinking" not in tools

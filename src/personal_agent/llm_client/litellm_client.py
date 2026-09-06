@@ -191,10 +191,13 @@ def _local_extra_body(model_def: ModelDefinition) -> dict[str, Any]:
     went out on the wire and llama-server ignored the block entirely, so all
     five controls were inert (measured 2026-09-03).
 
-    The two thinking controls are **distinct wire shapes**, not one (D4):
-    ``chat_template_kwargs.enable_thinking=false`` hard-disables at the chat
-    template, while ``thinking_budget`` caps the thinking stream. The catalog
-    model already refuses to declare both.
+    Reads the deployment's resolved default mode (ADR-0145 D3a) rather than
+    top-level fields, which no longer exist on :class:`ModelDefinition`. The
+    wire keys sent here are UNCHANGED by that migration — including
+    ``repetition_penalty``, which stays the literal key sent even though the
+    config field is now named ``repeat_penalty`` (FRE-1430 F2 found the old
+    name inert on this server; renaming the wire key itself is FRE-1438, not
+    this change).
 
     Args:
         model_def: The local deployment's effective definition.
@@ -202,6 +205,7 @@ def _local_extra_body(model_def: ModelDefinition) -> dict[str, Any]:
     Returns:
         The parameter block for litellm's ``extra_body``.
     """
+    mode = model_def.resolve_mode()
     extra_body: dict[str, Any] = {
         # Within-turn KV-cache prefix reuse. Current llama.cpp defaults this on,
         # but older builds defaulted it off; sending it explicitly keeps the
@@ -209,17 +213,15 @@ def _local_extra_body(model_def: ModelDefinition) -> dict[str, Any]:
         # slot config, not this flag).
         "cache_prompt": True,
     }
-    if model_def.top_k is not None:
-        extra_body["top_k"] = model_def.top_k
-    if model_def.min_p is not None:
-        extra_body["min_p"] = model_def.min_p
-    if model_def.repetition_penalty is not None:
-        extra_body["repetition_penalty"] = model_def.repetition_penalty
+    if mode.top_k is not None:
+        extra_body["top_k"] = mode.top_k
+    if mode.min_p is not None:
+        extra_body["min_p"] = mode.min_p
+    if mode.repeat_penalty is not None:
+        extra_body["repetition_penalty"] = mode.repeat_penalty
 
-    if model_def.disable_thinking:
+    if mode.enable_thinking is False:
         extra_body["chat_template_kwargs"] = {"enable_thinking": False}
-    elif model_def.thinking_budget_tokens is not None:
-        extra_body["thinking_budget"] = model_def.thinking_budget_tokens
 
     return extra_body
 
@@ -1495,7 +1497,8 @@ class LiteLLMClient:
             timeout_s if timeout_s is not None else float(model_def.default_timeout)
         )
         effective_max_retries = max_retries if max_retries is not None else settings.llm_max_retries
-        effective_temperature = temperature if temperature is not None else model_def.temperature
+        local_mode = model_def.resolve_mode()
+        effective_temperature = temperature if temperature is not None else local_mode.temperature
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
 
         litellm_kwargs: dict[str, Any] = {
@@ -1535,10 +1538,10 @@ class LiteLLMClient:
             litellm_kwargs["max_tokens"] = effective_max_tokens
         if effective_temperature is not None:
             litellm_kwargs["temperature"] = effective_temperature
-        if model_def.top_p is not None:
-            litellm_kwargs["top_p"] = model_def.top_p
-        if model_def.presence_penalty is not None:
-            litellm_kwargs["presence_penalty"] = model_def.presence_penalty
+        if local_mode.top_p is not None:
+            litellm_kwargs["top_p"] = local_mode.top_p
+        if local_mode.presence_penalty is not None:
+            litellm_kwargs["presence_penalty"] = local_mode.presence_penalty
         if response_format is not None:
             litellm_kwargs["response_format"] = response_format
         if tools:

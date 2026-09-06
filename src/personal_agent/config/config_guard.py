@@ -950,6 +950,41 @@ def reasoning_wire_shape(
     return _probe(model_id, provider, companion_params, effort)
 
 
+def _project_default_mode(deployment: JSONDict) -> JSONDict:
+    """Project a deployment's default mode onto the pre-D3a field names this check reads.
+
+    D3a moved sampler/thinking values off the top level and into ``modes:``
+    (:class:`personal_agent.llm_client.models.ModeSpec`), in a vocabulary that
+    differs per dialect — ``effort`` on Anthropic, ``reasoning_effort`` on
+    OVH/OpenAI, ``enable_thinking`` on llama.cpp. Rewriting *which oracle* this
+    check asks is D3b's job (the guard is meant to consult the declared
+    dialect directly, not litellm's map); this only keeps the existing oracle
+    fed with the same shape of input it read before the migration.
+    """
+    default_mode = deployment.get("default_mode")
+    modes = deployment.get("modes")
+    body: JSONDict = {}
+    if isinstance(modes, dict) and isinstance(default_mode, str):
+        candidate = modes.get(default_mode)
+        if isinstance(candidate, dict):
+            body = candidate
+
+    projected = dict(deployment)
+    if "reasoning_effort" in body:
+        projected["reasoning_effort"] = body["reasoning_effort"]
+    elif "effort" in body:
+        projected["reasoning_effort"] = body["effort"]
+    if "temperature" in body:
+        projected["temperature"] = body["temperature"]
+    if "enable_thinking" in body:
+        # llamacpp_qwen's real lever (FRE-1430 F16) — an explicit choice either
+        # way, unlike the old thinking_budget_tokens signal this check used to
+        # accept, which FRE-1430 F2 found wire-inert.
+        projected["disable_thinking"] = body["enable_thinking"] is False
+        projected["_dialect_thinking_declared"] = True
+    return projected
+
+
 def _effective_reasoning(deployment: JSONDict, binding: JSONDict) -> JSONDict:
     """Merge a Layer-3 binding's per-use overrides onto its deployment.
 
@@ -973,8 +1008,10 @@ def _check_one_reasoning_declaration(
     where = f"role '{role}' -> deployment '{deployment_key}'"
     placement = provider_def.get("placement")
     effort = effective.get("reasoning_effort")
-    declares_local = effective.get("disable_thinking") is True or (
-        effective.get("thinking_budget_tokens") is not None
+    declares_local = (
+        effective.get("disable_thinking") is True
+        or effective.get("thinking_budget_tokens") is not None
+        or effective.get("_dialect_thinking_declared") is True
     )
 
     if placement == "local":
@@ -1158,7 +1195,10 @@ def check_reasoning_declaration(root: Path) -> list[Finding]:
             continue
         findings.extend(
             _check_one_reasoning_declaration(
-                role, deployment_key, _effective_reasoning(deployment, binding), provider_def
+                role,
+                deployment_key,
+                _effective_reasoning(_project_default_mode(deployment), binding),
+                provider_def,
             )
         )
     return findings

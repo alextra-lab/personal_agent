@@ -50,8 +50,11 @@ class TestChildTraceIsolation:
         provider.add_span_processor(SimpleSpanProcessor(exporter))
         tracer = provider.get_tracer("test")
 
+        mock_mode = SimpleNamespace(temperature=0.0, resolved_reasoning_effort=None)
         mock_model_def = SimpleNamespace(
-            provider="openai", id="gpt-5.4-mini", temperature=0.0, reasoning_effort=None
+            provider="openai",
+            id="gpt-5.4-mini",
+            resolve_mode=lambda: mock_mode,
         )
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
@@ -95,8 +98,11 @@ class TestChildTraceIsolation:
         provider.add_span_processor(SimpleSpanProcessor(exporter))
         tracer = provider.get_tracer("test")
 
+        mock_mode = SimpleNamespace(temperature=0.0, resolved_reasoning_effort=None)
         mock_model_def = SimpleNamespace(
-            provider="openai", id="gpt-5.4-mini", temperature=0.0, reasoning_effort=None
+            provider="openai",
+            id="gpt-5.4-mini",
+            resolve_mode=lambda: mock_mode,
         )
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
@@ -134,8 +140,11 @@ class TestChildTraceIsolation:
         provider.add_span_processor(SimpleSpanProcessor(exporter))
         tracer = provider.get_tracer("test")
 
+        mock_mode = SimpleNamespace(temperature=0.0, resolved_reasoning_effort=None)
         mock_model_def = SimpleNamespace(
-            provider="openai", id="gpt-5.4-mini", temperature=0.0, reasoning_effort=None
+            provider="openai",
+            id="gpt-5.4-mini",
+            resolve_mode=lambda: mock_mode,
         )
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,

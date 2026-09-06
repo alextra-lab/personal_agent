@@ -46,6 +46,136 @@ class Placement(str, Enum):
     CLOUD = "cloud"
 
 
+class Dialect(str, Enum):
+    """A named wire vocabulary: the thinking lever, plus the accepted sampling set (ADR-0145 D3a).
+
+    Declared once on a :class:`ProviderDefinition` and overridable on a
+    :class:`ModelDefinition` that disagrees with its provider — the Anthropic case,
+    where Sonnet 5 and Haiku 4.5 share a provider entry but speak different
+    dialects (FRE-1430 F6). Five dialects cover every declared chat model measured
+    by FRE-1430: no two of the five agree on what they accept.
+    """
+
+    LLAMACPP_QWEN = "llamacpp_qwen"
+    OVH_QWEN = "ovh_qwen"
+    OPENAI_GPT5 = "openai_gpt5"
+    ANTHROPIC_ADAPTIVE = "anthropic_adaptive"
+    ANTHROPIC_BUDGET = "anthropic_budget"
+
+
+class ModeSpec(BaseModel):
+    """A named sampler/thinking preset, written in a model's dialect vocabulary (ADR-0145 D3a).
+
+    Every field here is optional; a mode sets only the ones its dialect accepts,
+    and the loader rejects the rest (:data:`DIALECT_FIELDS`). The three
+    thinking-lever fields (``enable_thinking``, ``reasoning_effort``, ``effort``,
+    ``budget_tokens``) are named per the dialect that owns them rather than
+    unified into one, because the dialects disagree not just on the wire shape
+    but on the value domain (FRE-1430 F3, F6): OVH's ``reasoning_effort`` admits
+    ``{none, low, medium}``, OpenAI's the full five-rung ladder, and Anthropic's
+    two models don't share a lever at all.
+
+    Attributes:
+        enable_thinking: llamacpp_qwen's thinking lever
+            (``chat_template_kwargs.enable_thinking``). ``reasoning_effort``
+            validates on this dialect but changes nothing (FRE-1430 F16), so it
+            is deliberately absent from this dialect's accepted fields.
+        temperature: Sampling temperature, accepted by every dialect except
+            anthropic_adaptive (Sonnet 5 rejects it as deprecated, F1/F6).
+        top_p: Nucleus sampling probability.
+        top_k: Top-k sampling (llamacpp_qwen and anthropic_budget only).
+        min_p: Min-p sampling (llamacpp_qwen only; llama.cpp/vLLM extension).
+        presence_penalty: Presence penalty (llamacpp_qwen and ovh_qwen only).
+        frequency_penalty: Frequency penalty.
+        repeat_penalty: llama.cpp's own wire name for repetition penalty — NOT
+            ``repetition_penalty``, which is accepted and silently ignored on
+            that server (FRE-1430 F2; the rename itself is FRE-1438).
+        seed: Sampling seed.
+        reasoning_effort: ovh_qwen / openai_gpt5's thinking lever. Value domain
+            is further restricted per dialect by :data:`DIALECT_VALUE_DOMAINS` —
+            OVH's gateway 400s on ``high`` and 422s on ``xhigh`` (FRE-1430 F3).
+        effort: anthropic_adaptive's thinking lever (native
+            ``thinking: {type: adaptive}`` + ``output_config.effort``).
+        budget_tokens: anthropic_budget's thinking lever (native
+            ``thinking: {type: enabled, budget_tokens}``).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enable_thinking: bool | None = None
+    temperature: float | None = Field(None, ge=0.0, le=2.0)
+    top_p: float | None = Field(None, ge=0.0, le=1.0)
+    top_k: int | None = Field(None, ge=1)
+    min_p: float | None = Field(None, ge=0.0, le=1.0)
+    presence_penalty: float | None = Field(None, ge=-2.0, le=2.0)
+    frequency_penalty: float | None = Field(None, ge=-2.0, le=2.0)
+    repeat_penalty: float | None = Field(None, ge=0.0)
+    seed: int | None = None
+    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
+    effort: Literal["low", "medium", "high"] | None = None
+    budget_tokens: int | None = Field(None, ge=1)
+
+    @property
+    def resolved_reasoning_effort(self) -> str | None:
+        """The single wire-facing reasoning-depth value, whichever dialect field carries it.
+
+        Callers that forward a reasoning depth to litellm (which accepts one
+        ``reasoning_effort`` kwarg regardless of provider and transforms it
+        per model, FRE-1430 F5) do not need to know which lever field their
+        model's dialect uses.
+        """
+        return self.reasoning_effort if self.reasoning_effort is not None else self.effort
+
+
+#: Fields each dialect's mode bodies may set — the lever plus the accepted
+#: sampling set (ADR-0145 D3a table). A field absent here is either rejected by
+#: the wire (OVH, OpenAI, Anthropic all 400 on an unknown field, FRE-1430 F1) or
+#: silently inert (llama.cpp's ``reasoning_effort``, F16) — either way, not part
+#: of the dialect's real vocabulary.
+DIALECT_FIELDS: dict[Dialect, frozenset[str]] = {
+    Dialect.LLAMACPP_QWEN: frozenset(
+        {
+            "enable_thinking",
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "repeat_penalty",
+            "seed",
+        }
+    ),
+    Dialect.OVH_QWEN: frozenset(
+        {
+            "reasoning_effort",
+            "temperature",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "seed",
+        }
+    ),
+    Dialect.OPENAI_GPT5: frozenset(
+        {"reasoning_effort", "temperature", "top_p", "frequency_penalty", "seed"}
+    ),
+    Dialect.ANTHROPIC_ADAPTIVE: frozenset({"effort"}),
+    Dialect.ANTHROPIC_BUDGET: frozenset({"budget_tokens", "temperature", "top_p", "top_k"}),
+}
+
+#: Per-dialect value restrictions narrower than the field's own type (ADR-0145
+#: D3a). ``reasoning_effort`` is a five-value ``Literal`` on :class:`ModeSpec`
+#: because the value is shared type-wise across dialects, but no single dialect
+#: accepts all five (FRE-1430 F3): OVH's gateway 400s on ``high`` and 422s on
+#: ``xhigh``, and only the 3-rung intersection reaches the model at all.
+DIALECT_VALUE_DOMAINS: dict[Dialect, dict[str, frozenset[str]]] = {
+    Dialect.OVH_QWEN: {"reasoning_effort": frozenset({"none", "low", "medium"})},
+    Dialect.OPENAI_GPT5: {
+        "reasoning_effort": frozenset({"none", "low", "medium", "high", "xhigh"})
+    },
+}
+
+
 class ModelKind(str, Enum):
     """What a deployment *is* (ADR-0121 Layer 2).
 
@@ -118,6 +248,17 @@ class ProviderDefinition(BaseModel):
     placement: Placement = Field(..., description="local | cloud")
     max_concurrency: int = Field(..., ge=1, description="Total in-flight cap across deployments")
     summary: str = Field("", description="One-line description for the config read API")
+    dialect: Dialect | None = Field(
+        None,
+        description=(
+            "Default wire vocabulary for this provider's kind=llm models "
+            "(ADR-0145 D3a). None where every model on the provider must "
+            "override — 'anthropic' has two chat models on two different "
+            "dialects (FRE-1430 F6) and declares neither as default. "
+            "Meaningless for a provider that only serves embedding/reranker "
+            "deployments."
+        ),
+    )
 
 
 class RoleBinding(BaseModel):
@@ -196,20 +337,19 @@ class ModelDefinition(BaseModel):
             cloud models where quantization is managed by the provider.
         max_concurrency: Maximum concurrent requests for this model.
         default_timeout: Default timeout in seconds for requests to this model.
-        temperature: Default sampling temperature (None uses backend default).
-        top_p: Top-p nucleus sampling probability (None uses backend default).
-        top_k: Top-k sampling — number of highest-probability tokens to keep. Not in the
-            standard OpenAI spec; passed via extra_body for vLLM/LM Studio backends.
-        presence_penalty: Presence penalty to reduce repetition. Positive values discourage
-            token reuse. Passed in the top-level payload (standard OpenAI field).
+        dialect: Override of the provider's default wire vocabulary (ADR-0145
+            D3a). Required when the provider declares none, or when this model
+            disagrees with its provider's default (the Anthropic case).
+        modes: Named sampler/thinking presets, written in this model's dialect
+            vocabulary (ADR-0145 D3a). The only declarative home for samplers
+            and thinking — there is no top-level fallback. Required, with at
+            least one entry, for every ``kind: llm`` deployment; validated
+            against the resolved dialect's accepted fields
+            (:data:`DIALECT_FIELDS`) at catalog load.
+        default_mode: Which entry in ``modes`` a caller gets when it does not
+            name one. Must be a key of ``modes``.
         supports_function_calling: Whether model/backend supports OpenAI-style function calling.
             If False, tools are not passed to the model. Defaults to True.
-        disable_thinking: If True, inject chat_template_kwargs enable_thinking=False via
-            extra_body on every request. Hard-disables thinking for Qwen3.5+ models.
-            Mutually exclusive with thinking_budget_tokens.
-        thinking_budget_tokens: Cap on the number of thinking tokens the model may generate.
-            Passed as thinking_budget in extra_body. None means unlimited.
-            Mutually exclusive with disable_thinking.
         supports_vision: Whether this model/deployment accepts image content blocks
             (ADR-0101 §5). A deployment property, not inferred — set explicitly per
             model definition. Defaults to False.
@@ -288,56 +428,27 @@ class ModelDefinition(BaseModel):
         ),
     )
     default_timeout: int = Field(..., ge=1, description="Default timeout in seconds")
-    temperature: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=2.0,
-        description="Default sampling temperature for this model (None uses backend default).",
-    )
-    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = Field(
-        default=None,
+    dialect: Dialect | None = Field(
+        None,
         description=(
-            "Declared reasoning depth for this deployment (FRE-766; made mandatory for "
-            "role-bound llm deployments by FRE-1007). ``None`` is not 'the default' — it "
-            "means nobody chose, and the provider's own default applies at call time. "
-            "``'none'`` (FRE-1007) is the DELIBERATE no-reasoning choice, and it is a real "
-            "wire value only where litellm forwards it: on OpenAI it sends "
-            "reasoning_effort='none', on Anthropic litellm drops it, so there it declares "
-            "nothing and config_guard rejects it. What each value becomes on the wire is "
-            "per MODEL, not per vendor — claude-sonnet-5 maps effort onto adaptive thinking "
-            "plus output_config, while claude-haiku-4-5 takes litellm's legacy path and "
-            "rewrites max_tokens. config_guard.check_reasoning_declaration verifies the "
-            "declared value against litellm's own transformation rather than assuming a "
-            "vendor's shape."
+            "Override of the provider's default dialect (ADR-0145 D3a). "
+            "Required when the provider declares none for this kind=llm model."
         ),
     )
-    top_p: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-        description="Top-p nucleus sampling probability (None uses backend default).",
+    modes: dict[str, ModeSpec] = Field(
+        default_factory=dict,
+        description=(
+            "Named sampler/thinking presets, written in this model's dialect "
+            "vocabulary (ADR-0145 D3a). Required, non-empty, for every "
+            "kind=llm deployment — enforced at catalog load "
+            "(ModelConfig._llm_deployments_declare_valid_modes), not here, so "
+            "a standalone ModelDefinition built for an unrelated test stays "
+            "cheap to construct."
+        ),
     )
-    top_k: int | None = Field(
-        default=None,
-        ge=1,
-        description="Top-k sampling — passed via extra_body (not standard OpenAI).",
-    )
-    presence_penalty: float | None = Field(
-        default=None,
-        ge=-2.0,
-        le=2.0,
-        description="Presence penalty to reduce token repetition.",
-    )
-    min_p: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-        description="Min-p sampling — passed via extra_body (llama.cpp / vLLM extension).",
-    )
-    repetition_penalty: float | None = Field(
-        default=None,
-        ge=0.0,
-        description="Repetition penalty — passed via extra_body (llama.cpp / vLLM extension).",
+    default_mode: str | None = Field(
+        None,
+        description="Key into `modes` a caller gets when it names none. Must be a member of modes.",
     )
     supports_function_calling: bool = Field(
         True,
@@ -412,32 +523,50 @@ class ModelDefinition(BaseModel):
             "Set False for models whose chat template does not handle parallel calls."
         ),
     )
-    disable_thinking: bool = Field(
-        default=False,
-        description=(
-            "If True, inject chat_template_kwargs enable_thinking=False via extra_body. "
-            "Hard-disables thinking for Qwen3.5+ models. "
-            "Mutually exclusive with thinking_budget_tokens."
-        ),
-    )
-    thinking_budget_tokens: int | None = Field(
-        default=None,
-        ge=1,
-        description=(
-            "Cap on thinking tokens; passed as thinking_budget in extra_body. "
-            "None = unlimited. Mutually exclusive with disable_thinking."
-        ),
-    )
 
     @model_validator(mode="after")
-    def _thinking_fields_exclusive(self) -> "ModelDefinition":
-        """Ensure disable_thinking and thinking_budget_tokens are not both set."""
-        if self.disable_thinking and self.thinking_budget_tokens is not None:
+    def _modes_and_default_mode_consistent(self) -> "ModelDefinition":
+        """A declared default_mode must name a declared mode (ADR-0145 D3a AC-3).
+
+        Deliberately does not require kind=llm to declare modes at all — that
+        stronger rule needs the provider (for dialect resolution) and lives on
+        :class:`ModelConfig` instead, so a standalone ``ModelDefinition()``
+        built for an unrelated test does not need a modes: block it never uses.
+        """
+        if self.default_mode is not None and self.default_mode not in self.modes:
             raise ValueError(
-                "disable_thinking and thinking_budget_tokens are mutually exclusive: "
-                "a model cannot have thinking both disabled and budgeted."
+                f"default_mode {self.default_mode!r} is not a key of modes "
+                f"{sorted(self.modes)} — a caller asking for the default would "
+                "get nothing to resolve."
+            )
+        if self.modes and self.default_mode is None:
+            raise ValueError(
+                f"modes {sorted(self.modes)} declared with no default_mode — "
+                "a caller asking for the default cannot be resolved arbitrarily."
             )
         return self
+
+    def resolve_mode(self, name: str | None = None) -> ModeSpec:
+        """Return the named mode's spec, or the default mode's when name is None.
+
+        Args:
+            name: A key of :attr:`modes`, or ``None`` for :attr:`default_mode`.
+
+        Returns:
+            The resolved :class:`ModeSpec`.
+
+        Raises:
+            ValueError: ``name`` (or the model's ``default_mode``) is not a
+                declared mode. Unreachable for a deployment loaded through
+                :class:`ModelConfig`, which requires every kind=llm entry to
+                declare modes and a matching default_mode.
+        """
+        key = name if name is not None else self.default_mode
+        if key is None or key not in self.modes:
+            raise ValueError(
+                f"{key!r} is not a declared mode on {self.id!r}; known modes: {sorted(self.modes)}"
+            )
+        return self.modes[key]
 
     @model_validator(mode="after")
     def _min_max_concurrency(self) -> "ModelDefinition":
@@ -531,6 +660,66 @@ class ModelConfig(BaseModel):
                     f"deployment {key!r} references unknown provider "
                     f"{definition.provider!r}; known providers: {sorted(self.providers)}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _llm_deployments_declare_valid_modes(self) -> "ModelConfig":
+        """Every kind=llm deployment declares modes, in its dialect's vocabulary (ADR-0145 D3a).
+
+        Skipped for a providerless/partial config (mirrors
+        :meth:`_deployments_reference_known_providers`'s own guard) so a
+        standalone ``ModelConfig`` built for an unrelated test does not need a
+        dialect it never exercises. For a config that DOES declare providers,
+        every kind=llm entry must resolve a dialect (its own override, or its
+        provider's default) and declare at least one mode, each validated
+        against that dialect's accepted fields and value domains.
+        """
+        if not self.providers:
+            return self
+        for key, definition in self.models.items():
+            if definition.kind is not ModelKind.LLM:
+                continue
+            if not definition.modes or definition.default_mode is None:
+                raise ValueError(
+                    f"deployment {key!r} is kind=llm and must declare modes: with "
+                    "at least one entry and a default_mode naming it (ADR-0145 D3a)"
+                )
+            provider_def = self.providers.get(definition.provider or "")
+            dialect = definition.dialect or (provider_def.dialect if provider_def else None)
+            if dialect is None:
+                raise ValueError(
+                    f"deployment {key!r} has no dialect — declare one on the model "
+                    f"or on provider {definition.provider!r} (ADR-0145 D3a)"
+                )
+            accepted = DIALECT_FIELDS[dialect]
+            domains = DIALECT_VALUE_DOMAINS.get(dialect, {})
+            for mode_name, spec in definition.modes.items():
+                where = f"deployment {key!r} mode {mode_name!r} (dialect {dialect.value!r})"
+                set_fields = spec.model_dump(exclude_none=True)
+                for field_name, value in set_fields.items():
+                    if field_name not in accepted:
+                        raise ValueError(
+                            f"{where} sets {field_name!r}, which {dialect.value!r} does not "
+                            f"accept; accepted fields: {sorted(accepted)} (ADR-0145 D3a, "
+                            "FRE-1430 F1)"
+                        )
+                    domain = domains.get(field_name)
+                    if domain is not None and value not in domain:
+                        raise ValueError(
+                            f"{where} sets {field_name}={value!r}, outside "
+                            f"{dialect.value!r}'s domain {sorted(domain)} (ADR-0145 D3a, "
+                            "FRE-1430 F3)"
+                        )
+                if (
+                    dialect is Dialect.OPENAI_GPT5
+                    and spec.reasoning_effort not in (None, "none")
+                    and (spec.temperature is not None or spec.top_p is not None)
+                ):
+                    raise ValueError(
+                        f"{where} sets temperature/top_p alongside "
+                        f"reasoning_effort={spec.reasoning_effort!r} — openai_gpt5 accepts "
+                        "temperature and top_p only at effort 'none' (FRE-1430 F1, F5)"
+                    )
         return self
 
     @model_validator(mode="after")

@@ -12,10 +12,14 @@ from personal_agent.llm_client import ModelRole
 from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
+    ModeSpec,
     Placement,
     ProviderDefinition,
     RoleBinding,
 )
+
+#: Trivial mode (ADR-0145 D3a) — these suites test routing, not dialect vocabulary.
+_TRIVIAL_MODES = {"default": ModeSpec()}
 from personal_agent.orchestrator import Channel, Orchestrator
 from personal_agent.orchestrator.executor import (
     _determine_initial_model_role,
@@ -184,7 +188,6 @@ class TestRoutingFlow:
         assert mock_client.respond.call_args.kwargs["role"] == ModelRole.PRIMARY
 
 
-
 class TestVisionRouting:
     """ADR-0121 T5 (FRE-920): vision is a pinned Layer-3 role — no per-attachment
     override, no profile-driven escalation. ``_resolve_vision_routing_key``
@@ -226,7 +229,10 @@ class TestVisionRouting:
             max_concurrency=1,
             default_timeout=30,
             provider="slm_local" if provider_type == "local" else "anthropic",
+            dialect="llamacpp_qwen" if provider_type == "local" else "anthropic_adaptive",
             supports_vision=supports_vision,
+            modes=_TRIVIAL_MODES,
+            default_mode="default",
         )
 
     def _patch_models(
@@ -364,8 +370,11 @@ class TestDocumentRouting:
             max_concurrency=1,
             default_timeout=30,
             provider="slm_local" if provider_type == "local" else "anthropic",
+            dialect="llamacpp_qwen" if provider_type == "local" else "anthropic_adaptive",
             supports_vision=supports_vision,
             supports_pdf_document=supports_pdf_document,
+            modes=_TRIVIAL_MODES,
+            default_mode="default",
         )
 
     def _patch_models(

@@ -122,16 +122,23 @@ class TestReasoningEffortWiring:
         assert "reasoning_effort" not in kwargs
 
 
-class TestModelDefinitionReasoningEffort:
-    """FRE-766: ModelDefinition carries a validated reasoning_effort (config-owned)."""
+class TestModeSpecReasoningEffort:
+    """FRE-766 / ADR-0145 D3a: a mode carries a validated reasoning_effort.
+
+    ADR-0145 D3a moved ``reasoning_effort`` off ``ModelDefinition`` and onto
+    :class:`~personal_agent.llm_client.models.ModeSpec` — the only declarative
+    home for sampler/thinking values now. The five-rung ``Literal`` stays
+    shared type-wise across dialects; which subset a given dialect actually
+    accepts is a separate, narrower check
+    (``ModelConfig._llm_deployments_declare_valid_modes``, covered in
+    ``tests/personal_agent/llm_client/test_dialect_modes.py``).
+    """
 
     @staticmethod
     def _base(**extra: Any) -> Any:
-        from personal_agent.llm_client.models import ModelDefinition
+        from personal_agent.llm_client.models import ModeSpec
 
-        return ModelDefinition(
-            id="gpt-5.4", context_length=128000, max_concurrency=10, default_timeout=60, **extra
-        )
+        return ModeSpec(**extra)
 
     def test_defaults_none(self) -> None:
         """Absent reasoning_effort defaults None (backend default; prod mini path)."""

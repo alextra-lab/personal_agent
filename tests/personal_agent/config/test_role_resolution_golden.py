@@ -47,7 +47,8 @@ def _clear_matrix_cache():
 def _definition_tuple(config_path: Path, model_key: str) -> tuple[object, ...]:
     config = load_model_config(config_path)
     model_def = config.models[model_key]
-    return (model_def.id, model_def.provider, model_def.max_tokens, model_def.temperature)
+    temperature = model_def.resolve_mode().temperature if model_def.modes else None
+    return (model_def.id, model_def.provider, model_def.max_tokens, temperature)
 
 
 class TestEveryRoleDereferencesToARealDefinition:

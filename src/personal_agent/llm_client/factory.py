@@ -118,8 +118,10 @@ def _build_client(
         # — role-resolved (binding overrides merged) or key-resolved — so the
         # declared reasoning depth travels with the client either way. This is
         # the seam that makes the declaration effective for producers that
-        # never named an effort at their call site.
-        reasoning_effort=model_def.reasoning_effort,
+        # never named an effort at their call site. ADR-0145 D3a: the value now
+        # comes from the model's resolved default mode, whichever dialect field
+        # (`reasoning_effort` or `effort`) carries it.
+        reasoning_effort=model_def.resolve_mode().resolved_reasoning_effort,
         placement=placement,
         model_def=model_def,
     )

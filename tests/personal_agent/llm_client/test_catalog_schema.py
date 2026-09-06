@@ -14,7 +14,12 @@ from pydantic import ValidationError
 from personal_agent.llm_client.models import ModelConfig, ModelKind, Placement, RoleBinding
 
 _PROVIDERS = {
-    "slm_local": {"placement": "local", "max_concurrency": 2, "base_url": "https://slm/v1"},
+    "slm_local": {
+        "placement": "local",
+        "max_concurrency": 2,
+        "base_url": "https://slm/v1",
+        "dialect": "llamacpp_qwen",
+    },
     "openai": {"placement": "cloud", "max_concurrency": 10, "auth_env": "openai_api_key"},
 }
 
@@ -26,6 +31,10 @@ _DEPLOYMENTS = {
         "context_length": 65536,
         "max_concurrency": 1,
         "default_timeout": 90,
+        # ADR-0145 D3a: trivial mode, since this suite tests kind/role binding,
+        # not dialect vocabulary.
+        "default_mode": "default",
+        "modes": {"default": {}},
     },
     "qwen-embed": {
         "id": "Qwen/Qwen3-Embedding-8B",

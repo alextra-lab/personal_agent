@@ -502,16 +502,18 @@ Each `ModelDef` supports the following fields. Some are local-only; some are clo
 |-------|------|----------|---------|-------------|
 | `endpoint` | string | no | `settings.llm_base_url` | Base URL override |
 | `quantization` | string | no | — | `"8bit"` \| `"4bit"` |
-| `temperature` | float | no | — | Sampling temperature |
-| `top_p` | float | no | — | Nucleus sampling threshold |
-| `top_k` | int | no | — | Top-K sampling (passed via `extra_body`) |
-| `presence_penalty` | float | no | — | Presence penalty |
 | `max_tokens` | int | no | — | Max output tokens |
-| `disable_thinking` | bool | no | `false` | Hard-disable thinking via `chat_template_kwargs` |
-| `thinking_budget_tokens` | int | no | — | Cap thinking tokens via `extra_body` |
 | `min_concurrency` | int | no | — | Floor for adaptive concurrency |
 | `supports_function_calling` | bool | no | `false` | Whether the model supports tool calling |
 | `tool_calling_strategy` | string | no | — | `"native"` \| `"prompt"` |
+
+**Sampler and thinking values (ADR-0145 D3a).** `temperature`, `top_p`, `top_k`, `min_p`,
+`presence_penalty`, `repeat_penalty`, `reasoning_effort`/`effort`, and the thinking lever
+(`enable_thinking` locally; per-dialect elsewhere) are no longer top-level `ModelDef` fields.
+Every `kind: llm` entry declares them inside `modes:`, named in its resolved `dialect`'s own
+vocabulary, with `default_mode` naming which one a caller gets by default. See
+`ProviderDefinition.dialect`, `ModelDefinition.modes`/`default_mode`, and
+`personal_agent.llm_client.models.ModeSpec` for the current shape.
 
 #### Cloud model fields
 

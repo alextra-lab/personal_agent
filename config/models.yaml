@@ -19,15 +19,21 @@
 # Local-model fields (omit for cloud models):
 #   endpoint         Base URL override (defaults to settings.slm_base_url)
 #   quantization     e.g. "8bit", "4bit" (omit for cloud models)
-#   temperature, top_p, presence_penalty   Sampling params
-#   top_k            Passed via extra_body (vLLM/LM Studio extension)
-#   disable_thinking Hard-disables thinking via chat_template_kwargs (Qwen3.5+)
-#   thinking_budget_tokens  Caps thinking tokens via extra_body (Qwen3.5+)
 #   parallel_tool_calls     Allow multiple tool calls per turn (default true; requires updated llama.cpp)
 #   min_concurrency  Floor for adaptive concurrency (ADR-0033)
 #
 # Cloud-model fields:
 #   max_tokens       Max output tokens (billed per token; set deliberately)
+#
+# Every `kind: llm` entry (ADR-0145 D3a):
+#   dialect          Override of the provider's default wire vocabulary. Required
+#                    when the provider declares none (see `anthropic:` below).
+#   modes            Named sampler/thinking presets, written in the resolved
+#                    dialect's own vocabulary — the ONLY home for sampling and
+#                    thinking values; there is no top-level fallback. At least
+#                    one entry, validated against the dialect's accepted fields
+#                    at load.
+#   default_mode     Which entry in `modes` a caller gets when it names none.
 #
 # NOTE: `provider_type` was removed in FRE-916 phase 2 (ADR-0121). Placement is a
 # PROVIDER fact, declared once under `providers:` and read via
@@ -49,6 +55,7 @@ providers:
     base_url: "https://slm.example.com/v1"
     auth: none
     placement: local
+    dialect: llamacpp_qwen  # ADR-0145 D3a; thinking lever chat_template_kwargs.enable_thinking (FRE-1430 F1)
     # 2026-09-04: raised 2 -> 3 to match slm_server's `--parallel 3` on the single
     # served model. At 2 the expansion controller's 4-way fan-out could only ever
     # place 2 sub-agents; the other 2 sat in the client queue and timed out at the
@@ -79,16 +86,20 @@ providers:
     placement: cloud
     max_concurrency: 50
     summary: "OVH AI Endpoints — managed chat inference (litellm-native provider)"
+    dialect: ovh_qwen  # ADR-0145 D3a; reasoning_effort domain {none,low,medium} only (FRE-1430 F3)
   openai:
     auth_env: openai_api_key
     placement: cloud
     max_concurrency: 50
     summary: "OpenAI — structured extraction and compression"
+    dialect: openai_gpt5  # ADR-0145 D3a (FRE-1430 F1)
   anthropic:
     auth_env: anthropic_api_key
     placement: cloud
     max_concurrency: 50
     summary: "Anthropic — background reasoning and cloud-profile inference"
+    # No provider-level dialect: Sonnet 5 and Haiku 4.5 are two different
+    # dialects on one vendor (FRE-1430 F6) — each model below overrides.
   voyage:
     base_url: "https://api.voyageai.com/v1"
     auth_env: voyage_api_key
@@ -125,24 +136,32 @@ models:
     min_concurrency: 1
     max_concurrency: 1
     default_timeout: 600         # 128K prefill + up to 32K thinking output (was 180)
-    temperature: 0.6             # Qwen3.5 carryover; outperforms card's 1.0 on our agent loop (deterministic intent + bounded tool iterations). See EVAL-2026-05-11-subagent-qwen36 COMPARISON.
-    top_p: 0.95
-    top_k: 20                    # via extra_body
-    min_p: 0.0                   # Qwen card recommended; via extra_body
-    # 1.5 -> 0.0, owner-directed 2026-08-05 on Unsloth's guidance, which is the
-    # authority for this deployment: we run Unsloth's GGUF quant on llama.cpp,
-    # and Unsloth recommends presence_penalty 0.0 for thinking mode on BOTH
-    # Qwen3.6 sizes. Only the official 35B-A3B card says 1.5, and that value is
-    # paired there with temperature 1.0; the 27B card says 0.0. Holding 1.5 next
-    # to our temperature 0.6 made this entry a hybrid of two presets that no
-    # source recommends together -- a strong repetition penalty tuned for
-    # temperature-1.0 sampling, applied to much tighter sampling. With this
-    # change the entry is exactly Unsloth's thinking-mode preset for precise
-    # tasks: 0.6 / 0.95 / 20 / 0.0 / 0.0 / 1.0. The temperature was already
-    # chosen on evidence (EVAL-2026-05-11) and independently matches it.
-    presence_penalty: 0.0
-    repetition_penalty: 1.0      # Unsloth + Qwen card: disabled or 1.0; via extra_body
-    thinking_budget_tokens: 32768  # Qwen card "standard" max output
+    # ADR-0145 D3a: sampler/thinking values move into modes:, field for field —
+    # no value changes here, only their home. `thinking_budget_tokens` (was
+    # 32768) has no home in llamacpp_qwen's dialect and is dropped: it is
+    # wire-inert on this server (FRE-1430 F2, FRE-1423), not a lever.
+    default_mode: default
+    modes:
+      default:
+        enable_thinking: true   # thinking was on by default (no disable_thinking set)
+        temperature: 0.6        # Qwen3.5 carryover; outperforms card's 1.0 on our agent loop (deterministic intent + bounded tool iterations). See EVAL-2026-05-11-subagent-qwen36 COMPARISON.
+        top_p: 0.95
+        top_k: 20                    # via extra_body
+        min_p: 0.0                   # Qwen card recommended; via extra_body
+        # 1.5 -> 0.0, owner-directed 2026-08-05 on Unsloth's guidance, which is the
+        # authority for this deployment: we run Unsloth's GGUF quant on llama.cpp,
+        # and Unsloth recommends presence_penalty 0.0 for thinking mode on BOTH
+        # Qwen3.6 sizes. Only the official 35B-A3B card says 1.5, and that value is
+        # paired there with temperature 1.0; the 27B card says 0.0. Holding 1.5 next
+        # to our temperature 0.6 made this entry a hybrid of two presets that no
+        # source recommends together -- a strong repetition penalty tuned for
+        # temperature-1.0 sampling, applied to much tighter sampling. With this
+        # change the entry is exactly Unsloth's thinking-mode preset for precise
+        # tasks: 0.6 / 0.95 / 20 / 0.0 / 0.0 / 1.0. The temperature was already
+        # chosen on evidence (EVAL-2026-05-11) and independently matches it.
+        presence_penalty: 0.0
+        repeat_penalty: 1.0     # llama.cpp's wire name (FRE-1430 F2); was declared as
+                                 # `repetition_penalty`, which that server silently ignores
     supports_function_calling: true
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
@@ -183,18 +202,24 @@ models:
     min_concurrency: 1
     max_concurrency: 1
     default_timeout: 600
-    # Sampling per the Qwen3.8-Flash-Next card, "Thinking Mode" preset. NOT
-    # carried over from qwen3.6-35b-thinking's temperature 0.6: that value was
-    # chosen on EVAL-2026-05-11 evidence for a different model, and pairing it
-    # with this card's other parameters would rebuild exactly the two-preset
-    # hybrid this file records fixing on 2026-08-05.
-    temperature: 1.0
-    top_p: 0.95
-    top_k: 20
-    min_p: 0.0
-    presence_penalty: 0.0
-    repetition_penalty: 1.0
-    thinking_budget_tokens: 32768
+    # ADR-0145 D3a: sampler/thinking values move into modes:, field for field.
+    # `thinking_budget_tokens` (was 32768) has no home in llamacpp_qwen's
+    # dialect and is dropped: wire-inert on this server (FRE-1430 F2, FRE-1423).
+    default_mode: default
+    modes:
+      default:
+        # Sampling per the Qwen3.8-Flash-Next card, "Thinking Mode" preset. NOT
+        # carried over from qwen3.6-35b-thinking's temperature 0.6: that value was
+        # chosen on EVAL-2026-05-11 evidence for a different model, and pairing it
+        # with this card's other parameters would rebuild exactly the two-preset
+        # hybrid this file records fixing on 2026-08-05.
+        enable_thinking: true   # thinking was on by default (no disable_thinking set)
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repeat_penalty: 1.0     # llama.cpp's wire name (FRE-1430 F2); was `repetition_penalty`
     supports_function_calling: true
     supports_vision: true         # SLM catalog reports model_type: multimodal
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
@@ -231,18 +256,22 @@ models:
                                  # one served model the sub-agent now queues behind the
                                  # primary, so 90s may be too short under contention — revisit
                                  # once the slot count is known rather than guessing now.
-    # Unsloth's NON-thinking preset. presence_penalty 1.5 is correct here and
-    # deliberately differs from the thinking entry's 0.0 -- same reasoning as the
-    # retired qwen3.6-35b-instruct entry this replaces.
-    temperature: 0.7
-    top_p: 0.8
-    top_k: 20
-    min_p: 0.0
-    presence_penalty: 1.5
-    repetition_penalty: 1.0
     max_tokens: 2048             # bounded sub-task output; safe because thinking is
                                  # hard-disabled below, so reasoning cannot eat the budget
-    disable_thinking: true       # hard disable via chat_template_kwargs (ADR-0023)
+    # ADR-0145 D3a: sampler/thinking values move into modes:, field for field.
+    default_mode: default
+    modes:
+      default:
+        # Unsloth's NON-thinking preset. presence_penalty 1.5 is correct here and
+        # deliberately differs from the thinking entry's 0.0 -- same reasoning as the
+        # retired qwen3.6-35b-instruct entry this replaces.
+        enable_thinking: false  # was disable_thinking: true — hard disable via chat_template_kwargs (ADR-0023)
+        temperature: 0.7
+        top_p: 0.8
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repeat_penalty: 1.0     # llama.cpp's wire name (FRE-1430 F2); was `repetition_penalty`
     supports_function_calling: true
     supports_vision: true
     supports_pdf_document: false
@@ -280,18 +309,22 @@ models:
     min_concurrency: 1
     max_concurrency: 3
     default_timeout: 90          # Fail-fast — sub-agent delays cascade to primary
-    temperature: 0.7             # Qwen card Instruct preset (was 0.4 for Qwen3.5-9B)
-    top_p: 0.80                  # Qwen card Instruct
-    top_k: 20
-    min_p: 0.0                   # Qwen card Instruct (new)
-    # Deliberately NOT changed alongside the thinking model's 1.5 -> 0.0.
-    # Unsloth's non-thinking preset recommends presence_penalty 1.5, and this
-    # entry runs thinking disabled, so 1.5 is the correct value here. Checked
-    # 2026-08-05 rather than assumed to move with its sibling.
-    presence_penalty: 1.5        # Unsloth + Qwen card, Instruct/non-thinking
-    repetition_penalty: 1.0      # Unsloth + Qwen card: disabled or 1.0; via extra_body
     max_tokens: 2048             # Bounded output for summary-length sub-task results
-    disable_thinking: true       # Hard disable via chat_template_kwargs (ADR-0023)
+    # ADR-0145 D3a: sampler/thinking values move into modes:, field for field.
+    default_mode: default
+    modes:
+      default:
+        enable_thinking: false  # was disable_thinking: true — Hard disable via chat_template_kwargs (ADR-0023)
+        temperature: 0.7             # Qwen card Instruct preset (was 0.4 for Qwen3.5-9B)
+        top_p: 0.80                  # Qwen card Instruct
+        top_k: 20
+        min_p: 0.0                   # Qwen card Instruct (new)
+        # Deliberately NOT changed alongside the thinking model's 1.5 -> 0.0.
+        # Unsloth's non-thinking preset recommends presence_penalty 1.5, and this
+        # entry runs thinking disabled, so 1.5 is the correct value here. Checked
+        # 2026-08-05 rather than assumed to move with its sibling.
+        presence_penalty: 1.5        # Unsloth + Qwen card, Instruct/non-thinking
+        repeat_penalty: 1.0          # llama.cpp's wire name (FRE-1430 F2); was `repetition_penalty`
     supports_function_calling: true
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
@@ -373,11 +406,9 @@ models:
     input_cost_per_token: 0.00000047     # $0.47/MTok (EUR 0.4 at the 3.6 entry's rate)
     output_cost_per_token: 0.00000319    # $3.19/MTok (EUR 2.7 at the 3.6 entry's rate)
     # 1.0 is the model card's THINKING-mode value, and thinking mode is the one
-    # this deployment actually runs in. Qwen3.8-27B ships with thinking ON by
-    # default, and it is disabled only through `enable_thinking` inside
-    # `chat_template_kwargs` -- an extra_body field the LiteLLM path does not
-    # send (see the note below). So we cannot select the instruct preset here
-    # even if we wanted it, and the thinking row is the honest one to follow.
+    # this deployment actually runs in: no reasoning_effort is declared below,
+    # so OVH's own gateway default (xhigh, unrequestable — FRE-1430 F3) applies.
+    # Qwen3.8-27B ships with thinking ON by default.
     #
     # Card values, read 2026-09-06 from huggingface.co/Qwen/Qwen3.8-27B:
     #   thinking  temperature 1.0, top_p 0.95, top_k 20, min_p 0.0, presence_penalty 0.0
@@ -387,14 +418,15 @@ models:
     # "a good starting point" chosen to match the then-local primary rather than
     # read from a card.
     #
-    # temperature stays the ONLY sampling parameter declared, because it is the
-    # only one that reaches this model: the LiteLLM path sends temperature and
-    # not top_p, top_k, min_p, presence_penalty or repetition_penalty. Declaring
-    # the other four would read as configured while doing nothing -- the same
-    # trap as the thinking fields below. Landing them properly is ADR work, not
-    # a config edit: FRE-1426 D3 puts a card's presets on the model as named
-    # `modes:`, with these exact numbers.
-    temperature: 1.0
+    # temperature stays the ONLY sampling value declared, because it is the
+    # only one ovh_qwen's dialect actually reaches: top_p, top_k, min_p and
+    # presence_penalty are declared on the card but are not in this entry,
+    # rather than declared-but-inert (ADR-0145 D3a; FRE-1430 F1/F5 measured the
+    # accepted set). Choosing a cheap worker mode is D6, a separate decision.
+    default_mode: default
+    modes:
+      default:
+        temperature: 1.0
     # PROVENANCE WARNING for the three capability flags below. OVH's models
     # endpoint returns exactly seven keys -- id, created, object, owned_by,
     # pricing, context_length, max_completion_tokens -- and no capability
@@ -412,9 +444,6 @@ models:
     # this flag is the one that was first set wrong by inferring.
     supports_vision: true
     supports_pdf_document: false
-    # NOTE: thinking_budget_tokens / disable_thinking are deliberately absent.
-    # They are delivered via extra_body, which the LiteLLM path does not send --
-    # declaring them here would read as configured while doing nothing.
 
   # ── Cloud Models (ADR-0031) ─────────────────────────────────────
   # API key is NOT stored here — set AGENT_ANTHROPIC_API_KEY / AGENT_OPENAI_API_KEY in .env
@@ -425,6 +454,7 @@ models:
     # LiteLLM model string: "anthropic/claude-sonnet-5" (prefixed at call time)
     id: "claude-sonnet-5"
     provider: "anthropic"
+    dialect: anthropic_adaptive  # ADR-0145 D3a — provider declares no default (FRE-1430 F6)
     max_tokens: 128000        # provider ceiling; policy clamp is settings.artifact_draft_max_tokens
     context_length: 200000
     # FRE-1007: MANDATORY for a role-bound llm deployment — config_guard's
@@ -440,12 +470,12 @@ models:
     # "output_config": {"effort": "high"}}. Tuning a cheaper depth for the
     # digest's faithfulness task is FRE-993's, per FRE-1007's RELATED section.
     #
-    # `none` would NOT be a declaration here: litellm drops it for Anthropic, so
-    # the request would go out bare and the provider default would still apply.
-    # The guard rejects it for that reason. On gpt-5.4-mini below, the same value
-    # IS a real wire parameter — which is why the rule is verified per model
-    # against litellm rather than written once in one vendor's vocabulary.
-    reasoning_effort: high
+    # ADR-0145 D3a: moved into modes: below, field for field — `reasoning_effort:
+    # high` becomes `effort: high`, anthropic_adaptive's own lever name.
+    default_mode: default
+    modes:
+      default:
+        effort: high
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 180
@@ -459,11 +489,18 @@ models:
     # Used as sub_agent_model in config/profiles/cloud.yaml
     id: "claude-haiku-4-5-20251001"
     provider: "anthropic"
+    dialect: anthropic_budget  # ADR-0145 D3a — no adaptive thinking, no effort (FRE-1430 F6)
     max_tokens: 64000         # provider ceiling; policy clamp is settings.artifact_draft_max_tokens
     context_length: 200000
     min_concurrency: 1
     max_concurrency: 20
     default_timeout: 30
+    # ADR-0145 D3a: no sampler/thinking value was declared before this migration
+    # (none reaches this producer today), so the default mode stays empty —
+    # behaviour-preserving, not a new choice.
+    default_mode: default
+    modes:
+      default: {}
     supports_vision: true         # Claude Haiku is vision-capable (ADR-0101)
     supports_pdf_document: true   # Claude Haiku accepts the native PDF document block (ADR-0102 §3)
     input_cost_per_token: 0.000001    # $1/MTok (ADR-0101 §8b / FRE-691 — config-owned cost matrix)
@@ -483,7 +520,7 @@ models:
     # FRE-758/FRE-649: the local entity_extraction_role (top of file), matching
     # the prod entity extractor (the two catalogs agreed here before FRE-916
     # phase 2 collapsed them into this file).
-    temperature: 0.0
+    #
     # FRE-1007: MANDATORY declaration (see claude_sonnet above). `none` is the
     # DELIBERATE no-reasoning choice, and it is the only value this deployment
     # can carry — both facts are measured, not assumed:
@@ -494,14 +531,19 @@ models:
     #     that the GPT-5 default is 'medium' is wrong; that eval is the evidence.)
     #  2. Any HIGHER value would be an outage, not a cost change. litellm rejects
     #     temperature != 1 together with any effort above 'none' on the gpt-5
-    #     family, and `temperature: 0.0` above is the FRE-758 pin. Measured
+    #     family, and `temperature: 0.0` below is the FRE-758 pin. Measured
     #     against litellm 1.89.2: reasoning_effort='medium' + temperature=0.0 ->
     #     UnsupportedParamsError. entity_extraction and compressor both bind here.
     #
     # 'none' reaching the wire as a real parameter (reasoning_effort: "none") is
     # what makes this a declaration rather than a silence — the guard verifies
     # exactly that, and rejects the same value on Anthropic where it is dropped.
-    reasoning_effort: none
+    # ADR-0145 D3a moved both values into modes: below, field for field.
+    default_mode: default
+    modes:
+      default:
+        temperature: 0.0
+        reasoning_effort: none
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok
 

@@ -455,7 +455,7 @@ class TestClientWiring:
         import httpx
 
         from personal_agent.llm_client.litellm_client import LiteLLMClient
-        from personal_agent.llm_client.models import ModelDefinition, Placement
+        from personal_agent.llm_client.models import ModelDefinition, ModeSpec, Placement
         from personal_agent.llm_client.types import LLMTimeout, ModelRole
 
         ctx = _ctx_with_session()
@@ -471,6 +471,8 @@ class TestClientWiring:
                 context_length=32768,
                 max_concurrency=2,
                 default_timeout=60,
+                modes={"default": ModeSpec()},
+                default_mode="default",
             ),
         )
 

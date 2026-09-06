@@ -100,7 +100,7 @@ def _sse_response(content: str) -> bytes:
 class TestLlmClientSeam:
     def _client(self, *, endpoint: str) -> Any:
         from personal_agent.llm_client.litellm_client import LiteLLMClient
-        from personal_agent.llm_client.models import ModelDefinition, Placement
+        from personal_agent.llm_client.models import ModelDefinition, ModeSpec, Placement
 
         return LiteLLMClient(
             model_id="test-primary",
@@ -114,6 +114,8 @@ class TestLlmClientSeam:
                 context_length=32768,
                 max_concurrency=2,
                 default_timeout=5,
+                modes={"default": ModeSpec()},
+                default_mode="default",
             ),
         )
 

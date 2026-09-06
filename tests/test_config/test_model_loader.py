@@ -329,6 +329,7 @@ providers:
 models:
   reranker:
     provider: slm_local
+    kind: reranker
     id: "test-reranker"
     endpoint: "https://slm.example.com/v1"
     context_length: 8192
@@ -507,9 +508,10 @@ class TestEntityExtractionTemperatureDeployedConfig:
         resolved_key = resolve_role_model_key("entity_extraction", config_path=config_path)
 
         role_model = config.models[resolved_key]
-        assert role_model.temperature == 0.0, (
+        resolved_temperature = role_model.resolve_mode().temperature
+        assert resolved_temperature == 0.0, (
             f"{resolved_key} in {config_path} must be pinned to "
-            f"temperature=0.0, got {role_model.temperature!r}"
+            f"temperature=0.0, got {resolved_temperature!r}"
         )
 
 

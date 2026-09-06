@@ -15,17 +15,25 @@ from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
     ModelKind,
+    ModeSpec,
     Placement,
     ProviderDefinition,
     RoleBinding,
 )
 from personal_agent.orchestrator import constraint_options as co
 
+#: Trivial mode (ADR-0145 D3a) — this suite tests option computation, not dialect
+#: vocabulary.
+_TRIVIAL_MODES = {"default": ModeSpec()}
+
 
 def _provider(
     *, auth_env: str | None, placement: Placement = Placement.CLOUD
 ) -> ProviderDefinition:
-    return ProviderDefinition(auth_env=auth_env, placement=placement, max_concurrency=10)
+    dialect = "llamacpp_qwen" if placement is Placement.LOCAL else "anthropic_adaptive"
+    return ProviderDefinition(
+        auth_env=auth_env, placement=placement, max_concurrency=10, dialect=dialect
+    )
 
 
 def _model(
@@ -51,6 +59,8 @@ def _model(
         dimensions=dimensions,
         max_concurrency=4,
         default_timeout=30,
+        modes=_TRIVIAL_MODES if kind is ModelKind.LLM else {},
+        default_mode="default" if kind is ModelKind.LLM else None,
     )
 
 

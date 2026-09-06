@@ -199,16 +199,14 @@ local-placement deployment. Section 2 shows that rejection is not merely tidy: a
 value returns HTTP 500 on Flash-Next. Verified 2026-09-04 — both local deployments resolve
 with `reasoning_effort=None`.
 
-**`thinking_budget_tokens` is inert and the guard has no effective alternative for a
-thinking-on local deployment.** Probed against Flash-Next 2026-09-04 (recorded on
-FRE-1362): a declared `thinking_budget: 256` left about 924 tokens of reasoning untouched.
-Meanwhile FRE-1007 requires every local role-bound deployment to declare either
-`disable_thinking` or `thinking_budget_tokens`. For a thinking-**off** deployment that is
-satisfiable and effective. For a thinking-**on** one the only accepted declaration does
-nothing, so the guard is satisfied by a dead field. The real lever — `reasoning_effort` —
-is pinned server-side and is exactly what the guard forbids sending. The guard has no
-vocabulary for "reasoning depth is set at the server", and that gap should be closed
-deliberately rather than papered over.
+**`thinking_budget_tokens` was inert, and the gap it left is now closed (ADR-0145 D3a,
+FRE-1439).** Probed against Flash-Next 2026-09-04 (recorded on FRE-1362): a declared
+`thinking_budget: 256` left about 924 tokens of reasoning untouched. FRE-1430 F2
+reproduced the same inertness independently and the field has been retired from the
+catalog: it is no longer a config field at all. A thinking-**on** local deployment now
+satisfies FRE-1007's guard by declaring `enable_thinking: true` on its mode — a real,
+effective lever (FRE-1430 F16) — rather than the dead `thinking_budget_tokens` field this
+section used to describe as the only option.
 
 **The `max_tokens >= 4000` floor belongs to Qwen3.6, not the model we now run.**
 Flash-Next needs about 1077 tokens for a 600-word answer at `medium` and spends 20-23

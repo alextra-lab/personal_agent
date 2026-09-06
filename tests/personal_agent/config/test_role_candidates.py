@@ -8,8 +8,9 @@ single-membership checks.
 FRE-1415 layers a second dimension on top: for LOCAL deployments, ``model.id``
 (not the catalog key) must also be confirmed served. ``_FLASH``/``_FLASH_INSTRUCT``
 below mirror the real catalog's ``qwen3.8-flash-next``/``-instruct`` pair — two
-keys sharing one served id, differing only in ``disable_thinking`` — so AC-2
-is exercised inside the same fixture every other test here already uses.
+keys sharing one served id, differing only in their mode's ``enable_thinking``
+(ADR-0145 D3a) — so AC-2 is exercised inside the same fixture every other test
+here already uses.
 """
 
 from __future__ import annotations
@@ -20,9 +21,15 @@ from personal_agent.config.model_loader import role_candidates
 from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
+    ModeSpec,
     ProviderDefinition,
     RoleBinding,
 )
+
+#: Trivial mode declaration (ADR-0145 D3a) — every kind=llm entry below needs
+#: modes/default_mode/dialect to load, but this suite tests role_candidates'
+#: picker logic, not dialect vocabulary, so the mode body stays empty.
+_TRIVIAL_MODES = {"default": ModeSpec()}
 
 _QWEN_THINKING = "qwen3.6-35b-thinking"  # slm_local, llm
 _QWEN_INSTRUCT = "qwen3.6-35b-instruct"  # slm_local, llm
@@ -64,9 +71,15 @@ _ALL_LLM_KEYS = {
 def _config() -> ModelConfig:
     return ModelConfig(
         providers={
-            "slm_local": ProviderDefinition(placement="local", max_concurrency=2),
-            "anthropic": ProviderDefinition(placement="cloud", max_concurrency=50),
-            "openai": ProviderDefinition(placement="cloud", max_concurrency=50),
+            "slm_local": ProviderDefinition(
+                placement="local", max_concurrency=2, dialect="llamacpp_qwen"
+            ),
+            "anthropic": ProviderDefinition(
+                placement="cloud", max_concurrency=50, dialect="anthropic_adaptive"
+            ),
+            "openai": ProviderDefinition(
+                placement="cloud", max_concurrency=50, dialect="openai_gpt5"
+            ),
             "ovh": ProviderDefinition(placement="cloud", max_concurrency=50),
             "voyage": ProviderDefinition(placement="cloud", max_concurrency=50),
         },
@@ -77,6 +90,8 @@ def _config() -> ModelConfig:
                 context_length=131072,
                 max_concurrency=1,
                 default_timeout=600,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             _QWEN_INSTRUCT: ModelDefinition(
                 id=_QWEN_INSTRUCT_ID,
@@ -84,6 +99,8 @@ def _config() -> ModelConfig:
                 context_length=65536,
                 max_concurrency=3,
                 default_timeout=90,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             _FLASH: ModelDefinition(
                 id=_FLASH_ID,
@@ -91,6 +108,8 @@ def _config() -> ModelConfig:
                 context_length=131072,
                 max_concurrency=3,
                 default_timeout=600,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             _FLASH_INSTRUCT: ModelDefinition(
                 id=_FLASH_ID,
@@ -98,7 +117,8 @@ def _config() -> ModelConfig:
                 context_length=131072,
                 max_concurrency=3,
                 default_timeout=90,
-                disable_thinking=True,
+                modes={"default": ModeSpec(enable_thinking=False)},
+                default_mode="default",
             ),
             _CLAUDE_SONNET: ModelDefinition(
                 id="claude-sonnet-5",
@@ -106,13 +126,18 @@ def _config() -> ModelConfig:
                 context_length=200000,
                 max_concurrency=10,
                 default_timeout=180,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             _CLAUDE_HAIKU: ModelDefinition(
                 id="claude-haiku-4-5-20251001",
                 provider="anthropic",
+                dialect="anthropic_budget",
                 context_length=200000,
                 max_concurrency=20,
                 default_timeout=30,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             _GPT_MINI: ModelDefinition(
                 id="gpt-5.4-mini",
@@ -120,6 +145,8 @@ def _config() -> ModelConfig:
                 context_length=128000,
                 max_concurrency=10,
                 default_timeout=60,
+                modes=_TRIVIAL_MODES,
+                default_mode="default",
             ),
             _EMBEDDING: ModelDefinition(
                 id="Qwen3-Embedding-8B",

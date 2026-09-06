@@ -720,6 +720,16 @@ class ModelConfig(BaseModel):
                         f"reasoning_effort={spec.reasoning_effort!r} — openai_gpt5 accepts "
                         "temperature and top_p only at effort 'none' (FRE-1430 F1, F5)"
                     )
+                if (
+                    dialect is Dialect.ANTHROPIC_BUDGET
+                    and spec.temperature is not None
+                    and spec.top_p is not None
+                ):
+                    raise ValueError(
+                        f"{where} sets both temperature and top_p — anthropic_budget accepts "
+                        'only one at a time (FRE-1430 F6: "temperature and top_p cannot both '
+                        'be specified for this model")'
+                    )
         return self
 
     @model_validator(mode="after")

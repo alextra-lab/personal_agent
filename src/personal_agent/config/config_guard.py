@@ -982,6 +982,11 @@ def _project_default_mode(deployment: JSONDict) -> JSONDict:
         # accept, which FRE-1430 F2 found wire-inert.
         projected["disable_thinking"] = body["enable_thinking"] is False
         projected["_dialect_thinking_declared"] = True
+    if "budget_tokens" in body:
+        # anthropic_budget's own lever (native thinking.enabled + budget_tokens,
+        # FRE-1430 table) — a set value is an explicit thinking-on declaration,
+        # same as enable_thinking above, just under a different dialect's name.
+        projected["_dialect_thinking_declared"] = True
     return projected
 
 

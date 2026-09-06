@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from personal_agent.config.config_guard import (
+    _project_default_mode,
     check_reasoning_declaration,
     run_all_checks,
 )
@@ -242,3 +243,36 @@ class TestSeededNegatives:
         from scripts.check_config import main
 
         assert main(["--root", str(_FIXTURES / fixture)]) == 1
+
+
+class TestProjectDefaultModeOntoPreD3aShape:
+    """ADR-0145 D3a's ``_project_default_mode`` shim — every dialect's own
+    thinking lever must register as a declaration, not just llamacpp_qwen's
+    ``enable_thinking`` (codex plan-review caught the missing ``budget_tokens``
+    branch on the first pass: anthropic_budget's own lever, silently dropped,
+    would have made a real declaration read as a missing one).
+    """
+
+    @staticmethod
+    def _deployment(modes: dict[str, object]) -> dict[str, object]:
+        return {
+            "provider": "anthropic",
+            "default_mode": "default",
+            "modes": modes,
+        }
+
+    def test_budget_tokens_registers_as_a_thinking_declaration(self) -> None:
+        projected = self._project_default_mode_deployment({"budget_tokens": 1024})
+        assert projected["_dialect_thinking_declared"] is True
+
+    def test_enable_thinking_still_registers(self) -> None:
+        """Regression guard — the fix must not disturb the existing llamacpp_qwen branch."""
+        projected = self._project_default_mode_deployment({"enable_thinking": True})
+        assert projected["_dialect_thinking_declared"] is True
+
+    def test_empty_mode_registers_no_declaration(self) -> None:
+        projected = self._project_default_mode_deployment({})
+        assert "_dialect_thinking_declared" not in projected
+
+    def _project_default_mode_deployment(self, mode_body: dict[str, object]) -> dict[str, object]:
+        return _project_default_mode(self._deployment({"default": mode_body}))

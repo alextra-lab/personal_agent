@@ -146,6 +146,53 @@ class TestAC2InvalidValueFailsAtLoad:
             )
 
 
+class TestCrossFieldRulesBeyondFieldMembership:
+    """A field can individually belong to a dialect's accepted set and still be
+    an illegal COMBINATION with another field the dialect also accepts
+    (FRE-1430 F1/F5/F6) — caught by codex plan-review as a gap on the first
+    pass of this validator.
+    """
+
+    def test_openai_gpt5_rejects_temperature_with_a_nonzero_effort(self) -> None:
+        """OpenAI accepts temperature/top_p only at effort 'none' (F1, F5)."""
+        with pytest.raises(ValidationError, match="temperature.*openai_gpt5|openai_gpt5.*low"):
+            _config(
+                provider_dialect="openai_gpt5",
+                model_dialect=None,
+                mode_body={"temperature": 0.5, "reasoning_effort": "low"},
+            )
+
+    def test_openai_gpt5_accepts_temperature_at_effort_none(self) -> None:
+        _config(
+            provider_dialect="openai_gpt5",
+            model_dialect=None,
+            mode_body={"temperature": 0.0, "reasoning_effort": "none"},
+        )
+
+    def test_anthropic_budget_rejects_temperature_with_top_p(self) -> None:
+        """Haiku 4.5 400s if both are specified together (FRE-1430 F6)."""
+        with pytest.raises(ValidationError, match="anthropic_budget"):
+            _config(
+                provider_dialect=None,
+                model_dialect="anthropic_budget",
+                mode_body={"temperature": 0.5, "top_p": 0.9},
+            )
+
+    def test_anthropic_budget_accepts_temperature_alone(self) -> None:
+        _config(
+            provider_dialect=None,
+            model_dialect="anthropic_budget",
+            mode_body={"temperature": 0.5},
+        )
+
+    def test_anthropic_budget_accepts_top_p_alone(self) -> None:
+        _config(
+            provider_dialect=None,
+            model_dialect="anthropic_budget",
+            mode_body={"top_p": 0.9},
+        )
+
+
 class TestAC3DefaultModeMustMatchADeclaredMode:
     """AC-3 — modes declared with no matching default_mode fails at load."""
 

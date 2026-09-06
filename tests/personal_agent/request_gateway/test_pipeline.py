@@ -400,7 +400,7 @@ class TestStage7BudgetResolvesActiveSelection:
     """FRE-978 — Stage 7's budget trim must measure the session's real window.
 
     Before the fix, an unset ``max_context_tokens`` always fell back to the
-    static ``settings.context_budget_max_tokens`` (120K, Qwen-calibrated)
+    static ``settings.context_budget_max_tokens`` (Qwen-calibrated)
     regardless of the session's selected primary model — the sibling bug to
     FRE-972 (the in-turn compaction/consent gate), in Stage 7 of the pre-LLM
     gateway instead of the executor's state machine.
@@ -408,10 +408,11 @@ class TestStage7BudgetResolvesActiveSelection:
     FRE-1411: the 2026-09-05 catalog correction records every local Qwen
     deployment at its full natural window (262,144), so no ``kind: llm``
     deployment left in
-    the catalog is smaller than the static fallback (120000) any more — every
-    real chat-capable candidate (the local Qwen pair, ``qwen3.8-27b-ovh``,
-    ``claude_sonnet``/``claude_haiku``, ``gpt-5.4-mini`` at 128000) now exceeds
-    it. ``resolve_active_context_length`` resolves purely off a deployment's
+    the catalog is smaller than the static fallback (FRE-1427: 98304, was
+    120000) any more — every real chat-capable candidate (the local Qwen
+    pair, ``qwen3.8-27b-ovh``, ``claude_sonnet``/``claude_haiku``,
+    ``gpt-5.4-mini`` at 128000) now exceeds it.
+    ``resolve_active_context_length`` resolves purely off a deployment's
     ``context_length`` field regardless of ``kind`` (``config/model_loader.py``),
     so this test substitutes ``embedding`` (context_length 32768) — the
     smallest real entry left in the catalog — to exercise Stage 7's own
@@ -425,7 +426,7 @@ class TestStage7BudgetResolvesActiveSelection:
 
     _SMALL_KEY = "embedding"  # context_length 32768 (config/models.yaml)
     _LARGE_KEY = "claude_sonnet"  # context_length 200000 (config/models.yaml)
-    _HISTORY_TOKENS = 90000  # > 32768, < 120000 (static fallback), < 200000
+    _HISTORY_TOKENS = 90000  # > 32768, < 98304 (static fallback, FRE-1427), < 200000
 
     @pytest.mark.asyncio
     async def test_trims_for_a_selection_smaller_than_the_static_fallback(self) -> None:
@@ -451,12 +452,12 @@ class TestStage7BudgetResolvesActiveSelection:
         """The identical history is untouched under a larger-window selection.
 
         Proves the trim is selection-aware, not just more aggressive across
-        the board: the static fallback (120000) would NOT have trimmed this
-        history either, but the old code ignored the selection entirely, so
-        this alone doesn't prove the fix — paired with the smaller-selection
-        test above (which the static fallback would also NOT have trimmed,
-        since 90000 < 120000) it shows the ceiling actually moves with the
-        selection in both directions.
+        the board: the static fallback (98304, FRE-1427) would NOT have
+        trimmed this history either, but the old code ignored the selection
+        entirely, so this alone doesn't prove the fix — paired with the
+        smaller-selection test above (which the static fallback would also
+        NOT have trimmed, since 90000 < 98304) it shows the ceiling actually
+        moves with the selection in both directions.
         """
         history = _history_sized(self._HISTORY_TOKENS)
         token = set_current_selection({"primary": self._LARGE_KEY})
@@ -476,7 +477,7 @@ class TestStage7BudgetResolvesActiveSelection:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_static_budget_when_no_selection_is_set(self) -> None:
-        """No active selection -> resolves via settings.context_budget_max_tokens (unchanged)."""
+        """No active selection -> resolves via settings.context_budget_max_tokens."""
         history = _history_sized(self._HISTORY_TOKENS)
         result = await run_gateway_pipeline(
             user_message="current question",
@@ -486,7 +487,7 @@ class TestStage7BudgetResolvesActiveSelection:
             mode=Mode.NORMAL,
             memory_adapter=None,
         )
-        # 90000 tokens of history stays under the 120000 static fallback.
+        # 90000 tokens of history stays under the 98304 static fallback (FRE-1427).
         assert result.context.trimmed is False
 
 

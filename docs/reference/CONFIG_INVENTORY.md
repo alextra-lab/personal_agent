@@ -87,16 +87,16 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 37 | `constraint_pause_timeout_seconds` | `AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS` | `float` | `180.0` |  | — |
 | 38 | `context_budget_comfortable_tokens` | `AGENT_CONTEXT_BUDGET_COMFORTABLE_TOKENS` | `int` | `64000` |  | — |
 | 39 | `context_budget_generation_reserve_tokens` | `AGENT_CONTEXT_BUDGET_GENERATION_RESERVE_TOKENS` | `int` | `32768` |  | — |
-| 40 | `context_budget_max_tokens` | `AGENT_CONTEXT_BUDGET_MAX_TOKENS` | `int` | `120000` |  | — |
+| 40 | `context_budget_max_tokens` | `AGENT_CONTEXT_BUDGET_MAX_TOKENS` | `int` | `98304` |  | — |
 | 41 | `context_compression_enabled` | `AGENT_CONTEXT_COMPRESSION_ENABLED` | `bool` | `True` |  | ✅ |
 | 42 | `context_compression_threshold_ratio` | `AGENT_CONTEXT_COMPRESSION_THRESHOLD_RATIO` | `float` | `0.65` |  | ✅ |
 | 43 | `context_quality_governance_budget_reduction` | `AGENT_CONTEXT_QUALITY_GOVERNANCE_BUDGET_REDUCTION` | `float` | `0.15` |  | — |
 | 44 | `context_quality_governance_enabled` | `AGENT_CONTEXT_QUALITY_GOVERNANCE_ENABLED` | `bool` | `False` |  | — |
 | 45 | `context_quality_governance_threshold` | `AGENT_CONTEXT_QUALITY_GOVERNANCE_THRESHOLD` | `int` | `2` |  | — |
 | 46 | `context_quality_stream_enabled` | `AGENT_CONTEXT_QUALITY_STREAM_ENABLED` | `bool` | `True` |  | — |
-| 47 | `context_window_max_tokens` | `AGENT_CONTEXT_WINDOW_MAX_TOKENS` | `int` | `96000` |  | ✅ |
+| 47 | `context_window_max_tokens` | `AGENT_CONTEXT_WINDOW_MAX_TOKENS` | `int` | `48000` |  | ✅ |
 | 48 | `conversation_context_strategy` | `AGENT_CONVERSATION_CONTEXT_STRATEGY` | `str` | `'truncate'` |  | ✅ |
-| 49 | `conversation_max_history_messages` | `AGENT_CONVERSATION_MAX_HISTORY_MESSAGES` | `int` | `10` |  | ✅ |
+| 49 | `conversation_max_history_messages` | `AGENT_CONVERSATION_MAX_HISTORY_MESSAGES` | `int` | `20` |  | ✅ |
 | 50 | `cors_allowed_origins` | `AGENT_CORS_ALLOWED_ORIGINS` | `list` | `['http://localhost:3000', 'https://<deployment-host>', 'https://<deployment-host>']` |  | ✅ |
 | 51 | `data_lifecycle_enabled` | `AGENT_DATA_LIFECYCLE_ENABLED` | `bool` | `True` |  | ✅ |
 | 52 | `database_admin_url` | `AGENT_DATABASE_ADMIN_URL` | `str` | `'postgresql+asyncpg://<redacted>@localhost:5432/personal_agent'` |  | ✅ |

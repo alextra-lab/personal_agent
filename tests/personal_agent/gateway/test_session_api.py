@@ -589,7 +589,9 @@ def test_get_session_context_max_defaults_when_no_selection() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["primary_selection"] == "qwen3.8-flash-next"
-    assert body["context_max"] == 262144  # flash-next, full pooled --ctx-size (--kv-unified)
+    assert (
+        body["context_max"] == 131072
+    )  # flash-next, full pooled --ctx-size (--kv-unified), FRE-1427
 
 
 def test_get_session_context_max_resolution_failure_surfaces_as_500() -> None:

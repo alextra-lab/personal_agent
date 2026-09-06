@@ -134,7 +134,8 @@ def stream_label(stream: str) -> str:
     guard on one argparse parser protects only that entry point; the
     orchestrator daemon imports these functions directly and would keep
     querying a nonexistent label, matching nothing, and reporting
-    ``occupied-or-no-candidate`` forever (2026-07-18).
+    ``no-candidate`` forever (2026-07-18; the skip reason was later split into
+    ``occupied-no-record``/``no-candidate``/``no-tier-label``, FRE-1405).
 
     Args:
         stream: The dispatch stream, e.g. ``build2``.
@@ -160,6 +161,26 @@ def _is_occupied(issues: Sequence[IssueSnapshot], label: str) -> bool:
         label in issue.labels and issue.state.strip().lower() in _OCCUPIED_STATES
         for issue in issues
     )
+
+
+def is_occupied(issues: Sequence[IssueSnapshot], stream: str) -> bool:
+    """Return True if `stream`'s head ticket is In Progress or In Review (FRE-1405).
+
+    A public wrapper over ``_is_occupied`` so callers outside this module
+    (the orchestrator daemon) can distinguish a genuinely occupied stream from
+    a stream with simply no eligible candidate — ``resolve_next`` conflates
+    both into a single ``None`` return, which is exactly right for dispatch
+    but wrong for deciding whether an anomaly is worth alarming on.
+
+    Args:
+        issues: The stream's board snapshot.
+        stream: The dispatch stream, e.g. ``build2``.
+
+    Returns:
+        Whether an issue carrying the stream's label sits In Progress or In
+        Review.
+    """
+    return _is_occupied(issues, stream_label(stream))
 
 
 def _has_open_blocker(issue: IssueSnapshot) -> bool:

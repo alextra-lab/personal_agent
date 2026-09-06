@@ -25,6 +25,7 @@ from scripts.dispatch.trigger_ledger import (
     load_ledger,
     main,
     mark_consumed,
+    mark_consumed_if_present,
     mark_queued,
     mark_send_started,
     mark_sent,
@@ -33,6 +34,7 @@ from scripts.dispatch.trigger_ledger import (
     prune_ledger,
     reconcile,
     record_pending,
+    record_surfaced,
     save_ledger,
     snapshot_unconsumed,
 )
@@ -755,3 +757,96 @@ def test_cli_labels_an_unconfirmed_entry_queued(tmp_path: Path, capsys) -> None:
     save_ledger(path, ledger)
     assert main(["--ledger-file", str(path), "--unconsumed"]) == 0
     assert "[queued]" in capsys.readouterr().out
+
+
+# --- record_surfaced / mark_consumed_if_present (FRE-1405) --------------------
+# The dispatch orchestrator's own notify ledger (a non-actuation sibling use of
+# this module's data model) needs to write a terminal-surfaced entry directly
+# (no command to send, no pending/sent phase) and later close it out without
+# knowing whether it was ever opened.
+
+
+def test_record_surfaced_writes_terminal_surfaced_entry() -> None:
+    ledger = record_surfaced(
+        {},
+        event_id="dispatch-notify:dispatch_stall:build1",
+        source="dispatch_stall",
+        target_pane="build1",
+        ticket="FRE-1",
+        preconditions={"reason": "no-pr-past-timeout"},
+        now=100.0,
+    )
+    entry = ledger["dispatch-notify:dispatch_stall:build1"]
+    assert entry.surfaced_at == 100.0
+    assert entry.consumed_at is None
+    assert entry.command == ""
+    assert entry.preconditions == {"reason": "no-pr-past-timeout"}
+
+
+def test_record_surfaced_entry_skipped_by_reconcile() -> None:
+    """The hazard this exists to avoid: reconcile() must never treat this as a dropped actuation."""
+    ledger = record_surfaced(
+        {},
+        event_id="dispatch-notify:dispatch_stall:build1",
+        source="dispatch_stall",
+        target_pane="build1",
+        ticket="FRE-1",
+        preconditions={},
+        now=100.0,
+    )
+
+    def _must_not_be_called(_entry: LedgerEntry) -> Literal["sent", "busy", "absent"]:
+        raise AssertionError("reconcile must never execute_pending a record_surfaced entry")
+
+    result = reconcile(
+        ledger,
+        now=200.0,
+        execute_pending=_must_not_be_called,
+        persist=lambda _l: None,
+        logger=_NullLogger(),
+    )
+    assert result == ledger
+
+
+def test_record_surfaced_same_event_id_overwrites() -> None:
+    ledger = record_surfaced(
+        {},
+        event_id="dispatch-notify:dispatch_stall:build1",
+        source="dispatch_stall",
+        target_pane="build1",
+        ticket="FRE-1",
+        preconditions={"reason": "no-pr-past-timeout"},
+        now=100.0,
+    )
+    ledger = record_surfaced(
+        ledger,
+        event_id="dispatch-notify:dispatch_stall:build1",
+        source="dispatch_stall",
+        target_pane="build1",
+        ticket="FRE-1",
+        preconditions={"reason": "in-progress-past-timeout"},
+        now=200.0,
+    )
+    assert len(ledger) == 1
+    entry = ledger["dispatch-notify:dispatch_stall:build1"]
+    assert entry.surfaced_at == 200.0
+    assert entry.preconditions == {"reason": "in-progress-past-timeout"}
+
+
+def test_mark_consumed_if_present_noop_when_absent() -> None:
+    result = mark_consumed_if_present({}, "dispatch-notify:dispatch_stall:build1", 100.0)
+    assert result == {}
+
+
+def test_mark_consumed_if_present_closes_existing_entry() -> None:
+    ledger = record_surfaced(
+        {},
+        event_id="dispatch-notify:dispatch_stall:build1",
+        source="dispatch_stall",
+        target_pane="build1",
+        ticket="FRE-1",
+        preconditions={},
+        now=100.0,
+    )
+    result = mark_consumed_if_present(ledger, "dispatch-notify:dispatch_stall:build1", 200.0)
+    assert result["dispatch-notify:dispatch_stall:build1"].consumed_at == 200.0

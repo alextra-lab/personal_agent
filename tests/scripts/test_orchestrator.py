@@ -26,25 +26,31 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from scripts.dispatch import trigger_ledger
 from scripts.dispatch.next_resolver import IssueSnapshot
 from scripts.dispatch.orchestrator import (
+    DEFAULT_HEAD_STALL_RENOTIFY_TICKS,
     DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
     DEFAULT_SEAT_FAILURE_THRESHOLD,
     DEFAULT_STALL_TIMEOUT_S,
     DEFAULT_WEDGE_RENOTIFY_TICKS,
     MAX_DELIVERY_ATTEMPTS,
     DispatchRecord,
+    HeadStallState,
     WedgeState,
     _record_for_result,
+    _trigger_ledger_notifier,
     check_preconditions,
     decide,
     is_anthropic_endpoint,
+    load_head_stall_state,
     load_state,
     load_wedge_state,
     main,
     model_for_labels,
     rc_server_alive,
     run_once,
+    save_head_stall_state,
     save_wedge_state,
 )
 
@@ -152,6 +158,28 @@ class _Notifier:
         self.events.append((event, fields))
 
 
+def _tracking_notifier(notify_ledger_path, logger):  # type: ignore[no-untyped-def]
+    """A ``_Notifier`` that ALSO writes through to the real notify ledger when a path is given.
+
+    FRE-1405: many tests assert on `.events` (schedule/crossing behaviour) while
+    others assert on the actual ledger file contents — this lets one helper
+    (`_run_wedge`/`_run_head_stall`) serve both without a fake that silently
+    diverges from what the real ``_trigger_ledger_notifier`` writes.
+    """
+    from scripts.dispatch.orchestrator import _trigger_ledger_notifier
+
+    fake = _Notifier()
+    if notify_ledger_path is None:
+        return fake, fake
+    real = _trigger_ledger_notifier(notify_ledger_path, logger)
+
+    def combined(event: str, **fields: object) -> None:
+        fake(event, **fields)
+        real(event, **fields)
+
+    return combined, fake
+
+
 class _NullLogger:
     def info(self, *args: object, **kwargs: object) -> None: ...
     def warning(self, *args: object, **kwargs: object) -> None: ...
@@ -219,6 +247,20 @@ def test_decide_skip_when_occupied() -> None:
     issues = [_issue("FRE-1", "In Progress", _OPUS), _issue("FRE-2", "Approved", _OPUS)]
     d = decide("build1", issues, None, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
     assert d.kind == "skip"
+
+
+def test_decide_skip_reason_occupied_no_record_when_head_stuck() -> None:
+    """FRE-1405: the anomalous shape (occupied, no orchestrator record) gets its own reason."""
+    issues = [_issue("FRE-1", "In Progress", _OPUS), _issue("FRE-2", "Approved", _OPUS)]
+    d = decide("build1", issues, None, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
+    assert d.reason == "occupied-no-record"
+
+
+def test_decide_skip_reason_no_candidate_when_backlog_empty() -> None:
+    """FRE-1405: a healthy empty backlog must not share the occupied reason — never alarmed on."""
+    d = decide("build1", [], None, now=0.0, stall_timeout_s=60, tracked_pr_open=False)
+    assert d.kind == "skip"
+    assert d.reason == "no-candidate"
 
 
 def test_decide_skip_when_next_has_no_tier() -> None:
@@ -480,6 +522,8 @@ def _run(
     rc_alive=None,
     kill_switch_engaged=None,
     reconcile=None,
+    notify_ledger_path=None,
+    head_stall_state=None,
 ):
     # Default reconcile reads the tracked ticket's state from the board — a
     # stand-in for "the direct Linear lookup agrees with the board". Tests that
@@ -503,6 +547,8 @@ def _run(
         execute=execute,
         rc_alive=rc_alive,
         kill_switch_engaged=kill_switch_engaged or (lambda: False),
+        notify_ledger_path=notify_ledger_path,
+        head_stall_state=head_stall_state,
         sleeper=_no_wait,
     )
     return result, persisted
@@ -775,12 +821,13 @@ def _run_wedge(
     ticks: int,
     wedge_ticks: int = 2,
     wedge_renotify_ticks: int = DEFAULT_WEDGE_RENOTIFY_TICKS,
+    notify_ledger_path=None,
 ):  # type: ignore[no-untyped-def]
     board = [_issue("FRE-1", "Approved", _OPUS)]
     state: dict[str, DispatchRecord] = {}
     wedge_state: dict[str, WedgeState] = {}
-    notifier = _Notifier()
     logger = _CapturingLogger()
+    notifier, fake_notifier = _tracking_notifier(notify_ledger_path, logger)
     for _ in range(ticks):
         run_once(
             ["build1"],
@@ -798,8 +845,50 @@ def _run_wedge(
             wedge_state=wedge_state,
             wedge_ticks=wedge_ticks,
             wedge_renotify_ticks=wedge_renotify_ticks,
+            notify_ledger_path=notify_ledger_path,
         )
-    return state, wedge_state, notifier, logger
+    return state, wedge_state, fake_notifier, logger
+
+
+def _run_head_stall(
+    ticks: int,
+    head_stall_ticks: int = 2,
+    head_stall_renotify_ticks: int = DEFAULT_HEAD_STALL_RENOTIFY_TICKS,
+    notify_ledger_path=None,
+    occupied: bool = True,
+):  # type: ignore[no-untyped-def]
+    """Mirrors ``_run_wedge`` for the ``occupied-no-record`` head-stall path (FRE-1405).
+
+    ``occupied=True`` holds a board shape that decides ``skip``/``occupied-no-record``
+    every tick (a stream-labeled issue In Progress, no orchestrator record).
+    ``occupied=False`` switches to an empty backlog (``skip``/``no-candidate``) —
+    used to prove the counter never engages on a healthy idle stream.
+    """
+    board = [_issue("FRE-1", "In Progress", _OPUS)] if occupied else []
+    state: dict[str, DispatchRecord] = {}
+    head_stall_state: dict[str, HeadStallState] = {}
+    logger = _CapturingLogger()
+    notifier, fake_notifier = _tracking_notifier(notify_ledger_path, logger)
+    for _ in range(ticks):
+        run_once(
+            ["build1"],
+            state,
+            now=0.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: board,
+            reconcile=lambda _t: None,
+            runner=_RecordingRunner(),
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=logger,
+            execute=True,
+            rc_alive=lambda: True,
+            head_stall_state=head_stall_state,
+            head_stall_ticks=head_stall_ticks,
+            head_stall_renotify_ticks=head_stall_renotify_ticks,
+            notify_ledger_path=notify_ledger_path,
+        )
+    return state, head_stall_state, fake_notifier, logger
 
 
 def _no_termination_argv(runner: _RecordingRunner) -> bool:
@@ -2183,3 +2272,467 @@ def test_fre923_budget_semantics_are_untouched_by_seat_health() -> None:
     exhausted = [e for e, _ in notifier.events if e == "dispatch_delivery_exhausted"]
     assert exhausted == ["dispatch_delivery_exhausted"], "announced exactly once, as before"
     assert len(_seat_pings(notifier)) == 1, "and the seat is independently reported broken"
+
+
+# --- FRE-1405: the notify ledger — AC-1 end-to-end, AC-2/3/4/5 --------------
+# The dispatch daemon's Notifier used to be a pure log-line duplicate; nothing
+# reached master. These tests exercise the replacement sink (an orchestrator-
+# owned notify ledger master reads at priming, mirroring trigger_ledger.py's
+# own data model but in a SEPARATE file so a second continuous writer never
+# races gating_watcher.py's file) end to end.
+
+
+def test_trigger_ledger_notifier_writes_entry_readable_by_main_cli(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    """AC-1: a stall reaches master through the exact command prime-master runs."""
+    path = tmp_path / "dispatch_notify_ledger.json"
+    notifier = _trigger_ledger_notifier(path, _NullLogger())
+    notifier(
+        "dispatch_stall",
+        trace_id="t1",
+        stream="build1",
+        ticket="FRE-786",
+        reason="no-pr-past-timeout",
+    )
+    assert trigger_ledger.main(["--ledger-file", str(path), "--unconsumed", "--json"]) == 0
+    out = capsys.readouterr().out
+    assert "build1" in out
+    assert "FRE-786" in out
+    assert "no-pr-past-timeout" in out
+
+
+def test_trigger_ledger_notifier_entry_is_surfaced_not_pending(tmp_path: Path) -> None:
+    """A notify-ledger entry must never enter reconcile()'s retry path (no command to send)."""
+    path = tmp_path / "notify.json"
+    notifier = _trigger_ledger_notifier(path, _NullLogger())
+    notifier("dispatch_stall", trace_id="t1", stream="build1", ticket="FRE-786")
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    entry = ledger["dispatch-notify:dispatch_stall:build1"]
+    assert entry.surfaced_at is not None
+    assert entry.command == ""
+
+
+def test_trigger_ledger_notifier_stable_event_id_overwrites_not_accumulates(
+    tmp_path: Path,
+) -> None:
+    """AC-4 (by construction): a persisting condition updates one entry, never accumulates."""
+    path = tmp_path / "notify.json"
+    notifier = _trigger_ledger_notifier(path, _NullLogger())
+    for _ in range(5):
+        notifier("dispatch_stall", trace_id="t1", stream="build1", ticket="FRE-786")
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    assert len(ledger) == 1
+
+
+def _seed_notify(path: Path, event: str, stream: str = "build1", ticket: str = "FRE-786") -> None:
+    ledger = trigger_ledger.record_surfaced(
+        {},
+        event_id=f"dispatch-notify:{event}:{stream}",
+        source=event,
+        target_pane=stream,
+        ticket=ticket,
+        preconditions={},
+        now=0.0,
+    )
+    trigger_ledger.save_ledger(path, ledger)
+
+
+# --- AC-2(a)/(b): already-wired paths reach the ledger, and resolve when the
+# condition ends -------------------------------------------------------------
+
+
+def test_stall_reaches_notify_ledger(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    notifier = _trigger_ledger_notifier(path, _NullLogger())
+    board = [_issue("FRE-786", "Approved", _OPUS)]
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+    _run(
+        {"build1": _launched_record()},
+        runner,
+        board,
+        now=10_000.0,
+        notifier=notifier,
+        stall=60,
+        notify_ledger_path=path,
+    )
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    unconsumed = trigger_ledger.snapshot_unconsumed(ledger)
+    assert any(e.source == "dispatch_stall" for e in unconsumed)
+
+
+def test_stall_notify_consumed_on_run_complete(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_notify(path, "dispatch_stall")
+    board = [_issue("FRE-786", "In Review", _OPUS)]
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout='[{"number": 385}]')})
+    _run({"build1": _launched_record()}, runner, board, now=5.0, notify_ledger_path=path)
+    reloaded = trigger_ledger.load_ledger(path, _NullLogger())
+    assert trigger_ledger.snapshot_unconsumed(reloaded) == ()
+
+
+def test_stall_notify_consumed_on_clear_without_run_complete(tmp_path: Path) -> None:
+    """FRE-965 shape: a record can reach ``clear`` without ever passing through ``run_complete``."""
+    path = tmp_path / "notify.json"
+    _seed_notify(path, "dispatch_stall", ticket="FRE-965")
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+    _run(
+        {"build1": _launched_record(ticket="FRE-965")},
+        runner,
+        [],
+        now=10.0,
+        reconcile=lambda t: "Done",
+        notify_ledger_path=path,
+    )
+    reloaded = trigger_ledger.load_ledger(path, _NullLogger())
+    assert trigger_ledger.snapshot_unconsumed(reloaded) == ()
+
+
+def test_stall_notify_consumed_on_await_in_progress_grace(tmp_path: Path) -> None:
+    """The pre-pickup-stall -> in-progress-grace transition: neither run_complete nor clear."""
+    path = tmp_path / "notify.json"
+    _seed_notify(path, "dispatch_stall")
+    rec = _launched_record(now=0.0)
+    board = [_issue("FRE-786", "In Progress", _OPUS)]
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+    _run({"build1": rec}, runner, board, now=10.0, in_progress_stall=60, notify_ledger_path=path)
+    reloaded = trigger_ledger.load_ledger(path, _NullLogger())
+    assert trigger_ledger.snapshot_unconsumed(reloaded) == ()
+
+
+def test_wedge_reaches_notify_ledger(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    _run_wedge(runner, ticks=4, wedge_ticks=2, notify_ledger_path=path)
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    unconsumed = trigger_ledger.snapshot_unconsumed(ledger)
+    assert any(e.source == "dispatch_seat_wedged" for e in unconsumed)
+
+
+def test_wedge_notify_consumed_on_reset(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    state, wedge_state, notifier, logger = _run_wedge(
+        runner, ticks=4, wedge_ticks=2, notify_ledger_path=path
+    )
+    assert trigger_ledger.snapshot_unconsumed(trigger_ledger.load_ledger(path, _NullLogger()))
+
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    busy_runner = _WedgeRunner(pane=_WEDGE_BUSY_PANE)  # genuinely busy -- the wedge clears
+    reset_notifier, _fake = _tracking_notifier(path, logger)
+    run_once(
+        ["build1"],
+        state,
+        now=0.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board,
+        reconcile=lambda _t: None,
+        runner=busy_runner,
+        notifier=reset_notifier,
+        persist=lambda st: None,
+        logger=logger,
+        execute=True,
+        rc_alive=lambda: True,
+        wedge_state=wedge_state,
+        wedge_ticks=2,
+        notify_ledger_path=path,
+    )
+    reloaded = trigger_ledger.load_ledger(path, _NullLogger())
+    assert trigger_ledger.snapshot_unconsumed(reloaded) == ()
+
+
+# --- Restart-amnesia regression: delivery_failures/held_escalated reset empty
+# on a daemon restart, so consume-on-resolve must not depend on their pop() ---
+
+
+def test_delivery_failing_notify_consumed_after_restart_amnesia(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_notify(path, "dispatch_seat_delivery_failing", ticket="build1")
+
+    runner = _DeliveryRunner()
+    runner.behaviour = "ok"
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    fresh_delivery_failures: dict[str, int] = {}  # simulates a post-restart empty dict
+    run_once(
+        ["build1"],
+        {},
+        now=0.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board,
+        reconcile=lambda _t: "Done",
+        runner=runner,
+        notifier=_Notifier(),
+        persist=lambda st: None,
+        logger=_NullLogger(),
+        execute=True,
+        rc_alive=lambda: True,
+        delivery_failures=fresh_delivery_failures,
+        notify_ledger_path=path,
+        sleeper=_no_wait,
+    )
+    reloaded = trigger_ledger.load_ledger(path, _NullLogger())
+    assert trigger_ledger.snapshot_unconsumed(reloaded) == ()
+
+
+def test_held_notify_consumed_after_restart_amnesia(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_notify(path, "dispatch_held_too_long")
+
+    # Owner acted: the ticket left Approved, so _decide_surfaced returns "clear", not "hold".
+    board = [_issue("FRE-786", "In Progress", _OPUS | {"context:keep"})]
+    state = {"build1": _surfaced("FRE-786", launched_at=0.0)}
+    fresh_held_escalated: dict[str, str] = {}  # simulates a post-restart empty dict
+    run_once(
+        ["build1"],
+        state,
+        now=5000.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board,
+        reconcile=lambda _t: None,
+        runner=_RecordingRunner(),
+        notifier=_Notifier(),
+        persist=lambda st: None,
+        logger=_NullLogger(),
+        execute=True,
+        rc_alive=lambda: True,
+        held_escalated=fresh_held_escalated,
+        notify_ledger_path=path,
+    )
+    reloaded = trigger_ledger.load_ledger(path, _NullLogger())
+    assert trigger_ledger.snapshot_unconsumed(reloaded) == ()
+
+
+def test_blocked_notify_consumed_when_stream_falls_to_non_launch_decision(tmp_path: Path) -> None:
+    """The stream falls to a non-launch decision the very tick the block would clear."""
+    path = tmp_path / "notify.json"
+    _seed_notify(path, "dispatch_blocked", ticket="FRE-1")
+
+    board = [_issue("FRE-1", "In Progress", _OPUS)]  # occupied, no record -> "skip", never "launch"
+    run_once(
+        ["build1"],
+        {},
+        now=0.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board,
+        reconcile=lambda _t: None,
+        runner=_RecordingRunner(),
+        notifier=_Notifier(),
+        persist=lambda st: None,
+        logger=_NullLogger(),
+        execute=True,
+        rc_alive=lambda: True,
+        notify_ledger_path=path,
+    )
+    reloaded = trigger_ledger.load_ledger(path, _NullLogger())
+    assert trigger_ledger.snapshot_unconsumed(reloaded) == ()
+
+
+# --- AC-2(c): the new head-stall path — genuinely missing before FRE-1405 ---
+
+
+def test_head_stall_no_notify_before_threshold() -> None:
+    _state, head_stall_state, notifier, _logger = _run_head_stall(ticks=2, head_stall_ticks=2)
+    assert [e for e in notifier.events if e[0] == "dispatch_head_stalled"] == []
+    assert head_stall_state["build1"].count == 2
+
+
+def test_head_stall_notifies_on_crossing() -> None:
+    """The crossing test is `>`, not `>=` — mirrors _note_wedge exactly."""
+    _state, head_stall_state, notifier, _logger = _run_head_stall(ticks=3, head_stall_ticks=2)
+    events = [e for e in notifier.events if e[0] == "dispatch_head_stalled"]
+    assert len(events) == 1
+    assert events[0][1]["consecutive_ticks"] == 3
+    assert head_stall_state["build1"].count == 3
+
+
+def test_head_stall_renotify_schedule() -> None:
+    _state, _head_stall_state, notifier, _logger = _run_head_stall(
+        ticks=10, head_stall_ticks=2, head_stall_renotify_ticks=3
+    )
+    events = [e for e in notifier.events if e[0] == "dispatch_head_stalled"]
+    notified_counts = [e[1]["consecutive_ticks"] for e in events]
+    assert notified_counts == [3, 6, 9], "re-notified on schedule, mirroring the wedge path"
+
+
+def test_head_stall_resets_on_launch() -> None:
+    board_occupied = [_issue("FRE-1", "In Progress", _OPUS)]
+    state: dict[str, DispatchRecord] = {}
+    head_stall_state: dict[str, HeadStallState] = {}
+    notifier = _Notifier()
+    logger = _CapturingLogger()
+    for _ in range(3):
+        run_once(
+            ["build1"],
+            state,
+            now=0.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: board_occupied,
+            reconcile=lambda _t: None,
+            runner=_RecordingRunner(),
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=logger,
+            execute=True,
+            rc_alive=lambda: True,
+            head_stall_state=head_stall_state,
+            head_stall_ticks=2,
+        )
+    assert head_stall_state["build1"].count == 3
+
+    board_free = [_issue("FRE-2", "Approved", _OPUS)]
+    run_once(
+        ["build1"],
+        state,
+        now=0.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board_free,
+        reconcile=lambda _t: None,
+        runner=_SeatRunner(),
+        notifier=notifier,
+        persist=lambda st: None,
+        logger=logger,
+        execute=True,
+        rc_alive=lambda: True,
+        head_stall_state=head_stall_state,
+        head_stall_ticks=2,
+        sleeper=_no_wait,
+    )
+    assert "build1" not in head_stall_state
+
+
+def test_head_stall_ignores_no_candidate_skip() -> None:
+    """A healthy empty backlog never engages the counter, regardless of tick count."""
+    _state, head_stall_state, notifier, _logger = _run_head_stall(
+        ticks=5, head_stall_ticks=2, occupied=False
+    )
+    assert head_stall_state == {}
+    assert notifier.events == []
+
+
+def test_head_stall_state_file_round_trips(tmp_path: Path) -> None:
+    """Mirrors ``test_wedge_state_file_round_trips`` for the new persisted state."""
+    path = tmp_path / "head_stall_state.json"
+    save_head_stall_state(path, {"build1": HeadStallState(count=5, last_notified_count=3)})
+    assert load_head_stall_state(path) == {"build1": HeadStallState(count=5, last_notified_count=3)}
+
+    assert load_head_stall_state(tmp_path / "missing.json") == {}
+
+    path.write_text(json.dumps({"build1": {"count": "oops", "last_notified_count": 0}}))
+    assert load_head_stall_state(path) == {}
+
+    # last_notified_count > count would leave the re-notify schedule permanently
+    # unable to fire again (same invariant as WedgeState's own guard).
+    path.write_text(json.dumps({"build1": {"count": 3, "last_notified_count": 9}}))
+    assert load_head_stall_state(path) == {}
+
+
+def test_head_stall_reaches_notify_ledger(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _run_head_stall(ticks=3, head_stall_ticks=2, notify_ledger_path=path)
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    unconsumed = trigger_ledger.snapshot_unconsumed(ledger)
+    assert any(e.source == "dispatch_head_stalled" for e in unconsumed)
+
+
+def test_head_stall_notify_consumed_on_reset(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    state, head_stall_state, notifier, logger = _run_head_stall(
+        ticks=3, head_stall_ticks=2, notify_ledger_path=path
+    )
+    board_free = [_issue("FRE-2", "Approved", _OPUS)]
+    run_once(
+        ["build1"],
+        state,
+        now=0.0,
+        stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+        board_fetcher=lambda s: board_free,
+        reconcile=lambda _t: None,
+        runner=_SeatRunner(),
+        notifier=notifier,
+        persist=lambda st: None,
+        logger=logger,
+        execute=True,
+        rc_alive=lambda: True,
+        head_stall_state=head_stall_state,
+        head_stall_ticks=2,
+        notify_ledger_path=path,
+        sleeper=_no_wait,
+    )
+    reloaded = trigger_ledger.load_ledger(path, _NullLogger())
+    assert trigger_ledger.snapshot_unconsumed(reloaded) == ()
+
+
+# --- AC-4: no notification storm (an entry count, not a call count) --------
+
+
+def test_wedge_renotify_schedule_bounded_over_ten_ticks(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    _run_wedge(runner, ticks=10, wedge_ticks=2, wedge_renotify_ticks=3, notify_ledger_path=path)
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    assert len(ledger) == 1, "one entry regardless of how many ticks the condition persisted"
+
+
+def test_head_stall_renotify_schedule_bounded_over_ten_ticks(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _run_head_stall(
+        ticks=10, head_stall_ticks=2, head_stall_renotify_ticks=3, notify_ledger_path=path
+    )
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    assert len(ledger) == 1
+
+
+def test_dispatch_blocked_bounded_despite_unthrottled_calls(tmp_path: Path) -> None:
+    """dispatch_blocked calls the notifier every tick (unthrottled); the stable key still bounds it."""
+    path = tmp_path / "notify.json"
+    notifier = _trigger_ledger_notifier(path, _NullLogger())
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    runner = _RecordingRunner()
+    for _ in range(10):
+        run_once(
+            ["build1"],
+            {},
+            now=0.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: board,
+            reconcile=lambda _t: None,
+            runner=runner,
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=_NullLogger(),
+            execute=True,
+            rc_alive=lambda: True,
+            kill_switch_engaged=lambda: True,  # always blocked
+            notify_ledger_path=path,
+        )
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    assert len(ledger) == 1
+
+
+# --- AC-5: the seeded negative ------------------------------------------
+
+
+def test_no_stall_no_ledger_entries_over_full_cycle(tmp_path: Path) -> None:
+    """A notifier that fires on everything would still pass AC-1..AC-4 -- this must be tested."""
+    path = tmp_path / "notify.json"
+    notifier = _trigger_ledger_notifier(path, _NullLogger())
+    runner = _SeatRunner()
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    state: dict[str, DispatchRecord] = {}
+    for i in range(5):
+        run_once(
+            ["build1"],
+            state,
+            now=float(i),
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: board,
+            reconcile=lambda _t: "Approved",
+            runner=runner,
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=_NullLogger(),
+            execute=True,
+            rc_alive=lambda: True,
+            notify_ledger_path=path,
+            sleeper=_no_wait,
+        )
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    assert ledger == {}

@@ -13,11 +13,11 @@ from scripts.check_config import main
 
 from personal_agent.config.config_guard import (
     _compose_deployment_profiles,
+    check_binding_shape,
     check_dangling_model_references,
     check_deployment_manifest_matches_compose,
     check_embedding_fallback_identity,
     check_field_descriptions,
-    check_matrix_shape,
     check_secret_field_plaintext_defaults,
     load_deployment_manifest,
     load_matrix,
@@ -29,34 +29,27 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-class TestRealRepoMatrixShape:
-    """The real matrix is clean and carries the post-FRE-916 single-key shape.
+class TestRealRepoRoleTable:
+    """The real role table is clean, and is a single `bindings:` table (ADR-0145 D4).
 
-    Replaces TestForbiddenRoleDivergence. The definition-drift fixture it used
-    (`divergent_forbidden_role`) modelled the same key backed by different
-    models in two catalogs — a state that became unrepresentable when phase 2
-    collapsed to one catalog, so the fixture and its guard were both retired.
+    Replaces TestRealRepoMatrixShape / TestForbiddenRoleDivergence. The
+    definition-drift fixture the latter used (`divergent_forbidden_role`)
+    modelled the same key backed by different models in two catalogs — a
+    state that became unrepresentable when phase 2 collapsed to one catalog,
+    so the fixture and its guard were both retired. D4 retired the second
+    piece of duplication this file carried — the `roles:` matrix — leaving
+    `bindings:` as the one role table.
     """
 
     def test_passes_on_real_repo(self) -> None:
         findings = run_all_checks(_REPO_ROOT)
         assert findings == []
 
-    def test_real_repo_roles_declare_a_bare_all_value(self) -> None:
-        roles = load_matrix(_REPO_ROOT)["roles"]
-        assert roles["entity_extraction"] == {"all": "gpt-5.4-mini"}
-        assert roles["captains_log"] == {"all": "claude_sonnet"}
-        assert roles["insights"] == {"all": "claude_sonnet"}
-        # `primary`'s `divergence: allowed` row phase 2 collapsed (still present
-        # here, unlike `sub_agent`'s: ADR-0121 T5 (FRE-920, master gate 2026-07-20)
-        # removed that entry — a stale duplicate of the Layer-3 binding, never
-        # actually consulted through this matrix in the first place).
-        assert roles["primary"] == {"all": "qwen3.8-flash-next"}
-        assert "sub_agent" not in roles
-
-    def test_no_role_carries_a_retired_per_profile_key(self) -> None:
-        for role, cfg in load_matrix(_REPO_ROOT)["roles"].items():
-            assert set(cfg) == {"all"}, f"role {role!r} carries retired keys: {sorted(cfg)}"
+    def test_real_repo_has_no_roles_key(self) -> None:
+        """AC-1/AC-3 — the `roles:` matrix is gone; `bindings:` is the only table."""
+        matrix = load_matrix(_REPO_ROOT)
+        assert "roles" not in matrix
+        assert "bindings" in matrix
 
 
 class TestOrphanEnvKeys:
@@ -144,17 +137,19 @@ class TestRetiredModelDefinitionYamlsStayGone:
         assert not (_REPO_ROOT / "config" / "models.medium.yaml").exists()
 
 
-class TestMatrixShape:
-    """Every role declares exactly one `all:` key, and no retired keys (FRE-916 phase 2)."""
+class TestBindingShape:
+    """Every role declares a `deployment` key, and no unknown keys (ADR-0145 D4)."""
 
-    def test_flags_missing_all_key_and_retired_per_profile_keys(self) -> None:
-        matrix = load_matrix(_FIXTURES / "malformed_matrix_shape")
-        findings = check_matrix_shape(matrix)
+    def test_flags_missing_deployment_key_and_unknown_keys(self) -> None:
+        matrix = load_matrix(_FIXTURES / "malformed_binding_shape")
+        findings = check_binding_shape(matrix)
         messages = " ".join(f.message for f in findings)
 
-        assert any("entity_extraction" in f.message and "no 'all'" in f.message for f in findings)
-        # compressor HAS a valid `all`, so it must be flagged purely for carrying
-        # the retired keys — which the loader now ignores silently.
+        assert any(
+            "entity_extraction" in f.message and "no 'deployment'" in f.message for f in findings
+        )
+        # compressor HAS a valid `deployment`, so it must be flagged purely for
+        # carrying unknown keys — which the loader now ignores silently.
         stale = [f for f in findings if "compressor" in f.message]
         assert len(stale) == 1
         assert "'cloud'" in stale[0].message
@@ -165,7 +160,7 @@ class TestMatrixShape:
 
     def test_no_false_positive_on_real_repo(self) -> None:
         matrix = load_matrix(_REPO_ROOT)
-        findings = check_matrix_shape(matrix)
+        findings = check_binding_shape(matrix)
         assert findings == []
 
 

@@ -1,89 +1,22 @@
-# config/model_roles.yaml — ADR-0099 D1 role matrix (stage 2, FRE-650)
+# config/model_roles.yaml — role→model assignment (ADR-0099 D1 stage 2, FRE-650;
+# ADR-0121 Layer 3; ADR-0145 D4)
 #
-# The ONE hand-edited home for role→model assignment. Stage 2 makes this
-# GENERATIVE: each role carries the actual model-key value, and
-# src/personal_agent/config/model_loader.py's resolve_role_model_key()
-# resolves every runtime consumer directly from this file. The per-profile
-# `<role>_role:` YAML headers stage 1 checked this file against are REMOVED
-# (there is no second place a role assignment can live).
+# The ONE hand-edited home for role→model assignment. There is a single role
+# table — `bindings:` below. It used to be split across two top-level keys:
+# `roles:` (the original ADR-0099 matrix, `{all: <key>}` shape, read by
+# `resolve_role_model_key()`) and `bindings:` (the ADR-0121 Layer-3 table,
+# `{deployment: <key>, ...}` shape, read by `resolve_role_target()`). Every
+# role in the old `roles:` block already carried the same value as its
+# `bindings:` entry, so ADR-0145 D4 deleted `roles:` and repointed
+# `resolve_role_model_key()` at `bindings:` too — one table, both resolvers.
 #
-# ── roles ───────────────────────────────────────────────────────────────────
-# FRE-916 phase 2 (ADR-0121) COLLAPSED the divergence axis. `active_profiles`
-# and the `divergence: allowed | forbidden` distinction both existed to describe
-# how a role could resolve differently across the two model-definition files.
-# There is now exactly one catalog (config/models.yaml), so there is no second
-# file for an assignment to diverge into: every role has one value, and
-# assignment drift is structurally impossible rather than merely policed.
+# `resolve_role_model_key()` (model_loader.py) and `resolve_role_target()`
+# (model_loader.py, ADR-0121) both read this `bindings:` block; several
+# runtime call sites still call one or the other directly for their role
+# (grep `resolve_role_model_key`/`resolve_role_target` under src/). This
+# matrix is also read by config_guard's dangling-reference check
+# (`check_dangling_model_references`) and shape check (`check_binding_shape`).
 #
-# The two `allowed` roles this retired (`primary`, `sub_agent`) already carried
-# identical `local:`/`cloud:` values, so the collapse is a no-op in resolution.
-# They were also never resolved through this matrix in the first place — they
-# route via ExecutionProfile (ADR-0044) and, since ADR-0121, the Layer-3
-# bindings below. FRE-917 removes ExecutionProfile itself.
-#
-# The dangling-reference half of the old guard is RETAINED
-# (config_guard.check_forbidden_role_divergence_and_dangling_refs): a role
-# pointing at a model key that no longer exists is still a real failure.
-#
-# ADR-0121 T5 (FRE-920, master gate 2026-07-20): `sub_agent`'s entry here was
-# removed — it was never resolved through this matrix (see above), and its
-# stale value (`qwen3.6-35b-instruct`) had drifted from the Layer-3 binding
-# below, a two-places-for-one-role trap master caught at the gate. `primary`
-# stays: its value here still matches its binding, so there is no drift to
-# trap, even though this matrix isn't consulted for it either.
-#
-# Status for the next reader (FRE-926): this matrix is NOT dead weight —
-# resolve_role_model_key() (model_loader.py) still reads this `roles:` block
-# directly, and several runtime call sites still call it for their role
-# (grep `resolve_role_model_key` under src/ before assuming a role here is
-# unused; some roles, e.g. `compressor`, resolve through it at one call site
-# and through the Layer-3-bindings resolver `resolve_role_target()` at
-# another — the split below is not a clean one-or-the-other partition).
-# `sub_agent`, `artifact_builder`, and `vision` are the only roles that never
-# touch this matrix at all; they exist solely as bindings below. Beyond those
-# runtime callers, this matrix is also read by config_guard's
-# dangling-reference check (`check_forbidden_role_divergence_and_dangling_refs`).
-# Each entry's `all:` key is a vestigial profile-era shape: ADR-0099 originally
-# needed it to hold one value per profile when `divergence: allowed`; FRE-916
-# phase 2 collapsed that axis to a single catalog, so `all:` now just means
-# "the one value" — kept because the loader and the dangling-ref check both
-# still read that key name, not because there is anything left to be "all" of.
-roles:
-  primary:            { all: qwen3.8-flash-next }
-  entity_extraction:  { all: gpt-5.4-mini }
-  captains_log:       { all: claude_sonnet }
-  # ADR-0124 D2 (FRE-947): the session summariser's own role. It previously
-  # borrowed captains_log, which made "bind the summariser to a deployment whose
-  # egress you accept" unactionable — you would have re-bound reflection at the
-  # same time. Defaulted to captains_log's current value so introducing the role
-  # is an observable no-op (AC-14); the model CHOICE stays deferred.
-  session_summary:    { all: claude_sonnet }
-  insights:           { all: claude_sonnet }
-  embedding:          { all: embedding }
-  compressor:         { all: gpt-5.4-mini }
-  # ADR-0138 D1 (FRE-1281): span classification is "a named component, not a regex".
-  # Bound to claude_sonnet on MEASURED grounds, not by preference. Scored over the
-  # FRE-1281 corpus, 3 samples, 156 document-scorings:
-  #   gpt-5.4-mini  11/16 preregistered bars met (recall 0.891, prose_in_fence 0.767)
-  #   claude_sonnet 15/16                        (recall 0.953, prose_in_fence 1.000)
-  # gpt-5.4-mini cannot be improved in place: reasoning_effort above `none` is an
-  # OUTAGE on that deployment, not a cost change (litellm rejects it with the
-  # `temperature: 0.0` FRE-758 pin), and entity_extraction and compressor bind there
-  # too. So this is a model choice, not a tuning knob. The contract's strength is
-  # bounded by extraction recall, which is why the stronger model is the right default
-  # here and why the cheaper one is a deliberate downgrade rather than a saving.
-  # Reproduce either figure with harness.py --model-key.
-  span_extraction:    { all: claude_sonnet }
-  # ADR-0138 D3(d) (FRE-1286): the entailment judge. Bound to claude_sonnet because the
-  # ADR names the failure mode directly when rejecting Option 5 — "requires the
-  # verification model to be at least as capable as the primary, or it becomes the new
-  # weakest link". A judge weaker than the model it audits does not audit it. Its own
-  # error rate is measured against a labelled corpus rather than assumed
-  # (scripts/eval/fre1286_entailment), which is the other half of that rejection.
-  entailment:         { all: claude_sonnet }
-  reranker:           { all: reranker }
-  reranker_fallback:  { all: reranker_fallback }
-
 # ── required_secrets ────────────────────────────────────────────────────────
 # Per-profile required AppConfig secret fields (ADR-0099 D4: "required secret
 # is per-profile, not global"). Checked at AppConfig startup (safety class) —
@@ -135,16 +68,7 @@ bindings:
   # qwen3.6-35b-instruct, alongside the qwen3.6-35b-thinking primary — after
   # drifting to claude_sonnet (a silent local-primary-to-cloud-sub_agent fan-out,
   # the incoherence FRE-958 also touched). `open: true` makes it user-selectable
-  # rather than pinned; the per-primary default mapping and must-define-on-add
-  # guard are the ADR-0121 amendment, not this stopgap.
-  #
-  # ADR-0121 Addendum A (FRE-964) step 1 (FRE-965): `defaults_by_primary` below
-  # is the durable, per-primary form of the FRE-963 re-bind above — one
-  # deliberate line per primary-eligible (kind: llm) deployment, no derivation.
-  # Migration window: this is substrate only. `deployment`/`open` above stay
-  # operative and unchanged; nothing resolves through this map until step 3
-  # (FRE-967) cuts the resolver over, and it is not yet enforced total/valid
-  # until step 2's (FRE-966) fail-closed guard lands.
+  # rather than pinned.
   # Owner-directed 2026-08-30: back to the local instruct companion alongside the
   # qwen3.6-35b-thinking primary, restoring the FRE-963 pairing. FRE-1319 moved
   # this to gpt-5.4-mini only because the MBP could hold a single model at
@@ -158,15 +82,6 @@ bindings:
   sub_agent:
     deployment: qwen3.8-flash-next-instruct
     open: true
-    defaults_by_primary:
-      qwen3.8-flash-next:   qwen3.8-flash-next-instruct
-      qwen3.8-flash-next-instruct: qwen3.8-flash-next-instruct  # self-pair — it IS the instruct half of the single served model  # 2026-09-03: slm_server collapsed to one served model; the instruct sibling is the SAME id with disable_thinking. Supersedes the FRE-1319 cloud pairing, which routed sub_agent (and recall paraphrasing) to OpenAI.
-      qwen3.6-35b-thinking: qwen3.6-35b-instruct  # local thinking primary -> local instruct companion
-      qwen3.6-35b-instruct: qwen3.6-35b-instruct  # self-pair — no cheaper local companion
-      qwen3.8-27b-ovh:      qwen3.8-27b-ovh       # self-pair — no cheaper OVH-hosted companion
-      claude_sonnet:        claude_sonnet          # frontier primary -> itself (no cheaper same-family sub)
-      claude_haiku:         claude_haiku           # self-pair — already the cheap Anthropic tier
-      gpt-5.4-mini:         gpt-5.4-mini           # self-pair — no cheaper GPT tier in the catalog
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads the whole
@@ -181,7 +96,25 @@ bindings:
   session_summary:    { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }
   compressor:         { deployment: gpt-5.4-mini }
+  # ADR-0138 D1 (FRE-1281): span classification is "a named component, not a regex".
+  # Bound to claude_sonnet on MEASURED grounds, not by preference. Scored over the
+  # FRE-1281 corpus, 3 samples, 156 document-scorings:
+  #   gpt-5.4-mini  11/16 preregistered bars met (recall 0.891, prose_in_fence 0.767)
+  #   claude_sonnet 15/16                        (recall 0.953, prose_in_fence 1.000)
+  # gpt-5.4-mini cannot be improved in place: reasoning_effort above `none` is an
+  # OUTAGE on that deployment, not a cost change (litellm rejects it with the
+  # `temperature: 0.0` FRE-758 pin), and entity_extraction and compressor bind there
+  # too. So this is a model choice, not a tuning knob. The contract's strength is
+  # bounded by extraction recall, which is why the stronger model is the right default
+  # here and why the cheaper one is a deliberate downgrade rather than a saving.
+  # Reproduce either figure with harness.py --model-key.
   span_extraction:    { deployment: claude_sonnet }
+  # ADR-0138 D3(d) (FRE-1286): the entailment judge. Bound to claude_sonnet because the
+  # ADR names the failure mode directly when rejecting Option 5 — "requires the
+  # verification model to be at least as capable as the primary, or it becomes the new
+  # weakest link". A judge weaker than the model it audits does not audit it. Its own
+  # error rate is measured against a labelled corpus rather than assumed
+  # (scripts/eval/fre1286_entailment), which is the other half of that rejection.
   # FRE-1286: pinned — no `open: true`. The judge decides whether an assertion may be
   # delivered, so binding it is a correctness decision rather than a user preference.
   entailment:         { deployment: claude_sonnet }

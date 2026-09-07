@@ -1,4 +1,4 @@
-"""Unit tests for resolve_role_model_key (ADR-0099 D1 stage 2, FRE-650).
+"""Unit tests for resolve_role_model_key (ADR-0099 D1 stage 2, FRE-650; ADR-0145 D4).
 
 Cache-bleed note: the matrix loader is cached by resolved root path
 (mirrors ``_load_model_config_at_path``'s pattern), so every test that
@@ -86,27 +86,29 @@ class TestUndeclaredRole:
         with pytest.raises(ModelRoleError, match="not declared"):
             resolve_role_model_key("totally_made_up_role", config_path=_CATALOG)
 
-    def test_artifact_builder_is_not_matrix_resolved(self) -> None:
-        """ADR-0119 §2/AC-8 (FRE-879): artifact_builder is off the matrix.
 
-        It is an "open" role resolved via the Layer-3 binding
-        (config/model_roles.yaml's `bindings:` section, ADR-0121), never the matrix.
-        The parked FRE-879 WIP's first cut made it a matrix row — the exact regression
-        this ticket corrects — so this asserts it stays undeclared here.
-        """
-        with pytest.raises(ModelRoleError, match="not declared"):
-            resolve_role_model_key("artifact_builder", config_path=_CATALOG)
+class TestPreviouslyBindingOnlyRolesNowResolve:
+    """ADR-0145 D4 — folding `roles:` into `bindings:` makes every bound role reachable.
 
-    def test_sub_agent_is_not_matrix_resolved(self) -> None:
-        """ADR-0121 T5 (FRE-920, master gate 2026-07-20): sub_agent is off the matrix.
+    Before D4, `artifact_builder`, `sub_agent` and `vision` had no `roles:`
+    matrix entry (ADR-0119 §2/AC-8, FRE-879; ADR-0121 T5, FRE-920) and raised
+    ``ModelRoleError`` from ``resolve_role_model_key``. There is now one table
+    — `bindings:` — and all three are declared in it, so this function
+    resolves them the same as any other role. No production call site relies
+    on the old raising behaviour (grep-verified), so this is the intended
+    shape of the fold, not a regression.
+    """
 
-        Its entry here was a stale duplicate of the Layer-3 binding (a
-        two-places-for-one-role drift trap master caught at the gate) and was
-        removed; sub_agent resolves only via config/model_roles.yaml's
-        `bindings:` section, same as artifact_builder above.
-        """
-        with pytest.raises(ModelRoleError, match="not declared"):
-            resolve_role_model_key("sub_agent", config_path=_CATALOG)
+    @pytest.mark.parametrize(
+        ("role", "expected"),
+        [
+            ("artifact_builder", "claude_sonnet"),
+            ("sub_agent", "qwen3.8-flash-next-instruct"),
+            ("vision", "claude_sonnet"),
+        ],
+    )
+    def test_resolves_via_bindings(self, role: str, expected: str) -> None:
+        assert resolve_role_model_key(role, config_path=_CATALOG) == expected
 
 
 class TestMatrixMissing:

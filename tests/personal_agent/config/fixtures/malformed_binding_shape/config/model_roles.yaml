@@ -1,0 +1,10 @@
+# Fixture (ADR-0145 D4): bindings entries whose declared keys are invalid.
+# entity_extraction declares no `deployment` key at all. compressor declares
+# `deployment` but ALSO carries retired matrix-era keys, which the Pydantic
+# loader ignores silently — the exact drift check_binding_shape exists to catch.
+bindings:
+  entity_extraction: {}
+  compressor: { deployment: gpt-5.4-mini, divergence: allowed, local: gpt-5.4-nano, cloud: gpt-5.4-mini }
+required_secrets:
+  local: []
+  cloud: []

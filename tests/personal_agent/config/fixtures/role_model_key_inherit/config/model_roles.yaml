@@ -1,9 +1,8 @@
-# Fixture (FRE-1443 AC-3, path 7): a matrix role whose `all:` value is the
-# `inherit` sentinel — contrived, since no real role uses this matrix shape
-# with `inherit` today, but resolve_role_model_key must resolve it correctly
-# once D4 makes it reachable.
-roles:
-  some_matrix_role: { all: inherit }
+# Fixture (ADR-0145 D4): a binding whose `deployment` value is the `inherit`
+# sentinel — contrived, since no real role uses `inherit` off the `primary`
+# binding today, but resolve_role_model_key must resolve it correctly now
+# that it reads `bindings:` directly.
+bindings:
+  some_matrix_role: { deployment: inherit }
 required_secrets:
   local: []
-bindings: {}

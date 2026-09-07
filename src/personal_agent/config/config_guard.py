@@ -268,7 +268,7 @@ def _check_substrate_row(
                 "substrate_source_dangling",
                 "policy",
                 f"{where}: source {source!r} names model role {ref!r} which is not declared "
-                "in config/model_roles.yaml roles:",
+                "in config/model_roles.yaml bindings:",
             )
         )
     elif source_kind == "backed_by" and ref not in declared_components:
@@ -310,8 +310,8 @@ def check_substrate_manifest(root: Path) -> list[Finding]:
             )
         ]
 
-    raw_roles = load_matrix(root).get("roles", {})
-    matrix_roles: JSONDict = raw_roles if isinstance(raw_roles, dict) else {}
+    raw_bindings = load_matrix(root).get("bindings", {})
+    matrix_roles: JSONDict = raw_bindings if isinstance(raw_bindings, dict) else {}
     app_fields = _appconfig_field_names()
 
     findings: list[Finding] = []
@@ -409,13 +409,26 @@ def check_dangling_model_references(root: Path, matrix: JSONDict) -> list[Findin
     that comparison impossible to fail, because there is nothing left to compare
     against: definition drift became unrepresentable rather than merely policed.
 
+    **Repointed by ADR-0145 D4.** Reads ``bindings:`` (a role's ``deployment``
+    key) rather than the retired ``roles:`` matrix (``all:``) — the two tables
+    were folded into one. A ``deployment`` of ``inherit`` is resolved against
+    the ``primary`` binding first (:func:`_resolve_inherit_deployment_key`,
+    mirroring :func:`check_reasoning_declaration`); when it cannot resolve,
+    this check stays silent — that failure is
+    ``reasoning_declaration_inherit_unresolvable``'s to report, not a dangling
+    reference.
+
     The dangling-reference half is retained unchanged in substance. A role
     pointing at a key the catalog does not define is still a live failure, and it
     is *safety* class — it wedges role resolution at runtime, so it must fail
     loudly rather than merely block CI.
     """
+    from personal_agent.llm_client.models import INHERIT_DEPLOYMENT  # noqa: PLC0415
+
     findings: list[Finding] = []
-    roles: dict[str, JSONDict] = matrix.get("roles", {})  # type: ignore[assignment]
+    bindings = matrix.get("bindings", {})
+    if not isinstance(bindings, dict):
+        bindings = {}
 
     catalog_rel = "config/models.yaml"
     catalog_path = root / catalog_rel
@@ -423,11 +436,18 @@ def check_dangling_model_references(root: Path, matrix: JSONDict) -> list[Findin
         return findings
 
     catalog = _load_yaml(catalog_path)
-    for role, role_cfg in roles.items():
-        model_name = role_cfg.get("all")
-        if not isinstance(model_name, str):
-            # Shape is check_matrix_shape's job; nothing to dereference here.
+    for role, binding_cfg in bindings.items():
+        if not isinstance(binding_cfg, dict):
+            # Shape is check_binding_shape's job; nothing to dereference here.
             continue
+        model_name = binding_cfg.get("deployment")
+        if not isinstance(model_name, str):
+            continue
+        if model_name == INHERIT_DEPLOYMENT:
+            resolved = _resolve_inherit_deployment_key(bindings)
+            if resolved is None:
+                continue
+            model_name = resolved
         if _resolved_model_definition(catalog, model_name) is None:
             findings.append(
                 Finding(
@@ -696,42 +716,57 @@ def _strip_provider_prefix(model_id: str) -> str:
     return model_id.split("/", 1)[1] if "/" in model_id else model_id
 
 
-def check_matrix_shape(matrix: JSONDict) -> list[Finding]:
-    """Every role must declare exactly one ``all:`` model key (FRE-650; FRE-916 phase 2).
+#: RoleBinding's own field names (ADR-0121 Layer 3, ADR-0145 D2/D4) — a
+#: bindings: entry declaring anything outside this set is silently ignored by
+#: the Pydantic loader (RoleBinding does not forbid extra keys), so
+#: check_binding_shape treats it as drift rather than letting it pass quietly.
+_BINDING_FIELDS: frozenset[str] = frozenset(
+    {"deployment", "open", "max_tokens", "mode", "default_timeout"}
+)
 
-    **Re-scoped by FRE-916 phase 2 (ADR-0121).** This check used to enforce the
-    ``divergence: allowed | forbidden`` contract — that a ``forbidden`` role
-    declare ``all`` and no per-profile value, and an ``allowed`` role the
-    reverse. Collapsing to a single catalog removed the per-profile axis
-    entirely, so the only remaining shape rule is the one that always carried the
-    weight: a role resolves to exactly one declared key.
 
-    Per-profile keys are now rejected outright rather than being one valid shape
-    — a re-introduced ``local:``/``cloud:`` value would be silently ignored by
-    :func:`~personal_agent.config.model_loader.resolve_role_model_key`, which is
-    precisely the silent-assignment-drift failure this check exists to prevent.
+def check_binding_shape(matrix: JSONDict) -> list[Finding]:
+    """Every role's binding declares a ``deployment`` key and no unknown keys (ADR-0145 D4).
+
+    **Replaces ``check_matrix_shape``**, retired along with the ``roles:``
+    matrix it validated (ADR-0145 D4 folded that matrix into ``bindings:``).
+    The protective purpose carries over unchanged: ``RoleBinding``
+    (``llm_client/models.py``) does not forbid extra keys, so a stray or
+    misspelled key on a binding — including a resurrected per-profile key like
+    ``local``/``cloud``/``divergence``, or the retired ``all`` — would be
+    silently ignored by the Pydantic loader rather than raising. This check
+    catches that drift at the CI/pre-commit layer, before it reaches a boot.
     """
     findings: list[Finding] = []
-    roles: dict[str, JSONDict] = matrix.get("roles", {})  # type: ignore[assignment]
-    for role, role_cfg in roles.items():
-        if not isinstance(role_cfg.get("all"), str):
+    bindings: dict[str, JSONDict] = matrix.get("bindings", {})  # type: ignore[assignment]
+    for role, binding_cfg in bindings.items():
+        if not isinstance(binding_cfg, dict):
             findings.append(
                 Finding(
-                    check="matrix_shape",
+                    check="binding_shape",
                     severity="policy",
-                    message=f"role '{role}' declares no 'all' model key",
+                    message=f"role '{role}' binding is not a mapping",
                 )
             )
-        stale = sorted(k for k in ("local", "cloud", "eval", "divergence") if k in role_cfg)
-        if stale:
+            continue
+        deployment = binding_cfg.get("deployment")
+        if not isinstance(deployment, str) or not deployment:
             findings.append(
                 Finding(
-                    check="matrix_shape",
+                    check="binding_shape",
+                    severity="policy",
+                    message=f"role '{role}' declares no 'deployment' key",
+                )
+            )
+        unknown = sorted(set(binding_cfg) - _BINDING_FIELDS)
+        if unknown:
+            findings.append(
+                Finding(
+                    check="binding_shape",
                     severity="policy",
                     message=(
-                        f"role '{role}' declares {stale}, which FRE-916 phase 2 retired "
-                        "along with the second catalog. Only 'all' is read now, so these "
-                        "would be silently ignored — the exact drift this check prevents."
+                        f"role '{role}' declares {unknown}, which RoleBinding does not "
+                        "define — silently ignored rather than raising (ADR-0145 D4)"
                     ),
                 )
             )
@@ -1470,7 +1505,7 @@ def run_all_checks(root: Path) -> list[Finding]:
     manifest = load_deployment_manifest(root)
 
     findings: list[Finding] = []
-    findings.extend(check_matrix_shape(matrix))
+    findings.extend(check_binding_shape(matrix))
     findings.extend(check_dangling_model_references(root, matrix))
     findings.extend(check_no_role_headers(root))
     findings.extend(check_orphan_env_keys(root))

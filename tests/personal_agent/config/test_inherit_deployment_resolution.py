@@ -10,9 +10,8 @@ the seven readers of a binding's deployment field.
 This file covers the resolver layer: :func:`resolve_inherited_deployment`
 directly, and the two general-purpose resolvers that must resolve the
 sentinel rather than return it literally (paths 1 and 2). Path 7
-(``resolve_role_model_key``) is covered separately at the end — it is not a
-live path until ADR-0145 D4 folds the two role tables, so its own fixture
-says so.
+(``resolve_role_model_key``) is covered separately at the end — live since
+ADR-0145 D4 folded the two role tables into `bindings:`.
 """
 
 from __future__ import annotations
@@ -202,14 +201,14 @@ class TestResolveSelectedDeploymentResolvesInherit:
 
 
 class TestResolveRoleModelKeyInheritSentinel:
-    """Path 7 — not live until ADR-0145 D4 folds the two role tables.
+    """Path 7 — live since ADR-0145 D4 folded the two role tables into `bindings:`.
 
-    ``sub_agent`` (the only inherit-eligible role today) is deliberately off
-    this matrix (ADR-0121 T5, FRE-920) and stays that way here — see
-    ``tests/personal_agent/config/test_model_loader_roles.py::TestUndeclaredRole``.
-    This fixture instead seeds a contrived matrix role whose `all:` value is
+    ``sub_agent`` (the only inherit-eligible role in the real repo) binds a
+    literal deployment there, not `inherit` — see
+    ``tests/personal_agent/config/test_model_loader_roles.py::TestPreviouslyBindingOnlyRolesNowResolve``.
+    This fixture instead seeds a contrived binding whose `deployment` value is
     the sentinel, purely to prove the function resolves it rather than
-    returning the literal string, ahead of D4 making the path live.
+    returning the literal string.
     """
 
     _FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "role_model_key_inherit"

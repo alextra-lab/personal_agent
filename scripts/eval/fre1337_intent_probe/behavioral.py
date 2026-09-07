@@ -6,16 +6,15 @@ on :9002) the way `fre481_decomposition_ab/harness.py` drives the production gat
 response), but targets `elasticsearch-eval` (:9202) instead — never production's ES.
 
 Contamination control (AC-3) is two-part, both required — this is the one place FRE-1338's
-incident actually bites: entity extraction is asynchronous (`brainstem/scheduler.py`'s
+incident actually bites. Entity extraction is asynchronous (`brainstem/scheduler.py`'s
 consolidation pass, not a synchronous per-turn write) and can land tens of seconds after a
-turn's HTTP response returns. Wiping `neo4j-eval` immediately after a turn, with no wait,
-would very likely let that turn's own extraction land *after* the wipe — during or after
-the *next* fixture's turn, reproducing the exact contamination this control exists to
-prevent. So between fixtures this module (1) waits for that fixture's
-`entity_extraction_completed` event (or a generous timeout) before wiping, and (2) the
-`run_contamination_proof` entry point actually checks the graph afterwards
-(`substrate.find_cross_session_sources`) rather than asserting the control worked by
-construction.
+turn's HTTP response returns (FRE-1338's own incident measured 31s). The wipe-before-every-
+turn mechanism, and its wait for a turn's `entity_extraction_completed` event before the
+*next* turn's wipe runs, now live in `eval_isolation.IsolatedArmRunner` (FRE-1372) — the
+same shared, structural mechanism any eval script uses, so this module no longer wipes
+`neo4j-eval` directly. `run_contamination_proof` is the second half: it actually checks the
+resulting graph afterwards (`substrate.find_cross_session_sources`) rather than asserting
+the control worked by construction.
 """
 
 from __future__ import annotations
@@ -23,22 +22,22 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import structlog
 from scripts.eval.fre1337_intent_probe.fixtures import Fixture
 from scripts.eval.fre1337_intent_probe.substrate import (
     EVAL_ARMS,
-    EVAL_CHAT_BASE_URL,
     EVAL_NEO4J_URI,
-    assert_eval_chat_url,
     fetch_originating_session_ids,
     find_cross_session_sources,
-    wipe_eval_graph,
 )
 from scripts.eval.gateway_freshness import assert_gateway_fresh
 from scripts.eval.gateway_freshness import repo_root as _repo_root
+
+if TYPE_CHECKING:
+    from scripts.eval.eval_isolation import IsolatedArmRunner
 
 log = structlog.get_logger(__name__)
 
@@ -176,26 +175,6 @@ async def wait_for_event_settle(
     return seen > 0 or not require_nonzero
 
 
-async def _call_chat(
-    client: httpx.AsyncClient, message: str, base_url: str = EVAL_CHAT_BASE_URL
-) -> tuple[str, str]:
-    """POST one message to a named eval arm.
-
-    FRE-1350: the arm is a parameter, not a module constant read at the call site, so a
-    behavioral row can be attributed to the gateway that produced it. The guard still
-    refuses anything outside `EVAL_ARMS`.
-    """
-    assert_eval_chat_url(base_url)
-    resp = await client.post(
-        f"{base_url}/chat",
-        params={"message": message, "channel": "EVAL"},
-        timeout=1200.0,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return str(data["session_id"]), str(data["trace_id"])
-
-
 def _wall_time(hits: list[dict[str, Any]]) -> float:
     stamps = [h["_source"].get("@timestamp") for h in hits if h["_source"].get("@timestamp")]
     if len(stamps) < 2:
@@ -304,22 +283,20 @@ async def _fetch_behavioral_signals(
 
 
 async def run_one_fixture(
+    runner: "IsolatedArmRunner",
     http: httpx.AsyncClient,
     es: httpx.AsyncClient,
     fixture: Fixture,
     arm: str = "control",
 ) -> BehavioralReport:
-    """Drive one fixture through the eval gateway and collect its behavioral report.
+    """Drive one fixture through the isolated eval gateway and collect its report.
 
-    Waits for both settle conditions before returning: `model_call_completed` (so the
-    behavioral signals below are complete, not a partial read racing ES indexing) and
-    `entity_extraction_completed` (so the caller's next wipe, if any, happens *after*
-    this turn's entities have actually landed — see module docstring).
+    Isolation — the wipe before this turn, and the wait for both `model_call_completed`
+    and `entity_extraction_completed` to settle before returning — is `runner`'s job
+    (FRE-1372's `IsolatedArmRunner`). This function only reads the behavioral signals
+    back once the turn has landed.
     """
-    session_id, trace_id = await _call_chat(http, fixture.message, EVAL_ARMS[arm])
-    await wait_for_event_settle(
-        es, trace_id, "model_call_completed", timeout_s=SIGNAL_SETTLE_TIMEOUT_S
-    )
+    turn = await runner.run_turn(http, es, fixture.message, arm=arm)
     (
         tool_call_count,
         web_search_count,
@@ -328,20 +305,15 @@ async def run_one_fixture(
         input_token_growth,
         wall_time_s,
         tool_budget_exhausted,
-    ) = await _fetch_behavioral_signals(es, trace_id)
-    extraction_settled = await wait_for_event_settle(
-        es,
-        trace_id,
-        "entity_extraction_completed",
-        timeout_s=EXTRACTION_SETTLE_TIMEOUT_S,
-        require_nonzero=False,
-    )
-    if not extraction_settled:
-        log.warning("fre1337_extraction_settle_timeout", fixture=fixture.label, trace_id=trace_id)
+    ) = await _fetch_behavioral_signals(es, turn.trace_id)
+    if not turn.extraction_settled:
+        log.warning(
+            "fre1337_extraction_settle_timeout", fixture=fixture.label, trace_id=turn.trace_id
+        )
     report = BehavioralReport(
         fixture_label=fixture.label,
-        session_id=session_id,
-        trace_id=trace_id,
+        session_id=turn.session_id,
+        trace_id=turn.trace_id,
         tool_call_count=tool_call_count,
         web_search_count=web_search_count,
         web_search_result_counts=web_search_result_counts,
@@ -349,30 +321,21 @@ async def run_one_fixture(
         input_token_growth=input_token_growth,
         wall_time_s=wall_time_s,
         tool_budget_exhausted=tool_budget_exhausted,
-        extraction_settled=extraction_settled,
+        extraction_settled=turn.extraction_settled,
     )
     assert_behavioral_signals_complete(report)
     return report
 
 
-def _make_eval_driver() -> Any:
-    from neo4j import AsyncGraphDatabase
-
-    # EVAL_NEO4J_URI is the isolated eval substrate constant (substrate.py), never prod
-    # — every write on this driver goes through wipe_eval_graph's URI-equality guard
-    # before it runs.
-    return AsyncGraphDatabase.driver(  # fre-375-allow: EVAL_NEO4J_URI only, guarded in substrate.py
-        EVAL_NEO4J_URI, auth=("neo4j", _eval_neo4j_password())
-    )
-
-
 async def run_behavioral_arm(
     fixtures: list[Fixture], arms: tuple[str, ...] = ("control",), trials: int = 1
 ) -> list[dict[str, Any]]:
-    """Run every fixture through arm 3, wiping `neo4j-eval` between each.
+    """Run every fixture through arm 3, isolated via `IsolatedArmRunner` (FRE-1372).
 
     Covers AC-4 plus AC-3's per-fixture control — see :func:`run_contamination_proof`
-    for AC-3's actual "prove it" run.
+    for AC-3's actual "prove it" run. Isolation itself (wiping `neo4j-eval` before every
+    turn) no longer happens in this function — it is `IsolatedArmRunner`'s job, the same
+    shared mechanism any eval script uses.
 
     Args:
         fixtures: The fixture set.
@@ -396,7 +359,10 @@ async def run_behavioral_arm(
             unguarded, which is the same shape as the gap FRE-1341 left on
             `run_contamination_proof`.
     """
-    driver = _make_eval_driver()
+    from scripts.eval.eval_isolation import IsolatedArmRunner, create_eval_driver
+
+    driver = create_eval_driver()
+    runner = IsolatedArmRunner(driver=driver)
     rows: list[dict[str, Any]] = []
     try:
         async with httpx.AsyncClient() as http, httpx.AsyncClient() as es:
@@ -407,8 +373,7 @@ async def run_behavioral_arm(
                 await assert_gateway_fresh(http, EVAL_ARMS[arm], _repo_root())
                 for trial in range(trials):
                     for fixture in fixtures:
-                        await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
-                        report = await run_one_fixture(http, es, fixture, arm=arm)
+                        report = await run_one_fixture(runner, http, es, fixture, arm=arm)
                         # FRE-1350 AC-1: the arm and its trial index travel WITH the row.
                         # A tool-call count whose environment is not recorded is what made
                         # the first arm-3 run unattributable.
@@ -423,13 +388,6 @@ async def run_behavioral_arm(
                             web_searches=report.web_search_count,
                             extraction_settled=report.extraction_settled,
                         )
-                # AC-3: wait for THIS fixture's extraction to land before the NEXT
-                # fixture's wipe runs — wiping first would very likely let this
-                # fixture's own extraction land after the wipe, during or after the
-                # next fixture's turn (FRE-1338's incident, reproduced rather than
-                # prevented). Already waited inside run_one_fixture; nothing further
-                # needed here, but the ordering (wipe happens at the TOP of the next
-                # loop iteration, after this wait already completed) is the control.
     finally:
         await driver.close()
     return rows
@@ -458,10 +416,11 @@ class ContaminationProofResult:
 async def run_contamination_proof(fixture: Fixture) -> ContaminationProofResult:
     """AC-3: run the same fixture twice in sequence; verify B's graph carries nothing traceable to A.
 
-    Sequence: wipe → run A → wait for A's extraction to settle → wipe → run B → wait for
-    B's `model_call_completed` to settle → read the graph and check nothing in it
-    originates from session A. Every wait is real (:func:`wait_for_event_settle`), not
-    assumed — this is what makes it a demonstrated control rather than an asserted one.
+    Sequence: turn A, isolated, then turn B, isolated — `IsolatedArmRunner` wipes and
+    waits out both settle events between them (FRE-1372) — then read the graph and check
+    nothing in it originates from session A. The read is real
+    (:func:`substrate.fetch_originating_session_ids`), not assumed — this is what makes
+    it a demonstrated control rather than an asserted one.
 
     Args:
         fixture: The single fixture to run twice (any fixture; the ticket asks for "the
@@ -470,40 +429,21 @@ async def run_contamination_proof(fixture: Fixture) -> ContaminationProofResult:
     Returns:
         The proof result — ``controlled`` is the AC-3 pass/fail.
     """
-    driver = _make_eval_driver()
+    from scripts.eval.eval_isolation import IsolatedArmRunner, create_eval_driver
+
+    driver = create_eval_driver()
+    runner = IsolatedArmRunner(driver=driver)
     try:
         async with httpx.AsyncClient() as http, httpx.AsyncClient() as es:
-            await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
-            session_id_a, trace_id_a = await _call_chat(http, fixture.message)
-            await wait_for_event_settle(
-                es, trace_id_a, "model_call_completed", timeout_s=SIGNAL_SETTLE_TIMEOUT_S
-            )
-            extraction_settled = await wait_for_event_settle(
-                es,
-                trace_id_a,
-                "entity_extraction_completed",
-                timeout_s=EXTRACTION_SETTLE_TIMEOUT_S,
-                require_nonzero=False,
-            )
-            if not extraction_settled:
-                log.warning(
-                    "fre1337_contamination_proof_extraction_settle_timeout",
-                    fixture=fixture.label,
-                    trace_id=trace_id_a,
-                )
-
-            await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
-            session_id_b, trace_id_b = await _call_chat(http, fixture.message)
-            await wait_for_event_settle(
-                es, trace_id_b, "model_call_completed", timeout_s=SIGNAL_SETTLE_TIMEOUT_S
-            )
+            turn_a = await runner.run_turn(http, es, fixture.message)
+            turn_b = await runner.run_turn(http, es, fixture.message)
 
             current_sources = await fetch_originating_session_ids(driver, uri=EVAL_NEO4J_URI)
-            leaked = find_cross_session_sources(current_sources, session_id_a)
+            leaked = find_cross_session_sources(current_sources, turn_a.session_id)
             result = ContaminationProofResult(
                 fixture_label=fixture.label,
-                session_id_a=session_id_a,
-                session_id_b=session_id_b,
+                session_id_a=turn_a.session_id,
+                session_id_b=turn_b.session_id,
                 leaked_sources=leaked,
                 controlled=not leaked,
             )
@@ -516,15 +456,3 @@ async def run_contamination_proof(fixture: Fixture) -> ContaminationProofResult:
             return result
     finally:
         await driver.close()
-
-
-def _eval_neo4j_password() -> str:
-    import os
-
-    password = os.environ.get("NEO4J_PASSWORD") or os.environ.get("STUDY_NEO4J_PASSWORD")
-    if not password:
-        raise RuntimeError(
-            "NEO4J_PASSWORD (or STUDY_NEO4J_PASSWORD) must be set to run the behavioral "
-            "arm — it authenticates against neo4j-eval, matching docker-compose.eval.yml."
-        )
-    return password

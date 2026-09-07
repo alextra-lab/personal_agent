@@ -63,8 +63,9 @@ or `docker compose up` creates a second, colliding bridge network under the work
 directory-derived project name.
 
 `make eval-infra-down` only stops the gateway containers — it does **not** wipe
-`neo4j-eval`'s volume. The harness owns its own per-fixture wipe (`substrate.py`), so this
-is fine for repeated runs; if you want a clean slate at the container level:
+`neo4j-eval`'s volume. The harness wipes before every fixture via
+`eval_isolation.IsolatedArmRunner` (FRE-1372), so this is fine for repeated runs; if you
+want a clean slate at the container level:
 
 ```bash
 docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml down -v \
@@ -79,8 +80,10 @@ docker compose -p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml 
   `Environment` enum, because `docker-compose.eval.yml`'s `APP_ENV=eval` actually resolves
   to `Environment.DEVELOPMENT` (`env_loader.py`'s fallthrough has no `EVAL` member).
 - Between every fixture in the behavioral arm, the eval graph is fully wiped
-  (`MATCH (n) DETACH DELETE n`) — the AC-3 control for FRE-1338's incident (one turn's
-  freshly-extracted entities leaking into the next turn's `search_memory`).
+  (`MATCH (n) DETACH DELETE n`) via `eval_isolation.IsolatedArmRunner` — the AC-3 control
+  for FRE-1338's incident (one turn's freshly-extracted entities leaking into the next
+  turn's `search_memory`). FRE-1372 made this the one shared, structural mechanism every
+  eval script uses, enforced by `scripts/check_no_direct_substrate_in_tests.py`.
 - Both eval gateways now point at their own `redis-eval` service (FRE-1342, fixed
   2026-08-30) — the shared production Redis DB they used to share was a transport for
   Streams events, not KG data, but it let an eval turn's `request.captured` reach

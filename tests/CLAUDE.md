@@ -26,3 +26,10 @@ AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 make test
 **Eval isolation:** `docker-compose.eval.yml` has its own `postgres-eval`, `neo4j-eval`,
 `elasticsearch-eval`, `redis-eval` (FRE-1342) services with isolated volumes. Use
 `make eval-infra-up` before running evals.
+
+**Cross-arm isolation within one run (FRE-1372):** a shared eval Neo4j persists across an
+eval run's arms, so one arm's entity extraction can leak into a later arm's `search_memory`
+recall (FRE-1338's incident). Drive eval-gateway turns through
+`scripts/eval/eval_isolation.py`'s `IsolatedArmRunner` instead of a bare HTTP POST — it
+wipes and, if given a `reseed` coroutine, replays any fixture state before every turn, so
+a new eval script inherits isolation without writing wipe/restore code of its own.

@@ -69,11 +69,10 @@ _PROVIDERS = {
     ),
 }
 
-#: The `sub_agent` role reaches a cloud deployment through `defaults_by_primary`
-#: (claude_sonnet, claude_haiku, gpt-5.4-mini and qwen3.8-27b-ovh all self-pair), so the
-#: role's budget must bind on that placement too. The two branches resolve the number
-#: differently — only the local one falls back to the definition — which is why this is
-#: covered rather than assumed from the local result.
+#: The `sub_agent` role reaches a cloud deployment when its own binding names one
+#: directly, so the role's budget must bind on that placement too. The two branches
+#: resolve the number differently — only the local one falls back to the definition —
+#: which is why this is covered rather than assumed from the local result.
 _CLOUD_DEPLOYMENT = "cloud_worker_deployment"
 
 

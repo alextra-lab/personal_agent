@@ -16,7 +16,6 @@ from personal_agent.llm_client.models import (
     ModelConfig,
     ModelKind,
     Placement,
-    RoleBinding,
 )
 
 _PROVIDERS = {
@@ -263,33 +262,3 @@ class TestInheritDeploymentSentinel:
         message = str(exc.value)
         assert "embedding" in message
         assert "llm" in message and "embedding" in message
-
-
-class TestDefaultsByPrimary:
-    """``defaults_by_primary`` schema shape (ADR-0121 Addendum A step 1, FRE-965).
-
-    Step 1 only adds the field and its shape; the fail-closed must-define /
-    dangling-value guard is step 2 (FRE-966), so these tests cover Pydantic's
-    structural validation only.
-    """
-
-    def test_absent_defaults_to_none(self) -> None:
-        """A binding with no `defaults_by_primary` block leaves it unset."""
-        config = _build({"sub_agent": {"deployment": "qwen-chat"}})
-        assert config.roles["sub_agent"].defaults_by_primary is None
-
-    def test_accepts_a_str_to_str_map(self) -> None:
-        binding = RoleBinding(
-            deployment="qwen-chat",
-            defaults_by_primary={"qwen-chat": "qwen-chat"},
-        )
-        assert binding.defaults_by_primary == {"qwen-chat": "qwen-chat"}
-
-    def test_rejects_non_string_values(self) -> None:
-        """A malformed map (non-string value) fails Pydantic validation."""
-        with pytest.raises(ValidationError):
-            RoleBinding(deployment="qwen-chat", defaults_by_primary={"qwen-chat": 1})
-
-    def test_rejects_non_string_keys(self) -> None:
-        with pytest.raises(ValidationError):
-            RoleBinding(deployment="qwen-chat", defaults_by_primary={1: "qwen-chat"})

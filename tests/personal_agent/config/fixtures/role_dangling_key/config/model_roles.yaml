@@ -1,9 +1,10 @@
-# Fixture: forbidden role's `all:` value is absent from models: (FRE-650).
+# Fixture: gpt-9-ghost (the binding's `deployment` value) is not a key under
+# models: (FRE-650; re-pointed at `bindings:` by ADR-0145 D4).
 active_profiles:
   local: config/models.yaml
   cloud: config/models.yaml
-roles:
-  entity_extraction: { divergence: forbidden, all: gpt-9-ghost }
+bindings:
+  entity_extraction: { deployment: gpt-9-ghost }
 required_secrets:
   local: []
   cloud: []

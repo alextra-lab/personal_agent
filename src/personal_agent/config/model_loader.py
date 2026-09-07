@@ -252,18 +252,20 @@ def resolve_role_model_key(
     config_path: Path | str | None = None,
     root: Path | None = None,
 ) -> str:
-    """Resolve a role to its model key via ``config/model_roles.yaml`` (ADR-0099 D1 stage 2).
+    """Resolve a role to its model key via ``config/model_roles.yaml`` (ADR-0145 D4).
 
-    The matrix is the one hand-edited home for role assignment. Every role
-    resolves to its single ``all:`` value. FRE-916 phase 2 retired the
-    ``divergence: allowed`` branch along with the second catalog: with one
-    catalog there is no per-profile value for an assignment to diverge into.
-    There is no fallback — a missing matrix, an undeclared role, a role with no
-    ``all`` key, or a resolved key absent from the catalog's ``models:`` mapping
-    all raise.
+    Every role resolves to its single ``bindings:`` entry's ``deployment`` value
+    — the same table :func:`resolve_role_target` reads. (Before D4 this read a
+    separate ``roles:`` matrix with an ``all:`` value; D4 deleted that matrix as
+    a duplicate of ``bindings:`` and repointed this function at the one table.)
+    There is no fallback — a missing matrix, an undeclared role, a binding with
+    no ``deployment`` key, or a resolved key absent from the catalog's
+    ``models:`` mapping all raise. A ``deployment`` of ``inherit`` resolves via
+    :func:`resolve_inherited_deployment` rather than being returned literally
+    (ADR-0145 D1).
 
     Args:
-        role: The matrix role name (e.g. ``"entity_extraction"``).
+        role: The binding's role name (e.g. ``"entity_extraction"``).
         config_path: Catalog path the resolved key is validated against.
             ``None`` uses :data:`CATALOG_PATH`, matching
             :func:`load_model_config`'s own convention. Tests point it at a
@@ -276,8 +278,8 @@ def resolve_role_model_key(
 
     Raises:
         ModelRoleError: If the matrix is missing/empty, the role is undeclared,
-            the role declares no ``all`` key, or the resolved key is absent from
-            the catalog's ``models:`` mapping.
+            the binding declares no ``deployment`` key, or the resolved key is
+            absent from the catalog's ``models:`` mapping.
     """
     from personal_agent.config.config_guard import repo_root  # noqa: PLC0415
 
@@ -289,10 +291,10 @@ def resolve_role_model_key(
             f"cannot resolve role {role!r} (ADR-0099 D1 — no fallback)"
         )
 
-    roles = matrix.get("roles", {})
-    role_cfg = roles.get(role) if isinstance(roles, dict) else None
-    if role_cfg is None:
-        raise ModelRoleError(f"role {role!r} is not declared in config/model_roles.yaml roles:")
+    bindings = matrix.get("bindings", {})
+    binding_cfg = bindings.get(role) if isinstance(bindings, dict) else None
+    if binding_cfg is None:
+        raise ModelRoleError(f"role {role!r} is not declared in config/model_roles.yaml bindings:")
 
     if config_path is None:
         config_path = CATALOG_PATH
@@ -302,24 +304,19 @@ def resolve_role_model_key(
     else:
         resolved_config_path = resolved_config_path.resolve()
 
-    raw_model_key: object = role_cfg.get("all") if isinstance(role_cfg, dict) else None
+    raw_model_key: object = binding_cfg.get("deployment") if isinstance(binding_cfg, dict) else None
     if not raw_model_key:
         raise ModelRoleError(
-            f"role {role!r} declares no 'all' model key in config/model_roles.yaml"
+            f"role {role!r} declares no 'deployment' key in config/model_roles.yaml bindings:"
         )
 
     if not isinstance(raw_model_key, str):
         raise ModelRoleError(
-            f"role {role!r} resolves to a non-string matrix value {raw_model_key!r}"
+            f"role {role!r} resolves to a non-string binding value {raw_model_key!r}"
         )
     model_key = raw_model_key
 
     resolved_config = load_model_config(resolved_config_path)
-    # ADR-0145 D1 (FRE-1443 AC-3): once D4 folds `roles:` into `bindings:`, an
-    # `all:` value can itself be the `inherit` sentinel — resolve it the same
-    # way every other reader does, rather than treating it as a literal key.
-    # Not a live path today: no `roles:` entry names `inherit` (sub_agent, the
-    # only inherit-eligible role, is off this matrix entirely).
     if model_key == INHERIT_DEPLOYMENT:
         model_key = resolve_inherited_deployment(resolved_config)
     if model_key not in resolved_config.models:

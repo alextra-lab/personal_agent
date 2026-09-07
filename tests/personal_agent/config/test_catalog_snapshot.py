@@ -152,8 +152,9 @@ _GOLDEN = Path(__file__).with_name("catalog_snapshot_golden.json")
 #: FRE-916 phase 2 after being proven comment-only-different from this file.
 _CATALOG: Path = _REPO_ROOT / "config" / "models.yaml"
 
-#: Roles resolved through the ADR-0099 matrix (config/model_roles.yaml), whose
-#: callers then enter via ``get_llm_client_for_key``.
+#: Roles resolved via ``resolve_role_model_key`` (config/model_roles.yaml's
+#: ``bindings:`` table, ADR-0145 D4), whose callers then enter via
+#: ``get_llm_client_for_key``.
 _MATRIX_ROLES: tuple[str, ...] = (
     "entity_extraction",
     "captains_log",

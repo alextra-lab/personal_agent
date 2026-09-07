@@ -1,7 +1,6 @@
-# Fixture: the matrix's `all:` value names a model absent from the catalog's
-# models: mapping (AC-9, FRE-650; re-shaped for the single catalog in FRE-916
-# phase 2).
-roles:
-  entity_extraction: { all: gpt-9-ghost }
+# Fixture: the binding's `deployment` value names a model absent from the
+# catalog's models: mapping (AC-9, FRE-650; re-pointed at `bindings:` by ADR-0145 D4).
+bindings:
+  entity_extraction: { deployment: gpt-9-ghost }
 required_secrets:
   local: []

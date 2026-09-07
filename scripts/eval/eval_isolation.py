@@ -3,10 +3,17 @@
 FRE-1338's incident: a behavioral turn's entity extraction writes to ``neo4j-eval``
 asynchronously, and a *later* turn's ``search_memory`` picks those entities up as
 ordinary recall — a same-run KG leak, 31 seconds start to finish in the measured
-instance. ``fre1337_intent_probe/behavioral.py`` closed this with an explicit
-``wipe_eval_graph()`` call the harness makes itself, before every fixture. That
-control holds only as long as every eval script remembers to call it — a convention a
-future script can silently omit, reproducing the exact leak FRE-1338 diagnosed.
+instance. ``fre1337_intent_probe/behavioral.py`` originally closed this with an explicit
+``wipe_eval_graph()`` call the harness made itself, before every fixture — a control that
+held only as long as every eval script remembered to call it. A master review of FRE-1372
+caught that this was exactly the failure AC-3 rules out ("isolation depends on each
+script remembering to call a reset helper") and that behavioral.py was the live
+counter-example: two ways to drive a turn, only one isolated. behavioral.py is migrated
+onto this module as of FRE-1372 — see its own module docstring — so this is now the
+*only* way any eval script drives a turn against the isolated eval gateway, and
+``scripts/check_no_direct_substrate_in_tests.py`` enforces that structurally: a
+``scripts/eval/`` file referencing ``EVAL_ARMS``/``EVAL_CHAT_BASE_URL`` without also
+referencing ``IsolatedArmRunner`` fails pre-commit.
 
 ``IsolatedArmRunner`` is the shared, sanctioned way an eval script drives a turn
 against the isolated eval gateway. A caller writes no wipe/restore code of its own —

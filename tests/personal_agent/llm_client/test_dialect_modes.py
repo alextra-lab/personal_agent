@@ -24,6 +24,7 @@ from personal_agent.config.model_loader import load_model_config
 from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
+    ModelKind,
     ModeSpec,
     ProviderDefinition,
 )
@@ -400,24 +401,30 @@ class TestEverySelectablePrimaryDeclaresAWorkerMode:
     cheap-mode values (the D6 table in the ADR, not a new decision) onto
     every entry `role_candidates` can offer as `primary` — closing the
     window the same PR opens it (master's recommended option 2).
+
+    Self-review flagged (confidence 80) that a hardcoded key tuple here would
+    silently stop covering a future model added to the catalog without a
+    `worker` mode — and that `config_guard.check_reasoning_declaration`,
+    which the ADR's own risk table names as the backstop, only ever projects
+    a deployment's `default_mode` and never checks a `worker`-named mode, so
+    it would not catch that gap either. `_all_selectable_primary_keys()`
+    below derives the set from the live catalog instead of a fixed list, so
+    a newly added `kind: llm` entry is automatically in scope.
     """
 
-    #: Every kind: llm entry in the real catalog, mirroring what
-    #: `role_candidates` offers for the `open: true` `primary` role.
-    _ALL_SELECTABLE_PRIMARIES: tuple[str, ...] = (
-        "qwen3.6-35b-thinking",
-        "qwen3.8-flash-next",
-        "qwen3.8-27b-ovh",
-        "claude_sonnet",
-        "claude_haiku",
-        "gpt-5.4-mini",
-    )
+    @staticmethod
+    def _all_selectable_primary_keys(config: ModelConfig) -> list[str]:
+        """Every `kind: llm` catalog entry — the membership `role_candidates`
+        filters by availability, which this structural check does not need:
+        an unreachable model must still declare a `worker` mode.
+        """
+        return [key for key, model in config.models.items() if model.kind is ModelKind.LLM]
 
     def test_every_selectable_primary_has_a_worker_mode(self) -> None:
         config = load_model_config(_CATALOG)
         missing = [
             key
-            for key in self._ALL_SELECTABLE_PRIMARIES
+            for key in self._all_selectable_primary_keys(config)
             if "worker" not in config.models[key].modes
         ]
         assert not missing, (
@@ -434,7 +441,7 @@ class TestEverySelectablePrimaryDeclaresAWorkerMode:
         from personal_agent.config.model_loader import resolve_role_target
 
         config = load_model_config(_CATALOG)
-        for primary_key in self._ALL_SELECTABLE_PRIMARIES:
+        for primary_key in self._all_selectable_primary_keys(config):
             _, sub_def = resolve_role_target("sub_agent", model_key=primary_key, config=config)
             assert sub_def is not None
             assert sub_def.default_mode == "worker", (

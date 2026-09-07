@@ -204,12 +204,21 @@ async def test_run_turn_posts_to_the_named_arms_url(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_run_turn_refuses_an_arm_outside_eval_arms(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_turn_refuses_an_arm_outside_eval_arms_before_wiping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The arm is validated before the wipe, not after — an invalid `arm` must never
+    wipe `neo4j-eval` (or run `reseed`) on its way to raising.
+    """
     driver = _FakeDriver()
     _patch_settle_always_true(monkeypatch, [])
     http = AsyncMock()
     es = AsyncMock()
+    reseed = AsyncMock()
 
-    runner = IsolatedArmRunner(driver=driver)
+    runner = IsolatedArmRunner(driver=driver, reseed=reseed)
     with pytest.raises(KeyError):
         await runner.run_turn(http, es, "hello", arm="production")
+
+    assert driver.fake_session.queries == []
+    reseed.assert_not_called()

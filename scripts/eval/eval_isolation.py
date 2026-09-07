@@ -128,17 +128,20 @@ class IsolatedArmRunner:
             The turn's identifiers and whether its entity extraction settled.
 
         Raises:
-            KeyError: If ``arm`` is not a key in ``EVAL_ARMS``.
+            KeyError: If ``arm`` is not a key in ``EVAL_ARMS`` — checked before the
+                wipe, so an invalid ``arm`` never wipes ``neo4j-eval`` or runs
+                ``reseed`` on its way to raising.
             SubstrateGuardError: If the resolved URL is somehow outside ``EVAL_ARMS``
                 (defense in depth — ``EVAL_ARMS[arm]`` already guarantees this).
         """
+        base_url = EVAL_ARMS[arm]
+        assert_eval_chat_url(base_url)
+
         await wipe_eval_graph(self.driver, uri=EVAL_NEO4J_URI)
         if self.reseed is not None:
             await self.reseed()
         self._turn_count += 1
 
-        base_url = EVAL_ARMS[arm]
-        assert_eval_chat_url(base_url)
         resp = await http.post(
             f"{base_url}/chat", params={"message": message, "channel": "EVAL"}, timeout=1200.0
         )

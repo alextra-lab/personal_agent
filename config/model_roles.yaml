@@ -64,23 +64,23 @@ bindings:
   # applies to either role). artifact_builder's real per-build choice lands
   # with ADR-0122.
   artifact_builder:   { deployment: claude_sonnet, open: true }
-  # FRE-963 (owner-directed 2026-07-24): restored to its companion default —
-  # qwen3.6-35b-instruct, alongside the qwen3.6-35b-thinking primary — after
-  # drifting to claude_sonnet (a silent local-primary-to-cloud-sub_agent fan-out,
-  # the incoherence FRE-958 also touched). `open: true` makes it user-selectable
-  # rather than pinned.
-  # Owner-directed 2026-08-30: back to the local instruct companion alongside the
-  # qwen3.6-35b-thinking primary, restoring the FRE-963 pairing. FRE-1319 moved
-  # this to gpt-5.4-mini only because the MBP could hold a single model at
-  # Flash-Next's footprint; with both 35B deployments loaded again that
-  # constraint is gone, and the companion is local, free and concurrent
-  # (max_concurrency 3 against the primary's 1). HYBRID fan-out itself now
-  # dispatches sub-agents sequentially (FRE-1380), so this headroom is not
-  # what fan-out needs; the pairing stands on its other merits. Non-thinking
-  # is expressed by the deployment itself, so FRE-1007's
-  # reasoning-declaration guard is satisfied without a cloud reasoning lever.
+  # ADR-0145 D1 (FRE-1445): the local instruct twin (qwen3.8-flash-next-instruct)
+  # this role used to bind is deleted — one served model, one catalog entry, no
+  # pairing table. `inherit` resolves to whatever the session's primary deployment
+  # is, and `mode: worker` asks that deployment for its own non-thinking preset
+  # (the exact values the deleted twin carried, now living in each local primary's
+  # own `modes:` — see config/models.yaml). This is what makes a primary selection
+  # reach the whole turn: choosing a cloud primary gives cloud sub-agents, a local
+  # primary gives local ones (previously the sub-agent stayed pinned regardless).
+  #
+  # `priority: ELEVATED` (ADR-0145 D7) is not set here — `RoleBinding` has no
+  # `priority` field yet; it lands with FRE-1449, which also measures the
+  # concurrency widening this collapse's max_concurrency 1 -> 3 opens up.
   sub_agent:
-    deployment: qwen3.8-flash-next-instruct
+    deployment: inherit
+    mode: worker
+    max_tokens: 2048
+    default_timeout: 90
     open: true
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }

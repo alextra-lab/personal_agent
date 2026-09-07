@@ -1660,11 +1660,11 @@ class TestPlannerRoleBinding:
     """FRE-1390 — the planner call must reason about a turn that has not happened
 
     yet, so it runs on a thinking-capable deployment. ``ModelRole.SUB_AGENT``
-    binds to the instruct sibling with ``disable_thinking: true``
-    (config/model_roles.yaml); ``ModelRole.PRIMARY`` is the thinking-capable
-    deployment. AC-1's live-container verification is evidence for the PR, not
-    a unit test — this asserts the one thing a unit test can: which role the
-    call site actually requests.
+    resolves to its own ``worker`` mode with thinking hard-disabled
+    (ADR-0145 D1, config/model_roles.yaml); ``ModelRole.PRIMARY`` is the
+    thinking-capable deployment. AC-1's live-container verification is
+    evidence for the PR, not a unit test — this asserts the one thing a unit
+    test can: which role the call site actually requests.
     """
 
     @pytest.fixture

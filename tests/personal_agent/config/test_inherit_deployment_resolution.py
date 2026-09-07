@@ -203,12 +203,12 @@ class TestResolveSelectedDeploymentResolvesInherit:
 class TestResolveRoleModelKeyInheritSentinel:
     """Path 7 — live since ADR-0145 D4 folded the two role tables into `bindings:`.
 
-    ``sub_agent`` (the only inherit-eligible role in the real repo) binds a
-    literal deployment there, not `inherit` — see
+    ``sub_agent`` (the only inherit-eligible role in the real repo) itself
+    binds `inherit` there since ADR-0145 D1 (FRE-1445) — see
     ``tests/personal_agent/config/test_model_loader_roles.py::TestPreviouslyBindingOnlyRolesNowResolve``.
-    This fixture instead seeds a contrived binding whose `deployment` value is
-    the sentinel, purely to prove the function resolves it rather than
-    returning the literal string.
+    This fixture still seeds its own contrived binding under a different role
+    name, purely to prove the function resolves the sentinel rather than
+    returning the literal string, independent of the real repo's own shape.
     """
 
     _FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "role_model_key_inherit"

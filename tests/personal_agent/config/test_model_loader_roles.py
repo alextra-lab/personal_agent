@@ -103,7 +103,7 @@ class TestPreviouslyBindingOnlyRolesNowResolve:
         ("role", "expected"),
         [
             ("artifact_builder", "claude_sonnet"),
-            ("sub_agent", "qwen3.8-flash-next-instruct"),
+            ("sub_agent", "qwen3.8-flash-next"),
             ("vision", "claude_sonnet"),
         ],
     )

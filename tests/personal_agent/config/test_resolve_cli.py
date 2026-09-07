@@ -29,16 +29,15 @@ class TestResolve:
     def test_resolve_entity_extraction_returns_gpt_5_4_mini(self) -> None:
         assert resolve("entity_extraction") == "gpt-5.4-mini"
 
-    def test_resolve_sub_agent_returns_local_instruct(self) -> None:
+    def test_resolve_sub_agent_returns_inherited_primary(self) -> None:
         """FRE-926 AC-1 — sub_agent left the legacy matrix at FRE-920; it must still resolve via its Layer-3 binding.
 
-        FRE-963 restored the binding from claude_sonnet to qwen3.6-35b-instruct,
-        the primary's local companion. FRE-1319 moved it to gpt-5.4-mini for one
-        day, only because the MBP could hold a single model at Flash-Next's
-        footprint; the owner-directed 2026-08-30 revert to the qwen3.6-35b pair
-        loads both again, so the companion is local once more.
+        ADR-0145 D1 (FRE-1445) deleted the local instruct twins and bound
+        sub_agent to `inherit`: it now resolves to whatever the primary
+        binding resolves to (today, qwen3.8-flash-next), at its own `worker`
+        mode rather than the primary's `default` mode.
         """
-        assert resolve("sub_agent") == "qwen3.8-flash-next-instruct"
+        assert resolve("sub_agent") == "qwen3.8-flash-next"
 
     def test_resolve_artifact_builder_returns_claude_sonnet(self) -> None:
         """FRE-926 AC-1 — artifact_builder was never declared in the legacy matrix."""

@@ -812,18 +812,24 @@ def test_get_session_config_ac5_candidates_exclude_down_provider_both_directions
     # the deployment: it stays selectable exactly when the local model cannot serve.
     assert candidates == {"claude_sonnet", "claude_haiku", "gpt-5.4-mini", "qwen3.8-27b-ovh"}
     assert "qwen3.8-flash-next" not in candidates
-    assert "qwen3.6-35b-instruct" not in candidates
+    assert "qwen3.6-35b-thinking" not in candidates
     assert "embedding" not in candidates
     assert "reranker" not in candidates
 
 
 def test_get_session_config_fre1415_single_model_host_hides_unloaded_local_deployments() -> None:
-    """FRE-1415 AC-1/AC-2/AC-3 — the owner's exact reported scenario.
+    """FRE-1415 AC-1/AC-3 — the owner's exact reported scenario.
 
     slm_local reachable, but the host serves only ``unsloth/qwen3.8-flash-next``.
-    Both catalog keys pointing at that id (AC-2) stay candidates; the other two
-    local deployments whose id is not served (AC-1) do not; cloud candidates are
-    untouched (AC-3).
+    That deployment stays a candidate; the other local deployment
+    (``qwen3.6-35b-thinking``), whose id is not served (AC-1), does not; cloud
+    candidates are untouched (AC-3).
+
+    ADR-0145 D1 (FRE-1445) deleted ``qwen3.8-flash-next-instruct`` — the second
+    catalog key AC-2 originally exercised, sharing ``qwen3.8-flash-next``'s
+    served id — so that arm of FRE-1415 no longer has a real-catalog fixture.
+    Its coverage lives on synthetically in
+    ``tests/personal_agent/config/test_role_candidates.py``.
     """
     db_session = AsyncMock()
     sid = str(uuid4())
@@ -843,12 +849,10 @@ def test_get_session_config_fre1415_single_model_host_hides_unloaded_local_deplo
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
 
     candidates = {c["key"] for c in resp.json()["roles"]["primary"]["candidates"]}
-    # AC-2: both flash-next variants — same served id, different disable_thinking.
+    # AC-1: the served flash-next stays a candidate; the un-served 35b does not,
+    # despite slm_local being reachable.
     assert "qwen3.8-flash-next" in candidates
-    assert "qwen3.8-flash-next-instruct" in candidates
-    # AC-1: the un-served 35b pair is excluded despite slm_local being reachable.
     assert "qwen3.6-35b-thinking" not in candidates
-    assert "qwen3.6-35b-instruct" not in candidates
     # AC-3: cloud candidates are unaffected by the local served-id filter.
     assert {"claude_sonnet", "claude_haiku", "gpt-5.4-mini"} <= candidates
 
@@ -956,8 +960,8 @@ def test_get_session_config_no_selection_row_falls_back_to_binding_default() -> 
     assert roles["primary"]["resolved"] == "qwen3.8-flash-next"
     assert roles["artifact_builder"]["resolved"] == "claude_sonnet"
     assert (
-        roles["sub_agent"]["resolved"] == "qwen3.8-flash-next-instruct"
-    )  # 2026-09-03: one served model, instruct half
+        roles["sub_agent"]["resolved"] == "qwen3.8-flash-next"
+    )  # ADR-0145 D1 (FRE-1445): sub_agent inherits the primary's resolved deployment
 
 
 def test_get_session_config_selection_store_failure_logs_trace_id() -> None:

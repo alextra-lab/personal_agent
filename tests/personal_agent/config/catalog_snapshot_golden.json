@@ -18,23 +18,15 @@
           "active": 0,
           "limit": 10
         },
-        "qwen3.6-35b-instruct": {
-          "active": 0,
-          "limit": 3
-        },
         "qwen3.6-35b-thinking": {
           "active": 0,
-          "limit": 1
+          "limit": 3
         },
         "qwen3.8-27b-ovh": {
           "active": 0,
           "limit": 25
         },
         "qwen3.8-flash-next": {
-          "active": 0,
-          "limit": 1
-        },
-        "qwen3.8-flash-next-instruct": {
           "active": 0,
           "limit": 3
         },
@@ -128,6 +120,20 @@
             "temperature": null,
             "top_k": null,
             "top_p": null
+          },
+          "worker": {
+            "budget_tokens": null,
+            "effort": "low",
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": null,
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
           }
         },
         "output_cost_per_token": 1.5e-05,
@@ -158,6 +164,20 @@
           "default": {
             "budget_tokens": null,
             "effort": "high",
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": null,
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
+          },
+          "worker": {
+            "budget_tokens": null,
+            "effort": "low",
             "enable_thinking": null,
             "frequency_penalty": null,
             "min_p": null,
@@ -206,6 +226,20 @@
             "repeat_penalty": null,
             "seed": null,
             "temperature": 0.0,
+            "top_k": null,
+            "top_p": null
+          },
+          "worker": {
+            "budget_tokens": null,
+            "effort": null,
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": "none",
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
             "top_k": null,
             "top_p": null
           }
@@ -273,6 +307,20 @@
             "temperature": 0.0,
             "top_k": null,
             "top_p": null
+          },
+          "worker": {
+            "budget_tokens": null,
+            "effort": null,
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": "none",
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
           }
         },
         "output_cost_per_token": 4.5e-06,
@@ -313,6 +361,20 @@
             "temperature": null,
             "top_k": null,
             "top_p": null
+          },
+          "worker": {
+            "budget_tokens": null,
+            "effort": "low",
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": null,
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
           }
         },
         "output_cost_per_token": 1.5e-05,
@@ -336,7 +398,7 @@
         "id": "unsloth/qwen3.8-flash-next",
         "input_cost_per_token": null,
         "input_cost_per_token_eur": null,
-        "max_concurrency": 1,
+        "max_concurrency": 3,
         "max_tokens": null,
         "min_concurrency": 1,
         "modes": {
@@ -353,6 +415,20 @@
             "temperature": 1.0,
             "top_k": 20,
             "top_p": 0.95
+          },
+          "worker": {
+            "budget_tokens": null,
+            "effort": null,
+            "enable_thinking": false,
+            "frequency_penalty": null,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "reasoning_effort": null,
+            "repeat_penalty": 1.0,
+            "seed": null,
+            "temperature": 0.7,
+            "top_k": 20,
+            "top_p": 0.8
           }
         },
         "output_cost_per_token": null,
@@ -433,6 +509,20 @@
           "default": {
             "budget_tokens": null,
             "effort": null,
+            "enable_thinking": true,
+            "frequency_penalty": null,
+            "min_p": 0.0,
+            "presence_penalty": 0.0,
+            "reasoning_effort": null,
+            "repeat_penalty": 1.0,
+            "seed": null,
+            "temperature": 1.0,
+            "top_k": 20,
+            "top_p": 0.95
+          },
+          "worker": {
+            "budget_tokens": null,
+            "effort": null,
             "enable_thinking": false,
             "frequency_penalty": null,
             "min_p": 0.0,
@@ -449,7 +539,7 @@
         "parallel_tool_calls": true,
         "placement": "local",
         "provider": "slm_local",
-        "quantization": "4bit",
+        "quantization": "UD-IQ4_XS",
         "supports_function_calling": true,
         "supports_pdf_document": false,
         "supports_vision": true,
@@ -473,6 +563,20 @@
           "default": {
             "budget_tokens": null,
             "effort": "high",
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": null,
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
+          },
+          "worker": {
+            "budget_tokens": null,
+            "effort": "low",
             "enable_thinking": null,
             "frequency_penalty": null,
             "min_p": null,

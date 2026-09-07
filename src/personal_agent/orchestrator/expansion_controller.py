@@ -441,10 +441,10 @@ class ExpansionController:
                 llm_client.respond(
                     # FRE-1390: decomposition is a reasoning judgement about work
                     # that has not happened yet, and nothing downstream re-opens
-                    # a bad plan. SUB_AGENT binds to the instruct sibling with
-                    # thinking hard-disabled (config/model_roles.yaml); PRIMARY
-                    # is the thinking-capable deployment the plan's own output
-                    # will be judged against.
+                    # a bad plan. SUB_AGENT resolves to its own worker mode with
+                    # thinking hard-disabled (ADR-0145 D1, config/model_roles.yaml);
+                    # PRIMARY is the thinking-capable deployment the plan's own
+                    # output will be judged against.
                     role=ModelRole.PRIMARY,
                     messages=planner_messages,
                     # FRE-1413: no max_tokens override here. The old hardcoded

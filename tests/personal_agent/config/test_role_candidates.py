@@ -7,10 +7,12 @@ single-membership checks.
 
 FRE-1415 layers a second dimension on top: for LOCAL deployments, ``model.id``
 (not the catalog key) must also be confirmed served. ``_FLASH``/``_FLASH_INSTRUCT``
-below mirror the real catalog's ``qwen3.8-flash-next``/``-instruct`` pair — two
-keys sharing one served id, differing only in their mode's ``enable_thinking``
-(ADR-0145 D3a) — so AC-2 is exercised inside the same fixture every other test
-here already uses.
+below are a contrived same-id pair — two keys sharing one served id, differing
+only in their mode's ``enable_thinking`` — so AC-2 is exercised inside the same
+fixture every other test here already uses. ADR-0145 D1 (FRE-1445) deleted the
+real catalog's own such pair (``qwen3.8-flash-next``/``-instruct``), so this
+fixture is now the only place that shape is exercised; it stays synthetic on
+purpose, independent of what the real catalog currently contains.
 """
 
 from __future__ import annotations

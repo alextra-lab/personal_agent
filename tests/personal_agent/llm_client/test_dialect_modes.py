@@ -24,6 +24,7 @@ from personal_agent.config.model_loader import load_model_config
 from personal_agent.llm_client.models import (
     ModelConfig,
     ModelDefinition,
+    ModelKind,
     ModeSpec,
     ProviderDefinition,
 )
@@ -253,11 +254,15 @@ class TestAC3DefaultModeMustMatchADeclaredMode:
 
 
 class TestAC4RealCatalogEntriesAreBehaviourPreserving:
-    """AC-4 — the eight migrated entries' default_mode equals their pre-migration values.
+    """AC-4 — the migrated entries' default_mode equals their pre-migration values.
 
     Each expected value here is a literal copy of the value the entry declared
     before this migration (see the catalog's own inline comments for the
     pre-migration field name).
+
+    ADR-0145 D1 (FRE-1445) later deleted the two `-instruct` entries; their
+    two test methods below now assert the same literal preset survives as a
+    `worker` mode on each entry's surviving local primary instead.
     """
 
     def test_qwen36_35b_thinking(self) -> None:
@@ -282,9 +287,11 @@ class TestAC4RealCatalogEntriesAreBehaviourPreserving:
         assert mode.presence_penalty == 0.0
         assert mode.repeat_penalty == 1.0
 
-    def test_qwen38_flash_next_instruct(self) -> None:
-        """qwen3.8-flash-next-instruct's non-thinking preset carries over unchanged."""
-        mode = load_model_config(_CATALOG).models["qwen3.8-flash-next-instruct"].resolve_mode()
+    def test_qwen38_flash_next_worker_mode(self) -> None:
+        """ADR-0145 D1 (FRE-1445) — qwen3.8-flash-next's `worker` mode carries the
+        non-thinking preset the deleted qwen3.8-flash-next-instruct entry declared.
+        """
+        mode = load_model_config(_CATALOG).models["qwen3.8-flash-next"].resolve_mode("worker")
         assert mode.enable_thinking is False
         assert mode.temperature == 0.7
         assert mode.top_p == 0.8
@@ -293,9 +300,11 @@ class TestAC4RealCatalogEntriesAreBehaviourPreserving:
         assert mode.presence_penalty == 1.5
         assert mode.repeat_penalty == 1.0
 
-    def test_qwen36_35b_instruct(self) -> None:
-        """qwen3.6-35b-instruct's non-thinking preset carries over unchanged."""
-        mode = load_model_config(_CATALOG).models["qwen3.6-35b-instruct"].resolve_mode()
+    def test_qwen36_35b_thinking_worker_mode(self) -> None:
+        """ADR-0145 D1 (FRE-1445) — qwen3.6-35b-thinking's `worker` mode carries the
+        non-thinking preset the deleted qwen3.6-35b-instruct entry declared.
+        """
+        mode = load_model_config(_CATALOG).models["qwen3.6-35b-thinking"].resolve_mode("worker")
         assert mode.enable_thinking is False
         assert mode.temperature == 0.7
         assert mode.top_p == 0.80
@@ -371,3 +380,92 @@ class TestAC5NoTopLevelSamplerOrThinkingFieldRemains:
             temperature=0.5,  # type: ignore[call-arg]
         )
         assert not hasattr(definition, "temperature")
+
+
+class TestEverySelectablePrimaryDeclaresAWorkerMode:
+    """ADR-0145 D1 (FRE-1445), addressing master's 2026-09-07 comment on the ticket.
+
+    `sub_agent`'s `deployment: inherit` binding means it now resolves onto
+    WHATEVER the session's primary is, at its own `mode: worker`
+    (`config/model_roles.yaml`). Master measured the consequence on a live
+    turn (2026-09-07 05:12, OVH primary, 8 sub-agent calls): before this
+    ticket the sub-agent ran free on the local model regardless of the
+    primary's selection; after `inherit` lands, a cloud primary with no
+    `worker` mode declared would fall back to that primary's own — expensive
+    — `default_mode` (D2's fallback), silently billing every HYBRID
+    sub-agent call at the primary's thinking depth.
+
+    Rather than accept that window (master's option 3) or block this ticket
+    on FRE-1448 landing first (master's option 1, which inverts the ADR's own
+    dependency order), this folds ADR-0145 D6's already-measured per-dialect
+    cheap-mode values (the D6 table in the ADR, not a new decision) onto
+    every entry `role_candidates` can offer as `primary` — closing the
+    window the same PR opens it (master's recommended option 2).
+
+    Self-review flagged (confidence 80) that a hardcoded key tuple here would
+    silently stop covering a future model added to the catalog without a
+    `worker` mode — and that `config_guard.check_reasoning_declaration`,
+    which the ADR's own risk table names as the backstop, only ever projects
+    a deployment's `default_mode` and never checks a `worker`-named mode, so
+    it would not catch that gap either. `_all_selectable_primary_keys()`
+    below derives the set from the live catalog instead of a fixed list, so
+    a newly added `kind: llm` entry is automatically in scope.
+    """
+
+    @staticmethod
+    def _all_selectable_primary_keys(config: ModelConfig) -> list[str]:
+        """Every `kind: llm` catalog entry — the membership `role_candidates`
+        filters by availability, which this structural check does not need:
+        an unreachable model must still declare a `worker` mode.
+        """
+        return [key for key, model in config.models.items() if model.kind is ModelKind.LLM]
+
+    def test_every_selectable_primary_has_a_worker_mode(self) -> None:
+        config = load_model_config(_CATALOG)
+        missing = [
+            key
+            for key in self._all_selectable_primary_keys(config)
+            if "worker" not in config.models[key].modes
+        ]
+        assert not missing, (
+            f"{missing} declare no `worker` mode — a primary selection landing "
+            "there would route sub_agent onto that model's (likely more "
+            "expensive) default_mode instead, via resolve_role_target's "
+            "documented fallback-with-log (ADR-0145 D2)"
+        )
+
+    def test_sub_agent_resolves_a_worker_mode_for_every_primary_selection(self) -> None:
+        """The resolver-level guarantee, not just the declaration: `mode: worker`
+        actually lands on `worker`, never silently falls back to `default_mode`.
+        """
+        from personal_agent.config.model_loader import resolve_role_target
+
+        config = load_model_config(_CATALOG)
+        for primary_key in self._all_selectable_primary_keys(config):
+            _, sub_def = resolve_role_target("sub_agent", model_key=primary_key, config=config)
+            assert sub_def is not None
+            assert sub_def.default_mode == "worker", (
+                f"sub_agent inheriting {primary_key!r} as primary resolved to "
+                f"default_mode={sub_def.default_mode!r}, not 'worker'"
+            )
+
+    @pytest.mark.parametrize(
+        ("key", "expected"),
+        [
+            ("qwen3.8-27b-ovh", {"reasoning_effort": "none"}),
+            ("claude_sonnet", {"effort": "low"}),
+            ("claude_haiku", {}),
+            ("gpt-5.4-mini", {"reasoning_effort": "none"}),
+        ],
+    )
+    def test_cloud_worker_mode_matches_adr_0145_d6_table(
+        self, key: str, expected: dict[str, object]
+    ) -> None:
+        """Each cloud primary's `worker` mode is D6's measured cheap value, verbatim."""
+        mode = load_model_config(_CATALOG).models[key].resolve_mode("worker")
+        for field, value in expected.items():
+            assert getattr(mode, field) == value
+        declared_fields = {f for f, v in mode.model_dump().items() if v is not None}
+        assert declared_fields == set(expected), (
+            f"{key}'s worker mode declares {declared_fields}, expected exactly {set(expected)}"
+        )

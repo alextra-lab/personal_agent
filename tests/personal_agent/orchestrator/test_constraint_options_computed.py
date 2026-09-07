@@ -292,7 +292,7 @@ def test_resolve_options_and_default_artifact_builder_against_real_catalog() -> 
     opts, default = co.resolve_options_and_default("artifact_builder")
     # slm_local has no auth_env → always available regardless of cloud credentials
     assert "qwen3.6-35b-thinking" in opts
-    assert "qwen3.6-35b-instruct" in opts
+    assert "qwen3.8-flash-next" in opts
     # non-llm deployments are never options
     assert "embedding" not in opts
     assert "reranker" not in opts
@@ -307,7 +307,7 @@ def test_resolve_options_and_default_artifact_builder_against_real_catalog() -> 
 def test_valid_preference_actions_artifact_builder_against_real_catalog() -> None:
     actions = co.valid_preference_actions("artifact_builder")
     assert "always_pause" in actions
-    assert {"qwen3.6-35b-thinking", "qwen3.6-35b-instruct"} <= actions
+    assert {"qwen3.6-35b-thinking", "qwen3.8-flash-next"} <= actions
     assert "claude_sonnet" in actions  # llm, unfiltered by availability
     assert "embedding" not in actions
     assert "reranker" not in actions

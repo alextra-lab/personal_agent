@@ -126,6 +126,45 @@ explicit delta, and it is an addition rather than a change:
    call on the turn path is an unbounded one. The 180 is what the catalog
    declares, not what the judge waits.
 
+**Rebaselined a fifth time, deliberately, for ADR-0145 D1 (FRE-1445) — the local
+catalog pairs collapse.** Three explicit deltas:
+
+1. **``sub_agent`` now resolves onto ``qwen3.8-flash-next`` — the same deployment
+   ``primary`` resolves to — instead of the separate ``qwen3.8-flash-next-instruct``
+   entry, which is deleted.** The binding's own budget (``max_tokens: 2048``,
+   ``default_timeout: 90``) and its ``mode: worker`` override still reach the
+   resolved definition unchanged; only the deployment identity collapses. The
+   two deleted local ``-instruct`` entries drop out of ``_capture_concurrency``'s
+   semaphore map entirely — there is no longer a second catalog key to register one for.
+2. **``qwen3.6-35b-thinking`` and ``qwen3.8-flash-next``'s own ``max_concurrency``:
+   1 -> 3**, the box's real slot count, carried from each deployment's deleted
+   ``-instruct`` twin (ticket's own instruction) — both now show ``limit: 3`` in
+   ``_capture_concurrency``.
+3. **Both entries gain a ``worker`` mode** in their ``modes:`` map, carrying the
+   exact sampler/thinking preset their deleted twin declared, so ``sub_agent``'s
+   `mode: worker` binding has somewhere to resolve rather than silently stranding
+   onto the `default` (thinking) mode. ``sub_agent``'s resolved ``quantization``
+   also corrects from the deleted twin's stale ``"4bit"`` to ``qwen3.8-flash-next``'s
+   own ``"UD-IQ4_XS"`` — a drift fix that falls out of the collapse, not a
+   separate decision.
+4. **``claude_sonnet`` and ``gpt-5.4-mini`` also gain a ``worker`` mode** —
+   master flagged, from a live turn (2026-09-07 05:12, OVH primary, 8 sub-agent
+   calls), that `inherit` routes sub_agent onto ANY selected primary, not only
+   the two local ones, so every selectable primary needs one or a cloud
+   selection silently bills sub-agent calls at that primary's `default_mode`.
+   Pulls forward ADR-0145 D6's already-measured values (`effort: low` for
+   Sonnet, `reasoning_effort: none` for GPT-5.4-mini and, off-snapshot since
+   neither is bound to a captured role, the same for `qwen3.8-27b-ovh` and an
+   empty `worker` for `claude_haiku`, whose `default` is already the cheap
+   setting) rather than a new decision. Every ``claude_sonnet``-bound cell this
+   module captures (``artifact_builder``, ``captains_log``, ``insights``,
+   ``vision``) and every ``gpt-5.4-mini``-bound cell (``entity_extraction``,
+   ``compressor``) gains the same additive ``worker`` entry in its captured
+   ``modes`` dict — no existing mode body or resolved key changed.
+   ``session_summary`` also binds ``claude_sonnet`` (``config/model_roles.yaml``)
+   but is not among this module's ``_MATRIX_ROLES``/``_BINDING_ROLES``, so it
+   has no captured cell here to change.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

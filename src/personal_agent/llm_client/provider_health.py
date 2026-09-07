@@ -291,9 +291,10 @@ async def check_served_catalog_drift(
     """ADR-0145 D5 — compare each LOCAL deployment's declared facts against what is served.
 
     Widens :func:`check_local_served_ids`'s id-only membership check to
-    ``context_length`` and ``quantization``, both of which have already drifted in
-    the live catalog (``config/models.yaml``'s ``qwen3.8-flash-next-instruct`` declares
-    ``quantization: "4bit"`` against a served ``"UD-IQ4_XS"``). A mismatch is reported,
+    ``context_length`` and ``quantization``, both of which had already drifted in
+    the live catalog before ADR-0145 D1 deleted the entry that showed it
+    (``qwen3.8-flash-next-instruct`` declared ``quantization: "4bit"`` against a
+    served ``"UD-IQ4_XS"``, FRE-1421 F1). A mismatch is reported,
     never enforced — the SLM host is the owner's Mac and is not always on, so nothing
     here may fail a boot (AC-4); that is why every finding is ``policy``, not
     ``safety``, severity.

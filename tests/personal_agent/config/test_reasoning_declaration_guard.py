@@ -289,8 +289,12 @@ class TestOpenSelectionWalksEverySelectableEntry:
     names — passed by never being asked.
     """
 
-    def test_the_real_repos_eight_kind_llm_entries_are_all_reachable(self) -> None:
-        """AC-1 — every entry the primary picker can offer is in the walked set."""
+    def test_the_real_repos_six_kind_llm_entries_are_all_reachable(self) -> None:
+        """AC-1 — every entry the primary picker can offer is in the walked set.
+
+        ADR-0145 D1 (FRE-1445) deleted the two local `-instruct` twins, dropping
+        the reachable set from eight entries to six.
+        """
         catalog = _load_yaml(_REPO_ROOT / "config" / "models.yaml")
         bindings = load_matrix(_REPO_ROOT).get("bindings")
         assert isinstance(bindings, dict)
@@ -298,8 +302,6 @@ class TestOpenSelectionWalksEverySelectableEntry:
         assert reachable == {
             "qwen3.6-35b-thinking",
             "qwen3.8-flash-next",
-            "qwen3.8-flash-next-instruct",
-            "qwen3.6-35b-instruct",
             "qwen3.8-27b-ovh",
             "claude_sonnet",
             "claude_haiku",

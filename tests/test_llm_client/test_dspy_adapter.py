@@ -93,9 +93,9 @@ def test_configure_dspy_lm_with_primary_role():
 def test_configure_dspy_lm_with_sub_agent_role():
     """Test DSPy LM configuration with SUB_AGENT role.
 
-    FRE-963 (2026-07-24): sub_agent is bound to qwen3.6-35b-instruct, the local
-    Qwen companion deployment, restored from a drifted claude_sonnet pin — so
-    this resolves to an OpenAI-compatible local model string, not an
+    ADR-0145 D1 (FRE-1445): sub_agent inherits the primary's resolved
+    deployment (today, the local qwen3.8-flash-next) at its own worker mode —
+    so this resolves to an OpenAI-compatible local model string, not an
     Anthropic-prefixed cloud one.
     """
     lm = configure_dspy_lm(role=ModelRole.SUB_AGENT)

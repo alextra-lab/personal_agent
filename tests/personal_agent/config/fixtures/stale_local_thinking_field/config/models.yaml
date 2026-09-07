@@ -1,0 +1,15 @@
+# Fixture (FRE-1441, AC-5): thinking_budget_tokens left the local dialect under
+# ADR-0145 D3a — neither ModelDefinition nor RoleBinding declares it any more,
+# so a real load silently drops it (no `extra="forbid"` on either schema). This
+# entry writes it directly, in the pre-D3a raw shape (no `modes:`), to prove
+# the guard no longer treats it as a declaration.
+providers:
+  slm_local: { auth: none, placement: local, max_concurrency: 1, dialect: llamacpp_qwen }
+models:
+  local_only:
+    id: "local/only"
+    provider: slm_local
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 60
+    thinking_budget_tokens: 32768

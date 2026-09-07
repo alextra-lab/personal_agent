@@ -1,0 +1,9 @@
+# Fixture (FRE-1441, ADR-0145 D3b/D6): `primary` is open, so its picker also
+# offers `claude_haiku_like` below — an anthropic_budget-dialect model no
+# binding names.
+roles:
+  primary: { all: local_primary }
+required_secrets:
+  local: []
+bindings:
+  primary: { deployment: local_primary, open: true }

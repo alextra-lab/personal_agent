@@ -1,0 +1,8 @@
+# Fixture (FRE-1441, AC-5): a local deployment carrying the retired
+# thinking_budget_tokens field and nothing else.
+roles:
+  primary: { all: local_only }
+required_secrets:
+  local: []
+bindings:
+  primary: { deployment: local_only }

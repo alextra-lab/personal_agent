@@ -1,0 +1,30 @@
+# Fixture (FRE-1441, ADR-0145 D3b/D6): anthropic_budget (Claude Haiku's
+# dialect) has no reasoning_effort/effort field at all — its lever is
+# budget_tokens, and an undeclared thinking value there is the vendor's own
+# documented "no thinking" default, not an omission FRE-1007 exists to catch.
+# `claude_haiku_like` declares an empty mode and must stay clean once the
+# open-selection walk reaches it.
+providers:
+  slm_local: { auth: none, placement: local, max_concurrency: 2, dialect: llamacpp_qwen }
+  anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50 }
+models:
+  local_primary:
+    id: "local/primary"
+    provider: slm_local
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 60
+    default_mode: default
+    modes:
+      default:
+        enable_thinking: true
+  claude_haiku_like:
+    id: "claude-haiku-4-5"
+    provider: anthropic
+    dialect: anthropic_budget
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 30
+    default_mode: default
+    modes:
+      default: {}

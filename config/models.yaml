@@ -406,9 +406,7 @@ models:
     input_cost_per_token: 0.00000047     # $0.47/MTok (EUR 0.4 at the 3.6 entry's rate)
     output_cost_per_token: 0.00000319    # $3.19/MTok (EUR 2.7 at the 3.6 entry's rate)
     # 1.0 is the model card's THINKING-mode value, and thinking mode is the one
-    # this deployment actually runs in: no reasoning_effort is declared below,
-    # so OVH's own gateway default (xhigh, unrequestable — FRE-1430 F3) applies.
-    # Qwen3.8-27B ships with thinking ON by default.
+    # this deployment actually runs in.
     #
     # Card values, read 2026-09-06 from huggingface.co/Qwen/Qwen3.8-27B:
     #   thinking  temperature 1.0, top_p 0.95, top_k 20, min_p 0.0, presence_penalty 0.0
@@ -423,10 +421,21 @@ models:
     # presence_penalty are declared on the card but are not in this entry,
     # rather than declared-but-inert (ADR-0145 D3a; FRE-1430 F1/F5 measured the
     # accepted set). Choosing a cheap worker mode is D6, a separate decision.
+    #
+    # FRE-1441 (ADR-0145 D3b): `reasoning_effort` was previously undeclared here,
+    # so OVH's own gateway default (`xhigh`, unrequestable — FRE-1430 F3) applied
+    # by omission rather than by anyone's choice — exactly the FRE-1007 gap this
+    # deployment was passing unnoticed, because no binding names this key and
+    # the guard walked only bound deployments. `medium` is the closest legal
+    # value to the thinking-mode intent above: ovh_qwen's domain is
+    # {none, low, medium} only (`high` 400s, `xhigh` 422s, FRE-1430 F3), and it
+    # is also cheaper — ADR-0145 D6 measured `xhigh` at 2.2x `medium`'s total
+    # cost.
     default_mode: default
     modes:
       default:
         temperature: 1.0
+        reasoning_effort: medium
     # PROVENANCE WARNING for the three capability flags below. OVH's models
     # endpoint returns exactly seven keys -- id, created, object, owned_by,
     # pricing, context_length, max_completion_tokens -- and no capability

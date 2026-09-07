@@ -198,6 +198,30 @@ class TestDeclaredEffortReachesOvh:
         assert captured["reasoning_effort"] == "high"
         assert "allowed_openai_params" not in captured
 
+    @pytest.mark.asyncio
+    async def test_a_declared_dialect_never_logs_undeliverable(self) -> None:
+        """FRE-1441 AC-3 — dispatching the catalog's own qwen3.8-27b-ovh, now
+        declaring reasoning_effort: medium, never hits `_apply_undeclared_effort`
+        (the only source of this event), which only fires when `dialect is None`.
+
+        This is a client-side REGRESSION PIN, not the AC-3 proof itself: the
+        provider already declared `dialect: ovh_qwen` before FRE-1441, so this
+        path was already avoided regardless of the effort declaration. The
+        actual AC-3 claim — that the NEW declaration is verified without a
+        litellm capability-map dependency — is what
+        TestOpenSelectionWalksEverySelectableEntry (test_reasoning_declaration_
+        guard.py) proves: `check_reasoning_declaration` returns clean for
+        qwen3.8-27b-ovh via `_dialect_declares_effort`, never reaching the
+        litellm probe this event's sibling code path depends on.
+        """
+        import structlog
+
+        with structlog.testing.capture_logs() as logs:
+            await _capture_from_key("qwen3.8-27b-ovh")
+
+        events = [entry["event"] for entry in logs]
+        assert "reasoning_declaration_undeliverable" not in events
+
 
 class TestNoSamplerReachesSonnet:
     """AC-3 — no sampler reaches anthropic_adaptive, on either Sonnet path."""

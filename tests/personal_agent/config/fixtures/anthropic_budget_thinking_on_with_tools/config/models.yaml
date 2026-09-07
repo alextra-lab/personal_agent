@@ -1,0 +1,20 @@
+# Fixture (FRE-1441 self-review): `_dialect_thinking_declared` is set by ANY
+# explicit thinking choice, including `budget_tokens` — which means thinking
+# is ON, the opposite of `disable_thinking`. Before the self-review fix, the
+# `thinking_disable_on_tool_model` check read that shared flag and would have
+# false-flagged this deployment (tools + thinking correctly ON with a budget)
+# as though thinking were disabled.
+providers:
+  anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50 }
+models:
+  claude_haiku_thinking_tools:
+    id: "claude-haiku-4-5"
+    provider: anthropic
+    dialect: anthropic_budget
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 30
+    default_mode: default
+    modes:
+      default:
+        budget_tokens: 4096

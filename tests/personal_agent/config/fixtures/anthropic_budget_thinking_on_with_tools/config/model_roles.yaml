@@ -1,0 +1,8 @@
+# Fixture (FRE-1441 self-review): a pinned binding to an anthropic_budget
+# deployment that declares budget_tokens (thinking ON) and uses tools.
+roles:
+  primary: { all: claude_haiku_thinking_tools }
+required_secrets:
+  local: []
+bindings:
+  primary: { deployment: claude_haiku_thinking_tools }

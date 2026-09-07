@@ -315,7 +315,6 @@ class TestExpansionControllerExecute:
         # Build a mock settings object with a very short planner timeout
         mock_settings = MagicMock()
         mock_settings.planner_timeout_seconds = 0.01
-        mock_settings.worker_timeout_seconds = 45.0
 
         with (
             patch(

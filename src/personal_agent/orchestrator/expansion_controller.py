@@ -598,7 +598,6 @@ class ExpansionController:
             complete per-task record of what raised, and
             ``result.skipped_tasks`` for what never ran.
         """
-        settings = get_settings()
         start_ms = time.monotonic() * 1000
 
         logger.info(
@@ -626,8 +625,11 @@ class ExpansionController:
                 # (smaller, deliberately sized) value on every call; that
                 # setting's only other reader was the autonomous-mode
                 # decomposition path, deleted in FRE-1381 along with the field.
-                timeout_seconds=settings.worker_timeout_seconds,
-                hard_deadline_seconds=settings.worker_hard_deadline_seconds,
+                # ADR-0145 D1 (FRE-1444): neither budget is pinned here any more. Both
+                # settings reads shadowed the `sub_agent` role's own `default_timeout`
+                # — an explicit `timeout_s` beats the deployment's declaration inside
+                # the client, so the role's budget could never bind. Omitting them
+                # leaves one owner for the number: the role.
                 tools=list(grant.granted),
                 background=(f"Sub-task: {task.name}. Constraints: {', '.join(task.constraints)}"),
                 mode=task.mode,

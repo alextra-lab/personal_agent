@@ -40,11 +40,19 @@ class SubAgentSpec:
             shape as ``timeout_seconds`` below.
         timeout_seconds: Generation timeout for this sub-agent call, passed to the LLM
             client as ``timeout_s`` — measured from concurrency-slot acquisition, not
-            from spawn (FRE-1374).
+            from spawn (FRE-1374). ``None`` (the default) defers to the client's own
+            resolved default, which is the ``sub_agent`` role's effective
+            ``default_timeout`` (ADR-0145 D1/D2) — the same "knob that reads
+            load-bearing and is not" shape as ``max_tokens`` above. A hardcoded 120
+            here, combined with the dispatch call site always supplying
+            ``settings.worker_timeout_seconds``, is precisely why the role's budget
+            could never bind before FRE-1444.
         hard_deadline_seconds: Spawn-to-completion safety net — a separate, larger
             budget bounding the whole call (including any slot wait) in case the
-            underlying client ignores ``timeout_seconds``. ``None`` falls back to
-            ``timeout_seconds`` (today's behavior, for callers that don't set it).
+            underlying client ignores ``timeout_seconds``. ``None`` (the default)
+            derives it from the effective generation budget plus
+            ``settings.worker_queue_absorption_seconds``, so the declared queue-wait
+            allowance survives any binding value.
         tools: Tool names the sub-agent is allowed to invoke (empty = none). Already
             filtered against the sub-agent tool principal's grant set (FRE-1388) —
             a caller populates this with the *granted* subset, never the raw request.
@@ -67,7 +75,7 @@ class SubAgentSpec:
     context: list[dict[str, Any]]
     output_format: str = "text"
     max_tokens: int | None = None
-    timeout_seconds: float = 120.0
+    timeout_seconds: float | None = None
     hard_deadline_seconds: float | None = None
     tools: list[str] = field(default_factory=list)
     background: str = ""

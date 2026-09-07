@@ -126,6 +126,28 @@ explicit delta, and it is an addition rather than a change:
    call on the turn path is an unbounded one. The 180 is what the catalog
    declares, not what the judge waits.
 
+**Rebaselined a fifth time, deliberately, for ADR-0145 D1 (FRE-1445) — the local
+catalog pairs collapse.** Three explicit deltas:
+
+1. **``sub_agent`` now resolves onto ``qwen3.8-flash-next`` — the same deployment
+   ``primary`` resolves to — instead of the separate ``qwen3.8-flash-next-instruct``
+   entry, which is deleted.** The binding's own budget (``max_tokens: 2048``,
+   ``default_timeout: 90``) and its ``mode: worker`` override still reach the
+   resolved definition unchanged; only the deployment identity collapses. The
+   two deleted local ``-instruct`` entries drop out of ``_capture_concurrency``'s
+   semaphore map entirely — there is no longer a second catalog key to register one for.
+2. **``qwen3.6-35b-thinking`` and ``qwen3.8-flash-next``'s own ``max_concurrency``:
+   1 -> 3**, the box's real slot count, carried from each deployment's deleted
+   ``-instruct`` twin (ticket's own instruction) — both now show ``limit: 3`` in
+   ``_capture_concurrency``.
+3. **Both entries gain a ``worker`` mode** in their ``modes:`` map, carrying the
+   exact sampler/thinking preset their deleted twin declared, so ``sub_agent``'s
+   `mode: worker` binding has somewhere to resolve rather than silently stranding
+   onto the `default` (thinking) mode. ``sub_agent``'s resolved ``quantization``
+   also corrects from the deleted twin's stale ``"4bit"`` to ``qwen3.8-flash-next``'s
+   own ``"UD-IQ4_XS"`` — a drift fix that falls out of the collapse, not a
+   separate decision.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

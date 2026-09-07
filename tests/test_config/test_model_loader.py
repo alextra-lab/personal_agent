@@ -418,7 +418,7 @@ class TestSupportsVisionDeployedConfig:
 
     _VISION_ROLES = (
         "qwen3.6-35b-thinking",
-        "qwen3.6-35b-instruct",
+        "qwen3.8-flash-next",
         "claude_sonnet",
         "claude_haiku",
     )
@@ -451,7 +451,7 @@ class TestSupportsPdfDocumentDeployedConfig:
     """
 
     _PDF_CAPABLE_ROLES = ("claude_sonnet", "claude_haiku")
-    _PDF_INCAPABLE_ROLES = ("qwen3.6-35b-thinking", "qwen3.6-35b-instruct")
+    _PDF_INCAPABLE_ROLES = ("qwen3.6-35b-thinking", "qwen3.8-flash-next")
 
     @pytest.mark.parametrize(
         "config_path",

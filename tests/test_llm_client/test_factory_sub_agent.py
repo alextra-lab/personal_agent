@@ -1,80 +1,161 @@
-"""FRE-958/FRE-963/FRE-1319 regression guard.
+"""FRE-958/ADR-0145 D1 (FRE-1445) regression guard.
 
-The ``sub_agent`` role is bound to ``qwen3.6-35b-instruct`` (owner-directed
-revert, 2026-08-30). A sub-agent spawn for this role must build a client
-resolved from its OWN binding — never falling back to ``primary``'s, which is
-the FRE-958 bug: the executor built a PRIMARY-role client and handed it to the
-sub-agent dispatch path.
+The ``sub_agent`` role binds ``inherit``: it resolves to whatever the
+``primary`` binding resolves to (today, ``qwen3.8-flash-next``), never to a
+hardcoded literal. Before FRE-1443/FRE-1445 that meant a *different* catalog
+key from primary's (a dedicated local instruct twin, or a background model);
+under `inherit` the two roles now DELIBERATELY resolve to the same catalog
+key. The FRE-958 bug this file guards against — the sub-agent dispatch client
+silently falling back to a PRIMARY-role client — is still real, but the
+literal-key comparison that used to catch it (``sub_key != primary_key``) no
+longer discriminates, because equal keys are now the *correct* outcome. What
+must still differ is the **effective resolved definition**: sub_agent's own
+``mode: worker`` override must reach the client, not primary's own mode.
 
-**Placement no longer discriminates, and this file says so rather than implying
-otherwise.** For one day (FRE-1319, 2026-08-28 to 08-30) the two roles sat on
-opposite sides of the placement split — ``primary`` on ``qwen3.8-flash-next``
-(``slm_local`` → local placement) and ``sub_agent`` on ``gpt-5.4-mini``
-(``openai`` → ``LiteLLMClient``) — so asserting the client class was on its own
-enough to catch a silent fallback. That was always noted as a temporary
-property, and it has now reversed: both roles are local again, so a fallback to
-``primary`` would build the same local-placement client a correct resolution does.
-The client-class assertion below is therefore *corroborating, not
-discriminating*, and ``test_sub_agent_does_not_resolve_to_primary`` is the
-assertion that actually guards FRE-958. It was written to survive exactly this
-re-convergence and now carries the weight alone.
-
-Why the local companion serves this role again: ``sub_agent`` is defined by
-ADR-0033 as focused, non-thinking completion, and ``qwen3.6-35b-instruct``
-expresses that in the deployment itself rather than through a provider lever,
-so FRE-1007's reasoning-declaration guard is satisfied without needing a cloud
-``reasoning_effort``. FRE-1319 moved it to ``gpt-5.4-mini`` only because the MBP
-could hold a single model at Flash-Next's 87 GiB; with both qwen3.6-35B
-deployments loaded that constraint is gone, and the companion is local, free,
-and concurrent (``max_concurrency: 3`` against the primary's ``1``), which is
-what HYBRID fan-out needs.
+**Placement no longer discriminates either, for the same reason it didn't
+before FRE-1319's one-day split reversed** — both roles are local again
+(``qwen3.8-flash-next``), so a fallback to primary's binding would build the
+same local-placement client a correct resolution does. The client-class
+assertion below stays corroborating.
 """
 
 from __future__ import annotations
 
-from personal_agent.config import load_model_config
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from personal_agent.config.model_loader import resolve_role_target
 from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.litellm_client import LiteLLMClient
 from personal_agent.llm_client.models import Placement
 from personal_agent.llm_client.types import ModelRole
+from personal_agent.security import DomainGuard
+from personal_agent.telemetry.trace import SystemTraceContext
 
 
 class TestSubAgentResolution:
-    """sub_agent resolves to its own qwen3.6-35b-instruct binding."""
+    """sub_agent resolves through its own `inherit` binding, at its own mode."""
 
-    def test_role_resolves_to_its_own_binding(self) -> None:
-        """resolve_role_target("sub_agent") names sub_agent's deployment, not primary's."""
-        resolved_key, model_def = resolve_role_target("sub_agent")
+    def test_role_resolves_to_primarys_deployment_at_its_own_mode(self) -> None:
+        """`inherit` resolves sub_agent's key to primary's; the mode override is its own."""
+        sub_key, sub_def = resolve_role_target("sub_agent")
+        primary_key, _ = resolve_role_target("primary")
 
-        assert resolved_key == "qwen3.8-flash-next-instruct"
-        assert model_def is not None
-        assert model_def.id == load_model_config().models["qwen3.8-flash-next-instruct"].id
+        assert sub_key == primary_key == "qwen3.8-flash-next"
+        assert sub_def is not None
+        assert sub_def.default_mode == "worker"
 
     def test_builds_local_client_matching_its_deployment_placement(self) -> None:
-        """sub_agent dispatches at local placement — qwen3.6-35b-instruct's.
+        """sub_agent dispatches at local placement — qwen3.8-flash-next's.
 
-        Corroborating only. Since the 2026-08-30 revert both roles are
+        Corroborating only, same as before FRE-1445: both roles are
         ``slm_local``, so a fallback to primary's binding would satisfy this
         assertion too. Kept because it still catches a client built for the
-        wrong *placement* (a cloud client for a local deployment), and it
-        becomes discriminating again the moment the two roles are split across
-        providers. ``test_sub_agent_does_not_resolve_to_primary`` is what
-        actually guards FRE-958 today.
+        wrong *placement* (a cloud client for a local deployment).
         """
         client = get_llm_client(role_name=ModelRole.SUB_AGENT.value)
 
         assert isinstance(client, LiteLLMClient)
         assert client.placement is Placement.LOCAL
 
-    def test_sub_agent_does_not_resolve_to_primary(self) -> None:
-        """The FRE-958 bug stated directly, independent of either role's value.
+    def test_sub_agent_mode_differs_from_primarys_even_though_the_key_is_shared(self) -> None:
+        """The FRE-958 bug's successor assertion, stated for the `inherit` shape.
 
-        Asserting the two keys differ catches the fallback even when both roles
-        share a placement — which is the case again since 2026-08-30, making
-        this the only assertion in the file that discriminates.
+        Equal resolved KEYS are correct under D1 (both `qwen3.8-flash-next`),
+        so that comparison can no longer catch a sub-agent dispatch silently
+        built from PRIMARY's binding instead of its own. What must still hold
+        is that sub_agent's binding-level `mode: worker` override reaches the
+        resolved definition, distinctly from primary's own `default` mode —
+        a fallback to primary's binding would collapse this to `default` too.
         """
-        sub_key, _ = resolve_role_target("sub_agent")
-        primary_key, _ = resolve_role_target("primary")
+        _, sub_def = resolve_role_target("sub_agent")
+        _, primary_def = resolve_role_target("primary")
 
-        assert sub_key != primary_key
+        sub_mode = sub_def.resolve_mode()
+        primary_mode = primary_def.resolve_mode()
+
+        assert sub_mode.enable_thinking is False
+        assert primary_mode.enable_thinking is True
+        assert sub_mode != primary_mode
+
+
+def _permissive_guard() -> DomainGuard:
+    """A DomainGuard that refuses nothing — never touches network or disk."""
+    guard = DomainGuard(cache_path=Path("telemetry/security/_unused_test_blocklist.json"))
+    guard._blocklist = frozenset()
+    guard._last_loaded = datetime.now(timezone.utc)
+    return guard
+
+
+def _stream_chunk(content: str = "ok") -> Any:
+    class _Chunk:
+        def model_dump(self) -> dict[str, Any]:
+            return {
+                "id": "chunk-1",
+                "choices": [{"delta": {"role": "assistant", "content": content}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    return _Chunk()
+
+
+async def _fake_stream() -> Any:
+    yield _stream_chunk()
+
+
+@pytest.mark.asyncio
+class TestSubAgentWorkerPresetReachesTheWire:
+    """AC-4 — the wire-dispatched call, not the resolved definition, is the proof.
+
+    ADR-0145's own risk table names this failure mode directly: "the worker's
+    mode is missing on a newly added model, and the sub-agent silently runs at
+    the model's default (thinking on, billed)". Reading ``resolve_mode()`` back
+    (as ``TestSubAgentResolution`` above does) cannot rule that out on its own —
+    the client still has to actually build the request from it. This asserts
+    the real ``qwen3.8-flash-next`` deployment's ``worker`` mode against the
+    kwargs ``litellm.acompletion`` receives when a real ``sub_agent`` client
+    dispatches, mirroring the deleted ``qwen3.8-flash-next-instruct`` entry's
+    preset exactly.
+    """
+
+    async def test_worker_thinking_and_sampler_preset_dispatched_on_the_real_catalog(
+        self,
+    ) -> None:
+        _, model_def = resolve_role_target("sub_agent")
+        assert model_def is not None
+        assert model_def.provider is not None
+
+        client = LiteLLMClient(
+            model_id=model_def.id,
+            model_key="qwen3.8-flash-next",
+            provider=model_def.provider,
+            max_tokens=model_def.max_tokens,
+            budget_role="sub_agent",
+            placement=Placement.LOCAL,
+            model_def=model_def,
+            egress_guard=_permissive_guard(),
+        )
+
+        acompletion = AsyncMock(side_effect=lambda **_: _fake_stream())
+        with patch("litellm.acompletion", acompletion):
+            await client.respond(
+                role=ModelRole.SUB_AGENT,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=SystemTraceContext.new(
+                    "test", session_id="00000000-0000-0000-0000-000000000002"
+                ),
+            )
+        kwargs = dict(acompletion.call_args.kwargs)
+
+        assert kwargs["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
+        assert kwargs["temperature"] == 0.7
+        assert kwargs["top_p"] == 0.8
+        assert kwargs["presence_penalty"] == 1.5
+        assert kwargs["extra_body"]["top_k"] == 20
+        assert kwargs["extra_body"]["min_p"] == 0.0
+        assert kwargs["extra_body"]["repetition_penalty"] == 1.0
+        assert kwargs["max_tokens"] == 2048

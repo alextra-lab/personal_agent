@@ -33,7 +33,7 @@ for every chat-completion provider — ``slm_local``, ``anthropic``, ``openai``,
 entirely. Placement (local vs cloud) now decides only parameter shape and
 cost-gate applicability, not which controller instance is acquired.
 
-The local ``max_concurrency: 1`` GPU ceiling and the ``InferencePriority``
+The local GPU ceiling, declared per deployment, and the ``InferencePriority``
 tiers carry over unchanged through the singleton's per-deployment
 ``register_model`` registration. The cloud ceilings (``openai``/``anthropic``/
 ``ovhcloud``, set high at 50 as a safety valve) are now live for the first

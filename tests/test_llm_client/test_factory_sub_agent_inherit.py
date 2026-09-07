@@ -6,12 +6,13 @@ always got ``None``, and fell through to the binding's own static default —
 the owner's live-turn complaint (2026-09-06, session ``6a4b1d46``): selecting
 ``qwen3.8-27b-ovh`` as primary still ran every sub-agent on the local default.
 
-The real catalog does not bind ``sub_agent`` to ``inherit`` yet — that is the
-catalog collapse (FRE-1445), which this ticket's own D1 sentinel must exist
-before landing (ADR-0145's migration order). So this exercises the factory
-end-to-end (path 4 of the ticket's seven) against a fixture catalog with an
-inherit-bound sub_agent, monkeypatching only the catalog load — the selection
-context, the resolvers, and the client construction are all real.
+The real catalog now binds ``sub_agent`` to ``inherit`` too (FRE-1445 landed
+the catalog collapse this ticket's own D1 sentinel had to exist before). This
+module still exercises the factory end-to-end (path 4 of the ticket's seven)
+against a fixture catalog with an inherit-bound sub_agent, monkeypatching only
+the catalog load — the selection context, the resolvers, and the client
+construction are all real — so the fixture's shape stays independent of
+whatever the real catalog currently declares.
 """
 
 from __future__ import annotations

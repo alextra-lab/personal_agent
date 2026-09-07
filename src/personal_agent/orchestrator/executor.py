@@ -4992,8 +4992,10 @@ async def step_init(
             llm_client = get_llm_client(role_name=ModelRole.SUB_AGENT.value)
             # FRE-1390: the PLANNER client is a SEPARATE, explicitly-built
             # client for role=PRIMARY. Decomposition is a reasoning judgement
-            # about work that has not happened yet, and SUB_AGENT binds to a
-            # deployment with thinking hard-disabled (config/model_roles.yaml).
+            # about work that has not happened yet, and SUB_AGENT resolves to
+            # its own worker mode with thinking hard-disabled (ADR-0145 D1,
+            # config/model_roles.yaml) — the same catalog deployment PRIMARY
+            # may resolve to, at a different effective mode.
             # A single shared client cannot serve both roles: LiteLLMClient's
             # dispatched deployment is fixed at construction, not by the
             # ``role`` kwarg passed to ``.respond()`` (that kwarg is a

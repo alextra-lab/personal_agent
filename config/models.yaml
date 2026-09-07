@@ -134,7 +134,10 @@ models:
                                  # understated what the backend actually serves.)
     quantization: "UD-Q6_K_XL"   # reported by /v1/models 2026-09-05 (was "8bit")
     min_concurrency: 1
-    max_concurrency: 1
+    # ADR-0145 D1 (FRE-1445): 1 -> 3, the box's real slot count (slm_local's own
+    # max_concurrency above), carried from qwen3.6-35b-instruct — the paired
+    # deployment this collapse deletes.
+    max_concurrency: 3
     default_timeout: 600         # 128K prefill + up to 32K thinking output (was 180)
     # ADR-0145 D3a: sampler/thinking values move into modes:, field for field —
     # no value changes here, only their home. `thinking_budget_tokens` (was
@@ -162,6 +165,18 @@ models:
         presence_penalty: 0.0
         repeat_penalty: 1.0     # llama.cpp's wire name (FRE-1430 F2); was declared as
                                  # `repetition_penalty`, which that server silently ignores
+      # ADR-0145 D1 (FRE-1445): the non-thinking preset qwen3.6-35b-instruct carried,
+      # preserved here so `sub_agent`'s `mode: worker` binding (inherited onto this
+      # entry when it is the selected primary) does not silently strand onto the
+      # `default` mode's thinking preset above.
+      worker:
+        enable_thinking: false
+        temperature: 0.7             # Qwen card Instruct preset (was 0.4 for Qwen3.5-9B)
+        top_p: 0.80                  # Qwen card Instruct
+        top_k: 20
+        min_p: 0.0                   # Qwen card Instruct (new)
+        presence_penalty: 1.5        # Unsloth + Qwen card, Instruct/non-thinking
+        repeat_penalty: 1.0          # llama.cpp's wire name (FRE-1430 F2)
     supports_function_calling: true
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
@@ -200,7 +215,10 @@ models:
                                  # express; concurrent large requests contend for one pool.
     quantization: "UD-IQ4_XS"
     min_concurrency: 1
-    max_concurrency: 1
+    # ADR-0145 D1 (FRE-1445): 1 -> 3, the box's real slot count (slm_local's own
+    # max_concurrency above), carried from qwen3.8-flash-next-instruct — the
+    # paired deployment this collapse deletes.
+    max_concurrency: 3
     default_timeout: 600
     # ADR-0145 D3a: sampler/thinking values move into modes:, field for field.
     # `thinking_budget_tokens` (was 32768) has no home in llamacpp_qwen's
@@ -220,51 +238,11 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repeat_penalty: 1.0     # llama.cpp's wire name (FRE-1430 F2); was `repetition_penalty`
-    supports_function_calling: true
-    supports_vision: true         # SLM catalog reports model_type: multimodal
-    supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
-    tool_calling_strategy: "native"
-    endpoint: "https://slm.example.com/v1"
-
-  # ── Tier 2: Sub-Agent ───────────────────────────────────────────
-  # ---------------------------------------------------------------------------
-  # Owner collapsed slm_server to a single served model 2026-09-03 21:50: only
-  # `unsloth/qwen3.8-flash-next` is served now (port 8502, ctx 131072, UD-IQ4_XS).
-  # Both the reasoning and instruct roles therefore point at the SAME id, and the
-  # only thing separating them is the per-request thinking control -- which
-  # actually reaches llama.cpp for the first time as of ADR-0141 T2 (FRE-1365,
-  # deployed 2026-09-03 21:26). Before that, `disable_thinking` was inert on the
-  # wire and the split only worked because backend 8503 was launched thinking-off.
-  # That backend no longer exists, so this entry is now load-bearing rather than
-  # belt-and-braces.
-  qwen3.8-flash-next-instruct:
-    provider: slm_local
-    id: "unsloth/qwen3.8-flash-next"
-    context_length: 131072       # FRE-1427: same served id as qwen3.8-flash-next above, so it
-                                 # moves with it — same --ctx-size, same pooled KV cache. Full
-                                 # --ctx-size, still. slm_server runs --kv-unified, which POOLS
-                                 # the KV cache across slots instead of partitioning it, so a
-                                 # single request may use the whole window — do NOT divide by
-                                 # --parallel. The real constraint is aggregate KV across
-                                 # concurrent requests, which this per-deployment field cannot
-                                 # express; concurrent large requests contend for one pool.
-    quantization: "4bit"
-    min_concurrency: 1
-    max_concurrency: 3
-    default_timeout: 90          # unchanged from the retired qwen3.6-35b-instruct entry.
-                                 # NOTE: that value assumed a dedicated 2-slot backend. With
-                                 # one served model the sub-agent now queues behind the
-                                 # primary, so 90s may be too short under contention — revisit
-                                 # once the slot count is known rather than guessing now.
-    max_tokens: 2048             # bounded sub-task output; safe because thinking is
-                                 # hard-disabled below, so reasoning cannot eat the budget
-    # ADR-0145 D3a: sampler/thinking values move into modes:, field for field.
-    default_mode: default
-    modes:
-      default:
-        # Unsloth's NON-thinking preset. presence_penalty 1.5 is correct here and
-        # deliberately differs from the thinking entry's 0.0 -- same reasoning as the
-        # retired qwen3.6-35b-instruct entry this replaces.
+      # ADR-0145 D1 (FRE-1445): the non-thinking preset qwen3.8-flash-next-instruct
+      # carried, preserved here so `sub_agent`'s `mode: worker` binding (inherited
+      # onto this entry, the currently served primary) does not silently strand
+      # onto the `default` mode's thinking preset above.
+      worker:
         enable_thinking: false  # was disable_thinking: true — hard disable via chat_template_kwargs (ADR-0023)
         temperature: 0.7
         top_p: 0.8
@@ -273,65 +251,10 @@ models:
         presence_penalty: 1.5
         repeat_penalty: 1.0     # llama.cpp's wire name (FRE-1430 F2); was `repetition_penalty`
     supports_function_calling: true
-    supports_vision: true
-    supports_pdf_document: false
+    supports_vision: true         # SLM catalog reports model_type: multimodal
+    supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
     tool_calling_strategy: "native"
     endpoint: "https://slm.example.com/v1"
-  qwen3.6-35b-instruct:
-    # Focused single-task completion for HYBRID expansion sub-agents.
-    # Sampling per the Qwen3.6 card "Instruct (Non-Thinking) Mode" preset.
-    #
-    # 2026-09-05 catalog correction. The bindings are NOT changed here: the
-    # primary and sub_agent roles still bind qwen3.8-flash-next. Only the
-    # description of what the backend serves is corrected, so that a future
-    # swap to this model does not fail on a stale id.
-    #
-    # This is NO LONGER a second
-    # served instance. The owner serves ONE model, and this entry points at the
-    # SAME id as qwen3.6-35b-thinking — exactly the shape the flash-next pair
-    # already used since 2026-09-03. The only thing separating the two roles is
-    # the per-request thinking control, which reaches llama.cpp for real as of
-    # ADR-0141 T2 (FRE-1365), so `disable_thinking` below is load-bearing rather
-    # than belt-and-braces.
-    #
-    # The previous id `unsloth/qwen3.6-35-A3B-subagent` named a dedicated second
-    # backend from the two-instance era that no longer exists. Left unfixed it
-    # would have reproduced FRE-1317 exactly — both local roles pointing at a
-    # model the server does not serve, and every primary and HYBRID turn failing.
-    # Bound here to the id the server actually reports, not the one the catalog
-    # remembered.
-    provider: slm_local
-    id: "unsloth/qwen3.6-35-A3B"
-    context_length: 262144  # Same served window as the thinking entry — one model, one
-                            # --ctx-size, one pooled KV cache. (Was 65536, correct only for
-                            # the retired dedicated sub-agent backend.)
-    quantization: "UD-Q6_K_XL"   # reported by /v1/models 2026-09-05 (was "8bit")
-    min_concurrency: 1
-    max_concurrency: 3
-    default_timeout: 90          # Fail-fast — sub-agent delays cascade to primary
-    max_tokens: 2048             # Bounded output for summary-length sub-task results
-    # ADR-0145 D3a: sampler/thinking values move into modes:, field for field.
-    default_mode: default
-    modes:
-      default:
-        enable_thinking: false  # was disable_thinking: true — Hard disable via chat_template_kwargs (ADR-0023)
-        temperature: 0.7             # Qwen card Instruct preset (was 0.4 for Qwen3.5-9B)
-        top_p: 0.80                  # Qwen card Instruct
-        top_k: 20
-        min_p: 0.0                   # Qwen card Instruct (new)
-        # Deliberately NOT changed alongside the thinking model's 1.5 -> 0.0.
-        # Unsloth's non-thinking preset recommends presence_penalty 1.5, and this
-        # entry runs thinking disabled, so 1.5 is the correct value here. Checked
-        # 2026-08-05 rather than assumed to move with its sibling.
-        presence_penalty: 1.5        # Unsloth + Qwen card, Instruct/non-thinking
-        repeat_penalty: 1.0          # llama.cpp's wire name (FRE-1430 F2); was `repetition_penalty`
-    supports_function_calling: true
-    supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
-    supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
-    tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
-    endpoint: "https://slm.example.com/v1"
-
-
 
   # ── Managed Qwen (OVH AI Endpoints) ─────────────────────────────
   qwen3.8-27b-ovh:

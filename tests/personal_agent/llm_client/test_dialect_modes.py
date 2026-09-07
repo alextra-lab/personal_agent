@@ -253,11 +253,15 @@ class TestAC3DefaultModeMustMatchADeclaredMode:
 
 
 class TestAC4RealCatalogEntriesAreBehaviourPreserving:
-    """AC-4 — the eight migrated entries' default_mode equals their pre-migration values.
+    """AC-4 — the migrated entries' default_mode equals their pre-migration values.
 
     Each expected value here is a literal copy of the value the entry declared
     before this migration (see the catalog's own inline comments for the
     pre-migration field name).
+
+    ADR-0145 D1 (FRE-1445) later deleted the two `-instruct` entries; their
+    two test methods below now assert the same literal preset survives as a
+    `worker` mode on each entry's surviving local primary instead.
     """
 
     def test_qwen36_35b_thinking(self) -> None:
@@ -282,9 +286,11 @@ class TestAC4RealCatalogEntriesAreBehaviourPreserving:
         assert mode.presence_penalty == 0.0
         assert mode.repeat_penalty == 1.0
 
-    def test_qwen38_flash_next_instruct(self) -> None:
-        """qwen3.8-flash-next-instruct's non-thinking preset carries over unchanged."""
-        mode = load_model_config(_CATALOG).models["qwen3.8-flash-next-instruct"].resolve_mode()
+    def test_qwen38_flash_next_worker_mode(self) -> None:
+        """ADR-0145 D1 (FRE-1445) — qwen3.8-flash-next's `worker` mode carries the
+        non-thinking preset the deleted qwen3.8-flash-next-instruct entry declared.
+        """
+        mode = load_model_config(_CATALOG).models["qwen3.8-flash-next"].resolve_mode("worker")
         assert mode.enable_thinking is False
         assert mode.temperature == 0.7
         assert mode.top_p == 0.8
@@ -293,9 +299,11 @@ class TestAC4RealCatalogEntriesAreBehaviourPreserving:
         assert mode.presence_penalty == 1.5
         assert mode.repeat_penalty == 1.0
 
-    def test_qwen36_35b_instruct(self) -> None:
-        """qwen3.6-35b-instruct's non-thinking preset carries over unchanged."""
-        mode = load_model_config(_CATALOG).models["qwen3.6-35b-instruct"].resolve_mode()
+    def test_qwen36_35b_thinking_worker_mode(self) -> None:
+        """ADR-0145 D1 (FRE-1445) — qwen3.6-35b-thinking's `worker` mode carries the
+        non-thinking preset the deleted qwen3.6-35b-instruct entry declared.
+        """
+        mode = load_model_config(_CATALOG).models["qwen3.6-35b-thinking"].resolve_mode("worker")
         assert mode.enable_thinking is False
         assert mode.temperature == 0.7
         assert mode.top_p == 0.80

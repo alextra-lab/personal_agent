@@ -65,11 +65,11 @@ def test_artifact_builder_catalog_key_accepted() -> None:
                 _URL,
                 json={
                     "constraint_name": "artifact_builder",
-                    "preferred_action": "qwen3.6-35b-instruct",
+                    "preferred_action": "qwen3.6-35b-thinking",
                 },
             )
         assert resp.status_code == 200
-        assert resp.json()["preferred_action"] == "qwen3.6-35b-instruct"
+        assert resp.json()["preferred_action"] == "qwen3.6-35b-thinking"
         upsert.assert_awaited_once()
     finally:
         _teardown()
@@ -112,7 +112,7 @@ def test_catalog_unavailable_is_503_not_500() -> None:
                 _URL,
                 json={
                     "constraint_name": "artifact_builder",
-                    "preferred_action": "qwen3.6-35b-instruct",
+                    "preferred_action": "qwen3.6-35b-thinking",
                 },
             )
         assert resp.status_code == 503

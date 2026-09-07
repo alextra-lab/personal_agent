@@ -104,8 +104,16 @@ class TestRunSubAgent:
         assert result.denied_tools == ("bash",)
 
     @pytest.mark.asyncio
-    async def test_denied_tools_threads_into_result_on_timeout(self) -> None:
+    async def test_denied_tools_threads_into_result_on_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """FRE-1388: the refusal survives a killed sub-agent too."""
+        from personal_agent.config import settings
+
+        # FRE-1444: the outer deadline is the budget plus this allowance, so a test
+        # whose mock client ignores its generation budget must shrink the allowance to
+        # keep the net firing inside a test's patience.
+        monkeypatch.setattr(settings, "worker_queue_absorption_seconds", 0.05)
         mock_client = AsyncMock()
 
         async def slow_respond(*args: object, **kwargs: object) -> str:
@@ -137,8 +145,11 @@ class TestRunSubAgent:
         assert "LLM overloaded" in (result.error or "")
 
     @pytest.mark.asyncio
-    async def test_timeout_returns_failure(self) -> None:
+    async def test_timeout_returns_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.config import settings
 
+        # FRE-1444: see test_denied_tools_threads_into_result_on_timeout.
+        monkeypatch.setattr(settings, "worker_queue_absorption_seconds", 0.05)
         mock_client = AsyncMock()
 
         async def slow_respond(*args: object, **kwargs: object) -> str:
@@ -373,16 +384,24 @@ class TestBuildToolDefs:
 class TestEffectiveHardDeadline:
     """A tool-using loop's deadline must scale with its own iteration cap —
 
-    the single-call sizing (worker_hard_deadline_seconds: "60s generation +
-    25s queue-wait absorption") predates this loop and would otherwise kill a
+    the single-call sizing (the generation budget plus
+    ``worker_queue_absorption_seconds``) predates this loop and would otherwise kill a
     genuine multi-round tool-using sub-agent well before it ever reaches its
     own cap.
     """
 
-    def test_no_tools_keeps_single_call_sizing(self) -> None:
+    def test_no_tools_keeps_single_call_sizing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FRE-1444: the single-call sizing is derived now, so it exceeds the budget.
+
+        It used to equal it (60.0) — the collapsed state ADR-0145 D1 removes, since a
+        deadline equal to the generation timeout can never fire.
+        """
+        from personal_agent.config import settings
         from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
 
-        assert _effective_hard_deadline(_spec(timeout=60.0)) == 60.0
+        monkeypatch.setattr(settings, "worker_queue_absorption_seconds", 25.0)
+
+        assert _effective_hard_deadline(_spec(timeout=60.0), 60.0) == 85.0
 
     def test_tools_scale_by_iteration_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from personal_agent.config import settings
@@ -390,7 +409,9 @@ class TestEffectiveHardDeadline:
 
         monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
 
-        assert _effective_hard_deadline(_spec_with_tools(["run_python"], timeout=60.0)) == 300.0
+        assert (
+            _effective_hard_deadline(_spec_with_tools(["run_python"], timeout=60.0), 60.0) == 300.0
+        )
 
     def test_explicit_hard_deadline_still_wins_if_larger(
         self, monkeypatch: pytest.MonkeyPatch
@@ -401,7 +422,7 @@ class TestEffectiveHardDeadline:
         monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
         spec = _spec_with_tools(["run_python"], timeout=60.0, hard_deadline=1000.0)
 
-        assert _effective_hard_deadline(spec) == 1000.0
+        assert _effective_hard_deadline(spec, 60.0) == 1000.0
 
 
 class TestMaxDeadlineSecondsOverride:
@@ -1093,8 +1114,14 @@ class TestDigestCapAndClipVisibility:
         assert "sub_agent_output_clipped" in WARNING_EVENT_ALLOWLIST
 
     @pytest.mark.asyncio
-    async def test_killed_worker_over_cap_is_clipped_and_warned(self) -> None:
+    async def test_killed_worker_over_cap_is_clipped_and_warned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The killed-result path shares the same cap and must warn identically."""
+        from personal_agent.config import settings
+
+        # FRE-1444: the outer deadline is the budget plus this allowance.
+        monkeypatch.setattr(settings, "worker_queue_absorption_seconds", 0.05)
 
         async def _slow_over_cap(*args: object, **kwargs: object) -> str:
             progress: GenerationProgress | None = kwargs.get("progress_sink")  # type: ignore[assignment]

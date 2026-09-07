@@ -560,37 +560,24 @@ class AppConfig(BaseSettings):
             "sized there for '128K prefill + up to 32K thinking output'."
         ),
     )
-    worker_timeout_seconds: float = Field(
-        default=60.0,
+    worker_queue_absorption_seconds: float = Field(
+        default=25.0,
         description=(
-            "Generation budget per sub-agent worker, from concurrency-slot "
-            "acquisition (FRE-1374). Enforced two ways on the local streaming "
-            "path (FRE-1379): as the httpx read timeout (gap between bytes) "
-            "and, separately, as a wall-clock bound on the whole call — before "
-            "FRE-1379 only the read timeout applied, which a steadily "
-            "streaming response never trips, so this budget was inert against "
-            "the real client and only the larger worker_hard_deadline_seconds "
-            "ever fired. Measured live throughput at the fan-out's own "
-            "concurrency (FRE-1379 AC-4, master benchmark 2026-09-04): "
-            "~14.4 tok/s at concurrency 3, so this budget permits roughly "
-            "850 generated tokens at 60s — well under a sub-agent's typical "
-            "catalog-declared max_tokens ceiling for a long task. Not tuned "
-            "in FRE-1379 per the ticket's own scope."
-        ),
-    )
-    worker_hard_deadline_seconds: float = Field(
-        default=85.0,
-        description=(
-            "Spawn-to-completion safety net per sub-agent (FRE-1374). Deliberately larger "
-            "than worker_timeout_seconds (60s): that budget now starts at concurrency-slot "
-            "acquisition (passed as timeout_s to llm_client.respond), so this is a "
-            "defense-in-depth cap for a client that ignores timeout_s — not the primary "
-            "timeout mechanism. Sized as 60s generation + 25s queue-wait absorption (the "
-            "live incident's worst observed wait was 22.8s). This budget is per-worker, "
-            "with no arithmetic relationship to any other worker's timing (FRE-1380 "
-            "serialized the fan-out itself, deleting the concurrency-ceiling admission "
-            "race — and the settings field that bounded it — this sentence originally "
-            "referred to)."
+            "Queue-wait allowance added to a sub-agent's generation budget to size its "
+            "spawn-to-completion safety net (FRE-1374, re-derived by ADR-0145 D1). The "
+            "generation budget itself is the sub_agent role's own default_timeout and is "
+            "no longer duplicated in settings: worker_timeout_seconds (60s) pinned it on "
+            "every SubAgentSpec and beat the role's declaration inside the client, so the "
+            "role's budget could never bind. This field is the 25s half of what "
+            "worker_hard_deadline_seconds expressed as a fixed 85 ('60s generation + 25s "
+            "queue-wait absorption'; the live incident's worst observed wait was 22.8s). "
+            "Fixing the sum rather than the allowance made the net inert against any "
+            "budget at or above it — max(85, 90) is 90, which is the generation timeout "
+            "itself. Deriving the deadline keeps the margin for any binding value. The "
+            "net is a defense-in-depth cap for a client that ignores timeout_s, not the "
+            "primary timeout mechanism, and is per-worker with no arithmetic "
+            "relationship to any other worker's timing (FRE-1380 serialized the fan-out "
+            "itself)."
         ),
     )
     synthesis_timeout_seconds: float = Field(

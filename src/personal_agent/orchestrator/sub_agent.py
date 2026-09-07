@@ -162,31 +162,80 @@ def _normalize_tool_calls(
     ]
 
 
-def _effective_hard_deadline(spec: SubAgentSpec) -> float:
-    """Compute the tool loop's overall ``wait_for`` deadline (FRE-1389).
+def _resolve_effective_timeout(spec: SubAgentSpec, llm_client: Any) -> float:
+    """Resolve the ONE generation budget this sub-agent call uses (ADR-0145 D1).
 
-    ``spec.hard_deadline_seconds``/``spec.timeout_seconds`` alone are sized for
-    ONE inference call — ``worker_hard_deadline_seconds``'s own description
-    states it as "60s generation + 25s queue-wait absorption", from before
-    this loop existed. A genuinely multi-round tool-using sub-agent would
-    otherwise be killed by that single-call budget well before ever reaching
-    its own ``sub_agent_max_tool_iterations`` cap (AC-2's "explicit, distinct
-    terminal state" would then rarely fire in practice). When the spec grants
-    no tools, no multi-round loop can occur, so the single-call sizing is
-    left exactly as it was pre-loop.
+    The budget belongs to the role, and the client already holds the role's effective
+    definition, so the client is asked for it rather than a setting being read here.
+    The number is resolved once and used twice: the outer deadline is sized from it
+    (:func:`_effective_hard_deadline`), and it is handed back down to the client as
+    ``timeout_s`` for the inner call. Resolving it separately at each use is the
+    two-sources-of-truth condition FRE-1444 exists to remove. D1 sketched the second use
+    as omitting ``timeout_s`` and letting the client re-derive the value; only the local
+    dispatch branch does that, so it is passed explicitly instead — see
+    :func:`_run_tool_loop`'s ``effective_timeout`` argument for the full reasoning.
 
     Args:
         spec: The sub-agent specification.
+        llm_client: The client this sub-agent dispatches through.
+
+    Returns:
+        The generation budget in seconds.
+
+    Raises:
+        ValueError: When neither the spec nor the client names a budget. Every
+            factory-built client carries a definition and therefore names one, so this
+            is an unconfigurable sub-agent rather than a routine fallback — inventing a
+            number here would restore the defect.
+    """
+    if spec.timeout_seconds is not None:
+        return float(spec.timeout_seconds)
+    declared = getattr(llm_client, "default_timeout_seconds", None)
+    if declared is None:
+        raise ValueError(
+            "sub-agent has no generation budget: the spec names none and "
+            f"{type(llm_client).__name__} declares no default_timeout_seconds "
+            "(ADR-0145 D1)."
+        )
+    return float(declared)
+
+
+def _effective_hard_deadline(spec: SubAgentSpec, effective_timeout: float) -> float:
+    """Compute the tool loop's overall ``wait_for`` deadline (FRE-1389).
+
+    The single-call sizing is the generation budget plus
+    ``settings.worker_queue_absorption_seconds``. Deriving it, rather than reading a
+    fixed number, is what keeps the declared queue-wait allowance intact for any
+    binding value (ADR-0145 D1): a fixed 85 against a 90s role budget gives
+    ``max(85, 90) = 90``, which collapses the net onto the generation timeout and makes
+    it inert.
+
+    That single-call budget is sized for ONE inference call. A genuinely multi-round
+    tool-using sub-agent would otherwise be killed by it well before ever reaching its
+    own ``sub_agent_max_tool_iterations`` cap (AC-2's "explicit, distinct terminal
+    state" would then rarely fire in practice). When the spec grants no tools, no
+    multi-round loop can occur, so the single-call sizing applies unscaled.
+
+    Args:
+        spec: The sub-agent specification.
+        effective_timeout: The generation budget resolved by
+            :func:`_resolve_effective_timeout`.
 
     Returns:
         The deadline in seconds to pass to the outer ``asyncio.wait_for``.
     """
+    # `is not None`, not `or`: an explicit 0.0 means "no absorption margin, just the
+    # generation budget" — which the max() below then floors correctly. Falling through
+    # on 0.0 would silently grant the caller 25s MORE than it asked for.
     single_call_deadline = max(
-        spec.hard_deadline_seconds or spec.timeout_seconds, spec.timeout_seconds
+        spec.hard_deadline_seconds
+        if spec.hard_deadline_seconds is not None
+        else effective_timeout + settings.worker_queue_absorption_seconds,
+        effective_timeout,
     )
     if not spec.tools:
         return single_call_deadline
-    return max(single_call_deadline, spec.timeout_seconds * settings.sub_agent_max_tool_iterations)
+    return max(single_call_deadline, effective_timeout * settings.sub_agent_max_tool_iterations)
 
 
 def _extract_stated_tool_gap(content: str) -> tuple[str, str | None]:
@@ -458,6 +507,7 @@ async def _run_tool_loop(
     loaded_skills: set[str],
     trace_id: str,
     session_id: str | None,
+    effective_timeout: float,
 ) -> tuple[str, str | None]:
     """Run inference/tool-execution rounds until the model stops or the cap fires.
 
@@ -477,10 +527,16 @@ async def _run_tool_loop(
         loaded_skills: Mutable ``read_skill`` dedup set for ``dispatch_tool_call``.
         trace_id: Parent request trace identifier.
         session_id: Originating session id.
-
-    Returns:
-        (final response text with any ``TOOL_GAP`` sentinel stripped, the
-        stated gap tool name or ``None``).
+        effective_timeout: The generation budget from
+            :func:`_resolve_effective_timeout` — the same number the outer deadline is
+            sized from. Passed explicitly rather than left for the client to re-derive
+            (ADR-0145 D1 sketches the omit-and-re-derive form) because only the local
+            branch re-derives it: the cloud branch applies no timeout at all when the
+            call names none, so a cloud-placed ``sub_agent`` deployment would dispatch
+            with no role budget. Handing back the number the client itself declared is
+            not the "explicit override beats the declaration" trap this ticket removes
+            — it IS the declaration — and it keeps every other cloud producer's
+            timeout untouched.
 
     Raises:
         _ToolIterationLimitReached: When another tool batch would exceed
@@ -497,7 +553,7 @@ async def _run_tool_loop(
             messages=state.messages,
             max_tokens=spec.max_tokens,
             trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
-            timeout_s=spec.timeout_seconds,
+            timeout_s=effective_timeout,
             progress_sink=round_progress,
             tools=tool_defs,
             tool_choice=tool_choice,
@@ -626,18 +682,6 @@ async def run_sub_agent(
         _system_content = f"{_system_content}\n\n{spec.skill_index_block}"
     _context_breakdown = _summarize_input_context(_system_content, spec)
 
-    logger.info(
-        "sub_agent_start",
-        task_id=task_id_str,
-        task=spec.task,
-        output_format=spec.output_format,
-        max_tokens=spec.max_tokens,
-        timeout=spec.timeout_seconds,
-        trace_id=trace_id,
-        session_id=session_id,
-        **_context_breakdown,
-    )
-
     # FRE-1389: tool defs restricted to exactly this spec's granted subset —
     # None (not []) when spec.tools is empty, so respond() never receives a
     # tools argument for a grant-less sub-agent, preserving pre-loop behavior.
@@ -665,6 +709,26 @@ async def run_sub_agent(
     state = _ToolLoopState(messages=messages)
 
     try:
+        # ADR-0145 D1: resolved once, inside the audited region, and used twice — by the
+        # outer net below and by the dispatched call itself. Inside the try because an
+        # unconfigurable sub-agent must still produce an audit record and a reported
+        # failure, not an escaping exception.
+        effective_timeout = _resolve_effective_timeout(spec, llm_client)
+
+        # Logged here rather than from the spec: `spec.timeout_seconds` is None on every
+        # production spec now, so the spec reports the override, not the budget in force.
+        logger.info(
+            "sub_agent_start",
+            task_id=task_id_str,
+            task=spec.task,
+            output_format=spec.output_format,
+            max_tokens=spec.max_tokens,
+            timeout=effective_timeout,
+            trace_id=trace_id,
+            session_id=session_id,
+            **_context_breakdown,
+        )
+
         # FRE-1374: timeout_s reaches the client as the GENERATION-only budget — for
         # LiteLLMClient it becomes the read timeout applied inside its concurrency-slot
         # context, so it starts counting at slot acquisition, not at spawn. The outer
@@ -674,12 +738,20 @@ async def run_sub_agent(
         # the iteration cap for a tool-granted spec (_effective_hard_deadline) — the
         # single-call sizing alone would kill a genuine multi-round loop before it ever
         # reached its own cap.
-        hard_deadline = _effective_hard_deadline(spec)
+        hard_deadline = _effective_hard_deadline(spec, effective_timeout)
         if max_deadline_seconds is not None:
             hard_deadline = min(hard_deadline, max_deadline_seconds)
         response_content, stated_tool_gap = await asyncio.wait_for(
             _run_tool_loop(
-                state, spec, llm_client, tool_defs, tool_layer, loaded_skills, trace_id, session_id
+                state,
+                spec,
+                llm_client,
+                tool_defs,
+                tool_layer,
+                loaded_skills,
+                trace_id,
+                session_id,
+                effective_timeout,
             ),
             timeout=hard_deadline,
         )

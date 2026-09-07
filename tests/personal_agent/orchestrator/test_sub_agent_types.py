@@ -22,7 +22,10 @@ class TestSubAgentSpec:
         # FRE-1379: None means "defer to the deployment's catalog max_tokens" —
         # a hardcoded 4096 default here used to silently shadow that.
         assert spec.max_tokens is None
-        assert spec.timeout_seconds == 120.0
+        # FRE-1444: None means "defer to the client's resolved default", which is the
+        # sub_agent role's own default_timeout (ADR-0145 D1). A hardcoded 120 here was
+        # the second of the three pins that kept the role's budget from binding.
+        assert spec.timeout_seconds is None
         assert spec.tools == []
         assert spec.background == ""
         assert spec.model_role == ModelRole.SUB_AGENT

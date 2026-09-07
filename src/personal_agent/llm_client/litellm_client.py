@@ -776,7 +776,9 @@ class LiteLLMClient:
             model_def: The deployment's effective definition. **Required for
                 local placement** — it carries the sampler parameters, the
                 endpoint override and the role timeout that the local wire
-                payload is built from. Ignored for cloud placement.
+                payload is built from. A cloud client's own dispatch reads nothing
+                from it, but :attr:`default_timeout_seconds` reports its
+                ``default_timeout`` on either placement.
             model_key: The catalog deployment key (e.g. ``"claude_sonnet"``,
                 ``"qwen3.6-35b-thinking"``) this client was built for (ADR-0141
                 D3). Used to acquire the re-homed ``InferenceConcurrencyController``'s
@@ -829,6 +831,35 @@ class LiteLLMClient:
         # across the cutover; the catalog provider (`slm_local`) is reported
         # separately and is what attribution actually keys on.
         self._telemetry_model = model_id if self._is_local else self._litellm_model
+
+    @property
+    def default_timeout_seconds(self) -> float | None:
+        """The generation budget this client applies when a call names no ``timeout_s``.
+
+        ADR-0145 D2 merges the role binding's ``default_timeout`` into the effective
+        definition, so for a role-resolved client this is the **role's** budget on
+        whichever deployment the role landed on — not the deployment's own declaration.
+
+        Exposed because the sub-agent layer must size its outer safety net against the
+        same number the inner call will use (ADR-0145 D1, FRE-1444). That resolution
+        happens privately inside :meth:`respond`, after the deadline has already been
+        computed, so without this property the caller would either have no number or
+        resolve a second one — two sources of truth for one budget.
+
+        Reading it does NOT change what this client dispatches. The cloud branch still
+        applies only an explicit ``timeout_s``, and the local branch still resolves the
+        same field itself — so no producer acquires a timeout it did not have before.
+        The sub-agent layer is the one caller, and it passes the number back down
+        explicitly (:func:`~personal_agent.orchestrator.sub_agent._resolve_effective_timeout`).
+
+        Returns:
+            The effective ``default_timeout`` in seconds, or ``None`` when this client
+            was built without a definition (only reachable by constructing a cloud
+            client directly, outside the factory — every factory door supplies one).
+        """
+        if self.model_def is None:
+            return None
+        return float(self.model_def.default_timeout)
 
     @property
     def model_configs(self) -> dict[str, Any]:
@@ -1705,6 +1736,9 @@ class LiteLLMClient:
             tools = None
             tool_choice = None
 
+        # `model_def.default_timeout` is the same field `default_timeout_seconds`
+        # reports, so the number the sub-agent layer sized its outer deadline against
+        # (FRE-1444) is the number enforced here.
         effective_timeout_s = (
             timeout_s if timeout_s is not None else float(model_def.default_timeout)
         )

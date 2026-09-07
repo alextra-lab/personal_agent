@@ -716,12 +716,12 @@ def _strip_provider_prefix(model_id: str) -> str:
     return model_id.split("/", 1)[1] if "/" in model_id else model_id
 
 
-#: RoleBinding's own field names (ADR-0121 Layer 3, ADR-0145 D2/D4) — a
+#: RoleBinding's own field names (ADR-0121 Layer 3, ADR-0145 D2/D4/D7) — a
 #: bindings: entry declaring anything outside this set is silently ignored by
 #: the Pydantic loader (RoleBinding does not forbid extra keys), so
 #: check_binding_shape treats it as drift rather than letting it pass quietly.
 _BINDING_FIELDS: frozenset[str] = frozenset(
-    {"deployment", "open", "max_tokens", "mode", "default_timeout"}
+    {"deployment", "open", "max_tokens", "mode", "default_timeout", "priority"}
 )
 
 

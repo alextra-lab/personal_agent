@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 from personal_agent.config import load_model_config
+from personal_agent.llm_client.concurrency import InferencePriority
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition, Placement
 
 if TYPE_CHECKING:
@@ -63,7 +64,11 @@ class LLMClient(Protocol):
 
 
 def _build_client(
-    model_key: str, model_def: ModelDefinition | None, budget_role: str, config: ModelConfig
+    model_key: str,
+    model_def: ModelDefinition | None,
+    budget_role: str,
+    config: ModelConfig,
+    priority: InferencePriority = InferencePriority.USER_FACING,
 ) -> Any:
     """Construct the client for a resolved deployment key + explicit budget lane.
 
@@ -77,6 +82,10 @@ def _build_client(
         model_def: The effective :class:`ModelDefinition` for the call.
         budget_role: The cost-gate budget lane to bill against.
         config: The loaded :class:`ModelConfig`.
+        priority: The role's own inference-scheduling rank (ADR-0145 D7),
+            applied to every call this client makes unless a call site
+            overrides it. ``USER_FACING`` for a caller with no role binding
+            (e.g. :func:`get_llm_client_for_key`, which has no role concept).
 
     Returns:
         A :class:`LiteLLMClient` configured for the deployment's placement.
@@ -124,6 +133,7 @@ def _build_client(
         reasoning_effort=model_def.resolve_mode().resolved_reasoning_effort,
         placement=placement,
         model_def=model_def,
+        default_priority=priority,
     )
 
 
@@ -191,7 +201,16 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
 
     from personal_agent.cost_gate import budget_role_for
 
-    return _build_client(resolved_key, model_def, budget_role_for(role_name), config)
+    # ADR-0145 D7: the role's own scheduling rank, read directly off its binding
+    # rather than threaded through resolve_role_target — the deployment key and
+    # the priority are two different facts, and widening that resolver's return
+    # would touch its 26+ call sites for no design reason (D7's own risk table).
+    # A role with no binding (an unbound key used directly as its own role name)
+    # falls back to USER_FACING, the pre-D7 behaviour.
+    binding = config.roles.get(role_name)
+    priority = binding.priority if binding is not None else InferencePriority.USER_FACING
+
+    return _build_client(resolved_key, model_def, budget_role_for(role_name), config, priority)
 
 
 def get_llm_client_for_key(model_key: str, *, budget_role: str) -> Any:

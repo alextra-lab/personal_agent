@@ -334,11 +334,22 @@ def resolve_role_target(
     this role *uses* it. Reading ``config.models[key]`` directly returns only the
     former, silently dropping per-use parameters.
 
-    Overrides apply **only when the resolved key is the binding's own
-    deployment.** When a per-turn selection or an explicit ``model_key``
-    redirects the role elsewhere, that deployment's own values stand — the
-    binding's overrides are model-specific in practice, so carrying them onto
-    a different model would change the call.
+    ADR-0145 D2 sorts the binding's fields by what kind of fact each one is,
+    rather than gating all of them on whether the resolved key matches the
+    binding's own deployment:
+
+    * **Budget** (``max_tokens``, ``default_timeout``) always applies, on any
+      resolved deployment. The role owns it — it describes the job, not the
+      model, so it is valid regardless of a per-turn selection or an explicit
+      ``model_key`` redirecting the role elsewhere.
+    * **Mode** (``binding.mode``) resolves against whichever deployment the
+      role actually lands on: that deployment's own mode of this name, if it
+      declares one. If the resolved deployment declares no mode of that name,
+      its own ``default_mode`` applies instead, and the fallback is logged.
+    * **Sampler** fields (temperature, top_p, ...) have no field on the
+      binding at all — they live only inside a mode on the model
+      (:class:`~personal_agent.llm_client.models.ModeSpec`), so a value never
+      crosses from one deployment's dialect onto another's.
 
     Args:
         role: Role name (e.g. ``"sub_agent"``).
@@ -358,14 +369,27 @@ def resolve_role_target(
     key = model_key if model_key is not None else (binding.deployment if binding else role)
 
     definition = resolved_config.models.get(key)
-    if definition is None or binding is None or key != binding.deployment:
+    if definition is None or binding is None:
         return key, definition
 
-    overrides = {
+    overrides: dict[str, object] = {
         field: value
-        for field, value in binding.model_dump(exclude={"deployment", "open"}).items()
-        if value is not None
+        for field in ("max_tokens", "default_timeout")
+        if (value := getattr(binding, field)) is not None
     }
+
+    if binding.mode is not None:
+        if binding.mode in definition.modes:
+            overrides["default_mode"] = binding.mode
+        else:
+            log.warning(
+                "role_binding_mode_missing_on_deployment",
+                role=role,
+                requested_mode=binding.mode,
+                deployment=key,
+                default_mode=definition.default_mode,
+            )
+
     return key, (definition.model_copy(update=overrides) if overrides else definition)
 
 

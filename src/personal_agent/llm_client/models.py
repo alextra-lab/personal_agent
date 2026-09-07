@@ -303,17 +303,31 @@ class RoleBinding(BaseModel):
     duplication: they stop being two "models" and become two bindings of one
     model at different effort — which is what they always were.
 
+    ADR-0145 D2 sorts this binding's fields by what kind of fact they are, not
+    by whether a resolved key happens to match ``deployment``: ``max_tokens``
+    and ``default_timeout`` are the role's **budget** and always apply, on any
+    resolved deployment — a worker's 90s and 2048 tokens describe the job, not
+    the model. ``mode`` names a **mode intent** — resolved against whichever
+    deployment the role actually lands on, never carried as raw sampler values.
+    A **sampler** (temperature, top_p, ...) has no field here at all: it lives
+    only inside a mode on the model (:class:`ModeSpec`), because a value tuned
+    for one model's dialect is not valid on another's.
+
     Attributes:
         deployment: Key into the deployment catalog. Validated to exist and to
             be ``kind``-compatible with this role at config load (AC-2).
         open: Whether a user may select this role's model. ``False`` (the
             default) means pinned — the fail-closed half of ADR-0121 §6's
             guardrail, so a role added later is never selectable by omission.
-        max_tokens: Per-use output cap, overriding the deployment default.
-        temperature: Per-use sampling temperature, overriding the deployment default.
-        disable_thinking: Per-use hard disable of thinking for Qwen3.5+ models.
-        reasoning_effort: Per-use reasoning-effort hint for reasoning models.
-        default_timeout: Per-use request timeout, overriding the deployment default.
+        max_tokens: Per-use output cap. Budget — always applies, on any
+            resolved deployment (ADR-0145 D2).
+        mode: Named mode this role asks for. Resolved against whichever
+            deployment the role lands on: that deployment's own mode of this
+            name if it declares one, else its ``default_mode`` with a log
+            (ADR-0145 D2). ``None`` leaves the resolved deployment's own
+            ``default_mode`` untouched.
+        default_timeout: Per-use request timeout. Budget — always applies, on
+            any resolved deployment (ADR-0145 D2).
         defaults_by_primary: ADR-0121 Addendum A (FRE-964) — a per-primary default
             map, currently meaningful only on the ``sub_agent`` binding: primary
             deployment key -> the sub deployment key it pairs with, one
@@ -329,11 +343,7 @@ class RoleBinding(BaseModel):
     deployment: str = Field(..., description="Deployment catalog key this role binds to")
     open: bool = Field(False, description="User-selectable? Pinned by default (fail closed)")
     max_tokens: int | None = Field(None, ge=1, description="Per-use output cap override")
-    temperature: float | None = Field(None, ge=0.0, le=2.0, description="Per-use temperature")
-    disable_thinking: bool | None = Field(None, description="Per-use thinking disable")
-    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = Field(
-        None, description="Per-use reasoning-effort hint"
-    )
+    mode: str | None = Field(None, description="Named mode this role asks for (ADR-0145 D2)")
     default_timeout: int | None = Field(None, ge=1, description="Per-use timeout override")
     defaults_by_primary: dict[str, str] | None = Field(
         None,

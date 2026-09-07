@@ -1,0 +1,19 @@
+# Fixture (FRE-1443 AC-3, path 7): resolve_role_model_key's `all:` value can
+# itself be the `inherit` sentinel once ADR-0145 D4 folds the two role tables.
+# Not a live shape today — this fixture exists only to prove the function
+# resolves the sentinel rather than treating it as a literal key.
+providers:
+  anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50, dialect: anthropic_adaptive }
+models:
+  claude_sonnet:
+    id: "claude-sonnet-5"
+    provider: "anthropic"
+    context_length: 200000
+    max_concurrency: 10
+    default_timeout: 180
+    default_mode: default
+    modes:
+      default: {}
+roles:
+  primary:
+    deployment: claude_sonnet

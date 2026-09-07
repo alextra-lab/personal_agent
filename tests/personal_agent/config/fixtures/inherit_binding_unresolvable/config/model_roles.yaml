@@ -1,0 +1,8 @@
+# Fixture (FRE-1443 AC-4): sub_agent binds `inherit`, but no `primary`
+# binding exists to resolve it against. The guard must report this — not
+# silently drop sub_agent from coverage the way a plain dangling key would if
+# nobody had built the sentinel path at all.
+required_secrets:
+  local: []
+bindings:
+  sub_agent: { deployment: inherit }

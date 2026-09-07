@@ -295,6 +295,14 @@ class ProviderDefinition(BaseModel):
     )
 
 
+#: Sentinel ``deployment`` value meaning "the session's primary deployment,
+#: whatever the session picked" (ADR-0145 D1). Not a deployment key — every
+#: reader of a binding's ``deployment`` field must resolve it via
+#: :func:`personal_agent.config.model_loader.resolve_inherited_deployment`
+#: rather than treating it as a literal catalog key.
+INHERIT_DEPLOYMENT: Literal["inherit"] = "inherit"
+
+
 class RoleBinding(BaseModel):
     """Which deployment a role uses, plus its per-use parameters (ADR-0121 Layer 3).
 
@@ -314,8 +322,11 @@ class RoleBinding(BaseModel):
     for one model's dialect is not valid on another's.
 
     Attributes:
-        deployment: Key into the deployment catalog. Validated to exist and to
-            be ``kind``-compatible with this role at config load (AC-2).
+        deployment: Key into the deployment catalog, or the ``INHERIT_DEPLOYMENT``
+            sentinel (ADR-0145 D1), meaning "the session's primary deployment".
+            A literal key is validated to exist and to be ``kind``-compatible
+            with this role at config load (AC-2); the sentinel is validated by
+            resolving it against the ``primary`` binding instead.
         open: Whether a user may select this role's model. ``False`` (the
             default) means pinned — the fail-closed half of ADR-0121 §6's
             guardrail, so a role added later is never selectable by omission.
@@ -340,7 +351,13 @@ class RoleBinding(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    deployment: str = Field(..., description="Deployment catalog key this role binds to")
+    deployment: str = Field(
+        ...,
+        description=(
+            "Deployment catalog key this role binds to, or the 'inherit' "
+            "sentinel — INHERIT_DEPLOYMENT (ADR-0145 D1)"
+        ),
+    )
     open: bool = Field(False, description="User-selectable? Pinned by default (fail closed)")
     max_tokens: int | None = Field(None, ge=1, description="Per-use output cap override")
     mode: str | None = Field(None, description="Named mode this role asks for (ADR-0145 D2)")
@@ -807,19 +824,49 @@ class ModelConfig(BaseModel):
         retired divergence guard; the kind half is new, and is what makes
         "a writer role bound to an embedding model" unrepresentable rather
         than merely unconventional.
+
+        ADR-0145 D1 (FRE-1443 AC-5): a binding may name ``INHERIT_DEPLOYMENT``
+        instead of a literal key. That is accepted only when it resolves — the
+        ``primary`` binding must exist, must not itself be ``inherit``
+        (inherit cannot resolve recursively), and must name a real deployment.
+        An inherit binding whose primary cannot resolve is a load-time
+        failure, the same as a dangling literal key.
         """
         for role, binding in self.roles.items():
-            definition = self.models.get(binding.deployment)
-            if definition is None:
-                raise ValueError(
-                    f"role {role!r} binds to deployment {binding.deployment!r}, which is "
-                    f"not defined under models:; known deployments: {sorted(self.models)}"
-                )
+            if binding.deployment == INHERIT_DEPLOYMENT:
+                primary_binding = self.roles.get("primary")
+                if primary_binding is None:
+                    raise ValueError(
+                        f"role {role!r} binds to deployment 'inherit', but no 'primary' "
+                        "role binding exists to inherit from (ADR-0145 D1)"
+                    )
+                if primary_binding.deployment == INHERIT_DEPLOYMENT:
+                    raise ValueError(
+                        f"role {role!r} binds to deployment 'inherit', but 'primary' "
+                        "itself binds to 'inherit' — inherit cannot resolve recursively "
+                        "(ADR-0145 D1)"
+                    )
+                deployment_key = primary_binding.deployment
+                definition = self.models.get(deployment_key)
+                if definition is None:
+                    raise ValueError(
+                        f"role {role!r} binds to deployment 'inherit', which resolves to "
+                        f"primary's deployment {deployment_key!r}, not defined under "
+                        f"models:; known deployments: {sorted(self.models)} (ADR-0145 D1)"
+                    )
+            else:
+                deployment_key = binding.deployment
+                definition = self.models.get(deployment_key)
+                if definition is None:
+                    raise ValueError(
+                        f"role {role!r} binds to deployment {deployment_key!r}, which is "
+                        f"not defined under models:; known deployments: {sorted(self.models)}"
+                    )
             required = required_kind_for_role(role)
             if definition.kind is not required:
                 raise ValueError(
                     f"role {role!r} requires a {required.value!r} deployment but "
-                    f"{binding.deployment!r} is kind {definition.kind.value!r} "
+                    f"{deployment_key!r} is kind {definition.kind.value!r} "
                     "(ADR-0121 §6 / AC-2 — kind compatibility is not a convention)"
                 )
         return self

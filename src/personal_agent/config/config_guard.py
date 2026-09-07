@@ -1328,6 +1328,36 @@ def _reachable_llm_deployment_keys(models: JSONDict, bindings: JSONDict) -> set[
     return bound | {key for key, deployment in models.items() if _is_llm(deployment)}
 
 
+def _resolve_inherit_deployment_key(bindings: JSONDict) -> str | None:
+    """Resolve the ``inherit`` sentinel to primary's raw deployment key, statically.
+
+    ADR-0145 D1 (FRE-1443 AC-4): this module reads ``config/model_roles.yaml``
+    as raw YAML rather than a validated :class:`~personal_agent.llm_client.models.ModelConfig`
+    (see the no-cycle-with-``model_loader`` note at the top of this file), so it
+    cannot call :func:`~personal_agent.config.model_loader.resolve_inherited_deployment`
+    — there is no live per-turn selection to resolve at this static, boot/CI
+    layer. It resolves against the ``primary`` binding's own declared
+    deployment instead, mirroring what an unselected turn would land on.
+
+    Args:
+        bindings: The ``bindings:`` mapping from ``config/model_roles.yaml``.
+
+    Returns:
+        Primary's declared deployment key, or ``None`` when it cannot be
+        resolved (no ``primary`` binding, no string deployment, or primary
+        itself names ``inherit`` — which cannot resolve recursively here).
+    """
+    from personal_agent.llm_client.models import INHERIT_DEPLOYMENT  # noqa: PLC0415
+
+    primary_binding = bindings.get("primary")
+    if not isinstance(primary_binding, dict):
+        return None
+    primary_deployment = primary_binding.get("deployment")
+    if not isinstance(primary_deployment, str) or primary_deployment == INHERIT_DEPLOYMENT:
+        return None
+    return primary_deployment
+
+
 def check_reasoning_declaration(root: Path) -> list[Finding]:
     """FRE-1007 — every selectable llm deployment declares its reasoning depth, effectively.
 
@@ -1370,6 +1400,8 @@ def check_reasoning_declaration(root: Path) -> list[Finding]:
         return []
     provider_rows: JSONDict = providers if isinstance(providers, dict) else {}
 
+    from personal_agent.llm_client.models import INHERIT_DEPLOYMENT
+
     findings: list[Finding] = []
     checked: set[str] = set()
     for role, binding in sorted(bindings.items()):
@@ -1378,6 +1410,24 @@ def check_reasoning_declaration(root: Path) -> list[Finding]:
         deployment_key = binding.get("deployment")
         if not isinstance(deployment_key, str):
             continue
+        if deployment_key == INHERIT_DEPLOYMENT:
+            resolved_key = _resolve_inherit_deployment_key(bindings)
+            if resolved_key is None:
+                # ADR-0145 D1 (FRE-1443 AC-4): an unresolvable `inherit` must not
+                # silently drop this role from coverage — that is exactly the
+                # "looks like a dangling binding" failure this guard exists to
+                # catch, just reached through the sentinel instead of a typo.
+                findings.append(
+                    Finding(
+                        "reasoning_declaration_inherit_unresolvable",
+                        "safety",
+                        f"role {role!r} binds to deployment 'inherit', but the 'primary' "
+                        "role binding does not resolve to a real deployment, so this run "
+                        "could not verify this role's reasoning declaration (ADR-0145 D1).",
+                    )
+                )
+                continue
+            deployment_key = resolved_key
         deployment = models.get(deployment_key)
         if not isinstance(deployment, dict):
             # A dangling binding is check_dangling_model_references' finding.

@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.models import (
+    INHERIT_DEPLOYMENT,
     ModelConfig,
     ModelDefinition,
     Placement,
@@ -314,12 +315,44 @@ def resolve_role_model_key(
     model_key = raw_model_key
 
     resolved_config = load_model_config(resolved_config_path)
+    # ADR-0145 D1 (FRE-1443 AC-3): once D4 folds `roles:` into `bindings:`, an
+    # `all:` value can itself be the `inherit` sentinel — resolve it the same
+    # way every other reader does, rather than treating it as a literal key.
+    # Not a live path today: no `roles:` entry names `inherit` (sub_agent, the
+    # only inherit-eligible role, is off this matrix entirely).
+    if model_key == INHERIT_DEPLOYMENT:
+        model_key = resolve_inherited_deployment(resolved_config)
     if model_key not in resolved_config.models:
         raise ModelRoleError(
             f"role {role!r} resolves to model key {model_key!r} which is not "
             f"defined under models: in {resolved_config_path}"
         )
     return model_key
+
+
+def resolve_inherited_deployment(config: ModelConfig) -> str:
+    """Resolve the ``inherit`` sentinel to the session's primary deployment (ADR-0145 D1).
+
+    A binding's ``deployment`` may name ``INHERIT_DEPLOYMENT`` instead of a
+    literal catalog key, meaning "whatever the primary resolves to for this
+    turn". That is the session's active primary selection
+    (:func:`~personal_agent.config.selection.get_current_selection`) when one
+    is carried, honoured through the same fail-closed guardrail every
+    selection goes through; otherwise the ``primary`` role's own binding
+    default. Every reader of a binding's ``deployment`` field must call this
+    rather than treating the sentinel as a literal key — a sentinel resolved
+    in one place and not another is worse than no sentinel (ADR-0145 D1 risk
+    table).
+
+    Args:
+        config: The catalog to resolve the primary role against.
+
+    Returns:
+        The primary's resolved deployment key.
+    """
+    from personal_agent.config.selection import get_current_selection  # noqa: PLC0415
+
+    return resolve_selected_deployment("primary", get_current_selection("primary"), config)
 
 
 def resolve_role_target(
@@ -351,6 +384,10 @@ def resolve_role_target(
       (:class:`~personal_agent.llm_client.models.ModeSpec`), so a value never
       crosses from one deployment's dialect onto another's.
 
+    A binding's ``deployment`` (or an explicit ``model_key``) naming
+    ``INHERIT_DEPLOYMENT`` is resolved via :func:`resolve_inherited_deployment`
+    — the session's primary, not the literal sentinel string (ADR-0145 D1).
+
     Args:
         role: Role name (e.g. ``"sub_agent"``).
         model_key: Already-resolved key, when the caller resolved it through an
@@ -367,6 +404,8 @@ def resolve_role_target(
     resolved_config = config if config is not None else load_model_config()
     binding = resolved_config.roles.get(role)
     key = model_key if model_key is not None else (binding.deployment if binding else role)
+    if key == INHERIT_DEPLOYMENT:
+        key = resolve_inherited_deployment(resolved_config)
 
     definition = resolved_config.models.get(key)
     if definition is None or binding is None:
@@ -493,10 +532,18 @@ def resolve_selected_deployment(role: str, selection: str | None, config: ModelC
     Returns:
         The deployment key to run this role on — the honoured selection, or the
         role's configured binding default (its own name when the role is
-        unbound, matching :func:`resolve_role_target`'s fallback).
+        unbound, matching :func:`resolve_role_target`'s fallback). A binding
+        default of ``INHERIT_DEPLOYMENT`` resolves to the primary's own
+        deployment (ADR-0145 D1) — never returned as the literal sentinel.
+        Recursion-safe: the catalog validator
+        (:meth:`~personal_agent.llm_client.models.ModelConfig._bindings_are_valid_and_kind_compatible`)
+        rejects a ``primary`` binding that names ``inherit``, so this is never
+        called for ``role="primary"`` with a default of ``inherit`` itself.
     """
     binding = config.roles.get(role)
     default_key = binding.deployment if binding else role
+    if default_key == INHERIT_DEPLOYMENT:
+        default_key = resolve_inherited_deployment(config)
     if selection is None:
         return default_key
     return selection if is_selectable_binding(role, selection, config) else default_key

@@ -1,0 +1,15 @@
+# Fixture (FRE-1443 AC-4): a local producer that properly declares its
+# reasoning lever, reused via `inherit` by a second role.
+providers:
+  slm_local: { auth: none, placement: local, max_concurrency: 2, dialect: llamacpp_qwen }
+models:
+  local_primary:
+    id: "local/primary"
+    provider: slm_local
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 60
+    default_mode: default
+    modes:
+      default:
+        enable_thinking: true

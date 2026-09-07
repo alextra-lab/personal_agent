@@ -1,0 +1,9 @@
+# Fixture (FRE-1443 AC-4): sub_agent binds `inherit`, which resolves to
+# primary's deployment. Neither role declares a reasoning_effort, so the
+# guard must flag BOTH roles by name — proving it resolved and checked the
+# sub_agent binding rather than silently skipping it as dangling.
+required_secrets:
+  local: []
+bindings:
+  primary: { deployment: claude_sonnet }
+  sub_agent: { deployment: inherit }

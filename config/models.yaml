@@ -359,6 +359,16 @@ models:
       default:
         temperature: 1.0
         reasoning_effort: medium
+      # ADR-0145 D1 (FRE-1445), pulling forward D6's already-measured value:
+      # master flagged, from a live turn (2026-09-07 05:12, OVH primary, eight
+      # sub-agent calls), that `inherit` now routes sub_agent onto whatever
+      # primary is selected — without this mode, those calls would silently
+      # fall back to `default` above (reasoning_effort: medium) instead of the
+      # role's own non-thinking budget. `none` is D6's measured cheapest
+      # setting: 823 tokens / USD 0.0035 against `medium`'s 3242 / USD 0.0116 —
+      # a quarter of the cost (ADR-0145 D6 table, FRE-1430 F13).
+      worker:
+        reasoning_effort: none
     # PROVENANCE WARNING for the three capability flags below. OVH's models
     # endpoint returns exactly seven keys -- id, created, object, owned_by,
     # pricing, context_length, max_completion_tokens -- and no capability
@@ -408,6 +418,17 @@ models:
     modes:
       default:
         effort: high
+      # ADR-0145 D1 (FRE-1445), pulling forward D6's already-measured value rather
+      # than leaving this selectable-as-primary entry without a `worker` mode: a
+      # cloud primary selection now reaches sub_agent via `inherit`
+      # (config/model_roles.yaml), and with no `worker` mode declared here the
+      # binding's `mode: worker` request would fall back to `default` (effort
+      # high) — silently billing every HYBRID sub-agent call at the primary's
+      # thinking depth. `effort: low` is D6's measured value: the CHEAPEST Sonnet
+      # setting measured (USD 0.0108, below thinking-off's 0.0137), 10/10 correct
+      # on the study's probe (ADR-0145 D6 table).
+      worker:
+        effort: low
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 180
@@ -433,6 +454,13 @@ models:
     default_mode: default
     modes:
       default: {}
+      # ADR-0145 D1 (FRE-1445): declared explicitly, though empty, so a cloud
+      # primary selection reaching sub_agent via `inherit` resolves `mode: worker`
+      # to a real declared mode rather than falling back with a log. D6's own
+      # anthropic_budget row is "thinking disabled" — which `default` above
+      # already is, by omission — so this is behaviour-preserving, not a new
+      # choice, unlike claude_sonnet's `worker` above.
+      worker: {}
     supports_vision: true         # Claude Haiku is vision-capable (ADR-0101)
     supports_pdf_document: true   # Claude Haiku accepts the native PDF document block (ADR-0102 §3)
     input_cost_per_token: 0.000001    # $1/MTok (ADR-0101 §8b / FRE-691 — config-owned cost matrix)
@@ -475,6 +503,15 @@ models:
     modes:
       default:
         temperature: 0.0
+        reasoning_effort: none
+      # ADR-0145 D1 (FRE-1445): declared explicitly so a cloud primary selection
+      # reaching sub_agent via `inherit` resolves `mode: worker` to a real
+      # declared mode rather than falling back with a log. `default` above is
+      # already `reasoning_effort: none` (FRE-758/FRE-1007), matching D6's own
+      # openai_gpt5 row, so this is behaviour-preserving — the `temperature: 0.0`
+      # pin is FRE-758's entity-extraction-specific requirement and is
+      # deliberately not carried onto a generic sub-agent worker.
+      worker:
         reasoning_effort: none
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok

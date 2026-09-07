@@ -379,3 +379,86 @@ class TestAC5NoTopLevelSamplerOrThinkingFieldRemains:
             temperature=0.5,  # type: ignore[call-arg]
         )
         assert not hasattr(definition, "temperature")
+
+
+class TestEverySelectablePrimaryDeclaresAWorkerMode:
+    """ADR-0145 D1 (FRE-1445), addressing master's 2026-09-07 comment on the ticket.
+
+    `sub_agent`'s `deployment: inherit` binding means it now resolves onto
+    WHATEVER the session's primary is, at its own `mode: worker`
+    (`config/model_roles.yaml`). Master measured the consequence on a live
+    turn (2026-09-07 05:12, OVH primary, 8 sub-agent calls): before this
+    ticket the sub-agent ran free on the local model regardless of the
+    primary's selection; after `inherit` lands, a cloud primary with no
+    `worker` mode declared would fall back to that primary's own — expensive
+    — `default_mode` (D2's fallback), silently billing every HYBRID
+    sub-agent call at the primary's thinking depth.
+
+    Rather than accept that window (master's option 3) or block this ticket
+    on FRE-1448 landing first (master's option 1, which inverts the ADR's own
+    dependency order), this folds ADR-0145 D6's already-measured per-dialect
+    cheap-mode values (the D6 table in the ADR, not a new decision) onto
+    every entry `role_candidates` can offer as `primary` — closing the
+    window the same PR opens it (master's recommended option 2).
+    """
+
+    #: Every kind: llm entry in the real catalog, mirroring what
+    #: `role_candidates` offers for the `open: true` `primary` role.
+    _ALL_SELECTABLE_PRIMARIES: tuple[str, ...] = (
+        "qwen3.6-35b-thinking",
+        "qwen3.8-flash-next",
+        "qwen3.8-27b-ovh",
+        "claude_sonnet",
+        "claude_haiku",
+        "gpt-5.4-mini",
+    )
+
+    def test_every_selectable_primary_has_a_worker_mode(self) -> None:
+        config = load_model_config(_CATALOG)
+        missing = [
+            key
+            for key in self._ALL_SELECTABLE_PRIMARIES
+            if "worker" not in config.models[key].modes
+        ]
+        assert not missing, (
+            f"{missing} declare no `worker` mode — a primary selection landing "
+            "there would route sub_agent onto that model's (likely more "
+            "expensive) default_mode instead, via resolve_role_target's "
+            "documented fallback-with-log (ADR-0145 D2)"
+        )
+
+    def test_sub_agent_resolves_a_worker_mode_for_every_primary_selection(self) -> None:
+        """The resolver-level guarantee, not just the declaration: `mode: worker`
+        actually lands on `worker`, never silently falls back to `default_mode`.
+        """
+        from personal_agent.config.model_loader import resolve_role_target
+
+        config = load_model_config(_CATALOG)
+        for primary_key in self._ALL_SELECTABLE_PRIMARIES:
+            _, sub_def = resolve_role_target("sub_agent", model_key=primary_key, config=config)
+            assert sub_def is not None
+            assert sub_def.default_mode == "worker", (
+                f"sub_agent inheriting {primary_key!r} as primary resolved to "
+                f"default_mode={sub_def.default_mode!r}, not 'worker'"
+            )
+
+    @pytest.mark.parametrize(
+        ("key", "expected"),
+        [
+            ("qwen3.8-27b-ovh", {"reasoning_effort": "none"}),
+            ("claude_sonnet", {"effort": "low"}),
+            ("claude_haiku", {}),
+            ("gpt-5.4-mini", {"reasoning_effort": "none"}),
+        ],
+    )
+    def test_cloud_worker_mode_matches_adr_0145_d6_table(
+        self, key: str, expected: dict[str, object]
+    ) -> None:
+        """Each cloud primary's `worker` mode is D6's measured cheap value, verbatim."""
+        mode = load_model_config(_CATALOG).models[key].resolve_mode("worker")
+        for field, value in expected.items():
+            assert getattr(mode, field) == value
+        declared_fields = {f for f, v in mode.model_dump().items() if v is not None}
+        assert declared_fields == set(expected), (
+            f"{key}'s worker mode declares {declared_fields}, expected exactly {set(expected)}"
+        )

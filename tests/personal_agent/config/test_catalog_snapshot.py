@@ -147,6 +147,20 @@ catalog pairs collapse.** Three explicit deltas:
    also corrects from the deleted twin's stale ``"4bit"`` to ``qwen3.8-flash-next``'s
    own ``"UD-IQ4_XS"`` — a drift fix that falls out of the collapse, not a
    separate decision.
+4. **``claude_sonnet`` and ``gpt-5.4-mini`` also gain a ``worker`` mode** —
+   master flagged, from a live turn (2026-09-07 05:12, OVH primary, 8 sub-agent
+   calls), that `inherit` routes sub_agent onto ANY selected primary, not only
+   the two local ones, so every selectable primary needs one or a cloud
+   selection silently bills sub-agent calls at that primary's `default_mode`.
+   Pulls forward ADR-0145 D6's already-measured values (`effort: low` for
+   Sonnet, `reasoning_effort: none` for GPT-5.4-mini and, off-snapshot since
+   neither is bound to a captured role, the same for `qwen3.8-27b-ovh` and an
+   empty `worker` for `claude_haiku`, whose `default` is already the cheap
+   setting) rather than a new decision. Every ``claude_sonnet``-bound cell
+   (``artifact_builder``, ``captains_log``, ``insights``, ``session_summary``,
+   ``vision``) and every ``gpt-5.4-mini``-bound cell (``entity_extraction``,
+   ``compressor``) gains the same additive ``worker`` entry in its captured
+   ``modes`` dict — no existing mode body or resolved key changed.
 
 Regenerate deliberately — never to make a red test green:
 

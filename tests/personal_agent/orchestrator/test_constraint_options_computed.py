@@ -168,6 +168,44 @@ def test_artifact_builder_default_key_raises_when_unbound() -> None:
         co.artifact_builder_default_key(unbound)
 
 
+# ── inherit sentinel (ADR-0145 D1, FRE-1443 AC-3, path 6) ──
+#
+# Not a live path today: this role is hard-wired to artifact_builder, never
+# sub_agent (the ADR's own note). Covered anyway — every reader of a
+# binding's deployment must resolve the sentinel the same way.
+
+
+def test_artifact_builder_default_key_resolves_inherit_to_primarys_selection() -> None:
+    from personal_agent.config.selection import _current_selection, set_current_selection
+    from personal_agent.llm_client.models import INHERIT_DEPLOYMENT
+
+    config = _catalog()
+    config.roles["primary"] = RoleBinding(deployment="m_local", open=True)
+    config.roles["artifact_builder"] = RoleBinding(deployment=INHERIT_DEPLOYMENT)
+
+    token = _current_selection.set({})
+    try:
+        set_current_selection({"primary": "m_cloud_up"})
+        assert co.artifact_builder_default_key(config) == "m_cloud_up"
+    finally:
+        _current_selection.reset(token)
+
+
+def test_artifact_builder_default_key_inherit_with_no_selection_uses_primarys_default() -> None:
+    from personal_agent.config.selection import _current_selection
+    from personal_agent.llm_client.models import INHERIT_DEPLOYMENT
+
+    config = _catalog()
+    config.roles["primary"] = RoleBinding(deployment="m_local", open=True)
+    config.roles["artifact_builder"] = RoleBinding(deployment=INHERIT_DEPLOYMENT)
+
+    token = _current_selection.set({})
+    try:
+        assert co.artifact_builder_default_key(config) == "m_local"
+    finally:
+        _current_selection.reset(token)
+
+
 # ── resolve_artifact_builder_key — fail-closed catalog check (ADR-0122 §4, AC-4) ──
 
 

@@ -1,0 +1,8 @@
+# Fixture (FRE-1443 AC-4): the clean case — primary's deployment properly
+# declares its reasoning depth, and sub_agent inherits it. The guard must not
+# false-flag either role.
+required_secrets:
+  local: []
+bindings:
+  primary: { deployment: local_primary }
+  sub_agent: { deployment: inherit }

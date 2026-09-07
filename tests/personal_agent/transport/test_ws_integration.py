@@ -17,6 +17,7 @@ Wire format reference (from transport/agui/adapter.py):
 
 from __future__ import annotations
 
+import time
 from typing import Any, Generator
 from uuid import uuid4
 
@@ -51,6 +52,32 @@ def _drain_until_done(ws: Any, max_msgs: int = 50) -> list[dict[str, Any]]:
         if msg["type"] == "DONE":
             break
     return msgs
+
+
+def _wait_for_cancel_event(session_id: str, *, timeout_s: float = 2.0) -> Any:
+    """Poll for the session's cancel event to appear (FRE-1456 Finding 2).
+
+    ``ws_connect`` sends CONNECT and yields as soon as the client-side
+    ``send_json`` call returns — it does not wait for the server, running the
+    ASGI app on its own thread, to have actually received and processed that
+    message. ``_get_or_create_cancel_event`` only runs after the server's
+    ``_receive_connect`` completes (``ws_endpoint.py``), so a test asserting
+    against ``get_cancel_event`` the instant the ``with`` block is entered
+    races that handshake — measured failing 40-60% of isolated runs. Polling
+    here (rather than asserting once) is a test-harness fix for a genuine
+    cross-thread timing gap, not a production defect.
+    """
+    from personal_agent.transport.agui import ws_endpoint as wsep
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        evt = wsep.get_cancel_event(session_id)
+        if evt is not None:
+            return evt
+        time.sleep(0.01)
+    raise AssertionError(
+        f"cancel event for session {session_id!r} did not appear within {timeout_s}s"
+    )
 
 
 # ── Event delivery ────────────────────────────────────────────────────────────
@@ -279,8 +306,10 @@ class TestUserCancel:
         assert wsep.get_cancel_event(session_id) is None, "not yet connected"
 
         with ws_connect(client, session_id):
-            evt = wsep.get_cancel_event(session_id)
-            assert evt is not None
+            # FRE-1456 Finding 2: the server registers the event only after its
+            # own CONNECT handshake completes, on a different thread than this
+            # `with` block's entry — poll rather than assert instantly.
+            evt = _wait_for_cancel_event(session_id)
             assert not evt.is_set()
 
     def test_user_cancel_sets_the_session_scoped_cancel_event(

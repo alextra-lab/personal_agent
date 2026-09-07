@@ -351,6 +351,40 @@ class TestThinkingDisabledCheckIsNotTheDeclaredCheck:
         )
 
 
+class TestInheritSentinelResolvesToPrimary:
+    """ADR-0145 D1 (FRE-1443 AC-4) — `inherit` must not silently drop a role
+    from coverage. `deployment_key = binding.get("deployment")` used to hit
+    `models.get("inherit")` -> None and `continue`, the exact "looks like a
+    dangling binding" branch this guard exists to catch — just reached
+    through the sentinel instead of a typo.
+    """
+
+    def test_sub_agent_binding_is_still_checked_by_name(self) -> None:
+        """The guard resolves inherit and checks the RESOLVED model, not merely boots.
+
+        Both `primary` and `sub_agent` land on the same undeclared deployment,
+        so both role labels must appear in `reasoning_declaration_missing`
+        findings — proving sub_agent was actually evaluated, not skipped.
+        """
+        messages = _checks(_FIXTURES / "inherit_binding_reasoning", "reasoning_declaration_missing")
+        assert any("role 'primary'" in m for m in messages)
+        assert any("role 'sub_agent'" in m for m in messages)
+        assert any("claude_sonnet" in m for m in messages)
+
+    def test_unresolvable_inherit_is_reported_not_silently_skipped(self) -> None:
+        """No `primary` binding to resolve against — a finding, not silence."""
+        messages = _checks(
+            _FIXTURES / "inherit_binding_unresolvable",
+            "reasoning_declaration_inherit_unresolvable",
+        )
+        assert len(messages) == 1
+        assert "sub_agent" in messages[0]
+
+    def test_a_properly_declared_inherit_target_is_clean(self) -> None:
+        """The positive case: inherit resolving to a compliant deployment stays clean."""
+        assert check_reasoning_declaration(_FIXTURES / "inherit_binding_covered") == []
+
+
 class TestAnthropicBudgetHasNoReasoningLever:
     """FRE-1441 (ADR-0145 D3b/D6) — anthropic_budget (Claude Haiku's dialect) has
     no field that expresses reasoning depth at all, so an undeclared thinking

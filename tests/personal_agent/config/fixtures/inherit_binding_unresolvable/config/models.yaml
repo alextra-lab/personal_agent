@@ -1,0 +1,11 @@
+# Fixture (FRE-1443 AC-4): a catalog with no `primary` binding at all, so
+# sub_agent's `inherit` cannot resolve.
+providers:
+  anthropic: { auth_env: anthropic_api_key, placement: cloud, max_concurrency: 50 }
+models:
+  claude_sonnet:
+    id: "claude-sonnet-5"
+    provider: "anthropic"
+    context_length: 200000
+    max_concurrency: 10
+    default_timeout: 180

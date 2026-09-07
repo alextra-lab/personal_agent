@@ -249,6 +249,12 @@ def artifact_builder_default_key(config: "ModelConfig") -> str:
     this deliberately returns the Layer-3 binding rather than threading the (being-
     deleted, ADR-0121) ExecutionProfile redirect.
 
+    A binding default of ``INHERIT_DEPLOYMENT`` resolves to the session's
+    primary deployment (ADR-0145 D1) rather than being returned as the literal
+    sentinel — not a live path today (this role is hard-wired to
+    ``artifact_builder``, never ``sub_agent``), but every reader of a
+    binding's deployment must resolve the sentinel the same way.
+
     Args:
         config: The catalog carrying the ``artifact_builder`` role binding.
 
@@ -266,6 +272,12 @@ def artifact_builder_default_key(config: "ModelConfig") -> str:
             f"catalog defines no {ARTIFACT_BUILDER_CONSTRAINT!r} Layer-3 binding; "
             "cannot resolve the artifact-builder default (ADR-0122 §4)"
         )
+    from personal_agent.llm_client.models import INHERIT_DEPLOYMENT
+
+    if binding.deployment == INHERIT_DEPLOYMENT:
+        from personal_agent.config.model_loader import resolve_inherited_deployment
+
+        return resolve_inherited_deployment(config)
     return binding.deployment
 
 

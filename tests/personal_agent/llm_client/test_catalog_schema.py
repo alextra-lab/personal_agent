@@ -11,7 +11,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from personal_agent.llm_client.models import ModelConfig, ModelKind, Placement, RoleBinding
+from personal_agent.llm_client.models import (
+    INHERIT_DEPLOYMENT,
+    ModelConfig,
+    ModelKind,
+    Placement,
+    RoleBinding,
+)
 
 _PROVIDERS = {
     "slm_local": {
@@ -183,6 +189,80 @@ class TestRoleBindingDefaults:
     def test_kind_defaults_to_llm(self) -> None:
         """A deployment with no declared kind is an LLM."""
         assert _build({}).models["qwen-chat"].kind is ModelKind.LLM
+
+
+class TestInheritDeploymentSentinel:
+    """ADR-0145 D1 (FRE-1443 AC-5) — `inherit` is accepted only when it resolves.
+
+    The catalog validator (path 3 of the ticket's seven) is the load-time half
+    of the sentinel: a binding may name INHERIT_DEPLOYMENT instead of a
+    literal key, but only when the `primary` binding it defers to itself
+    resolves to a real, kind-compatible deployment.
+    """
+
+    def test_inherit_binding_resolves_against_primary_and_loads(self) -> None:
+        """The happy path: sub_agent inherits primary's llm deployment."""
+        config = _build(
+            {
+                "primary": {"deployment": "qwen-chat", "open": True},
+                "sub_agent": {"deployment": INHERIT_DEPLOYMENT},
+            }
+        )
+        assert config.roles["sub_agent"].deployment == INHERIT_DEPLOYMENT
+
+    def test_inherit_binding_with_no_primary_binding_fails(self) -> None:
+        """AC-5 seeded negative: nothing for `inherit` to resolve against."""
+        with pytest.raises(ValidationError) as exc:
+            _build({"sub_agent": {"deployment": INHERIT_DEPLOYMENT}})
+
+        message = str(exc.value)
+        assert "sub_agent" in message
+        assert "no 'primary' role binding" in message
+
+    def test_inherit_binding_when_primary_itself_is_inherit_fails(self) -> None:
+        """AC-5 seeded negative: inherit cannot resolve recursively."""
+        with pytest.raises(ValidationError) as exc:
+            _build(
+                {
+                    "primary": {"deployment": INHERIT_DEPLOYMENT},
+                    "sub_agent": {"deployment": INHERIT_DEPLOYMENT},
+                }
+            )
+
+        assert "cannot resolve recursively" in str(exc.value)
+
+    def test_inherit_binding_whose_primary_is_dangling_fails(self) -> None:
+        """AC-5 seeded negative: primary itself names no real deployment."""
+        with pytest.raises(ValidationError) as exc:
+            _build(
+                {
+                    "primary": {"deployment": "no-such-model"},
+                    "sub_agent": {"deployment": INHERIT_DEPLOYMENT},
+                }
+            )
+
+        message = str(exc.value)
+        # The primary binding's own dangling-reference failure fires first —
+        # inherit cannot resolve to a deployment that does not exist either way.
+        assert "primary" in message and "no-such-model" in message
+
+    def test_inherit_binding_still_enforces_kind_compatibility(self) -> None:
+        """AC-5 + AC-2 together: inherit does not bypass the kind check.
+
+        `embedding` requires an embedding deployment; primary here resolves to
+        an llm one, so the mismatch must still fail after inherit resolves.
+        """
+        with pytest.raises(ValidationError) as exc:
+            _build(
+                {
+                    "primary": {"deployment": "qwen-chat"},
+                    "embedding": {"deployment": INHERIT_DEPLOYMENT},
+                }
+            )
+
+        message = str(exc.value)
+        assert "embedding" in message
+        assert "llm" in message and "embedding" in message
 
 
 class TestDefaultsByPrimary:

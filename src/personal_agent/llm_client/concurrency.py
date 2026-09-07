@@ -46,26 +46,20 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from enum import IntEnum
 from typing import AsyncIterator
 
+from personal_agent.llm_client.priority import InferencePriority
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
-
-class InferencePriority(IntEnum):
-    """Priority tiers for inference requests.
-
-    Lower numeric value = higher priority. When a semaphore slot opens,
-    the highest-priority (lowest value) waiting request proceeds first.
-    """
-
-    CRITICAL = 0
-    USER_FACING = 1
-    ELEVATED = 2
-    BACKGROUND = 3
-    DEFERRED = 4
+__all__ = [
+    "InferencePriority",
+    "InferenceConcurrencyController",
+    "InferenceSlotTimeout",
+    "get_inference_concurrency_controller",
+    "set_inference_concurrency_controller",
+]
 
 
 class _PrioritySlot:

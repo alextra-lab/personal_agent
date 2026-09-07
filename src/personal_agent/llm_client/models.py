@@ -6,7 +6,9 @@ This module defines the schema for model configuration loaded from config/models
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from personal_agent.llm_client.priority import InferencePriority
 
 
 class ToolCallingStrategy(str, Enum):
@@ -339,6 +341,12 @@ class RoleBinding(BaseModel):
             ``default_mode`` untouched.
         default_timeout: Per-use request timeout. Budget — always applies, on
             any resolved deployment (ADR-0145 D2).
+        priority: Scheduling rank for the re-homed inference concurrency
+            controller (ADR-0145 D7). Not a count — a fixed slot count on a
+            role cannot be right across providers (the local box serves 3
+            slots, a cloud provider 25-50), so ``max_concurrency`` stays on
+            the provider/model. Defaults to ``USER_FACING`` — the role's own
+            rank, unrelated to whichever deployment it resolves to.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -354,6 +362,30 @@ class RoleBinding(BaseModel):
     max_tokens: int | None = Field(None, ge=1, description="Per-use output cap override")
     mode: str | None = Field(None, description="Named mode this role asks for (ADR-0145 D2)")
     default_timeout: int | None = Field(None, ge=1, description="Per-use timeout override")
+    priority: InferencePriority = Field(
+        InferencePriority.USER_FACING,
+        description="Inference concurrency scheduling rank for this role (ADR-0145 D7)",
+    )
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _priority_by_name(cls, value: object) -> object:
+        """Accept an ``InferencePriority`` member's name as a YAML string.
+
+        Pydantic v2 validates an ``IntEnum`` field by VALUE, not NAME, so a bare
+        ``priority: ELEVATED`` in YAML fails validation (``0, 1, 2, 3 or 4``)
+        without this — the enum's members carry integer values, not the
+        human-readable names ADR-0145 D7 and this file's YAML comments use.
+        """
+        if isinstance(value, str):
+            try:
+                return InferencePriority[value]
+            except KeyError as exc:
+                allowed = [member.name for member in InferencePriority]
+                raise ValueError(
+                    f"unknown InferencePriority name {value!r}; must be one of {allowed}"
+                ) from exc
+        return value
 
 
 class ModelDefinition(BaseModel):

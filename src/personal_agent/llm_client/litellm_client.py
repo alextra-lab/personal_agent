@@ -731,6 +731,7 @@ class LiteLLMClient:
         placement: Placement = Placement.CLOUD,
         model_def: ModelDefinition | None = None,
         model_key: str | None = None,
+        default_priority: InferencePriority = InferencePriority.USER_FACING,
     ) -> None:
         """Initialize LiteLLMClient with model and provider configuration.
 
@@ -795,6 +796,13 @@ class LiteLLMClient:
                 provider by role registration, not by ``self.provider`` directly.
                 Only pass ``None`` for a deployment genuinely outside the
                 catalog.
+            default_priority: The role's own inference-scheduling rank
+                (ADR-0145 D7), applied to every :meth:`respond` call this
+                client makes unless a call site passes its own ``priority``.
+                Mirrors how ``reasoning_effort`` above is a constructor-level
+                declaration a call site may override, not a per-call default
+                re-derived each time. ``USER_FACING`` (the pre-D7 default) for
+                a client built outside the factory (e.g. directly in a test).
 
         Raises:
             ValueError: If ``placement`` is local and ``model_def`` is None.
@@ -814,6 +822,7 @@ class LiteLLMClient:
         self._egress_guard = egress_guard
         self.placement = placement
         self.model_def = model_def
+        self.default_priority = default_priority
         self._is_local = placement is Placement.LOCAL
         # LiteLLM model string: "provider/model_id".
         #
@@ -974,7 +983,7 @@ class LiteLLMClient:
         max_retries: int | None = None,
         reasoning_effort: str | None = None,
         previous_response_id: str | None = None,
-        priority: InferencePriority = InferencePriority.USER_FACING,
+        priority: InferencePriority | None = None,
         priority_timeout: float | None = None,
         prompt_identity: PromptIdentity | None = None,
         progress_sink: GenerationProgress | None = None,
@@ -1003,7 +1012,10 @@ class LiteLLMClient:
                 controller (ADR-0141 D3). Every provider that dispatches
                 through this client — local and cloud alike — acquires a
                 slot; this decides scheduling order when requests compete for
-                the same provider's or deployment's ceiling.
+                the same provider's or deployment's ceiling. ``None`` (the
+                default) uses ``self.default_priority`` — the role binding's
+                own rank (ADR-0145 D7) — rather than always favoring
+                ``USER_FACING`` regardless of which role is calling.
             priority_timeout: Max seconds to wait for a concurrency slot.
                 ``None`` waits forever.
             prompt_identity: Identity of the prompt sent on this call (ADR-0078
@@ -1034,6 +1046,12 @@ class LiteLLMClient:
         if not isinstance(role, _ModelRole):
             raise TypeError(f"role must be a ModelRole, got {type(role).__name__}: {role!r}")
 
+        # ADR-0145 D7: an omitted priority defers to the role binding's own rank
+        # (self.default_priority), never a hardcoded USER_FACING — a call site
+        # that DOES pass one (e.g. the existing BACKGROUND-priority producers)
+        # still overrides it, unchanged.
+        effective_priority = priority if priority is not None else self.default_priority
+
         from personal_agent.llm_client.types import LLMClientError
         from personal_agent.llm_client.types import LLMResponse as LLMResponseType
         from personal_agent.llm_client.types import ToolCall as ToolCallType
@@ -1052,7 +1070,7 @@ class LiteLLMClient:
                 timeout_s=timeout_s,
                 max_retries=max_retries,
                 prompt_identity=prompt_identity,
-                priority=priority,
+                priority=effective_priority,
                 priority_timeout=priority_timeout,
                 progress_sink=progress_sink,
             )
@@ -1293,7 +1311,7 @@ class LiteLLMClient:
         try:
             async with get_inference_concurrency_controller().request_slot(
                 role=self.model_key,
-                priority=priority,
+                priority=effective_priority,
                 timeout=priority_timeout,
                 trace_id=trace_id,
             ):

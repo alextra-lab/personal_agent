@@ -9,6 +9,8 @@ from personal_agent.llm_client.concurrency import (
     InferencePriority,
     InferenceSlotTimeout,
     _PrioritySemaphore,
+    get_inference_concurrency_controller,
+    set_inference_concurrency_controller,
 )
 
 
@@ -505,3 +507,97 @@ class TestProviderKeyedConcurrency:
         peak = await self._drive(ctrl, roles, expect_in_flight=2)
 
         assert peak == 2, "two providers on one endpoint must not share a semaphore"
+
+
+class TestConcurrencyWideningAfterTheRoleCollapse:
+    """FRE-1449 AC-1/2/3 — ADR-0145 D7's stated prediction, measured.
+
+    Production already carries the collapsed (post-D1/FRE-1445) catalog shape, so a
+    literal live "sample it before, then sample it after" is not reproducible
+    post-deploy. The BEFORE figure here reconstructs the pre-collapse catalog shape
+    from its own historical values (ADR-0145 D7, and FRE-1445's ticket body, which
+    deleted these two entries): the thinking entry allowed 1 in flight, the instruct
+    entry 3, on separate semaphores, same provider. The AFTER figure drives the
+    identical scenario against the REAL, currently checked-in catalog's collapsed
+    ``qwen3.8-flash-next`` entry (``config/models.yaml``) — not a synthetic value.
+
+    Both figures read exclusively from ``get_status()["models"][key]["active"]``
+    while the two coordinated sessions are genuinely both outstanding — never
+    ``.limit`` (a capacity claim, not an observation, AC-2's own "fails if") and
+    never the ``inference_slot_acquired`` log event (fires only past a 100ms wait
+    and carries no active count, AC-3's).
+    """
+
+    @staticmethod
+    async def _peak_active_across_two_sessions(
+        ctrl: InferenceConcurrencyController, role: str
+    ) -> int:
+        """Hold two concurrent "sessions" open against `role`; return the peak active count.
+
+        `get_status()[...]["active"]` is sampled while both remain outstanding. A
+        queued (not-yet-acquired) session must not time out DURING the sample
+        window — its own ``request_slot`` timeout (10s) is deliberately far
+        longer than the ~1s polling window below, so a session still waiting
+        when polling ends is released and allowed to proceed cleanly, rather
+        than racing its own acquire timeout against the sample window.
+        """
+        release = asyncio.Event()
+
+        async def _session() -> None:
+            async with ctrl.request_slot(role, InferencePriority.USER_FACING, timeout=10.0):
+                await release.wait()
+
+        tasks = [asyncio.create_task(_session()) for _ in range(2)]
+        peak = 0
+        try:
+            for _ in range(150):
+                await asyncio.sleep(0.01)
+                peak = max(peak, ctrl.get_status()["models"][role]["active"])
+        finally:
+            release.set()
+            await asyncio.gather(*tasks)
+        return peak
+
+    @pytest.mark.asyncio
+    async def test_ac1_before_the_collapse_two_primary_turns_serialize(self) -> None:
+        """Reconstructed pre-FRE-1445 shape: the thinking entry alone, at max_concurrency=1.
+
+        Two overlapped "primary" sessions never both hold — the semaphore's
+        `active` never exceeds 1.
+        """
+        ctrl = InferenceConcurrencyController(default_base_url="http://slm-test:8000/v1")
+        ctrl.register_provider("slm_local", max_concurrency=10)
+        ctrl.register_model(
+            "qwen3.8-flash-next", max_concurrency=1, provider="slm_local"
+        )  # pre-collapse: the thinking entry primary bound to
+        ctrl.register_model(
+            "qwen3.8-flash-next-instruct", max_concurrency=3, provider="slm_local"
+        )  # pre-collapse: the deleted instruct twin, unrelated semaphore
+
+        peak = await self._peak_active_across_two_sessions(ctrl, "qwen3.8-flash-next")
+
+        assert peak == 1, (
+            f"expected the pre-collapse thinking entry (max_concurrency=1) to serialize "
+            f"two overlapped primary sessions, peak active was {peak}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ac2_after_the_collapse_two_primary_turns_run_concurrently(self) -> None:
+        """The REAL, currently checked-in catalog — not a synthetic value.
+
+        Primary's collapsed `qwen3.8-flash-next` entry now carries
+        max_concurrency=3 (FRE-1445). Two overlapped "primary" sessions both
+        hold — `active` reaches >= 2.
+        """
+        set_inference_concurrency_controller(None)
+        try:
+            ctrl = get_inference_concurrency_controller()
+
+            peak = await self._peak_active_across_two_sessions(ctrl, "qwen3.8-flash-next")
+
+            assert peak >= 2, (
+                "expected the collapsed catalog entry to let two overlapped primary "
+                f"sessions run concurrently, peak active was {peak}"
+            )
+        finally:
+            set_inference_concurrency_controller(None)

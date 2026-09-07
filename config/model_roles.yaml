@@ -73,15 +73,18 @@ bindings:
   # reach the whole turn: choosing a cloud primary gives cloud sub-agents, a local
   # primary gives local ones (previously the sub-agent stayed pinned regardless).
   #
-  # `priority: ELEVATED` (ADR-0145 D7) is not set here — `RoleBinding` has no
-  # `priority` field yet; it lands with FRE-1449, which also measures the
-  # concurrency widening this collapse's max_concurrency 1 -> 3 opens up.
+  # `priority: ELEVATED` (ADR-0145 D7, FRE-1449): the role's own rank for the
+  # re-homed inference concurrency controller. Read from this binding by the
+  # factory (llm_client/factory.py) at the point it builds the client, not
+  # hard-coded at the sub-agent dispatch site — otherwise this field is
+  # decorative and a second, disagreeing home for the same fact exists.
   sub_agent:
     deployment: inherit
     mode: worker
     max_tokens: 2048
     default_timeout: 90
     open: true
+    priority: ELEVATED
   entity_extraction:  { deployment: gpt-5.4-mini }
   captains_log:       { deployment: claude_sonnet }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads the whole

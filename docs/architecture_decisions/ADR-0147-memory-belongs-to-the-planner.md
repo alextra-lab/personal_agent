@@ -12,7 +12,9 @@
 ### The measured defect
 
 Master measured the following on FRE-1469 and FRE-1470. The figures are that investigation's, not
-this ADR's, and the traces are cited in References so a reader can reproduce them.
+this ADR's. They were verified there, against live Elasticsearch and the named traces. **They are
+not reproducible from this repository**, which holds no saved query or result export for them.
+Treat them as externally verified evidence, cited to their ticket.
 
 `memory_in_context` is `False` on all 186 sub-agent captures ever written, across every index
 month. The detector was checked before the number was trusted. `sub_agent.py:57` scans for
@@ -101,13 +103,23 @@ A **memory digest** is a compact list, one line per item. This ADR uses that ter
 of the document. Each line carries the item kind, the item name or target, and one short clause
 of the fact.
 
-**The digest is defined over exactly the items the primary's renderer would render.** The
-filter-then-cap selection inside `_render_memory_section_with_ids` moves into a shared function.
-The renderer and the digest builder both call it. Two properties follow structurally rather than
-by test:
+**The digest is derived from the primary's own rendered text, not from raw memory items.** Two
+extractions move into shared functions that the renderer and the digest builder both call: the
+filter-then-cap selection inside `_render_memory_section_with_ids`, and the per-item text
+helpers `_entity_line`, `_episode_text` and `_stance_line`. The digest builder never reads a raw
+item dictionary, so it cannot surface a field or a wording the renderer omits.
 
-- No fact can reach a worker through a goal unless the answering model also received it.
+Three properties follow structurally rather than by test:
+
+- No fact can reach a worker through a goal unless the same fact was eligible for the primary's
+  render, in the same words.
 - A Stage 7 memory drop produces an empty digest, because it produces an empty render.
+- A change to either shared function moves both outputs together.
+
+**Eligible for the render is not the same as delivered to the model.** The rendered ids record
+what the renderer emitted. Whether the volatile block reached the wire is checked separately
+(`captains_log/turn_evidence.py:780`). This ADR guarantees render eligibility. It does not
+guarantee wire admission, and no criterion below claims it does.
 
 The digest omits what the primary's section carries for a different purpose: citation
 identifiers (ADR-0138 D1 binds those to the answering model, not to a planner), the guidance
@@ -139,8 +151,8 @@ and authorship, not of category:
 1. The volume is what one thinking-capable component judged a task needs, rather than 20 items
    times every arm.
 2. Every fact that travels was chosen by a component that can reason about the choice.
-3. Every fact that travels was already rendered to the answering model (D1), so nothing reaches
-   a worker that the primary did not also receive.
+3. Every fact that travels was rendered for the answering model in the same words (D1), so
+   nothing reaches a worker that the primary's own section did not also carry.
 
 The disclosure path stays open and is recorded as such: a worker holding `web_search` reaches
 the self-hosted SearXNG instance and then upstream engines, so an inlined fact can enter a
@@ -156,21 +168,29 @@ this date. When it lands, it removes the missing-identity guard that currently m
 
 ### D3 — The plan carries an absence signal, not a validation arm
 
-`ExpansionPlan` gains one field, `memory_relevance`. It has five values, and **exactly one
-writer each**, so no state is ambiguous about who decided it:
+`ExpansionPlan` gains one field, `memory_relevance`. It records **the planner's judgment about
+the digest, and nothing else.** It does not also record whether a digest existed, or whether a
+plan came from the planner at all. Those are two separate axes, and folding them into one enum
+produced a state that demanded two values at once: a turn with an empty digest whose planner
+then failed is both "no digest" and "no plan".
 
-| Value | Written by | Meaning |
-|-------|-----------|---------|
-| `absent` | the code, before the planner call | The digest was empty. The planner was never asked. |
+The two other axes are already available and are logged beside it: `memory_digest_items` (zero
+means no digest) and `ExpansionPlan.is_fallback`.
+
+| Value | Written by | When |
+|-------|-----------|------|
 | `used` | the planner | At least one digest line shaped at least one task goal. |
 | `none_relevant` | the planner | A digest existed and nothing **in it** bears on this query. |
-| `unstated` | the plan validator | A digest existed, the plan parsed, and the field was missing or invalid. |
-| `fallback` | the fallback planner | No planner judgment exists. The LLM planner was asked and failed. |
+| `unstated` | the plan validator | The planner returned a plan that parsed, and the field was missing or invalid. |
+| `not_applicable` | the code | No judgment exists to record. Either the digest was empty, so the planner was never asked to judge, or no planner plan exists. |
 
-`unstated` and `fallback` exist because both were previously collapsed into `absent`, which made
-"the model judged" indistinguishable from "no model answered". `fallback` is not `absent`: the
-fallback planner runs only after the LLM planner was asked and failed, so a digest may well have
-existed.
+`not_applicable` is written deterministically and **takes precedence over anything the model
+wrote**. The two reasons behind it are never merged, because the reader separates them from the
+two fields logged alongside: `memory_digest_items == 0` is the never-asked case, and
+`is_fallback` is the no-plan case. Both together are one coherent state, not a conflict.
+
+`unstated` covers a missing field and a malformed one alike. The difference is not
+decision-relevant, and splitting it would add a field that changes no outcome.
 
 `none_relevant` is scoped to the digest, never to all recalled memory. The planner sees at most
 20 lines with no episode bodies. It can honestly report that nothing in that view bears on the
@@ -215,14 +235,28 @@ a clause, not a section — but it is not zero and it is not bounded here.
 ### D5 — A fallback plan carries no digest, and every planner attempt reports
 
 `generate_fallback_plan` (`fallback_planner.py:49`) is a deterministic keyword split and makes
-no LLM call. It receives no digest and sets `memory_relevance` to `fallback`.
+no LLM call. Its plan carries `memory_relevance: not_applicable` and `is_fallback: True`.
 
 Today `planner_completed` is emitted only on the success path. A fallback returns after
 `fallback_planner_used` with no terminal event carrying the same fields, so any rate computed
 over `planner_completed` silently excludes every failed planner call. **One terminal planner
-event must fire on every path** — success, validation failure, timeout, exception and fallback —
-carrying `memory_digest_items`, `memory_digest_item_ids`, `memory_digest_tokens` and
-`memory_relevance`. Without that, every criterion below measures a biased population.
+event must fire on every path** — success, validation failure, timeout, exception and fallback.
+Without it, every criterion below measures a biased population.
+
+The event carries these fields, and every criterion below reads only these plus existing
+sub-agent captures:
+
+| Field | Meaning |
+|-------|---------|
+| `memory_relevance` | D3's four-value judgment |
+| `is_fallback` | Whether the plan came from the fallback planner |
+| `memory_digest_eligible_items` | How many items the shared selection returned |
+| `memory_digest_items` | How many lines the digest actually carried |
+| `memory_digest_items_dropped` | Lines dropped by the token ceiling |
+| `memory_digest_kinds` | A count per item kind, so a criterion can stratify without parsing an identity |
+| `memory_digest_max_line_chars` | The longest emitted line, so the per-line bound is checkable live |
+| `memory_digest_tokens` | The estimated size of the emitted block |
+| `memory_digest_item_keys` | One compound `(kind, identity, ordinal)` key per line, in order |
 
 ### D6 — Enrichment stays out of scope
 
@@ -287,8 +321,8 @@ selected items ride to the worker as structured context.
 - Selection is per task rather than per question, which is the strongest form of the precision
   argument.
 - A worker with a long task can consult a fact the goal text has no room for.
-- It would make AC-2 far stronger: a per-task reference is a checkable claim, where lexical
-  overlap is not.
+- It would make per-task attribution checkable in production: a stated reference is a claim a
+  query can test, where a goal's free text is not.
 
 **Cons:**
 - The planner must emit identifiers, and a model-authored identifier can be invented.
@@ -296,10 +330,10 @@ selected items ride to the worker as structured context.
 - It multiplies the disclosed volume per arm, which is the property D2 keeps small.
 
 **Why Rejected:** The primary already renders the same facts at synthesis, so the worker does not
-need to hold a body of them. **Reopening condition, stated in advance:** measurement under AC-2
-shows planners routinely naming facts they had no room to inline, or an egress control lands
-that bounds what a worker can disclose. Absent either, this stays rejected and no ticket is
-filed for it.
+need to hold a body of them. **Reopening conditions, stated in advance:** AC-2's relevant-fact
+run shows the planner naming a fact it had no room to inline, or an egress control lands that
+bounds what a worker can disclose. Absent either, this stays rejected and no ticket is filed for
+it.
 
 ### Option 4: A validation sub-agent arm
 
@@ -342,8 +376,8 @@ nothing and costs latency inside a turn budget that already fails.
 - The one component that decides the work stops being the only one denied user context.
 - The retrieval cost is zero. The digest re-renders items the turn already paid for.
 - The mechanism does not depend on FRE-960, which is dead today with no signal.
-- Nothing can reach a worker that the answering model did not also receive (D1's shared
-  selection).
+- Nothing can reach a worker in words the primary's own section did not carry (D1's shared
+  selection and shared text helpers).
 - The system gains its first honest absence signal, at plan altitude, for no extra call.
 - Every planner attempt reports for the first time (D5), which fixes a measurement bias that
   predates this ADR.
@@ -364,12 +398,12 @@ nothing and costs latency inside a turn budget that already fails.
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| The digest is built and the planner ignores it, repeating FRE-1463's inert grant | High | AC-3 fixes a floor in advance and measures it over a stratified population |
+| The digest is built and the planner ignores it, repeating FRE-1463's inert grant | High | AC-2's paired seeded runs prove the planner responds to a digest at all; AC-3 detects the field going constant in production |
 | The planner claims `used` without any goal reflecting the digest | Medium | AC-2 is a consistency invariant checked at 100%. Its blind spot is stated with it |
 | The digest grows past its ceiling on a memory-rich turn and feeds FRE-1138 | Medium | D4's three bounds, plus AC-4's seeded negative over 47 oversized items |
 | A future change attaches memory to `spec.context` and reopens structured routing | Medium | AC-5 asserts no rendered memory section appears in any sub-agent capture's context |
-| An inlined fact enters a `web_search` query and reaches upstream engines | Medium | Not mechanically bounded. D2 states this. The volume is one clause chosen by a reasoning component, and never a fact the primary did not also receive |
-| A digest fact was never shown to the answering model | Low | Structurally impossible: D1 shares one selection function with the renderer |
+| An inlined fact enters a `web_search` query and reaches upstream engines | Medium | Not mechanically bounded. D2 states this. The volume is one clause chosen by a reasoning component, and never a clause the primary's section did not also carry |
+| A digest fact was never rendered for the answering model | Low | Structurally excluded: D1 shares both the selection and the per-item text helpers with the renderer. Wire admission stays out of scope and is stated in D1 |
 
 ---
 
@@ -378,31 +412,40 @@ nothing and costs latency inside a turn budget that already fails.
 **Files affected:**
 
 - `src/personal_agent/orchestrator/executor.py` — extract the filter-then-cap selection out of
-  `_render_memory_section_with_ids` into a shared function; add the digest builder beside it;
-  the `controller.execute(...)` call site at `:5036` passes the digest.
+  `_render_memory_section_with_ids` into a shared function; the digest builder calls it and the
+  per-item helpers `_entity_line` / `_episode_text` / `_stance_line` (`:3603`, `:3635`, `:3650`)
+  rather than raw items; the `controller.execute(...)` call site at `:5036` passes the digest.
 - `src/personal_agent/orchestrator/expansion_types.py` — a frozen `PlannerMemoryDigest`
-  (`text`, `item_ids`, `item_count`, `estimated_tokens`); `ExpansionPlan.memory_relevance`.
+  (`text`, `item_keys`, `item_count`, `eligible_count`, `dropped_count`, `kind_counts`,
+  `max_line_chars`, `estimated_tokens`); `ExpansionPlan.memory_relevance`.
 - `src/personal_agent/orchestrator/expansion_controller.py` — `execute` and `_run_planner`
   signatures; `_build_planner_system_prompt` gains the digest block and the schema field;
   `_validate_plan_json` classifies a missing or invalid field as `unstated`; the terminal
   planner event fires on every path (D5).
-- `src/personal_agent/orchestrator/fallback_planner.py` — sets `memory_relevance` to `fallback`.
+- `src/personal_agent/orchestrator/fallback_planner.py` — sets `memory_relevance` to
+  `not_applicable`.
 
-**Item identities.** `memory_item_identity` already yields a stable `(kind, id)` per item, and
-`_render_memory_section_with_ids` already returns the rendered ids. The digest logs
-`memory_digest_item_ids` from the same helper. **No digest text is logged** — the identities and
-the counts carry every criterion below, so no new free-text personal-data surface is created in
-Elasticsearch.
+**Item keys.** `memory_item_identity` (`captains_log/turn_evidence.py:220`) yields
+`(kind, identity)`, but the identity alone is not a key: an entity's identity is its name, an
+episode's is a conversation or turn id, and an unrecognised or id-less item collapses to the
+empty string. `_render_memory_section_with_ids` then discards the kind and returns identity
+strings only. The digest therefore logs a **compound key** — kind, identity and the line's
+ordinal — and comparisons are ordered multisets, never sets. A bare identity is never used as a
+key anywhere in this design.
 
-**Telemetry.** The terminal planner event carries `memory_digest_items`,
-`memory_digest_item_ids`, `memory_digest_tokens` and `memory_relevance`. Every criterion reads
-these fields plus existing sub-agent captures, so no new instrument is built.
+**What is logged, stated accurately.** No digest clause is logged. The keys are not free of
+personal data: an entity key contains the entity's name and a stance key contains its target.
+Those are the same values the existing evidence record already carries, so this adds no new
+*class* of personal data to Elasticsearch, but it does add another field that holds names. That
+is the honest statement, and it is why no clause text is added on top of it.
 
 **Testing strategy.** Unit tests cover all three bounds with a seeded negative: 47 items with
 oversized descriptions must yield at most 20 items, no line over 120 characters, and at most 300
-estimated tokens. A second test asserts the digest's item ids are a subset of the renderer's
-rendered ids for the same input, including an input containing session items and blank items. A
-regression test asserts `SubAgentSpec.context` still equals the `messages[-4:]` slice.
+estimated tokens. A second test feeds a set containing session items, blank items and over-cap
+items, and asserts every digest line is a prefix of the renderer's own line for the same item. A
+third seeds each of D3's four values and asserts AC-6's matrix. A regression test asserts
+`SubAgentSpec.context` still equals the `messages[-4:]` slice. AC-2's paired runs are an
+integration test, because they need the real planner model.
 
 **Dependencies.** None. FRE-1467 is in flight and is not a blocker. FRE-960 is a quality
 ceiling, not a dependency.
@@ -422,45 +465,53 @@ The second: no criterion bounds what a goal discloses to a worker (D2). Lexical 
 that a fact travelled. Nothing here proves that it needed to. Closing that requires an egress
 control on the worker, which is out of scope and is Alternative 3's second reopening condition.
 
-- **AC-1** — Every item in the digest is one the primary's own renderer selected for the same
-  turn, and the digest never holds more than 20. · **Check:** `memory_digest_item_ids` on the
-  terminal planner event is a subset of that turn's `_rendered_memory_ids`, and
-  `memory_digest_items <= min(rendered_items, 20)`, with equality whenever
-  `memory_digest_tokens` is below the ceiling. · *Fails if* any digest id is absent from the
-  rendered ids, which means a worker can be told something the answering model never saw.
-  Equality is not asserted unconditionally because D4's token ceiling legitimately drops tail
-  lines.
+- **AC-1** — Every digest line carries the primary renderer's own text for an item that renderer
+  selected, and the arithmetic of the bound closes. · **Check:** on the terminal planner event,
+  `memory_digest_items == min(memory_digest_eligible_items, 20) - memory_digest_items_dropped`,
+  and `memory_digest_item_keys` is an ordered sub-multiset of the same turn's rendered
+  selection. Plus a unit test that feeds a set containing session items, blank items and more
+  than 47 items, and asserts every digest line is a prefix of the renderer's own line for the
+  same item. · *Fails if* the arithmetic does not close, or any digest line carries text the
+  renderer would not have emitted for that item — either of which means a worker can be told
+  something the primary's section never carried. The dropped count is logged precisely so this
+  can be an equality rather than an unfalsifiable inequality.
 
-- **AC-2** — On **every** turn returning `memory_relevance: used`, at least one task goal names
-  an entity, target or episode subject that is in the digest and absent from the user's own
-  question. · **Check:** resolve `memory_digest_item_ids` to their names, then match against the
-  plan's task goals and `user_message` for the same `trace_id`. · *Fails if* a single `used`
-  turn has no such name, which means the planner claimed a use the plan does not show. The
-  pre-change rate of this measure is structurally zero, because the planner had no access to
-  those names. **Stated blind spot:** this is necessary, not sufficient. A planner that copies
-  one name into every goal passes it without using the fact well. AC-2 catches a false claim; no
-  criterion here certifies a good one.
+- **AC-2** — **The digest changes the plan, and an irrelevant digest does not.** Two seeded
+  planner runs on the same query: one whose digest carries a decisive relevant fact, one whose
+  digest carries only unrelated items. · **Check:** an integration test
+  (`PERSONAL_AGENT_INTEGRATION=1`) invoking the real planner. The relevant run must produce a
+  task goal that acts on the seeded fact. The unrelated run must return `none_relevant` and must
+  not carry the seeded fact's terms into any goal. · *Fails if* both runs produce the same plan,
+  which means the digest changed nothing, or if the unrelated run reports `used`, which means
+  the judgment is not a judgment. **Why this replaced a live lexical count:** an earlier draft
+  counted digest terms appearing in goals. That check is not even necessary — a clause such as
+  *"prefers automatic"* can shape a goal without the goal repeating the item's name — so it can
+  fail on a working planner, and it can pass on one that copies a name into every goal. A paired
+  seeded run discriminates on the property the decision actually claims.
 
-- **AC-3** — Over at least 20 live turns whose digest held at least one **query-retrieved** item,
-  `memory_relevance: used` is returned on **at least 25%**. · **Check:** count over the terminal
-  planner events, excluding turns whose digest held only standing behavioural stances. · *Fails
-  if* the rate falls below the floor, which reproduces FRE-1463's inert grant in a new place.
-  **Why the population is stratified:** `_enrich_with_behavioural_stances`
-  (`request_gateway/context.py:271`) injects standing preferences every turn, independently of
-  what recall selected. Those items are not evidence that the gateway retrieved anything for
-  this query, so a digest made only of them cannot test D1's premise. **Why 25%, fixed here
-  before the first measured run:** the floor separates working from inert rather than grading
-  quality, and it sits deliberately low because the input is a known-degraded upstream. FRE-960
-  has left recall as one blunt query since 2026-07-20, and this ADR must not be adjudicated on
-  that defect.
+- **AC-3** — In production the judgment **discriminates**: over at least 20 live turns whose
+  digest was non-empty, both `used` and `none_relevant` are observed. · **Check:** count the four
+  `memory_relevance` values over the terminal planner events, stratified by
+  `memory_digest_kinds` so turns whose digest held only standing behavioural stances are
+  reported separately. · *Fails if* one value is constant across the sample, which is FRE-1463's
+  inert grant reproduced in a new place, or if `unstated` dominates, which means the planner
+  never learned the field. **Why no rate is fixed here.** An earlier draft set a 25% floor. That
+  number had no empirical basis, and the criterion below it is a model self-report that a
+  planner can satisfy by emitting `used` mechanically. The honest position is that no defensible
+  production rate exists in advance, because the digest's own relevance depends on recall that
+  FRE-960 has left as one blunt query since 2026-07-20. AC-2's seeded pair is what proves the
+  capability. AC-3 only detects a mechanism that has gone inert. **This weakness is stated, not
+  designed around:** a genuine relevance rate needs a labelled turn set, which is a study, not
+  an acceptance criterion.
 
 - **AC-4** — No turn ever produces a digest above 20 items, above 120 characters on any line, or
-  above 300 estimated tokens. · **Check:** the maxima of `memory_digest_items` and
-  `memory_digest_tokens` across all recorded turns, plus the seeded unit test over 47 oversized
-  items asserting all three bounds. · *Fails if* any maximum is exceeded, or the seeded test
-  passes only because its input was already small. The per-line bound is asserted explicitly:
-  without it an implementation that never clips a line still passes the other two by dropping
-  more lines.
+  above 300 estimated tokens. · **Check:** the live maxima of `memory_digest_items`,
+  `memory_digest_max_line_chars` and `memory_digest_tokens` across all recorded turns, plus the
+  seeded unit test over 47 oversized items asserting all three bounds. · *Fails if* any maximum
+  is exceeded, or the seeded test passes only because its input was already small.
+  `memory_digest_max_line_chars` exists for this criterion: without it, no logged field can
+  detect an overlong line, and an implementation that never clips a line still passes the other
+  two bounds by dropping more lines.
 
 - **AC-5** — No rendered memory section reaches any worker's context. `memory_in_context` remains
   `False` on **every** sub-agent capture written after this chain deploys, and
@@ -470,15 +521,21 @@ control on the worker, which is out of scope and is Alternative 3's second reope
   for a literal marker. It does not and cannot detect a fact inlined in `spec.task`, which D2
   permits by design. This criterion asserts the structured-routing invariant only.
 
-- **AC-6** — Every plan carries a `memory_relevance` value written by that value's own writer,
-  and no state is misattributed. Specifically: an empty digest yields `absent` on 100% of those
-  turns and is never `used` or `none_relevant`; a fallback plan yields `fallback` and never
-  `absent`; a parsed plan omitting the field yields `unstated` and never `none_relevant`. ·
-  **Check:** the terminal planner event's `memory_relevance` against its own
-  `memory_digest_items` and the plan's `is_fallback`, plus unit tests seeding each of the five
-  cases. · *Fails if* any turn shows a value its designated writer could not have written — for
-  example a model-authored value on a turn where the digest was empty, which would mean the
-  deterministic writers in D3's table were not enforced.
+- **AC-6** — The three axes never contradict each other. The allowed matrix, over the terminal
+  planner event's own fields, is exactly:
+
+  | `memory_digest_items` | `is_fallback` | Allowed `memory_relevance` |
+  |---|---|---|
+  | 0 | either | `not_applicable` only |
+  | > 0 | `True` | `not_applicable` only |
+  | > 0 | `False` | `used`, `none_relevant` or `unstated` only |
+
+  · **Check:** the matrix over every recorded turn, plus unit tests seeding each of the four
+  values. · *Fails if* any turn falls outside a row — for example a model-authored `used` on a
+  turn whose digest was empty, which means the deterministic writer did not take precedence, or
+  a `not_applicable` on a successful planner turn with a digest, which means the field was never
+  wired. The matrix is decidable from three logged fields alone, so no separate "who wrote this"
+  field is added: the writer is a function of the row.
 
 **Where these are adjudicated.** On FRE-1470, this ADR's umbrella ticket, once both
 implementation tickets have landed and deployed. Not at merge of this ADR, and not by either
@@ -519,4 +576,7 @@ implementation ticket, each of which carries criteria for its own work only.
 **Reason:** Authored from the owner's design conversation of 2026-09-08. The owner settled the
 inform-versus-route question in favour of inform only. Codex round 1 corrected the central
 framing: an inlined fact does reach the worker, so D2 now states the invariant it actually
-guarantees and names the exposure it does not close.
+guarantees and names the exposure it does not close. Codex round 2 showed the five-value
+relevance enum demanded two values at once on an empty-digest fallback, and killed the original
+AC-2 on the stronger ground that a lexical check is not even necessary. D3 now records one axis,
+and AC-2 is a paired seeded planner run.

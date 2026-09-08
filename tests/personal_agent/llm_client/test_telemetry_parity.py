@@ -27,6 +27,7 @@ client (where the wiring lives).
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -38,6 +39,7 @@ from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
 )
+from personal_agent.llm_client.types import ModelRole
 from personal_agent.telemetry.vocabulary import FIELD_EXCLUSIONS
 
 
@@ -269,7 +271,6 @@ class TestClientWiring:
     async def test_litellm_client_calls_both_helpers_with_matched_span(self) -> None:
         """LiteLLMClient calls started + completed helpers with the same span_id."""
         from personal_agent.llm_client.litellm_client import LiteLLMClient
-        from personal_agent.llm_client.types import ModelRole
 
         # Minimal response — content only; usage fields are irrelevant here.
         usage = MagicMock()
@@ -360,7 +361,6 @@ class TestClientWiring:
         model-call-completed model") explicitly forbids.
         """
         from personal_agent.llm_client.litellm_client import LiteLLMClient
-        from personal_agent.llm_client.types import ModelRole
 
         usage = MagicMock()
         usage.prompt_tokens = 100
@@ -456,7 +456,7 @@ class TestClientWiring:
 
         from personal_agent.llm_client.litellm_client import LiteLLMClient
         from personal_agent.llm_client.models import ModelDefinition, ModeSpec, Placement
-        from personal_agent.llm_client.types import LLMTimeout, ModelRole
+        from personal_agent.llm_client.types import LLMTimeout
 
         ctx = _ctx_with_session()
         client = LiteLLMClient(
@@ -509,6 +509,291 @@ class TestClientWiring:
 
 
 # ---------------------------------------------------------------------------
+# FRE-1465 — billed reasoning tokens carried through the cloud emit
+# ---------------------------------------------------------------------------
+
+
+class TestReasoningTokenTelemetry:
+    """AC-1/AC-2/AC-5 for the cloud path.
+
+    ``reasoning_tokens`` present when billed, absent (never 0/null-as-0) when
+    the provider omits it. Plus the Anthropic thinking-block presence flag.
+    """
+
+    @staticmethod
+    def _response() -> MagicMock:
+        """A minimal successful cloud response mock, shaped like litellm's ModelResponse."""
+        usage = MagicMock()
+        usage.prompt_tokens = 100
+        usage.completion_tokens = 50
+        usage.total_tokens = 150
+        usage.cache_read_input_tokens = None
+        usage.cache_creation_input_tokens = None
+        usage.prompt_tokens_details = None
+        usage.completion_tokens_details = None
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "ok"
+        response.choices[0].message.tool_calls = None
+        response.choices[0].message.thinking_blocks = None
+        response.choices[0].message.reasoning_content = None
+        response.usage = usage
+        response.id = "resp_reasoning"
+        return response
+
+    @staticmethod
+    def _enter_common_patches(stack: ExitStack, *, response: MagicMock) -> None:
+        """Enter the transport/cost-gate/cost-tracker patches every dispatch below needs."""
+        mock_gate = MagicMock()
+        mock_gate.reserve = AsyncMock(return_value="res-reasoning")
+        mock_gate.commit = AsyncMock()
+        mock_tracker = AsyncMock()
+        stack.enter_context(patch("litellm.acompletion", AsyncMock(return_value=response)))
+        stack.enter_context(patch("litellm.completion_cost", return_value=0.0))
+        stack.enter_context(
+            patch("personal_agent.cost_gate.get_default_gate", return_value=mock_gate)
+        )
+        stack.enter_context(
+            patch("personal_agent.cost_gate.load_budget_config", return_value=MagicMock())
+        )
+        stack.enter_context(
+            patch(
+                "personal_agent.llm_client.cost_estimator.estimate_reservation_for_call",
+                return_value=Decimal("0.01"),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "personal_agent.llm_client.history_sanitiser.sanitise_messages",
+                side_effect=lambda msgs, trace_id: (msgs, []),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "personal_agent.llm_client.cost_tracker.get_cost_tracker_service",
+                return_value=mock_tracker,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "personal_agent.config.settings.get_settings",
+                return_value=MagicMock(anthropic_api_key="k", openai_api_key="k"),
+            )
+        )
+
+    async def _dispatch(
+        self,
+        *,
+        response: MagicMock,
+        provider: str,
+        model_id: str,
+        role: ModelRole = ModelRole.PRIMARY,
+    ) -> MagicMock:
+        """Dispatch with ``emit_model_call_completed`` mocked at the call site.
+
+        Returns the mock so a test can inspect the ``extra`` kwargs it was
+        called with. Fast, but stops short of the real telemetry helper —
+        pair with :meth:`_dispatch_real_emit` for AC-2's end-to-end guarantee.
+        """
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
+
+        with ExitStack() as stack:
+            completed = stack.enter_context(
+                patch("personal_agent.llm_client.litellm_client.emit_model_call_completed")
+            )
+            self._enter_common_patches(stack, response=response)
+            client = LiteLLMClient(
+                model_id=model_id,
+                provider=provider,
+                max_tokens=16,
+                budget_role="main_inference",
+            )
+            await client.respond(
+                role=role,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=_ctx_with_session(),
+            )
+        return completed
+
+    async def _dispatch_real_emit(
+        self,
+        *,
+        response: MagicMock,
+        provider: str,
+        model_id: str,
+        role: ModelRole = ModelRole.PRIMARY,
+    ) -> dict[str, Any]:
+        """Dispatch through the REAL ``emit_model_call_completed`` helper.
+
+        Captures the ``model_call_completed`` structlog kwargs as they would
+        actually reach Elasticsearch — proves AC-2's absence contract through
+        the helper/logger boundary (``telemetry.py``'s ``payload.update``),
+        not just the client's call-site dict construction.
+        """
+        from personal_agent.llm_client import litellm_client as litellm_client_module
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
+
+        captured: list[tuple[str, dict[str, Any]]] = []
+        real_info = litellm_client_module.log.info
+
+        def _record_info(event: str, **payload: Any) -> Any:
+            captured.append((event, payload))
+            return real_info(event, **payload)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(litellm_client_module.log, "info", _record_info))
+            self._enter_common_patches(stack, response=response)
+            client = LiteLLMClient(
+                model_id=model_id,
+                provider=provider,
+                max_tokens=16,
+                budget_role="main_inference",
+            )
+            await client.respond(
+                role=role,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=_ctx_with_session(),
+            )
+
+        return next(kwargs for event, kwargs in captured if event == "model_call_completed")
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_present_when_the_provider_bills_it(self) -> None:
+        """AC-1: the field reaches the emit's ``extra`` for a reasoning-billing provider."""
+        response = self._response()
+        response.usage.completion_tokens_details = {"reasoning_tokens": 42}
+
+        completed = await self._dispatch(
+            response=response, provider="anthropic", model_id="claude-sonnet-4-6"
+        )
+
+        extra = completed.call_args.kwargs["extra"]
+        assert extra["reasoning_tokens"] == 42
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_present_for_a_sub_agent_call_too(self) -> None:
+        """AC-1 names both roles explicitly — sub_agent must carry it too, not only primary."""
+        response = self._response()
+        response.usage.completion_tokens_details = {"reasoning_tokens": 7}
+
+        completed = await self._dispatch(
+            response=response,
+            provider="anthropic",
+            model_id="claude-sonnet-4-6",
+            role=ModelRole.SUB_AGENT,
+        )
+
+        extra = completed.call_args.kwargs["extra"]
+        assert extra["reasoning_tokens"] == 7
+        assert completed.call_args.kwargs["role"] == "sub_agent"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_absent_stays_absent_not_zero(self) -> None:
+        """AC-2: a provider reporting no reasoning detail omits the key entirely."""
+        response = self._response()
+        response.usage.completion_tokens_details = None
+
+        completed = await self._dispatch(
+            response=response, provider="anthropic", model_id="claude-sonnet-4-6"
+        )
+
+        extra = completed.call_args.kwargs["extra"]
+        assert "reasoning_tokens" not in extra
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_absence_survives_the_real_emit_helper(self) -> None:
+        """AC-2 through the actual telemetry boundary, not a mocked emit call.
+
+        Regression guard for exactly the gap codex's plan-review flagged: a
+        test that only inspects the client's call-site dict would not catch
+        the helper (or structlog, or the ES handler) silently materializing
+        the key as ``null``.
+        """
+        response = self._response()
+        response.usage.completion_tokens_details = None
+
+        kwargs = await self._dispatch_real_emit(
+            response=response, provider="anthropic", model_id="claude-sonnet-4-6"
+        )
+
+        assert "reasoning_tokens" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_anthropic_thinking_present_flag_true_when_thinking_blocks_returned(
+        self,
+    ) -> None:
+        """A returned thinking block sets the presence flag true."""
+        response = self._response()
+        response.choices[0].message.thinking_blocks = [{"type": "thinking", "thinking": "..."}]
+
+        completed = await self._dispatch(
+            response=response, provider="anthropic", model_id="claude-sonnet-4-6"
+        )
+
+        extra = completed.call_args.kwargs["extra"]
+        assert extra["anthropic_thinking_present"] is True
+        # AC-5 analogue for the presence flag: never the thinking text.
+        assert "..." not in repr(extra)
+
+    @pytest.mark.asyncio
+    async def test_anthropic_thinking_present_flag_true_from_reasoning_content_alone(
+        self,
+    ) -> None:
+        """The flag also fires off ``reasoning_content`` — not only ``thinking_blocks``."""
+        response = self._response()
+        response.choices[0].message.reasoning_content = "weighing the options"
+
+        completed = await self._dispatch(
+            response=response, provider="anthropic", model_id="claude-sonnet-4-6"
+        )
+
+        extra = completed.call_args.kwargs["extra"]
+        assert extra["anthropic_thinking_present"] is True
+        assert "weighing the options" not in repr(extra)
+
+    @pytest.mark.asyncio
+    async def test_anthropic_thinking_present_flag_false_when_no_block_returned(self) -> None:
+        """No thinking block returned sets the presence flag false, not absent."""
+        response = self._response()
+
+        completed = await self._dispatch(
+            response=response, provider="anthropic", model_id="claude-sonnet-4-6"
+        )
+
+        extra = completed.call_args.kwargs["extra"]
+        assert extra["anthropic_thinking_present"] is False
+
+    @pytest.mark.asyncio
+    async def test_non_anthropic_provider_omits_the_thinking_flag(self) -> None:
+        """The flag is Anthropic-specific — a different provider never carries it."""
+        response = self._response()
+
+        completed = await self._dispatch(response=response, provider="openai", model_id="gpt-5.4")
+
+        extra = completed.call_args.kwargs["extra"]
+        assert "anthropic_thinking_present" not in extra
+
+    @pytest.mark.asyncio
+    async def test_non_anthropic_provider_omits_the_flag_even_with_reasoning_content_present(
+        self,
+    ) -> None:
+        """Gated on provider, not incidentally on the mock's attributes being unset.
+
+        A non-Anthropic response that happens to carry litellm's normalized
+        ``reasoning_content``/``thinking_blocks`` (litellm's shape is uniform
+        across providers) must still omit the Anthropic-named flag entirely.
+        """
+        response = self._response()
+        response.choices[0].message.thinking_blocks = [{"type": "thinking", "thinking": "..."}]
+        response.choices[0].message.reasoning_content = "weighing the options"
+
+        completed = await self._dispatch(response=response, provider="openai", model_id="gpt-5.4")
+
+        extra = completed.call_args.kwargs["extra"]
+        assert "anthropic_thinking_present" not in extra
+
+
+# ---------------------------------------------------------------------------
 # Layer 3: Phase 3 cleanup — confirm legacy event names are no longer emitted.
 # ---------------------------------------------------------------------------
 
@@ -520,7 +805,6 @@ class TestNoLegacyEvents:
     async def test_litellm_does_not_emit_legacy_event_names(self) -> None:
         """No ``litellm_request_start`` / ``litellm_request_complete`` in respond()."""
         from personal_agent.llm_client.litellm_client import LiteLLMClient
-        from personal_agent.llm_client.types import ModelRole
 
         usage = MagicMock()
         usage.prompt_tokens = 1

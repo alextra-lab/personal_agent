@@ -1564,6 +1564,29 @@ class LiteLLMClient:
             request_messages=api_messages,
             tools=tools,
         )
+        # FRE-1465: usage["reasoning_tokens"] is already left absent (never 0)
+        # by the FRE-766 extraction above when the provider omits it — carry
+        # that same absence into the emit rather than writing a null.
+        _reasoning_tokens = usage.get("reasoning_tokens")
+        _extra: dict[str, Any] = {
+            "cost_usd": _cost_usd,
+            "tool_calls": len(tool_calls),
+            "cache_creation_input_tokens": _cache_creation,
+            # FRE-989: parity with model_call_started, which has carried the
+            # budget lane since the gate landed. A completed event that
+            # reports cost_usd without naming the lane it was billed to
+            # cannot answer a per-role cost question on its own.
+            "budget_role": self.budget_role,
+        }
+        if _reasoning_tokens is not None:
+            _extra["reasoning_tokens"] = _reasoning_tokens
+        if self.provider == "anthropic":
+            # Cheaply derived from litellm's normalized message shape — a
+            # presence flag only, never the thinking text itself (AC-5).
+            _extra["anthropic_thinking_present"] = bool(
+                getattr(message, "thinking_blocks", None)
+                or getattr(message, "reasoning_content", None)
+            )
         emit_model_call_completed(
             log=log,
             role=role.value,
@@ -1577,16 +1600,7 @@ class LiteLLMClient:
             prompt_identity=_identity,
             total_tokens=_total_tokens,
             cache_read_tokens=_cache_read,
-            extra={
-                "cost_usd": _cost_usd,
-                "tool_calls": len(tool_calls),
-                "cache_creation_input_tokens": _cache_creation,
-                # FRE-989: parity with model_call_started, which has carried the
-                # budget lane since the gate landed. A completed event that
-                # reports cost_usd without naming the lane it was billed to
-                # cannot answer a per-role cost question on its own.
-                "budget_role": self.budget_role,
-            },
+            extra=_extra,
         )
 
         return LLMResponseType(
@@ -1947,6 +1961,9 @@ class LiteLLMClient:
                     request_messages=request_messages,
                     tools=tools,
                 )
+                # FRE-1465 AC-3: local dialect's own half of reasoning
+                # visibility — a length, never the trace text itself (AC-5).
+                _reasoning_trace = llm_response.get("reasoning_trace") or ""
                 emit_model_call_completed(
                     log=log,
                     role=role.value,
@@ -1960,7 +1977,10 @@ class LiteLLMClient:
                     prompt_identity=identity,
                     total_tokens=usage.get("total_tokens") or (input_tokens + output_tokens),
                     cache_read_tokens=cached_tokens if cached_tokens > 0 else None,
-                    extra={"tool_calls": len(llm_response["tool_calls"])},
+                    extra={
+                        "tool_calls": len(llm_response["tool_calls"]),
+                        "reasoning_content_chars": len(_reasoning_trace),
+                    },
                 )
 
         return llm_response

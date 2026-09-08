@@ -258,6 +258,16 @@ class SubAgentApprovalBroker:
                 trace_id=self._ctx.trace_id,
                 user_id=self._ctx.user_id,
                 constraint=SUB_AGENT_APPROVAL_CONSTRAINT,
+                # The card names the tool and the task, and NOT the call's
+                # arguments — unlike the primary's own gate, which sends `args`.
+                # That is deliberate and follows from the turn-wide scope: this
+                # answer covers every sibling's differing, model-authored
+                # arguments for the rest of the turn, so showing one call's
+                # arguments would tell the owner they were deciding about that
+                # specific call when they are not. A card must not misrepresent
+                # what it is asking. Per-call argument review needs a per-call
+                # decision, which is the design this ticket rejected on fan-out
+                # grounds.
                 context=(
                     f"A sub-agent wants to use {tool_name}. "
                     f"Task: {task[:_TASK_PREVIEW_CHARS]}. "

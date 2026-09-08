@@ -279,6 +279,14 @@ class SubAgentToolDecision(BaseModel):
 
     granted: bool = Field(..., description="Whether a sub-agent may use this tool")
     reason: str = Field(..., min_length=1, description="Why this decision was made")
+    param_ceilings: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Per-parameter maximum values enforced only for the sub-agent principal "
+            "(FRE-1473). A parameter absent here is unbounded for this principal; the "
+            "primary's own tool policy never reads this mapping."
+        ),
+    )
 
     @field_validator("reason")
     @classmethod
@@ -296,6 +304,29 @@ class SubAgentToolDecision(BaseModel):
         """
         if not value.strip():
             raise ValueError("reason must not be blank")
+        return value
+
+    @field_validator("param_ceilings")
+    @classmethod
+    def _ceilings_are_named_and_positive(cls, value: dict[str, int]) -> dict[str, int]:
+        """Reject a blank parameter name or a non-positive ceiling.
+
+        Args:
+            value: The recorded per-parameter ceilings.
+
+        Returns:
+            The ceilings unchanged.
+
+        Raises:
+            ValueError: A key is blank/whitespace-only, or a ceiling is not positive.
+        """
+        for param, ceiling in value.items():
+            if not param.strip():
+                raise ValueError("param_ceilings key must not be blank")
+            if ceiling <= 0:
+                raise ValueError(
+                    f"param_ceilings[{param!r}] must be a positive integer, got {ceiling}"
+                )
         return value
 
 

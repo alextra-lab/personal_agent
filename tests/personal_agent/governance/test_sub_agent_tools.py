@@ -22,6 +22,8 @@ from personal_agent.governance.models import (
 )
 from personal_agent.governance.sub_agent_tools import (
     SUB_AGENT_DENIED_MODES,
+    ParamClamp,
+    clamp_sub_agent_tool_params,
     evaluate_sub_agent_tool_grant,
     sub_agent_tool_requires_approval,
 )
@@ -338,3 +340,141 @@ class TestAlertAndDegradedStillRevokeEveryNewGrant:
         grant = evaluate_sub_agent_tool_grant(["web_search", "search_memory"], Mode.NORMAL, config)
         assert grant.granted == ("web_search", "search_memory")
         assert grant.denied == ()
+
+
+# --------------------------------------------------------------------------------------
+# FRE-1473 — per-principal parameter ceilings for recall_personal_history.
+# --------------------------------------------------------------------------------------
+
+
+def _decision_with_ceilings(**ceilings: int) -> SubAgentToolDecision:
+    return SubAgentToolDecision(granted=True, reason="test decision", param_ceilings=ceilings)
+
+
+def _config_with_decision(tool_name: str, decision: SubAgentToolDecision) -> GovernanceConfig:
+    return GovernanceConfig(
+        modes={},
+        tools={},
+        sub_agent_tools={tool_name: decision},
+        mode_constraints={},
+    )
+
+
+class TestParamCeilingSchema:
+    """FRE-1473 — ``SubAgentToolDecision.param_ceilings`` validates its own shape."""
+
+    def test_default_is_empty(self) -> None:
+        decision = SubAgentToolDecision(granted=True, reason="no ceilings recorded")
+        assert decision.param_ceilings == {}
+
+    def test_a_blank_key_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SubAgentToolDecision(granted=True, reason="x", param_ceilings={"  ": 10})
+
+    def test_a_non_positive_ceiling_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SubAgentToolDecision(granted=True, reason="x", param_ceilings={"days_ago": 0})
+
+
+class TestClampSubAgentToolParams:
+    """FRE-1473 AC-1/AC-4/AC-5 — the clamp function itself, independent of dispatch."""
+
+    def test_out_of_range_request_is_clamped_not_rejected(self) -> None:
+        """AC-1 — an over-ceiling value is reduced; the call still produces usable arguments."""
+        config = _config_with_decision(
+            "recall_personal_history", _decision_with_ceilings(days_ago=30, limit=10)
+        )
+        clamped, applied = clamp_sub_agent_tool_params(
+            "recall_personal_history", {"days_ago": 365, "limit": 50}, config
+        )
+        assert clamped == {"days_ago": 30, "limit": 10}
+        assert applied == (
+            ParamClamp(param="days_ago", requested=365, applied=30),
+            ParamClamp(param="limit", requested=50, applied=10),
+        )
+
+    def test_in_bounds_request_is_unaffected(self) -> None:
+        """AC-5 — the seeded negative: a within-ceiling request changes nothing."""
+        config = _config_with_decision(
+            "recall_personal_history", _decision_with_ceilings(days_ago=30, limit=10)
+        )
+        arguments = {"days_ago": 5, "topic": "athens"}
+        clamped, applied = clamp_sub_agent_tool_params("recall_personal_history", arguments, config)
+        assert clamped == arguments
+        assert clamped is not arguments
+        assert applied == ()
+
+    def test_a_param_absent_from_the_ceiling_map_is_left_untouched(self) -> None:
+        """Only the declared parameters are ever clamped, even when others are out of range."""
+        config = _config_with_decision(
+            "recall_personal_history", _decision_with_ceilings(days_ago=30)
+        )
+        clamped, applied = clamp_sub_agent_tool_params(
+            "recall_personal_history", {"days_ago": 365, "limit": 999}, config
+        )
+        assert clamped == {"days_ago": 30, "limit": 999}
+        assert applied == (ParamClamp(param="days_ago", requested=365, applied=30),)
+
+    def test_a_tool_with_no_recorded_decision_is_a_no_op(self) -> None:
+        config = _config_with_decision(
+            "recall_personal_history", _decision_with_ceilings(days_ago=30)
+        )
+        clamped, applied = clamp_sub_agent_tool_params("web_search", {"days_ago": 365}, config)
+        assert clamped == {"days_ago": 365}
+        assert applied == ()
+
+    def test_a_decision_with_no_ceilings_is_a_no_op(self) -> None:
+        config = _config_with_decision(
+            "recall_personal_history", SubAgentToolDecision(granted=True, reason="no ceilings")
+        )
+        clamped, applied = clamp_sub_agent_tool_params(
+            "recall_personal_history", {"days_ago": 365}, config
+        )
+        assert clamped == {"days_ago": 365}
+        assert applied == ()
+
+    def test_the_input_mapping_is_never_mutated(self) -> None:
+        config = _config_with_decision(
+            "recall_personal_history", _decision_with_ceilings(days_ago=30)
+        )
+        arguments = {"days_ago": 365}
+        clamp_sub_agent_tool_params("recall_personal_history", arguments, config)
+        assert arguments == {"days_ago": 365}
+
+    def test_a_non_numeric_or_boolean_value_is_left_for_the_tools_own_validation(self) -> None:
+        """A malformed value is not this function's problem — it passes through unclamped."""
+        config = _config_with_decision(
+            "recall_personal_history", _decision_with_ceilings(days_ago=30)
+        )
+        clamped, applied = clamp_sub_agent_tool_params(
+            "recall_personal_history", {"days_ago": "a lot"}, config
+        )
+        assert clamped == {"days_ago": "a lot"}
+        assert applied == ()
+
+        clamped_bool, applied_bool = clamp_sub_agent_tool_params(
+            "recall_personal_history", {"days_ago": True}, config
+        )
+        assert clamped_bool == {"days_ago": True}
+        assert applied_bool == ()
+
+
+class TestShippedRecallPersonalHistoryCeiling:
+    """FRE-1473 AC-4 — the ceiling is declared beside the grant it constrains."""
+
+    def test_the_shipped_config_carries_the_recommended_ceiling(self) -> None:
+        from personal_agent.config.governance_loader import load_governance_config
+
+        config = load_governance_config()
+        decision = config.sub_agent_tools["recall_personal_history"]
+        assert decision.granted is True
+        assert decision.param_ceilings == {"days_ago": 30, "limit": 10}
+        assert "FRE-1473" in decision.reason
+
+    def test_the_primarys_own_tool_policy_is_untouched(self) -> None:
+        """AC-3's config half — no ceiling concept exists in the primary's own policy."""
+        from personal_agent.config.governance_loader import load_governance_config
+
+        config = load_governance_config()
+        policy = config.tools["recall_personal_history"]
+        assert not hasattr(policy, "param_ceilings")

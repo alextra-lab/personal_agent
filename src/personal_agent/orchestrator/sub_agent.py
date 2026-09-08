@@ -19,8 +19,12 @@ dispatches. It carries the turn's ``user_id``, ``authenticated`` and
 neither identity field, which put every identity-scoped tool out of a
 sub-agent's reach.
 
-A sub-agent's read is therefore now **equal to** the primary's, not narrower.
-What that changed, per granted tool:
+A sub-agent's read is therefore now close to the primary's, though no longer equal on every
+tool: FRE-1473 gave ``recall_personal_history`` a sub-agent-only parameter ceiling (see
+``dispatch_tool_call``'s ``principal="sub_agent"`` argument and
+``governance.sub_agent_tools.clamp_sub_agent_tool_params``), so a sub-agent's window and
+turn count are capped tighter than the primary's while the read itself uses the same
+identity. What identity changed, per granted tool:
 
 - ``search_memory`` — ``MemoryService.query_claims`` and
   ``query_claims_history`` stop returning ``[]`` on their missing-identity
@@ -35,7 +39,9 @@ What that changed, per granted tool:
   Returns the user's own past turns in the window: ``turn_id``, timestamp,
   session id, ``user_message`` and ``assistant_response`` (each capped at 400
   characters, the same bound ``search_memory`` applies to a matched turn),
-  ``summary``, discussed entities, and an optional topic-match flag.
+  ``summary``, discussed entities, and an optional topic-match flag. The window
+  and turn count are the sub-agent-only ceiling above, not the tool's own
+  365-day/50-turn range — that range still applies to the primary unchanged.
 - ``web_search`` — unchanged. It reads ``ctx.trace_id`` and no identity field.
 - ``run_python`` — unchanged. Same: ``ctx.trace_id`` only.
 
@@ -725,6 +731,7 @@ async def _run_tool_loop(
                 trace_id=trace_id,
                 session_id=session_id,
                 loaded_skills=loaded_skills,
+                principal="sub_agent",
             )
             state.tools_used.append(tool_name)
             content = str(dispatch_result["content"])

@@ -12,16 +12,18 @@ Owner decision (Linear FRE-1388, 2026-09-04): the grant set is ``run_python`` on
 FRE-1463 (2026-09-08) widened it and changed its shape. ``sub_agent_tools`` is now a
 per-tool decision record rather than a list of granted names, so a refusal is an entry
 carrying its reason instead of an absence indistinguishable from an unconsidered tool.
-``web_search`` and ``search_memory`` join ``run_python``; ``fetch_url`` and
-``recall_personal_history`` are refused, each for its own recorded reason. Read
-``GovernanceConfig.granted_sub_agent_tool_names()`` for the grant set — the mapping's
-keys include the refusals.
+``web_search`` and ``search_memory`` join ``run_python``; ``fetch_url`` stays refused.
+``recall_personal_history`` was refused the same day, then FRE-1467 reversed that refusal
+the same day, and FRE-1473 gave it a sub-agent-only parameter ceiling (see
+:func:`clamp_sub_agent_tool_params`). Read ``GovernanceConfig.granted_sub_agent_tool_names()``
+for the grant set — the mapping's keys include the refusals.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from personal_agent.governance.models import GovernanceConfig, Mode
 
@@ -112,6 +114,63 @@ def evaluate_sub_agent_tool_grant(
     denied = tuple(t for t in requested_tools if t not in allowed)
     denial_reason = _describe_denial(denied, config) if denied else None
     return SubAgentToolGrant(granted=granted, denied=denied, denial_reason=denial_reason)
+
+
+@dataclass(frozen=True)
+class ParamClamp:
+    """One tool argument the sub-agent principal's ceiling reduced (FRE-1473).
+
+    Attributes:
+        param: The clamped argument's name.
+        requested: The value the sub-agent asked for.
+        applied: The ceiling value used instead.
+    """
+
+    param: str
+    requested: int | float
+    applied: int
+
+
+def clamp_sub_agent_tool_params(
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    config: GovernanceConfig,
+) -> tuple[dict[str, Any], tuple[ParamClamp, ...]]:
+    """Clamp a sub-agent's tool arguments to this principal's declared ceilings (FRE-1473).
+
+    Reduces only the parameters named in ``config.sub_agent_tools[tool_name].param_ceilings``
+    — that mapping is declared beside the grant it constrains (AC-4) — and only when the
+    sub-agent's requested value exceeds the ceiling; an in-bounds request passes through with
+    the same values (AC-5). A tool with no recorded decision, or a decision with no ceilings,
+    is a no-op: this function never invents a ceiling the config does not declare. It carries
+    no notion of "primary" versus "sub-agent" itself — the caller must never invoke this for a
+    primary-principal call (see ``dispatch_tool_call``'s ``principal`` gate).
+
+    Args:
+        tool_name: The tool about to be dispatched.
+        arguments: The sub-agent's requested arguments. Never mutated.
+        config: Loaded governance configuration.
+
+    Returns:
+        A ``(clamped_arguments, applied_clamps)`` pair. ``clamped_arguments`` is always a new
+        dict, equal to ``arguments`` when ``applied_clamps`` is empty. ``applied_clamps`` holds
+        one entry per parameter actually reduced, in ``param_ceilings`` declaration order.
+    """
+    clamped = dict(arguments)
+    decision = config.sub_agent_tools.get(tool_name)
+    if decision is None or not decision.param_ceilings:
+        return clamped, ()
+
+    applied: list[ParamClamp] = []
+    for param, ceiling in decision.param_ceilings.items():
+        requested = clamped.get(param)
+        if not isinstance(requested, (int, float)) or isinstance(requested, bool):
+            continue
+        if requested > ceiling:
+            applied.append(ParamClamp(param=param, requested=requested, applied=ceiling))
+            clamped[param] = ceiling
+
+    return clamped, tuple(applied)
 
 
 def sub_agent_tool_requires_approval(

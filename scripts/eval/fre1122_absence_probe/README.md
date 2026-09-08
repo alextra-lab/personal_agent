@@ -98,7 +98,14 @@ uv run python scripts/eval/fre1122_absence_probe/runner.py preflight \
 # 2. The twenty turns. NEEDS THE OWNER'S AUTHORIZATION — see below.
 uv run python scripts/eval/fre1122_absence_probe/runner.py run \
     --probe-set telemetry/evaluation/fre1122-absence-probe/probe_set.yaml \
-    --user-id <owner-uuid> --authorized-by "<who authorized, when>"
+    --user-id <owner-uuid> --auth-email <the owner's address> \
+    --authorized-by "<who authorized, when>"
+
+# 2b. ONLY after an interrupted run. Fires what is missing, never what was sent.
+uv run python scripts/eval/fre1122_absence_probe/runner.py run --resume \
+    --probe-set telemetry/evaluation/fre1122-absence-probe/probe_set.yaml \
+    --user-id <owner-uuid> --auth-email <the owner's address> \
+    --authorized-by "<who authorized, when>"
 
 # 3. Pollution → cleanup → re-check. Dry run by default; --execute to delete.
 uv run python scripts/eval/fre1122_absence_probe/runner.py postcheck \
@@ -110,10 +117,15 @@ uv run python scripts/eval/fre1122_absence_probe/runner.py report \
     --probe-set telemetry/evaluation/fre1122-absence-probe/probe_set.yaml
 ```
 
-The relational and Elasticsearch side of cleanup is `scripts/cleanup_eval_data.py`,
-which purges by `session_id`. The run phase writes a `results.json` in the shape
-that script consumes — FRE-1122 is single-arm, so every turn appears as a
-control side:
+`postcheck` cleans **both** substrates: the graph nodes and the `sessions` rows
+that hold the message history. Absence is established against both, so a
+graph-only cleanup would leave every absent probe's own question behind and the
+absent half could never return to zero rows.
+
+`scripts/cleanup_eval_data.py` remains available for the Elasticsearch side. The
+run phase writes a `results.json` in the shape that script consumes, one row per
+probe naming that probe's own session — FRE-1122 is single-arm, so every turn
+appears as a control side:
 
 ```bash
 uv run python scripts/cleanup_eval_data.py \
@@ -127,6 +139,44 @@ permanently writes to the real corpus. `--authorized-by` is required, and the
 refusal happens before dispatch — it is not reachable as a side effect of
 running the other phases. `tests/evaluation/test_fre1122_runner_guard.py` pins
 that.
+
+## Identity: two things that must be the same owner
+
+The turn is authenticated by the `Cf-Access-Authenticated-User-Email` header,
+which `service/auth.py` reads on the loopback path — the pattern
+`scripts/eval/recovery_harness.py` already uses. This is *inbound* identity. It
+is not the Cloudflare Access service-token pattern ADR-0132 retires, and the
+Caddy egress work does not supply it.
+
+`--auth-email` is required for `run`, and it must resolve to `--user-id`. The
+service **upserts** an unknown address into `users` and returns a fresh id, so a
+run under the wrong address would create a user, measure their empty corpus,
+read every present probe as absent, and report a clean baseline. The run refuses
+before firing rather than warning, because nothing about that report would look
+wrong.
+
+## One session per probe, and what a resume may refire
+
+Each probe fires in its own session. Threading twenty probes through one session
+answered every probe inside the conversation history of the ones before it, and
+the history cap then rolled the earliest out partway through — so the twenty
+were not even biased uniformly.
+
+The per-turn ceiling is `--turn-timeout` (default 900s; a legitimate
+five-tool-iteration turn has been measured at 318.8s against the old hardcoded
+300s, which discarded nine completed turns). A failing probe no longer discards
+the others: the ledger in `run_answers.json` is rewritten after every probe and
+records how each attempt ended.
+
+**A resume never refires a probe whose request was submitted.** A client-side
+timeout does not cancel the turn — the question is already in
+`sessions.messages` — so refiring answers against a corpus containing the
+probe's own first firing. That destroys the ground truth rather than repeating
+the measurement, and the absent half is single-use. Only a probe that never
+reached the service (`not_submitted`) is refired automatically; a
+`submitted_unknown` probe is reported and left for the operator to decide.
+
+Without `--resume`, a `run` that finds existing answers refuses outright.
 
 ## The substrate question this fixture answers about itself
 
@@ -197,14 +247,21 @@ repairs the common uncontended case. Either way the pre-restore state is on
 disk. Deletion runs before restoration, so a crash cannot leave two current
 claims for the same fact.
 
-**Deletion refuses what it cannot prove.** Before anything destructive,
-`postcheck --execute` verifies the session's turns all belong to the named owner
-and that at least one carries a trace id the run recorded — a stale or
+**Deletion refuses what it cannot prove, per session.** Before anything
+destructive, `postcheck --execute` verifies **each** of the run's sessions
+independently: every turn in it must belong to the named owner *and* carry a
+trace id the run recorded — not merely one of them, and not merely in aggregate
+across the run. Aggregating would let a session contributing zero turns ride on
+the others and still reach the entity delete. On the relational side every
+requested session must have a `sessions` row owned by that same user. A stale or
 hand-edited artifact naming a real production session is refused, not deleted.
-Every turn in the session must be the owner's *and* carry a trace id the run
-recorded — not merely one of them. Entities are removed only when nothing
-outside the probe session references them; a probe-created entity a later turn adopted is retained and reported by
-name rather than destroyed along with that turn's edge.
+
+**The cleanup unit is the run, not one session.** Each probe fires in its own
+session, so "outside this session" would count another probe's turn as an
+outside reference and retain entities the run itself created. Every predicate
+therefore scopes to the run's whole session set, and one probe-created entity
+adopted by a turn *outside* the run is still retained and reported by name
+rather than destroyed along with that turn's edge.
 
 `postcheck` measures all of this and records the substrate decision AC-6 turns
 on: if cleanup restores the absent half, the FRE-1118 delta runs live on the

@@ -243,8 +243,9 @@ over `planner_completed` silently excludes every failed planner call. **One term
 event must fire on every path** — success, validation failure, timeout, exception and fallback.
 Without it, every criterion below measures a biased population.
 
-The event carries these fields, and every criterion below reads only these plus existing
-sub-agent captures:
+The event carries these fields. AC-1's arithmetic, AC-3, AC-4 and AC-6 read these and nothing
+else. AC-5 reads existing sub-agent captures. AC-1's text-parity half and the whole of AC-2 are
+tests, not telemetry queries, and are marked as such where they appear.
 
 | Field | Meaning |
 |-------|---------|
@@ -257,6 +258,7 @@ sub-agent captures:
 | `memory_digest_max_line_chars` | The longest emitted line, so the per-line bound is checkable live |
 | `memory_digest_tokens` | The estimated size of the emitted block |
 | `memory_digest_item_keys` | One compound `(kind, identity, ordinal)` key per line, in order |
+| `memory_rendered_item_keys` | The same compound keys for the shared selection's whole output, in order — AC-1's comparison set, which no existing capture holds |
 
 ### D6 — Enrichment stays out of scope
 
@@ -391,15 +393,17 @@ nothing and costs latency inside a turn budget that already fails.
   failed.
 - A memory-derived fact now reaches workers through goal text, and no mechanism bounds that
   (D2). This is new exposure, smaller than every rejected alternative's, but not zero.
-- Two new failure surfaces exist: a digest built and never used, and a `used` claim no goal
-  supports. AC-2 and AC-3 exist to catch both, and AC-2's limits are stated with it.
+- Two new failure surfaces exist. AC-2 and AC-3 catch the first — a digest built and never used.
+  The second, a live `used` claim that no goal supports, **stays unmeasured**: AC-2 proves
+  seeded capability on two controlled runs, and AC-3 only reads the field's distribution. Live
+  per-turn attribution needs the structured references Alternative 3 was rejected for.
 
 ### Risks and Mitigations
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
 | The digest is built and the planner ignores it, repeating FRE-1463's inert grant | High | AC-2's paired seeded runs prove the planner responds to a digest at all; AC-3 detects the field going constant in production |
-| The planner claims `used` without any goal reflecting the digest | Medium | AC-2 is a consistency invariant checked at 100%. Its blind spot is stated with it |
+| The planner claims `used` without any goal reflecting the digest | Medium | Unmitigated on live turns, and stated as such in Consequences. AC-2 proves the capability on a seeded pair only |
 | The digest grows past its ceiling on a memory-rich turn and feeds FRE-1138 | Medium | D4's three bounds, plus AC-4's seeded negative over 47 oversized items |
 | A future change attaches memory to `spec.context` and reopens structured routing | Medium | AC-5 asserts no rendered memory section appears in any sub-agent capture's context |
 | An inlined fact enters a `web_search` query and reaches upstream engines | Medium | Not mechanically bounded. D2 states this. The volume is one clause chosen by a reasoning component, and never a clause the primary's section did not also carry |
@@ -416,8 +420,8 @@ nothing and costs latency inside a turn budget that already fails.
   per-item helpers `_entity_line` / `_episode_text` / `_stance_line` (`:3603`, `:3635`, `:3650`)
   rather than raw items; the `controller.execute(...)` call site at `:5036` passes the digest.
 - `src/personal_agent/orchestrator/expansion_types.py` — a frozen `PlannerMemoryDigest`
-  (`text`, `item_keys`, `item_count`, `eligible_count`, `dropped_count`, `kind_counts`,
-  `max_line_chars`, `estimated_tokens`); `ExpansionPlan.memory_relevance`.
+  (`text`, `item_keys`, `rendered_item_keys`, `item_count`, `eligible_count`, `dropped_count`,
+  `kind_counts`, `max_line_chars`, `estimated_tokens`); `ExpansionPlan.memory_relevance`.
 - `src/personal_agent/orchestrator/expansion_controller.py` — `execute` and `_run_planner`
   signatures; `_build_planner_system_prompt` gains the digest block and the schema field;
   `_validate_plan_json` classifies a missing or invalid field as `unstated`; the terminal
@@ -454,7 +458,7 @@ ceiling, not a dependency.
 
 ## Verification / Acceptance Criteria
 
-**Two stated limits first, because both are design smells this ADR surfaces rather than hides.**
+**Three stated limits first, because each is a design smell this ADR surfaces rather than hides.**
 
 The first: these criteria prove the mechanism, not the answer quality. Whether a memory-informed
 spec produces a better sub-agent result has no turn-scoped instrument here. The eval set is not
@@ -465,37 +469,53 @@ The second: no criterion bounds what a goal discloses to a worker (D2). Lexical 
 that a fact travelled. Nothing here proves that it needed to. Closing that requires an egress
 control on the worker, which is out of scope and is Alternative 3's second reopening condition.
 
+The third: **a live `used` claim is never verified against the plan it describes.** AC-2 proves
+on a seeded pair that the planner can respond to a digest. In production the field stays a model
+self-report. Verifying it per turn needs the per-task structured references Alternative 3 was
+rejected for, so this is a consequence of that rejection, deliberately taken.
+
 - **AC-1** — Every digest line carries the primary renderer's own text for an item that renderer
-  selected, and the arithmetic of the bound closes. · **Check:** on the terminal planner event,
+  selected, and the arithmetic of the bound closes. · **Check, two halves.** *Telemetry:* on the
+  terminal planner event,
   `memory_digest_items == min(memory_digest_eligible_items, 20) - memory_digest_items_dropped`,
-  and `memory_digest_item_keys` is an ordered sub-multiset of the same turn's rendered
-  selection. Plus a unit test that feeds a set containing session items, blank items and more
-  than 47 items, and asserts every digest line is a prefix of the renderer's own line for the
-  same item. · *Fails if* the arithmetic does not close, or any digest line carries text the
-  renderer would not have emitted for that item — either of which means a worker can be told
-  something the primary's section never carried. The dropped count is logged precisely so this
-  can be an equality rather than an unfalsifiable inequality.
+  and `memory_digest_item_keys` is an ordered sub-multiset of `memory_rendered_item_keys` on
+  that same event. *Test:* a unit test feeds a set containing session items, blank items and
+  more than 47 items, and asserts every digest line is a prefix of the renderer's own line for
+  the same item. · *Fails if* the arithmetic does not close, a digest key is absent from the
+  rendered keys, or any digest line carries text the renderer would not have emitted for that
+  item — each of which means a worker can be told something the primary's section never carried.
+  Both key lists are logged on the one event precisely so the comparison needs no join: no
+  existing capture holds the renderer's compound keys.
 
 - **AC-2** — **The digest changes the plan, and an irrelevant digest does not.** Two seeded
   planner runs on the same query: one whose digest carries a decisive relevant fact, one whose
   digest carries only unrelated items. · **Check:** an integration test
-  (`PERSONAL_AGENT_INTEGRATION=1`) invoking the real planner. The relevant run must produce a
-  task goal that acts on the seeded fact. The unrelated run must return `none_relevant` and must
-  not carry the seeded fact's terms into any goal. · *Fails if* both runs produce the same plan,
-  which means the digest changed nothing, or if the unrelated run reports `used`, which means
-  the judgment is not a judgment. **Why this replaced a live lexical count:** an earlier draft
-  counted digest terms appearing in goals. That check is not even necessary — a clause such as
-  *"prefers automatic"* can shape a goal without the goal repeating the item's name — so it can
-  fail on a working planner, and it can pass on one that copies a name into every goal. A paired
-  seeded run discriminates on the property the decision actually claims.
+  (`PERSONAL_AGENT_INTEGRATION=1`) invoking the real planner. **The oracle is deterministic
+  because the test owns the seed.** The relevant digest's decisive value is a token that cannot
+  arise by chance and cannot be guessed from the query — a coined identifier, not a real-world
+  word. The test declares that token plus a small closed set of accepted equivalents, and
+  asserts: the relevant run carries one of them in at least one task goal, and the unrelated run
+  carries none of them in any goal and returns `none_relevant`. · *Fails if* the relevant run
+  produces no goal carrying the token, which means the digest changed nothing that matters, or
+  if the unrelated run reports `used` or leaks the token. Plan text differing between runs is
+  **not** accepted as a pass: a planner varies stylistically while ignoring memory entirely, so
+  only the seeded token discriminates. **Why this replaced a live lexical count:** an earlier
+  draft counted digest terms appearing in goals on live turns. That check is not even necessary
+  — a clause such as *"prefers automatic"* can shape a goal without the goal repeating the
+  item's name — so it can fail on a working planner, and it can pass on one that copies a name
+  into every goal. **The seeded token is not that check under another name.** The test owns the
+  seed, so the token is decisive by construction and its absence is a real failure. On a live
+  turn nothing tells the reader which recalled term mattered, so the same match proves nothing
+  either way.
 
 - **AC-3** — In production the judgment **discriminates**: over at least 20 live turns whose
   digest was non-empty, both `used` and `none_relevant` are observed. · **Check:** count the four
   `memory_relevance` values over the terminal planner events, stratified by
   `memory_digest_kinds` so turns whose digest held only standing behavioural stances are
-  reported separately. · *Fails if* one value is constant across the sample, which is FRE-1463's
-  inert grant reproduced in a new place, or if `unstated` dominates, which means the planner
-  never learned the field. **Why no rate is fixed here.** An earlier draft set a 25% floor. That
+  reported separately. · *Fails if* `memory_relevance` is constant across the sample, which is
+  FRE-1463's inert grant reproduced in a new place, or if `unstated` is the most frequent of the
+  four values, which means the planner never learned the field. Both conditions are counts over
+  one logged field, with no threshold left to judgment. **Why no rate is fixed here.** An earlier draft set a 25% floor. That
   number had no empirical basis, and the criterion below it is a model self-report that a
   planner can satisfy by emitting `used` mechanically. The honest position is that no defensible
   production rate exists in advance, because the digest's own relevance depends on recall that
@@ -579,4 +599,7 @@ framing: an inlined fact does reach the worker, so D2 now states the invariant i
 guarantees and names the exposure it does not close. Codex round 2 showed the five-value
 relevance enum demanded two values at once on an empty-digest fallback, and killed the original
 AC-2 on the stronger ground that a lexical check is not even necessary. D3 now records one axis,
-and AC-2 is a paired seeded planner run.
+and AC-2 is a paired seeded planner run. Codex round 3 confirmed D3 free of ambiguous and
+unreachable states, and closed the last gaps: AC-1's comparison set is now logged rather than
+assumed, AC-2's oracle is a coined seed token rather than a semantic judgment, and AC-3's one
+undefined threshold is a plurality test. The round budget is exhausted at three.

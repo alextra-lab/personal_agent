@@ -42,12 +42,24 @@ sub_agent_tools:
   search_memory:
     granted: true
     reason: >-
-      FRE-1463, 2026-09-08. An internal read with no egress and no spend, and
-      strictly narrower for a sub-agent than for the primary: the sub-agent's
-      TraceContext carries no user_id and no authenticated flag, so
-      MemoryService.query_claims returns [] on its missing-identity guard and the
-      FRE-229 visibility filter reveals no group-visibility rows. What remains is
-      entities, turn summaries and session context.
+      FRE-1463, 2026-09-08; re-grounded by FRE-1467 the same day. The original
+      reason justified the grant BY the sub-agent's missing identity — claims
+      returned [] and no group-visibility row was reachable. FRE-1467 threads the
+      turn's user_id and authenticated flag into the sub-agent's TraceContext, so
+      that reason is now false and the grant needs the ground below. It is a graph
+      read of the connecting user's own memory that costs nothing, and it is the
+      same read the primary already performs on that user's behalf in the same
+      turn. What identity added: claims, claims_history, group- and
+      private-visibility rows in entity-match and broad recall, and the
+      authenticated gate on stance_history — which is scoped to the harness
+      owner's is_owner sentinel, not to the connecting user. The query itself
+      reaches no external host, but the rows it returns enter the sub-agent's
+      message stream and are sent to the configured sub-agent provider, which may
+      be a cloud deployment; a sub-agent also holding web_search can place them in
+      a model-authored query that SearXNG forwards to upstream engines. That
+      channel is not new — the sub-agent's context slice already carries the
+      turn's own conversation — but it is the honest description of where this
+      data can travel.
 
   fetch_url:
     granted: false
@@ -59,13 +71,30 @@ sub_agent_tools:
       is the complete search-then-fetch chain. Revisit when FRE-1360 lands.
 
   recall_personal_history:
-    granted: false
+    granted: true
     reason: >-
-      FRE-1463, 2026-09-08. Refused because it cannot work: the executor raises
-      missing_user_id when ctx.user_id is absent, and the sub-agent's
-      TraceContext never carries one. A grant today hands a sub-agent a tool
-      whose only outcome is an error reading "this is a bug; report it". Revisit
-      when sub-agent identity threading lands.
+      FRE-1467, 2026-09-08, reversing the FRE-1463 refusal of the same day. That
+      refusal rested on one ground — the tool could not work, because the
+      sub-agent's TraceContext carried no user_id and the executor raises
+      missing_user_id without one. FRE-1467 removed that ground, so the refusal
+      needs a different one. The read is scoped to the connecting user's own past
+      turns and costs nothing, and it returns the same 400-character caps on
+      user_message and assistant_response that search_memory applies to a matched
+      turn. What it adds over search_memory is reach, not raw text: up to 50 turns
+      across up to 365 days, with no relevance filter. Two real arguments against,
+      both recorded rather than dismissed. First, disclosure: the returned rows
+      enter the sub-agent's message stream, go to the configured sub-agent
+      provider (possibly cloud), and a sub-agent also holding web_search can place
+      them in a model-authored query that SearXNG forwards upstream. Second, the
+      tool's own description says to use it only when the user explicitly refers
+      to their personal history, and a sub-agent's task text is planner-authored,
+      so no deterministic intent gate exists — though the sub-agent does read that
+      description in its tool definitions and does hold the turn's own context.
+      Granted because neither argument distinguishes this tool from what a
+      sub-agent already reaches: the same channel carries its context slice and
+      search_memory's own turn previews today. The widening is the time window.
+      Revisit at FRE-1388 if the sub-agent principal is defined narrower than the
+      primary, or at FRE-1360.
 
 # Per-mode allowed categories. Used by the mode-policy gate in evaluate_governance().
 # Not intersected with TaskType — the TaskType→tool-filter wire was severed in

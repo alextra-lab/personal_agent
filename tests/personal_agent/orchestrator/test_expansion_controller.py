@@ -235,7 +235,9 @@ class TestPlannerPromptToolSurface:
         assert "web_search" in surface
         assert "search_memory" in surface
         assert "fetch_url" not in surface
-        assert "recall_personal_history" not in surface
+        # FRE-1467 granted this one: FRE-1463 refused it only because it could
+        # not work without an identity, and FRE-1467 threads the identity.
+        assert "recall_personal_history" in surface
 
     @pytest.mark.parametrize("mode", [Mode.ALERT, Mode.DEGRADED])
     def test_the_denied_modes_advertise_nothing(

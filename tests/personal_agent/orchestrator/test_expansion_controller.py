@@ -201,6 +201,53 @@ class TestPlannerPromptToolSurface:
 
         assert ec._current_sub_agent_tool_surface("t") == []
 
+    def test_a_refused_decision_is_never_advertised(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FRE-1463 — the one bug the decision-record shape can introduce.
+
+        ``sub_agent_tools`` is a mapping now, so iterating it would offer every
+        key to the planner, refusals included. The planner would then request a
+        tool the grant evaluation refuses, on every turn.
+        """
+        from personal_agent.governance.models import GovernanceConfig, SubAgentToolDecision
+        from personal_agent.orchestrator import expansion_controller as ec
+
+        config = GovernanceConfig(
+            modes={},
+            tools={},
+            sub_agent_tools={
+                "run_python": SubAgentToolDecision(granted=True, reason="granted"),
+                "fetch_url": SubAgentToolDecision(granted=False, reason="refused on 2026-09-08"),
+            },
+            mode_constraints={},
+        )
+        monkeypatch.setattr(ec, "get_current_mode", lambda: Mode.NORMAL)
+        monkeypatch.setattr(ec, "load_governance_config", lambda: config)
+
+        assert ec._current_sub_agent_tool_surface("t") == ["run_python"]
+
+    def test_the_live_surface_carries_the_new_grants(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FRE-1463 AC-2 (config half) — the planner may now ask for the new tools."""
+        from personal_agent.orchestrator import expansion_controller as ec
+
+        monkeypatch.setattr(ec, "get_current_mode", lambda: Mode.NORMAL)
+
+        surface = ec._current_sub_agent_tool_surface("t")
+        assert "web_search" in surface
+        assert "search_memory" in surface
+        assert "fetch_url" not in surface
+        assert "recall_personal_history" not in surface
+
+    @pytest.mark.parametrize("mode", [Mode.ALERT, Mode.DEGRADED])
+    def test_the_denied_modes_advertise_nothing(
+        self, mode: Mode, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1463 AC-5 — the revocation reaches the planner surface too."""
+        from personal_agent.orchestrator import expansion_controller as ec
+
+        monkeypatch.setattr(ec, "get_current_mode", lambda: mode)
+
+        assert ec._current_sub_agent_tool_surface("t") == []
+
 
 class TestExpansionControllerExecute:
     @pytest.fixture
@@ -985,10 +1032,15 @@ class TestSubAgentToolGrant:
 
     @staticmethod
     def _hermetic_config() -> Any:
-        from personal_agent.governance.models import GovernanceConfig
+        from personal_agent.governance.models import GovernanceConfig, SubAgentToolDecision
 
         return GovernanceConfig(
-            modes={}, tools={}, sub_agent_tools=["run_python"], mode_constraints={}
+            modes={},
+            tools={},
+            sub_agent_tools={
+                "run_python": SubAgentToolDecision(granted=True, reason="granted for this test")
+            },
+            mode_constraints={},
         )
 
     @staticmethod
@@ -1222,10 +1274,16 @@ class TestSubAgentGapRedispatch:
 
     @staticmethod
     def _hermetic_config(sub_agent_tools: list[str]) -> Any:
-        from personal_agent.governance.models import GovernanceConfig
+        from personal_agent.governance.models import GovernanceConfig, SubAgentToolDecision
 
         return GovernanceConfig(
-            modes={}, tools={}, sub_agent_tools=sub_agent_tools, mode_constraints={}
+            modes={},
+            tools={},
+            sub_agent_tools={
+                name: SubAgentToolDecision(granted=True, reason="granted for this test")
+                for name in sub_agent_tools
+            },
+            mode_constraints={},
         )
 
     @staticmethod

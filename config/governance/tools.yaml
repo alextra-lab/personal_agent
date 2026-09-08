@@ -2,17 +2,70 @@
 # See ADR-0005 for detailed semantics
 
 # FRE-1388: sub-agent tool principal. A sub-agent is a distinct governance
-# principal from the primary, not a subset of it — this list is the ONLY
+# principal from the primary, not a subset of it — this block is the ONLY
 # source of a sub-agent's tool grants and does not consult a tool's own
-# `allowed_in_modes` below. Owner decision, 2026-09-04: grant set is
-# run_python only. Not web_search, fetch_url, search_memory, or
-# recall_personal_history — those want their own decision later.
+# `allowed_in_modes` below.
+#
+# Owner decision, 2026-09-04: grant set was run_python only. Not web_search,
+# fetch_url, search_memory, or recall_personal_history — those wanted their own
+# decision later. FRE-1463 (2026-09-08) is that decision, and each of the four
+# is answered separately below because they differ in egress, spend and trust.
+#
+# FRE-1463 also changed the shape: an entry per tool, carrying `granted` and the
+# reason. A refusal is a recorded entry, not an absence — an absence cannot say
+# whether a tool was refused or simply never considered. Membership of this
+# mapping therefore proves only that a decision exists; read
+# `GovernanceConfig.granted_sub_agent_tool_names()` for the grant set.
+#
 # Sub-agents additionally hold no tools at all in ALERT or DEGRADED mode
-# regardless of this list (enforced in code — personal_agent.governance.
-# sub_agent_tools.SUB_AGENT_DENIED_MODES — because a sub-agent runs
-# unattended and those modes have no approver to grant `requires_approval_in_modes`).
+# regardless of this block (enforced in code — personal_agent.governance.
+# sub_agent_tools.SUB_AGENT_DENIED_MODES). FRE-1461 wired the ADR-0076
+# constraint pause to the sub-agent path, so the "runs unattended" premise
+# behind that revocation no longer holds; lifting it is its own owner decision.
 sub_agent_tools:
-  - "run_python"
+  run_python:
+    granted: true
+    reason: >-
+      Owner decision, 2026-09-04 (FRE-1388): the first and, until 2026-09-08, the
+      only grant. Sandboxed execution with no network route of its own.
+
+  web_search:
+    granted: true
+    reason: >-
+      FRE-1463, 2026-09-08. Its absence produces confabulation, not silence: two
+      research sub-agents refused this tool wrote a ranked agency table and a
+      pricing verification from parametric recall, then ran run_python over the
+      figures they had invented (session 36b4ac05). Egress is the self-hosted
+      SearXNG instance (ADR-0034), so a call bills nothing; only the opt-in
+      categories="exa" reaches a paid vendor.
+
+  search_memory:
+    granted: true
+    reason: >-
+      FRE-1463, 2026-09-08. An internal read with no egress and no spend, and
+      strictly narrower for a sub-agent than for the primary: the sub-agent's
+      TraceContext carries no user_id and no authenticated flag, so
+      MemoryService.query_claims returns [] on its missing-identity guard and the
+      FRE-229 visibility filter reveals no group-visibility rows. What remains is
+      entities, turn summaries and session context.
+
+  fetch_url:
+    granted: false
+    reason: >-
+      FRE-1463, 2026-09-08. Refused while FRE-1360 is open. Its destination is
+      model-selected and arbitrary — it reaches any http(s) host the model names,
+      which web_search cannot do — and FRE-1360 still delivers that text to the
+      model as user text with no tool-result channel. web_search plus fetch_url
+      is the complete search-then-fetch chain. Revisit when FRE-1360 lands.
+
+  recall_personal_history:
+    granted: false
+    reason: >-
+      FRE-1463, 2026-09-08. Refused because it cannot work: the executor raises
+      missing_user_id when ctx.user_id is absent, and the sub-agent's
+      TraceContext never carries one. A grant today hands a sub-agent a tool
+      whose only outcome is an error reading "this is a bug; report it". Revisit
+      when sub-agent identity threading lands.
 
 # Per-mode allowed categories. Used by the mode-policy gate in evaluate_governance().
 # Not intersected with TaskType — the TaskType→tool-filter wire was severed in

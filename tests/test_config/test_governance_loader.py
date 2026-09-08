@@ -220,18 +220,27 @@ def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
     """FRE-1388 AC-1 — the sub-agent principal's grant set loads from the real config
 
     and is independent of the primary's per-tool ``allowed_in_modes``.
+
+    FRE-1463 turned the flat list into a per-tool decision record, so the
+    independence claim is now asserted against the granted subset. Membership of
+    the mapping proves only that a decision was recorded — ``fetch_url`` is a key
+    and is refused.
     """
     project_root = Path(__file__).parent.parent.parent
     config_dir = project_root / "config" / "governance"
 
     config = load_governance_config(config_dir)
 
-    # Owner decision, 2026-09-04: the grant set is run_python only.
-    assert config.sub_agent_tools == ["run_python"]
-    # web_search is granted to the primary in NORMAL but is not in the
-    # sub-agent grant set — proves the two lists are genuinely independent.
-    assert "web_search" in config.tools
-    assert "web_search" not in config.sub_agent_tools
+    granted = config.granted_sub_agent_tool_names()
+    # Owner decisions, 2026-09-04 and 2026-09-08 (FRE-1388, FRE-1463).
+    assert set(granted) == {"run_python", "web_search", "search_memory"}
+    # fetch_url is granted to the primary in NORMAL but refused to the sub-agent
+    # principal — proves the two policies are genuinely independent.
+    assert "fetch_url" in config.tools
+    assert "fetch_url" not in granted
+    # ... and the refusal is a recorded entry, not an absence (FRE-1463 AC-1).
+    assert config.sub_agent_tools["fetch_url"].granted is False
+    assert config.sub_agent_tools["fetch_url"].reason.strip()
 
 
 def test_governance_config_safety_policies() -> None:

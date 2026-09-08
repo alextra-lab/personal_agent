@@ -47,6 +47,7 @@ from personal_agent.governance.models import (
     RateLimits,
     SafetyConfig,
     SecretPattern,
+    SubAgentToolDecision,
     ToolCategory,
     ToolPolicy,
     TransitionCondition,
@@ -82,8 +83,9 @@ __all__ = [
     "RateLimits",
     "HumanApproval",
     "HumanApprovalRule",
-    # Sub-agent tool principal (FRE-1388, FRE-1461)
+    # Sub-agent tool principal (FRE-1388, FRE-1461, FRE-1463)
     "SUB_AGENT_DENIED_MODES",
+    "SubAgentToolDecision",
     "SubAgentToolGrant",
     "evaluate_sub_agent_tool_grant",
     "sub_agent_tool_requires_approval",

@@ -68,6 +68,7 @@ cost_gate: "CostGate | None" = None  # type: ignore  # noqa: F821
 cost_gate_reaper_task: asyncio.Task[None] | None = None
 cost_gate_snapshotter_task: asyncio.Task[None] | None = None
 cost_gate_silence_monitor_task: asyncio.Task[None] | None = None
+sandbox_reaper_task: asyncio.Task[None] | None = None
 
 # Fire-and-forget assistant message appends: session_id -> task (FRE-51).
 # Next request for same session awaits this so history is consistent before hydration.
@@ -655,7 +656,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cost_gate, \
         cost_gate_reaper_task, \
         cost_gate_snapshotter_task, \
-        cost_gate_silence_monitor_task
+        cost_gate_silence_monitor_task, \
+        sandbox_reaper_task
 
     # Startup
     log.info("service_starting")
@@ -857,6 +859,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "main_inference_silence_monitor_startup_failed",
                 error=str(silence_exc),
                 remedy="Verify config/models.yaml; the monitor stays off until next restart.",
+                exc_info=True,
+            )
+
+        # Sandbox container reaper (FRE-1462): backstop for run_python (and any
+        # future sandboxed tool) leaving a Docker container running past its
+        # turn — two containers survived 2+ days undetected before this ticket.
+        # Started here, after the ES handler is wired above, for the same
+        # reason as the silence monitor: its first sweep can fire almost
+        # immediately, and a reaped-orphan record is only useful (AC-4) if it
+        # reaches ES rather than file/console only.
+        try:
+            from personal_agent.tools.primitives.sandbox import run_sandbox_reaper
+
+            sandbox_reaper_task = asyncio.create_task(
+                run_sandbox_reaper(), context=contextvars.Context()
+            )
+        except Exception as sandbox_reaper_exc:  # noqa: BLE001
+            log.error(
+                "sandbox_reaper_startup_failed",
+                error=str(sandbox_reaper_exc),
+                remedy="Orphaned sandbox containers will not be auto-reaped until next restart.",
                 exc_info=True,
             )
 
@@ -1539,6 +1562,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             except asyncio.CancelledError:
                 pass
             cost_gate_silence_monitor_task = None
+        if sandbox_reaper_task is not None:
+            sandbox_reaper_task.cancel()
+            try:
+                await sandbox_reaper_task
+            except asyncio.CancelledError:
+                pass
+            sandbox_reaper_task = None
         if cost_gate is not None:
             from personal_agent.cost_gate import set_default_gate as _set_default_gate
 

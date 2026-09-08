@@ -12,15 +12,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.primitives.run_python import (
-    _DEFAULT_TIMEOUT,
     _MAX_TIMEOUT,
     _MIN_TIMEOUT,
     run_python_executor,
 )
 from personal_agent.tools.primitives.sandbox import SandboxResult
-from personal_agent.telemetry.trace import TraceContext
-
 
 _CTX = TraceContext.new_trace()
 
@@ -169,6 +167,76 @@ async def test_run_python_timeout_propagated() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_python_passes_tool_name_to_sandbox() -> None:
+    """run_in_sandbox is called with tool="run_python" for durable attribution.
+
+    FRE-1462 AC-4 — sandbox.py is tool-agnostic, so the caller must supply it.
+    """
+    mock_run_in_sandbox = AsyncMock(return_value=_success_result())
+    with (
+        patch("shutil.which", return_value="/usr/bin/docker"),
+        patch(
+            "personal_agent.tools.primitives.run_python.run_in_sandbox",
+            new=mock_run_in_sandbox,
+        ),
+    ):
+        await run_python_executor(script="print(1)", ctx=_CTX)
+
+    assert mock_run_in_sandbox.call_args.kwargs["tool"] == "run_python"
+
+
+@pytest.mark.asyncio
+async def test_run_python_timeout_logs_terminated_event() -> None:
+    """A timed-out run emits a durable, tool/turn/limit-named warning log.
+
+    Distinct from the generic per-call info log (FRE-1462 AC-4).
+    """
+    with (
+        patch("shutil.which", return_value="/usr/bin/docker"),
+        patch(
+            "personal_agent.tools.primitives.run_python.run_in_sandbox",
+            new=AsyncMock(return_value=_failure_result(timed_out=True)),
+        ),
+        patch("personal_agent.tools.primitives.run_python.log") as mock_log,
+    ):
+        await run_python_executor(
+            script="import time; time.sleep(999)", timeout_seconds=42, ctx=_CTX
+        )
+
+    terminated_calls = [
+        call for call in mock_log.warning.call_args_list if call.args[0] == "run_python_terminated"
+    ]
+    assert len(terminated_calls) == 1
+    kwargs = terminated_calls[0].kwargs
+    assert kwargs["tool"] == "run_python"
+    assert kwargs["timeout_seconds"] == 42
+    assert kwargs["trace_id"] == _CTX.trace_id
+
+
+@pytest.mark.asyncio
+async def test_run_python_no_terminated_log_on_success() -> None:
+    """A normal completion does not emit the terminated-event log.
+
+    Seeded negative for AC-4 — the record must be specific to an actual
+    bound firing.
+    """
+    with (
+        patch("shutil.which", return_value="/usr/bin/docker"),
+        patch(
+            "personal_agent.tools.primitives.run_python.run_in_sandbox",
+            new=AsyncMock(return_value=_success_result(stdout="ok")),
+        ),
+        patch("personal_agent.tools.primitives.run_python.log") as mock_log,
+    ):
+        await run_python_executor(script="print('ok')", ctx=_CTX)
+
+    terminated_calls = [
+        call for call in mock_log.warning.call_args_list if call.args[0] == "run_python_terminated"
+    ]
+    assert terminated_calls == []
+
+
+@pytest.mark.asyncio
 async def test_run_python_oom_propagated() -> None:
     """oom=True from sandbox is surfaced in the executor result."""
     with (
@@ -233,7 +301,9 @@ async def test_run_python_scratch_files_propagated(tmp_path: Path) -> None:
             new=AsyncMock(return_value=sandbox_result),
         ),
     ):
-        result = await run_python_executor(script="open('/sandbox/output.txt','w').write('x')", ctx=_CTX)
+        result = await run_python_executor(
+            script="open('/sandbox/output.txt','w').write('x')", ctx=_CTX
+        )
 
     assert result["scratch_files"] == fake_files
 

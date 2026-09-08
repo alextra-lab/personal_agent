@@ -70,6 +70,10 @@ APPROVAL_REQUIRED = "approval_required"
 APPROVAL_GRANTED = "approval_granted"
 APPROVAL_DENIED = "approval_denied"
 
+# FRE-1473: a sub-agent's tool argument exceeded its principal-specific ceiling
+# and was reduced rather than refused. Fires only when a clamp actually applies.
+SUB_AGENT_TOOL_PARAM_CLAMPED = "sub_agent_tool_param_clamped"
+
 # Session events
 SESSION_CREATED = "session_created"
 SESSION_CLOSED = "session_closed"

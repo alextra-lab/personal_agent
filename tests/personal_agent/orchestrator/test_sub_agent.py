@@ -608,6 +608,36 @@ class TestSubAgentToolLoop:
         assert dispatch_mock.call_args.kwargs["tool_name"] == "run_python"
 
     @pytest.mark.asyncio
+    async def test_dispatch_is_called_with_the_sub_agent_principal(self) -> None:
+        """FRE-1473 — every tool call this loop dispatches identifies as the sub-agent
+        principal, so ``dispatch_tool_call`` can apply its parameter ceiling (AC-1).
+        """
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "",
+                    tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}],
+                ),
+                _llm_response("final answer"),
+            ]
+        )
+        dispatch_mock = AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok"))
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch_mock),
+        ):
+            await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert dispatch_mock.call_args.kwargs["principal"] == "sub_agent"
+
+    @pytest.mark.asyncio
     async def test_the_refusal_names_the_tool_to_the_sub_agent(self) -> None:
         """FRE-1463 AC-3 — the refusal reaches the sub-agent and names the tool.
 

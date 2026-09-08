@@ -72,6 +72,9 @@ sub_agent_tools:
 
   recall_personal_history:
     granted: true
+    param_ceilings:
+      days_ago: 30
+      limit: 10
     reason: >-
       FRE-1467, 2026-09-08, reversing the FRE-1463 refusal of the same day. That
       refusal rested on one ground — the tool could not work, because the
@@ -95,6 +98,15 @@ sub_agent_tools:
       search_memory's own turn previews today. The widening is the time window.
       Revisit at FRE-1388 if the sub-agent principal is defined narrower than the
       primary, or at FRE-1360.
+
+      FRE-1473, 2026-09-08: the widening above is now bounded for this principal.
+      days_ago is capped at 30 and limit at 10, clamped rather than refused when
+      exceeded (a worker's task is scoped to the current turn, and a month of
+      turns is generous for that) — master's recommendation, put to the owner for
+      confirmation rather than adopted silently; revisit these two numbers on that
+      word. The primary's own tool policy still allows the full 365-day/50-turn
+      range; this ceiling reads only from param_ceilings above and never touches
+      that policy.
 
 # Per-mode allowed categories. Used by the mode-policy gate in evaluate_governance().
 # Not intersected with TaskType — the TaskType→tool-filter wire was severed in

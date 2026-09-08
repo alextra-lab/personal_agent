@@ -1,14 +1,14 @@
 """Shared per-call tool dispatch boundary.
 
 `dispatch_tool_call` executes one validated, gate-allowed tool call and returns
-its result payload. It is the single dispatch path invoked by the primary
-executor loop (`orchestrator.executor.step_tool_execution`), designed so any
-future caller (e.g. a sub-agent loop) can reuse it without re-implementing
+its result payload. It is the single dispatch path invoked by both the primary
+executor loop (`orchestrator.executor.step_tool_execution`) and the sub-agent
+loop (`orchestrator.sub_agent.run_sub_agent`), so it does not re-implement
 tool permissions, action-boundary governance (ADR-0063), and per-call
 telemetry/``trace_id`` threading (ADR-0074) — all inherited from
 `ToolExecutionLayer.execute_tool`; this function adds only parameter
-validation, known-bad-pattern pre-checks, skill-load dedup, and error
-formatting.
+validation, known-bad-pattern pre-checks, skill-load dedup, per-principal
+parameter clamping (FRE-1473), and error formatting.
 
 The function takes the few request primitives it needs (``trace_id``,
 ``session_id``, ``loaded_skills``) rather than an ``ExecutionContext`` so a
@@ -21,12 +21,14 @@ and they echo back as ``None`` in the contract dict.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
+from personal_agent.governance.sub_agent_tools import clamp_sub_agent_tool_params
 from personal_agent.orchestrator.loop_gate import GateResult, ToolLoopPolicy, stable_hash
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.events import SUB_AGENT_TOOL_PARAM_CLAMPED
 from personal_agent.telemetry.trace import TraceContext
 
 if TYPE_CHECKING:
@@ -70,6 +72,7 @@ async def dispatch_tool_call(
     args_hash: str = "",
     gate_result: GateResult | None = None,
     loop_policy: ToolLoopPolicy | None = None,
+    principal: Literal["primary", "sub_agent"] = "primary",
 ) -> dict[str, Any]:
     """Execute one validated tool call and return its result payload.
 
@@ -92,6 +95,13 @@ async def dispatch_tool_call(
             Phase-3 gate record. Defaults to "" for callers without a gate.
         gate_result: Loop-gate decision from the primary, or ``None``.
         loop_policy: Loop policy from the primary, or ``None``.
+        principal: Which governance principal issued this call (FRE-1473).
+            ``"sub_agent"`` runs ``arguments`` through
+            ``clamp_sub_agent_tool_params`` before anything else, reducing any
+            parameter over that principal's declared ceiling and logging each
+            reduction. Defaults to ``"primary"``, which never calls the clamp
+            function at all — the primary's own tool policy is untouched by
+            this parameter's existence, not merely by its value.
 
     Returns:
         A dict with keys: ``tool_call_id``, ``tool_name``, ``content``,
@@ -100,6 +110,22 @@ async def dispatch_tool_call(
         ``tool_layer_error``, ``terminal``, ``terminal_reason``,
         ``terminal_next_step``.
     """
+    if principal == "sub_agent":
+        arguments, param_clamps = clamp_sub_agent_tool_params(
+            tool_name, arguments, tool_layer.governance_config
+        )
+        for clamp in param_clamps:
+            log.info(
+                SUB_AGENT_TOOL_PARAM_CLAMPED,
+                trace_id=trace_id,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                principal=principal,
+                param=clamp.param,
+                requested=clamp.requested,
+                applied=clamp.applied,
+            )
+
     # Validate required parameters against the tool definition.
     tool_info = tool_layer.registry.get_tool(tool_name)
     if tool_info:

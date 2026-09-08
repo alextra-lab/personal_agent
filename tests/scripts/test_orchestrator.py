@@ -769,6 +769,14 @@ def test_run_once_confirmed_run_never_stall_notifies_via_the_real_transition() -
 _BUILD_WORKTREE = "/opt/seshat/.claude/worktrees/build"
 _WEDGE_IDLE_PANE = "some earlier output\n❯\n"
 _WEDGE_BUSY_PANE = "● Building… (1m 2s · ↑ 4.1k tokens)\n❯\n"
+# FRE-1457: the second suspected-wedge shape — RC busy, the pane holds the
+# TUI's own live decision prompt (no ❯-anchored spinner, so it is not
+# genuinely progressing).
+_WEDGE_PROMPT_PANE = (
+    "Switch model? Opus 5 offers deeper reasoning for this task.\n"
+    "❯ 1. Yes, switch to Opus 5\n"
+    "  2. No, go back\n"
+)
 
 
 class _WedgeRunner(_RecordingRunner):
@@ -779,11 +787,20 @@ class _WedgeRunner(_RecordingRunner):
     (the wedge) or a live spinner (a genuine turn). Everything else answers so
     the launch reaches the reuse→``seat-busy`` outcome: session present, clean
     worktree, RC reachable.
+
+    ``pane_sequence`` (FRE-1457's AC-4 test) makes each successive
+    ``capture-pane`` return the next entry, cycling to the last once
+    exhausted — models a genuinely advancing spinner (elapsed time, token
+    count) rather than one static string repeated every tick. Mutually
+    exclusive with ``pane`` in practice, though both may be set; a sequence
+    always takes priority when non-empty.
     """
 
-    def __init__(self, *, pane: str) -> None:
+    def __init__(self, *, pane: str = "", pane_sequence: Sequence[str] = ()) -> None:
         super().__init__()
         self._pane = pane
+        self._pane_sequence = list(pane_sequence)
+        self._captures = 0
 
     def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
         self.calls.append(tuple(argv))
@@ -793,6 +810,10 @@ class _WedgeRunner(_RecordingRunner):
         if args[:2] == ["tmux", "list-panes"]:
             return _FakeRunResult(stdout=f"claude\t{_BUILD_WORKTREE}\n")
         if args[:2] == ["tmux", "capture-pane"]:
+            if self._pane_sequence:
+                index = min(self._captures, len(self._pane_sequence) - 1)
+                self._captures += 1
+                return _FakeRunResult(stdout=self._pane_sequence[index])
             return _FakeRunResult(stdout=self._pane)
         if args[:2] == ["claude", "agents"]:
             agent = {
@@ -913,6 +934,11 @@ def test_wedge_is_surfaced_past_threshold_and_never_killed() -> None:
     assert len(wedge_events) == 1, "master is pinged once on the crossing tick"
     assert wedge_events[0][1]["stream"] == "build1"
     assert wedge_events[0][1]["ticket"] == "FRE-1"
+    # FRE-1457: this pane-idle event names its own shape, distinct from the
+    # held-prompt shape below (see test_held_prompt_is_surfaced_with_its_own_reason).
+    assert wedge_events[0][1]["reason"] == "pane-idle"
+    assert wedge_events[0][1]["outcome"] == "seat-busy"
+    assert wedge_state["build1"].reason == "pane-idle"
     # The distinct anomaly log fires on every post-threshold tick (ticks 3 and 4).
     wedge_logs = [w for w in logger.warnings if w[0] == "dispatch_seat_wedged"]
     assert len(wedge_logs) == 2
@@ -1011,6 +1037,135 @@ def test_genuinely_busy_seat_is_never_mistaken_for_a_wedge() -> None:
     assert "build1" not in wedge_state  # reset every tick
     assert "build1" not in state  # generic seat-busy still writes no record
     assert _no_termination_argv(runner)
+
+
+# --- FRE-1457: a second suspected-wedge shape (held interactive prompt) -----
+
+
+def test_held_prompt_is_surfaced_with_its_own_reason() -> None:
+    """AC-1 + AC-2: an RC-busy + held-decision-prompt seat is surfaced distinctly.
+
+    Mirrors ``test_wedge_is_surfaced_past_threshold_and_never_killed`` but for
+    the second suspected-wedge shape: the pane is not idle (a live decision
+    prompt reads as busy), yet nothing progresses either since no spinner
+    shows. Ticks below the threshold must notify ZERO times — an "eventually
+    fires" assertion alone would still pass a premature-firing bug.
+    """
+    runner = _WedgeRunner(pane=_WEDGE_PROMPT_PANE)
+    state, wedge_state, notifier, logger = _run_wedge(runner, ticks=2, wedge_ticks=2)
+    assert not any(e[0] == "dispatch_seat_wedged" for e in notifier.events)
+    assert wedge_state["build1"].count == 2
+
+    state, wedge_state, notifier, logger = _run_wedge(runner, ticks=4, wedge_ticks=2)
+    wedge_events = [e for e in notifier.events if e[0] == "dispatch_seat_wedged"]
+    assert len(wedge_events) == 1, "master is pinged once on the crossing tick"
+    assert wedge_events[0][1]["reason"] == "held-prompt"
+    assert wedge_events[0][1]["outcome"] == "seat-busy"
+    assert wedge_events[0][1]["prompt_summary"]
+    assert "1. Yes" in wedge_events[0][1]["prompt_summary"]
+    assert wedge_state["build1"].reason == "held-prompt"
+    assert _no_termination_argv(runner)
+
+
+def test_held_prompt_reaches_notify_ledger(tmp_path: Path) -> None:
+    """AC-1: the held-prompt entry is retrievable the same way the pane-idle one is."""
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_WEDGE_PROMPT_PANE)
+    _run_wedge(runner, ticks=4, wedge_ticks=2, notify_ledger_path=path)
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    unconsumed = trigger_ledger.snapshot_unconsumed(ledger)
+    assert any(e.source == "dispatch_seat_wedged" for e in unconsumed)
+
+
+def test_wedge_reason_change_resets_the_episode() -> None:
+    """Codex plan-review Focus 3: a reason change is a new episode, not a continuation.
+
+    Two pane-idle ticks followed by a held-prompt tick must NOT cross
+    ``wedge_ticks=2`` off that single held-prompt observation — carrying the
+    pane-idle count into the new reason would break AC-1's persistence
+    guarantee. The reason-boundary reset (mirroring ``_reset_wedge``'s own
+    resolve-before-persist ordering) restarts the count at 1 for the new
+    reason; it then needs its OWN two ticks to cross the same threshold.
+    """
+    runner = _WedgeRunner(pane=_WEDGE_IDLE_PANE)
+    state: dict[str, DispatchRecord] = {}
+    wedge_state: dict[str, WedgeState] = {}
+    notifier = _Notifier()
+
+    def _one_tick() -> None:
+        run_once(
+            ["build1"],
+            state,
+            now=0.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: [_issue("FRE-1", "Approved", _OPUS)],
+            reconcile=lambda _t: None,
+            runner=runner,
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=_NullLogger(),
+            execute=True,
+            rc_alive=lambda: True,
+            wedge_state=wedge_state,
+            wedge_ticks=2,
+        )
+
+    _one_tick()
+    _one_tick()
+    assert wedge_state["build1"].count == 2
+    assert wedge_state["build1"].reason == "pane-idle"
+    assert not any(e[0] == "dispatch_seat_wedged" for e in notifier.events)
+
+    runner._pane = _WEDGE_PROMPT_PANE  # reason changes mid-episode
+    _one_tick()
+    assert wedge_state["build1"].count == 1, "reset, not carried over from pane-idle"
+    assert wedge_state["build1"].reason == "held-prompt"
+    assert not any(e[0] == "dispatch_seat_wedged" for e in notifier.events)
+
+    _one_tick()
+    _one_tick()
+    assert wedge_state["build1"].count == 3
+    wedge_events = [e for e in notifier.events if e[0] == "dispatch_seat_wedged"]
+    assert len(wedge_events) == 1
+    assert wedge_events[0][1]["reason"] == "held-prompt"
+
+    runner._pane = _WEDGE_IDLE_PANE  # and the reverse transition also resets
+    _one_tick()
+    assert wedge_state["build1"].count == 1
+    assert wedge_state["build1"].reason == "pane-idle"
+    assert len(wedge_events) == 1, "no new ping off a single post-transition tick"
+
+
+def test_advancing_spinner_pane_is_never_a_wedge_across_ten_ticks() -> None:
+    """AC-4 (the ticket's own wording): a genuinely busy, ADVANCING seat is never a wedge.
+
+    A single static spinner string repeated every tick cannot distinguish
+    "spinner present" from "spinner present and changing" — this fixture
+    varies elapsed time and token count on every capture, matching what a
+    live in-progress turn actually renders, across the ticket's own "at least
+    ten ticks" bar.
+    """
+    spinners = [
+        f"● Building… ({i}m {i * 7}s · ↑ {4.0 + i * 0.3:.1f}k tokens)\n❯\n" for i in range(1, 11)
+    ]
+    runner = _WedgeRunner(pane_sequence=spinners)
+    state, wedge_state, notifier, logger = _run_wedge(runner, ticks=10, wedge_ticks=2)
+
+    assert not any(e[0] == "dispatch_seat_wedged" for e in notifier.events)
+    assert not any(w[0] == "dispatch_seat_wedged" for w in logger.warnings)
+    assert "build1" not in wedge_state
+    assert "build1" not in state
+
+
+def test_held_prompt_renotify_schedule_bounded_over_ten_ticks(tmp_path: Path) -> None:
+    """AC-5: the held-prompt shape is bounded to one ledger entry, same as pane-idle."""
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_WEDGE_PROMPT_PANE)
+    _run_wedge(runner, ticks=10, wedge_ticks=2, wedge_renotify_ticks=3, notify_ledger_path=path)
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    assert len(ledger) == 1, "one entry regardless of how many ticks the condition persisted"
+    (entry,) = ledger.values()
+    assert entry.preconditions["reason"] == "held-prompt"
 
 
 def test_stale_wedge_count_is_reset_on_a_non_wedge_decision() -> None:

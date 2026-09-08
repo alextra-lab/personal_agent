@@ -61,7 +61,7 @@ from scripts.dispatch.launcher import (
     known_streams,
     plan_launch,
     seat_state,
-    seat_wedge_signature,
+    seat_wedge_reason,
     subprocess_runner,
     topology_for,
 )
@@ -460,10 +460,20 @@ class WedgeState:
             so a dispatcher restart resumes the re-notification schedule
             instead of losing it (silence) or restarting it (an immediate
             duplicate ping the moment the process comes back).
+        reason: Which suspected-wedge shape this episode is (FRE-1457) —
+            ``"pane-idle"`` or ``"held-prompt"``, see ``SeatWedgeSignal``. A
+            tick classified under a DIFFERENT reason than the persisted one
+            ends this episode rather than continuing its count — the two
+            shapes are different blocking conditions, and carrying one's count
+            into the other would let a single tick of the new reason cross an
+            already-primed threshold (``_note_wedge``'s reason-boundary
+            reset). Defaults to ``"pane-idle"`` so a wedge-state file written
+            before this field existed still loads (FRE-1077's original shape).
     """
 
     count: int
     last_notified_count: int = 0
+    reason: str = "pane-idle"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1260,27 +1270,37 @@ def _apply(
             else:
                 state.pop(stream, None)
             persist(state)
-            # FRE-922/FRE-1077: a ``seat-busy`` outcome whose seat shows the
-            # suspected-wedge signature (RC busy while the pane is idle) is
-            # counted; past the threshold it is SURFACED — a distinct, greppable
-            # anomaly and a master ping on a re-notify schedule (not just once)
-            # — instead of silently re-emitting ``seat-busy`` forever. Any other
-            # outcome (a real dispatch, or a genuinely-busy seat whose spinner
-            # shows) resets the count. This path NEVER kills a process: detection
-            # and surfacing only, master decides (AC-2).
+            # FRE-922/FRE-1077/FRE-1457: a ``seat-busy`` outcome whose seat
+            # shows a suspected-wedge shape (RC busy while the pane is idle —
+            # ``"pane-idle"``; or RC busy while the pane holds a live decision
+            # prompt with no progress — ``"held-prompt"``) is counted; past the
+            # threshold it is SURFACED — a distinct, greppable anomaly and a
+            # master ping on a re-notify schedule (not just once) — instead of
+            # silently re-emitting ``seat-busy`` forever. Any other outcome (a
+            # real dispatch, or a genuinely-busy seat whose spinner shows)
+            # resets the count. This path NEVER kills a process: detection and
+            # surfacing only, master decides (AC-2).
             # (``execute`` is already True here — the dry-run early return above
             # precedes this — so the wedge check never runs in a dry-run tick.)
-            if result.outcome == "seat-busy" and seat_wedge_signature(topology_for(stream), runner):
+            wedge_signal = (
+                seat_wedge_reason(topology_for(stream), runner)
+                if result.outcome == "seat-busy"
+                else None
+            )
+            if wedge_signal is not None:
                 _note_wedge(
                     stream,
                     decision.ticket,
                     wedge_state,
+                    reason=wedge_signal.reason,
+                    prompt_summary=wedge_signal.prompt_summary,
                     wedge_ticks=wedge_ticks,
                     wedge_renotify_ticks=wedge_renotify_ticks,
                     trace_id=trace_id,
                     notifier=notifier,
                     logger=logger,
                     persist_wedge=persist_wedge,
+                    notify_ledger_path=notify_ledger_path,
                 )
             else:
                 _reset_wedge(stream, wedge_state, persist_wedge, notify_ledger_path, logger)
@@ -1466,17 +1486,36 @@ def _reset_wedge(
         persist_wedge(wedge_state)
 
 
+# FRE-1457: the two suspected-wedge shapes a ``WedgeState`` episode can carry.
+_WEDGE_REASONS: frozenset[str] = frozenset({"pane-idle", "held-prompt"})
+_WEDGE_DETAIL: dict[str, str] = {
+    "pane-idle": (
+        "remote-control reports busy while the pane is idle — a suspected "
+        "orphaned background poller (CC #61568); dispatch is blocked"
+    ),
+    "held-prompt": (
+        "remote-control reports busy while the pane holds a live decision "
+        "prompt with no progress — the seat is blocked on an interactive "
+        "prompt (FRE-1457) that only a human or master can answer; dispatch "
+        "is blocked"
+    ),
+}
+
+
 def _note_wedge(
     stream: str,
     ticket: str,
     wedge_state: dict[str, WedgeState],
     *,
+    reason: str,
+    prompt_summary: str | None,
     wedge_ticks: int,
     wedge_renotify_ticks: int,
     trace_id: str,
     notifier: Notifier,
     logger: Logger,
     persist_wedge: Callable[[dict[str, WedgeState]], None],
+    notify_ledger_path: Path | None,
 ) -> None:
     """Count a suspected-wedge tick and keep surfacing it past the threshold.
 
@@ -1503,6 +1542,15 @@ def _note_wedge(
     between the two means the worst case is one extra, survivable re-ping on
     the next tick, never a silently lost one.
 
+    A tick classified under a DIFFERENT ``reason`` than the persisted episode
+    (FRE-1457) ends that episode rather than continuing its count — the
+    ``pane-idle`` and ``held-prompt`` shapes are different blocking
+    conditions, and carrying one's count into the other would let a single
+    tick of the new reason cross an already-primed threshold. The stale
+    ledger entry is resolved before the new episode starts (mirroring
+    ``_reset_wedge``'s own resolve-before-persist ordering), then the new
+    reason's count begins at 1 exactly like a fresh episode.
+
     Detection and surfacing only — no process is ever terminated here; master
     decides whether to intervene (AC-2, FRE-922).
 
@@ -1510,6 +1558,12 @@ def _note_wedge(
         stream: The wedged stream.
         ticket: The ticket whose dispatch the wedge is blocking.
         wedge_state: Per-stream persisted state, mutated in place.
+        reason: Which suspected-wedge shape this tick matched — ``"pane-idle"``
+            or ``"held-prompt"`` (FRE-1457, see ``SeatWedgeSignal``).
+        prompt_summary: For ``"held-prompt"``, the matched prompt text (see
+            ``pane_state.held_prompt_summary``) — threaded into the
+            notification so master can act without capturing the pane
+            (AC-2). ``None`` for ``"pane-idle"``.
         wedge_ticks: Consecutive ticks tolerated before surfacing.
         wedge_renotify_ticks: Ticks between re-notifications past the crossing
             tick. Clamped to a minimum of 1 (mirroring
@@ -1521,9 +1575,13 @@ def _note_wedge(
         notifier: The master-notification sink (pinged on the schedule above).
         logger: Structured logger (warns every post-threshold tick).
         persist_wedge: Persists ``wedge_state`` after this tick's mutation.
+        notify_ledger_path: Resolves a stale ledger entry on a reason change.
     """
     wedge_renotify_ticks = max(1, wedge_renotify_ticks)
     prior = wedge_state.get(stream)
+    if prior is not None and prior.reason != reason:
+        _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_seat_wedged", stream)
+        prior = None
     count = (prior.count if prior is not None else 0) + 1
     last_notified = prior.last_notified_count if prior is not None else 0
     should_notify = False
@@ -1534,8 +1592,9 @@ def _note_wedge(
             stream=stream,
             ticket=ticket,
             consecutive_ticks=count,
-            detail="remote-control reports busy while the pane is idle — a suspected "
-            "orphaned background poller (CC #61568); dispatch is blocked",
+            reason=reason,
+            prompt_summary=prompt_summary,
+            detail=_WEDGE_DETAIL[reason],
         )
         should_notify = last_notified == 0 or count - last_notified >= wedge_renotify_ticks
         if should_notify:
@@ -1545,8 +1604,11 @@ def _note_wedge(
                 stream=stream,
                 ticket=ticket,
                 consecutive_ticks=count,
+                reason=reason,
+                prompt_summary=prompt_summary,
+                outcome="seat-busy",
             )
-    wedge_state[stream] = WedgeState(count, count if should_notify else last_notified)
+    wedge_state[stream] = WedgeState(count, count if should_notify else last_notified, reason)
     persist_wedge(wedge_state)
 
 
@@ -1875,6 +1937,8 @@ def load_wedge_state(path: Path) -> dict[str, WedgeState]:
             or wedge.last_notified_count < 0
             or wedge.last_notified_count > wedge.count
         ):
+            continue
+        if wedge.reason not in _WEDGE_REASONS:
             continue
         state[stream] = wedge
     return state

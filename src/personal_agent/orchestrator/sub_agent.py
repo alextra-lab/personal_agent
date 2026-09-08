@@ -28,6 +28,10 @@ import structlog
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
 from personal_agent.config import settings
 from personal_agent.llm_client.types import GenerationProgress, LLMTimeout
+from personal_agent.orchestrator.sub_agent_approval import (
+    get_sub_agent_approval_broker,
+    resolve_sub_agent_approval_requirements,
+)
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 from personal_agent.orchestrator.tool_dispatch import (
     dispatch_tool_call,
@@ -508,6 +512,8 @@ async def _run_tool_loop(
     trace_id: str,
     session_id: str | None,
     effective_timeout: float,
+    approval_required_tools: frozenset[str],
+    deadline_monotonic: float,
 ) -> tuple[str, str | None]:
     """Run inference/tool-execution rounds until the model stops or the cap fires.
 
@@ -537,6 +543,15 @@ async def _run_tool_loop(
             not the "explicit override beats the declaration" trap this ticket removes
             — it IS the declaration — and it keeps every other cloud producer's
             timeout untouched.
+        approval_required_tools: Granted tools that need the owner's word before
+            they run (FRE-1461), resolved once by
+            :func:`~personal_agent.orchestrator.sub_agent_approval.resolve_sub_agent_approval_requirements`.
+            Empty for every sub-agent under today's shipped config, which is why
+            this ships inert.
+        deadline_monotonic: This call's absolute ``time.monotonic()`` deadline — the
+            same bound the outer ``wait_for`` enforces. The approval pause is opened
+            only when enough of it remains for the worker to outlive its own wait,
+            so a refusal is always recorded rather than lost to a mid-pause kill.
 
     Raises:
         _ToolIterationLimitReached: When another tool batch would exceed
@@ -614,6 +629,52 @@ async def _run_tool_loop(
                     }
                 )
                 continue
+
+            # FRE-1461: the owner's gate. Checked AFTER the argument parse, so a
+            # malformed call is refused without troubling anyone, and before
+            # dispatch, so a denial costs nothing. A missing broker is a denial,
+            # not an allowance: an approval-required tool with nobody to ask has no
+            # other safe answer, and the pre-FRE-1461 behaviour here was to proceed
+            # with only a warning logged.
+            if tool_name in approval_required_tools:
+                broker = get_sub_agent_approval_broker()
+                if broker is None:
+                    outcome_approved, outcome_reason = False, "no_approver_in_scope"
+                else:
+                    outcome = await broker.decide(
+                        tool_name,
+                        task=spec.task,
+                        worker_remaining_seconds=deadline_monotonic - time.monotonic(),
+                    )
+                    outcome_approved, outcome_reason = outcome.approved, outcome.reason
+                if not outcome_approved:
+                    logger.warning(
+                        "sub_agent_tool_approval_denied",
+                        tool_name=tool_name,
+                        reason=outcome_reason,
+                        task=spec.task,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                    )
+                    error_content = json.dumps(
+                        {
+                            "status": "error",
+                            "hint": (
+                                f"{tool_name} was not approved for this turn "
+                                f"({outcome_reason}). Continue without it."
+                            ),
+                        }
+                    )
+                    state.tool_result_chars_absorbed += len(error_content)
+                    state.messages.append(
+                        {
+                            "tool_call_id": tool_call_id,
+                            "role": "tool",
+                            "name": tool_name,
+                            "content": error_content,
+                        }
+                    )
+                    continue
 
             dispatch_result = await dispatch_tool_call(
                 tool_call_id=tool_call_id,
@@ -741,6 +802,17 @@ async def run_sub_agent(
         hard_deadline = _effective_hard_deadline(spec, effective_timeout)
         if max_deadline_seconds is not None:
             hard_deadline = min(hard_deadline, max_deadline_seconds)
+
+        # FRE-1461: resolved once per sub-agent, not per tool call — the governance
+        # config is read from YAML each time, and the answer cannot change inside one
+        # worker's loop in any way that matters. An empty grant costs no lookup.
+        approval_required_tools = resolve_sub_agent_approval_requirements(
+            spec.tools, trace_id=trace_id
+        )
+        # The same instant the wait_for below is measured from, expressed absolutely
+        # so the approval gate can ask how much of THIS worker's budget is left.
+        deadline_monotonic = time.monotonic() + hard_deadline
+
         response_content, stated_tool_gap = await asyncio.wait_for(
             _run_tool_loop(
                 state,
@@ -752,6 +824,8 @@ async def run_sub_agent(
                 trace_id,
                 session_id,
                 effective_timeout,
+                approval_required_tools,
+                deadline_monotonic,
             ),
             timeout=hard_deadline,
         )

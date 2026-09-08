@@ -8,6 +8,14 @@ sub-agent may use, and it does not fall back to the primary's policy for anythin
 absent from ``GovernanceConfig.sub_agent_tools``.
 
 Owner decision (Linear FRE-1388, 2026-09-04): the grant set is ``run_python`` only.
+
+FRE-1463 (2026-09-08) widened it and changed its shape. ``sub_agent_tools`` is now a
+per-tool decision record rather than a list of granted names, so a refusal is an entry
+carrying its reason instead of an absence indistinguishable from an unconsidered tool.
+``web_search`` and ``search_memory`` join ``run_python``; ``fetch_url`` and
+``recall_personal_history`` are refused, each for its own recorded reason. Read
+``GovernanceConfig.granted_sub_agent_tool_names()`` for the grant set — the mapping's
+keys include the refusals.
 """
 
 from __future__ import annotations
@@ -48,6 +56,30 @@ class SubAgentToolGrant:
     denial_reason: str | None = None
 
 
+def _describe_denial(denied: Sequence[str], config: GovernanceConfig) -> str:
+    """Phrase a refusal so it names each tool and, where recorded, says why.
+
+    A tool refused by an explicit decision record carries that record's reason
+    (FRE-1463 AC-3). A tool nobody has decided on has no reason to quote, and
+    keeps the pre-FRE-1463 wording.
+
+    Args:
+        denied: The refused tool names, in request order.
+        config: Loaded governance configuration.
+
+    Returns:
+        A single human-readable sentence naming every refused tool.
+    """
+    parts: list[str] = []
+    for name in denied:
+        decision = config.sub_agent_tools.get(name)
+        if decision is not None and not decision.granted:
+            parts.append(f"{name} ({decision.reason})")
+        else:
+            parts.append(name)
+    return f"not in sub-agent tool grant set: {', '.join(parts)}"
+
+
 def evaluate_sub_agent_tool_grant(
     requested_tools: Sequence[str],
     mode: Mode,
@@ -74,10 +106,11 @@ def evaluate_sub_agent_tool_grant(
             denial_reason=f"sub-agents hold no tools in {mode.value} mode",
         )
 
-    allowed = set(config.sub_agent_tools)
+    # The granted subset, never the mapping's keys — a refused decision is still a key.
+    allowed = set(config.granted_sub_agent_tool_names())
     granted = tuple(t for t in requested_tools if t in allowed)
     denied = tuple(t for t in requested_tools if t not in allowed)
-    denial_reason = f"not in sub-agent tool grant set: {', '.join(denied)}" if denied else None
+    denial_reason = _describe_denial(denied, config) if denied else None
     return SubAgentToolGrant(granted=granted, denied=denied, denial_reason=denial_reason)
 
 

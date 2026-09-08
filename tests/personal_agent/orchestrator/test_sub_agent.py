@@ -608,6 +608,43 @@ class TestSubAgentToolLoop:
         assert dispatch_mock.call_args.kwargs["tool_name"] == "run_python"
 
     @pytest.mark.asyncio
+    async def test_the_refusal_names_the_tool_to_the_sub_agent(self) -> None:
+        """FRE-1463 AC-3 — the refusal reaches the sub-agent and names the tool.
+
+        The AC's failure clause is "the request silently returns nothing — the
+        sub-agent then reports an absence it cannot distinguish from an empty
+        result". So the audience is the sub-agent, and the proof is the tool
+        message it reads on the next round, not a log line.
+        """
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "", tool_calls=[{"id": "c0", "name": "fetch_url", "arguments": "{}"}]
+                ),
+                _llm_response("final answer"),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", AsyncMock()),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.refused_tool_attempts == ("fetch_url",)
+        second_round_messages = mock_client.respond.call_args_list[1].kwargs["messages"]
+        tool_messages = [m for m in second_round_messages if m.get("role") == "tool"]
+        assert tool_messages, "the sub-agent saw no tool message at all"
+        assert "fetch_url" in tool_messages[-1]["content"]
+        assert "not available" in tool_messages[-1]["content"]
+
+    @pytest.mark.asyncio
     async def test_malformed_arguments_are_refused_without_dispatch(self) -> None:
         mock_client = AsyncMock()
         mock_client.respond = AsyncMock(

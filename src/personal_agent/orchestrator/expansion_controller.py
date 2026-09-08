@@ -78,7 +78,10 @@ def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
         return []
     if current_mode in SUB_AGENT_DENIED_MODES:
         return []
-    return list(governance_config.sub_agent_tools)
+    # The granted subset, never the mapping's keys (FRE-1463): a refused entry is
+    # still a key, and advertising it would have the planner request a tool the
+    # grant evaluation then refuses, on every turn.
+    return list(governance_config.granted_sub_agent_tool_names())
 
 
 def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:

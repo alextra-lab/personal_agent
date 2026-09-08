@@ -10,7 +10,7 @@ This module defines the schema for governance policies including:
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Mode(str, Enum):
@@ -261,6 +261,44 @@ class SafetyConfig(BaseModel):
     )
 
 
+class SubAgentToolDecision(BaseModel):
+    """One tool's recorded grant decision for the sub-agent principal (FRE-1463).
+
+    A list of granted names can only record the tools that were said yes to. A
+    refusal then reads as an absence, indistinguishable from a tool nobody has
+    considered yet. This record carries both answers and the reason for each, so
+    ``config/governance/tools.yaml`` states the decision rather than its result.
+
+    Attributes:
+        granted: Whether a sub-agent may use this tool.
+        reason: Why the decision went that way. Required and non-blank — a reason
+            that may be empty turns this record back into a list of names.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    granted: bool = Field(..., description="Whether a sub-agent may use this tool")
+    reason: str = Field(..., min_length=1, description="Why this decision was made")
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_is_not_blank(cls, value: str) -> str:
+        """Reject a whitespace-only reason.
+
+        Args:
+            value: The recorded reason.
+
+        Returns:
+            The reason unchanged.
+
+        Raises:
+            ValueError: When the reason holds no non-whitespace character.
+        """
+        if not value.strip():
+            raise ValueError("reason must not be blank")
+        return value
+
+
 class GovernanceConfig(BaseModel):
     """Complete governance configuration."""
 
@@ -272,12 +310,14 @@ class GovernanceConfig(BaseModel):
         default_factory=dict, description="Tool category definitions"
     )
     tools: dict[str, ToolPolicy] = Field(..., description="Tool policies")
-    sub_agent_tools: list[str] = Field(
-        default_factory=list,
+    sub_agent_tools: dict[str, SubAgentToolDecision] = Field(
+        default_factory=dict,
         description=(
-            "Tool names granted to the sub-agent principal (FRE-1388). Independent of "
-            "`tools[name].allowed_in_modes`, which governs the primary only — a sub-agent "
-            "is a distinct principal, not a subset of the primary's policy."
+            "The sub-agent principal's tool decisions, one per tool (FRE-1388, FRE-1463). "
+            "Independent of `tools[name].allowed_in_modes`, which governs the primary only — "
+            "a sub-agent is a distinct principal, not a subset of the primary's policy. "
+            "Membership proves only that a decision was recorded; read "
+            "`granted_sub_agent_tool_names()` for the grant set."
         ),
     )
     mode_constraints: dict[str, ModeModelConstraints] = Field(
@@ -286,3 +326,15 @@ class GovernanceConfig(BaseModel):
     safety: SafetyConfig = Field(
         default_factory=lambda: SafetyConfig(), description="Safety config"
     )
+
+    def granted_sub_agent_tool_names(self) -> tuple[str, ...]:
+        """The tool names a sub-agent may actually use, in declaration order.
+
+        The single accessor for the grant set (FRE-1463). Iterating
+        ``sub_agent_tools`` directly yields every key, refusals included, which
+        would grant a tool whose entry says ``granted: false``.
+
+        Returns:
+            The granted tool names, in the order the config declares them.
+        """
+        return tuple(name for name, decision in self.sub_agent_tools.items() if decision.granted)

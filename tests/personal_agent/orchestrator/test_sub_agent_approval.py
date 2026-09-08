@@ -22,7 +22,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import personal_agent.orchestrator.executor as ex
-from personal_agent.governance.models import GovernanceConfig, Mode, ToolPolicy
+from personal_agent.governance.models import (
+    GovernanceConfig,
+    Mode,
+    SubAgentToolDecision,
+    ToolPolicy,
+)
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.constraint_options import ConstraintDecision
 from personal_agent.orchestrator.sub_agent import run_sub_agent
@@ -596,7 +601,9 @@ class TestRequirementResolverFailsClosed:
                     requires_approval_in_modes=["NORMAL"],
                 )
             },
-            sub_agent_tools=["run_python"],
+            sub_agent_tools={
+                "run_python": SubAgentToolDecision(granted=True, reason="granted for this test")
+            },
             mode_constraints={},
         )
         with (

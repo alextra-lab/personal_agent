@@ -11,7 +11,15 @@ AC-5: an empty request changes nothing, preserving the pre-FRE-1388 status quo.
 
 from __future__ import annotations
 
-from personal_agent.governance.models import GovernanceConfig, Mode, ToolPolicy
+import pytest
+from pydantic import ValidationError
+
+from personal_agent.governance.models import (
+    GovernanceConfig,
+    Mode,
+    SubAgentToolDecision,
+    ToolPolicy,
+)
 from personal_agent.governance.sub_agent_tools import (
     SUB_AGENT_DENIED_MODES,
     evaluate_sub_agent_tool_grant,
@@ -19,11 +27,28 @@ from personal_agent.governance.sub_agent_tools import (
 )
 
 
+def _granted(*tool_names: str) -> dict[str, SubAgentToolDecision]:
+    """Build a decision mapping granting exactly ``tool_names``."""
+    return {
+        name: SubAgentToolDecision(granted=True, reason="granted for this test")
+        for name in tool_names
+    }
+
+
 def _config(sub_agent_tools: list[str]) -> GovernanceConfig:
     return GovernanceConfig(
         modes={},
         tools={},
-        sub_agent_tools=sub_agent_tools,
+        sub_agent_tools=_granted(*sub_agent_tools),
+        mode_constraints={},
+    )
+
+
+def _config_with_decisions(decisions: dict[str, SubAgentToolDecision]) -> GovernanceConfig:
+    return GovernanceConfig(
+        modes={},
+        tools={},
+        sub_agent_tools=decisions,
         mode_constraints={},
     )
 
@@ -32,7 +57,7 @@ def _config_with_policy(tool_name: str, policy: ToolPolicy) -> GovernanceConfig:
     return GovernanceConfig(
         modes={},
         tools={tool_name: policy},
-        sub_agent_tools=[tool_name],
+        sub_agent_tools=_granted(tool_name),
         mode_constraints={},
     )
 
@@ -185,3 +210,126 @@ class TestApprovalRequirementPredicate:
         config = load_governance_config()
         assert sub_agent_tool_requires_approval("run_python", Mode.NORMAL, config) is False
         assert sub_agent_tool_requires_approval("run_python", Mode.ALERT, config) is True
+
+
+# --------------------------------------------------------------------------------------
+# FRE-1463 — the grant is a per-tool decision record, not a list of names.
+# --------------------------------------------------------------------------------------
+
+
+class TestADecisionRecordCarriesItsReason:
+    """FRE-1463 AC-1 — a refusal is an entry with a reason, not an absence."""
+
+    def test_a_refused_entry_is_not_granted(self) -> None:
+        config = _config_with_decisions(
+            {
+                "run_python": SubAgentToolDecision(granted=True, reason="the 2026-09-04 grant"),
+                "fetch_url": SubAgentToolDecision(granted=False, reason="the 2026-09-08 refusal"),
+            }
+        )
+        assert config.granted_sub_agent_tool_names() == ("run_python",)
+
+    def test_a_refused_entry_is_denied_at_evaluation(self) -> None:
+        """The leak this shape can introduce: a key read as a grant.
+
+        Iterating the mapping would grant ``fetch_url`` because it is a key. The
+        evaluation must read the granted subset, not the keys.
+        """
+        config = _config_with_decisions(
+            {"fetch_url": SubAgentToolDecision(granted=False, reason="refused on 2026-09-08")}
+        )
+        grant = evaluate_sub_agent_tool_grant(["fetch_url"], Mode.NORMAL, config)
+        assert grant.granted == ()
+        assert grant.denied == ("fetch_url",)
+
+    def test_an_explicit_refusal_surfaces_its_recorded_reason(self) -> None:
+        """AC-3 — the denial names the tool AND says why it was refused."""
+        config = _config_with_decisions(
+            {"fetch_url": SubAgentToolDecision(granted=False, reason="FRE-1360 is still open")}
+        )
+        grant = evaluate_sub_agent_tool_grant(["fetch_url"], Mode.NORMAL, config)
+        assert grant.denial_reason is not None
+        assert "fetch_url" in grant.denial_reason
+        assert "FRE-1360 is still open" in grant.denial_reason
+
+    def test_a_tool_with_no_entry_is_still_denied_and_still_named(self) -> None:
+        """AC-3's seeded negative — absence keeps working, with no recorded reason to add."""
+        config = _config(["run_python"])
+        grant = evaluate_sub_agent_tool_grant(["bash"], Mode.NORMAL, config)
+        assert grant.denied == ("bash",)
+        assert grant.denial_reason is not None
+        assert "bash" in grant.denial_reason
+
+    def test_a_blank_reason_is_rejected(self) -> None:
+        """A reason that may be blank is a list wearing a mapping's clothes."""
+        with pytest.raises(ValidationError):
+            SubAgentToolDecision(granted=False, reason="   ")
+
+
+class TestTheShippedDecisions:
+    """FRE-1463 AC-1 — the four deferred tools each carry their own answer."""
+
+    @pytest.mark.parametrize(
+        ("tool_name", "expected_granted"),
+        [
+            ("run_python", True),
+            ("web_search", True),
+            ("search_memory", True),
+            ("fetch_url", False),
+            ("recall_personal_history", False),
+        ],
+    )
+    def test_each_tool_has_its_own_decision_and_a_reason(
+        self, tool_name: str, expected_granted: bool
+    ) -> None:
+        from personal_agent.config.governance_loader import load_governance_config
+
+        config = load_governance_config()
+        decision = config.sub_agent_tools.get(tool_name)
+        assert decision is not None, f"{tool_name} has no recorded decision"
+        assert decision.granted is expected_granted
+        assert decision.reason.strip()
+
+    def test_the_four_are_not_one_decision(self) -> None:
+        """*Fails if* the four are granted as a block (the ticket's own words)."""
+        from personal_agent.config.governance_loader import load_governance_config
+
+        config = load_governance_config()
+        four = ("web_search", "search_memory", "fetch_url", "recall_personal_history")
+        answers = {config.sub_agent_tools[name].granted for name in four}
+        assert answers == {True, False}
+
+    def test_every_recorded_reason_is_distinct(self) -> None:
+        """A reason copied across entries is a block decision in disguise."""
+        from personal_agent.config.governance_loader import load_governance_config
+
+        config = load_governance_config()
+        reasons = [d.reason.strip() for d in config.sub_agent_tools.values()]
+        assert len(set(reasons)) == len(reasons)
+
+
+class TestAlertAndDegradedStillRevokeEveryNewGrant:
+    """FRE-1463 AC-5 — the FRE-1388 revocation binds this grant too."""
+
+    @pytest.mark.parametrize("tool_name", ["web_search", "search_memory", "run_python"])
+    @pytest.mark.parametrize("mode", [Mode.ALERT, Mode.DEGRADED])
+    def test_a_newly_granted_tool_is_revoked_in_the_denied_modes(
+        self, tool_name: str, mode: Mode
+    ) -> None:
+        from personal_agent.config.governance_loader import load_governance_config
+
+        config = load_governance_config()
+        assert tool_name in config.granted_sub_agent_tool_names()
+        grant = evaluate_sub_agent_tool_grant([tool_name], mode, config)
+        assert grant.granted == ()
+        assert grant.denied == (tool_name,)
+        assert grant.denial_reason == f"sub-agents hold no tools in {mode.value} mode"
+
+    def test_the_newly_granted_tools_do_reach_a_sub_agent_in_normal(self) -> None:
+        """AC-2's config half — permission, which the live probe then turns into use."""
+        from personal_agent.config.governance_loader import load_governance_config
+
+        config = load_governance_config()
+        grant = evaluate_sub_agent_tool_grant(["web_search", "search_memory"], Mode.NORMAL, config)
+        assert grant.granted == ("web_search", "search_memory")
+        assert grant.denied == ()

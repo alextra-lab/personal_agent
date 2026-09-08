@@ -173,7 +173,18 @@ async def run_python_executor(
         network=network,
         scratch_host_path=scratch_dir,
         trace_id=trace_id,
+        tool="run_python",
     )
+
+    if result.timed_out:
+        # Durable, tool-named, turn-named, limit-named record (FRE-1462 AC-4)
+        # distinct from the generic per-call info log below.
+        log.warning(
+            "run_python_terminated",
+            trace_id=trace_id,
+            timeout_seconds=timeout_seconds,
+            tool="run_python",
+        )
 
     # ------------------------------------------------------------------
     # 5. Output cap (50 KiB combined; 25 KiB per stream)

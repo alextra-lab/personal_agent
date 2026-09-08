@@ -276,7 +276,9 @@ class TestTheShippedDecisions:
             ("web_search", True),
             ("search_memory", True),
             ("fetch_url", False),
-            ("recall_personal_history", False),
+            # FRE-1467 reversed this one: FRE-1463 refused it because it could
+            # not work without an identity, and FRE-1467 threaded the identity.
+            ("recall_personal_history", True),
         ],
     )
     def test_each_tool_has_its_own_decision_and_a_reason(
@@ -311,7 +313,10 @@ class TestTheShippedDecisions:
 class TestAlertAndDegradedStillRevokeEveryNewGrant:
     """FRE-1463 AC-5 — the FRE-1388 revocation binds this grant too."""
 
-    @pytest.mark.parametrize("tool_name", ["web_search", "search_memory", "run_python"])
+    @pytest.mark.parametrize(
+        "tool_name",
+        ["web_search", "search_memory", "run_python", "recall_personal_history"],
+    )
     @pytest.mark.parametrize("mode", [Mode.ALERT, Mode.DEGRADED])
     def test_a_newly_granted_tool_is_revoked_in_the_denied_modes(
         self, tool_name: str, mode: Mode

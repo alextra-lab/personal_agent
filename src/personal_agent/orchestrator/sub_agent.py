@@ -9,6 +9,36 @@ a compressed summary.
 Full output goes to ES via structlog; only the summary enters
 the primary agent's synthesis context.
 
+Identity (FRE-1467)
+-------------------
+One ``TraceContext`` is built per sub-agent, in :func:`run_sub_agent`, and is
+used both for the sub-agent's own inference call and for every tool it
+dispatches. It carries the turn's ``user_id``, ``authenticated`` and
+``eval_mode`` — the same five fields the primary's own context carries
+(``executor.run_task``). It was formerly two separate constructions carrying
+neither identity field, which put every identity-scoped tool out of a
+sub-agent's reach.
+
+A sub-agent's read is therefore now **equal to** the primary's, not narrower.
+What that changed, per granted tool:
+
+- ``search_memory`` — ``MemoryService.query_claims`` and
+  ``query_claims_history`` stop returning ``[]`` on their missing-identity
+  guard, so the user's own ``:Claim`` rows are returned. ``query_stance_history``
+  stops fail-closing on ``authenticated``; note it is scoped to the harness
+  owner's ``Person {is_owner: true}`` sentinel, not to the connecting
+  ``user_id`` (ADR-0098 D2/D3), so what identity unlocks there is the
+  ``authenticated`` gate alone. The FRE-229 visibility filter admits ``group``
+  rows and this user's ``private:`` rows to entity-match and broad-recall
+  results.
+- ``recall_personal_history`` — stops raising ``missing_user_id`` on every call.
+  Returns the user's own past turns in the window: ``turn_id``, timestamp,
+  session id, ``user_message`` and ``assistant_response`` (each capped at 400
+  characters, the same bound ``search_memory`` applies to a matched turn),
+  ``summary``, discussed entities, and an optional topic-match flag.
+- ``web_search`` — unchanged. It reads ``ctx.trace_id`` and no identity field.
+- ``run_python`` — unchanged. Same: ``ctx.trace_id`` only.
+
 See: docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 4.6
 """
 
@@ -22,6 +52,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 import structlog
 
@@ -37,6 +68,7 @@ from personal_agent.orchestrator.tool_dispatch import (
     dispatch_tool_call,
     get_shared_tool_execution_layer,
 )
+from personal_agent.telemetry.trace import TraceContext
 
 logger = structlog.get_logger(__name__)
 
@@ -509,6 +541,7 @@ async def _run_tool_loop(
     tool_defs: list[dict[str, Any]] | None,
     tool_layer: Any,
     loaded_skills: set[str],
+    trace_ctx: TraceContext,
     trace_id: str,
     session_id: str | None,
     effective_timeout: float,
@@ -531,8 +564,17 @@ async def _run_tool_loop(
             or ``None`` for a grant-less sub-agent.
         tool_layer: Shared ``ToolExecutionLayer`` for real dispatch.
         loaded_skills: Mutable ``read_skill`` dedup set for ``dispatch_tool_call``.
-        trace_id: Parent request trace identifier.
-        session_id: Originating session id.
+        trace_ctx: The sub-agent's identity context, built once by
+            :func:`run_sub_agent` (FRE-1467) and used for both the inference call
+            and every tool dispatch. Passed in rather than constructed here, and
+            constructed once rather than per use: two independent constructions
+            can be threaded apart, which produces a tool that works in some
+            rounds and not others. The object is a frozen dataclass whose
+            ``span_id`` resolves live on access, so sharing one instance across
+            every round is safe.
+        trace_id: Parent request trace identifier. Kept alongside ``trace_ctx``
+            because this function's log calls read it directly.
+        session_id: Originating session id. Same reason as ``trace_id``.
         effective_timeout: The generation budget from
             :func:`_resolve_effective_timeout` — the same number the outer deadline is
             sized from. Passed explicitly rather than left for the client to re-derive
@@ -557,8 +599,6 @@ async def _run_tool_loop(
         _ToolIterationLimitReached: When another tool batch would exceed
             ``settings.sub_agent_max_tool_iterations``.
     """
-    from personal_agent.telemetry.trace import TraceContext
-
     tool_choice = "auto" if tool_defs else None
     while True:
         round_progress = GenerationProgress()
@@ -567,7 +607,7 @@ async def _run_tool_loop(
             role=spec.model_role,
             messages=state.messages,
             max_tokens=spec.max_tokens,
-            trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
+            trace_ctx=trace_ctx,
             timeout_s=effective_timeout,
             progress_sink=round_progress,
             tools=tool_defs,
@@ -681,7 +721,7 @@ async def _run_tool_loop(
                 tool_name=tool_name,
                 arguments=arguments,
                 tool_layer=tool_layer,
-                trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
+                trace_ctx=trace_ctx,
                 trace_id=trace_id,
                 session_id=session_id,
                 loaded_skills=loaded_skills,
@@ -707,6 +747,8 @@ async def run_sub_agent(
     session_id: str | None = None,
     eval_mode: bool = False,
     max_deadline_seconds: float | None = None,
+    user_id: UUID | None = None,
+    authenticated: bool = False,
 ) -> SubAgentResult:
     """Execute a single sub-agent inference call.
 
@@ -724,15 +766,40 @@ async def run_sub_agent(
             outlive the turn. Only ever shrinks ``_effective_hard_deadline``'s
             own result via ``min()``, never extends it. ``None`` (the
             default) leaves that deadline exactly as computed today.
+        user_id: The turn's owning user UUID (FRE-1467, ADR-0064). Reaches every
+            granted tool through this call's one ``TraceContext``; see the module
+            docstring for what each tool then returns that it did not before.
+        authenticated: Whether the turn carries a verified identity (FRE-229 /
+            FRE-673). Threads into the memory visibility filter.
 
     Returns:
         SubAgentResult with summary, metrics, and success status.
+
+    Note:
+        ``user_id`` and ``authenticated`` default to the unauthenticated pair, so
+        a caller that does not supply them — a headless or background path —
+        keeps producing a fail-closed context. The defaults must never be
+        widened: they are what stops an unauthenticated turn reading
+        ``group``-visibility memory.
     """
     # FRE-517: real UUID so it can key the (trace_id, task_id) route-trace segment row.
     # Stringified once for every wire/log/ES boundary; only SubAgentResult keeps the UUID.
     task_id = uuid.uuid4()
     task_id_str = str(task_id)
     start_ms = int(time.monotonic() * 1000)
+
+    # FRE-1467: ONE context for this whole sub-agent — its inference call and
+    # every tool it dispatches. Built here because this is the only place that
+    # holds all five fields at once. Mirrors executor.run_task's own
+    # construction field for field, which is what "the same identity the primary
+    # carries" has to mean.
+    trace_ctx = TraceContext(
+        trace_id=trace_id,
+        user_id=user_id,
+        session_id=session_id,
+        eval_mode=eval_mode,
+        authenticated=authenticated,
+    )
 
     # Build system prompt: base + optional skill index inherited from parent (Phase B).
     # Built before the try so the FRE-505 input-context breakdown is available on every
@@ -821,6 +888,7 @@ async def run_sub_agent(
                 tool_defs,
                 tool_layer,
                 loaded_skills,
+                trace_ctx,
                 trace_id,
                 session_id,
                 effective_timeout,

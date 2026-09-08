@@ -22,6 +22,7 @@ import json
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any
+from uuid import UUID
 
 import structlog
 
@@ -260,6 +261,8 @@ class ExpansionController:
         eval_mode: bool = False,
         planner_llm_client: Any | None = None,
         turn_deadline_monotonic: float | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -294,6 +297,14 @@ class ExpansionController:
                 this must be a genuinely different client, not a request-time
                 override — defaults to ``llm_client`` for a caller that has not
                 been updated to build one (e.g. an existing test double).
+            user_id: The turn's owning user UUID (FRE-1467). Threaded to every
+                sub-agent so its granted tools are identity-scoped exactly as
+                the primary's are; see ``sub_agent``'s module docstring for what
+                each tool returns that it did not before.
+            authenticated: Whether the turn carries a verified identity
+                (FRE-229 / FRE-673). Threaded with ``user_id``; the two are read
+                together by the memory visibility filter and separating them
+                would half-open it.
 
         Returns:
             ExpansionResult with plan, sub-agent results, and synthesis context.
@@ -310,6 +321,9 @@ class ExpansionController:
             timeout_s=settings.planner_timeout_seconds,
             result=result,
             session_id=session_id,
+            user_id=user_id,
+            authenticated=authenticated,
+            eval_mode=eval_mode,
         )
         result.plan = plan
 
@@ -347,6 +361,8 @@ class ExpansionController:
             session_id=session_id,
             eval_mode=eval_mode,
             turn_deadline_monotonic=turn_deadline_monotonic,
+            user_id=user_id,
+            authenticated=authenticated,
         )
         result.sub_agent_results = sub_results
 
@@ -407,6 +423,9 @@ class ExpansionController:
         timeout_s: float,
         result: ExpansionResult,
         session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+        eval_mode: bool = False,
     ) -> ExpansionPlan:
         """Phase 1: Get a plan from the LLM or fallback planner.
 
@@ -418,6 +437,15 @@ class ExpansionController:
             timeout_s: Planner timeout in seconds.
             result: ExpansionResult to append phase data to.
             session_id: Originating session id for cost attribution (ADR-0074).
+            user_id: The turn's owning user UUID (FRE-1467). The planner calls no
+                tool, so nothing about its behaviour changes; it is carried so
+                that every LLM call inside expansion answers "whose turn is
+                this?" the same way, rather than two ways.
+            authenticated: Whether the turn carries a verified identity. Carried
+                for the same reason as ``user_id``.
+            eval_mode: EVAL provenance (FRE-523 / FRE-375). Carried for the same
+                reason: the planner's context otherwise disagreed with the
+                worker's about which turn it belongs to.
 
         Returns:
             An ExpansionPlan — either LLM-generated or fallback.
@@ -458,7 +486,13 @@ class ExpansionController:
                     # client's own catalog ceiling, exactly like every other
                     # `.respond()` call in the orchestrator's main turn loop.
                     response_format={"type": "json_object"},
-                    trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
+                    trace_ctx=TraceContext(
+                        trace_id=trace_id,
+                        user_id=user_id,
+                        session_id=session_id,
+                        eval_mode=eval_mode,
+                        authenticated=authenticated,
+                    ),
                 ),
                 timeout=timeout_s,
             )
@@ -547,6 +581,8 @@ class ExpansionController:
         session_id: str | None = None,
         eval_mode: bool = False,
         turn_deadline_monotonic: float | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> list[SubAgentResult]:
         """Phase 2: Dispatch sub-agents sequentially, one task at a time.
 
@@ -587,6 +623,12 @@ class ExpansionController:
                 post-``wait_for`` cleanup overhead (already documented as
                 negligible against these 60-300s budgets elsewhere on
                 ``SubAgentResult.elapsed_generation_ms``).
+            user_id: The turn's owning user UUID (FRE-1467), threaded to every
+                worker call this method makes — the per-task dispatch AND the
+                replacement dispatch below. Both, or a granted tool works on the
+                first attempt and fails on the retry.
+            authenticated: Whether the turn carries a verified identity, threaded
+                on the same two paths as ``user_id``.
 
         Returns:
             List of SubAgentResult, in dispatch order — one entry per task that
@@ -694,6 +736,8 @@ class ExpansionController:
                             session_id=session_id,
                             eval_mode=eval_mode,
                             max_deadline_seconds=worker_max_deadline,
+                            user_id=user_id,
+                            authenticated=authenticated,
                         )
                 except Exception as exc:
                     raw_results.append(exc)
@@ -722,6 +766,8 @@ class ExpansionController:
                     parent_span_id=_parent_id,
                     intervals=intervals,
                     turn_deadline_monotonic=turn_deadline_monotonic,
+                    user_id=user_id,
+                    authenticated=authenticated,
                 )
                 if replacement is not None:
                     sub_results.append(replacement)
@@ -784,6 +830,8 @@ class ExpansionController:
         parent_span_id: Any,
         intervals: list[SubAgentInterval],
         turn_deadline_monotonic: float | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> SubAgentResult | None:
         """Single-shot replacement dispatch when a sub-agent stated a tool gap (FRE-1389 AC-5).
 
@@ -814,6 +862,13 @@ class ExpansionController:
                 serialized ``run_sub_agent`` call inside the same dispatch
                 phase, so it must respect the same bound or the aggregate
                 guarantee would have a hole exactly here.
+            user_id: The turn's owning user UUID (FRE-1467), threaded exactly as
+                for the original dispatch. A replacement is dispatched precisely
+                because the original reported a missing tool, so this is the one
+                call where a dropped identity is most likely to be noticed as
+                "the tool still does not work".
+            authenticated: Whether the turn carries a verified identity, threaded
+                with ``user_id``.
 
         Returns:
             The replacement SubAgentResult, or ``None`` when there was no gap,
@@ -902,6 +957,8 @@ class ExpansionController:
                     session_id=session_id,
                     eval_mode=eval_mode,
                     max_deadline_seconds=redispatch_max_deadline,
+                    user_id=user_id,
+                    authenticated=authenticated,
                 )
             return replacement_result
         except Exception as exc:

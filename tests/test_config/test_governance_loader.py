@@ -232,8 +232,13 @@ def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
     config = load_governance_config(config_dir)
 
     granted = config.granted_sub_agent_tool_names()
-    # Owner decisions, 2026-09-04 and 2026-09-08 (FRE-1388, FRE-1463).
-    assert set(granted) == {"run_python", "web_search", "search_memory"}
+    # Decisions of 2026-09-04 and 2026-09-08 (FRE-1388, FRE-1463, FRE-1467).
+    assert set(granted) == {
+        "run_python",
+        "web_search",
+        "search_memory",
+        "recall_personal_history",
+    }
     # fetch_url is granted to the primary in NORMAL but refused to the sub-agent
     # principal — proves the two policies are genuinely independent.
     assert "fetch_url" in config.tools

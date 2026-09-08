@@ -5044,6 +5044,13 @@ async def step_init(
                 session_id=ctx.session_id,
                 eval_mode=ctx.eval_mode,
                 turn_deadline_monotonic=_expansion_turn_deadline,
+                # FRE-1467: the turn's identity, threaded to every sub-agent so
+                # its granted tools are identity-scoped exactly as the primary's
+                # are. Without this the sub-agent's TraceContext carries no
+                # user_id, recall_personal_history can only raise, and every
+                # search_memory read falls to its fail-closed path.
+                user_id=ctx.user_id,
+                authenticated=ctx.authenticated,
             )
 
             ctx.expansion_plan = expansion_result.plan

@@ -673,6 +673,55 @@ class TestReasoningPreservation:
         assert captured.response["content"] == "the answer"
 
 
+# ── FRE-1465 AC-3/AC-5 — the local dialect's reasoning-length telemetry ───
+
+
+class TestReasoningContentCharsTelemetry:
+    """``reasoning_content_chars`` on ``model_call_completed`` (AC-3), never the text (AC-5)."""
+
+    @pytest.mark.asyncio
+    async def test_thinking_on_reports_a_nonzero_char_count(self) -> None:
+        """AC-3: BUDGET_KEY's mode leaves thinking on, so the trace has a nonzero length."""
+        stream = _sse(
+            _chunk(
+                delta={
+                    "role": "assistant",
+                    "content": "<think>weighing the options</think>the answer",
+                }
+            ),
+            _chunk(delta={}, finish_reason="stop"),
+            _chunk(usage=USAGE_BLOCK),
+        )
+        captured = await _dispatch(model_key=BUDGET_KEY, stream=stream)
+        event = captured.completed_event()
+        assert event["reasoning_content_chars"] == len("weighing the options")
+
+    @pytest.mark.asyncio
+    async def test_thinking_off_reports_a_zero_char_count(self) -> None:
+        """DISABLE_KEY's mode hard-disables thinking — no trace, so the count is 0."""
+        event = (await _dispatch(model_key=DISABLE_KEY)).completed_event()
+        assert event["reasoning_content_chars"] == 0
+
+    @pytest.mark.asyncio
+    async def test_reasoning_text_itself_never_reaches_the_event(self) -> None:
+        """AC-5: a character count only — the reasoning trace string never leaks."""
+        stream = _sse(
+            _chunk(
+                delta={
+                    "role": "assistant",
+                    "content": "the answer",
+                    "reasoning_content": "a secret chain of thought",
+                }
+            ),
+            _chunk(delta={}, finish_reason="stop"),
+            _chunk(usage=USAGE_BLOCK),
+        )
+        captured = await _dispatch(model_key=BUDGET_KEY, stream=stream)
+        event = captured.completed_event()
+        assert event["reasoning_content_chars"] == len("a secret chain of thought")
+        assert "a secret chain of thought" not in repr(event)
+
+
 # ── AC-f — all four propagation headers ───────────────────────────────────
 
 

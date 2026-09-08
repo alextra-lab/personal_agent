@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["session_is_idle"]
+__all__ = ["held_prompt_summary", "session_is_idle"]
 
 # Idle/busy heuristic over ``capture-pane -p`` (best-effort, fail-safe = busy).
 # Idle requires the literal input-prompt line — a bare ``❯`` caret alone on its
@@ -59,6 +59,19 @@ _BUSY_MARKERS: tuple[str, ...] = (
 # trailing window is sufficient without parsing the box structure itself.
 _ACTIVE_REGION_LINES = 30
 
+# FRE-1457: the live TUI's own selection-cursor line for a numbered decision
+# prompt (a permission dialog, a model-switch confirmation, ...), e.g.
+# ``❯ 1. Yes, switch to Opus 5``. This is a STRUCTURAL signal, deliberately not
+# a word list like ``_BUSY_MARKERS`` above: ``test_session_idle_true_when_marker
+# _words_appear_only_in_scrollback_prose`` (test_gating_watcher.py) already
+# proves "Do you want"/"1. Yes"/"No, and tell" appear verbatim in an ordinary
+# completed turn's own response prose, so a substring check over those words
+# would misread a busy seat discussing a yes/no decision as a held prompt. The
+# ❯ glyph is the TUI's own render for "this option is currently selected" and
+# is not something response prose emits at the start of a line.
+_HELD_PROMPT_CHOICE_RE: re.Pattern[str] = re.compile(r"^\s*❯\s*\d+[.)].*$", re.MULTILINE)
+_PROMPT_SUMMARY_MAX_CHARS = 200
+
 
 def _active_region(pane_text: str) -> str:
     """Return the trailing "active" window of a captured pane.
@@ -95,3 +108,31 @@ def session_is_idle(pane_text: str) -> bool:
     if _BUSY_SPINNER_RE.search(pane_text):
         return False
     return bool(_IDLE_PROMPT_RE.search(pane_text))
+
+
+def held_prompt_summary(pane_text: str) -> str | None:
+    """Return a short summary of a held decision prompt, or ``None`` if absent.
+
+    A held prompt is the pane's SECOND suspected-wedge shape (FRE-1457),
+    distinct from ``session_is_idle``'s idle reading: the pane is not idle (a
+    decision prompt like ``Do you want...``/``Switch model?`` correctly reads
+    as busy), but nothing is progressing either, since no live spinner is
+    present. See ``_HELD_PROMPT_CHOICE_RE`` for why this is a structural
+    ❯-anchored match rather than a busy-marker word list.
+
+    Args:
+        pane_text: The ``tmux capture-pane -p`` output.
+
+    Returns:
+        The active region's lines from its start through the matched
+        selector line, capped at ``_PROMPT_SUMMARY_MAX_CHARS`` characters, or
+        ``None`` when a live spinner is present or no selector line matches.
+    """
+    if _BUSY_SPINNER_RE.search(pane_text):
+        return None
+    region = _active_region(pane_text)
+    match = _HELD_PROMPT_CHOICE_RE.search(region)
+    if match is None:
+        return None
+    summary = region[: match.end()].strip()
+    return summary[-_PROMPT_SUMMARY_MAX_CHARS:]

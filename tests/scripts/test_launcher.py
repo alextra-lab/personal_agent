@@ -28,6 +28,7 @@ from scripts.dispatch import launcher as launcher_module
 from scripts.dispatch.launcher import (
     DEFAULT_CAPABILITIES,
     LauncherCapabilities,
+    SeatWedgeSignal,
     execute_plan,
     find_warm_session,
     known_streams,
@@ -35,6 +36,7 @@ from scripts.dispatch.launcher import (
     plan_launch,
     seat_is_busy,
     seat_state,
+    seat_wedge_reason,
     seat_wedge_signature,
     session_id_for,
     stream_for_tmux_session,
@@ -431,6 +433,10 @@ class _SeatRunner:
             return _BUSY_PANE
         if self._pane == "static":
             return _IDLE_PANE
+        if self._pane == "prompt":
+            return _PROMPT_PANE
+        if self._pane == "prose":
+            return _PROSE_ABOUT_A_DECISION_PANE
         self._captures += 1
         return f"turn {self._captures}\n{_IDLE_PANE}"
 
@@ -1021,6 +1027,66 @@ def test_seat_wedge_signature_truth_table() -> None:
     )
     # RC unreadable/ambiguous (None) → never fires (blind spot).
     assert seat_wedge_signature(topology, _SeatRunner(pane="static", agents=[])) is False
+
+
+_PROMPT_PANE = (
+    "Switch model? Opus 5 offers deeper reasoning for this task.\n"
+    "❯ 1. Yes, switch to Opus 5\n"
+    "  2. No, go back\n"
+)
+
+# FRE-845's own regression fixture (test_gating_watcher.py) proves this exact
+# wording — "Do you want"/"1. Yes"/"No, and tell" — appears in ordinary
+# completed-turn response prose. It carries no ❯-prefixed selector line, so it
+# must never read as a held prompt.
+_PROSE_ABOUT_A_DECISION_PANE = (
+    "Do you want me to proceed with the migration? Here is the plan:\n"
+    "1. Yes, run the migration script now.\n"
+    "2. No, and tell Claude to hold off until review.\n"
+    "❯\n"
+)
+
+
+def test_seat_wedge_reason_classifies_the_held_prompt_shape() -> None:
+    """FRE-1457: a second suspected-wedge shape — RC busy, pane holds a live decision prompt.
+
+    Distinct from the pane-idle shape (CC #61568, an orphaned background
+    poller): here the pane is NOT idle — ``session_is_idle`` correctly reads a
+    decision prompt as busy — but nothing is progressing either, since no live
+    spinner is present. The discriminator is the TUI's own ❯-prefixed
+    selection-cursor line, not response-prose word overlap (see the negative
+    test below).
+    """
+    topology = topology_for("build1")
+    # RC busy + idle pane → the original pane-idle shape.
+    assert seat_wedge_reason(
+        topology, _SeatRunner(pane="static", agents=[_agent("busy")])
+    ) == SeatWedgeSignal("pane-idle")
+    # RC busy + live spinner → genuinely busy, neither shape (AC-3/AC-4).
+    assert seat_wedge_reason(topology, _SeatRunner(pane="busy", agents=[_agent("busy")])) is None
+    # RC busy + a held decision prompt (no spinner) → the new shape, carrying
+    # a summary master can read without opening the pane (AC-2).
+    signal = seat_wedge_reason(topology, _SeatRunner(pane="prompt", agents=[_agent("busy")]))
+    assert signal is not None
+    assert signal.reason == "held-prompt"
+    assert signal.prompt_summary
+    assert "1. Yes" in signal.prompt_summary
+    # RC idle / RC unreadable → neither shape.
+    assert seat_wedge_reason(topology, _SeatRunner(pane="static", agents=[_agent("idle")])) is None
+    assert seat_wedge_reason(topology, _SeatRunner(pane="static", agents=[])) is None
+
+
+def test_response_prose_containing_prompt_words_is_never_a_held_prompt() -> None:
+    """FRE-1457 (codex plan-review Focus 1): substring markers over-fire on prose.
+
+    A busy seat whose visible pane happens to contain a completed turn's own
+    prose discussing a yes/no decision must not be misread as a held prompt —
+    only the live TUI's own ❯-prefixed selector line is structural evidence of
+    an actual pending prompt.
+    """
+    topology = topology_for("build1")
+    runner = _SeatRunner(pane="prose", agents=[_agent("busy")])
+    assert seat_wedge_reason(topology, runner) is None
 
 
 def test_malformed_ticket_identifier_is_rejected() -> None:

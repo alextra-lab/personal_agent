@@ -92,7 +92,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from typing import Literal, Protocol
 
-from scripts.dispatch.pane_state import session_is_idle
+from scripts.dispatch.pane_state import held_prompt_summary, session_is_idle
 from scripts.dispatch.tmux_target import exact_pane, exact_session
 
 # Model tiers the launcher will place on a command line. Validated so no
@@ -1344,8 +1344,71 @@ def seat_is_busy(topology: StreamTopology, runner: CommandRunner) -> bool | None
     return None
 
 
+@dataclasses.dataclass(frozen=True)
+class SeatWedgeSignal:
+    """A classified suspected-wedge shape for one seat (FRE-1457).
+
+    Attributes:
+        reason: Which shape matched — ``"pane-idle"`` (FRE-922/CC #61568: RC
+            confidently busy while the pane sits at the idle input prompt, the
+            signature of an orphaned background poller) or ``"held-prompt"``
+            (RC confidently busy, the pane shows the TUI's own live decision
+            prompt, and no progress spinner is present — the seat is blocked
+            on a keypress only a human or master can supply).
+        prompt_summary: For ``"held-prompt"`` only, the matched prompt text
+            (see ``pane_state.held_prompt_summary``) — what a notification
+            recipient reads instead of capturing the pane themselves.
+            ``None`` for ``"pane-idle"``.
+    """
+
+    reason: Literal["pane-idle", "held-prompt"]
+    prompt_summary: str | None = None
+
+
+def seat_wedge_reason(topology: StreamTopology, runner: CommandRunner) -> SeatWedgeSignal | None:
+    """Classify a busy seat's suspected-wedge shape, from one pane capture (FRE-1457).
+
+    Two mutually exclusive shapes, both requiring RC to confidently report the
+    seat ``busy`` (an unreadable, zero-match, multi-match, or unknown-status
+    registry never fires either — an intentional blind spot, matching
+    ``seat_wedge_signature``'s original reasoning: that path either dispatches
+    or is genuinely busy):
+
+    - **pane-idle**: the pane sits at the idle input prompt
+      (``session_is_idle``) — see ``seat_wedge_signature``'s docstring.
+    - **held-prompt**: the pane is not idle, but shows the TUI's own
+      ❯-prefixed decision-prompt selector with no live progress spinner
+      (``pane_state.held_prompt_summary``) — a pending interactive
+      confirmation (e.g. a model-switch dialog) that nothing is answering.
+
+    This is deliberately a **heuristic, not a classifier**, for both shapes: a
+    single observation is ambiguous (a genuinely mid-turn seat's spinner can be
+    momentarily missed), so the caller only surfaces a wedge after N
+    consecutive ticks of the SAME reason. That persistence gate lives in the
+    orchestrator, not here.
+
+    Args:
+        topology: The stream's launch coordinates.
+        runner: The command runner seam.
+
+    Returns:
+        A ``SeatWedgeSignal`` naming the matched shape, or ``None`` when RC
+        cannot be read cleanly, or the pane matches neither shape (most
+        commonly: a genuinely busy seat with a live, advancing spinner).
+    """
+    if seat_is_busy(topology, runner) is not True:
+        return None
+    pane_text = _capture_pane(topology.tmux_session, runner)
+    if session_is_idle(pane_text):
+        return SeatWedgeSignal("pane-idle")
+    summary = held_prompt_summary(pane_text)
+    if summary is not None:
+        return SeatWedgeSignal("held-prompt", summary)
+    return None
+
+
 def seat_wedge_signature(topology: StreamTopology, runner: CommandRunner) -> bool:
-    """Whether a seat shows the *suspected*-wedge signature (FRE-922, CC #61568).
+    """Whether a seat shows the *pane-idle* suspected-wedge signature (FRE-922, CC #61568).
 
     The signature is Remote Control **confidently** reporting the seat ``busy``
     while its tmux pane sits at the idle input prompt. That is what an orphaned
@@ -1353,19 +1416,9 @@ def seat_wedge_signature(topology: StreamTopology, runner: CommandRunner) -> boo
     keeps RC busy, but the conversation itself is idle, so the stream's reuse
     dispatch returns ``seat-busy`` every tick and never lands.
 
-    This is deliberately a **heuristic, not a classifier**. A single observation
-    is ambiguous — a genuinely mid-turn seat whose in-progress spinner the pane
-    scrape momentarily missed (``session_is_idle`` is documented best-effort and
-    has produced false-idle readings) reads identically. The discriminator is
-    therefore *persistence*: the orchestrator only surfaces a wedge after N
-    consecutive ticks (a real turn re-renders its spinner within N ticks and
-    resets the count; only a persistently-idle pane survives). The N-tick gate
-    lives in the orchestrator, not here.
-
-    RC that cannot be read cleanly (``seat_is_busy`` → ``None`` on an unreadable,
-    zero-match, multi-match, or unknown-status registry) never fires the
-    signature — an intentional blind spot: that path either dispatches (RC
-    silent + pane idle → delivery proceeds) or is genuinely busy.
+    See ``seat_wedge_reason`` for the second suspected-wedge shape
+    (``"held-prompt"``, FRE-1457) this function does not report — it exists
+    purely to keep this original boolean signature's callers/tests unchanged.
 
     Args:
         topology: The stream's launch coordinates.
@@ -1374,9 +1427,8 @@ def seat_wedge_signature(topology: StreamTopology, runner: CommandRunner) -> boo
     Returns:
         ``True`` iff RC confidently reports the seat busy AND its pane is idle.
     """
-    if seat_is_busy(topology, runner) is not True:
-        return False
-    return session_is_idle(_capture_pane(topology.tmux_session, runner))
+    signal = seat_wedge_reason(topology, runner)
+    return signal is not None and signal.reason == "pane-idle"
 
 
 def _agent_holding_name(name: str, runner: CommandRunner) -> bool:

@@ -63,12 +63,19 @@ class TestActionIdRegistry:
             assert default_action_id(name) == opts[-1].action_id
 
     def test_constraint_literal_admits_attachment_cost_and_artifact_builder(self) -> None:
-        """The ConstraintName literal is widened (ADR-0122 §3 / FRE-881).
+        """The ConstraintName literal is widened (ADR-0122 §3 / FRE-881, FRE-1461).
 
         Runtime proof the pre-existing ``attachment_cost`` drift is closed (it was
-        passed at the executor but absent from the closed literal) and that the new
-        computed-options constraint ``artifact_builder`` is admitted. The removal of
-        the executor's ``# type: ignore[arg-type]`` is proven separately by ``mypy``.
+        passed at the executor but absent from the closed literal), that the
+        computed-options constraint ``artifact_builder`` is admitted, and that
+        FRE-1461's ``sub_agent_tool_approval`` — the first constraint raised from the
+        sub-agent path rather than the primary's own loop — is admitted too. The
+        removal of the executor's ``# type: ignore[arg-type]`` is proven separately
+        by ``mypy``.
+
+        Asserted as an exact set, deliberately: a new constraint passed at a call
+        site but never registered here is precisely the drift FRE-881 had to clean
+        up, and an open assertion would not catch the next one.
         """
         from typing import get_args
 
@@ -80,7 +87,28 @@ class TestActionIdRegistry:
             "context_compression",
             "attachment_cost",
             "artifact_builder",
+            "sub_agent_tool_approval",
         }
+
+    def test_every_literal_member_has_options_or_is_computed(self) -> None:
+        """A registered name must resolve to a card, not a KeyError at pause time.
+
+        ``sub_agent_tool_approval`` is static, so it must appear in
+        ``CONSTRAINT_OPTIONS``; ``artifact_builder``'s options are computed from the
+        ADR-0121 catalog instead, so it is exempt by membership of
+        ``COMPUTED_OPTION_CONSTRAINTS`` rather than by being named here.
+        """
+        from typing import get_args
+
+        from personal_agent.orchestrator.constraint_options import (
+            COMPUTED_OPTION_CONSTRAINTS,
+        )
+        from personal_agent.transport.events import ConstraintName
+
+        for name in get_args(ConstraintName):
+            if name in COMPUTED_OPTION_CONSTRAINTS:
+                continue
+            assert name in CONSTRAINT_OPTIONS, f"{name} is registered but has no options"
 
 
 class TestAdapterMappings:

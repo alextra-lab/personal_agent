@@ -3958,6 +3958,18 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     # FRE-928 AC-3: same turn-scoped lifetime for no-decision disclosures.
     _disclosure_carrier_token = start_decision_disclosures()
 
+    # FRE-1461: the sub-agent approval channel, on the same turn-scoped lifetime. The
+    # broker holds `ctx`, so a pause raised from a sub-agent is accounted against this
+    # turn (ADR-0142 D4a) exactly as the primary's own pauses are, and it caches this
+    # turn's answers so a fan-out asks once per tool rather than once per worker.
+    from personal_agent.orchestrator.sub_agent_approval import (  # noqa: PLC0415
+        SubAgentApprovalBroker,
+        reset_sub_agent_approval_broker,
+        set_sub_agent_approval_broker,
+    )
+
+    _approval_carrier_token = set_sub_agent_approval_broker(SubAgentApprovalBroker(ctx))
+
     previous_state: TaskState | None = None
     # ADR-0129 D3 (FRE-1067): the step span. Opened on entry into LLM_CALL and
     # stays open across the following TOOL_EXECUTION call, if any — model-call
@@ -4271,6 +4283,9 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
             # no resolution outlives this turn into a later async context (AC-10c).
             reset_artifact_builder_resolution(_builder_carrier_token)
             reset_decision_disclosures(_disclosure_carrier_token)
+            # FRE-1461: same reason — an approval answered for this turn's fan-out
+            # must never be reused by the next turn's.
+            reset_sub_agent_approval_broker(_approval_carrier_token)
 
             # ADR-0138 (FRE-1280): what this turn could have cited. In the `finally` so a
             # failed turn is observable too — a turn that retrieved nothing before it

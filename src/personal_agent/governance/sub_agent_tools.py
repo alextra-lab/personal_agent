@@ -22,6 +22,13 @@ from personal_agent.governance.models import GovernanceConfig, Mode
 # outcome. Sub-agents hold no tools at all in ALERT or DEGRADED. This binds every
 # future grant, not only run_python, so it is enforced here rather than left as a
 # per-tool config knob a future grant could omit.
+#
+# FRE-1461 (2026-09-08): the premise above — "runs unattended" — is no longer true.
+# A sub-agent can now reach the owner through the ADR-0076 constraint pause
+# (`orchestrator/sub_agent_approval.py`), so an approval-gated tool DOES have a
+# correct outcome in an attended mode. The directive itself stands unchanged: this
+# ticket removes the reason that forced the revocation, and revisiting the
+# revocation on its own merits is a separate owner decision, not a side effect.
 SUB_AGENT_DENIED_MODES: frozenset[Mode] = frozenset({Mode.ALERT, Mode.DEGRADED})
 
 
@@ -72,3 +79,39 @@ def evaluate_sub_agent_tool_grant(
     denied = tuple(t for t in requested_tools if t not in allowed)
     denial_reason = f"not in sub-agent tool grant set: {', '.join(denied)}" if denied else None
     return SubAgentToolGrant(granted=granted, denied=denied, denial_reason=denial_reason)
+
+
+def sub_agent_tool_requires_approval(
+    tool_name: str,
+    mode: Mode,
+    config: GovernanceConfig,
+) -> bool:
+    """Report whether a granted tool needs the owner's word before a sub-agent runs it.
+
+    Reads the same two policy fields, in the same order, as the primary's own gate
+    (``personal_agent.tools.executor._check_permissions``): the always-on
+    ``requires_approval`` flag, or this mode's membership of
+    ``requires_approval_in_modes``. Sharing the rule is the point — a sub-agent that
+    asked about a different set of tools than the primary does would be a second,
+    silently divergent policy.
+
+    A grant is necessary but not sufficient (see :class:`SubAgentToolGrant`), and so
+    is this answer: an approved call still passes through
+    ``ToolExecutionLayer.execute_tool``, which enforces the tool's own
+    ``allowed_in_modes``/``forbidden_in_modes`` on top. This predicate can never
+    grant access that the tool's base policy forbids.
+
+    Args:
+        tool_name: The granted tool name about to be dispatched.
+        mode: Current brainstem operational mode.
+        config: Loaded governance configuration.
+
+    Returns:
+        ``True`` when the owner must be asked before this call runs. ``False`` when
+        the tool has no governance policy entry at all — an unpoliced tool is not
+        made approval-gated by this ticket.
+    """
+    policy = config.tools.get(tool_name)
+    if policy is None:
+        return False
+    return policy.requires_approval or mode.value in policy.requires_approval_in_modes

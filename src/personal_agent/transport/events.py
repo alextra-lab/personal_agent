@@ -49,11 +49,16 @@ class Phase(str, Enum):
 #: the pre-existing ``attachment_cost`` drift: that constraint was already passed
 #: at the executor's attachment-cost gate yet was absent from the literal, riding a
 #: ``# type: ignore[arg-type]`` at the pause helper. Both are now first-class.
+#: FRE-1461 adds ``sub_agent_tool_approval``: the first constraint raised from the
+#: SUB-AGENT path rather than the primary's own loop. Added here rather than passed
+#: with a ``type: ignore`` at the pause helper, which is exactly the drift FRE-881
+#: closed for ``attachment_cost``.
 ConstraintName = Literal[
     "tool_iteration_limit",
     "context_compression",
     "attachment_cost",
     "artifact_builder",
+    "sub_agent_tool_approval",
 ]
 
 

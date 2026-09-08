@@ -56,6 +56,7 @@ from personal_agent.governance.sub_agent_tools import (
     SUB_AGENT_DENIED_MODES,
     SubAgentToolGrant,
     evaluate_sub_agent_tool_grant,
+    sub_agent_tool_requires_approval,
 )
 
 __all__ = [
@@ -81,8 +82,9 @@ __all__ = [
     "RateLimits",
     "HumanApproval",
     "HumanApprovalRule",
-    # Sub-agent tool principal (FRE-1388)
+    # Sub-agent tool principal (FRE-1388, FRE-1461)
     "SUB_AGENT_DENIED_MODES",
     "SubAgentToolGrant",
     "evaluate_sub_agent_tool_grant",
+    "sub_agent_tool_requires_approval",
 ]

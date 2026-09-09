@@ -158,6 +158,28 @@ def test_worker_seat_launches_in_accept_edits_permission_mode() -> None:
     assert inner[inner.index("--permission-mode") + 1] == "acceptEdits"
 
 
+def test_reuse_card_names_all_three_deliveries_fre1475() -> None:
+    """FRE-1475 AC-1: the reuse card names the context reset and model switch.
+
+    A reuse dispatch delivers three commands: /clear, /model {model}, and
+    /build {ticket}. The card must name all three so the reader can tell
+    whether context was cleared without consulting the source. The KEEP path
+    must remain distinct — it never resets and never verifies the model.
+    """
+    plan = plan_launch("build1", "FRE-1475", "opus", context_keep=False, seat="live")
+    assert plan.outcome == "reuse"
+    assert plan.context == "clear"
+    # AC-1: card names the reset
+    assert "/clear" in plan.card
+    assert "/model opus" in plan.card
+    assert "/build FRE-1475" in plan.card
+    # Verify order: clear → model → build
+    clear_pos = plan.card.find("/clear")
+    model_pos = plan.card.find("/model")
+    build_pos = plan.card.find("/build")
+    assert clear_pos < model_pos < build_pos, "deliveries not in order"
+
+
 # --- AC-2 KEEP: never machine-launch, never reset --------------------------
 
 

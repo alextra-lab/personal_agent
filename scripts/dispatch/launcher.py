@@ -636,10 +636,14 @@ def _manual_model_card(topology: StreamTopology, model: str, dispatch: str) -> s
 
 
 def _reuse_card(topology: StreamTopology, model: str, dispatch: str) -> str:
-    """Card for the FRE-913 happy path — a live seat reused, never restarted."""
+    """Card for the FRE-913 happy path — a live seat reused, never restarted.
+
+    FRE-1475: names all three deliveries so the reader can tell whether context
+    was cleared without consulting the source.
+    """
     return (
-        f"[{topology.stream}] reuse → {topology.tmux_session} kept alive at {model}; "
-        f"delivered {dispatch} in-session (seat process and Remote Control "
+        f"[{topology.stream}] reuse → {topology.tmux_session} kept alive; "
+        f"/clear → /model {model} → {dispatch} (seat process and Remote Control "
         f"registration untouched)"
     )
 

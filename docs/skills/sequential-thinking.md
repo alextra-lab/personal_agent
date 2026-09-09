@@ -10,9 +10,10 @@ keywords:
   - think this through carefully
 nudge: |
   Keep the discipline below internally on every turn this skill engages.
-  Write a visible marker into the answer ONLY when you reverse an earlier
-  conclusion or abandon one line of reasoning for another. An unremarkable
-  linear chain of reasoning must stay invisible to the reader.
+  When the problem has a genuine false start, show the step you tried and
+  abandoned, alongside the correct path. Never invent a wrong step you did
+  not actually take. An unremarkable linear chain of reasoning with no false
+  start must stay invisible to the reader.
 ---
 
 # sequential-thinking — Structured Reasoning Discipline
@@ -56,20 +57,37 @@ When this skill engages, hold yourself to the following, internally, for the who
 
 ## When to surface structure in the answer
 
-**Owner decision, 2026-09-05 — not always, and not never.** Surface a visible marker in the
-answer **only** when you actually reverse an earlier conclusion or abandon one line of reasoning
-for another. Do not surface anything for an ordinary linear chain of reasoning that needed no
-revision or branch — that case stays exactly as invisible as it was under the removed tool,
-which never surfaced anything to the model or the user either way.
+**Owner decision, 2026-09-05 — not always, and not never.** Do not surface anything for an
+ordinary linear chain of reasoning that needed no revision or branch — that case must **stay
+clean**, exactly as invisible as it was under the removed tool, which never surfaced anything to
+the model or the user either way.
 
-Rationale: a revision the reader cannot see is precisely what native thinking already fails to
-give, so it is the part worth surfacing. It is also the rarest of the three cases, so ordinary
-answers do not turn into numbered essays.
+**Owner decision, 2026-09-08 — the mechanism changed; the "not always, not never" boundary did
+not.** Master's live verification of the 2026-09-05 design ("surface only on a spontaneous
+reversal") found it structurally unmeetable: the primary runs with a 32,768-token thinking
+budget, so a reversal happens inside the invisible thinking block, and by the time the visible
+answer is written the question is already settled. There is no live reversal left to mark.
 
-A visible marker names what was reconsidered, in one short line, at the point in the answer
-where the reversal happened — for example: "Correction: the first read of the ticket assumed
-X; that is wrong because Y, so this answer instead does Z." Do not renumber the whole answer
-into an essay around it.
+The owner ruled: "not achievable. We can force the model to think through a problem and include
+a step that was wrong." The replacement mechanism is a **false start**, not a spontaneous
+reversal — when the problem genuinely has one:
+
+- If the obvious first line of attack on this problem fails, show that **tried and abandoned**
+  step in the answer, alongside the correct path, and name what was wrong with it — for example:
+  "First attempt: X — that fails because Y, so this answer instead does Z."
+- Show it only when a false start actually exists. An unremarkable linear chain of reasoning
+  with no false start available must stay clean, per the 2026-09-05 boundary above.
+- Do not renumber the whole answer into an essay around it — one short line at the point in the
+  answer where the false start belongs.
+
+**Never invent a false start you did not actually take.** A plausible-looking wrong step
+manufactured for presentation, rather than reasoning the model genuinely did, is confabulation —
+the same failure shape FRE-1327 is open on. If the problem has no real false start, show none;
+a fabricated one is worse than showing nothing.
+
+Rationale: a false start the reader cannot see is what native thinking already discards once the
+question is settled, so it is the part worth surfacing. It stays rare — most problems this skill
+engages on have no wrong turn at all — so ordinary answers do not turn into numbered essays.
 
 ## When NOT to engage
 

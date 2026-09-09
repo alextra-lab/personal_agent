@@ -393,3 +393,36 @@ class TestSequentialThinkingSkill:
         tools = governance["tools"]
         assert "sequential-thinking" not in tools
         assert "sequential_thinking" not in tools
+
+    def test_surfaces_a_false_start_not_a_spontaneous_reversal(self) -> None:
+        """AC-2a (master's 2026-09-08 comment, superseding the original AC-2):
+
+        master's live verification found the original 'surface only on a
+        spontaneous reversal' rule structurally unmeetable — with the primary's
+        32,768-token thinking budget, any reversal happens inside the invisible
+        thinking block, so there is no live reversal left for the visible
+        answer to mark. The owner's replacement mechanism is to show a wrong
+        step the model actually tried and abandoned, when the problem had one.
+        """
+        doc = get_all_skills()["sequential-thinking"]
+        assert "false start" in doc.body.lower() or "tried and abandoned" in doc.body.lower()
+
+    def test_forbids_inventing_a_step_never_taken(self) -> None:
+        """AC-2b: the shown misstep must be real, not decorative. Master's
+        comment named the risk explicitly — instructing the model to invent a
+        plausible-looking wrong step it never took would produce the same
+        confabulation shape FRE-1327 is open on.
+        """
+        doc = get_all_skills()["sequential-thinking"]
+        body_lower = doc.body.lower()
+        assert "invent" in body_lower or "fabricat" in body_lower
+        assert "fre-1327" in body_lower
+
+    def test_still_stays_clean_with_no_false_start(self) -> None:
+        """AC-2c (renumbered from the original AC-2b, stands as written): an
+        unremarkable multi-step turn with no false start must still show no
+        visible scaffold. The rewritten surfacing rule must not regress to
+        always-surface, which the owner already rejected once.
+        """
+        doc = get_all_skills()["sequential-thinking"]
+        assert "stay" in doc.body.lower() and "clean" in doc.body.lower()

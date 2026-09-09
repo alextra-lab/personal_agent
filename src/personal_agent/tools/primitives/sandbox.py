@@ -284,6 +284,21 @@ async def run_in_sandbox(
         # is killed by the kernel OOM killer due to memory exhaustion.
         oom = exit_code == 137
 
+        # Detect network attachment failure (FRE-1466 AC-4): emit a named event
+        # so the failure is queryable, not just paraphrased by the model into prose.
+        if exit_code != 0 and network:
+            if "network" in stderr_str.lower() and (
+                "not found" in stderr_str.lower() or "not connected" in stderr_str.lower()
+            ):
+                log.warning(
+                    "sandbox_network_attachment_failed",
+                    image=image,
+                    network=settings.sandbox_network,
+                    trace_id=trace_id,
+                    tool=tool,
+                    container=container_name,
+                )
+
         scratch_files = _list_scratch_files(scratch_host_path)
 
         log.info(

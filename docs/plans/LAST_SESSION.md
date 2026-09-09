@@ -1,81 +1,90 @@
-# Last session — 2026-09-07
+# Last session — 2026-09-08
 
 ## Doing / discussing  (≤5 sentences)
-The owner said **"full steam ahead"** and the ADR-0145 chain finished: eleven tickets merged,
-deployed and verified in one day. The afternoon turned into design work the owner drove —
-sub-agent approvals, tool grants, `run_python` bounds — and five tickets came out of it. The
-owner also ran live turns that produced the session's two most valuable measurements. Master
-made two errors, both corrected on the record.
+The owner's own research turn failed three times on the same question, and chasing that produced
+most of the day. It opened a design conversation the owner drove — **memory belongs to the
+planner** — which became ADR-0147, merged Proposed. The owner corrected master twice, and the
+second correction is the single most important thing on this page. Seven PRs merged; the day
+ended at the reset gate catching a ticket master had left half-closed.
 
 ## What was decided and why
 
-**"Unattended" is our implementation, not a property of sub-agents — and this reverses a
-master argument.** Master argued the sub-agent tool grant should stay narrow because sub-agents
-run with no approver. The owner asked whether Claude Code bubbles subagent approvals to the
-user; it does — a subagent there borrows the user's approval channel. `_maybe_pause_for_constraint`
-already exists at `executor.py:682` and `sub_agent.py` has **zero** occurrences of pause or
-approval. So the gap is wiring, not architecture. **FRE-1461** is the enabler; **FRE-1463** (tool
-grant) is blocked on it deliberately, not merely sequenced after.
+**The owner's correction: `sub_agent` was ALWAYS local. Master said otherwise and was wrong.**
+Master claimed ADR-0145 D1's `inherit` moved sub-agents from OVH to local, and built that on a
+*comment inside the `qwen3.8-flash-next` catalog entry* explaining why that entry does not
+self-pair. That is not the role binding. `git log` on `config/model_roles.yaml` settles it:
+`sub_agent` read `qwen3.8-flash-next-instruct` from `d044003c` until `inherit` landed. So the
+local model has been carrying every sub-agent since then. **This is a standing condition the
+owner's OVH selection revealed, not a regression we introduced.** Read a binding from the
+binding, never from a neighbouring comment.
 
-**The four deferred tools are not one decision.** `search_memory` / `recall_personal_history`
-are internal reads whose objection is provenance (FRE-1338/1302/1303). `web_search` / `fetch_url`
-bring untrusted content and real spend into an agent that acts on it. FRE-1463's AC-1 refuses a
-block grant. Fan-out is the hard part: 6–8 sub-agents per turn means a naive per-call prompt
-produces 6–8 prompts, which the owner would switch off — so FRE-1461 AC-4 tests at fan-out scale.
+**The local model cannot do sub-agent work reliably, and this is now measured.** All 10
+`model_call_error` events on 2026-09-08 are on local models; zero on OVH, OpenAI or Anthropic.
+Both malformed tool calls — an empty required `query` — are local. The cleanest comparison is
+two turns on the same question in the same minute: local 17 searches / ~15 min / 3,445 chars;
+OVH 8 / 5.7 min / 5,094 chars. In-flight model calls **never exceeded 1** — the fan-out is fully
+serialised behind one llama-server. Not a general weakness: five short factual probes and a
+four-step arithmetic probe were all clean. The failure is specific to multi-round tool use.
+**Open decision:** bind `sub_agent` to `qwen3.8-27b-ovh`. Owner has not ruled.
 
-**Grounding is not broken; it was starved.** Every prior turn read `passed_count: 0`, and
-FRE-1328 said that was structural. An owner turn using `web_search` produced
-`tool_results_admitted=2`, `turn_evidence_class=citable`, and the **first non-zero `passed_spans`**.
-The headline is the other number: of 16 spans, **8 came back `not_contained`** — a citation whose
-source was found, read, and does not contain the claim. That is FRE-1327's defect measured through
-the contract instead of inferred. Caveat recorded: `degraded_extraction=True` on that turn, so
-8-of-16 is not yet a rate.
+**A master hypothesis was disproven by test, and the disproof found the real defect.** Master
+believed a client-side abort left the llama.cpp slot busy, poisoning the next call. Tested
+against the live server: three aborts, each followed immediately by a 200, plus a clean control.
+False. What it exposed instead: the SLM health probe is liveness-only, reads `up` on both sides
+of a 20-second window where every generation returned 503, and its own `degraded` branch depends
+on `model_loaded`, which is always `None` — a check that cannot fire. FRE-1474.
 
-**Span extraction can be skipped, but not on the signal it looks like.** `turn_evidence_class`
-is computed at `executor.py:2166`, *after* the verification it would gate. "No sources" is also
-wrong — that turn had `source_count=10` and the claims simply matched none. The usable
-pre-extraction signal is `tool_results_offered > 0 and tool_results_admitted == 0`. On FRE-1458.
+**The owner's two challenges each moved ADR-0147, and the second retracted master's advice.**
+First: a sub-agent's task is a better recall query than the raw question — correct, and gateway
+recall runs one query on `user_message`. Second: *"subagents have low reasoning — are they
+capable of deciding they need a memory recall search?"* That killed master's pull-at-the-worker
+recommendation. The codebase already agreed: FRE-1390 put the planner on `PRIMARY` precisely
+because judgment is not worker work.
 
-**Master error 1 — gated FRE-1445 off a stale ref.** Fetched the branch at 09:13, the seat pushed
-the cost-window fix at 09:21, master analysed the 09:13 ref at 09:32 and merged the head at 09:50.
-Master told the owner a cost window was open that the seat had already closed, and asked them to
-decide a trade that no longer existed. **The gate must read the commit it is merging.**
+**ADR-0147 then corrected three premises the owner and master had agreed.** The "cheap variant"
+is ~700 estimated tokens unbounded — *dearer* than the 516 full section — so D4 bounds it at
+20 items / 120 chars / 300 tokens. FRE-960 is a quality ceiling, not a blocker: `ctx.memory_context`
+is already in hand when the planner runs, so no design here issues a recall query. And
+`ctx.memory_context` is a **superset** of what the primary renders, so a digest over the raw set
+could show a worker a fact the answering model never sees.
 
-**Master error 2 — reproduced a documented trap.** Wrote `until ! pgrep -f 'bin/pytest'`, which
-matches its own command line, and blocked itself for 35 minutes. That exact substring flaw is
-written up in root `CLAUDE.md` and in FRE-1405's own description. Reading it was not enough.
+**FRE-1467 removed the ability to distinguish principals downstream** — a sub-agent's
+`TraceContext` is now identical to the primary's. That is why FRE-1473's clamp passes
+`principal` explicitly: any inference would rebuild what FRE-1467 deleted.
 
-**`run_python` has no execution bound.** Two sandbox containers ran a non-terminating
-agent-written benchmark at 99.9% CPU for **2 days 3 hours** (from 09-05 09:14). They also
-silently corrupted an owner benchmark taken while they ran. Master removed them; **FRE-1462**
-carries the fix. The owner's generalisation — *all* unattended tool execution wants bounds — is
-in the ticket and should not be narrowed to `run_python`.
+**Six escalated diffs merged without owner ultra** under the 2026-08-31 directive. One went to
+the owner instead — the `recall_personal_history` grant, which reversed a refusal the owner made
+twice and ran against ADR-0147 merged hours earlier. Owner ruled: merge, bound the window. Live
+at 30 days / 10 turns, **pending the owner's confirmation** — those are master's numbers.
 
 ## Worktrees — anything special
 Nothing unpushed. `telemetry/dispatch_state.json.bak-163808` is untracked, pre-existing and the
-owner's — leave it. The `adr` stream carries a **stale dispatch record** pointing at parked
-FRE-1361 (20+ hours), which makes the daemon log a `no-pr-past-timeout` stall every tick.
-Cosmetic; clear it only while dispatch is paused, since the daemon writes that file continuously.
+owner's.
 
 ## Sequence position + drift
-The model/agent/subagent fast-track directive is **discharged** — ADR-0145 is complete. Three
-seats mis-attributed the same stale searxng file in their own worktrees to `main`; master
-corrected each time (FRE-1456). The Observability Foundation directive remains deferred by the
-owner's own 2026-09-06 decision, not drifted.
+**FRE-1426's thirteen ACs were master's declared first task at 17:35 and were never adjudicated.**
+It is still Awaiting Deploy. That is the one real drift of the day and it should lead the next
+session.
+
+The 2026-09-05 fast-track directive's retirement condition is **unmet**: it retires when FRE-1394
+reaches Done, and FRE-1394 is `Needs Approval` and never started. The previous session delta
+called the directive discharged because ADR-0145 completed — that is a session judgment, not the
+console's recorded condition. Do not retire it.
+
+FRE-1359 stayed unapproved all day — the sole reason `adr` computed no eligible work until
+FRE-1122 unblocked FRE-1118.
+
+A seat wedged on an interactive dialog **four times** today, each cleared by hand. FRE-1457's
+detector shipped; watch whether the next one surfaces on its own.
 
 ## Answers for the fresh start
 
-- **First task?** Adjudicate **FRE-1426**'s thirteen ACs — the chain has landed, so its
-  precondition is met. ADR-0145 is still `Proposed`; the stated blocker on Accepted (D7's
-  concurrency prediction) was measured by FRE-1449. Full detail is a comment on FRE-1426.
-- **What is dispatchable?** Five new tickets are Approved and **deliberately unlabelled**:
-  FRE-1461, 1462, 1463 (blocked on 1461), 1464, plus FRE-1458/1459. Both build lanes are clear.
-  Recommended order: 1461 and 1462 in parallel, then 1463.
-- **Why is FRE-1372 `Verify Failed`?** Master ran its probe; it printed `AC-1 held` and exit 0
-  **vacuously** — zero graph nodes, `entity_extraction running_total=0.0`, `extraction_settled=False`
-  on both arms. Re-running changes nothing until the probe fails loudly or the eval stack runs
-  extraction. Do not re-run it as-is.
-- **What is blocked on the owner?** FRE-1448's AC-3/AC-4, FRE-1427's AC-2/AC-3, FRE-1402's three
-  probes, FRE-1414's iOS check. All need live turns master will not fire unasked.
-- **Is `main` green and healthy?** Yes. Gateway rebuilt at 10:43, all five components connected,
-  `check_config: clean` before every deploy today.
+- **First task?** Adjudicate **FRE-1426**. Owed since yesterday, still Awaiting Deploy.
+- **What is dispatchable?** build2 → FRE-1466 then FRE-1402. **build1 and adr have empty queues**
+  — the adr seat is mid-flight on FRE-1118, build1 has nothing behind it.
+- **What is blocked on the owner?** The 30/10 ceiling numbers (FRE-1473) · accepting ADR-0147 ·
+  FRE-1471/1472 and FRE-1469/1474 approval · FRE-1359 (the adr blocker) · the `sub_agent`
+  binding decision · authorising FRE-1122's baseline run · FRE-1427 AC-3.
+- **Anything the owner parked?** The PWA context meter is broken and explicitly **not** a
+  priority until the local model is usable again.
+- **Is `main` green and healthy?** Yes. Gateway rebuilt four times, healthy each time.

@@ -2755,6 +2755,16 @@ class AppConfig(BaseSettings):
             "Env var: AGENT_SANDBOX_SCRATCH_ROOT"
         ),
     )
+    sandbox_network: str = Field(
+        default="seshat_cloud-sim",
+        description=(
+            "Docker network name for network-enabled sandbox runs (FRE-1466). "
+            "When run_python is called with network=True, the container attaches to this network. "
+            "Docker Compose prefixes all networks with the project name, so this should include "
+            "the full network name including the prefix (e.g., 'seshat_cloud-sim', not 'cloud-sim'). "
+            "Env var: AGENT_SANDBOX_NETWORK"
+        ),
+    )
 
     # Tool approval UI (FRE-261 — Steps 1 & 6)
     approval_ui_enabled: bool = Field(

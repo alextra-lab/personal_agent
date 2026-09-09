@@ -463,3 +463,80 @@ async def test_reap_orphaned_does_not_count_failed_removal() -> None:
         reaped = await reap_orphaned_sandbox_containers()
 
     assert reaped == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests — network configuration (FRE-1466)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sandbox_network_name_from_config(tmp_path: Path) -> None:
+    """When network=True, uses sandbox_network from config, not a hardcoded value.
+
+    AC-3: network name is resolved from configuration.
+    """
+    scratch = tmp_path / "scratch"
+    run_proc, rm_proc = _run_and_rm_mocks(returncode=0, stdout=b"ok\n")
+    captured_args: list[list[str]] = []
+
+    async def _capture(*args: str, **kwargs: object) -> MagicMock:
+        captured_args.append(list(args))
+        return run_proc if args[1] == "run" else rm_proc
+
+    # Mock the config to use a custom network name
+    with (
+        patch("shutil.which", return_value="/usr/bin/docker"),
+        patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=_capture)),
+        patch("personal_agent.tools.primitives.sandbox.settings") as mock_settings,
+    ):
+        mock_settings.sandbox_network = "custom-network-name"
+        await run_in_sandbox(
+            image="seshat-sandbox-python:0.1",
+            script="print('hi')",
+            timeout_seconds=10,
+            scratch_host_path=scratch,
+            network=True,
+        )
+
+    # Verify docker args contain --network=<config_value>, not hardcoded "cloud-sim"
+    run_args = captured_args[0]
+    network_args = [arg for arg in run_args if arg.startswith("--network=")]
+    assert len(network_args) == 1
+    network_arg = network_args[0]
+    assert network_arg == "--network=custom-network-name"
+    # Verify it's not hardcoded to "cloud-sim"
+    assert "--network=cloud-sim" not in run_args
+
+
+@pytest.mark.asyncio
+async def test_sandbox_network_none_when_disabled(tmp_path: Path) -> None:
+    """When network=False, uses network=none for isolation.
+
+    AC-2 seeded negative: disabled network still produces isolation.
+    """
+    scratch = tmp_path / "scratch"
+    run_proc, rm_proc = _run_and_rm_mocks(returncode=0, stdout=b"ok\n")
+    captured_args: list[list[str]] = []
+
+    async def _capture(*args: str, **kwargs: object) -> MagicMock:
+        captured_args.append(list(args))
+        return run_proc if args[1] == "run" else rm_proc
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/docker"),
+        patch("asyncio.create_subprocess_exec", new=AsyncMock(side_effect=_capture)),
+    ):
+        await run_in_sandbox(
+            image="seshat-sandbox-python:0.1",
+            script="print('hi')",
+            timeout_seconds=10,
+            scratch_host_path=scratch,
+            network=False,
+        )
+
+    run_args = captured_args[0]
+    network_args = [arg for arg in run_args if arg.startswith("--network=")]
+    assert len(network_args) == 1
+    network_arg = network_args[0]
+    assert network_arg == "--network=none"

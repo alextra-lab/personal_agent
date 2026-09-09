@@ -50,6 +50,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from personal_agent.config import settings
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -130,8 +131,8 @@ async def run_in_sandbox(
             is the advertised limit, not the limit plus extra slack.
         memory_mb: Container memory limit in megabytes (default 512).
         cpus: CPU quota as a fraction (default 1.0).
-        network: When True attach to the ``cloud-sim`` Docker network; when
-            False pass ``--network=none`` (no outbound access).
+        network: When True attach to the configured ``sandbox_network`` Docker
+            network (from settings); when False pass ``--network=none`` (no outbound access).
         scratch_host_path: Absolute path on the Docker host that will be
             bind-mounted as ``/sandbox`` inside the container (rw).  Created
             automatically if it does not yet exist.
@@ -174,7 +175,7 @@ async def run_in_sandbox(
             scratch_files=[],
         )
 
-    network_arg = "cloud-sim" if network else "none"
+    network_arg = settings.sandbox_network if network else "none"
 
     container_name = f"seshat-sbx-{uuid.uuid4().hex[:16]}"
     deadline_epoch = time.time() + timeout_seconds + _REAPER_GRACE_SECONDS
@@ -282,6 +283,21 @@ async def run_in_sandbox(
         # OOM kill: Docker sets exit code 137 (128 + SIGKILL) when the container
         # is killed by the kernel OOM killer due to memory exhaustion.
         oom = exit_code == 137
+
+        # Detect network attachment failure (FRE-1466 AC-4): emit a named event
+        # so the failure is queryable, not just paraphrased by the model into prose.
+        if exit_code != 0 and network:
+            if "network" in stderr_str.lower() and (
+                "not found" in stderr_str.lower() or "not connected" in stderr_str.lower()
+            ):
+                log.warning(
+                    "sandbox_network_attachment_failed",
+                    image=image,
+                    network=settings.sandbox_network,
+                    trace_id=trace_id,
+                    tool=tool,
+                    container=container_name,
+                )
 
         scratch_files = _list_scratch_files(scratch_host_path)
 

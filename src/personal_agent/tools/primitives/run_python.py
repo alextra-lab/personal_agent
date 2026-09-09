@@ -71,7 +71,7 @@ run_python_tool = ToolDefinition(
             name="network",
             type="boolean",
             description=(
-                "Enable outbound network access (attaches to cloud-sim network). "
+                "Enable outbound network access (attaches to the configured sandbox network). "
                 "Disabled by default. Requires approval in ALERT/DEGRADED modes."
             ),
             required=False,

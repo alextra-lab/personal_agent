@@ -9,16 +9,27 @@ accident:
                 (AC-1, AC-2). Replaces an absent probe whose query returns rows
                 with one from the pre-registered pool. **Fires no turns.**
 ``run``         Fire the twenty turns and classify the answers (AC-4, AC-5).
-                Requires explicit authorization — see below.
-``postcheck``   Measure what the run created, apply session-scoped cleanup, and
-                re-check whether the absent subjects returned to zero rows
-                (AC-3). This is what decides AC-6's substrate branch.
+                One session per probe. Requires explicit authorization and an
+                explicit identity — see below.
+``postcheck``   Measure what the run created, apply run-scoped cleanup across
+                both substrates, and re-check whether the absent subjects
+                returned to zero rows (AC-3). This decides AC-6's substrate
+                branch.
 ``report``      Assemble the six-cell report from the artifacts above.
 
 **The run phase needs the owner's authorization and will not proceed without
 it.** It fires real turns against the live gateway under the owner's identity;
 that is not a session's to start unprompted, and ``--authorized-by`` is required
 precisely so it cannot happen as a side effect of running the other phases.
+
+**It also needs an explicit identity.** ``--auth-email`` is sent as
+``Cf-Access-Authenticated-User-Email`` and must resolve to ``--user-id``. The
+service upserts an unknown address into ``users``, so a run under the wrong one
+measures an empty corpus and reports a clean, meaningless baseline.
+
+**A failed probe does not discard the completed ones**, and a resume never
+refires a probe whose request was submitted: the turn may have completed
+server-side, and the absent half is single-use.
 
 **Artifacts are gitignored, and that is deliberate.** AC-2 requires quoting the
 stored text a correct answer must reproduce, and AC-7 requires probe subjects be
@@ -73,10 +84,27 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _DEFAULT_ARTIFACT_ROOT = _PROJECT_ROOT / "telemetry" / "evaluation" / "fre1122-absence-probe"
 _DEFAULT_CAPTURES_ROOT = _PROJECT_ROOT / "telemetry" / "captains_log" / "captures"
 
-# One turn at a time: the probes share a session and the corpus is mutated by
-# every turn, so concurrency would make the ground truth of probe N depend on
-# whether probe N-1 had finished writing.
-_TURN_TIMEOUT_SECONDS = 300.0
+# One turn at a time. Each probe now fires in its own session, so concurrency is
+# available — but the corpus is mutated by every turn, and sequential firing
+# keeps what each probe was asked against deterministic.
+#
+# The ceiling was 300 seconds and a legitimate five-tool-iteration turn took
+# 318.8, taking nine completed turns down with it. Three times the observed
+# maximum, and overridable, so the ceiling moves without a code edit.
+_DEFAULT_TURN_TIMEOUT_SECONDS = 900.0
+
+# How a probe's attempt ended. The distinction that matters is whether the
+# request reached the service: absent probes are single-use, so refiring one that
+# may have completed server-side answers against a corpus containing its own
+# first firing, which destroys the ground truth rather than repeating it.
+STATE_COMPLETED = "completed"
+STATE_NOT_SUBMITTED = "not_submitted"
+STATE_SUBMITTED_UNKNOWN = "submitted_unknown"
+
+
+class RunRefused(RuntimeError):
+    """The run phase refused to fire, for a reason that would void the baseline."""
+
 
 # A capture that could not be read is NOT the same as a turn that rendered no
 # memory. "Zero items admitted" is a legitimate, and for FRE-1118 an
@@ -95,6 +123,8 @@ class ProbeAnswer:
         status: Its construction-time ground truth.
         question: What was asked.
         answer: The rendered answer, verbatim.
+        session_id: The session this probe fired in. One per probe, so that no
+            probe is answered inside another's conversation history.
         trace_id: Join key to the turn's capture, for AC-5's memory items.
         outcome: The classification.
         evidence_span: The verbatim span that decided it.
@@ -107,6 +137,7 @@ class ProbeAnswer:
     status: str
     question: str
     answer: str
+    session_id: str
     trace_id: str
     outcome: str
     evidence_span: str
@@ -178,6 +209,154 @@ async def _open_pg() -> Connection:
 
     url = str(settings.database_url).replace("postgresql+asyncpg://", "postgresql://")
     return await asyncpg.connect(url)
+
+
+async def _verify_run_identity(pg_conn: Connection, *, email: str, user_id: str) -> None:
+    """Refuse unless the run's turn identity is the owner the ground truth used.
+
+    ``get_request_user`` **upserts** an unknown address into ``users`` and hands
+    back a fresh id, so a run under the wrong email creates a user, measures
+    their empty corpus, reads every present probe as absent, and reports a clean
+    baseline. Nothing else catches that, and nothing about the report looks
+    wrong.
+
+    Args:
+        pg_conn: An open asyncpg connection.
+        email: The address the run will send as the authenticated user.
+        user_id: The owner the ground-truth queries were scoped to.
+
+    Raises:
+        RunRefused: If the address is unknown, or maps to a different user.
+    """
+    row = await pg_conn.fetchrow("SELECT user_id FROM users WHERE email = lower($1)", email)
+    if row is None:
+        raise RunRefused(
+            f"refusing to run: {email} is not a known user. The service would "
+            "create it on the first turn and the run would measure an empty "
+            "corpus while reporting a clean baseline."
+        )
+    if str(row["user_id"]) != str(user_id):
+        raise RunRefused(
+            f"refusing to run: {email} resolves to {row['user_id']}, but the "
+            f"ground truth was established for {user_id}. The run would measure a "
+            "different corpus from the one preflight evidenced."
+        )
+
+
+def _is_refirable(attempt: dict[str, object] | None) -> bool:
+    """Whether a probe may be fired, given what an earlier attempt recorded.
+
+    Args:
+        attempt: The ledger entry for this probe, or None if it has none.
+
+    Returns:
+        True for a probe never attempted, or one whose request provably never
+        reached the service. A probe that was submitted is never refired: the
+        turn may have completed server-side, and the absent half is single-use.
+    """
+    if attempt is None:
+        return True
+    return attempt.get("state") == STATE_NOT_SUBMITTED
+
+
+def _load_run_state(
+    path: pathlib.Path,
+    manifest: Manifest,
+    *,
+    resume: bool,
+) -> tuple[list[dict[str, object]], dict[str, dict[str, object]]]:
+    """Load an existing run artifact for a resume, or refuse to overwrite one.
+
+    Args:
+        path: The run artifact.
+        manifest: The effective manifest for this run.
+        resume: Whether the caller asked to continue an interrupted run.
+
+    Returns:
+        The answers collected so far and the attempt ledger, both empty on a
+        fresh run.
+
+    Raises:
+        RunRefused: If answers already exist and no resume was requested.
+        ManifestError: If the existing artifact belongs to a different probe set.
+    """
+    if not path.exists():
+        return [], {}
+
+    artifact = json.loads(path.read_text())
+    answers = list(artifact.get("answers") or [])
+    attempts = dict(artifact.get("attempts") or {})
+
+    if not resume:
+        if answers or attempts:
+            raise RunRefused(
+                f"refusing to run: {path} already holds {len(answers)} answer(s). "
+                "The absent probes are single-use — refiring one answers against a "
+                "corpus that now contains its own first firing. Pass --resume to "
+                "fire only what is missing, or move the artifact aside."
+            )
+        return [], {}
+
+    if artifact.get("manifest_digest") != manifest.digest:
+        raise ManifestError(
+            "run_answers.json was produced against a different manifest "
+            f"({str(artifact.get('manifest_digest'))[:12]} != {manifest.digest[:12]}) "
+            "— resuming would mix two probe sets into one baseline"
+        )
+    return answers, attempts
+
+
+def _write_run_state(
+    path: pathlib.Path,
+    manifest: Manifest,
+    args: argparse.Namespace,
+    answers: list[dict[str, object]],
+    attempts: dict[str, dict[str, object]],
+) -> None:
+    """Rewrite the run artifact and its cleanup-compatibility shape.
+
+    Called after every probe rather than once at the end. A run that aborts must
+    leave both the answers it collected and the record of what it attempted;
+    losing nine completed turns to one slow turn is the behaviour this replaces.
+
+    Args:
+        path: The run artifact.
+        manifest: The effective manifest for this run.
+        args: Parsed CLI arguments.
+        answers: The answers collected so far.
+        attempts: The attempt ledger.
+    """
+    session_ids = list(dict.fromkeys(str(a["session_id"]) for a in answers if a.get("session_id")))
+    path.write_text(
+        json.dumps(
+            {
+                "session_ids": session_ids,
+                "authorized_by": args.authorized_by.strip(),
+                "auth_email": args.auth_email,
+                "manifest_digest": manifest.digest,
+                "attempts": attempts,
+                "answers": answers,
+            },
+            indent=2,
+            default=str,
+        )
+    )
+
+    # Compatibility shape for scripts/cleanup_eval_data.py, which purges the
+    # relational and Elasticsearch side and consumes an A/B results.json.
+    # FRE-1122 is single-arm, so every turn is a control side. Each row names its
+    # OWN probe's session — with one session per probe, a shared outer id would
+    # have named the last probe's session on every row.
+    compat = _artifact(args.artifact_root, "results.json")
+    compat.write_text(
+        json.dumps(
+            [
+                {"control": {"session_id": a.get("session_id"), "trace_id": a.get("trace_id")}}
+                for a in answers
+            ],
+            indent=2,
+        )
+    )
 
 
 async def _phase_preflight(args: argparse.Namespace, probe_set: ProbeSet) -> int:
@@ -307,22 +486,62 @@ async def _phase_run(args: argparse.Namespace, probe_set: ProbeSet) -> int:
             "turns at the live gateway under the owner's identity"
         )
 
-    answers: list[ProbeAnswer] = []
-    session_id: str | None = None
+    path = _artifact(args.artifact_root, "run_answers.json")
+    answers, attempts = _load_run_state(path, manifest, resume=bool(args.resume))
 
-    async with httpx.AsyncClient(timeout=_TURN_TIMEOUT_SECONDS) as client:
-        for probe in manifest.probes:
-            params = {"message": probe.question, "channel": "EVAL"}
-            if session_id:
-                params["session_id"] = session_id
+    # Bind the two identities BEFORE the client opens. The ground-truth queries
+    # scope to --user-id and the turn scopes to whoever the header names; if they
+    # differ the run measures a corpus preflight never evidenced, and the report
+    # states a clean baseline for it.
+    pg_conn = await _open_pg()
+    try:
+        await _verify_run_identity(pg_conn, email=args.auth_email, user_id=args.user_id)
+    finally:
+        await pg_conn.close()
 
-            response = await client.post(f"{args.service_url}/chat", params=params)
-            response.raise_for_status()
-            payload = response.json()
+    pending = [p for p in manifest.probes if _is_refirable(attempts.get(p.probe_id))]
+    ambiguous = [pid for pid, a in attempts.items() if a.get("state") == STATE_SUBMITTED_UNKNOWN]
+    headers = {"Cf-Access-Authenticated-User-Email": args.auth_email}
 
-            session_id = payload["session_id"]
-            answer = payload.get("response", "")
-            trace_id = payload.get("trace_id", "")
+    async with httpx.AsyncClient(timeout=args.turn_timeout) as client:
+        for probe in pending:
+            # Recorded, and made durable, BEFORE the request goes out. A crash
+            # mid-turn must not look like a probe that never fired.
+            attempts[probe.probe_id] = {
+                "state": STATE_SUBMITTED_UNKNOWN,
+                "started_at": dt.datetime.now(dt.UTC).isoformat(),
+                "error": None,
+            }
+            _write_run_state(path, manifest, args, answers, attempts)
+
+            try:
+                response = await client.post(
+                    f"{args.service_url}/chat",
+                    params={"message": probe.question, "channel": "EVAL"},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                session_id = str(payload["session_id"])
+                answer = str(payload.get("response", ""))
+                trace_id = str(payload.get("trace_id", ""))
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                # The request never reached the service, so the corpus is
+                # untouched and this probe is safely refirable.
+                attempts[probe.probe_id]["state"] = STATE_NOT_SUBMITTED
+                attempts[probe.probe_id]["error"] = f"{type(exc).__name__}: {exc}"
+                log.warning("fre1122_probe_not_submitted", probe_id=probe.probe_id, error=str(exc))
+                _write_run_state(path, manifest, args, answers, attempts)
+                continue
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
+                # The request went out. The turn may have completed server-side
+                # and written to the corpus, so this probe is never auto-refired.
+                attempts[probe.probe_id]["error"] = f"{type(exc).__name__}: {exc}"
+                log.warning(
+                    "fre1122_probe_submitted_unknown", probe_id=probe.probe_id, error=str(exc)
+                )
+                _write_run_state(path, manifest, args, answers, attempts)
+                continue
 
             classification = classify_answer(
                 answer,
@@ -331,18 +550,29 @@ async def _phase_run(args: argparse.Namespace, probe_set: ProbeSet) -> int:
                 subject_terms=probe.subject_terms,
             )
             answers.append(
-                ProbeAnswer(
-                    probe_id=probe.probe_id,
-                    status=probe.status,
-                    question=probe.question,
-                    answer=answer,
-                    trace_id=trace_id,
-                    outcome=str(classification.outcome),
-                    evidence_span=classification.evidence_span,
-                    reason=classification.reason,
-                    rendered_memory=_load_rendered_memory(args.captures_root, trace_id),
+                asdict(
+                    ProbeAnswer(
+                        probe_id=probe.probe_id,
+                        status=probe.status,
+                        question=probe.question,
+                        answer=answer,
+                        session_id=session_id,
+                        trace_id=trace_id,
+                        outcome=str(classification.outcome),
+                        evidence_span=classification.evidence_span,
+                        reason=classification.reason,
+                        rendered_memory=_load_rendered_memory(args.captures_root, trace_id),
+                    )
                 )
             )
+            attempts[probe.probe_id] = {
+                "state": STATE_COMPLETED,
+                "started_at": attempts[probe.probe_id]["started_at"],
+                "session_id": session_id,
+                "trace_id": trace_id,
+                "error": None,
+            }
+            _write_run_state(path, manifest, args, answers, attempts)
             log.info(
                 "fre1122_probe_answered",
                 probe_id=probe.probe_id,
@@ -350,33 +580,24 @@ async def _phase_run(args: argparse.Namespace, probe_set: ProbeSet) -> int:
                 trace_id=trace_id,
             )
 
-    path = _artifact(args.artifact_root, "run_answers.json")
-    path.write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "authorized_by": args.authorized_by.strip(),
-                "manifest_digest": manifest.digest,
-                "answers": [asdict(a) for a in answers],
-            },
-            indent=2,
-            default=str,
-        )
+    incomplete = [
+        p.probe_id for p in manifest.probes if p.probe_id not in {a["probe_id"] for a in answers}
+    ]
+    log.info(
+        "fre1122_run_written",
+        path=str(path),
+        answered=len(answers),
+        incomplete=len(incomplete),
     )
-
-    # Compatibility shape for scripts/cleanup_eval_data.py, which purges the
-    # relational and Elasticsearch side by session_id and consumes an A/B
-    # results.json. FRE-1122 is single-arm, so every turn is a control side.
-    compat = _artifact(args.artifact_root, "results.json")
-    compat.write_text(
-        json.dumps(
-            [{"control": {"session_id": session_id, "trace_id": a.trace_id}} for a in answers],
-            indent=2,
+    if ambiguous:
+        log.warning(
+            "fre1122_probes_need_a_decision",
+            probes=sorted(ambiguous),
+            reason="the request went out and no answer came back; the turn may have "
+            "completed server-side, so refiring would answer against a corpus "
+            "containing the probe's own first firing",
         )
-    )
-
-    log.info("fre1122_run_written", path=str(path), session_id=session_id)
-    return 0
+    return 1 if incomplete else 0
 
 
 async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int:
@@ -416,7 +637,7 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
             "run's"
         )
 
-    session_id = run_artifact["session_id"]
+    session_ids = list(run_artifact["session_ids"])
     trace_ids = [a["trace_id"] for a in run_artifact["answers"] if a["trace_id"]]
 
     driver = connect_graph()
@@ -430,9 +651,10 @@ async def _phase_postcheck(args: argparse.Namespace, probe_set: ProbeSet) -> int
 
         cleanup = await cleanup_probe_session(
             driver,
-            session_id,
+            session_ids,
             user_id=args.user_id,
             snapshot_path=_artifact(args.artifact_root, "cleanup_snapshot.jsonl"),
+            pg_conn=pg_conn,
             trace_ids=trace_ids,
             dry_run=args.dry_run,
             restore_superseded=args.restore_superseded_claims,
@@ -604,7 +826,7 @@ def _phase_report(args: argparse.Namespace, probe_set: ProbeSet) -> int:
     lines = [
         "# FRE-1122 — absence-probe baseline",
         "",
-        f"Session: {run_artifact['session_id']}",
+        f"Sessions: {len(run_artifact['session_ids'])} (one per probe)",
         f"Authorized by: {run_artifact['authorized_by']}",
         "",
         "## The baseline number (AC-5)",
@@ -693,6 +915,7 @@ def _phase_report(args: argparse.Namespace, probe_set: ProbeSet) -> int:
             f"{cleanup['claims_restored']})",
             f"- probe-created entities adopted by later turns, therefore retained: "
             f"{cleanup['adopted_entities_retained']}",
+            f"- message-history rows removed: {cleanup['message_rows_removed']}",
         ]
     else:
         lines += [
@@ -732,6 +955,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--user-id", help="Owner user UUID, for turn and message queries")
     parser.add_argument(
         "--service-url", default=f"http://localhost:{settings.service_port}", help="Agent service"
+    )
+    parser.add_argument(
+        "--auth-email",
+        help="Address sent as Cf-Access-Authenticated-User-Email. REQUIRED for the "
+        "run phase, and it must resolve to --user-id: an unknown address is "
+        "created on first use and the run would measure an empty corpus.",
+    )
+    parser.add_argument(
+        "--turn-timeout",
+        type=float,
+        default=_DEFAULT_TURN_TIMEOUT_SECONDS,
+        help="Per-turn ceiling in seconds. A legitimate five-iteration turn has "
+        "been measured at 318.8s.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="run: fire only the probes an interrupted run did not complete. "
+        "Probes whose request was submitted are never refired — the turn may "
+        "have completed server-side and the absent half is single-use.",
     )
     parser.add_argument(
         "--authorized-by",
@@ -795,6 +1038,17 @@ def main() -> int:
             "This phase fires twenty real turns at the live gateway under the "
             "owner's identity and permanently writes to the real corpus. It is "
             "not a session's to start unprompted.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.phase == "run" and not (args.auth_email or "").strip():
+        print(  # noqa: T201 — CLI usage error, before logging is configured
+            "refusing to run: --auth-email is required.\n"
+            "The turn runs under whatever identity this header names, and the "
+            "ground truth was established for --user-id. An unknown address is "
+            "created on first use, so the run would measure an empty corpus and "
+            "report a clean baseline for it.",
             file=sys.stderr,
         )
         return 2

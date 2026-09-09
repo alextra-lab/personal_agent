@@ -121,8 +121,12 @@ class CleanupResult:
     """What session-scoped cleanup found, removed, and could not remove.
 
     Attributes:
-        session_id: The probe session.
+        session_ids: Every session the run created — one per probe.
         dry_run: Whether anything was actually deleted.
+        message_rows_removed: Count of ``sessions`` rows deleted. The message
+            history is a JSONB column on that row, and absence is established
+            against it as well as against the graph, so without this the absent
+            half can never return to zero rows.
         turns_removed: Count of ``:Turn`` nodes deleted (or that would be).
         entities_removed: Count of probe-created ``:Entity`` nodes deleted —
             only those never referenced from outside the probe session.
@@ -151,8 +155,9 @@ class CleanupResult:
         snapshot_path: Where the pre-deletion snapshot was written.
     """
 
-    session_id: str
+    session_ids: tuple[str, ...]
     dry_run: bool
+    message_rows_removed: int
     turns_removed: int
     entities_removed: int
     claims_removed: int
@@ -527,7 +532,7 @@ async def gather_evidence(
 # destroyed (Codex round 1, finding 8).
 _SNAPSHOT_TURNS = """
 MATCH (t:Turn)
-WHERE t.session_id = $sid OR t.originating_session_id = $sid
+WHERE t.session_id IN $sids OR t.originating_session_id IN $sids
 RETURN elementId(t) AS element_id, labels(t) AS labels, properties(t) AS node,
        [(t)-[r]->(o) | {type: type(r), direction: 'out', properties: properties(r),
                         other_element_id: elementId(o), other_labels: labels(o),
@@ -544,11 +549,11 @@ RETURN elementId(t) AS element_id, labels(t) AS labels, properties(t) AS node,
 # (Codex round 1, finding 7).
 _SNAPSHOT_ENTITIES = """
 MATCH (e:Entity)
-WHERE e.originating_session_id = $sid
+WHERE e.originating_session_id IN $sids
   AND NOT EXISTS {
       MATCH (t:Turn)-[:DISCUSSES]->(e)
-      WHERE coalesce(t.session_id, '') <> $sid
-        AND coalesce(t.originating_session_id, '') <> $sid
+      WHERE NOT coalesce(t.session_id, '') IN $sids
+        AND NOT coalesce(t.originating_session_id, '') IN $sids
   }
 RETURN elementId(e) AS element_id, labels(e) AS labels, properties(e) AS node,
        [(e)-[r]->(o) | {type: type(r), direction: 'out', properties: properties(r),
@@ -564,11 +569,11 @@ RETURN elementId(e) AS element_id, labels(e) AS labels, properties(e) AS node,
 # silently destroyed or silently ignored.
 _ADOPTED_ENTITIES = """
 MATCH (e:Entity)
-WHERE e.originating_session_id = $sid
+WHERE e.originating_session_id IN $sids
   AND EXISTS {
       MATCH (t:Turn)-[:DISCUSSES]->(e)
-      WHERE coalesce(t.session_id, '') <> $sid
-        AND coalesce(t.originating_session_id, '') <> $sid
+      WHERE NOT coalesce(t.session_id, '') IN $sids
+        AND NOT coalesce(t.originating_session_id, '') IN $sids
   }
 RETURN e.name AS name
 """
@@ -577,10 +582,17 @@ RETURN e.name AS name
 # belong to the expected owner and contain the trace ids the run recorded. A
 # stale or hand-edited run artifact naming a real production session would
 # otherwise have its turns and entities deleted (Codex round 1, finding 7).
+# Per id, deliberately, rather than over the set. An aggregate count across the
+# run's sessions stops failing on an id that contributes zero turns — the other
+# nineteen carry it past `turns > 0` — and that id then reaches _DELETE_ENTITIES,
+# whose `IN $sids` can match entities the run never created. UNWIND + OPTIONAL
+# MATCH gives one row per requested id, including the ids that matched nothing.
 _VERIFY_SESSION_BINDING = """
-MATCH (t:Turn)
-WHERE t.session_id = $sid OR t.originating_session_id = $sid
-RETURN count(t) AS turns,
+UNWIND $sids AS sid
+OPTIONAL MATCH (t:Turn)
+WHERE t.session_id = sid OR t.originating_session_id = sid
+RETURN sid AS session_id,
+       count(t) AS turns,
        count(CASE WHEN t.user_id = $user_id THEN 1 END) AS owned,
        count(CASE WHEN t.trace_id IN $trace_ids THEN 1 END) AS matching_traces
 """
@@ -589,7 +601,8 @@ RETURN count(t) AS turns,
 # The graph carries its own :Session node (service.py:1369), distinct from the
 # Postgres row. It survived an otherwise "zero residue" cleanup (Codex round 2).
 _SNAPSHOT_SESSION = """
-MATCH (s:Session {session_id: $sid})
+MATCH (s:Session)
+WHERE s.session_id IN $sids
 RETURN elementId(s) AS element_id, labels(s) AS labels, properties(s) AS node,
        [(s)-[r]->(o) | {type: type(r), direction: 'out', properties: properties(r),
                         other_element_id: elementId(o), other_labels: labels(o),
@@ -600,7 +613,8 @@ RETURN elementId(s) AS element_id, labels(s) AS labels, properties(s) AS node,
 """
 
 _DELETE_SESSION = """
-MATCH (s:Session {session_id: $sid})
+MATCH (s:Session)
+WHERE s.session_id IN $sids
 DETACH DELETE s
 """
 
@@ -625,7 +639,8 @@ RETURN count(old) AS restored
 """
 
 _RUN_CLAIM_IDS = """
-MATCH (:Person)-[:HAS_FACT]->(cl:Claim {session_id: $sid})
+MATCH (:Person)-[:HAS_FACT]->(cl:Claim)
+WHERE cl.session_id IN $sids
 RETURN collect(cl.claim_id) AS claim_ids
 """
 
@@ -634,12 +649,73 @@ class CleanupRefused(RuntimeError):
     """Cleanup was asked to delete something it could not prove belongs to the run."""
 
 
+# The relational half of the run's footprint. `messages` is a JSONB column on the
+# session row (docker/postgres/init.sql:8-15), so the row is the whole history:
+# reading it snapshots the history, and deleting it removes the history.
+_SESSION_ROWS = """
+SELECT * FROM sessions WHERE session_id = ANY($1::uuid[])
+"""
+
+# The owner predicate is repeated here rather than trusted from the SELECT: the
+# delete must be safe on its own terms, not only in the order this function
+# happens to call things.
+_DELETE_SESSION_ROWS = """
+DELETE FROM sessions WHERE session_id = ANY($1::uuid[]) AND user_id = $2::uuid
+"""
+
+
+async def _verify_session_rows(
+    pg_conn: Connection,
+    sids: Sequence[str],
+    *,
+    user_id: str,
+) -> list[dict[str, object]]:
+    """Fetch the run's session rows, refusing any that are not this owner's.
+
+    Every requested session must be present and owned. A missing row means the
+    run artifact names a session Postgres never had, and a foreign row means it
+    names someone else's — both are the hand-edited-artifact case the graph-side
+    binding check already refuses, applied to the substrate that actually holds
+    the message history.
+
+    Args:
+        pg_conn: An open asyncpg connection.
+        sids: The run's session ids.
+        user_id: The owner every row must belong to.
+
+    Returns:
+        The session rows, as plain dictionaries ready for the snapshot.
+
+    Raises:
+        CleanupRefused: If a requested session is missing or owned by another
+            user.
+    """
+    records = await pg_conn.fetch(_SESSION_ROWS, list(sids))
+    rows = [dict(record) for record in records]
+    by_id = {str(row.get("session_id")): row for row in rows}
+
+    missing = [sid for sid in sids if sid not in by_id]
+    if missing:
+        raise CleanupRefused(
+            f"refusing to clean up: no sessions row for {', '.join(missing)} — the "
+            "run artifact names a session this database does not have"
+        )
+
+    foreign = [sid for sid, row in by_id.items() if str(row.get("user_id")) != user_id]
+    if foreign:
+        raise CleanupRefused(
+            f"refusing to clean up: sessions row(s) {', '.join(sorted(foreign))} are "
+            f"not owned by {user_id} — the message history is not this run's to delete"
+        )
+    return rows
+
+
 # Entities the probe session touched but did NOT create — cleanup cannot restore
 # their bumped mention_count / last_seen, so they are counted as residue.
 _MUTATED_ENTITIES = """
 MATCH (t:Turn)-[:DISCUSSES]->(e:Entity)
-WHERE (t.session_id = $sid OR t.originating_session_id = $sid)
-  AND coalesce(e.originating_session_id, '') <> $sid
+WHERE (t.session_id IN $sids OR t.originating_session_id IN $sids)
+  AND NOT coalesce(e.originating_session_id, '') IN $sids
 RETURN count(DISTINCT e) AS mutated
 """
 
@@ -649,8 +725,8 @@ RETURN count(DISTINCT e) AS mutated
 # as empty-description, this is the residue class most likely to be non-zero.
 _FILLED_DESCRIPTIONS = """
 MATCH (t:Turn)-[:DISCUSSES]->(e:Entity)
-WHERE (t.session_id = $sid OR t.originating_session_id = $sid)
-  AND coalesce(e.originating_session_id, '') <> $sid
+WHERE (t.session_id IN $sids OR t.originating_session_id IN $sids)
+  AND NOT coalesce(e.originating_session_id, '') IN $sids
   AND coalesce(e.description_eval_mode, false) = true
   AND coalesce(e.description, '') <> ''
 RETURN count(DISTINCT e) AS filled
@@ -670,7 +746,8 @@ RETURN count(v) AS rewritten
 # (consolidator.py:876), so without this the run's own facts survive cleanup and
 # the absent half never returns to zero rows (Codex round 1, finding 5).
 _SNAPSHOT_CLAIMS = """
-MATCH (p:Person)-[:HAS_FACT]->(cl:Claim {session_id: $sid})
+MATCH (p:Person)-[:HAS_FACT]->(cl:Claim)
+WHERE cl.session_id IN $sids
 RETURN elementId(cl) AS element_id, labels(cl) AS labels, properties(cl) AS node,
        [(cl)<-[r]-(o) | {type: type(r), direction: 'in', properties: properties(r),
                          other_element_id: elementId(o), other_labels: labels(o),
@@ -679,7 +756,8 @@ RETURN elementId(cl) AS element_id, labels(cl) AS labels, properties(cl) AS node
 """
 
 _DELETE_CLAIMS = """
-MATCH (:Person)-[:HAS_FACT]->(cl:Claim {session_id: $sid})
+MATCH (:Person)-[:HAS_FACT]->(cl:Claim)
+WHERE cl.session_id IN $sids
 DETACH DELETE cl
 """
 
@@ -688,17 +766,17 @@ DETACH DELETE cl
 # equal by the delete-scope test rather than left to review.
 _DELETE_ENTITIES = """
 MATCH (e:Entity)
-WHERE e.originating_session_id = $sid
+WHERE e.originating_session_id IN $sids
   AND NOT EXISTS {
       MATCH (t:Turn)-[:DISCUSSES]->(e)
-      WHERE coalesce(t.session_id, '') <> $sid
-        AND coalesce(t.originating_session_id, '') <> $sid
+      WHERE NOT coalesce(t.session_id, '') IN $sids
+        AND NOT coalesce(t.originating_session_id, '') IN $sids
   }
 DETACH DELETE e
 """
 
 _DELETE_TURNS = """
-MATCH (t:Turn) WHERE t.session_id = $sid OR t.originating_session_id = $sid
+MATCH (t:Turn) WHERE t.session_id IN $sids OR t.originating_session_id IN $sids
 DETACH DELETE t
 """
 
@@ -722,18 +800,33 @@ async def _count(session, statement: str, key: str, **params: object) -> int:  #
 
 async def cleanup_probe_session(
     driver: AsyncDriver,
-    session_id: str,
+    session_ids: Sequence[str],
     *,
     user_id: str,
     snapshot_path: pathlib.Path,
+    pg_conn: Connection,
     trace_ids: Sequence[str] = (),
     dry_run: bool = True,
     restore_superseded: bool = False,
 ) -> CleanupResult:
-    """Remove the probe session's graph footprint, snapshotting first.
+    """Remove the run's footprint from both substrates, snapshotting first.
 
-    Deletes ``:Entity`` nodes whose *only* provenance is this session and the
-    session's ``:Turn`` nodes. Entities that pre-existed keep their original
+    **The unit is the run, not one session.** Each probe fires in its own session
+    so that no probe is answered inside another's conversation history, and that
+    makes "outside this session" the wrong boundary: a probe-created entity
+    mentioned on another probe's turn would count as adopted, and the split would
+    manufacture residue that says nothing about the substrate. Every predicate
+    therefore scopes to the whole set of the run's sessions.
+
+    **Both substrates, because absence is established in both.**
+    :func:`gather_evidence` queries the graph *and* ``sessions.messages``.
+    Graph-only cleanup leaves every absent probe's own question in the message
+    history, so the post-cleanup evidence pass can never return to zero and AC-3
+    would report an irreversibility that is a gap here rather than a property of
+    the corpus.
+
+    Deletes ``:Entity`` nodes whose *only* provenance is this run and the run's
+    ``:Turn`` nodes. Entities that pre-existed keep their original
     ``originating_session_id`` and are left alone — they are counted as residue
     instead, in three classes cleanup cannot roll back:
 
@@ -750,12 +843,17 @@ async def cleanup_probe_session(
 
     Args:
         driver: An open Neo4j async driver.
-        session_id: The probe session's id.
-        user_id: The owner the session must belong to. Checked before any
-            deletion; a session whose turns are not all this owner's is refused.
+        session_ids: Every session the run created, one per probe.
+        user_id: The owner the sessions must belong to. Checked per session
+            before any deletion, on both substrates; one session that cannot be
+            proven this run's and this owner's refuses the whole cleanup.
         snapshot_path: Where to write the durable pre-deletion snapshot. Written,
             flushed and fsynced before any mutation, so a crash mid-cleanup
-            leaves a complete undo record on disk.
+            leaves a complete undo record on disk. One file per run — which is
+            why the run's sessions are cleaned in a single call rather than one
+            call each, since the file is opened for truncating write.
+        pg_conn: An open asyncpg connection, for the ``sessions`` rows that hold
+            the message history.
         trace_ids: The run's trace ids. Required for a real delete — they bind
             the session to this run. Also drives the description-rewrite count.
         dry_run: When True (the default), snapshot and count but delete nothing.
@@ -776,42 +874,53 @@ async def cleanup_probe_session(
 
     Raises:
         CleanupRefused: If a real delete is requested for a session that cannot
-            be proven to belong to this run and this owner.
+            be proven to belong to this run and this owner, on either substrate.
     """
+    sids = list(dict.fromkeys(session_ids))
+    if not sids:
+        raise CleanupRefused("refusing to clean up: no session ids were supplied")
+
     async with driver.session() as session:
-        # Prove the session belongs to this run BEFORE anything destructive. A
+        # Prove every session belongs to this run BEFORE anything destructive. A
         # stale or hand-edited run artifact naming a real production session
         # would otherwise have its turns and entities deleted.
         if not dry_run:
             if not trace_ids:
                 raise CleanupRefused(
-                    "refusing to delete: no trace ids were supplied, so the session "
+                    "refusing to delete: no trace ids were supplied, so the sessions "
                     "cannot be bound to this run"
                 )
             result = await session.run(
                 _VERIFY_SESSION_BINDING,
-                sid=session_id,
+                sids=sids,
                 user_id=user_id,
                 trace_ids=list(trace_ids),
             )
-            binding = await result.single()
-            turns = int(binding["turns"]) if binding else 0
-            owned = int(binding["owned"]) if binding else 0
-            matching = int(binding["matching_traces"]) if binding else 0
-            # Every turn must be this owner's AND carry a trace id the run
-            # recorded. "at least one matches" would have let a session that
-            # merely overlaps the run be deleted wholesale (Codex round 2).
-            if turns == 0 or owned != turns or matching != turns:
-                raise CleanupRefused(
-                    f"refusing to delete session {session_id}: {turns} turn(s), "
-                    f"{owned} owned by {user_id}, {matching} carrying a recorded "
-                    "trace id — every turn must be both, or the session is not "
-                    "provably this run's alone"
-                )
+            bindings = {str(row["session_id"]): row for row in await result.data()}
+            for sid in sids:
+                row = bindings.get(sid)
+                turns = int(row["turns"]) if row else 0
+                owned = int(row["owned"]) if row else 0
+                matching = int(row["matching_traces"]) if row else 0
+                # Every turn must be this owner's AND carry a trace id the run
+                # recorded. "at least one matches" would have let a session that
+                # merely overlaps the run be deleted wholesale (Codex round 2).
+                # Checked per id: an aggregate over the run's sessions stops
+                # failing on an id contributing zero turns, and that id would
+                # still reach the entity delete.
+                if turns == 0 or owned != turns or matching != turns:
+                    raise CleanupRefused(
+                        f"refusing to delete session {sid}: {turns} turn(s), "
+                        f"{owned} owned by {user_id}, {matching} carrying a recorded "
+                        "trace id — every turn must be both, or the session is not "
+                        "provably this run's alone"
+                    )
+
+        session_rows = await _verify_session_rows(pg_conn, sids, user_id=user_id)
 
         # Claim ids first: the superseded-claim snapshot keys off them, and it
         # has to be captured while the run's claims still exist.
-        result = await session.run(_RUN_CLAIM_IDS, sid=session_id)
+        result = await session.run(_RUN_CLAIM_IDS, sids=sids)
         claim_id_row = await result.single()
         run_claim_ids = list(claim_id_row["claim_ids"]) if claim_id_row else []
 
@@ -822,7 +931,7 @@ async def cleanup_probe_session(
             ("Claim", _SNAPSHOT_CLAIMS),
             ("Session", _SNAPSHOT_SESSION),
         ):
-            result = await session.run(statement, sid=session_id)
+            result = await session.run(statement, sids=sids)
             for record in await result.data():
                 snapshots.append(
                     {
@@ -851,6 +960,20 @@ async def cleanup_probe_session(
                     }
                 )
 
+        # The relational side of the undo log. The message history is a JSONB
+        # column on the session row, so the row IS the history — snapshot it
+        # whole, in the same file and before the same fsync as the graph nodes.
+        for row in session_rows:
+            snapshots.append(
+                {
+                    "label": "SessionRow",
+                    "element_id": str(row.get("session_id")),
+                    "labels": ["SessionRow"],
+                    "properties": row,
+                    "relationships": [],
+                }
+            )
+
         # Durable before destructive: flush() alone only reaches the OS buffer,
         # so a host crash could lose the undo record while the delete survived.
         # The containing directory is fsynced too, or the file's own directory
@@ -867,15 +990,15 @@ async def cleanup_probe_session(
         finally:
             os.close(dir_fd)
 
-        mutated = await _count(session, _MUTATED_ENTITIES, "mutated", sid=session_id)
-        filled = await _count(session, _FILLED_DESCRIPTIONS, "filled", sid=session_id)
+        mutated = await _count(session, _MUTATED_ENTITIES, "mutated", sids=sids)
+        filled = await _count(session, _FILLED_DESCRIPTIONS, "filled", sids=sids)
         rewritten = (
             await _count(session, _REWRITTEN_DESCRIPTIONS, "rewritten", trace_ids=list(trace_ids))
             if trace_ids
             else 0
         )
 
-        result = await session.run(_ADOPTED_ENTITIES, sid=session_id)
+        result = await session.run(_ADOPTED_ENTITIES, sids=sids)
         adopted = tuple(str(r["name"]) for r in await result.data())
 
         turn_count = sum(1 for s in snapshots if s["label"] == "Turn")
@@ -886,7 +1009,7 @@ async def cleanup_probe_session(
         restored = 0
         if not dry_run:
             for statement in (_DELETE_CLAIMS, _DELETE_ENTITIES, _DELETE_TURNS, _DELETE_SESSION):
-                result = await session.run(statement, sid=session_id)
+                result = await session.run(statement, sids=sids)
                 await result.consume()
 
             # Delete FIRST, restore after. Restoring first opened a window where
@@ -901,9 +1024,20 @@ async def cleanup_probe_session(
                     session, _RESTORE_SUPERSEDED, "restored", claim_ids=run_claim_ids
                 )
 
+    # Relational delete last, after the graph and after the snapshot is durable.
+    # Ordering matters only for the crash story: a crash here leaves the message
+    # rows behind, which the postcheck reports as residue — visible, and the
+    # snapshot can restore them. The reverse order would delete the rows whose
+    # session ids the graph statements still need.
+    message_rows_removed = 0
+    if not dry_run:
+        await pg_conn.execute(_DELETE_SESSION_ROWS, sids, user_id)
+        message_rows_removed = len(session_rows)
+
     return CleanupResult(
-        session_id=session_id,
+        session_ids=tuple(sids),
         dry_run=dry_run,
+        message_rows_removed=message_rows_removed,
         turns_removed=turn_count,
         entities_removed=entity_count,
         claims_removed=claim_count,

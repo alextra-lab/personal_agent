@@ -1,6 +1,6 @@
 # ADR-0149: Land Before the Cut — a Sub-Agent Owes a Report on Every Path, and the Caller Cannot Hide a Failed Landing
 
-**Status:** Proposed
+**Status:** Accepted — 2026-09-10 (owner)
 **Date:** 2026-09-10
 **Deciders:** Owner (design direction and the no-raise directive, 2026-09-10), adr seat at Fable 5.1 (author, owner-directed model)
 **Tags:** orchestrator, sub-agent, tool-loop, budgets, prompt-cache, grounding, expansion
@@ -676,3 +676,29 @@ Files touched by T3: `orchestrator/executor.py` (`:5885-5896`, `:3100-3129`), `c
 - Anthropic API reference — `output_config.task_budget`, the countdown marker the model sees during generation
 - Sub-agent capture index `agent-captains-captures-subagents-2026-09`, session `606ae6a4`, read 2026-09-10
 - Cache probe, 2026-09-10 20:22 UTC, five calls against the local backend through the Caddy egress
+
+---
+
+## Status Updates
+
+### 2026-09-10 — Accepted
+**Changed By:** master, on the owner's ruling of 2026-09-10
+**Reason:** Accepted the same day it was written. The owner directed the design review, directed
+the model (Fable 5.1), and set its binding constraint — *"We dont raise limits until we have
+properly implemented the behavior when the limits are reached."* AC-8 guards that, and the three
+values are unchanged.
+
+**D6 was verified independently before acceptance.** Master re-ran the cache probe against the
+live local backend rather than accepting the adr seat's numbers, because D6 reverses advice master
+had already given the implementing seat. Four calls on one prefix: tools present and warm, 2083
+prefilled / 0 cached / 6.30 s; tools retained with `tool_choice="none"`, **4 prefilled / 2079
+cached / 0.64 s**; the tools array dropped, **1832 prefilled / 0 cached / 4.59 s**; tools restored,
+back to 4 / 2079 / 0.69 s. Dropping the tools array discards the entire cached prefix, and the miss
+is per-call rather than persistent.
+
+**This ADR exists because the owner refused a copy-and-paste fix.** Master had judged the primary's
+forced-synthesis mechanism obviously correct and told the implementing seat to copy it verbatim,
+including the tools-off behaviour that causes the miss above. That would have added a full prefix
+re-prefill to the last call a capped worker makes — on the OVH path that already dies at a 90 s
+per-call timeout. The review found it, and found the same defect live on the primary
+(`executor.py:3126`), now FRE-1485.

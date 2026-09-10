@@ -11,6 +11,7 @@ All operations return a new AssembledContext (frozen dataclass — no mutation).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -215,6 +216,7 @@ def apply_budget(
     messages = list(context.messages)
     memory_context = context.memory_context
     tool_definitions = context.tool_definitions
+    memory_status = context.memory_status
     overflow_action: str | None = None
 
     effective_max_tokens = max_tokens
@@ -273,6 +275,14 @@ def apply_budget(
         # memory context so the recall controller can detect when a later user
         # turn references something we just dropped (ADR-0047 D3, ADR-0059).
         dropped_entity_ids = _extract_entity_ids(memory_context)
+        # ADR-0148 D1 (FRE-1476): the drop is known here and nowhere else. Read from the
+        # classification the assembler already made, rather than re-deriving it, so the
+        # two stages cannot disagree about what was dropped. A context holding no admitted
+        # item is not withheld — there was nothing for this stage to take away.
+        memory_status = replace(
+            memory_status,
+            budget_dropped_recall_items=memory_status.admission.admitted > 0,
+        )
         memory_context = None
         overflow_action = "dropped_memory_context"
         total_tokens = _total_context_tokens(messages, memory_context, tool_definitions)
@@ -355,4 +365,6 @@ def apply_budget(
         # every live turn's record to the conservative "survivors only" claim, hiding the
         # completeness the assembler had actually established.
         candidate_population=context.candidate_population,
+        # FRE-1476: carried for the same reason, and rebuilt above when Phase 2 fired.
+        memory_status=memory_status,
     )

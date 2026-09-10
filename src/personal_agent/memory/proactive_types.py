@@ -84,3 +84,16 @@ class ProactiveMemorySuggestions(BaseModel):
         default=None,
         description="Wall time to produce query embedding, milliseconds.",
     )
+    failed: bool = Field(
+        default=False,
+        description=(
+            "True when this path did not run to completion (ADR-0148 D1, FRE-1476). "
+            "Empty candidates alone cannot say so: the adapter returns them for an "
+            "honest empty result and for a swallowed exception alike, and the turn "
+            "cannot claim absence on a path that failed."
+        ),
+    )
+    failure_cause: str | None = Field(
+        default=None,
+        description="Short machine-readable cause when ``failed``, for the evidence record.",
+    )

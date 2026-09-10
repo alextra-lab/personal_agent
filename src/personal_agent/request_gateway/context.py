@@ -30,6 +30,12 @@ from personal_agent.captains_log.turn_evidence import (
 from personal_agent.config import settings
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
+from personal_agent.request_gateway.memory_status import (
+    MemoryStatusReport,
+    RecallOutcome,
+    RecallStageReport,
+    classify_recall_admission,
+)
 from personal_agent.request_gateway.types import (
     AssembledContext,
     IntentResult,
@@ -68,6 +74,35 @@ class RecallDiscardReport:
 
     discards: ProactiveDiscards = ()
     population: CandidatePopulation = CandidatePopulation.POST_SELECTION
+
+
+def _arms_cause(arms_failed: Sequence[str]) -> str | None:
+    """Name the arms a producing path could not run, or None when it ran to completion.
+
+    Args:
+        arms_failed: Arm and resolution-step names the path reported.
+
+    Returns:
+        A short machine-readable cause for the evidence record, or None.
+    """
+    return f"recall_arms_failed:{','.join(arms_failed)}" if arms_failed else None
+
+
+def _stage_report(failure_cause: str | None) -> RecallStageReport:
+    """Build this path's stage report from whatever cause it accumulated (FRE-1476).
+
+    COMPLETED is claimed only where no stage below reported a failure. That claim is what
+    makes NOTHING_RELEVANT reachable, so it is never the fallback for silence.
+
+    Args:
+        failure_cause: The cause a stage reported, or None if none did.
+
+    Returns:
+        A FAILED report carrying the cause, or a COMPLETED one.
+    """
+    if failure_cause:
+        return RecallStageReport(RecallOutcome.FAILED, failure_cause)
+    return RecallStageReport(RecallOutcome.COMPLETED)
 
 
 def _session_topic_hint(session_messages: Sequence[dict[str, Any]]) -> str | None:
@@ -366,7 +401,7 @@ async def _query_memory_for_intent(
     session_messages: Sequence[dict[str, Any]],
     user_id: UUID | None = None,
     authenticated: bool = False,
-) -> tuple[list[dict[str, Any]] | None, dict[str, float], RecallDiscardReport]:
+) -> tuple[list[dict[str, Any]] | None, dict[str, float], RecallDiscardReport, RecallStageReport]:
     """Query memory based on intent type.
 
     Args:
@@ -381,9 +416,16 @@ async def _query_memory_for_intent(
 
     Returns:
         Tuple of (memory context list or None, relevance scores keyed by item
-        identity, discard report). The proactive and entity-match paths both supply
-        real scores; the broad-recall path computes none and returns an empty mapping
-        rather than a fabricated one (ADR-0125 D3 item 5, FRE-1004).
+        identity, discard report, stage report). The proactive and entity-match paths
+        both supply real scores; the broad-recall path computes none and returns an empty
+        mapping rather than a fabricated one (ADR-0125 D3 item 5, FRE-1004).
+
+        The fourth element is a :class:`RecallStageReport` (FRE-1476, ADR-0148 D1). It is
+        COMPLETED only where this function has positive evidence the path ran to
+        completion, and FAILED wherever a path, or an arm beneath it, reported that it did
+        not. The caller composes it into the turn's status, where a report of anything but
+        COMPLETED yields UNAVAILABLE — so a path that never reports cannot make the turn
+        claim absence (D3).
 
         The third element is a :class:`RecallDiscardReport` (FRE-1060). Its ``discards``
         are populated whenever the proactive path ran, **including when it emitted
@@ -401,10 +443,18 @@ async def _query_memory_for_intent(
     # nothing", which is the absence-vs-drop confusion this ticket closes and would fire on
     # exactly the turns most likely to be investigated.
     discards: ProactiveDiscards = ()
+    # FRE-1476: bound before the try for the same reason `discards` is — the handler
+    # below must report a failure, not a completed run that happened to find nothing.
+    failure_cause: str | None = None
     try:
         if not await memory_adapter.is_connected():
             logger.warning("memory_unavailable", trace_id=trace_id)
-            return None, {}, RecallDiscardReport()
+            return (
+                None,
+                {},
+                RecallDiscardReport(),
+                RecallStageReport(RecallOutcome.FAILED, "memory_not_connected"),
+            )
 
         if intent.task_type == TaskType.MEMORY_RECALL:
             broad = await memory_adapter.recall_broad(
@@ -418,7 +468,12 @@ async def _query_memory_for_intent(
             )
             # POST_SELECTION: recall_broad bounds its own read with `limit` and reports
             # nothing about what that cut.
-            return _format_broad_recall_context(broad), {}, RecallDiscardReport()
+            return (
+                _format_broad_recall_context(broad),
+                {},
+                RecallDiscardReport(),
+                _stage_report(_arms_cause(broad.arms_failed)),
+            )
 
         # FRE-1041: both consumers below share one graph-anchored resolution. The
         # capitalisation heuristic this replaces could not see a lowercase subject, so
@@ -455,6 +510,11 @@ async def _query_memory_for_intent(
             discards = tuple(
                 (d.payload, d.relevance_score, d.drop_reason) for d in suggestions.discarded
             )
+            # FRE-1476: held across the fall-through below. A proactive path that failed
+            # cannot be rescued into a completed run by the entity-match path that follows
+            # it — the turn still did not establish what the proactive population held.
+            if suggestions.failed:
+                failure_cause = suggestions.failure_cause or "proactive_recall_failed"
             if suggestions.candidates:
                 # FRE-1004: the payload is returned unchanged — the score rides a
                 # sibling map rather than the item, so nothing the model sees or the
@@ -470,6 +530,7 @@ async def _query_memory_for_intent(
                     [c.payload for c in suggestions.candidates],
                     scores,
                     RecallDiscardReport(discards, CandidatePopulation.OFFERED),
+                    _stage_report(failure_cause),
                 )
 
         # Entity-name matching for analysis and other task types (Slice 2). Reached
@@ -481,7 +542,12 @@ async def _query_memory_for_intent(
         # cut, and `recall` truncates again internally, so the record must not claim its
         # population is complete even though the proactive drops it carries are named.
         if not entity_names:
-            return None, {}, RecallDiscardReport(discards)
+            # FRE-1476, a declared limit: `resolve_message_entities` converts its own
+            # failures to an empty list (`protocol_adapter.py`), so this branch cannot
+            # distinguish "the graph names nothing in this message" from "resolution
+            # failed". It reports COMPLETED, which over-claims in the second case. Fixing
+            # it belongs with the other adapter-level collapses, not in this ticket.
+            return None, {}, RecallDiscardReport(discards), _stage_report(failure_cause)
 
         query = MemoryRecallQuery(
             entity_names=entity_names[:5],
@@ -546,6 +612,7 @@ async def _query_memory_for_intent(
             (context if context else None),
             dict(result.relevance_scores),
             RecallDiscardReport(discards),
+            _stage_report(failure_cause or _arms_cause(result.arms_failed)),
         )
 
     except Exception:
@@ -553,7 +620,12 @@ async def _query_memory_for_intent(
         # `discards` is carried, not dropped: the proactive gates may already have removed
         # candidates before whatever failed here, and discarding that account would record
         # "recall offered nothing" for a turn that retrieved and gated a full population.
-        return None, {}, RecallDiscardReport(discards)
+        return (
+            None,
+            {},
+            RecallDiscardReport(discards),
+            RecallStageReport(RecallOutcome.FAILED, "memory_query_failed"),
+        )
 
 
 async def assemble_context(
@@ -589,13 +661,22 @@ async def assemble_context(
     memory_context: list[dict[str, Any]] | None = None
     memory_scores: dict[str, float] = {}
     discard_report = RecallDiscardReport()
+    # FRE-1476: no adapter means memory was never wired for this turn. The default report
+    # says nothing, and a report that says nothing composes UNAVAILABLE (ADR-0148 D3) —
+    # never absence, and never a status read off the item count.
+    recall_report = RecallStageReport()
 
     # Include session history
     messages.extend(session_messages)
 
     # Query memory if adapter is available
     if memory_adapter is not None:
-        memory_context, memory_scores, discard_report = await _query_memory_for_intent(
+        (
+            memory_context,
+            memory_scores,
+            discard_report,
+            recall_report,
+        ) = await _query_memory_for_intent(
             intent=intent,
             user_message=user_message,
             memory_adapter=memory_adapter,
@@ -640,6 +721,16 @@ async def assemble_context(
         *build_discarded_candidates(discard_report.discards),
     )
 
+    # ADR-0148 D1/D2 (FRE-1476): classified *after* enrichment and stance injection, so
+    # the count is of the list the renderer will actually be handed. The classifier is
+    # what scopes the status to the recall layer — the standing behavioural stances
+    # injected just above are in `memory_context` and are deliberately not counted, since
+    # counting them would read POPULATED on nearly every authenticated turn.
+    memory_status = MemoryStatusReport(
+        recall=recall_report,
+        admission=classify_recall_admission(memory_context),
+    )
+
     return AssembledContext(
         messages=messages,
         memory_context=memory_context,
@@ -648,4 +739,5 @@ async def assemble_context(
         trimmed=False,  # Slice 1: no budget trimming
         recall_candidates=recall_candidates,
         candidate_population=discard_report.population,
+        memory_status=memory_status,
     )

@@ -8,6 +8,13 @@ Substrate-free: the arm methods and the reranker are mocked, so these run under
 * AC-6(a) — the fused set handed to the reranker never exceeds the input cap.
 * Operating point — an all-arms-miss recall yields an empty fused set (the
   "no prior discussions" condition), never a per-arm hard gate.
+
+The dense arm is mocked at ``_dense_recall_arm_strict``, not at the public
+``dense_recall_arm`` (FRE-1476): the core calls the strict variant so that an arm
+failure reaches ``arms_failed`` instead of arriving as an empty list. Mocking the
+public name here silently stopped intercepting when that changed, leaving these tests
+to run the real embedding call and record the dense arm as failed — they still passed,
+because none of their assertions read the value the dead mock was supplying.
 """
 
 from __future__ import annotations
@@ -82,11 +89,15 @@ class TestArmAssembly:
         """Multi-query off ⇒ the baseline dense arm supplies the dense signal."""
         _enable(monkeypatch, multiquery=False, lexical=True)
         service = _service()
-        service.dense_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._dense_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
         service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("t1", 1, kind="turn")])
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         assert "dense" in result.arms_executed
         assert "multi_query" not in result.arms_executed
+        # FRE-1476: the arm must actually *supply* the signal, not merely be named in the
+        # executed list. Asserting only the name let a dead mock pass unnoticed.
+        assert result.arms_failed == []
+        assert "e1" in {it.item_id for it in result.items}
 
     @pytest.mark.asyncio
     async def test_arm_exception_recorded_not_raised(self, monkeypatch) -> None:
@@ -144,7 +155,7 @@ class TestStructuralArm:
         """ADR-0104 AC-1: ≥2 independent arms run, even with only dense + structural."""
         _enable(monkeypatch, multiquery=False, lexical=False, structural=True)
         service = _service()
-        service.dense_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._dense_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
         service.structural_recall_arm_ranked = AsyncMock(
             return_value=[RankedResult("e2", 1, kind="entity")]
         )
@@ -157,7 +168,7 @@ class TestStructuralArm:
         """RRF agreement: an item surfaced by structural + lexical outranks a lone hit."""
         _enable(monkeypatch, multiquery=False, lexical=True, structural=True)
         service = _service()
-        service.dense_recall_arm = AsyncMock(return_value=[RankedResult("solo", 1)])
+        service._dense_recall_arm_strict = AsyncMock(return_value=[RankedResult("solo", 1)])
         service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
         service.structural_recall_arm_ranked = AsyncMock(
             return_value=[RankedResult("e1", 2, kind="entity")]

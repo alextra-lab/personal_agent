@@ -304,3 +304,12 @@ class MemoryQueryResult(BaseModel):
     entities: list[EntityNode] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
     relevance_scores: dict[str, float] = Field(default_factory=dict)  # turn_id -> score
+    arms_failed: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Recall arms, or resolution steps, that did not run to completion "
+            "(ADR-0148 D1, FRE-1476). Empty conversations and entities are the same "
+            "value for an honest empty recall and for a swallowed failure; this "
+            "separates them."
+        ),
+    )

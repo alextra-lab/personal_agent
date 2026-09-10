@@ -208,8 +208,10 @@ worker's own `deadline_monotonic`, which already reflects the turn's remaining b
 worker does is write.
 
 **Move 5 — forced synthesis, at the cap or at the reserve.** When `state.tool_iterations == N`, or
-when move 4 fires, the loop appends one user message and makes one call with the tools retained
-and `tool_choice="none"` (D6):
+when move 4 fires, the loop appends one user message and makes one call in the synthesis form the
+resolved dialect declares (D6): tools retained with `tool_choice="none"` where
+`synthesis_retains_tools()` is `True`, tools dropped where it is `False`. Every dialect measured so
+far declares `True`.
 
 ```
 Your tool budget is spent. Do NOT call any more tools. Using only the tool results already in
@@ -228,7 +230,11 @@ the report. The number of inference calls per capped worker is unchanged.
 **The terminal paths.** `SubAgentResult` and `SubAgentCapture` gain two fields. `stop_reason` is
 one of `completed | cap | time_reserve | timeout | deadline | cancelled | error`. `report_kind` is
 one of `synthesized | narration | ledger`. Every path that returns a result declares both.
-Cancellation does not return a result — see its row.
+Cancellation does not return a result — see its row. `success` is `True` only for `stop_reason ==
+"completed"` with a non-empty report. Every other `stop_reason` carries `success == False`, even
+when its report is `synthesized`: a worker that stopped at its cap did not finish its task, and
+FRE-1389 AC-2's "explicit, distinct terminal state" holds for the new paths as it does for the cap
+today (`sub_agent.py:1005-1027`).
 
 | Path | Trigger | Contract |
 |---|---|---|
@@ -581,8 +587,10 @@ attempt. *Fails if* the retained call re-prefills its prefix, if the declared-fa
 sends tools, or if a rejection triggers a second call. The seeded negative for the retained form:
 drop the tools and the ratio falls to zero.
 
-**AC-7 — The caller cannot hide a failed landing.** *Check:* a fan-out with one worker at
-`stop_reason == "cap"` emits a `sub_agent_fanout_incomplete` pause before the synthesis call.
+**AC-7 — The caller cannot hide a failed landing.** *Check:* a fan-out with one worker returning
+`success == False`, `stop_reason == "cap"`, `report_kind == "synthesized"` — and, in a second
+fixture, `success == False`, `stop_reason == "completed"`, `report_kind == "ledger"` — emits a
+`sub_agent_fanout_incomplete` pause before the synthesis call.
 `stop_and_show` produces a response containing every worker's report and makes no model call.
 `answer_from_partial` produces a final answer whose last lines are the trailer naming the task and its
 stop reason. The same fan-out with `ctx.eval_mode = True` and no stored preference emits no pause
@@ -594,13 +602,14 @@ without the pause, or if an eval fan-out waits on the pause timeout.
 and `orchestrator_task_timeout_seconds` (the 900 s turn budget) are unchanged in the merged diff. *This is a guard, not a
 discriminating criterion.* It is here because FRE-1483 AC-4 demands it.
 
-**AC-9 — The cost of the landing is reported.** Per-worker wall-clock, rounds used, characters
+**Required observation — not a criterion.** Per-worker wall-clock, rounds used, characters
 absorbed, and the `stop_reason` and `report_kind` distributions, from the captures, on a local and
-a cloud primary, in T1's close comment. *The report itself cannot fail; the ticket can:* a close
-comment without these figures does not discharge T1. No rate threshold is set here. Codex review
-asked for one, and it is refused on the ground ADR-0147 recorded: no defensible rate exists before
-the first real turns, and an invented floor measures the guess, not the system. The captures are
-the instrument, and the threshold is the owner's decision once they exist.
+a cloud primary, in T1's close comment. This is an observation artifact, not evidence that the
+landing achieved an outcome, and it is listed outside the criteria for that reason. A close comment
+without these figures does not discharge T1. No rate threshold is set. Codex review asked for one,
+and it is refused on the ground ADR-0147 recorded: no defensible rate exists before the first real
+turns, and an invented floor measures the guess, not the system. The captures are the instrument.
+The threshold is the owner's decision once they exist, and it is the input D5 names.
 
 **Seeded negatives (FRE-1482 AC-6).** Each mechanism is disabled in turn, and the named criterion
 must fail. A criterion that passes with its mechanism disabled is not measuring the mechanism.
@@ -624,7 +633,7 @@ must fail. A criterion that passes with its mechanism disabled is not measuring 
 
 | Ticket | Scope | Tier | Depends on |
 |---|---|---|---|
-| T1 — FRE-1482 (existing) | D2 planner rule. D3 moves 1–5 including the `turn_started_at` threading through `ExpansionController.execute` and `_run_dispatch`, the terminal paths, the ledger, `stop_reason` / `report_kind` on `SubAgentResult` and `SubAgentCapture`. D6 on the worker, including the `synthesis_retains_tools` dialect field and the OVH probe. AC-1 to AC-6, AC-8, AC-9. | Tier-1 (as labelled) | this ADR |
+| T1 — FRE-1482 (existing) | D2 planner rule. D3 moves 1–5 including the `turn_started_at` threading through `ExpansionController.execute` and `_run_dispatch`, the terminal paths, the ledger, `stop_reason` / `report_kind` on `SubAgentResult` and `SubAgentCapture`. D6 on the worker, including the `synthesis_retains_tools` dialect field and the OVH probe. AC-1 to AC-6, AC-8, and the required observation. | Tier-1 (as labelled) | this ADR |
 | T2 — new | D4: the `sub_agent_fanout_incomplete` pause and its `eval_mode` rule, `stop_and_show` composition, the trailer, the synthesis-context wording. AC-7. | Tier-2 | T1 (reads `stop_reason` / `report_kind`) |
 | T3 — new | D1 fixes on the primary: countdown unit and zero case, `_forced_synthesis_tool_overrides` branches on `synthesis_retains_tools()` and loses its Anthropic special case, its call site builds synthesis tool definitions whenever the capability is `True`, `settings.py:247` docstring. AC-6 on the primary. | Tier-3 | T1 (introduces `SYNTHESIS_RETAINS_TOOLS` and `dialect_for_role`) |
 | T4 — Backlog note | Follow-on ADR: shared source registry so worker findings are citable. | — | after T1 lands and is observed |

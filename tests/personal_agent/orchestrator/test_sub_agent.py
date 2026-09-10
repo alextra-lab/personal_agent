@@ -899,6 +899,56 @@ class TestIterationCapNarrative:
         assert result.narrative_synthesized is False
 
     @pytest.mark.asyncio
+    async def test_multiple_rounds_of_text_are_joined_in_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The join is genuine accumulation, not "keep the one non-empty round" —
+
+        two or more rounds of real text must both survive, in order. A test with
+        only one non-empty round (above) cannot tell "recovered one earlier round"
+        apart from "correctly concatenates several".
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 2)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "Alpha finding",
+                    tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}],
+                ),
+                _llm_response(
+                    "Beta finding",
+                    tool_calls=[{"id": "c1", "name": "run_python", "arguments": "{}"}],
+                ),
+                _llm_response(
+                    "", tool_calls=[{"id": "c2", "name": "run_python", "arguments": "{}"}]
+                ),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.narrative_synthesized is False
+        assert "Alpha finding" in result.summary
+        assert "Beta finding" in result.summary
+        assert result.summary.index("Alpha finding") < result.summary.index("Beta finding")
+
+    @pytest.mark.asyncio
     async def test_no_assistant_text_anywhere_gets_synthesized_fallback(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -388,6 +388,7 @@ def _emit_sub_agent_capture(
         tool_result_chars_absorbed=result.tool_result_chars_absorbed,
         refused_tool_attempts=list(result.refused_tool_attempts),
         stated_tool_gap=result.stated_tool_gap,
+        narrative_synthesized=result.narrative_synthesized,
         full_output=result.full_output,
         full_output_chars=full_output_chars,
         injected_digest=result.summary,
@@ -435,6 +436,34 @@ def _warn_if_clipped(result: SubAgentResult, trace_id: str, session_id: str | No
         discarded_chars=full_output_chars - digest_chars,
         truncation_ratio=digest_chars / full_output_chars if full_output_chars else 0.0,
         cap_chars=_SUMMARY_CAP_CHARS,
+    )
+
+
+def _warn_if_narrative_synthesized(
+    result: SubAgentResult, trace_id: str, session_id: str | None
+) -> None:
+    """Log a WARNING when a capped worker's report is a synthesized fallback (FRE-1399).
+
+    Mirrors :func:`_warn_if_clipped`'s shape for the digest-cap case: the flag
+    alone distinguishes "this worker found nothing" from "this worker did
+    work and could not report it" (AC-4), and this gives that distinction its
+    own WARNING-level event so it is visible without comparing
+    ``tool_result_chars_absorbed`` against ``summary`` by hand (AC-3).
+
+    Args:
+        result: The terminal sub-agent result to check.
+        trace_id: Parent request trace identifier.
+        session_id: Originating session id.
+    """
+    if not result.narrative_synthesized:
+        return
+    logger.warning(
+        "sub_agent_iteration_cap_narrative_synthesized",
+        task_id=str(result.task_id),
+        trace_id=trace_id,
+        session_id=session_id,
+        tool_iterations=result.tool_iterations,
+        tool_result_chars_absorbed=result.tool_result_chars_absorbed,
     )
 
 
@@ -525,19 +554,55 @@ class _ToolLoopState:
     refused_tool_attempts: list[str] = field(default_factory=list)
     cost_usd: float = 0.0
     progress: GenerationProgress = field(default_factory=GenerationProgress)
+    # FRE-1399: every round's own assistant text (including the round that trips the
+    # iteration cap), so a capped worker's report is never limited to just that one
+    # round's completion — which is frequently empty when a tool-call round carries
+    # no accompanying text. Only non-whitespace text is kept (see _run_tool_loop).
+    round_texts: list[str] = field(default_factory=list)
 
 
 class _ToolIterationLimitReached(Exception):
     """Raised when the sub-agent's own tool-loop cap (AC-2) is hit.
 
-    Carries whatever text accompanied the refused batch so the caller can
-    still report it — the sub-agent stays a pure bounded function: no
-    injected "please wrap up" round, just a stop.
+    Carries whatever text the loop recovered so the caller can still report
+    it — the sub-agent stays a pure bounded function: no injected "please
+    wrap up" round, just a stop. ``narrative_synthesized`` (FRE-1399) tells
+    the caller whether ``partial_content`` is the model's own text or a
+    deterministic fallback built because no round ever produced any.
     """
 
-    def __init__(self, partial_content: str) -> None:
+    def __init__(self, partial_content: str, narrative_synthesized: bool) -> None:
         super().__init__("sub-agent tool iteration limit reached")
         self.partial_content = partial_content
+        self.narrative_synthesized = narrative_synthesized
+
+
+def _build_capped_partial_content(state: "_ToolLoopState") -> tuple[str, bool]:
+    """Build what a capped worker reports, and whether it is a synthesized fallback.
+
+    ``state.round_texts`` holds every round's own assistant text, including the
+    round that trips the cap — recovered here instead of trusting only that one
+    round's ``response_content``, which is frequently empty when a tool-call round
+    carries no accompanying text (FRE-1399: the same cap produced 1,677 characters
+    in one real trace and 0 in another, purely because of whether that one round's
+    completion happened to include text). Falls back to a deterministic,
+    non-generated description when no round ever produced text — never a second
+    inference call (FRE-1387 ruled that out for the digest cap; the same reasoning
+    applies to this terminal path).
+
+    Args:
+        state: The tool loop's accumulator at the moment the cap fires.
+
+    Returns:
+        A tuple of (content to report, whether it is a synthesized fallback).
+    """
+    if state.round_texts:
+        return "\n\n".join(state.round_texts), False
+    return (
+        f"[Reached the tool-iteration limit after {state.tool_iterations} round(s) "
+        "of tool calls with no assistant text; absorbed "
+        f"{state.tool_result_chars_absorbed} characters of tool output.]"
+    ), True
 
 
 async def _run_tool_loop(
@@ -622,12 +687,18 @@ async def _run_tool_loop(
         state.cost_usd += _extract_call_cost(raw_response)
         raw_tool_calls = _extract_tool_calls(raw_response)
         response_content = _parse_llm_response(raw_response)
+        # FRE-1399: keep every round's own text, not just the round that ends up
+        # tripping the cap below — whitespace-only content (" \n") counts as no
+        # narrative, same as "".
+        if response_content.strip():
+            state.round_texts.append(response_content)
 
         if not raw_tool_calls:
             return _extract_stated_tool_gap(response_content)
 
         if state.tool_iterations >= settings.sub_agent_max_tool_iterations:
-            raise _ToolIterationLimitReached(response_content)
+            partial_content, narrative_synthesized = _build_capped_partial_content(state)
+            raise _ToolIterationLimitReached(partial_content, narrative_synthesized)
 
         state.tool_iterations += 1
         normalized_calls = _normalize_tool_calls(raw_tool_calls, state.tool_iterations)
@@ -952,6 +1023,7 @@ async def run_sub_agent(
             tool_iterations=state.tool_iterations,
             tool_result_chars_absorbed=state.tool_result_chars_absorbed,
             refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
+            narrative_synthesized=exc.narrative_synthesized,
         )
 
     except asyncio.TimeoutError:
@@ -1055,6 +1127,7 @@ async def run_sub_agent(
     # from telemetry alone. Best-effort; never raises.
     _emit_sub_agent_capture(result, spec, _context_breakdown, trace_id, session_id, eval_mode)
     _warn_if_clipped(result, trace_id, session_id)
+    _warn_if_narrative_synthesized(result, trace_id, session_id)
 
     return result
 

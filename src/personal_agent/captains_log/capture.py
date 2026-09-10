@@ -164,6 +164,10 @@ class SubAgentCapture(BaseModel):
     tool_result_chars_absorbed: int = 0
     refused_tool_attempts: list[str] = Field(default_factory=list)
     stated_tool_gap: str | None = None
+    # FRE-1399: True when the iteration-cap terminal path had no assistant text in
+    # any round and built a deterministic description instead of quoting the model —
+    # distinguishes "found nothing" from "did work, could not report it".
+    narrative_synthesized: bool = False
 
     # Output — full text, the injected digest, and the truncation ratio
     full_output: str

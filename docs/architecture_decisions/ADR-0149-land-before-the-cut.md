@@ -164,8 +164,12 @@ report from the results you already hold.
 ```
 
 **Move 2 — the date is in the task message.** `SubAgentSpec` gains `turn_started_at: datetime |
-None`. `_run_dispatch` sets it from the turn's `ctx.turn_started_at`. `run_sub_agent` renders the
-task message as:
+None`. The value travels one path: the executor passes `ctx.turn_started_at` as a new keyword
+argument of `ExpansionController.execute` (call site `executor.py:5036-5054`), `execute` hands it to
+`_run_dispatch`, and `_run_dispatch` sets it on every spec it builds — the per-task specs at
+`expansion_controller.py:661-683` and the replacement spec in `_maybe_redispatch_on_gap`. Today
+`_run_dispatch` receives no context and no timestamp, so this signature change is part of the
+obligation, not an implementation detail. `run_sub_agent` renders the task message as:
 
 ```
 {render_current_datetime_block(turn_started_at)}
@@ -221,20 +225,30 @@ content is the report, and the ledger (below) follows it.
 Today the sixth inference call emits tool calls that are discarded. After this ADR the sixth call is
 the report. The number of inference calls per capped worker is unchanged.
 
-**The four terminal paths.** Every path returns a `SubAgentResult` with two new fields.
-`stop_reason` is one of `completed | cap | time_reserve | timeout | deadline | cancelled | error`.
-`report_kind` is one of `synthesized | narration | ledger`.
+**The terminal paths.** `SubAgentResult` and `SubAgentCapture` gain two fields. `stop_reason` is
+one of `completed | cap | time_reserve | timeout | deadline | cancelled | error`. `report_kind` is
+one of `synthesized | narration | ledger`. Every path that returns a result declares both.
+Cancellation does not return a result — see its row.
 
 | Path | Trigger | Contract |
 |---|---|---|
-| Iteration cap | `state.tool_iterations == N` and the model returns tool calls, or the round after the last executed round | Forced synthesis (move 5). `report_kind = synthesized`. If the synthesis call fails, `ledger`. |
+| Completed | The model replies with no tool calls (`sub_agent.py:696`) | `stop_reason = completed`. The content is the report, `report_kind = synthesized`, **only if** it is non-empty after `strip()` and after the `TOOL_GAP:` line is removed. Empty content is not a report: the result becomes `report_kind = ledger` with `success = False`, and the ledger's `{why}` reads "the model returned no text". |
+| Iteration cap | `state.tool_iterations == N` and the model returns tool calls, or the round after the last executed round | Forced synthesis (move 5). `report_kind = synthesized`. If the synthesis call fails or returns empty text, `ledger`. |
 | Time reserve | Move 4 fires | Same as the cap, `stop_reason = time_reserve`. |
 | Per-call timeout | `LLMTimeout` from `respond()` on a tool round | One forced-synthesis attempt with `timeout_s = min(effective_timeout, remaining_s)` whenever `remaining_s > 0`. Otherwise `ledger`. |
 | Outer deadline | `asyncio.TimeoutError` from the `wait_for` in `run_sub_agent` | `ledger`. No time exists by definition. |
-| Cancellation | `CancelledError` from the dispatcher | `ledger`, then re-raise as today. |
+| Cancellation | `CancelledError` from the dispatcher | The ledger is written to the **capture** (`_emit_sub_agent_capture`, as `_killed_result` is today) and the cancellation is re-raised. No result reaches `_run_dispatch`, which catches only `Exception` (`expansion_controller.py:742`). A global cancel ends the turn, so no caller can use a result. The obligation on this path is the audit record, not the digest. |
 | Upstream error | Any other exception from `respond()` or a tool | `ledger`. The retry policy lives in the client (ADR-0144), not in the worker. |
 
 The rule: the worker recovers from its own limits. It does not retry the world.
+
+**What "report" means, and what this ADR does not detect.** The validity predicate is
+deterministic and weak on purpose: non-empty text. Worker 1's 468 characters of stage directions
+would pass it. A narration detector is free-text parsing of model output, which FRE-1389 AC-5 and
+FRE-1399 both refused, and this ADR refuses it too. What removes narration is not a detector but the
+tools-off call: a model with no tools and an explicit instruction to report writes findings, and the
+seeded fixture in AC-1 proves that on the mechanism. The live probe in AC-1 proves it on the owner's
+own failing query.
 
 **The ledger.** Deterministic, no inference, built from `_ToolLoopState`. It replaces the in-flight
 fragment as the terminal content of every path that cannot synthesize:
@@ -282,6 +296,22 @@ No option grants more rounds. That is a raise, and it is not this ADR's to make.
 a stored preference (`allow_preference=True`), so the owner can silence it once it is noise. The
 card's `context` names the incomplete tasks and their stop reasons, so the owner sees the gap before
 anything is composed over it.
+
+**Time accounting of the pause, stated so it is not mistaken for a raise.** A genuine pause is
+credited to the turn's work deadline (ADR-0142 D4a, `executor.py:202-213`) and bounded by the
+lifetime cap (`orchestrator_turn_lifetime_seconds`). That is how every ADR-0076 pause already
+works: time spent waiting for a human is not work time. The 900 s work budget is unchanged. The
+lifetime cap still ends the turn.
+
+**Callers with no one to ask.** `_maybe_pause_for_constraint` waits the full
+`constraint_pause_timeout_seconds` (180 s) for a headless caller before applying the default
+(`executor.py:700-704`). An eval run with three incomplete workers would wait nine minutes for
+answers nobody will give. The call site therefore applies this rule before opening a pause: when
+`ctx.eval_mode` is true, resolve the stored preference for the eval identity if one exists, otherwise
+apply the safe default (`stop_and_show`) immediately, and emit no pause event. An eval that wants
+synthesis over partial results stores `answer_from_partial` as its preference — the platform's
+existing mechanism, not a new flag. An interactive session with a momentarily absent socket keeps
+FRE-928's behaviour: the pause is registered and a reconnecting client is replayed the card.
 
 **Mechanism 2 — a deterministic trailer.** When `answer_from_partial` is chosen, the executor
 appends to the final answer, after generation and outside the model's control:
@@ -350,11 +380,20 @@ runs at ~350 tokens/s on this box, so a worker holding 40k tokens of results pay
 re-prefill — past its 90 s budget. The call designed to land would be the call that dies.
 
 Therefore: the worker's forced-synthesis call (move 5) and the primary's
-(`_forced_synthesis_tool_overrides`) both return `(tool_defs, "none")` on every provider.
-`litellm_client.py:1836` already passes `tool_choice` through on the local path. Anthropic already
-takes this form (FRE-484). OVH is OpenAI-compatible and `"none"` is standard there; the implementing
-ticket verifies it with the same probe and records the result. Cache continuity is asserted, not
-assumed (AC-6).
+(`_forced_synthesis_tool_overrides`) both return `(tool_defs, "none")`. `litellm_client.py:1836`
+already passes `tool_choice` through on the local path. Anthropic already takes this form (FRE-484).
+Cache continuity is asserted, not assumed (AC-6).
+
+**Which form a provider gets is declared, not discovered at runtime.** ADR-0145 D3 puts provider
+quirks on the dialect. The dialect declaration gains one boolean, `synthesis_retains_tools`,
+default `true`. A dialect declared `false` gets today's drop-tools form, and the cache miss it pays
+is logged at WARNING (`forced_synthesis_cache_miss_declared`) on every such call. The value is set
+from the probe in this ADR for `llamacpp_qwen` (`true`) and from FRE-484 for the Anthropic dialects
+(`true`). OVH is OpenAI-compatible and `"none"` is standard there; T1 runs the same five-call probe
+against it and records the result on the dialect before the flag defaults are trusted. A provider
+that rejects `tool_choice="none"` at runtime despite its declaration is a configuration defect: the
+synthesis call fails, the worker returns a `ledger`, and the error names the provider. There is no
+drop-tools retry. That is the same rule as every other path: the worker does not retry the world.
 
 ---
 
@@ -454,7 +493,8 @@ which FRE-1387 ruled out for the digest. With D6 the large-context call is cheap
 |---|---|---|
 | The synthesis call itself times out on a large context | Medium | D6 keeps prefill cached. The report is asked for under 400 words. A cut synthesis keeps its streamed partial on the local path, and the ledger follows on every path. |
 | The model ignores the countdown | Low | The countdown is advice. The enforcement is the tools-off call, which the model cannot bypass. |
-| `tool_choice="none"` is not honoured by a provider | Medium | Verified on llama-server (D6) and Anthropic (FRE-484). OVH is verified by the implementing ticket with the same probe. A provider that rejects it falls back to dropping tools, with the cache miss logged at WARNING. |
+| `tool_choice="none"` is not honoured by a provider | Medium | Verified on llama-server (D6) and Anthropic (FRE-484). OVH is verified by T1 with the same probe before its dialect flag is trusted. A dialect declared `synthesis_retains_tools: false` gets the drop-tools form with the miss logged. A runtime rejection despite the declaration is a `ledger` and a config finding, never a retry. |
+| The D4 pause fires on an eval run with nobody to answer | Medium | `eval_mode` resolves the stored preference or applies the safe default at once, with no pause event and no 180 s wait (D4). |
 | The pause becomes noise | Low | Stored preference. The card carries the stop reasons, so silencing it is an informed choice. |
 | Move 4 under-estimates a round and the synthesis still gets cut | Low | The estimate is the worker's own measured mean, conservative before the first round. A cut synthesis still returns its partial and its ledger. |
 | The ledger's queries disclose search terms to the primary's provider | Low | The primary already receives the worker's task text and digest over the same channel (`tools.yaml` reasoning for `search_memory`). No new destination. |
@@ -465,20 +505,27 @@ which FRE-1387 ruled out for the digest. With D6 the large-context call is cheap
 
 Each criterion states its check and how it fails. A criterion that cannot fail is marked as such.
 
-**AC-1 — A capped worker's report is written from its evidence, not from its narration.**
-*Check:* a stub model returns tool calls for `N` rounds, and on a call carrying `tool_choice="none"`
-returns text containing a marker present only in a tool result. Assert `summary` equals that text,
-`report_kind == "synthesized"`, `stop_reason == "cap"`, and the request carried the tool
-definitions with `tool_choice="none"`. *Live:* re-run the owner's 2026-09-10 research query under the
-same conditions; the capped worker's `full_output` names at least one dated event inside the asked
-week. Today 0 of 5 workers did. *Fails if* the terminal content is assembled from `round_texts`, or if
-the synthesis call carried no tools or `tool_choice="auto"`.
+**AC-1 — A capped worker's report carries its evidence, not its narration.** *Check (seeded
+fixture, owned by the test):* a stub tool returns results that each carry a coined marker token —
+`K` distinct markers across `N` rounds, each paired with a coined source string. A stub model emits
+tool calls with narration text ("Now let me check…") on every tool round, and on the one call
+carrying `tool_choice="none"` writes a report that names every marker with its source. Assert
+`summary` contains all `K` markers and all `K` sources, contains no narration line,
+`report_kind == "synthesized"`, `stop_reason == "cap"`, and the synthesis request carried the tool
+definitions with `tool_choice="none"`. *Seeded negative:* with forced synthesis disabled the terminal
+content contains zero markers and every narration line. *Live:* re-run the owner's 2026-09-10
+research query under the same conditions. The capped worker's report names at least one event with
+a date inside the asked week. Today 0 of 5 workers did; that is the discrimination. *Fails if* the
+terminal content is assembled from `round_texts`, or if the synthesis call carried no tools or
+`tool_choice="auto"`.
 
-**AC-2 — Every terminal path returns a declared report, never the in-flight fragment alone.**
-*Check:* drive each of `LLMTimeout` after two completed rounds, outer-deadline `TimeoutError`,
-`CancelledError`, and a generic exception. Assert `stop_reason` is that path's value, and that the
-ledger lists both completed rounds' tool calls with arguments and result sizes. *Fails if* any path
-returns `progress.content` only — today's behaviour on three of four.
+**AC-2 — Every terminal path yields a declared report, never the in-flight fragment alone.**
+*Check:* drive each of `LLMTimeout` after two completed rounds, outer-deadline `TimeoutError`, a
+generic exception, and a completed reply with empty content. Assert the result's `stop_reason` is
+that path's value, and that the ledger lists both completed rounds' tool calls with arguments and
+result sizes. For `CancelledError`: assert the **capture** written before the re-raise carries
+`stop_reason == "cancelled"` and the same ledger, and that the exception still propagates. *Fails if*
+any path returns or records `progress.content` only — today's behaviour on three of four.
 
 **AC-3 — The worker lands before it is cut.** *Check:* with a stub clock, set the remaining deadline
 below `mean_round_s + effective_timeout` before round `k`; assert no round `k` runs, the next call is
@@ -486,10 +533,11 @@ tools-off, and `stop_reason == "time_reserve"`. *Live:* in a local three-worker 
 carries `stop_reason` of `timeout` or `deadline`. *Fails if* the third worker still ends on the outer
 deadline, as it does today.
 
-**AC-4 — The countdown reaches the model every round.** *Check:* capture the request messages of
-each round; assert a user message with the correct remaining count follows every round's tool results
-and none precedes the first. *Fails if* the message list holds only today's three kinds, or the count
-is stated only in the system prompt (FRE-1482 AC-1's stated failure).
+**AC-4 — The countdown reaches the model every round.** *This is a mechanism check, stated as
+such; AC-1 is its outcome.* *Check:* capture the request messages of each round; assert a user
+message with the correct remaining count, absorbed characters and remaining seconds follows every
+round's tool results and none precedes the first. *Fails if* the message list holds only today's three
+kinds, or the count is stated only in the system prompt (FRE-1482 AC-1's stated failure).
 
 **AC-5 — The worker knows the date.** *Check:* the task message contains the rendered block.
 *Live:* a date-relative task's `web_search` arguments (tool-call log events) name the current year.
@@ -505,17 +553,22 @@ seeded negative: drop the tools and the ratio falls to zero.
 `stop_reason == "cap"` emits a `sub_agent_fanout_incomplete` pause before the synthesis call.
 `stop_and_show` produces a response containing every worker's report and makes no model call.
 `answer_from_partial` produces a final answer whose last lines are the trailer naming the task and its
-stop reason. *Fails if* a fan-out with all workers `completed` emits the pause or the trailer, or if
-an incomplete one reaches the synthesis call without the pause.
+stop reason. The same fan-out with `ctx.eval_mode = True` and no stored preference emits no pause
+event, applies `stop_and_show`, and resolves in under one second. *Fails if* a fan-out with all
+workers `completed` emits the pause or the trailer, if an incomplete one reaches the synthesis call
+without the pause, or if an eval fan-out waits on the pause timeout.
 
 **AC-8 — No limit changed.** *Check:* `sub_agent_max_tool_iterations`, `sub_agent.default_timeout`
 and `orchestrator_task_timeout_seconds` (the 900 s turn budget) are unchanged in the merged diff. *This is a guard, not a
 discriminating criterion.* It is here because FRE-1483 AC-4 demands it.
 
 **AC-9 — The cost of the landing is reported.** Per-worker wall-clock, rounds used, characters
-absorbed, and the `stop_reason` distribution, from the captures, on a local and a cloud primary, in
-the implementing ticket's close comment. *This criterion cannot fail; it is a report.* It is the
-input D5 names.
+absorbed, and the `stop_reason` and `report_kind` distributions, from the captures, on a local and
+a cloud primary, in T1's close comment. *The report itself cannot fail; the ticket can:* a close
+comment without these figures does not discharge T1. No rate threshold is set here. Codex review
+asked for one, and it is refused on the ground ADR-0147 recorded: no defensible rate exists before
+the first real turns, and an invented floor measures the guess, not the system. The captures are
+the instrument, and the threshold is the owner's decision once they exist.
 
 **Seeded negatives (FRE-1482 AC-6).** Each of moves 1 to 5 and each D4 mechanism is disabled in
 turn, and the corresponding criterion above must fail. A criterion that passes with its mechanism
@@ -527,8 +580,8 @@ disabled is not measuring the mechanism.
 
 | Ticket | Scope | Tier | Depends on |
 |---|---|---|---|
-| T1 — FRE-1482 (existing) | D2 planner rule. D3 moves 1–5, the four terminal paths, the ledger, `stop_reason` / `report_kind` on `SubAgentResult` and `SubAgentCapture`. D6 on the worker. AC-1 to AC-6, AC-8, AC-9. | Tier-1 (as labelled) | this ADR |
-| T2 — new | D4: the `sub_agent_fanout_incomplete` pause, `stop_and_show` composition, the trailer, the synthesis-context wording. AC-7. | Tier-2 | T1 (reads `stop_reason` / `report_kind`) |
+| T1 — FRE-1482 (existing) | D2 planner rule. D3 moves 1–5 including the `turn_started_at` threading through `ExpansionController.execute` and `_run_dispatch`, the terminal paths, the ledger, `stop_reason` / `report_kind` on `SubAgentResult` and `SubAgentCapture`. D6 on the worker, including the `synthesis_retains_tools` dialect field and the OVH probe. AC-1 to AC-6, AC-8, AC-9. | Tier-1 (as labelled) | this ADR |
+| T2 — new | D4: the `sub_agent_fanout_incomplete` pause and its `eval_mode` rule, `stop_and_show` composition, the trailer, the synthesis-context wording. AC-7. | Tier-2 | T1 (reads `stop_reason` / `report_kind`) |
 | T3 — new | D1 fixes on the primary: countdown unit and zero case, `_forced_synthesis_tool_overrides` returns `(tool_defs, "none")` on every provider, `settings.py:247` docstring. AC-6 on the primary. | Tier-3 | none |
 | T4 — Backlog note | Follow-on ADR: shared source registry so worker findings are citable. | — | after T1 lands and is observed |
 
@@ -536,7 +589,9 @@ Files touched by T1: `orchestrator/sub_agent.py` (`_SUB_AGENT_SYSTEM_PROMPT`, `_
 `_run_tool_loop`, `run_sub_agent`, `_killed_result`, `_build_capped_partial_content`),
 `orchestrator/sub_agent_types.py` (`SubAgentSpec.turn_started_at`, `SubAgentResult.stop_reason`,
 `.report_kind`), `orchestrator/expansion_controller.py` (`_build_planner_system_prompt`,
-`_run_dispatch`), `captains_log` sub-agent capture model and its ES template.
+`execute`, `_run_dispatch`, `_maybe_redispatch_on_gap`), `orchestrator/executor.py:5036-5054` (the
+`execute` call site), `llm_client/models.py` and `config/models.yaml` (the dialect field),
+`captains_log` sub-agent capture model and its ES template.
 Files touched by T2: `orchestrator/executor.py` (before `:5107`), `orchestrator/constraint_options.py`,
 `orchestrator/expansion_controller.py` (`_build_synthesis_context`).
 Files touched by T3: `orchestrator/executor.py` (`:5885-5896`, `:3100-3129`), `config/settings.py:247`.

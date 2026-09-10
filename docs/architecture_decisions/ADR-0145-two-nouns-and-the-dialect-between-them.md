@@ -1,6 +1,6 @@
 # ADR-0145: Two Nouns and the Dialect Between Them — Finish ADR-0121
 
-**Status:** Proposed
+**Status:** Accepted — 2026-09-10 (owner)
 **Date:** 2026-09-06
 **Deciders:** Owner (architect) · adr session
 **Tags:** configuration, model-management, llm-client, resolver, concurrency
@@ -829,3 +829,31 @@ each of which carries criteria for its own work only.
 2026-09-06 10:40 and 11:58. The second ruling withdrew the instruction to defer D3 and D6, after the
 adr seat identified that deleting the instruct entry with D3 deferred would strand its sampler
 preset — an unmeasured behaviour change on the exact path D1 exists to fix.
+
+### 2026-09-10 — Accepted
+**Changed By:** master, on the owner's ruling of 2026-09-10
+**Reason:** Accepted after master adjudicated FRE-1426's seven acceptance criteria against
+evidence. Six are met outright. AC-2 and AC-3 are proven at the dispatch site rather than in
+config (`test_role_binding_field_classes.py`), AC-4 through the single `resolve_inherited_deployment`
+that every reader calls, AC-6 by the absence of any `instruct` entry from the catalog, and AC-7 in
+production — the boot guard fired on its first boot naming a genuine pre-existing drift (declared
+`4bit` against a served `UD-IQ4_XS`), and that warning went to zero once FRE-1445 landed.
+
+**AC-1's premise no longer exists, and its substance is now measured.** The criterion says
+"select the non-thinking mode as primary". D1 deleted that entry, so the FRE-1420 incident is
+structurally unreachable — which was the decision's purpose. Its substance was unobserved until
+now: FRE-1444's close comment recorded that no HYBRID turn had run since the rebuild. Measured on
+2026-09-10 against `agent-logs-2026-09`: **40** `sub_agent_start` events since the 2026-09-07
+06:50 UTC rebuild, **every one at `timeout: 90.0`**, none at 60, with 40 matching
+`sub_agent_complete` and no orphans. One worker exhausted the 90s budget on 2026-09-08 — the
+local model's known multi-round limit, not a resolver defect.
+
+**One stated limit on AC-5.** The concurrency evidence reads observed in-flight counts
+(`get_status()["active"]`) and never `.limit`, which is what the criterion demands. But its BEFORE
+arm reconstructs the pre-collapse catalog, because production already carried the collapsed shape
+when the ticket ran. It is not a live before-and-after, and it is recorded as such.
+
+**The chain is ten of eleven Done.** FRE-1449's close comment claimed eleven of eleven; FRE-1448
+had reached `Awaiting Deploy` six minutes after its PR #1098 merged and never moved. Its AC-4
+needs a HYBRID turn on an OVH primary with a billed cost comparison, which is owner-authorized
+spend. That criterion is the only part of this ADR still unproven.

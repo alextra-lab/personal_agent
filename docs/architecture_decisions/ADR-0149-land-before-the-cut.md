@@ -634,9 +634,9 @@ must fail. A criterion that passes with its mechanism disabled is not measuring 
 | Ticket | Scope | Tier | Depends on |
 |---|---|---|---|
 | T1 — FRE-1482 (existing) | D2 planner rule. D3 moves 1–5 including the `turn_started_at` threading through `ExpansionController.execute` and `_run_dispatch`, the terminal paths, the ledger, `stop_reason` / `report_kind` on `SubAgentResult` and `SubAgentCapture`. D6 on the worker, including the `synthesis_retains_tools` dialect field and the OVH probe. AC-1 to AC-6, AC-8, and the required observation. | Tier-1 (as labelled) | this ADR |
-| T2 — new | D4: the `sub_agent_fanout_incomplete` pause and its `eval_mode` rule, `stop_and_show` composition, the trailer, the synthesis-context wording. AC-7. | Tier-2 | T1 (reads `stop_reason` / `report_kind`) |
-| T3 — new | D1 fixes on the primary: countdown unit and zero case, `_forced_synthesis_tool_overrides` branches on `synthesis_retains_tools()` and loses its Anthropic special case, its call site builds synthesis tool definitions whenever the capability is `True`, `settings.py:247` docstring. AC-6 on the primary. | Tier-3 | T1 (introduces `SYNTHESIS_RETAINS_TOOLS` and `dialect_for_role`) |
-| T4 — Backlog note | Follow-on ADR: shared source registry so worker findings are citable. | — | after T1 lands and is observed |
+| T2 — FRE-1484 | D4: the `sub_agent_fanout_incomplete` pause and its `eval_mode` rule, `stop_and_show` composition, the trailer, the synthesis-context wording. AC-7. | Tier-2 | T1 (reads `stop_reason` / `report_kind`) |
+| T3 — FRE-1485 | D1 fixes on the primary: countdown unit and zero case, `_forced_synthesis_tool_overrides` branches on `synthesis_retains_tools()` and loses its Anthropic special case, its call site builds synthesis tool definitions whenever the capability is `True`, `settings.py:247` docstring. AC-6 on the primary. | Tier-3 | T1 (introduces `SYNTHESIS_RETAINS_TOOLS` and `dialect_for_role`) |
+| T4 — FRE-1486 (Backlog note) | Follow-on ADR: shared source registry so worker findings are citable. | — | after T1 lands and is observed |
 
 Files touched by T1: `orchestrator/sub_agent.py` (`_SUB_AGENT_SYSTEM_PROMPT`, `_ToolLoopState`,
 `_run_tool_loop`, `run_sub_agent`, `_killed_result`, `_build_capped_partial_content`),

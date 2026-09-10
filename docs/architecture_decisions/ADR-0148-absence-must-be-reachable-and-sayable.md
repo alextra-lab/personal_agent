@@ -253,8 +253,8 @@ whether the system holds a record bearing on the question. Without this scoping 
 | Rendered state | Arises from | Licenses |
 |---|---|---|
 | `POPULATED` | Recall admitted items and the renderer emitted at least one. | Reason from them. |
-| `NOTHING_RELEVANT` | Every arm ran to completion. Nothing cleared the bar. | *"I have no record of that."* |
-| `WITHHELD` | Recall admitted items. A **capacity** limit removed all of them. | *"I hold records on this and could not fit them into this turn."* |
+| `NOTHING_RELEVANT` | Every arm ran to completion. Nothing usable cleared the bar. | *"I have no usable record of that."* |
+| `WITHHELD` | Recall admitted usable items. Capacity or the renderer removed all of them. | *"I hold records on this and could not present them in this turn."* |
 | `UNAVAILABLE` | An arm raised, a store was unreachable, or memory was not wired. | *"I could not reach my records."* |
 
 The memory section is **always present**. In the three non-populated states it carries one line
@@ -266,10 +266,11 @@ that was itself partial. The order is fixed and total:
 
 1. `UNAVAILABLE` outranks everything. If any arm failed to run to completion, the turn did not
    establish what exists, whatever else happened.
-2. `WITHHELD` outranks `POPULATED` only when **every** admitted item was removed by a capacity
-   limit. If any item survived to the render, the state is `POPULATED`.
-3. `NOTHING_RELEVANT` is reachable only when every arm ran to completion and admitted nothing
-   renderable. It is the one state that requires positive evidence of a complete run.
+2. `WITHHELD` outranks `POPULATED` only when **every** admitted item was removed by capacity or by
+   the renderer's unsupported-kind rule. If any item survived to the render, the state is
+   `POPULATED`.
+3. `NOTHING_RELEVANT` is reachable only when every arm ran to completion and admitted nothing that
+   carried content. It is the one state that requires positive evidence of a complete run.
 
 A partially degraded recall is therefore `UNAVAILABLE`, never `NOTHING_RELEVANT`. That is the whole
 point of the ordering: absence is the strongest claim the layer can make, so it is the hardest to
@@ -279,17 +280,30 @@ reach.
 where the system **knows** usable items existed. That is strictly more information than a failure
 supplies, and it is actionable for the reader, who can narrow the question and ask again.
 
-**Capacity is not the renderer's only reason to drop an item, and the other reason is not
-`WITHHELD`.** The renderer removes items whose text is blank and kinds it does not render
-(`executor.py:3709-3740`), before any cap applies. An item with no renderable content carries no
-knowledge, so *"I could not fit them into this turn"* would be false — nothing failed to fit.
+**The renderer drops items for two different reasons, and only one of them means the system holds
+nothing.** `executor.py:3709-3740` removes items whose text is blank, and kinds it does not render
+at all — session items among them — before any cap applies.
 
-Such items are therefore **not admitted items** for the purpose of this status. A turn where recall
-returned only blank or unrenderable items is `NOTHING_RELEVANT`, and the evidence record carries
-the cause: recall matched, and what it matched held nothing to read. That is the honest reading —
-the model has nothing to reason from — and it points at the real defect, which is FRE-1115's
-finding that 18.7% of entities carry an empty description. FRE-1114 is the same seam: the item cap
-runs before the emptiness filter, so a blank item can take a slot that nothing backfills.
+- **An item with no content** — the blank-description entity FRE-1115 counts at 18.7% of the corpus
+  — carries a name and no knowledge. There is nothing for the reader to have received. Such an item
+  is **not an admitted item** for the purpose of this status.
+- **An item with real content that the renderer does not support** is a different fact. The system
+  holds it. The reader did not get it. That is `WITHHELD`, exactly as a capacity drop is, which is
+  why the licensed sentence reads *"could not present them"* rather than *"could not fit them"*.
+
+So a turn where recall returned only contentless items is `NOTHING_RELEVANT`, and its evidence
+record carries the cause: recall matched, and what it matched held nothing to read. A turn where
+recall returned real content the renderer could not emit is `WITHHELD`.
+
+`NOTHING_RELEVANT` licenses *"I have no usable record"*, never *"I have no record"*. The two differ
+when a name matched and its description was empty, and the weaker sentence is the true one.
+
+**One declared imprecision.** The Stage 7 budget drop discards the raw context at
+`budget.py:276`, before any renderability classification exists, so that path reports `WITHHELD`
+without distinguishing the two cases. That overclaims only when **every** dropped item was
+contentless, in which case `NOTHING_RELEVANT` would have been the truer state. Classifying
+renderability before the budget stage would fix it and is out of scope here. The limit is recorded
+rather than hidden.
 
 The full cause stays in the turn-evidence record, where more than four values are useful and
 harmless. The rendered vocabulary and the recorded vocabulary are deliberately different sizes.
@@ -310,8 +324,22 @@ silently. The same trap applies here, and the same default closes it.
 The obligation is stated once, and it binds at one place:
 
 > **The admission boundary is where an item enters `memory_context`, in `context.py`.** Every item
-> admitted there carries a relevance value. An item whose relevance value is below a calibrated
-> bound is not admitted, whatever its recency, its name match, or any other non-relevance signal.
+> admitted there carries a relevance value. An item whose relevance value is below its path's
+> calibrated bound is not admitted, whatever its recency, its name match, or any other
+> non-relevance signal.
+
+**Derived items inherit, they do not qualify.** `_enrich_with_stances` (`context.py:322`) attaches
+a stance to an entity recall already selected, and states so: *"Enrichment on a selection recall
+has already made — not a new relevance decision."* Such an item is not independently admitted and
+carries the relevance of the item it enriches. If its parent is rejected, it never arrives. The
+curated behavioural stances of `_inject_behavioural_stances` are outside the recall layer entirely,
+per D2, and are neither admitted nor gated here.
+
+**One bound per path, never one bound for all three.** The paths score in incompatible spaces: the
+proactive combination is a weighted value over Neo4j-space embedding scores, while a reranker
+emits a scale FRE-695 records as arbitrary and not comparable across arms. A single number cannot
+govern both. Each path carries its own bound, calibrated in its own space, against the same two
+constraints below.
 
 **The boundary is the consumer, not the recall core.** This is deliberate, and it is what keeps the
 decision compatible with the layer beneath. `memory/service.py:5111-5120` states that the core
@@ -332,14 +360,35 @@ What each path must supply at the boundary:
   `_combine_scores` (`memory/proactive.py:113-127`): a candidate with no entity overlap, no topic
   hit, and an embedding term below the bound is not admitted. The gate precedes the combination
   rather than adjusting weights inside it, so recency cannot compensate for it.
-- **Broad recall** — the reranker's score at the fused output is the relevance value. The core
-  keeps ordering without gating. The path applies the bound when it admits.
+- **Broad recall** — the reranker's score at the fused output is the relevance value, and **it does
+  not survive to the boundary today.** `_rerank_fused_items` (`memory/service.py:5318-5323`) builds
+  the scores into a local map, uses them only to sort, and returns the original `FusedResult`
+  objects, whose `score` field still holds the RRF rank fusion value. `_multipath_broad_entities`
+  then resolves entities through a Cypher projection carrying no score at all, and
+  `BroadRecallResult` (`memory/protocol_adapter.py:133-140`) groups entities by type with no score
+  field. **Preserving the reranker score from `_rerank_fused_items` through to
+  `_format_broad_recall_context` is part of this ADR's work**, not an assumption it makes. The core
+  keeps ordering without gating; what changes is that it stops discarding the number it ordered by.
 - **Entity match** — this path computes no relevance value today, and **it must acquire one.**
   There is no exemption: an item admitted on name resolution and a 30-day window alone is exactly
   what the rule forbids, and `POPULATED` licenses unqualified reasoning that such an item does not
   support. The implementation ticket decides **which** value — routing the path through the
   multipath core for a reranker score, or computing a similarity over the `query_text` it already
   carries — against that path's measured population. It does not decide **whether**.
+
+**When a path can supply no relevance value, the turn is `UNAVAILABLE`.** This is not an edge case.
+The reranker produces no score when it is disabled, when the query is blank, when one item or
+fewer survives fusion, when the call raises, and when it returns nothing — and
+`_rerank_fused_items` returns the items unchanged in each of those, appending unscored items after
+scored ones (`memory/service.py:5290-5325`). A path in that condition has not established
+relevance, so it may not admit on the strength of order alone, and it equally may not claim
+absence. The rule is D3's, applied one level down: no relevance evidence is not evidence of
+relevance, and it is not evidence of its absence either.
+
+A path with a calibrated fallback value it *can* compute — the proactive combination, or a dense
+similarity — uses that rather than reporting `UNAVAILABLE`. A path with neither reports
+`UNAVAILABLE`. This makes a silently disabled reranker visible, which is FRE-1170's complaint about
+the neighbouring component and the same disease this ADR exists to treat.
 
 `recall_similarity_floor` remains worth calibrating on ADR-0100's own terms. That is a separate
 concern from this ADR's obligation, and this ADR does not discharge one with the other.
@@ -564,6 +613,9 @@ challenged it. The deferral described the question as unmeasured when the measur
 | The obligation collides with the recall core's ordering contract | High | D4 sits at the consumer, one layer above `memory/service.py:5111-5120`. ADR-0103 §4 and ADR-0104 AC-5 are untouched. |
 | The calibration has no owner and never happens | High | D4 makes a missing calibration a `config_guard` finding that holds the previous bound rather than defaulting to zero. AC-10 fails a configured value with no committed artifact behind it. |
 | No bound separates the two populations on the serving arm | Medium | D4 requires the calibration to report the incompatibility and stop rather than pick a number. AC-5 fails a bound configured in that case. The response is the owner's. |
+| One bound is applied across incompatible score spaces | High | D4 requires one bound per path, each calibrated in its own space, because reranker scales are not comparable to Neo4j embedding space (FRE-695). AC-10 requires one artifact per bound, named to its component. |
+| The reranker is off or fails, and rank order silently stands in for relevance | High | D4 makes a path with no relevance value report `UNAVAILABLE` rather than admit on order. AC-11 drives both the disabled and the raising case. |
+| The broad-recall plumbing turns out larger than the ADR assumes | Medium | The gap is named in D4 with its four discard points, and the two files are in the affected list. Sizing is its ticket's job, and the ADR does not claim the score is already available. |
 | The type change breaks ADR-0147's digest, which reads the same field | Medium | The digest reads the items, and the status is additive. AC-9 asserts the digest still builds. |
 
 ---
@@ -577,7 +629,9 @@ challenged it. The deferral described the question as unmeasured when the measur
   the recall-layer scoping that excludes `_inject_behavioural_stances`.
 - `src/personal_agent/request_gateway/budget.py` — the drop at `:269` reports `WITHHELD`.
 - `src/personal_agent/memory/service.py` — `dense_recall_arm` and its siblings report a cause
-  rather than returning a bare `[]`.
+  rather than returning a bare `[]`; `_rerank_fused_items` stops discarding the score it ordered by.
+- `src/personal_agent/memory/fusion.py` and `src/personal_agent/memory/protocol_adapter.py` — the
+  reranker score survives fusion and `BroadRecallResult` to reach the boundary.
 - `src/personal_agent/memory/proactive.py` — the D4 gate ahead of `_combine_scores`, plus its own
   drop reason.
 - `src/personal_agent/config/settings.py` — the admission bound, sourced from the committed
@@ -601,10 +655,12 @@ space**, never at 0.5. Every gate test carries a companion assertion that the pr
 for the same fixture crosses the bar, so a test that cannot fail is visible as one.
 
 The embedder fault-injection seam is `generate_embedding`, called at `memory/service.py:5059` inside
-the `try` that logs `dense_recall_arm_embed_failed`. Tests and the fixture induce failure there.
+the `try` that logs `dense_recall_arm_embed_failed`. **Tests use it. The FRE-1122 fixture does
+not** — its runner dispatches real HTTP turns and holds no service-side fault control, so AC-2 is an
+integration test over the assembly path rather than a fixture criterion.
 
-The FRE-1122 fixture supplies the end-to-end evidence. Its report gains one column: the state each
-probe's memory section carried.
+The FRE-1122 fixture supplies the end-to-end evidence for AC-1 and AC-6. Its report gains one
+column: the state each probe's memory section carried.
 
 ---
 
@@ -634,15 +690,18 @@ probe's memory section carried.
   producing path that returns items and omits the status. · *Fails if* the composed status is
   anything other than exactly `UNAVAILABLE`, including a status inferred from the item count.
 
-- **AC-4** — The relevance predicate binds at the admission boundary, on the measured non-match
-  rather than on orthogonal, for **every** path that admits. · **Check:** one test per admitting
+- **AC-4** — The relevance predicate binds at the admission boundary, on each path's **own scorer
+  output**, at the measured non-match rather than at orthogonal. · **Check:** one test per admitting
   path — proactive (`context.py:441`), broad recall (`context.py:409`) and entity match
-  (`context.py:486`) — each admitting a candidate whose relevance value sits at the calibrated
-  median top-ranked non-match, with zero entity overlap, zero topic hits and a same-instant
-  timestamp, against the deployed weights and bound. · *Fails if* any path admits the candidate, or
-  if any path has no relevance value to test, which is the entity-match case as it stands today.
-  Each test carries a companion assertion that the same fixture is admitted with the predicate
-  disabled — a test that passes both before and after the change proves nothing.
+  (`context.py:486`). Each drives the path end to end with a candidate whose relevance sits at that
+  path's calibrated median top-ranked non-match, in that path's own score space, and asserts two
+  things: the candidate is not admitted, and **the value the predicate compared is the value that
+  path's scorer produced for that candidate** — for broad recall, the reranker score from
+  `_rerank_fused_items`, not a substitute injected at the boundary. · *Fails if* any path admits the
+  candidate, if any path has no relevance value to test (the entity-match case as it stands today),
+  or if the compared value does not trace to the path's own scorer. Each test carries a companion
+  assertion that the same fixture is admitted with the predicate disabled — a test that passes both
+  before and after the change proves nothing.
 
 - **AC-5** — The bound is calibrated, and it does not suppress genuine relevance. · **Check:** apply
   the configured bound to the calibration's labelled positive set, taken **whole** — every labelled
@@ -679,13 +738,24 @@ probe's memory section carried.
   item. Standing behavioural items may appear in any state — ADR-0147 AC-3 stratifies on exactly
   that case — so a digest holding only behavioural items is a pass, not a failure.
 
-- **AC-10** — The configured bound traces to a committed calibration against the serving arm. ·
-  **Check:** the calibration artifact exists in the repository, names the embedder arm and date it
-  measured, and its reported bound equals the configured value; re-run the parity gate assertion the
-  artifact records. · *Fails if* the configured value has no artifact behind it, if the artifact
-  names an arm other than the one currently serving, or if the artifact is present but its bound and
-  the configured value disagree. A hand-written constant that happens to satisfy AC-4 and AC-5 fails
-  here, which is the point.
+- **AC-10** — **Every** configured bound traces to a committed calibration against the component
+  that actually produced its scores. · **Check:** one artifact per bound — the proactive bound
+  against the serving embedder arm, the broad-recall bound against the serving reranker, and the
+  entity-match bound against whichever scorer that path acquires. Each names its component and the
+  date it measured, and its reported bound equals the configured value; re-run the parity assertion
+  each artifact records. Then set one artifact's recorded component to a value other than the one
+  serving. · *Fails if* any configured value has no artifact behind it, if an artifact names a
+  component other than the one currently serving, if an artifact's bound and the configured value
+  disagree, or if the induced mismatch does not raise the `config_guard` staleness finding D4
+  requires while leaving the previous bound in force. A hand-written constant that happens to
+  satisfy AC-4 and AC-5 fails here, which is the point.
+
+- **AC-11** — A path that can supply no relevance value does not admit on order alone. · **Check:**
+  drive broad recall with the reranker disabled, and again with it raising, so
+  `_rerank_fused_items` returns items carrying no score (`memory/service.py:5290-5325`). · *Fails
+  if* the items are admitted, or if the state is `NOTHING_RELEVANT` rather than `UNAVAILABLE` when
+  the path has no calibrated fallback value to fall back to. This is the criterion that makes a
+  silently disabled reranker visible instead of degrading to rank order.
 
 **Where these are adjudicated.** On FRE-1118, this ADR's umbrella ticket, once the implementation
 chain has landed and deployed. Not at merge of this ADR, and not by any single implementation
@@ -704,6 +774,8 @@ ticket.
 - FRE-1325 — nothing consumes the compliance signal; D5's declared dependency
 - FRE-1328 — D2 makes tool-driven turns structurally uncitable; why `enforce` is not on
 - FRE-694 — the embedder separation ceiling; `docs/research/2026-06-29-fre-694-embedder-separation.md`
+- FRE-695 — reranker separation; the source for reranker scales being arbitrary and not comparable
+  across arms, which is why D4 carries one bound per path
 - FRE-1170 and FRE-240 — the same shape in the reranker; named, not decided
 - ADR-0138 — the citation contract; D1 default-deny, D2 admissibility, D6 the prompt deletion
 - ADR-0147 — memory belongs to the planner; §D3 reserved this work and states the superset/subset fact
@@ -733,6 +805,21 @@ revised gate still collided with the recall core's ordering contract, which move
 the admission boundary; that `WITHHELD` was claiming capacity for items that were simply
 unrenderable; that the entity-match escape hatch contradicted D4's own rule; and that four criteria
 still permitted a wrong outcome to pass.
+
+Codex round 3 spent the three-round cap and returned eight further blocking findings, all folded in
+here. The largest is that broad recall **cannot** supply the reranker score at the boundary today —
+`_rerank_fused_items` discards it after sorting — so D4 now names that plumbing as its own work
+rather than assuming it. The others: one bound cannot govern incompatible score spaces, so bounds
+are per path; a path with no relevance value reports `UNAVAILABLE` instead of admitting on rank
+order; topic-scoped stance enrichment inherits rather than qualifies; an unsupported-kind drop of
+real content is `WITHHELD`, not absence, and `NOTHING_RELEVANT` now licenses only *"no usable
+record"*; and AC-4, AC-10 and the new AC-11 close the provenance, staleness and reranker-absent
+gaps.
+
+**These round-3 fixes were not themselves re-reviewed.** The `/adr` process allows three codex
+rounds and all three are spent. Each fix traces to a finding verified against source in this
+session, and the residual risk is that a fix introduced a defect a fourth round would have caught.
+That is recorded here for the owner rather than left implicit.
 
 ---
 

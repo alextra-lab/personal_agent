@@ -283,9 +283,12 @@ The primary is already told "Synthesize from available results and note any gaps
 verified factual errors. An instruction is not enforcement. Two mechanisms are, and neither is an
 instruction.
 
-**Mechanism 1 — a constraint pause before synthesis.** When the fan-out returns and any worker has
-`stop_reason != completed`, or any task was skipped (FRE-1397), the executor opens an ADR-0076 pause
-of a new kind, `sub_agent_fanout_incomplete`, before the synthesis LLM call at `executor.py:5107`:
+**Mechanism 1 — a constraint pause before synthesis.** When the fan-out returns and any result has
+`success == False` or `report_kind == "ledger"`, or any task was skipped (FRE-1397), the executor
+opens an ADR-0076 pause of a new kind, `sub_agent_fanout_incomplete`, before the synthesis LLM call
+at `executor.py:5107`. The predicate reads `success` and `report_kind`, not `stop_reason` alone: a
+worker that completed with empty text carries `stop_reason == "completed"` and is still a failed
+landing.
 
 | `action_id` | Label | Effect |
 |---|---|---|
@@ -307,10 +310,13 @@ lifetime cap still ends the turn.
 `constraint_pause_timeout_seconds` (180 s) for a headless caller before applying the default
 (`executor.py:700-704`). An eval run with three incomplete workers would wait nine minutes for
 answers nobody will give. The call site therefore applies this rule before opening a pause: when
-`ctx.eval_mode` is true, resolve the stored preference for the eval identity if one exists, otherwise
-apply the safe default (`stop_and_show`) immediately, and emit no pause event. An eval that wants
-synthesis over partial results stores `answer_from_partial` as its preference — the platform's
-existing mechanism, not a new flag. An interactive session with a momentarily absent socket keeps
+`ctx.eval_mode` is true, read the stored preference for the eval identity; if it is one of this
+pause's actionable options (`answer_from_partial` or `stop_and_show`), apply it; otherwise — no
+preference, or the reserved `always_pause` — apply the safe default (`stop_and_show`) immediately.
+In `eval_mode` no pause event is emitted on any branch, and `always_pause` cannot open one, because
+`_maybe_pause_for_constraint` would otherwise register and wait on it (`executor.py:760-835`). An
+eval that wants synthesis over partial results stores `answer_from_partial` as its preference — the
+platform's existing mechanism, not a new flag. An interactive session with a momentarily absent socket keeps
 FRE-928's behaviour: the pause is registered and a reconnecting client is replayed the card.
 
 **Mechanism 2 — a deterministic trailer.** When `answer_from_partial` is chosen, the executor
@@ -380,20 +386,32 @@ runs at ~350 tokens/s on this box, so a worker holding 40k tokens of results pay
 re-prefill — past its 90 s budget. The call designed to land would be the call that dies.
 
 Therefore: the worker's forced-synthesis call (move 5) and the primary's
-(`_forced_synthesis_tool_overrides`) both return `(tool_defs, "none")`. `litellm_client.py:1836`
-already passes `tool_choice` through on the local path. Anthropic already takes this form (FRE-484).
-Cache continuity is asserted, not assumed (AC-6).
+(`_forced_synthesis_tool_overrides`) both take the form the resolved dialect declares, and for every
+dialect measured so far that form is `(tool_defs, "none")`. `litellm_client.py:1836` already passes
+`tool_choice` through on the local path. Anthropic already takes this form (FRE-484). Cache
+continuity is asserted, not assumed (AC-6).
 
 **Which form a provider gets is declared, not discovered at runtime.** ADR-0145 D3 puts provider
-quirks on the dialect. The dialect declaration gains one boolean, `synthesis_retains_tools`,
-default `true`. A dialect declared `false` gets today's drop-tools form, and the cache miss it pays
-is logged at WARNING (`forced_synthesis_cache_miss_declared`) on every such call. The value is set
-from the probe in this ADR for `llamacpp_qwen` (`true`) and from FRE-484 for the Anthropic dialects
-(`true`). OVH is OpenAI-compatible and `"none"` is standard there; T1 runs the same five-call probe
-against it and records the result on the dialect before the flag defaults are trusted. A provider
-that rejects `tool_choice="none"` at runtime despite its declaration is a configuration defect: the
-synthesis call fails, the worker returns a `ledger`, and the error names the provider. There is no
-drop-tools retry. That is the same rule as every other path: the worker does not retry the world.
+quirks on the dialect, and `Dialect` is an enum whose capabilities live in per-dialect tables beside
+it (`llm_client/models.py:138-181`, read through `dialect_accepts()`). The capability is
+represented the same way: a table `SYNTHESIS_RETAINS_TOOLS: Mapping[Dialect, bool]` in
+`llm_client/models.py`, read through `synthesis_retains_tools(dialect: Dialect | None) -> bool`.
+`None` — no dialect resolved — returns `True` and logs `synthesis_dialect_unresolved` at WARNING.
+The client exposes `dialect_for_role(role) -> Dialect | None`, resolved through
+`ModelDefinition.resolve_dialect(provider_def)` (`models.py:647`) for the role's effective
+deployment. Both synthesis paths call `synthesis_retains_tools(llm_client.dialect_for_role(role))`
+and branch on it: `True` keeps the tools and pins `"none"`; `False` drops the tools and logs
+`forced_synthesis_cache_miss_declared` at WARNING on every such call. `_forced_synthesis_tool_overrides`
+loses its `provider == "anthropic"` special case, and its call site (`executor.py:5944-5960`) builds
+the synthesis tool definitions whenever the capability is `True`, not only for Anthropic.
+
+Table values: `LLAMACPP_QWEN: True` from the probe in this ADR, `ANTHROPIC_ADAPTIVE` and
+`ANTHROPIC_BUDGET: True` from FRE-484, `OVH_QWEN` and `OPENAI_GPT5` set by T1 from the same
+five-call probe run against each, recorded in T1's close comment. A provider that rejects
+`tool_choice="none"` at runtime despite a `True` declaration is a configuration defect: the synthesis
+call fails, the worker returns a `ledger`, and the error names the provider and the dialect. There
+is no drop-tools retry. That is the same rule as every other path: the worker does not retry the
+world.
 
 ---
 
@@ -493,7 +511,7 @@ which FRE-1387 ruled out for the digest. With D6 the large-context call is cheap
 |---|---|---|
 | The synthesis call itself times out on a large context | Medium | D6 keeps prefill cached. The report is asked for under 400 words. A cut synthesis keeps its streamed partial on the local path, and the ledger follows on every path. |
 | The model ignores the countdown | Low | The countdown is advice. The enforcement is the tools-off call, which the model cannot bypass. |
-| `tool_choice="none"` is not honoured by a provider | Medium | Verified on llama-server (D6) and Anthropic (FRE-484). OVH is verified by T1 with the same probe before its dialect flag is trusted. A dialect declared `synthesis_retains_tools: false` gets the drop-tools form with the miss logged. A runtime rejection despite the declaration is a `ledger` and a config finding, never a retry. |
+| `tool_choice="none"` is not honoured by a provider | Medium | Verified on llama-server (D6) and Anthropic (FRE-484). OVH is verified by T1 with the same probe before its dialect flag is trusted. A dialect with `SYNTHESIS_RETAINS_TOOLS[dialect] == False` gets the drop-tools form with the miss logged. A runtime rejection despite the declaration is a `ledger` and a config finding, never a retry. |
 | The D4 pause fires on an eval run with nobody to answer | Medium | `eval_mode` resolves the stored preference or applies the safe default at once, with no pause event and no 180 s wait (D4). |
 | The pause becomes noise | Low | Stored preference. The card carries the stop reasons, so silencing it is an informed choice. |
 | Move 4 under-estimates a round and the synthesis still gets cut | Low | The estimate is the worker's own measured mean, conservative before the first round. A cut synthesis still returns its partial and its ledger. |
@@ -539,15 +557,29 @@ message with the correct remaining count, absorbed characters and remaining seco
 round's tool results and none precedes the first. *Fails if* the message list holds only today's three
 kinds, or the count is stated only in the system prompt (FRE-1482 AC-1's stated failure).
 
-**AC-5 — The worker knows the date.** *Check:* the task message contains the rendered block.
+**AC-4a — The budget is stated at round 1.** *Mechanism check for move 1.* *Check:* the first
+request's system message contains the move-1 text with `{N}` equal to
+`settings.sub_agent_max_tool_iterations`, and the bytes are identical across two workers in one turn
+and across two turns. *Fails if* the text is absent, carries a different number, or differs between
+workers.
+
+**AC-5 — The worker knows the date.** *Mechanism check for move 2; its outcome is AC-1's live
+probe, which requires an event dated inside the asked week.* *Check:* the task message contains the
+rendered block for `turn_started_at`, and a caller passing `None` gets no block and the WARNING.
 *Live:* a date-relative task's `web_search` arguments (tool-call log events) name the current year.
 *Fails if* the block is absent, or a worker on 2026-09-10 searches 2025, as the recorded run did.
 
-**AC-6 — The synthesis call keeps its cache.** *Check:* on the local backend, `cache_read_tokens` of
-the forced-synthesis call is at least 90% of its prompt tokens, for the worker and for the primary's
-`_forced_synthesis_tool_overrides` path. Baseline from the 2026-09-10 probe: 4,187 of 4,191 with
-tools retained, 0 of 3,915 with tools dropped. *Fails if* the call re-prefills its prefix. This is the
-seeded negative: drop the tools and the ratio falls to zero.
+**AC-6 — The synthesis call keeps its cache, and the declared form is the form sent.** *Check
+(retained form):* on the local backend, `cache_read_tokens` of the forced-synthesis call is at least
+90% of its prompt tokens, for the worker and for the primary's `_forced_synthesis_tool_overrides`
+path. Baseline from the 2026-09-10 probe: 4,187 of 4,191 with tools retained, 0 of 3,915 with tools
+dropped. *Check (declared-false branch):* with `SYNTHESIS_RETAINS_TOOLS[dialect]` patched to `False`,
+the synthesis request carries no `tools` and `forced_synthesis_cache_miss_declared` is logged.
+*Check (runtime rejection):* a stub client that raises on `tool_choice="none"` yields
+`report_kind == "ledger"`, an error naming the provider and dialect, and exactly one synthesis
+attempt. *Fails if* the retained call re-prefills its prefix, if the declared-false branch still
+sends tools, or if a rejection triggers a second call. The seeded negative for the retained form:
+drop the tools and the ratio falls to zero.
 
 **AC-7 — The caller cannot hide a failed landing.** *Check:* a fan-out with one worker at
 `stop_reason == "cap"` emits a `sub_agent_fanout_incomplete` pause before the synthesis call.
@@ -570,9 +602,21 @@ asked for one, and it is refused on the ground ADR-0147 recorded: no defensible 
 the first real turns, and an invented floor measures the guess, not the system. The captures are
 the instrument, and the threshold is the owner's decision once they exist.
 
-**Seeded negatives (FRE-1482 AC-6).** Each of moves 1 to 5 and each D4 mechanism is disabled in
-turn, and the corresponding criterion above must fail. A criterion that passes with its mechanism
-disabled is not measuring the mechanism.
+**Seeded negatives (FRE-1482 AC-6).** Each mechanism is disabled in turn, and the named criterion
+must fail. A criterion that passes with its mechanism disabled is not measuring the mechanism.
+
+| Mechanism disabled | Criterion that must fail |
+|---|---|
+| Move 1 (budget at round 1) | AC-4a |
+| Move 2 (date in the task message) | AC-5 |
+| Move 3 (countdown) | AC-4 |
+| Move 4 (time reserve) | AC-3 |
+| Move 5 (forced synthesis) | AC-1 (zero markers, every narration line) |
+| Ledger on the killed paths | AC-2 |
+| D4 pause | AC-7 (an incomplete fan-out reaches synthesis unpaused) |
+| D4 trailer | AC-7 (no trailer after `answer_from_partial`) |
+| D4 `eval_mode` rule | AC-7 (an eval fan-out waits on the pause timeout) |
+| D6 retained form | AC-6 (cache ratio falls to zero) |
 
 ---
 
@@ -582,7 +626,7 @@ disabled is not measuring the mechanism.
 |---|---|---|---|
 | T1 — FRE-1482 (existing) | D2 planner rule. D3 moves 1–5 including the `turn_started_at` threading through `ExpansionController.execute` and `_run_dispatch`, the terminal paths, the ledger, `stop_reason` / `report_kind` on `SubAgentResult` and `SubAgentCapture`. D6 on the worker, including the `synthesis_retains_tools` dialect field and the OVH probe. AC-1 to AC-6, AC-8, AC-9. | Tier-1 (as labelled) | this ADR |
 | T2 — new | D4: the `sub_agent_fanout_incomplete` pause and its `eval_mode` rule, `stop_and_show` composition, the trailer, the synthesis-context wording. AC-7. | Tier-2 | T1 (reads `stop_reason` / `report_kind`) |
-| T3 — new | D1 fixes on the primary: countdown unit and zero case, `_forced_synthesis_tool_overrides` returns `(tool_defs, "none")` on every provider, `settings.py:247` docstring. AC-6 on the primary. | Tier-3 | none |
+| T3 — new | D1 fixes on the primary: countdown unit and zero case, `_forced_synthesis_tool_overrides` branches on `synthesis_retains_tools()` and loses its Anthropic special case, its call site builds synthesis tool definitions whenever the capability is `True`, `settings.py:247` docstring. AC-6 on the primary. | Tier-3 | T1 (introduces `SYNTHESIS_RETAINS_TOOLS` and `dialect_for_role`) |
 | T4 — Backlog note | Follow-on ADR: shared source registry so worker findings are citable. | — | after T1 lands and is observed |
 
 Files touched by T1: `orchestrator/sub_agent.py` (`_SUB_AGENT_SYSTEM_PROMPT`, `_ToolLoopState`,
@@ -590,8 +634,8 @@ Files touched by T1: `orchestrator/sub_agent.py` (`_SUB_AGENT_SYSTEM_PROMPT`, `_
 `orchestrator/sub_agent_types.py` (`SubAgentSpec.turn_started_at`, `SubAgentResult.stop_reason`,
 `.report_kind`), `orchestrator/expansion_controller.py` (`_build_planner_system_prompt`,
 `execute`, `_run_dispatch`, `_maybe_redispatch_on_gap`), `orchestrator/executor.py:5036-5054` (the
-`execute` call site), `llm_client/models.py` and `config/models.yaml` (the dialect field),
-`captains_log` sub-agent capture model and its ES template.
+`execute` call site), `llm_client/models.py` (`SYNTHESIS_RETAINS_TOOLS`, `synthesis_retains_tools`),
+the client's `dialect_for_role`, `captains_log` sub-agent capture model and its ES template.
 Files touched by T2: `orchestrator/executor.py` (before `:5107`), `orchestrator/constraint_options.py`,
 `orchestrator/expansion_controller.py` (`_build_synthesis_context`).
 Files touched by T3: `orchestrator/executor.py` (`:5885-5896`, `:3100-3129`), `config/settings.py:247`.

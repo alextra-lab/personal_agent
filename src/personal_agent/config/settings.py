@@ -2065,6 +2065,41 @@ class AppConfig(BaseSettings):
         le=1.0,
         description="Discard proactive candidates below this final score.",
     )
+    # --- Relevance bound (ADR-0148 D4, FRE-1477) ---------------------------------
+    #
+    # The bound is NOT a second min_score. min_score compares the weighted sum, in which
+    # recency sits, so raising it suppresses true positives at the same rate as false ones
+    # (FRE-1287 ruled that remedy out in advance). This bound compares the embedding term
+    # alone, ahead of the combination, and only for a candidate that carries no entity
+    # overlap and no topic hit -- so recency cannot compensate for an absent relevance
+    # signal.
+    #
+    # Its space is the NORMALIZED embedding term (`_normalize_vector_score`'s output,
+    # `max(0, 2x - 1)`), not Neo4j score space, because that is the value the proactive
+    # path actually scores on.
+    proactive_memory_relevance_bound: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "ADR-0148 D4: minimum normalized embedding term for a proactive candidate "
+            "with zero entity overlap and zero topic hits. Calibrated against the serving "
+            "embedder arm -- the committed source is "
+            "config/calibration/proactive_relevance_bound.json, and config_guard's "
+            "relevance_bound_calibration check binds this value to it. None means no "
+            "calibration is in force and the gate does not fire; it never silently "
+            "defaults to zero."
+        ),
+    )
+    proactive_memory_relevance_gate_enabled: bool = Field(
+        default=True,
+        description=(
+            "ADR-0148 D4: apply the proactive relevance bound. Off restores the "
+            "pre-FRE-1477 admission behaviour exactly, which is what makes the gate's "
+            "own tests able to fail (the criterion that a test passing both before and "
+            "after a change proves nothing)."
+        ),
+    )
     proactive_memory_max_tokens: int = Field(
         default=500,
         ge=1,

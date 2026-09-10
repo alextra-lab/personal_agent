@@ -1052,6 +1052,11 @@ class MemoryService:
                     "entity_type": row.get("entity_type"),
                     "description": row.get("description"),
                     "vector_score": float(row.get("vector_score") or 0.0),
+                    # FRE-1477 (ADR-0148 D4): this score is the vector index's own
+                    # measurement of the query against the entity, so the relevance gate
+                    # may compare it against a calibrated bound. The lexical augment below
+                    # sets this False -- see the note there.
+                    "vector_score_measured": True,
                     "turn_id": row.get("turn_id"),
                     "session_id": row.get("session_id"),
                     "timestamp_iso": ts_iso,
@@ -1165,6 +1170,16 @@ class MemoryService:
                     "entity_type": row.get("entity_type"),
                     "description": row.get("description"),
                     "vector_score": float(baseline),
+                    # FRE-1477 (ADR-0148 D4): `baseline` is `recall_similarity_floor`, a
+                    # configuration constant standing in for a score this arm never
+                    # computed. It orders the candidate into the proactive gates; it is
+                    # NOT a measurement of this query against this entity. Comparing it to
+                    # a calibrated relevance bound would decide admission on a number that
+                    # measured nothing, and would silently change the gate's behaviour for
+                    # this whole arm whenever the floor is recalibrated. The flag keeps the
+                    # two apart, and the gate treats an unmeasured score as no relevance
+                    # evidence -- exactly as it treats a zero entity overlap.
+                    "vector_score_measured": False,
                     "turn_id": row.get("turn_id"),
                     "session_id": row.get("session_id"),
                     "timestamp_iso": ts_iso,

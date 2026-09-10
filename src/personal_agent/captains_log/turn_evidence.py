@@ -153,6 +153,14 @@ class DropReason(StrEnum):
     # budget on relevance alone only to be filtered at the renderer with nothing left
     # to backfill the slot it burned.
     RECALL_EMPTY_DESCRIPTION = "recall_empty_description"
+    # RECALL_RELEVANCE_BOUND (FRE-1477, ADR-0148 D4) fires next, ahead of the score
+    # combination: a candidate with no entity overlap, no topic hit and an embedding term
+    # below the calibrated bound carries no relevance evidence, and no amount of recency
+    # may buy its admission. It is deliberately distinct from RECALL_SCORE_THRESHOLD --
+    # that member says "the weighted sum came out low", which is a tuning question, while
+    # this one says "the candidate was never relevant", which is a corpus question. Folding
+    # them together would make a relevance rejection unreadable in the discard report.
+    RECALL_RELEVANCE_BOUND = "recall_relevance_bound"
     RECALL_SCORE_THRESHOLD = "recall_score_threshold"
     RECALL_CANDIDATE_CAP = "recall_candidate_cap"
     RECALL_ITEM_CAP = "recall_item_cap"

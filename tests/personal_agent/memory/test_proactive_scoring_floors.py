@@ -18,12 +18,15 @@ cross the bar (:class:`TestRecencyAloneStructurallyCannotAdmit`).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 
 import personal_agent.memory.proactive as proactive_mod
 from personal_agent.captains_log.turn_evidence import DropReason
+from personal_agent.config.calibration import load_relevance_calibration
+from personal_agent.config.config_guard import repo_root
 from personal_agent.memory.proactive import (
     _normalize_vector_score,
     _recency_subscore,
@@ -52,11 +55,21 @@ def deployed_scoring(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(s, name, value, raising=False)
 
 
+#: A same-instant timestamp, so recency sits at its maximum of ~1.0 (FRE-1477 repair).
+#:
+#: These fixtures previously hardcoded ``"2026-08-25T00:00:00+00:00"`` and described it as
+#: "today". A literal date does not stay today. By 2026-09-10 it had decayed to a recency
+#: of about 0.69 against the 30-day half-life, so every test claiming to drive recency at
+#: its maximum was quietly driving it at two thirds. Computed once at import instead, the
+#: claim stays true however long the file lives.
+_SAME_INSTANT = datetime.now(timezone.utc).isoformat()
+
+
 def _entity_row(
     *,
     name: str = "Irrelevant",
     vector_score: float = 0.5,
-    timestamp_iso: str | None = "2026-08-25T00:00:00+00:00",
+    timestamp_iso: str | None = _SAME_INSTANT,
     key_entities: list[str] | None = None,
     description: str = "some description",
 ) -> dict[str, Any]:
@@ -120,9 +133,51 @@ class TestRecencyAloneStructurallyCannotAdmit:
         """Same-instant timestamp (recency ~1.0), orthogonal embedding, no overlap,
         no topic hint — recency at its maximum, everything else at zero.
         """
-        row = _entity_row(vector_score=0.5, timestamp_iso="2026-08-25T00:00:00+00:00")
+        row = _entity_row(vector_score=0.5, timestamp_iso=_SAME_INSTANT)
         out = build_proactive_suggestions([row], set(), None, "t-recency-alone", None)
         assert out.candidates == []
+
+
+class TestTheMeasuredNonMatchStillClearsTheBar:
+    """FRE-1477 — the case FRE-1287's fixture never reached, stated in FRE-1287's terms.
+
+    This asserts the *defect*, not its remedy: with FRE-1287's configuration alone and no
+    relevance bound in force, a candidate at the measured median top-ranked non-match,
+    with zero entity overlap and zero topic hits, is still admitted on recency. The
+    relevance bound is pinned to None here deliberately, so this test states what FRE-1287
+    left open rather than what FRE-1477 changes.
+
+    The value is read from the committed calibration rather than restated, so it cannot
+    drift from the measurement. See ``test_proactive_relevance_gate.py`` for the gate.
+    """
+
+    def test_the_measured_non_match_is_admitted_on_recency_alone(
+        self, deployed_scoring: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(proactive_mod.settings, "proactive_memory_relevance_bound", None)
+        calibration = load_relevance_calibration(repo_root())
+        assert calibration is not None
+        row = _entity_row(
+            name="Bicycle",
+            vector_score=calibration.negative_median_neo4j,
+            key_entities=["Bicycle"],
+        )
+
+        out = build_proactive_suggestions(
+            [row], set(), "completely unrelated topic hint", "t-fre1477-gap", None
+        )
+
+        assert len(out.candidates) == 1
+        assert (
+            out.candidates[0].relevance_score >= proactive_mod.settings.proactive_memory_min_score
+        )
+
+    def test_embedding_evidence_alone_does_not_reach_the_bar(self, deployed_scoring: None) -> None:
+        """So recency is demonstrably what carried it, not the embedding term."""
+        calibration = load_relevance_calibration(repo_root())
+        assert calibration is not None
+        embedding_alone = 0.45 * _normalize_vector_score(calibration.negative_median_neo4j)
+        assert embedding_alone < proactive_mod.settings.proactive_memory_min_score
 
 
 class TestAC1SameDayZeroOverlapZeroTopic:
@@ -133,13 +188,25 @@ class TestAC1SameDayZeroOverlapZeroTopic:
     entities (overlap 0.0), and a topic hint that shares no keyword with the candidate
     (topic 0.0, not the zero-hit 0.3 floor). Pre-fix this scored 0.455 against a 0.3
     bar; it must score below the bar now.
+
+    **What this case does not reach** (FRE-1477). ``vector_score=0.5`` is orthogonal, and
+    orthogonal maps to 0.0 under the rescale this very ticket added -- so this asserts
+    non-admission at an embedding term of *zero*. The production embedder does not emit
+    orthogonal for the candidate that decides admission. On a query whose answer is not in
+    the corpus, the nearest neighbour the index returns is the strongest non-match, and
+    FRE-1477 measured its median on the serving arm at 0.6798 in Neo4j score space. At
+    that value the same construction is still admitted, which
+    :class:`TestTheMeasuredNonMatchStillClearsTheBar` below asserts.
+
+    The case here is correct and still holds. It is simply narrower than the claim
+    FRE-1287's title makes, and that gap is what FRE-1477 exists to close.
     """
 
     def test_the_0_455_case_is_no_longer_admitted(self, deployed_scoring: None) -> None:
         row = _entity_row(
             name="Bicycle",
             vector_score=0.5,  # orthogonal
-            timestamp_iso="2026-08-25T00:00:00+00:00",  # "today" per session context
+            timestamp_iso=_SAME_INSTANT,
             key_entities=["Bicycle"],
         )
 
@@ -218,7 +285,7 @@ class TestAC3RelevantMemoriesStillAdmitted:
         row = _entity_row(
             name="Neo4j",
             vector_score=0.95,  # cos=0.9, strongly similar
-            timestamp_iso="2026-08-25T00:00:00+00:00",
+            timestamp_iso=_SAME_INSTANT,
             key_entities=["Neo4j", "GraphDatabase", "Cypher"],
         )
         out = build_proactive_suggestions(
@@ -235,7 +302,7 @@ class TestAC3RelevantMemoriesStillAdmitted:
         row = _entity_row(
             name="Postgres",
             vector_score=0.85,  # cos=0.7
-            timestamp_iso="2026-08-25T00:00:00+00:00",
+            timestamp_iso=_SAME_INSTANT,
             key_entities=["Postgres"],
         )
         out = build_proactive_suggestions([row], {"Postgres"}, None, "t-ac3-moderate", None)
@@ -247,7 +314,7 @@ class TestAC3RelevantMemoriesStillAdmitted:
             _entity_row(
                 name=f"Relevant{i}",
                 vector_score=0.9,
-                timestamp_iso="2026-08-25T00:00:00+00:00",
+                timestamp_iso=_SAME_INSTANT,
                 key_entities=[f"Relevant{i}"],
             )
             for i in range(5)
@@ -335,7 +402,7 @@ class TestLexicalArmPlaceholderInteraction:
         row = _entity_row(
             name="LexicalMatch",
             vector_score=0.60,
-            timestamp_iso="2026-08-25T00:00:00+00:00",
+            timestamp_iso=_SAME_INSTANT,
             key_entities=["LexicalMatch"],
         )
         out = build_proactive_suggestions(
@@ -356,7 +423,7 @@ class TestAC5NoRowsLostToAccounting:
             _entity_row(
                 name=f"Admit{i}",
                 vector_score=0.9,
-                timestamp_iso="2026-08-25T00:00:00+00:00",
+                timestamp_iso=_SAME_INSTANT,
                 key_entities=[f"Admit{i}"],
             )
             for i in range(3)

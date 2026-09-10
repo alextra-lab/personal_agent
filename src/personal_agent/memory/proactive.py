@@ -109,6 +109,60 @@ def _normalize_vector_score(score: float) -> float:
     return max(0.0, 2.0 * clamped - 1.0)
 
 
+def _below_relevance_bound(
+    embedding_term: float,
+    overlap: float,
+    topic: float,
+    *,
+    measured: bool,
+) -> bool:
+    """Whether the relevance gate rejects this candidate (ADR-0148 D4, FRE-1477).
+
+    The obligation D4 states is that no item is admitted on a non-relevance signal alone.
+    Recency is the signal that was buying admission: FRE-1287 removed the subscore floors
+    and left the weights, and at the *measured* top-ranked non-match -- the very item
+    admission is decided on when the answer is not in the corpus -- recency still carries
+    a candidate over the 0.30 bar with nothing else behind it.
+
+    So the predicate sits **ahead of** :func:`_combine_scores` rather than inside it. A
+    weight adjustment would leave recency in the sum and able to compensate; a gate before
+    the sum cannot be compensated for at all. It binds only where there is no relevance
+    evidence of any kind -- zero entity overlap and zero topic hits -- so a candidate with
+    any other evidence is untouched.
+
+    ``measured`` carries the score's provenance, and it is not a formality.
+    ``_augment_proactive_with_lexical`` (``service.py:1124``, FRE-724) appends lexical-arm
+    entity hits whose ``vector_score`` is ``recall_similarity_floor`` -- a configuration
+    constant, not a measurement -- and that path runs in production. Comparing a constant
+    against a calibrated bound would decide admission on a number that never measured
+    anything, which is the pathology this gate exists to stop. An unmeasured score is
+    therefore no relevance evidence, exactly as a zero overlap is.
+
+    Args:
+        embedding_term: The normalized embedding subscore, from
+            :func:`_normalize_vector_score`. This is the path's own scorer output, and the
+            value the bound is calibrated against.
+        overlap: The entity-overlap subscore.
+        topic: The topic-coherence subscore.
+        measured: Whether ``embedding_term`` derives from a real embedding comparison.
+
+    Returns:
+        True when the candidate must not be admitted.
+    """
+    cfg = settings
+    bound = cfg.proactive_memory_relevance_bound
+    # A missing calibration leaves the gate inert and never defaults to zero (ADR-0148
+    # D4). Production is in exactly that state: the calibration measured the serving arm
+    # and reported that no bound satisfies both of D4's constraints, so it committed the
+    # incompatibility instead of a number -- see
+    # config/calibration/proactive_relevance_bound.json and the config_guard finding.
+    if bound is None or not cfg.proactive_memory_relevance_gate_enabled:
+        return False
+    if overlap > 0.0 or topic > 0.0:
+        return False
+    return not measured or embedding_term < bound
+
+
 def _combine_scores(
     emb: float,
     overlap: float,
@@ -331,7 +385,6 @@ def build_proactive_suggestions(
             cfg.proactive_memory_recency_half_life_days,
         )
         topic = _topic_subscore(session_topic_hint, name, key_entities)
-        final = _combine_scores(vector_score, overlap, recency, topic)
         # The pair shares its row's subscores by construction, so the sibling candidates
         # carry one score and the stable sort below keeps the entity (emitted first)
         # ahead of its episode.
@@ -346,12 +399,34 @@ def build_proactive_suggestions(
                 ProactiveMemoryDiscard(
                     kind=kind,
                     payload=payload,
-                    relevance_score=final,
+                    # Combined here rather than above so the gate below can precede the
+                    # combination on every path that reaches it. This candidate is already
+                    # rejected by an unrelated filter, so the score only labels its record,
+                    # which keeps the existing FRE-1114 record shape byte-for-byte.
+                    relevance_score=_combine_scores(vector_score, overlap, recency, topic),
                     drop_reason=DropReason.RECALL_EMPTY_DESCRIPTION,
                 )
             )
             continue
 
+        # ADR-0148 D4 (FRE-1477): the relevance gate, ahead of the combination. See
+        # _below_relevance_bound for why placement is the whole point. relevance_score
+        # stays None -- no final score was computed, and ProactiveMemoryDiscard reserves
+        # None for exactly that rather than fabricating a 0.0.
+        if _below_relevance_bound(
+            vector_score, overlap, topic, measured=bool(row.get("vector_score_measured", True))
+        ):
+            discarded.append(
+                ProactiveMemoryDiscard(
+                    kind=kind,
+                    payload=payload,
+                    relevance_score=None,
+                    drop_reason=DropReason.RECALL_RELEVANCE_BOUND,
+                )
+            )
+            continue
+
+        final = _combine_scores(vector_score, overlap, recency, topic)
         if final < cfg.proactive_memory_min_score:
             # Recorded, not skipped (FRE-1060).
             discarded.append(

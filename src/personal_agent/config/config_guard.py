@@ -711,6 +711,107 @@ def check_embedding_fallback_identity(settings: AppConfig | None = None) -> list
     ]
 
 
+def check_relevance_bound_calibration(
+    root: Path, settings: AppConfig | None = None
+) -> list[Finding]:
+    """ADR-0148 D4 / AC-10 (FRE-1477) — every relevance bound traces to a live calibration.
+
+    A relevance bound is a *measurement*, and a measurement describes the component that
+    produced it. Four states are reportable, and none of them changes the configured
+    value: this check reports, it never mutates settings, which is what leaves the
+    previous bound in force while a staleness finding stands.
+
+    * A bound is configured with no committed artifact behind it. This is the
+      hand-written constant AC-10 exists to fail on.
+    * The artifact names a component other than the one now serving. The bound was
+      measured somewhere else, and separation does not transfer across arms or
+      dimensions (FRE-694, FRE-695).
+    * The artifact's bound and the configured value disagree.
+    * A bound is configured even though the artifact reports that **no** value satisfies
+      D4's two constraints. ADR-0148 AC-5 fails a bound configured in that reserved case.
+
+    A standing incompatibility with **no** bound configured is deliberately not a finding.
+    It is a measurement result awaiting an owner decision -- a reranker-side bound or a
+    different arm -- not a repository violation, and ``scripts/check_config.py`` fails CI
+    on any finding at all. Making it one would wedge every build until the owner acts. The
+    committed artifact, the calibration harness's own report and the ticket handoff carry
+    it instead.
+
+    Args:
+        root: The repository root.
+        settings: The ``AppConfig`` to check. ``None`` constructs a fresh default
+            instance, mirroring the other checks reading committed repo state.
+
+    Returns:
+        Every finding raised, or an empty list when the configured state is consistent.
+    """
+    from personal_agent.config.calibration import (  # noqa: PLC0415 — avoid import cycle
+        load_relevance_calibration,
+    )
+    from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
+
+    if settings is None:
+        settings = AppConfig()
+
+    configured = settings.proactive_memory_relevance_bound
+    try:
+        calibration = load_relevance_calibration(root)
+    except ValueError as exc:
+        return [Finding("relevance_bound_calibration_malformed", "policy", str(exc))]
+
+    if calibration is None:
+        if configured is None:
+            return []
+        return [
+            Finding(
+                "relevance_bound_calibration_missing",
+                "policy",
+                f"proactive_memory_relevance_bound is set to {configured} but no committed "
+                "calibration stands behind it (ADR-0148 AC-10: a hand-written constant with "
+                "no artifact is exactly the condition this fails on)",
+            )
+        ]
+
+    findings: list[Finding] = []
+    serving = (settings.managed_embedding_model, settings.embedding_dimensions)
+    measured = (calibration.component.model, calibration.component.dimensions)
+    if serving != measured:
+        findings.append(
+            Finding(
+                "relevance_bound_calibration_stale",
+                "policy",
+                f"the proactive relevance bound was calibrated against "
+                f"{measured[0]}@{measured[1]} on {calibration.measured_on}, but "
+                f"{serving[0]}@{serving[1]} is serving. Separation does not transfer across "
+                "arms or dimensions (FRE-694), so the bound must be re-measured. The "
+                "previous bound stays in force until it is.",
+            )
+        )
+    if calibration.incompatible and configured is not None:
+        findings.append(
+            Finding(
+                "relevance_bound_configured_despite_incompatibility",
+                "policy",
+                f"proactive_memory_relevance_bound is set to {configured}, but the "
+                f"calibration of {measured[0]}@{measured[1]} on {calibration.measured_on} "
+                f"found no bound satisfying ADR-0148 D4: {calibration.incompatible_reason} "
+                "A bound configured in that reserved case is chosen, not measured, which is "
+                "the condition ADR-0148 AC-5 fails on.",
+            )
+        )
+    if configured != calibration.bound_embedding_term:
+        findings.append(
+            Finding(
+                "relevance_bound_calibration_mismatch",
+                "policy",
+                f"proactive_memory_relevance_bound is {configured} but the committed "
+                f"calibration reports {calibration.bound_embedding_term} "
+                "(normalized embedding term). The configured value must be the measured one.",
+            )
+        )
+    return findings
+
+
 def _strip_provider_prefix(model_id: str) -> str:
     """Strip a leading ``'<org>/'`` provider prefix (e.g. ``'Qwen/'``), if present."""
     return model_id.split("/", 1)[1] if "/" in model_id else model_id
@@ -1516,6 +1617,7 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_substrate_manifest(root))
     findings.extend(check_dev_test_profile_isolation(root))
     findings.extend(check_embedding_fallback_identity())
+    findings.extend(check_relevance_bound_calibration(root))
     findings.extend(check_budget_role_coverage(root))
     findings.extend(check_reasoning_declaration(root))
     return findings

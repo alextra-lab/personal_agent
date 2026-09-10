@@ -46,6 +46,10 @@ WARNING_EVENT_ALLOWLIST: frozenset[str] = frozenset(
         # sub-agent digest cap actually clipped a result (FRE-1387) — the parent
         # synthesis context lost characters the worker generated.
         "sub_agent_output_clipped",
+        # a capped sub-agent's report is a synthesized fallback, not the model's own
+        # text (FRE-1399) — it did work and could not report it, distinct from
+        # genuinely finding nothing.
+        "sub_agent_iteration_cap_narrative_synthesized",
         # mcp timeout/failure family
         "mcp_tool_call_failed",
         "mcp_tool_timeout",

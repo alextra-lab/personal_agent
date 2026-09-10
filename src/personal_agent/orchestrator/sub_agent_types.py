@@ -159,6 +159,15 @@ class SubAgentResult:
             to dispatch a replacement with an expanded grant (FRE-1389 AC-5) —
             the sub-agent only ever reports the gap; it never acquires the tool
             itself.
+        narrative_synthesized: True when the iteration-cap terminal path found
+            no assistant-authored text in any round and had to build a
+            deterministic description of what happened instead of quoting the
+            model (FRE-1399). Distinguishes "the worker found nothing" (real,
+            if terse, model text) from "the worker did work and could not
+            report it" (this flag) — both cases now leave ``summary``
+            non-empty, so the flag is the only way to tell them apart without
+            comparing ``tool_result_chars_absorbed`` against ``summary`` by
+            hand. Always ``False`` on every other terminal path.
     """
 
     task_id: UUID
@@ -178,3 +187,4 @@ class SubAgentResult:
     tool_result_chars_absorbed: int = 0
     refused_tool_attempts: tuple[str, ...] = field(default_factory=tuple)
     stated_tool_gap: str | None = None
+    narrative_synthesized: bool = False

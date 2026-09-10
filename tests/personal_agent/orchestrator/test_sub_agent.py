@@ -845,6 +845,249 @@ class TestSubAgentToolLoop:
         assert result.tools_used == ["run_python"]
 
 
+class TestIterationCapNarrative:
+    """FRE-1399 — a capped worker must always report what it absorbed.
+
+    The iteration-cap terminal path used to keep only the CAPPING round's own
+    ``response_content``. That is frequently empty because a tool-call round
+    commonly carries no assistant text — which is why the same cap produced
+    1,677 characters in one real trace and 0 in another: purely a property of
+    whether that one round's completion happened to include text.
+    """
+
+    @pytest.mark.asyncio
+    async def test_recovers_earlier_round_text_even_when_capping_round_is_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1/AC-2: an earlier round's real text survives a later empty-text cap."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 2)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "Found partial result X",
+                    tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}],
+                ),
+                _llm_response(
+                    "", tool_calls=[{"id": "c1", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response(
+                    "", tool_calls=[{"id": "c2", "name": "run_python", "arguments": "{}"}]
+                ),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.success is False
+        assert "Found partial result X" in result.summary
+        assert result.narrative_synthesized is False
+
+    @pytest.mark.asyncio
+    async def test_no_assistant_text_anywhere_gets_synthesized_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1: a worker that never emitted text still reports something, never ''."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            return_value=_llm_response(
+                "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+            )
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "x" * 42)),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.success is False
+        assert result.summary != ""
+        assert result.narrative_synthesized is True
+        assert str(result.tool_result_chars_absorbed) in result.summary
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_round_text_is_not_treated_as_narrative(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex plan-review: '' and ' \\n' must both count as "no narrative"."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            return_value=_llm_response(
+                " \n", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+            )
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.narrative_synthesized is True
+        assert result.summary.strip() != ""
+
+    @pytest.mark.asyncio
+    async def test_synthesized_narrative_emits_its_own_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-3: visible without reading source — mirrors sub_agent_output_clipped."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            return_value=_llm_response(
+                "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+            )
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+            structlog.testing.capture_logs() as cap_logs,
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]),
+                llm_client=mock_client,
+                trace_id="t",
+                session_id="s",
+            )
+
+        warnings = [
+            e for e in cap_logs if e.get("event") == "sub_agent_iteration_cap_narrative_synthesized"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0]["log_level"] == "warning"
+        assert warnings[0]["trace_id"] == "t"
+        assert warnings[0]["session_id"] == "s"
+        assert warnings[0]["tool_iterations"] == result.tool_iterations
+        assert warnings[0]["tool_result_chars_absorbed"] == result.tool_result_chars_absorbed
+
+    @pytest.mark.asyncio
+    async def test_real_narrative_emits_no_synthesized_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            return_value=_llm_response(
+                "still working",
+                tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}],
+            )
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+            structlog.testing.capture_logs() as cap_logs,
+        ):
+            await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert not [
+            e for e in cap_logs if e.get("event") == "sub_agent_iteration_cap_narrative_synthesized"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_synthesized_warning_is_allowlisted(self) -> None:
+        from personal_agent.telemetry.error_monitor import WARNING_EVENT_ALLOWLIST
+
+        assert "sub_agent_iteration_cap_narrative_synthesized" in WARNING_EVENT_ALLOWLIST
+
+    @pytest.mark.asyncio
+    async def test_capture_carries_narrative_synthesized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-4: the field reaches the audit record, not just the in-process result."""
+        import personal_agent.orchestrator.sub_agent as sa
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            return_value=_llm_response(
+                "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+            )
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert len(captured) == 1
+        assert captured[0].narrative_synthesized is True
+
+
 class TestPartialProgressOnKill:
     """FRE-1379 AC-1 — a killed sub-agent reports what it managed.
 

@@ -155,7 +155,7 @@ def _below_relevance_bound(
     # D4). Production is in exactly that state: the calibration measured the serving arm
     # and reported that no bound satisfies both of D4's constraints, so it committed the
     # incompatibility instead of a number -- see
-    # config/calibration/proactive_relevance_bound.json and the config_guard finding.
+    # config/calibration/proactive_relevance_bound.json and the research note beside it.
     if bound is None or not cfg.proactive_memory_relevance_gate_enabled:
         return False
     if overlap > 0.0 or topic > 0.0:

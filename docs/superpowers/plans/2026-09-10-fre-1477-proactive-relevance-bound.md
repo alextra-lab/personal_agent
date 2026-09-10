@@ -7,6 +7,24 @@
 
 ---
 
+## 0. Outcome — Branch B (§ D-F)
+
+The calibration ran against the serving arm and **found no admissible bound**. On
+`Qwen3-Embedding-8B` @ 1024 the lowest bound rejecting the median top-ranked non-match (0.6798)
+admits 84.2% of the 57 labelled positives, below D4's 90%. Both parity checks passed first
+(P1 max Δ 0.0107, P2 max Δ 0.0097), so the measurement is trustworthy and the verdict stands.
+
+Everything below shipped. The bound did not: `proactive_memory_relevance_bound` is `None`, the gate
+is inert, and **FRE-1477 is not dischargeable on this merge** — D4 hands the decision to the owner.
+Full result and the three courses open: `docs/research/2026-09-10-fre-1477-proactive-relevance-calibration.md`.
+
+One correction the run itself produced: the first attempt passed P1 while comparing 4096-dimension
+offline vectors against 1024-dimension index vectors. It passed *inside* tolerance, and only the
+consistent direction of the three deltas revealed it. Recorded in the research note, because it is
+the failure mode a parity gate exists to catch.
+
+---
+
 ## 1. Scope
 
 1. A hard relevance gate ahead of `_combine_scores` in `memory/proactive.py`, with its own drop reason.

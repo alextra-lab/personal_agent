@@ -20,8 +20,11 @@ proven and ready for the arm or the reranker-side bound the owner chooses.
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -30,6 +33,27 @@ from personal_agent.captains_log.turn_evidence import DropReason
 from personal_agent.config.calibration import RelevanceCalibration, load_relevance_calibration
 from personal_agent.config.config_guard import repo_root
 from personal_agent.memory.proactive import _normalize_vector_score, build_proactive_suggestions
+from personal_agent.memory.service import MemoryService
+
+
+def _make_service_with_mock() -> tuple[MemoryService, AsyncMock]:
+    """A MemoryService bypassing __init__, with its Neo4j session mocked.
+
+    Mirrors ``tests/personal_agent/memory/test_visibility.py``'s helper.
+    """
+    service = MemoryService.__new__(MemoryService)
+    service.connected = True
+    service._query_feedback_by_key = {}
+    mock_session = AsyncMock()
+    service.driver = MagicMock()
+    service.driver.session = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_session),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    return service, mock_session
+
 
 #: How far above the measured median the implied bound sits. Mirrors the harness's own
 #: ``BOUND_STEP`` -- the bound must be *strictly* above the median so that median is
@@ -379,6 +403,59 @@ class TestDGAConstantIsNotRelevanceEvidence:
             [row], {"Shared", "A", "B"}, "unrelated hint", "t-dg3", None
         )
         assert len(out.candidates) == 1
+
+
+class TestTheProvenanceFlagIsSetAtTheSource:
+    """D-G — every row ``suggest_proactive_raw`` emits declares its score's provenance.
+
+    The gate reads ``row.get("vector_score_measured", True)``, so a row-building branch
+    that forgot the key would silently be treated as a measurement. There is exactly one
+    producer today and it sets the flag on both of its branches; these tests hold that at
+    the source, so a third branch cannot be added without a decision.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_dense_arm_declares_its_score_measured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service, mock_session = _make_service_with_mock()
+        monkeypatch.setattr(proactive_mod.settings, "multipath_recall_enabled", False)
+        result = AsyncMock()
+        result.data = AsyncMock(
+            return_value=[
+                {
+                    "name": "Neo4j",
+                    "entity_type": "Thing",
+                    "description": "a graph database",
+                    "mention_count": 3,
+                    "vector_score": 0.82,
+                    "turn_id": None,
+                    "session_id": None,
+                    "timestamp": None,
+                    "user_message": None,
+                    "summary": None,
+                    "key_entities": [],
+                }
+            ]
+        )
+        mock_session.run = AsyncMock(return_value=result)
+
+        rows = await service.suggest_proactive_raw(
+            [0.1, 0.2], current_session_id="s1", trace_id="t1"
+        )
+
+        assert rows[0]["vector_score_measured"] is True
+
+    def test_the_lexical_augment_declares_its_score_unmeasured(self) -> None:
+        """Read from the source rather than driven, because the augment's own branch is
+        what must carry the flag -- ``recall_similarity_floor`` is a constant, not a
+        measurement (``service.py``, FRE-724).
+        """
+        source = Path(inspect.getsourcefile(MemoryService) or "").read_text(encoding="utf-8")
+        augment = source.split("async def _augment_proactive_with_lexical")[1]
+        augment = augment.split("\n    async def ")[0]
+        assert '"vector_score": float(baseline)' in augment
+        assert '"vector_score_measured": False' in augment
 
 
 class TestTheGateIsInertWithoutACalibratedBound:

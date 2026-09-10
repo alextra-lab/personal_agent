@@ -96,6 +96,21 @@ class AttachmentUnsupportedError(ValueError):
     """
 
 
+class RecallArmFailedError(RuntimeError):
+    """Raised when a recall arm cannot run to completion (ADR-0148 D1, FRE-1476).
+
+    The multi-path core records a raising arm in ``MultiPathRecallResult.arms_failed``
+    and keeps the surviving arms, so raising is how an arm reports a cause rather than
+    how it fails a turn. It exists because the alternative — returning an empty list —
+    is the same value an arm returns when it honestly found nothing, and the turn cannot
+    claim absence on a path that did not complete.
+
+    The ordinary embedder failure has this shape and no other: ``generate_embedding``
+    catches every provider exception and returns a zero vector rather than raising, so an
+    arm that only stopped swallowing exceptions would still report a clean empty result.
+    """
+
+
 class LinearProjectNotFoundError(ValueError):
     """Raised when a configured Linear project name does not exist on the team.
 

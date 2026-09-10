@@ -93,6 +93,9 @@ class MemoryServiceAdapter:
                 for e in result.entities
             ],
             relevance_scores=result.relevance_scores,
+            # FRE-1476: carried so the assembler can tell a failed recall from an empty
+            # one. Both arrive here as empty lists.
+            arms_failed=tuple(result.arms_failed),
         )
 
     async def recall_broad(
@@ -139,6 +142,8 @@ class MemoryServiceAdapter:
             entities_by_type=entities_by_type,
             recent_sessions=raw.get("sessions", []),
             total_entity_count=len(entities),
+            # FRE-1476: see recall() above.
+            arms_failed=tuple(raw.get("arms_failed", ())),
         )
 
     async def store_episode(self, episode: Episode, trace_id: str) -> str:
@@ -305,7 +310,16 @@ class MemoryServiceAdapter:
                     trace_id=trace_id,
                     reason="zero_embedding",
                 )
-                return ProactiveMemorySuggestions(candidates=[], query_embedding_ms=emb_ms)
+                # FRE-1476: a zero vector is the shape an embedder failure takes —
+                # generate_embedding catches every provider exception and returns one
+                # rather than raising. This path retrieved nothing because it could not
+                # ask, which is not the same as asking and finding nothing.
+                return ProactiveMemorySuggestions(
+                    candidates=[],
+                    query_embedding_ms=emb_ms,
+                    failed=True,
+                    failure_cause="zero_embedding",
+                )
 
             db_entities = await self._service.fetch_session_discussed_entity_names(
                 current_session_id,
@@ -357,7 +371,15 @@ class MemoryServiceAdapter:
             return suggestions
         except Exception:
             log.exception("proactive_memory_suggest_failed", trace_id=trace_id)
-            return ProactiveMemorySuggestions(candidates=[], query_embedding_ms=None)
+            # FRE-1476: reported rather than swallowed. This return was previously
+            # identical to an honest empty result, so a failed proactive path let the
+            # turn claim absence.
+            return ProactiveMemorySuggestions(
+                candidates=[],
+                query_embedding_ms=None,
+                failed=True,
+                failure_cause="proactive_recall_failed",
+            )
 
     async def get_current_stances(
         self,

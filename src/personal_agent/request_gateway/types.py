@@ -11,6 +11,7 @@ from typing import Any
 
 from personal_agent.captains_log.turn_evidence import CandidatePopulation, RecallCandidateRecord
 from personal_agent.governance.models import Mode
+from personal_agent.request_gateway.memory_status import MemoryStatusReport
 
 
 class TaskType(Enum):
@@ -127,6 +128,15 @@ class AssembledContext:
             because only the assembler knows whether its producers reported their
             discards. Defaults to the conservative claim so a construction site that does
             not set it cannot over-claim completeness.
+        memory_status: What the model may honestly conclude about recalled memory, and
+            the per-stage reports it composes from (ADR-0148 D1/D2/D3, FRE-1476).
+            ``memory_context`` alone cannot answer that: an empty list is the same value
+            for honest absence, a failed arm, a budget drop and memory never wired. A
+            sibling field rather than a change to ``memory_context``'s own type, because
+            ADR-0148's risk table states the status is additive to the items — the
+            ADR-0147 digest, the executor and the turn-evidence record all read that list.
+            Defaults to the weaker claim, so a construction site that says nothing
+            composes UNAVAILABLE rather than absence (D3).
     """
 
     messages: list[dict[str, Any]]
@@ -139,6 +149,7 @@ class AssembledContext:
     overflow_action: str | None = None
     recall_candidates: tuple[RecallCandidateRecord, ...] = ()
     candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION
+    memory_status: MemoryStatusReport = MemoryStatusReport()
 
 
 @dataclass(frozen=True)

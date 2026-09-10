@@ -22,6 +22,7 @@ from personal_agent.events import (
     MemoryAccessedEvent,
     get_event_bus,
 )
+from personal_agent.exceptions import RecallArmFailedError
 from personal_agent.grounding.source_registry import USER_STATED_EXTRACTOR_SENTINEL
 from personal_agent.llm_client import InferencePriority, ModelRole
 from personal_agent.llm_client.cost_tracker import SYSTEM_SESSION_ID
@@ -5066,36 +5067,86 @@ class MemoryService:
             Empty when disconnected, the query is empty, embedding fails, or
             nothing clears the floor.
         """
-        if not self.connected or not self.driver or not query_text.strip():
-            return []
-        current_settings = get_settings()
-        top_k = limit if limit is not None else current_settings.multipath_arm_top_k
         try:
-            embedding = await generate_embedding(
-                query_text, mode="query", trace_id=trace_id, session_id=session_id
+            return await self._dense_recall_arm_strict(
+                query_text,
+                limit=limit,
+                trace_id=trace_id,
+                session_id=session_id,
+                user_id=user_id,
+                authenticated=authenticated,
             )
         except Exception as exc:
             log.warning(
-                "dense_recall_arm_embed_failed",
-                error=str(exc),
-                trace_id=trace_id,
-                session_id=session_id,
-            )
-            return []
-        vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
-        try:
-            async with self.driver.session() as session:
-                ranked = await self._dense_vector_search_ranked(
-                    session, embedding, top_k, vis_frag, vis_params
-                )
-        except Exception as exc:
-            log.error(
                 "dense_recall_arm_failed",
                 error=str(exc),
                 trace_id=trace_id,
                 session_id=session_id,
             )
             return []
+
+    async def _dense_recall_arm_strict(
+        self,
+        query_text: str,
+        *,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[RankedResult]:
+        """The dense arm, raising its cause instead of swallowing it (FRE-1476, ADR-0148 D1).
+
+        The multi-path core calls this one so a failure lands in
+        ``MultiPathRecallResult.arms_failed``; :meth:`dense_recall_arm` keeps the
+        documented fail-open contract for every other caller. The split exists because a
+        failure returned as ``[]`` is the same value as an honest empty result, and the
+        turn cannot claim absence on an arm that did not complete.
+
+        **A zero embedding is the ordinary failure shape, not an edge case.**
+        ``generate_embedding`` catches every provider exception and returns a zero vector
+        (``memory/embeddings.py``), which ``_dense_vector_search_ranked`` then
+        short-circuits to ``[]``. So merely raising the exceptions this method used to
+        catch would still report a clean empty result on a dead embedder. Blank query text
+        is rejected above before any embedding, so a zero vector here has one cause.
+
+        Args:
+            query_text: Free-text query.
+            limit: Max hits; defaults to ``multipath_arm_top_k``.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            Ranked list of RankedResult (best-first, 1-based rank, entity kind). Empty
+            when disconnected, the query is empty, or nothing clears the floor — each an
+            outcome, never a failure.
+
+        Raises:
+            RecallArmFailedError: The embedder returned no usable vector.
+            Exception: Whatever the embedding call or the vector search raised.
+        """
+        if not self.connected or not self.driver or not query_text.strip():
+            return []
+        current_settings = get_settings()
+        top_k = limit if limit is not None else current_settings.multipath_arm_top_k
+        embedding = await generate_embedding(
+            query_text, mode="query", trace_id=trace_id, session_id=session_id
+        )
+        if not any(x != 0.0 for x in embedding):
+            log.warning(
+                "dense_recall_arm_embed_failed",
+                reason="zero_embedding",
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            raise RecallArmFailedError("dense recall arm: the embedder returned a zero vector")
+        vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
+        async with self.driver.session() as session:
+            ranked = await self._dense_vector_search_ranked(
+                session, embedding, top_k, vis_frag, vis_params
+            )
         log.info(
             "dense_recall_arm_completed",
             arm="dense",
@@ -5163,7 +5214,11 @@ class MemoryService:
             arm_coros.append(self.multi_query_recall_arm(query_text, **arm_kwargs))
         else:
             arm_names.append("dense")
-            arm_coros.append(self.dense_recall_arm(query_text, **arm_kwargs))
+            # The strict variant (FRE-1476): the gather below turns a raise into an
+            # arms_failed entry, which is the only way this core learns that an arm did
+            # not complete. The fail-open public method would report the failure as an
+            # empty result, indistinguishable from finding nothing.
+            arm_coros.append(self._dense_recall_arm_strict(query_text, **arm_kwargs))
         if current_settings.lexical_arm_enabled:
             arm_names.append("lexical")
             arm_coros.append(self.lexical_recall_arm(query_text, **arm_kwargs))
@@ -5347,7 +5402,7 @@ class MemoryService:
         authenticated: bool,
         trace_id: str | None,
         session_id: str | None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
         """Resolve the multi-path fused set into the broad path's entity payload.
 
         Runs the shared core (path="broad"), then maps its ordered fused items back
@@ -5366,7 +5421,10 @@ class MemoryService:
             session_id: Session id for event correlation.
 
         Returns:
-            Entity dicts ordered by fused rank, in the broad payload shape.
+            Entity dicts ordered by fused rank in the broad payload shape, paired with
+            the arms and resolution steps that did not run to completion (FRE-1476).
+            The second element is empty only when the whole path completed — an empty
+            entity list alone cannot say that, which is what ADR-0148 D1 exists to fix.
         """
         recall = await self._multipath_fused_recall(
             query_text,
@@ -5376,8 +5434,9 @@ class MemoryService:
             user_id=user_id,
             authenticated=authenticated,
         )
+        arms_failed = tuple(recall.arms_failed)
         if not recall.items or not self.driver:
-            return []
+            return [], arms_failed
 
         entity_ids = [it.item_id for it in recall.items if it.kind == "entity"]
         turn_ids = [it.item_id for it in recall.items if it.kind == "turn"]
@@ -5449,7 +5508,10 @@ class MemoryService:
                 trace_id=trace_id,
                 session_id=session_id,
             )
-            return []
+            # FRE-1476: the resolution step is a producing step like any arm. Returning a
+            # bare [] here discarded both this failure and the fused set the core had
+            # already established, so the turn read as "recall found nothing".
+            return [], (*arms_failed, "broad_resolve")
 
         ordered: list[dict[str, Any]] = []
         seen_names: set[str] = set()
@@ -5468,8 +5530,8 @@ class MemoryService:
                 seen_names.add(name)
                 ordered.append(ent)
                 if len(ordered) >= limit:
-                    return ordered
-        return ordered
+                    return ordered, arms_failed
+        return ordered, arms_failed
 
     @staticmethod
     def _turn_node_from_node(node: Any) -> TurnNode:
@@ -5539,13 +5601,17 @@ class MemoryService:
         conversations: list[TurnNode] = []
         entities: list[EntityNode] = []
         relevance_scores: dict[str, float] = {}
+        # FRE-1476: the arms the core could not run, plus any resolution step below.
+        arms_failed: list[str] = list(recall.arms_failed)
         if recall.items and self.driver:
-            turns_by_id, entities_by_id = await self._resolve_fused_turns(
+            turns_by_id, entities_by_id, resolve_failed = await self._resolve_fused_turns(
                 recall.items,
                 user_id=user_id,
                 authenticated=authenticated,
                 trace_id=trace_id,
             )
+            if resolve_failed:
+                arms_failed.append("entity_resolve")
             seen_turns: set[str] = set()
             seen_entities: set[str] = set()
             total = len(recall.items)
@@ -5613,6 +5679,7 @@ class MemoryService:
             conversations=conversations,
             entities=entities,
             relevance_scores=relevance_scores,
+            arms_failed=arms_failed,
         )
 
     async def _resolve_fused_turns(
@@ -5622,7 +5689,7 @@ class MemoryService:
         user_id: UUID | None,
         authenticated: bool,
         trace_id: str | None,
-    ) -> tuple[dict[str, TurnNode], dict[str, EntityNode]]:
+    ) -> tuple[dict[str, TurnNode], dict[str, EntityNode], bool]:
         """Resolve a fused set into TurnNodes and EntityNodes for the entity-name path.
 
         FRE-1021: an entity-kind fused item resolves to the Entity node itself
@@ -5637,12 +5704,15 @@ class MemoryService:
             trace_id: Request trace id for event correlation.
 
         Returns:
-            Tuple of (turn_id -> TurnNode, entity elementId -> EntityNode).
+            Tuple of (turn_id -> TurnNode, entity elementId -> EntityNode, resolution
+            failed). The third element is True when the read did not complete
+            (ADR-0148 D1, FRE-1476) — the maps may still hold whatever resolved before
+            the failure, and an empty pair alone cannot say which case it is.
         """
         by_turn: dict[str, TurnNode] = {}
         by_entity: dict[str, EntityNode] = {}
         if not self.driver or not items:
-            return by_turn, by_entity
+            return by_turn, by_entity, False
         entity_ids = [it.item_id for it in items if it.kind == "entity"]
         turn_ids = [it.item_id for it in items if it.kind == "turn"]
         vis_t, vis_params_t = _build_visibility_filter("t", user_id, authenticated)
@@ -5688,7 +5758,10 @@ class MemoryService:
                 error=str(exc),
                 trace_id=trace_id,
             )
-        return by_turn, by_entity
+            # FRE-1476: the partial maps are kept, as before — but the caller is told the
+            # step did not complete, so an empty result stops reading as honest absence.
+            return by_turn, by_entity, True
+        return by_turn, by_entity, False
 
     async def multi_query_recall_arm(
         self,
@@ -5850,14 +5923,25 @@ class MemoryService:
                 gate), whereas non-vector entities count within the recency window.
               - sessions: list of {session_id, dominant_entities, turn_count, started_at}
               - turns_summary: list of recent turn summaries
+              - arms_failed: tuple of arms or steps that did not run to completion
+                (ADR-0148 D1, FRE-1476). Empty means the path completed; an empty
+                ``entities`` alone never establishes that.
         """
         if not self.connected or not self.driver:
-            return {"entities": [], "sessions": [], "turns_summary": []}
+            return {
+                "entities": [],
+                "sessions": [],
+                "turns_summary": [],
+                "arms_failed": ("not_connected",),
+            }
 
         cutoff = (datetime.now(timezone.utc) - timedelta(days=recency_days)).isoformat()
         turn_vis_frag, vis_params = _build_visibility_filter("t", user_id, authenticated)
         sess_vis_frag, _ = _build_visibility_filter("s", user_id, authenticated)
 
+        # FRE-1476: empty on the legacy path means the path completed and found nothing.
+        # Every producing step below that can fail without raising appends its own name.
+        arms_failed: tuple[str, ...] = ()
         current_settings = get_settings()
         relevance_bounded = current_settings.relevance_bounded_recall_enabled and bool(query_text)
 
@@ -5869,7 +5953,7 @@ class MemoryService:
                 # Flag off reproduces the ADR-0100 / legacy entity path below,
                 # byte-for-byte.
                 if current_settings.multipath_recall_enabled and query_text:
-                    entities = await self._multipath_broad_entities(
+                    entities, arms_failed = await self._multipath_broad_entities(
                         query_text,
                         limit=limit,
                         entity_types=entity_types,
@@ -6007,6 +6091,7 @@ class MemoryService:
                     "entities": entities,
                     "sessions": sessions,
                     "turns_summary": turns,
+                    "arms_failed": arms_failed,
                 }
 
                 # Publish memory access event (Phase 4 / ADR-0042)
@@ -6066,7 +6151,14 @@ class MemoryService:
                 trace_id=trace_id,
                 session_id=session_id,
             )
-            return {"entities": [], "sessions": [], "turns_summary": []}
+            # FRE-1476: the caller could not previously tell this from a completed query
+            # that matched nothing, so a dead database read as honest absence.
+            return {
+                "entities": [],
+                "sessions": [],
+                "turns_summary": [],
+                "arms_failed": ("query_memory_broad",),
+            }
 
     def _log_query_quality_metrics(
         self,

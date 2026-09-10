@@ -126,11 +126,17 @@ class MemoryRecallResult:
         episodes: Matched episodic memories as dicts (heterogeneous data).
         entities: Matched entity information as dicts (heterogeneous data).
         relevance_scores: Per-result relevance scores keyed by ID.
+        arms_failed: Recall arms, or resolution steps, that did not run to completion
+            (ADR-0148 D1, FRE-1476). Empty means the path ran to completion — which is
+            what makes absence reachable, so it must never be assumed. Without this the
+            caller cannot tell a failed recall from an empty one, and both arrive as an
+            empty ``entities``.
     """
 
     episodes: list[dict[str, Any]]
     entities: list[dict[str, Any]]
     relevance_scores: dict[str, float] = field(default_factory=dict)
+    arms_failed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -141,11 +147,14 @@ class BroadRecallResult:
         entities_by_type: Entities grouped by type.
         recent_sessions: Recent session summaries.
         total_entity_count: Total entities in memory.
+        arms_failed: Recall arms, or resolution steps, that did not run to completion
+            (ADR-0148 D1, FRE-1476). See :class:`MemoryRecallResult`.
     """
 
     entities_by_type: dict[str, list[dict[str, Any]]]
     recent_sessions: list[dict[str, Any]]
     total_entity_count: int
+    arms_failed: tuple[str, ...] = ()
 
 
 @runtime_checkable

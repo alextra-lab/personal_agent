@@ -49,7 +49,8 @@
       "Bash(docker exec build-neo4j-test-1 cypher-shell:*)",
       "Bash(docker exec build2-neo4j-test-1 cypher-shell:*)",
       "Bash(docker exec adrs-neo4j-test-1 cypher-shell:*)",
-      "Bash(docker exec seshat-neo4j-test-1 cypher-shell:*)"
+      "Bash(docker exec seshat-neo4j-test-1 cypher-shell:*)",
+      "Bash(docker exec cloud-sim-postgres psql -U seshat_diag_ro:*)"
     ],
     "ask": [
       "Read(./.env)",

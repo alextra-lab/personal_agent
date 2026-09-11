@@ -63,6 +63,14 @@ CONSTRAINT_OPTIONS: dict[str, list[ConstraintOption]] = {
         ConstraintOption(action_id="approve_sub_agent_tool", label="Allow for this turn"),
         ConstraintOption(action_id="deny_sub_agent_tool", label="Deny"),
     ],
+    # ADR-0149 D4 / FRE-1484: a sub-agent fan-out returned with a failed landing
+    # (a worker that did not finish, or a task the turn's budget never reached).
+    # The safe default (last) is stop_and_show — no confident answer is composed
+    # over gathered results nobody confirmed using.
+    "sub_agent_fanout_incomplete": [
+        ConstraintOption(action_id="answer_from_partial", label="Answer from what was gathered"),
+        ConstraintOption(action_id="stop_and_show", label="Stop and show me the worker reports"),
+    ],
 }
 
 

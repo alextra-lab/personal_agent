@@ -53,12 +53,16 @@ class Phase(str, Enum):
 #: SUB-AGENT path rather than the primary's own loop. Added here rather than passed
 #: with a ``type: ignore`` at the pause helper, which is exactly the drift FRE-881
 #: closed for ``attachment_cost``.
+#: ADR-0149 D4 / FRE-1484 adds ``sub_agent_fanout_incomplete``: raised when a
+#: sub-agent fan-out returns with a failed landing, before the primary
+#: synthesizes an answer over it.
 ConstraintName = Literal[
     "tool_iteration_limit",
     "context_compression",
     "attachment_cost",
     "artifact_builder",
     "sub_agent_tool_approval",
+    "sub_agent_fanout_incomplete",
 ]
 
 

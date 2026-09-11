@@ -219,6 +219,10 @@ class TestUnwiredMemory:
 
         assert result.memory_status.recall.outcome is RecallOutcome.NOT_REPORTED
         assert result.memory_status.status is MemoryStatus.UNAVAILABLE
+        # FRE-1478: named so the turn-evidence record can tell this apart from an arm
+        # that ran and failed (AC-6) — both compose UNAVAILABLE, but must not read back
+        # as the same cause.
+        assert result.memory_status.recall.cause == "memory_not_wired"
 
     @pytest.mark.asyncio
     async def test_a_disconnected_store_is_unavailable(self) -> None:

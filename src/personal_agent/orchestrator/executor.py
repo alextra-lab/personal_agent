@@ -11,6 +11,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import Token
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
@@ -88,6 +89,15 @@ from personal_agent.orchestrator.types import (
     TaskState,
 )
 from personal_agent.orchestrator.unmeasured_claim import detect_unmeasured_claim
+from personal_agent.request_gateway.memory_status import (
+    MEMORY_STATE_LINES,
+    MemoryStatus,
+    MemoryStatusReport,
+    RecallOutcome,
+    RecallStageReport,
+    RenderStageReport,
+    classify_recall_admission,
+)
 from personal_agent.telemetry import (
     LLM_STEP_COMPLETED,
     MODEL_CALL_ERROR,
@@ -1470,6 +1480,23 @@ def _record_turn_evidence(
             prompt_component_ids=prompt_component_ids,
             operator_identity=ctx.operator_name or None,
             operator_assertion=ctx.operator_assertion or None,
+            # ADR-0148 D1/D2 (FRE-1478): the rendered state, and the cause the rendered
+            # vocabulary collapses — an arm failure and an unwired turn both render
+            # "unavailable" and must not read back as the same cause here. Checked in
+            # the same precedence order `MemoryStatusReport.status` composes in: a
+            # recall-stage cause names an UNAVAILABLE turn, a render-stage cause names a
+            # WITHHELD-by-renderer turn, and the budget flag names a WITHHELD-by-budget
+            # one when neither of the others fired.
+            memory_state=ctx.memory_status.status.value,
+            memory_state_cause=(
+                ctx.memory_status.recall.cause
+                or ctx.memory_status.render.cause
+                or (
+                    "budget_dropped_recall_items"
+                    if ctx.memory_status.budget_dropped_recall_items
+                    else None
+                )
+            ),
         )
     except Exception:
         log.exception(
@@ -3672,7 +3699,7 @@ def _stance_line(item: dict[str, Any], identifier: str | None = None) -> str:
 def _render_memory_section_with_ids(
     items: list[dict[str, Any]],
     registry: "SourceRegistry | None" = None,
-) -> tuple[str, tuple[str, ...]]:
+) -> tuple[str, tuple[str, ...], RenderStageReport]:
     """Render recalled memory for the volatile tail, dispatching **per item kind**.
 
     Replaces a branch selected by the *first* item's type (FRE-1010). That selection
@@ -3703,8 +3730,9 @@ def _render_memory_section_with_ids(
             None).
 
     Returns:
-        Tuple of (section string, identities that actually rendered content). Both
-        empty when nothing renders.
+        Tuple of (section string, identities that actually rendered content, this
+        call's own report of what it emitted (ADR-0148 D1, FRE-1478)). The first two
+        are both empty when nothing renders.
     """
     entities: list[dict[str, Any]] = []
     episodes: list[dict[str, Any]] = []
@@ -3791,7 +3819,25 @@ def _render_memory_section_with_ids(
         section += "\n".join(_stance_line(m, _identifier_for(m)) for m in stances)
         sections.append(section)
 
-    return "".join(sections), tuple(rendered_ids)
+    # ADR-0148 D1 (FRE-1478): the recall layer's own emitted count, excluding
+    # `behavioural` — standing behavioural stances are outside the recall layer (D2) and
+    # counting them here would report a turn as populated when only that layer rendered.
+    recall_emitted = len(described) + len(recalled) + len(stances)
+    # AC-6 (master bounce, PR #1131): a zero count is only a genuine drop when the
+    # recall layer actually admitted something to drop — a turn carrying only
+    # standing behavioural stances (or nothing at all) has nothing here to drop, and
+    # tagging it "render_dropped_all_recall_items" persisted a false cause into the
+    # turn-evidence record for exactly the NOTHING_RELEVANT case AC-6 exists to get
+    # right. `classify_recall_admission` is the one true source for "was there
+    # anything admitted" — including kinds (e.g. session) this function never even
+    # buckets locally, so a local list-length check would under-count.
+    had_something_to_drop = recall_emitted == 0 and classify_recall_admission(items).admitted > 0
+    render_report = RenderStageReport(
+        ran=True,
+        recall_emitted=recall_emitted,
+        cause="render_dropped_all_recall_items" if had_something_to_drop else None,
+    )
+    return "".join(sections), tuple(rendered_ids), render_report
 
 
 async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
@@ -4889,6 +4935,10 @@ async def step_init(
         # memory context to fit budget, ``memory_context`` is None but the candidates
         # are exactly what has to be recorded as dropped.
         ctx.recall_candidates = gw.context.recall_candidates
+        # ADR-0148 D1/D2 (FRE-1478): unconditional, unlike memory_context below — a
+        # NOTHING_RELEVANT turn and an UNAVAILABLE one both carry an empty
+        # memory_context, and the status is exactly what tells them apart.
+        ctx.memory_status = gw.context.memory_status
         if gw.context.memory_context:
             ctx.memory_context = gw.context.memory_context
             log.info(
@@ -5182,6 +5232,16 @@ async def step_init(
 
     # Query memory graph for relevant context (Phase 2.2)
     if settings.enable_memory_graph:
+        # ADR-0148 D1 (master bounce, PR #1131): this path is reachable — both service
+        # entrypoints fall back here with gateway_output=None whenever the gateway
+        # pipeline raises — so it must report its own outcome. Left at its
+        # NOT_REPORTED default (which composes UNAVAILABLE, D3) this branch could
+        # populate real memory into ctx.memory_context while the rendered state told
+        # the model its records could not be reached — a lie during exactly the
+        # moment (graceful degradation) that makes it worst. Coarser-grained than the
+        # gateway path's per-arm reporting (this legacy path has no equivalent), but
+        # each of the two sub-paths below reports COMPLETED/FAILED for what it did.
+        _legacy_recall = RecallStageReport(cause="legacy_recall_not_attempted")
         try:
             from personal_agent.memory.models import MemoryQuery
             from personal_agent.memory.service import MemoryService
@@ -5255,6 +5315,7 @@ async def step_init(
                             entity_type_hints=entity_type_hints,
                             entities_found=len(broad.get("entities", [])),
                         )
+                        _legacy_recall = RecallStageReport(RecallOutcome.COMPLETED)
                     except Exception as broad_err:
                         log.warning(
                             "memory_recall_broad_query_failed",
@@ -5267,6 +5328,9 @@ async def step_init(
                             entity_type_hints=entity_type_hints,
                             entities_found=0,
                             query_error=str(broad_err),
+                        )
+                        _legacy_recall = RecallStageReport(
+                            RecallOutcome.FAILED, "legacy_broad_recall_failed"
                         )
                 else:
                     # Entity-name match path (existing)
@@ -5320,12 +5384,26 @@ async def step_init(
                                 trace_id=ctx.trace_id,
                                 conversations_found=conversations_found,
                             )
+                            _legacy_recall = RecallStageReport(RecallOutcome.COMPLETED)
                         except Exception as entity_match_err:
                             log.warning(
                                 "memory_entity_match_query_failed",
                                 trace_id=ctx.trace_id,
                                 error=str(entity_match_err),
                             )
+                            _legacy_recall = RecallStageReport(
+                                RecallOutcome.FAILED, "legacy_entity_match_failed"
+                            )
+                    else:
+                        # No candidate names in the message to match against. Mirrors
+                        # request_gateway/context.py's own declared limit for the
+                        # identical case (FRE-1476): this cannot distinguish "the
+                        # message genuinely names nothing" from "name resolution
+                        # failed", and over-claims COMPLETED in the second case.
+                        # FRE-1481 (Needs Approval) owns fixing that class of
+                        # collapse; this path stays consistent with the gateway
+                        # path's own answer rather than diverging on it here.
+                        _legacy_recall = RecallStageReport(RecallOutcome.COMPLETED)
 
                 # ADR-0126 T2 (FRE-1017): standing behavioural stances, independent of
                 # what either recall sub-branch above selected -- present whenever
@@ -5374,9 +5452,10 @@ async def step_init(
                     entities_found=0,
                     skipped_reason="memory_service_unavailable",
                 )
+                _legacy_recall = RecallStageReport(RecallOutcome.FAILED, "memory_not_connected")
             else:
                 # Memory graph enabled but service not connected and not a recall-only path.
-                pass
+                _legacy_recall = RecallStageReport(RecallOutcome.FAILED, "memory_not_connected")
         except Exception as e:
             log.warning(
                 "memory_enrichment_failed",
@@ -5384,6 +5463,17 @@ async def step_init(
                 error=str(e),
                 exc_info=True,
             )
+            _legacy_recall = RecallStageReport(RecallOutcome.FAILED, "memory_enrichment_failed")
+
+        # ADR-0148 D1 (master bounce, PR #1131): compose from whatever ctx.memory_context
+        # actually ended up holding — after the behavioural-stance injection above, so a
+        # standing-stance-only context still classifies as NOTHING_RELEVANT rather than
+        # POPULATED (D2 scopes the status to the recall layer here exactly as it does on
+        # the gateway path).
+        ctx.memory_status = MemoryStatusReport(
+            recall=_legacy_recall,
+            admission=classify_recall_admission(ctx.memory_context),
+        )
 
     needs_planning = False
 
@@ -5995,12 +6085,28 @@ async def step_llm_call(
         # conversation renderer as empty bullets.
         _rendered_memory_ids: tuple[str, ...] = ()
         if ctx.memory_context:
-            _section_text, _rendered_memory_ids = _render_memory_section_with_ids(
+            _section_text, _rendered_memory_ids, _render_report = _render_memory_section_with_ids(
                 ctx.memory_context, ctx.source_registry
             )
             memory_section = _section_text or None
             if memory_section is None:
                 _rendered_memory_ids = ()
+            # ADR-0148 D1 (FRE-1478): the renderer's own report replaces the mirror
+            # `classify_recall_admission` inferred at context assembly (before the
+            # renderer existed to speak for itself) with the fact of what actually
+            # rendered.
+            ctx.memory_status = replace(ctx.memory_status, render=_render_report)
+
+        # ADR-0148 D2/D5 (FRE-1478): the memory section is always present — silence
+        # stops being a state. In the three non-populated states it carries one line
+        # naming the state, a hint for the model rather than enforcement (D5). Placed
+        # after the render call above so a POPULATED turn whose context was only
+        # standing behavioural stances (no recall content) still gets the line: the
+        # status is scoped to the recall layer (D2), not to whether a section rendered.
+        _memory_state = ctx.memory_status.status
+        if _memory_state is not MemoryStatus.POPULATED:
+            _state_line = MEMORY_STATE_LINES[_memory_state]
+            memory_section = f"{memory_section}\n\n{_state_line}" if memory_section else _state_line
 
         # If we are passing tools (native or prompt-injected), include tool-use guidance
         # in the system prompt to reduce malformed tool calls and looping (ADR-0032).

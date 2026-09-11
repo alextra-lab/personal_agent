@@ -160,7 +160,9 @@ async def _run_turn(
         authenticated=authenticated,
     )
 
-    memory_section, rendered_ids = _render_memory_section_with_ids(result.memory_context or [])
+    memory_section, rendered_ids, _report = _render_memory_section_with_ids(
+        result.memory_context or []
+    )
     final_messages, inline_outcome = _inline_volatile_with_outcome(result.messages, memory_section)
     wire = build_wire_messages(final_messages, "", "fre1017-trace")
 

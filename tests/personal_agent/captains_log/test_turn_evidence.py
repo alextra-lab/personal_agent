@@ -76,6 +76,8 @@ def _evidence(
     user_message: str = "hello",
     skill_bodies: tuple[str, ...] = (),
     candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION,
+    memory_state: str = "unavailable",
+    memory_state_cause: str | None = None,
 ):
     return build_turn_evidence(
         candidates=candidates,
@@ -89,6 +91,8 @@ def _evidence(
         call_index=0,
         primary_call_count=1,
         candidate_population=candidate_population,
+        memory_state=memory_state,
+        memory_state_cause=memory_state_cause,
     )
 
 
@@ -944,3 +948,32 @@ class TestStateIsNotCollapsedByDiscards:
     def test_no_candidates_at_all_is_still_empty(self) -> None:
         """The pre-existing meaning is unchanged when there are no discards either."""
         assert _evidence(()).recall.state is EvidenceState.EMPTY
+
+
+class TestMemoryStateAndCause:
+    """ADR-0148 D1/D2, FRE-1478 — the rendered state and the cause it collapses.
+
+    AC-6's own bar: an arm failure and an unwired turn both render "unavailable" and
+    must not read back as the same cause in the evidence record.
+    """
+
+    def test_memory_state_defaults_to_the_weaker_claim(self) -> None:
+        """A caller that says nothing cannot over-claim completeness (D3)."""
+        ev = _evidence(())
+
+        assert ev.recall.memory_state == "unavailable"
+        assert ev.recall.memory_state_cause is None
+
+    def test_an_arm_failure_and_an_unwired_turn_carry_different_causes(self) -> None:
+        arm_failure = _evidence(
+            (), memory_state="unavailable", memory_state_cause="memory_query_failed"
+        )
+        unwired = _evidence((), memory_state="unavailable", memory_state_cause="memory_not_wired")
+
+        assert arm_failure.recall.memory_state == unwired.recall.memory_state == "unavailable"
+        assert arm_failure.recall.memory_state_cause != unwired.recall.memory_state_cause
+
+    def test_populated_state_is_recorded_verbatim(self) -> None:
+        ev = _evidence((), memory_state="populated")
+
+        assert ev.recall.memory_state == "populated"

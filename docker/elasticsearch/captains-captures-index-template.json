@@ -141,6 +141,8 @@
             "candidate_count": { "type": "integer" },
             "admitted_count": { "type": "integer" },
             "candidate_population": { "type": "keyword" },
+            "memory_state": { "type": "keyword" },
+            "memory_state_cause": { "type": "keyword", "ignore_above": 1024 },
             "items": {
               "type": "nested",
               "properties": {

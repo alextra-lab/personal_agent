@@ -113,6 +113,11 @@ class RunRefused(RuntimeError):
 # the other (Codex round 3).
 _CAPTURE_MISSING = "(capture missing — memory items for this turn are unknown)"
 
+# ADR-0148 D2 (FRE-1478): the same "capture missing is not a fact about the turn"
+# rule applies to the rendered memory state — a probe with no capture must read as
+# unknown, never as inferred from ``rendered_memory`` being empty (AC-7's own bar).
+_MEMORY_STATE_UNKNOWN = "unknown (capture missing)"
+
 
 @dataclass(frozen=True)
 class ProbeAnswer:
@@ -131,6 +136,11 @@ class ProbeAnswer:
         reason: Why that outcome.
         rendered_memory: Memory items rendered on this turn, from the capture's
             ADR-0125 D3 recall-admission record. Empty when no capture was found.
+        memory_state: The rendered ``MemoryStatus`` this turn's memory section
+            carried — ``populated``, ``nothing_relevant``, ``withheld`` or
+            ``unavailable`` (ADR-0148 D2, FRE-1478) — read from the same
+            recall-admission record ``rendered_memory`` reads, never inferred from
+            its item count. ``_MEMORY_STATE_UNKNOWN`` when no capture was found.
     """
 
     probe_id: str
@@ -143,6 +153,7 @@ class ProbeAnswer:
     evidence_span: str
     reason: str
     rendered_memory: tuple[str, ...]
+    memory_state: str
 
 
 def _artifact(root: pathlib.Path, name: str) -> pathlib.Path:
@@ -159,31 +170,44 @@ def _artifact(root: pathlib.Path, name: str) -> pathlib.Path:
     return root / name
 
 
-def _load_rendered_memory(captures_root: pathlib.Path, trace_id: str) -> tuple[str, ...]:
-    """Read the memory items rendered on a turn from its capture (AC-5).
-
-    Captures are written to ``captures/YYYY-MM-DD/<trace_id>.json``, and the
-    ADR-0125 D3 recall-admission record names which memory items the turn
-    actually relied on, by identity and score — including the ones trimming or
-    rendering dropped. That is exactly what AC-5 needs to trace a confabulation
-    back to what it was built from.
+def _read_capture(captures_root: pathlib.Path, trace_id: str) -> dict[str, object] | None:
+    """Read one turn's capture JSON, the shared source for AC-5 and AC-7.
 
     Args:
         captures_root: Root of the on-disk capture tree.
         trace_id: The turn's trace id.
 
     Returns:
-        Item identities as strings; empty if no capture or no record was found.
+        The parsed capture, or None when it is missing or unreadable.
     """
     matches = list(captures_root.glob(f"*/{trace_id}.json"))
     if not matches:
         log.warning("fre1122_capture_missing", trace_id=trace_id)
-        return (_CAPTURE_MISSING,)
+        return None
 
     try:
-        capture = json.loads(matches[0].read_text())
+        return json.loads(matches[0].read_text())
     except (OSError, json.JSONDecodeError) as exc:
         log.warning("fre1122_capture_unreadable", trace_id=trace_id, error=str(exc))
+        return None
+
+
+def _load_rendered_memory(capture: dict[str, object] | None) -> tuple[str, ...]:
+    """Read the memory items rendered on a turn from its capture (AC-5).
+
+    The ADR-0125 D3 recall-admission record names which memory items the turn
+    actually relied on, by identity and score — including the ones trimming or
+    rendering dropped. That is exactly what AC-5 needs to trace a confabulation
+    back to what it was built from.
+
+    Args:
+        capture: The turn's parsed capture, or None when it could not be read.
+
+    Returns:
+        Item identities as strings; ``_CAPTURE_MISSING`` if no capture or no
+        record was found.
+    """
+    if capture is None:
         return (_CAPTURE_MISSING,)
 
     admission = capture.get("recall_admission") or {}
@@ -197,6 +221,30 @@ def _load_rendered_memory(captures_root: pathlib.Path, trace_id: str) -> tuple[s
         else:
             rendered.append(str(item))
     return tuple(rendered)
+
+
+def _load_memory_state(capture: dict[str, object] | None) -> str:
+    """Read the rendered ``MemoryStatus`` a turn's memory section carried (AC-7).
+
+    Read from the same ADR-0125 D3 recall-admission record ``_load_rendered_memory``
+    reads — ADR-0148 D2/FRE-1478 added ``memory_state`` to that record — never
+    inferred from ``rendered_memory``'s item count, which is exactly the collapse
+    ADR-0148 exists to end (a ``NOTHING_RELEVANT`` turn and an ``UNAVAILABLE`` one
+    both render an empty item list).
+
+    Args:
+        capture: The turn's parsed capture, or None when it could not be read.
+
+    Returns:
+        The recorded state, or ``_MEMORY_STATE_UNKNOWN`` if no capture or no
+        record was found.
+    """
+    if capture is None:
+        return _MEMORY_STATE_UNKNOWN
+
+    admission = capture.get("recall_admission") or {}
+    state = admission.get("memory_state")
+    return str(state) if state else _MEMORY_STATE_UNKNOWN
 
 
 async def _open_pg() -> Connection:
@@ -549,6 +597,7 @@ async def _phase_run(args: argparse.Namespace, probe_set: ProbeSet) -> int:
                 expected_tokens=probe.expected_tokens,
                 subject_terms=probe.subject_terms,
             )
+            capture = _read_capture(args.captures_root, trace_id)
             answers.append(
                 asdict(
                     ProbeAnswer(
@@ -561,7 +610,8 @@ async def _phase_run(args: argparse.Namespace, probe_set: ProbeSet) -> int:
                         outcome=str(classification.outcome),
                         evidence_span=classification.evidence_span,
                         reason=classification.reason,
-                        rendered_memory=_load_rendered_memory(args.captures_root, trace_id),
+                        rendered_memory=_load_rendered_memory(capture),
+                        memory_state=_load_memory_state(capture),
                     )
                 )
             )
@@ -859,14 +909,24 @@ def _phase_report(args: argparse.Namespace, probe_set: ProbeSet) -> int:
     lines += [
         "## Per-probe classification (AC-4)",
         "",
-        "| Probe | Status | Outcome | Span | Why |",
-        "|---|---|---|---|---|",
+        # ADR-0148 AC-7 (FRE-1478): the memory state each probe's memory section
+        # carried, read from the turn's own recall-admission record — never from
+        # `rendered_memory`'s item count, which cannot tell NOTHING_RELEVANT apart
+        # from UNAVAILABLE (both render an empty item list).
+        "| Probe | Status | Outcome | Memory State | Span | Why |",
+        "|---|---|---|---|---|---|",
     ]
     for answer in answers:
         span = answer["evidence_span"].replace("|", "\\|")[:160]
         why = answer["reason"].replace("|", "\\|")[:160]
+        # A pre-FRE-1478 or resumed artifact never wrote this key at all — .get()
+        # here, not answer["memory_state"], so a historical artifact reports the
+        # documented unknown fallback instead of crashing the whole report (master
+        # bounce, PR #1131).
+        memory_state = answer.get("memory_state") or _MEMORY_STATE_UNKNOWN
         lines.append(
-            f"| {answer['probe_id']} | {answer['status']} | {answer['outcome']} | {span} | {why} |"
+            f"| {answer['probe_id']} | {answer['status']} | {answer['outcome']} | "
+            f"{memory_state} | {span} | {why} |"
         )
 
     # AC-6 is a same-probe guarantee, so the report names the identifiers the

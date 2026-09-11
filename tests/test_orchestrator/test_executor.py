@@ -1765,6 +1765,171 @@ class TestExecutorFallbackBehaviouralStanceInjection:
         )
 
 
+class TestExecutorFallbackMemoryStatus:
+    """ADR-0148 D1 (master bounce, PR #1131): the pre-gateway fallback path
+
+    (``gateway_output is None``) is reachable in production — both service
+    entrypoints fall back to it whenever the gateway pipeline raises, and this
+    deployment runs with ``AGENT_ENABLE_MEMORY_GRAPH=true``. Left unwired,
+    ``ctx.memory_status`` stayed at its NOT_REPORTED default (composes
+    UNAVAILABLE) even on a call that populated real memory into
+    ``ctx.memory_context`` — the prompt would then say records could not be
+    reached while carrying them.
+    """
+
+    @staticmethod
+    def _make_ctx(message: str, uid, *, authenticated: bool = True) -> ExecutionContext:
+        return ExecutionContext(
+            session_id="sess-1478",
+            trace_id="trace-1478",
+            user_message=message,
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=None,  # forces the inline enrichment / fallback path
+            user_id=uid,
+            authenticated=authenticated,
+        )
+
+    @pytest.mark.asyncio
+    async def test_successful_broad_recall_is_populated_not_unavailable(self) -> None:
+        """The exact scenario the bounce named: real memory, honest status."""
+        from personal_agent.config import settings
+        from personal_agent.request_gateway.memory_status import MemoryStatus
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory_broad = AsyncMock(
+            return_value={
+                "entities": [{"name": "Kubernetes", "type": "Technology", "description": "x"}],
+                "sessions": [],
+            }
+        )
+        mock_memory.query_current_stances = AsyncMock(return_value=[])
+
+        ctx = self._make_ctx("What have we discussed before?", uid)
+        trace_ctx = TraceContext(trace_id="trace-1478", user_id=uid, session_id="sess-1478")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch("personal_agent.orchestrator.executor.is_memory_recall_query", return_value=True),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.memory_context is not None
+        assert ctx.memory_status.status is MemoryStatus.POPULATED
+
+    @pytest.mark.asyncio
+    async def test_broad_recall_failure_is_unavailable_with_its_own_cause(self) -> None:
+        from personal_agent.config import settings
+        from personal_agent.request_gateway.memory_status import MemoryStatus, RecallOutcome
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory_broad = AsyncMock(side_effect=RuntimeError("neo4j is down"))
+        mock_memory.query_current_stances = AsyncMock(return_value=[])
+
+        ctx = self._make_ctx("What have we discussed before?", uid)
+        trace_ctx = TraceContext(trace_id="trace-1478", user_id=uid, session_id="sess-1478")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch("personal_agent.orchestrator.executor.is_memory_recall_query", return_value=True),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.memory_status.status is MemoryStatus.UNAVAILABLE
+        assert ctx.memory_status.recall.outcome is RecallOutcome.FAILED
+        assert ctx.memory_status.recall.cause == "legacy_broad_recall_failed"
+
+    @pytest.mark.asyncio
+    async def test_entity_match_failure_is_unavailable_with_its_own_cause(self) -> None:
+        from personal_agent.config import settings
+        from personal_agent.request_gateway.memory_status import MemoryStatus
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory = AsyncMock(side_effect=RuntimeError("entity-match query down"))
+        mock_memory.query_current_stances = AsyncMock(return_value=[])
+
+        ctx = self._make_ctx("Tell me about Zanzibar please", uid)
+        trace_ctx = TraceContext(trace_id="trace-1478", user_id=uid, session_id="sess-1478")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch(
+                "personal_agent.orchestrator.executor.is_memory_recall_query", return_value=False
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.memory_status.status is MemoryStatus.UNAVAILABLE
+        assert ctx.memory_status.recall.cause == "legacy_entity_match_failed"
+
+    @pytest.mark.asyncio
+    async def test_disconnected_service_is_unavailable_with_memory_not_connected(self) -> None:
+        """Mirrors request_gateway/context.py's own cause string for the identical
+        fact, so the two paths read consistently in the evidence record.
+        """
+        from personal_agent.config import settings
+        from personal_agent.request_gateway.memory_status import MemoryStatus
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = False
+
+        ctx = self._make_ctx("What have we discussed before?", uid)
+        trace_ctx = TraceContext(trace_id="trace-1478", user_id=uid, session_id="sess-1478")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch("personal_agent.orchestrator.executor.is_memory_recall_query", return_value=True),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.memory_status.status is MemoryStatus.UNAVAILABLE
+        assert ctx.memory_status.recall.cause == "memory_not_connected"
+
+    @pytest.mark.asyncio
+    async def test_behavioural_stances_only_is_nothing_relevant_not_populated(self) -> None:
+        """D2 scoping applies on this path too: standing stances alone must not make
+        the status POPULATED.
+        """
+        from personal_agent.config import settings
+        from personal_agent.request_gateway.memory_status import MemoryStatus
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_current_stances = AsyncMock(
+            return_value=[
+                {"target": "Artifact", "affect": "prefers explicit request before creation"}
+            ]
+        )
+
+        # Lowercase message -> no potential_entities -> entity-match sub-branch's
+        # `if potential_entities:` guard is never entered -> COMPLETED, nothing admitted.
+        ctx = self._make_ctx("hello there", uid)
+        trace_ctx = TraceContext(trace_id="trace-1478", user_id=uid, session_id="sess-1478")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch(
+                "personal_agent.orchestrator.executor.is_memory_recall_query", return_value=False
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.memory_status.status is MemoryStatus.NOTHING_RELEVANT
+
+
 class TestStepInitAttachmentResolution:
     """FRE-666 / ADR-0101 §3, §4 — turn-assembly image-block injection."""
 

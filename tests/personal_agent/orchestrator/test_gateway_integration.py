@@ -515,17 +515,11 @@ class TestUnmeasuredClaimVisibleInTurnRecord:
             "personal_agent.llm_client.factory.get_llm_client",
             lambda role_name=None: MagicMock(),
         )
-        # ADR-0149 D4 (FRE-1484): this fixture's failed result is now also an
-        # incomplete fan-out, which pauses before synthesis. This test is about
-        # FRE-1417's unmeasured-claim flag, not D4's pause — resolve it to
-        # answer_from_partial so the turn still reaches LLM_CALL.
-        from personal_agent.orchestrator.constraint_options import ConstraintDecision
-
-        monkeypatch.setattr(
-            ex,
-            "_maybe_pause_for_constraint",
-            AsyncMock(return_value=ConstraintDecision("answer_from_partial", "user_choice")),
-        )
+        # ADR-0149 D4 (FRE-1484, amended 2026-09-11): this fixture's report_kind
+        # defaults to "synthesized" (only success is False), so it does not
+        # pause — the pause predicate reads report_kind (ledger/narration), not
+        # success. This test is about FRE-1417's unmeasured-claim flag, which
+        # is unaffected either way.
 
         session_manager = MagicMock()
         session_manager.get_session = MagicMock(return_value=None)

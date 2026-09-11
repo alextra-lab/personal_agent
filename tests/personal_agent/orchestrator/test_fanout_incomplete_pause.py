@@ -119,25 +119,56 @@ def _patch_expansion(monkeypatch: pytest.MonkeyPatch, exp_result: ExpansionResul
     return controller.execute
 
 
-class TestFanoutIncompleteTasks:
-    """Pure predicate — no pause/decision machinery involved."""
+class TestFanoutPauseTasks:
+    """Pure pause predicate (ADR-0149 D4, amended 2026-09-11) — no pause/decision
+    machinery involved. Guards a landing that FAILED, not merely a task that
+    is incomplete."""
 
     def test_complete_fanout_is_empty(self) -> None:
         results = [_sub_result("a"), _sub_result("b")]
-        assert ex._fanout_incomplete_tasks(results, []) == []
+        assert ex._fanout_pause_tasks(results, []) == []
 
-    def test_failed_success_is_incomplete(self) -> None:
-        """Fixture A — stopped at the cap with a synthesized (partial) report."""
-        results = [_sub_result("a", success=False, stop_reason="cap")]
-        assert ex._fanout_incomplete_tasks(results, []) == [("a", "cap")]
+    def test_capped_synthesized_report_is_not_a_pause_task(self) -> None:
+        """Fixture A — stopped at the cap with a good synthesized report: it
+        landed, even though its task is incomplete. Must NOT pause."""
+        results = [_sub_result("a", success=False, stop_reason="cap", report_kind="synthesized")]
+        assert ex._fanout_pause_tasks(results, []) == []
 
-    def test_completed_with_ledger_is_incomplete(self) -> None:
+    def test_ledger_is_a_pause_task(self) -> None:
         """Fixture B — completed but the content is a bare ledger, no report."""
         results = [_sub_result("a", success=False, stop_reason="completed", report_kind="ledger")]
-        assert ex._fanout_incomplete_tasks(results, []) == [("a", "completed")]
+        assert ex._fanout_pause_tasks(results, []) == [("a", "completed")]
 
-    def test_skipped_task_is_incomplete(self) -> None:
-        assert ex._fanout_incomplete_tasks([], ["never_dispatched"]) == [
+    def test_narration_is_a_pause_task(self) -> None:
+        """Fixture C — the report-writing call was cut mid-write."""
+        results = [_sub_result("a", success=False, stop_reason="timeout", report_kind="narration")]
+        assert ex._fanout_pause_tasks(results, []) == [("a", "timeout")]
+
+    def test_skipped_task_is_a_pause_task(self) -> None:
+        assert ex._fanout_pause_tasks([], ["never_dispatched"]) == [
+            ("never_dispatched", "not_dispatched")
+        ]
+
+
+class TestFanoutTrailerTasks:
+    """Pure trailer predicate — broader than the pause's: any incomplete task,
+    landing failed or not."""
+
+    def test_complete_fanout_is_empty(self) -> None:
+        results = [_sub_result("a"), _sub_result("b")]
+        assert ex._fanout_trailer_tasks(results, []) == []
+
+    def test_capped_synthesized_report_is_a_trailer_task(self) -> None:
+        """Fixture A — landed, but the task itself is still incomplete."""
+        results = [_sub_result("a", success=False, stop_reason="cap", report_kind="synthesized")]
+        assert ex._fanout_trailer_tasks(results, []) == [("a", "cap")]
+
+    def test_ledger_is_a_trailer_task(self) -> None:
+        results = [_sub_result("a", success=False, stop_reason="completed", report_kind="ledger")]
+        assert ex._fanout_trailer_tasks(results, []) == [("a", "completed")]
+
+    def test_skipped_task_is_a_trailer_task(self) -> None:
+        assert ex._fanout_trailer_tasks([], ["never_dispatched"]) == [
             ("never_dispatched", "not_dispatched")
         ]
 
@@ -173,11 +204,17 @@ class TestComposeStopAndShow:
         assert "stop=deadline" in response
 
 
-class TestStepInitPausesOnIncompleteFanout:
-    """AC-1 — an incomplete fan-out cannot reach synthesis unpaused."""
+class TestStepInitPausesOnFailedLanding:
+    """AC-7 (amended 2026-09-11) — a fan-out with a failed landing (a ledger
+    or a narration, or a skipped task) cannot reach synthesis unpaused; a
+    fan-out without one is never paused, even when a task is incomplete."""
 
     @pytest.mark.asyncio
-    async def test_fixture_a_cap_synthesized_pauses(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_fixture_a_cap_synthesized_does_not_pause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Landed — a good synthesized report — even though the task is
+        incomplete. Must not pause; the trailer still applies."""
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
             sub_agent_results=[
@@ -186,17 +223,23 @@ class TestStepInitPausesOnIncompleteFanout:
             synthesis_context="SYN",
         )
         _patch_expansion(monkeypatch, exp_result)
-        pause_mock = AsyncMock(return_value=ConstraintDecision("stop_and_show", "user_choice"))
+        pause_mock = AsyncMock(
+            return_value=ConstraintDecision("answer_from_partial", "user_choice")
+        )
         monkeypatch.setattr(ex, "_maybe_pause_for_constraint", pause_mock)
 
         ctx = _ctx()
-        await ex.step_init(ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1"))
+        state = await ex.step_init(
+            ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1")
+        )
 
-        pause_mock.assert_awaited_once()
-        assert pause_mock.await_args.kwargs["constraint"] == "sub_agent_fanout_incomplete"
+        pause_mock.assert_not_called()
+        assert state == TaskState.LLM_CALL
+        assert ctx.fanout_trailer is not None
+        assert "a: cap" in ctx.fanout_trailer
 
     @pytest.mark.asyncio
-    async def test_fixture_b_completed_ledger_pauses(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_fixture_b_ledger_pauses(self, monkeypatch: pytest.MonkeyPatch) -> None:
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
             sub_agent_results=[
@@ -212,9 +255,30 @@ class TestStepInitPausesOnIncompleteFanout:
         await ex.step_init(ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1"))
 
         pause_mock.assert_awaited_once()
+        assert pause_mock.await_args.kwargs["constraint"] == "sub_agent_fanout_incomplete"
 
     @pytest.mark.asyncio
-    async def test_fixture_c_all_successful_no_pause(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_fixture_c_narration_pauses(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[
+                _sub_result("a", success=False, stop_reason="timeout", report_kind="narration")
+            ],
+            synthesis_context="SYN",
+        )
+        _patch_expansion(monkeypatch, exp_result)
+        pause_mock = AsyncMock(return_value=ConstraintDecision("stop_and_show", "user_choice"))
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", pause_mock)
+
+        ctx = _ctx()
+        await ex.step_init(ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1"))
+
+        pause_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_all_successful_no_pause_no_trailer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
             sub_agent_results=[_sub_result("a", success=True), _sub_result("b", success=True)],
@@ -235,7 +299,11 @@ class TestStepInitPausesOnIncompleteFanout:
 
 
 class TestStopAndShowMakesNoModelCall:
-    """AC-2 — stop_and_show makes no model call and shows every report."""
+    """AC-2 — stop_and_show makes no model call and shows every report.
+
+    Requires a pause-eligible fixture (ledger/narration) — stop_and_show is
+    never offered on fixture A (cap + synthesized), which does not pause.
+    """
 
     @pytest.mark.asyncio
     async def test_stop_and_show_returns_synthesis_with_full_reports(
@@ -244,7 +312,13 @@ class TestStopAndShowMakesNoModelCall:
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
             sub_agent_results=[
-                _sub_result("a", success=False, stop_reason="cap", full_output="MARKER_REPORT_A")
+                _sub_result(
+                    "a",
+                    success=False,
+                    stop_reason="completed",
+                    report_kind="ledger",
+                    full_output="MARKER_REPORT_A",
+                )
             ],
             synthesis_context="SYN",
         )
@@ -263,7 +337,7 @@ class TestStopAndShowMakesNoModelCall:
         assert state == TaskState.SYNTHESIS
         assert ctx.final_reply is not None
         assert "MARKER_REPORT_A" in ctx.final_reply
-        assert "stop=cap" in ctx.final_reply
+        assert "stop=completed" in ctx.final_reply
         # No synthesis message was queued for a further LLM call.
         assert not any(
             m.get("role") == "user" and "Synthesize the results" in str(m.get("content", ""))
@@ -273,6 +347,9 @@ class TestStopAndShowMakesNoModelCall:
         # to verify — step_synthesis must skip grounding verification for it
         # exactly as it does for a deadline/lifetime-cap/user-cancel stop.
         assert ctx.turn_stopped_early is True
+        # stop_and_show makes no synthesis call — nothing for a trailer to
+        # attach to.
+        assert ctx.fanout_trailer is None
 
     @pytest.mark.asyncio
     async def test_stop_and_show_reply_survives_grounding_enforce_mode(
@@ -288,11 +365,16 @@ class TestStopAndShowMakesNoModelCall:
         """
         from unittest.mock import patch
 
-
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
             sub_agent_results=[
-                _sub_result("a", success=False, stop_reason="cap", full_output="MARKER_REPORT_A")
+                _sub_result(
+                    "a",
+                    success=False,
+                    stop_reason="completed",
+                    report_kind="ledger",
+                    full_output="MARKER_REPORT_A",
+                )
             ],
             synthesis_context="SYN",
         )
@@ -341,15 +423,19 @@ class TestStopAndShowMakesNoModelCall:
 
 
 class TestAnswerFromPartialCarriesTrailer:
-    """AC-3 — the trailer is present and names the tasks."""
+    """AC-3 — the trailer is present and names the tasks, whether from an
+    interactive answer_from_partial decision after a pause (a ledger fixture)
+    or with no pause at all (fixture A)."""
 
     @pytest.mark.asyncio
-    async def test_trailer_set_on_answer_from_partial(
+    async def test_trailer_set_on_answer_from_partial_after_a_pause(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
-            sub_agent_results=[_sub_result("a", success=False, stop_reason="cap")],
+            sub_agent_results=[
+                _sub_result("a", success=False, stop_reason="completed", report_kind="ledger")
+            ],
             synthesis_context="SYN",
         )
         _patch_expansion(monkeypatch, exp_result)
@@ -366,7 +452,7 @@ class TestAnswerFromPartialCarriesTrailer:
 
         assert state == TaskState.LLM_CALL
         assert ctx.fanout_trailer is not None
-        assert "a: cap" in ctx.fanout_trailer
+        assert "a: completed" in ctx.fanout_trailer
 
     @pytest.mark.asyncio
     async def test_no_trailer_on_complete_fanout(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -387,18 +473,27 @@ class TestAnswerFromPartialCarriesTrailer:
 
 
 class TestEvalModeNeverWaits:
-    """AC-4 — an eval fan-out never waits on the pause timeout."""
+    """AC-4 (amended 2026-09-11) — an eval fan-out never waits on the pause
+    timeout, and its default is answer_from_partial with the trailer — not
+    stop_and_show, which now needs an explicitly stored preference. All
+    require a pause-eligible (ledger) fixture; fixture A never reaches the
+    eval_mode branch at all since it never pauses."""
 
-    @pytest.mark.asyncio
-    async def test_no_preference_resolves_stop_and_show_with_no_pause(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        exp_result = ExpansionResult(
+    @staticmethod
+    def _ledger_exp_result() -> ExpansionResult:
+        return ExpansionResult(
             plan=MagicMock(is_fallback=False),
-            sub_agent_results=[_sub_result("a", success=False, stop_reason="cap")],
+            sub_agent_results=[
+                _sub_result("a", success=False, stop_reason="completed", report_kind="ledger")
+            ],
             synthesis_context="SYN",
         )
-        _patch_expansion(monkeypatch, exp_result)
+
+    @pytest.mark.asyncio
+    async def test_no_preference_resolves_answer_from_partial_with_trailer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_expansion(monkeypatch, self._ledger_exp_result())
         pause_mock = AsyncMock()
         monkeypatch.setattr(ex, "_maybe_pause_for_constraint", pause_mock)
         monkeypatch.setattr(ex, "_load_constraint_preference", AsyncMock(return_value=None))
@@ -409,19 +504,14 @@ class TestEvalModeNeverWaits:
         )
 
         pause_mock.assert_not_called()
-        assert state == TaskState.SYNTHESIS
-        assert ctx.final_reply is not None
+        assert state == TaskState.LLM_CALL
+        assert ctx.fanout_trailer is not None
 
     @pytest.mark.asyncio
-    async def test_always_pause_preference_resolves_stop_and_show_with_no_pause(
+    async def test_always_pause_preference_resolves_answer_from_partial_with_trailer(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        exp_result = ExpansionResult(
-            plan=MagicMock(is_fallback=False),
-            sub_agent_results=[_sub_result("a", success=False, stop_reason="cap")],
-            synthesis_context="SYN",
-        )
-        _patch_expansion(monkeypatch, exp_result)
+        _patch_expansion(monkeypatch, self._ledger_exp_result())
         pause_mock = AsyncMock()
         monkeypatch.setattr(ex, "_maybe_pause_for_constraint", pause_mock)
         monkeypatch.setattr(
@@ -434,18 +524,14 @@ class TestEvalModeNeverWaits:
         )
 
         pause_mock.assert_not_called()
-        assert state == TaskState.SYNTHESIS
+        assert state == TaskState.LLM_CALL
+        assert ctx.fanout_trailer is not None
 
     @pytest.mark.asyncio
-    async def test_answer_from_partial_preference_proceeds_to_synthesis(
+    async def test_stored_answer_from_partial_preference_resolves_the_same_way(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        exp_result = ExpansionResult(
-            plan=MagicMock(is_fallback=False),
-            sub_agent_results=[_sub_result("a", success=False, stop_reason="cap")],
-            synthesis_context="SYN",
-        )
-        _patch_expansion(monkeypatch, exp_result)
+        _patch_expansion(monkeypatch, self._ledger_exp_result())
         pause_mock = AsyncMock()
         monkeypatch.setattr(ex, "_maybe_pause_for_constraint", pause_mock)
         monkeypatch.setattr(
@@ -461,26 +547,49 @@ class TestEvalModeNeverWaits:
         assert state == TaskState.LLM_CALL
         assert ctx.fanout_trailer is not None
 
+    @pytest.mark.asyncio
+    async def test_stored_stop_and_show_preference_applies_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_expansion(monkeypatch, self._ledger_exp_result())
+        pause_mock = AsyncMock()
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", pause_mock)
+        monkeypatch.setattr(
+            ex, "_load_constraint_preference", AsyncMock(return_value="stop_and_show")
+        )
+
+        ctx = _ctx(eval_mode=True)
+        state = await ex.step_init(
+            ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1")
+        )
+
+        pause_mock.assert_not_called()
+        assert state == TaskState.SYNTHESIS
+        assert ctx.final_reply is not None
+        assert ctx.fanout_trailer is None
+
 
 class TestSeededNegativeD4Pause:
-    """AC-6 — disabling the D4 pause must fail AC-1: an incomplete fan-out
-    reaches synthesis unpaused.
+    """AC-6 — disabling the D4 pause predicate must fail AC-7: a fan-out with
+    a failed landing reaches synthesis unpaused.
     """
 
     @pytest.mark.asyncio
-    async def test_disabling_the_predicate_lets_incomplete_fanout_through(
+    async def test_disabling_the_predicate_lets_a_failed_landing_through(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
-            sub_agent_results=[_sub_result("a", success=False, stop_reason="cap")],
+            sub_agent_results=[
+                _sub_result("a", success=False, stop_reason="completed", report_kind="ledger")
+            ],
             synthesis_context="SYN",
         )
         _patch_expansion(monkeypatch, exp_result)
         pause_mock = AsyncMock()
         monkeypatch.setattr(ex, "_maybe_pause_for_constraint", pause_mock)
-        # The disabled mechanism: the predicate always reports nothing incomplete.
-        monkeypatch.setattr(ex, "_fanout_incomplete_tasks", lambda *_a, **_k: [])
+        # The disabled mechanism: the predicate always reports nothing failed.
+        monkeypatch.setattr(ex, "_fanout_pause_tasks", lambda *_a, **_k: [])
 
         ctx = _ctx()
         state = await ex.step_init(
@@ -507,7 +616,13 @@ class TestStopAndShowPersistsToHistory:
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
             sub_agent_results=[
-                _sub_result("a", success=False, stop_reason="cap", full_output="MARKER_REPORT_A")
+                _sub_result(
+                    "a",
+                    success=False,
+                    stop_reason="completed",
+                    report_kind="ledger",
+                    full_output="MARKER_REPORT_A",
+                )
             ],
             synthesis_context="SYN",
         )
@@ -527,6 +642,84 @@ class TestStopAndShowPersistsToHistory:
         assert ctx.messages[-1]["role"] == "assistant"
         assert ctx.messages[-1]["content"] == ctx.final_reply
         assert "MARKER_REPORT_A" in ctx.messages[-1]["content"]
+
+
+class TestFanoutDecisionRecordedOnTurnEvidence:
+    """ADR-0149 D4 (amended 2026-09-11) — the applied option and its source
+    reach the turn's own record (``ctx.steps`` → ``OrchestratorResult["steps"]``),
+    not only a log line, so a study can read which policy each of its turns
+    ran under.
+    """
+
+    @pytest.mark.asyncio
+    async def test_interactive_pause_decision_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[
+                _sub_result("a", success=False, stop_reason="completed", report_kind="ledger")
+            ],
+            synthesis_context="SYN",
+        )
+        _patch_expansion(monkeypatch, exp_result)
+        monkeypatch.setattr(
+            ex,
+            "_maybe_pause_for_constraint",
+            AsyncMock(return_value=ConstraintDecision("answer_from_partial", "user_choice")),
+        )
+
+        ctx = _ctx()
+        await ex.step_init(ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1"))
+
+        entries = [s for s in ctx.steps if s.get("metadata", {}).get("sub_agent_fanout_decision")]
+        assert len(entries) == 1
+        assert entries[0]["metadata"]["sub_agent_fanout_decision"] == "answer_from_partial"
+        assert entries[0]["metadata"]["sub_agent_fanout_decision_source"] == "user_choice"
+
+    @pytest.mark.asyncio
+    async def test_eval_default_decision_recorded_with_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[
+                _sub_result("a", success=False, stop_reason="completed", report_kind="ledger")
+            ],
+            synthesis_context="SYN",
+        )
+        _patch_expansion(monkeypatch, exp_result)
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", AsyncMock())
+        monkeypatch.setattr(ex, "_load_constraint_preference", AsyncMock(return_value=None))
+
+        ctx = _ctx(eval_mode=True)
+        await ex.step_init(ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1"))
+
+        entries = [s for s in ctx.steps if s.get("metadata", {}).get("sub_agent_fanout_decision")]
+        assert len(entries) == 1
+        assert entries[0]["metadata"]["sub_agent_fanout_decision"] == "answer_from_partial"
+        assert entries[0]["metadata"]["sub_agent_fanout_decision_source"] == "default"
+
+    @pytest.mark.asyncio
+    async def test_fixture_a_no_pause_records_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No decision was made (nothing paused) — nothing to record."""
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[
+                _sub_result("a", success=False, stop_reason="cap", report_kind="synthesized")
+            ],
+            synthesis_context="SYN",
+        )
+        _patch_expansion(monkeypatch, exp_result)
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", AsyncMock())
+
+        ctx = _ctx()
+        await ex.step_init(ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1"))
+
+        entries = [s for s in ctx.steps if s.get("metadata", {}).get("sub_agent_fanout_decision")]
+        assert entries == []
 
 
 class TestTrailerExitMatrix:

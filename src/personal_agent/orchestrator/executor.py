@@ -66,7 +66,11 @@ from personal_agent.llm_client.message_content import (
     get_text_content,
     merge_content,
 )
-from personal_agent.llm_client.models import Placement, ToolCallingStrategy
+from personal_agent.llm_client.models import (
+    Placement,
+    ToolCallingStrategy,
+    synthesis_retains_tools,
+)
 from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
@@ -199,6 +203,27 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     # last call before turn end reflects any bonus granted mid-turn.
     ctx.effective_tool_iteration_ceiling = resolved
     return resolved
+
+
+def _tool_budget_message(remaining: int) -> str:
+    """Build the tool-budget countdown message for the given rounds remaining (ADR-0149 D1).
+
+    Args:
+        remaining: Tool rounds left before the primary loses tool access this turn.
+
+    Returns:
+        The user-role message text to inject into the transcript.
+    """
+    if remaining == 0:
+        return (
+            "⚠️ Tool budget: this is your last round. Your next reply will have no tools available. "
+            "Gather what you still need now, in parallel, and be ready to write your answer."
+        )
+    return (
+        f"⚠️ Tool budget: {remaining} tool round(s) remaining "
+        "(a round may hold several parallel calls). Prioritize synthesis — "
+        "start another round only if it is strictly necessary to answer the user's question."
+    )
 
 
 def _turn_deadline_remaining(ctx: "ExecutionContext") -> float:
@@ -1147,6 +1172,7 @@ _tool_execution_layer: ToolExecutionLayer | None = None
 if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.grounding.entailment import ModelEntailmentJudge
+    from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.mcp.gateway import MCPGatewayAdapter
     from personal_agent.memory.service import MemoryService
     from personal_agent.orchestrator.cache_reset_scheduler import ResetDecision
@@ -3127,33 +3153,41 @@ def _transcript_has_tool_blocks(messages: Sequence[Mapping[str, Any]]) -> bool:
 
 def _forced_synthesis_tool_overrides(
     *,
-    provider: str | None,
+    llm_client: "LiteLLMClient",
+    model_role: ModelRole,
     messages: Sequence[Mapping[str, Any]],
     tool_defs: Sequence[dict[str, Any]] | None,
 ) -> tuple[list[dict[str, Any]] | None, str | None]:
     """Resolve ``(tools, tool_choice)`` for a forced-synthesis model call.
 
     The forced-synthesis path normally drops ``tools=`` so the model answers from
-    gathered results. On Anthropic, a transcript that already contains tool blocks
-    makes LiteLLM reject the call with ``UnsupportedParamsError`` when ``tools=`` is
-    absent (FRE-484). For that case only, keep a non-empty tool list and pin
-    ``tool_choice="none"`` so the model synthesizes instead of calling more tools.
-    Prefer the real mode ``tool_defs`` (best prompt-cache continuity); fall back to
-    a single placeholder tool when none are available so the call still succeeds.
+    gathered results. On some backends, a transcript with tool blocks requires
+    ``tools=`` to remain present (ADR-0149 AC-6). When cache retention is enabled
+    for the backend, keep the tool list and pin ``tool_choice="none"`` so synthesis
+    still happens. Otherwise drop tools per the prior behavior.
 
     Args:
-        provider: Cloud provider name; ``"anthropic"`` triggers the workaround.
-            ``None`` for the local SLM path.
+        llm_client: The LLM client instance to check cache capability.
+        model_role: The model role to resolve dialect for cache capability check.
         messages: Current conversation messages (OpenAI format).
         tool_defs: Tool definitions for the active mode, or ``None``.
 
     Returns:
-        ``(tools, tool_choice)``. Every path except Anthropic-with-tool-history
-        returns ``(None, None)`` — identical to the prior drop-tools behavior.
+        ``(tools, tool_choice)``. When cache retention is enabled, returns
+        ``(tool_defs or placeholder, "none")`` to keep the prompt cache.
+        Otherwise returns ``(None, None)`` and logs a cache miss declaration.
     """
-    if provider == "anthropic" and _transcript_has_tool_blocks(messages):
+    dialect = llm_client.dialect_for_role(model_role)
+    if synthesis_retains_tools(dialect) and _transcript_has_tool_blocks(messages):
         tools = list(tool_defs) if tool_defs else [dict(_SYNTHESIS_PLACEHOLDER_TOOL)]
         return tools, "none"
+    if synthesis_retains_tools(dialect):
+        log.warning(
+            "forced_synthesis_cache_miss_declared",
+            trace_id=None,
+            dialect=dialect,
+            reason="tool_definitions_unavailable",
+        )
     return None, None
 
 
@@ -6207,20 +6241,18 @@ async def step_llm_call(
         # Budget warning: when 2 calls from the per-TaskType limit, ask the LLM to wrap up
         elif not is_synthesizing and ctx.tool_iteration_count >= _resolve_max_iterations(ctx) - 2:
             _effective_max = _resolve_max_iterations(ctx)
+            _budget_remaining = _effective_max - ctx.tool_iteration_count
+            budget_message = _tool_budget_message(_budget_remaining)
             ctx.messages.append(
                 {
                     "role": "user",
-                    "content": (
-                        f"⚠️ Tool budget: {_effective_max - ctx.tool_iteration_count} "
-                        "tool call(s) remaining. Prioritize synthesis — only make additional tool calls "
-                        "if they are strictly necessary to answer the user's question."
-                    ),
+                    "content": budget_message,
                 }
             )
             log.info(
                 "tool_budget_warning_injected",
                 trace_id=ctx.trace_id,
-                remaining=_effective_max - ctx.tool_iteration_count,
+                remaining=_budget_remaining,
             )
 
         if not is_synthesizing and tool_strategy != ToolCallingStrategy.DISABLED:
@@ -6264,20 +6296,19 @@ async def step_llm_call(
                 reason="synthesizing" if is_synthesizing else "disabled",
             )
 
-        # FRE-484: Anthropic rejects a forced-synthesis call whose history already
-        # contains tool blocks unless tools= is present. Keep a non-empty tool list
-        # and pin tool_choice="none" so synthesis still happens. No-op on every other
-        # path (local SLM, or no tool history) → (None, None) preserves prior behavior.
+        # ADR-0149 AC-6: cache retention on forced synthesis. When the backend
+        # supports cache, keep tools= with tool_choice="none" for prefix reuse.
         tool_choice: str | dict[str, Any] | None = None
         if is_synthesizing:
-            _provider = getattr(llm_client, "provider", None)
+            dialect = llm_client.dialect_for_role(model_role)
             _synthesis_tool_defs = (
                 get_default_registry().get_tool_definitions_for_llm(mode=ctx.mode)
-                if _provider == "anthropic"
+                if synthesis_retains_tools(dialect)
                 else None
             )
             tools, tool_choice = _forced_synthesis_tool_overrides(
-                provider=_provider,
+                llm_client=llm_client,
+                model_role=model_role,
                 messages=ctx.messages,
                 tool_defs=_synthesis_tool_defs,
             )
@@ -6285,7 +6316,6 @@ async def step_llm_call(
                 log.info(
                     "force_synthesis_tools_retained",
                     trace_id=ctx.trace_id,
-                    provider=_provider,
                     tool_count=len(tools),
                 )
 
@@ -6534,7 +6564,7 @@ async def step_llm_call(
         # so the tighter of the two always wins.
         _deadline_remaining = _turn_deadline_remaining(ctx)
         _lifetime_remaining = _turn_lifetime_remaining(ctx)
-        _remaining = min(_deadline_remaining, _lifetime_remaining)
+        _remaining: float = min(_deadline_remaining, _lifetime_remaining)
         if _remaining <= 0:
             if _lifetime_remaining <= _deadline_remaining:
                 log.warning(

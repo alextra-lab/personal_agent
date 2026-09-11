@@ -12,7 +12,7 @@ import pytest
 from personal_agent.config.selection import reset_current_selection, set_current_selection
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client.history_sanitiser import sanitise_messages
-from personal_agent.llm_client.models import ToolCallingStrategy
+from personal_agent.llm_client.models import Dialect, ToolCallingStrategy
 from personal_agent.memory.models import MemoryQueryResult, TurnNode
 from personal_agent.orchestrator import Channel, Orchestrator
 from personal_agent.orchestrator.executor import (
@@ -874,6 +874,123 @@ class TestToolUsingFlow:
         assert len(tool_messages) >= 1
         content = tool_messages[0].get("content", "")
         assert "matched_turns" in content or "entity_match" in content
+
+
+class TestForcedSynthesisDrivenTurn:
+    """ADR-0149 D1 (FRE-1485): the countdown messages and the forced-synthesis
+    tool_choice, driven through the real Orchestrator instead of asserted
+    against a literal — AC-1 and AC-3.
+    """
+
+    @staticmethod
+    async def _drive_turn_past_the_cap(mock_client_class, mock_pause, dialect: Dialect):
+        from personal_agent.config import settings
+
+        # No WS waiter — anything but "continue_10" takes the real "finish now" path.
+        mock_pause.return_value = "finish_now"
+
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client.dialect_for_role = MagicMock(return_value=dialect)
+        mock_client_class.return_value = mock_client
+
+        def _tool_call_response(n: int) -> dict:
+            return {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"call_{n}",
+                        "name": "nonexistent_tool",
+                        "arguments": json.dumps({"n": n}),
+                    }
+                ],
+                "reasoning_trace": None,
+                "usage": {"total_tokens": 10},
+                "raw": {},
+            }
+
+        synthesis_response = {
+            "role": "assistant",
+            "content": "Here is what I found.",
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 20},
+            "raw": {},
+        }
+        # With max_tool_iterations=3: rounds at count 0, 1, 2 execute (landing the
+        # budget check on max-2, max-1, max); the round at count 3 hits the cap
+        # before its tool call is dispatched, forcing synthesis on the 5th call.
+        mock_client.respond.side_effect = [
+            _tool_call_response(0),
+            _tool_call_response(1),
+            _tool_call_response(2),
+            _tool_call_response(3),
+            synthesis_response,
+        ]
+
+        with patch.object(settings, "orchestrator_max_tool_iterations", 3):
+            orchestrator = Orchestrator()
+            result = await orchestrator.handle_user_request(
+                session_id=f"test-session-{dialect.value}",
+                user_message="Look something up",
+                mode=Mode.NORMAL,
+                channel=Channel.CHAT,
+            )
+        return mock_client, result
+
+    async def _assert_countdown_and_forced_synthesis(
+        self, mock_client_class, mock_pause, dialect: Dialect
+    ) -> None:
+        mock_client, result = await self._drive_turn_past_the_cap(
+            mock_client_class, mock_pause, dialect
+        )
+
+        assert mock_client.respond.call_count == 5
+        calls = mock_client.respond.call_args_list
+
+        def _last_message_content(call) -> str:
+            return call.kwargs["messages"][-1]["content"]
+
+        # AC-1: driven to count == max-2, max-1, max, the injected messages name
+        # the unit as rounds, and the zero case is the last-round text.
+        assert "2 tool round(s) remaining" in _last_message_content(calls[1])
+        assert "1 tool round(s) remaining" in _last_message_content(calls[2])
+        assert "this is your last round" in _last_message_content(calls[3])
+
+        # AC-3: the forced-synthesis call keeps tools with tool_choice="none"
+        # (ADR-0149 D6 — both dialects retain), and the mocked model honoring
+        # that pin (empty tool_calls) ends the turn instead of looping again.
+        final_call = calls[4]
+        assert final_call.kwargs.get("tool_choice") == "none"
+        assert final_call.kwargs.get("tools")
+
+        tool_steps = [s for s in result["steps"] if s["type"] == "tool_call"]
+        assert len(tool_steps) == 3
+        assert result["reply"] == "Here is what I found."
+
+        mock_pause.assert_awaited_once()
+        assert mock_pause.call_args.kwargs.get("constraint") == "tool_iteration_limit"
+
+    @patch("personal_agent.orchestrator.executor._maybe_pause_for_constraint")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_countdown_and_forced_synthesis_on_local_backend(
+        self, mock_client_class, mock_pause
+    ) -> None:
+        await self._assert_countdown_and_forced_synthesis(
+            mock_client_class, mock_pause, Dialect.LLAMACPP_QWEN
+        )
+
+    @patch("personal_agent.orchestrator.executor._maybe_pause_for_constraint")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_countdown_and_forced_synthesis_on_anthropic(
+        self, mock_client_class, mock_pause
+    ) -> None:
+        await self._assert_countdown_and_forced_synthesis(
+            mock_client_class, mock_pause, Dialect.ANTHROPIC_ADAPTIVE
+        )
 
 
 @patch("personal_agent.llm_client.factory.get_llm_client")

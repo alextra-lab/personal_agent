@@ -21,6 +21,7 @@ from personal_agent.memory.proactive import build_proactive_suggestions
 from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 from personal_agent.memory.protocol import (
     BroadRecallResult,
+    EntityResolutionResult,
     Episode,
     MemoryRecallQuery,
     MemoryRecallResult,
@@ -287,7 +288,7 @@ class MemoryServiceAdapter:
         trace_id: str,
         user_id: UUID | None = None,
         authenticated: bool = False,
-    ) -> list[str]:
+    ) -> EntityResolutionResult:
         """Return graph entity names the message literally mentions (FRE-1041).
 
         Args:
@@ -297,12 +298,13 @@ class MemoryServiceAdapter:
             authenticated: Whether the request carries a verified identity (FRE-229).
 
         Returns:
-            Mentioned entity names, best-first. Empty when the graph read fails — the
-            entity hint is an enrichment, so a failure degrades recall rather than
-            failing the turn.
+            The resolved names, best-first, or the failure that kept resolution from
+            completing (ADR-0148 D1, FRE-1481) — the entity hint is an enrichment, so
+            a failure degrades recall rather than failing the turn, but it must still
+            be reported rather than read as "the graph names nothing here."
         """
         try:
-            return await self._service.resolve_message_entity_names(
+            names = await self._service.resolve_message_entity_names(
                 message,
                 trace_id=trace_id,
                 user_id=user_id,
@@ -310,7 +312,10 @@ class MemoryServiceAdapter:
             )
         except Exception:
             log.exception("resolve_message_entities_failed", trace_id=trace_id)
-            return []
+            return EntityResolutionResult(
+                names=[], failed=True, failure_cause="entity_resolution_failed"
+            )
+        return EntityResolutionResult(names=names)
 
     async def suggest_relevant(
         self,
@@ -364,14 +369,29 @@ class MemoryServiceAdapter:
             )
             merged = set(session_entity_names) | set(db_entities)
 
-            raw = await self._service.suggest_proactive_raw(
-                embedding,
-                current_session_id,
-                trace_id,
-                user_id=user_id,
-                authenticated=authenticated,
-                query_text=user_message,
-            )
+            try:
+                raw = await self._service.suggest_proactive_raw(
+                    embedding,
+                    current_session_id,
+                    trace_id,
+                    user_id=user_id,
+                    authenticated=authenticated,
+                    query_text=user_message,
+                )
+            except Exception:
+                log.exception("proactive_raw_query_failed", trace_id=trace_id)
+                # FRE-1481: a narrow catch here, rather than letting this fall to the
+                # broad `except Exception` below, preserves the site-specific cause
+                # (ADR-0148 D1: "the cause of a failed retrieval is known at the arm,
+                # for one stack frame, and is then discarded"). The outer catch's
+                # generic "proactive_recall_failed" still covers every other failure
+                # in this function.
+                return ProactiveMemorySuggestions(
+                    candidates=[],
+                    query_embedding_ms=emb_ms,
+                    failed=True,
+                    failure_cause="proactive_raw_query_failed",
+                )
             if not raw:
                 log.info(
                     "proactive_memory_suggest_empty",

@@ -1035,6 +1035,14 @@ class MemoryService:
 
         Returns:
             Row dicts for :func:`personal_agent.memory.proactive.build_proactive_suggestions`.
+            Empty when disconnected or the embedding is a zero vector -- each an
+            outcome, never a failure.
+
+        Raises:
+            Exception: The database query did not complete (logged as
+                "suggest_proactive_raw_failed" before re-raising; FRE-1481,
+                ADR-0148 D1 -- the single caller, ``suggest_relevant``, reports this
+                as a failure rather than an honest empty result).
         """
         cfg = get_settings()
         top_k = cfg.proactive_memory_vector_top_k
@@ -1085,7 +1093,7 @@ class MemoryService:
                 trace_id=trace_id,
                 error=str(e),
             )
-            return []
+            raise
 
         out: list[dict[str, Any]] = []
         for row in rows:
@@ -4263,9 +4271,14 @@ class MemoryService:
         effective_user_id = user_id if user_id is not None else query.user_id
         effective_authenticated = authenticated or query.authenticated
 
+        # FRE-1481, ADR-0148 D1: named steps that degrade without raising append their
+        # own name here, so a partial or total failure survives to the returned result
+        # instead of reading as an honest empty query.
+        arms_failed: list[str] = []
+
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
-            return MemoryQueryResult()
+            return MemoryQueryResult(arms_failed=["not_connected"])
 
         # Multi-path recall (ADR-0104 / FRE-724): behind multipath_recall_enabled,
         # the entity-name path converges onto the shared fused+reranked core rather
@@ -4331,6 +4344,7 @@ class MemoryService:
                             query_text_length=len(query_text),
                             trace_id=trace_id,
                         )
+                        arms_failed.append("query_memory_vector_search")
 
                 # Build vector_scores for relevance calculation; floor-filter to
                 # the candidate entities for relevance-bounded candidate generation.
@@ -4674,6 +4688,7 @@ class MemoryService:
                     conversations=conversations,
                     entities=resolved_entities,
                     relevance_scores=relevance_scores,
+                    arms_failed=arms_failed,
                 )
 
                 # Publish memory access event (Phase 4)
@@ -4715,7 +4730,7 @@ class MemoryService:
                 trace_id=trace_id,
                 session_id=session_id,
             )
-            return MemoryQueryResult()
+            return MemoryQueryResult(arms_failed=[*arms_failed, "query_memory"])
 
     async def _query_entity_vector_candidates(
         self,
@@ -4765,10 +4780,61 @@ class MemoryService:
     ) -> list[dict[str, Any]] | None:
         """Shared execution core for the structural recall arm (ADR-0104 AC-4 / FRE-707, FRE-866).
 
-        Gate check, visibility scoping, query build, and Neo4j execution shared by
-        the arm's two thin wrappers — ``structural_recall_arm`` (EntityNode, FRE-707)
-        and ``structural_recall_arm_ranked`` (RankedResult, the multi-path fusion
-        core's contract) — so neither duplicates the substrate plumbing.
+        Fail-open wrapper around :meth:`_run_structural_arm_query_strict`; used by
+        ``structural_recall_arm`` (EntityNode, FRE-707), which keeps its documented
+        fail-open contract. ``structural_recall_arm_ranked`` uses the strict variant
+        instead (FRE-1481, ADR-0148 D1) so a query failure reaches
+        ``MultiPathRecallResult.arms_failed`` rather than reading as an honest miss.
+
+        Returns:
+            Raw Neo4j records (each carrying ``e`` and ``item_id``), or ``None``
+            when the arm is gated off, the service is disconnected, or the query
+            failed — distinct from an empty list, which means the arm ran and
+            found nothing.
+        """
+        try:
+            return await self._run_structural_arm_query_strict(
+                entity_types=entity_types,
+                recency_days=recency_days,
+                anchor_names=anchor_names,
+                entity_classes=entity_classes,
+                limit=limit,
+                trace_id=trace_id,
+                session_id=session_id,
+                user_id=user_id,
+                authenticated=authenticated,
+            )
+        except Exception as exc:
+            log.warning(
+                "structural_recall_arm_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return None
+
+    async def _run_structural_arm_query_strict(
+        self,
+        *,
+        entity_types: Sequence[str] | None,
+        recency_days: int | None,
+        anchor_names: Sequence[str] | None,
+        entity_classes: Sequence[str] | None,
+        limit: int | None,
+        trace_id: str | None,
+        session_id: str | None,
+        user_id: UUID | None,
+        authenticated: bool,
+    ) -> list[dict[str, Any]] | None:
+        """The structural arm's query, raising its cause instead of swallowing it (FRE-1481).
+
+        The gating checks below (arm disabled, service disconnected) are not
+        failures — they are legitimate no-op preconditions, unchanged from the
+        arm's existing contract — so they return ``None`` here exactly as before.
+        Only the query itself raises past this point, so a ``None`` returned by
+        this method always means "gated off," never a swallowed exception; callers
+        that need the distinction (``_structural_recall_arm_ranked_strict``) may
+        keep treating ``None`` as "no records" without risking a masked failure.
 
         Args:
             entity_types: Closed-axis type filter; applied only when the type
@@ -4786,9 +4852,10 @@ class MemoryService:
 
         Returns:
             Raw Neo4j records (each carrying ``e`` and ``item_id``), or ``None``
-            when the arm is gated off, the service is disconnected, or the query
-            failed — distinct from an empty list, which means the arm ran and
-            found nothing.
+            when the arm is gated off or the service is disconnected.
+
+        Raises:
+            RecallArmFailedError: The query did not complete.
         """
         current_settings = get_settings()
         if not current_settings.structural_arm_enabled:
@@ -4820,12 +4887,12 @@ class MemoryService:
                 records: list[dict[str, Any]] = await result.data()
         except Exception as e:
             log.error(
-                "structural_recall_arm_failed",
+                "structural_recall_arm_query_failed",
                 error=str(e),
                 trace_id=trace_id,
                 session_id=session_id,
             )
-            return None
+            raise RecallArmFailedError(f"structural recall arm: {e}") from e
 
         log.info(
             "structural_recall_arm_completed",
@@ -4940,7 +5007,55 @@ class MemoryService:
             Empty when the arm is gated off, the service is disconnected, the
             query failed, or nothing matches.
         """
-        records = await self._run_structural_arm_query(
+        try:
+            return await self._structural_recall_arm_ranked_strict(
+                entity_types=entity_types,
+                recency_days=recency_days,
+                anchor_names=anchor_names,
+                entity_classes=entity_classes,
+                limit=limit,
+                trace_id=trace_id,
+                session_id=session_id,
+                user_id=user_id,
+                authenticated=authenticated,
+            )
+        except Exception as exc:
+            log.warning(
+                "structural_recall_arm_ranked_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return []
+
+    async def _structural_recall_arm_ranked_strict(
+        self,
+        *,
+        entity_types: Sequence[str] | None = None,
+        recency_days: int | None = None,
+        anchor_names: Sequence[str] | None = None,
+        entity_classes: Sequence[str] | None = None,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[RankedResult]:
+        """The structural arm, RankedResult form, raising instead of swallowing (FRE-1481).
+
+        The multi-path core calls this one so a query failure lands in
+        ``MultiPathRecallResult.arms_failed``; :meth:`structural_recall_arm_ranked`
+        keeps the documented fail-open contract for every other caller. See
+        :meth:`_dense_recall_arm_strict` for the split's rationale.
+
+        A ``None`` from :meth:`_run_structural_arm_query_strict` here can only mean
+        "gated off" — a query failure now raises past that point — so it is still
+        safely treated as "no records," exactly as the fail-open wrapper does.
+
+        Raises:
+            RecallArmFailedError: The query did not complete.
+        """
+        records = await self._run_structural_arm_query_strict(
             entity_types=entity_types,
             recency_days=recency_days,
             anchor_names=anchor_names,
@@ -4974,7 +5089,8 @@ class MemoryService:
         ``turn_entity_fulltext`` index. Feature-gated OFF
         (``lexical_arm_enabled``); flag-dark until the multi-path fusion core
         (FRE-724) wires it in. Recovers rare tokens/IDs/names the dense
-        embedder blurs (ADR-0104 §2).
+        embedder blurs (ADR-0104 §2). Fails open to an empty list — never
+        hard-fails recall.
 
         Args:
             query_text: Free-text query. Lucene special characters are escaped.
@@ -4988,7 +5104,59 @@ class MemoryService:
             Ranked list of RankedResult (best-first, 1-based rank). item_id is
             Turn.turn_id for turns, Entity elementId for entities. Empty when
             the arm is gated off, the service is disconnected, the query is
-            empty, or nothing matches.
+            empty, or the query failed.
+        """
+        try:
+            return await self._lexical_recall_arm_strict(
+                query_text,
+                limit=limit,
+                trace_id=trace_id,
+                session_id=session_id,
+                user_id=user_id,
+                authenticated=authenticated,
+            )
+        except Exception as exc:
+            log.warning(
+                "lexical_recall_arm_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return []
+
+    async def _lexical_recall_arm_strict(
+        self,
+        query_text: str,
+        *,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[RankedResult]:
+        """The lexical arm, raising its cause instead of swallowing it (FRE-1481, ADR-0148 D1).
+
+        The multi-path core calls this one so a failure lands in
+        ``MultiPathRecallResult.arms_failed``; :meth:`lexical_recall_arm` keeps the
+        documented fail-open contract for every other caller. See
+        :meth:`_dense_recall_arm_strict` for the split's rationale.
+
+        Args:
+            query_text: Free-text query. Lucene special characters are escaped.
+            limit: Max hits; defaults to ``multipath_arm_top_k``.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            Ranked list of RankedResult (best-first, 1-based rank). item_id is
+            Turn.turn_id for turns, Entity elementId for entities. Empty when
+            the arm is gated off, the service is disconnected, the query is
+            empty, or nothing matches — each an outcome, never a failure.
+
+        Raises:
+            RecallArmFailedError: The full-text query did not complete.
         """
         current_settings = get_settings()
         if not current_settings.lexical_arm_enabled:
@@ -5024,12 +5192,12 @@ class MemoryService:
                 rows = await result.data()
         except Exception as e:
             log.error(
-                "lexical_recall_arm_failed",
+                "lexical_recall_arm_query_failed",
                 error=str(e),
                 trace_id=trace_id,
                 session_id=session_id,
             )
-            return []
+            raise RecallArmFailedError(f"lexical recall arm: {e}") from e
 
         ranked = [
             RankedResult(item_id=r["item_id"], rank=i + 1, kind=r["kind"])
@@ -5260,22 +5428,23 @@ class MemoryService:
         }
         arm_names: list[str] = []
         arm_coros: list[Any] = []
+        # Every arm below is gathered by its private "_strict" sibling (FRE-1476,
+        # FRE-1481): the gather below turns a raise into an arms_failed entry, which is
+        # the only way this core learns that an arm did not complete. The fail-open
+        # public methods would report a failure as an empty result, indistinguishable
+        # from finding nothing.
         if current_settings.multiquery_arm_enabled:
             arm_names.append("multi_query")
-            arm_coros.append(self.multi_query_recall_arm(query_text, **arm_kwargs))
+            arm_coros.append(self._multi_query_recall_arm_strict(query_text, **arm_kwargs))
         else:
             arm_names.append("dense")
-            # The strict variant (FRE-1476): the gather below turns a raise into an
-            # arms_failed entry, which is the only way this core learns that an arm did
-            # not complete. The fail-open public method would report the failure as an
-            # empty result, indistinguishable from finding nothing.
             arm_coros.append(self._dense_recall_arm_strict(query_text, **arm_kwargs))
         if current_settings.lexical_arm_enabled:
             arm_names.append("lexical")
-            arm_coros.append(self.lexical_recall_arm(query_text, **arm_kwargs))
+            arm_coros.append(self._lexical_recall_arm_strict(query_text, **arm_kwargs))
         if current_settings.structural_arm_enabled:
             arm_names.append("structural")
-            arm_coros.append(self.structural_recall_arm_ranked(**arm_kwargs))
+            arm_coros.append(self._structural_recall_arm_ranked_strict(**arm_kwargs))
 
         arm_results = await asyncio.gather(*arm_coros, return_exceptions=True)
 
@@ -5933,45 +6102,225 @@ class MemoryService:
         variants = [query_text, *paraphrases]
 
         vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
-        arm_rankings: list[list[RankedResult]] = []
         try:
-            async with self.driver.session() as session:
-                for variant in variants:
-                    # Per-variant isolation: one variant's embedding/ANN
-                    # failure must not zero out the other variants' results,
-                    # matching query_memory's existing per-call isolation.
-                    try:
-                        embedding = await generate_embedding(
-                            variant, mode="query", trace_id=trace_id, session_id=session_id
-                        )
-                        ranked = await self._dense_vector_search_ranked(
-                            session, embedding, top_k, vis_frag, vis_params
-                        )
-                    except Exception as exc:
-                        log.warning(
-                            "multiquery_variant_search_failed",
-                            error=str(exc),
-                            trace_id=trace_id,
-                            session_id=session_id,
-                        )
-                        continue
-                    if ranked:
-                        arm_rankings.append(ranked)
+            arm_rankings = await self._multi_query_search_variants(
+                variants,
+                top_k,
+                vis_frag,
+                vis_params,
+                trace_id=trace_id,
+                session_id=session_id,
+                strict=False,
+            )
         except Exception as exc:
             # Session acquisition/release failure (transient
             # ServiceUnavailable, pool exhaustion, etc.) must not hard-fail
             # recall — matches lexical_recall_arm / structural_recall_arm,
             # which both wrap their whole session block (master gate finding,
-            # 2026-07-02). Falls through to fusion with whatever arm_rankings
-            # was accumulated before the failure (empty if it failed on
-            # acquisition, before any variant ran).
+            # 2026-07-02). Falls through to fusion with an empty arm_rankings.
             log.error(
                 "multiquery_session_failed",
                 error=str(exc),
                 trace_id=trace_id,
                 session_id=session_id,
             )
+            arm_rankings = []
 
+        return self._fuse_multi_query_variants(
+            arm_rankings,
+            variants,
+            paraphrases,
+            top_k,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+    async def _multi_query_recall_arm_strict(
+        self,
+        query_text: str,
+        *,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[RankedResult]:
+        """The multi-query arm, raising its cause instead of swallowing it (FRE-1481, ADR-0148 D1).
+
+        The multi-path core calls this one so a failure lands in
+        ``MultiPathRecallResult.arms_failed``; :meth:`multi_query_recall_arm` keeps the
+        documented fail-open contract for every other caller — including its own
+        paraphrase-failure degrade-to-original-query behavior, which this strict
+        sibling does not share. See :meth:`_dense_recall_arm_strict` for the split's
+        general rationale.
+
+        **Granularity: any variant failing raises, not only every variant failing.**
+        ADR-0148 D2 ranks a partially degraded recall as ``UNAVAILABLE``, never
+        ``NOTHING_RELEVANT`` — the precedence applies below arm granularity, not
+        only across arms. This also matches every other arm's existing
+        all-or-nothing shape: a single dense/lexical/structural query exception
+        already drops that whole arm's contribution, never a partial one. The
+        public method's per-variant isolation (log, ``continue``) is unchanged and
+        keeps its documented behavior; only this strict sibling, used by the
+        gather, fails fast on the first bad variant — including on the paraphrase
+        step itself, which the public method's own contract must keep swallowing.
+        A zero-vector embedding is detected the same way
+        :meth:`_dense_recall_arm_strict` detects it — ``generate_embedding`` never
+        raises on a provider failure, it degrades to a zero vector, so a bare
+        "stop swallowing exceptions" would not catch it.
+
+        Args:
+            query_text: Free-text query.
+            limit: Max fused hits; defaults to ``multipath_arm_top_k``.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            Ranked, RRF-fused list of RankedResult (best-first). Empty when the
+            arm is gated off, disconnected, or the query is empty — each an
+            outcome, never a failure.
+
+        Raises:
+            RecallArmFailedError: Paraphrase generation, a variant's embedding or
+                search, or session acquisition did not complete.
+        """
+        current_settings = get_settings()
+        if not current_settings.multiquery_arm_enabled:
+            return []
+        if not self.connected or not self.driver or not query_text.strip():
+            return []
+
+        top_k = limit if limit is not None else current_settings.multipath_arm_top_k
+        paraphrase_count = max(current_settings.multipath_paraphrase_count - 1, 0)
+        try:
+            paraphrases = await generate_query_paraphrases(
+                query_text, paraphrase_count, trace_id=trace_id, session_id=session_id
+            )
+        except Exception as exc:
+            log.warning(
+                "multiquery_paraphrase_call_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            raise RecallArmFailedError(
+                f"multi-query arm: paraphrase generation failed: {exc}"
+            ) from exc
+        variants = [query_text, *paraphrases]
+
+        vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
+        try:
+            arm_rankings = await self._multi_query_search_variants(
+                variants,
+                top_k,
+                vis_frag,
+                vis_params,
+                trace_id=trace_id,
+                session_id=session_id,
+                strict=True,
+            )
+        except RecallArmFailedError:
+            raise
+        except Exception as exc:
+            log.error(
+                "multiquery_session_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            raise RecallArmFailedError(f"multi-query arm: {exc}") from exc
+
+        return self._fuse_multi_query_variants(
+            arm_rankings,
+            variants,
+            paraphrases,
+            top_k,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+    async def _multi_query_search_variants(
+        self,
+        variants: Sequence[str],
+        top_k: int,
+        vis_frag: str,
+        vis_params: dict[str, Any],
+        *,
+        trace_id: str | None,
+        session_id: str | None,
+        strict: bool,
+    ) -> list[list[RankedResult]]:
+        """Search every query variant, isolating or raising per-variant failures.
+
+        Shared by :meth:`multi_query_recall_arm` and :meth:`_multi_query_recall_arm_strict`
+        (FRE-1481) so the query logic is not duplicated — the two callers differ only in
+        whether a per-variant failure is swallowed (``strict=False``: log, ``continue``,
+        matching ``query_memory``'s existing per-call isolation) or raised immediately
+        (``strict=True``: the first bad variant fails the whole arm, per
+        :meth:`_multi_query_recall_arm_strict`'s granularity rationale).
+
+        Raises:
+            RecallArmFailedError: ``strict=True`` and a variant's embedding was a zero
+                vector or its search raised.
+        """
+        # Both callers already guard `self.driver` before calling this helper; the
+        # narrowing does not cross the method boundary, so mypy needs it restated.
+        assert self.driver is not None
+        arm_rankings: list[list[RankedResult]] = []
+        async with self.driver.session() as session:
+            for variant in variants:
+                try:
+                    embedding = await generate_embedding(
+                        variant, mode="query", trace_id=trace_id, session_id=session_id
+                    )
+                    if strict and not any(x != 0.0 for x in embedding):
+                        log.warning(
+                            "multiquery_variant_embed_failed",
+                            reason="zero_embedding",
+                            trace_id=trace_id,
+                            session_id=session_id,
+                        )
+                        raise RecallArmFailedError(
+                            f"multi-query arm: the embedder returned a zero vector for variant {variant!r}"
+                        )
+                    ranked = await self._dense_vector_search_ranked(
+                        session, embedding, top_k, vis_frag, vis_params
+                    )
+                except RecallArmFailedError:
+                    raise
+                except Exception as exc:
+                    if strict:
+                        raise RecallArmFailedError(
+                            f"multi-query arm: variant {variant!r} failed: {exc}"
+                        ) from exc
+                    # Per-variant isolation: one variant's embedding/ANN
+                    # failure must not zero out the other variants' results,
+                    # matching query_memory's existing per-call isolation.
+                    log.warning(
+                        "multiquery_variant_search_failed",
+                        error=str(exc),
+                        trace_id=trace_id,
+                        session_id=session_id,
+                    )
+                    continue
+                if ranked:
+                    arm_rankings.append(ranked)
+        return arm_rankings
+
+    def _fuse_multi_query_variants(
+        self,
+        arm_rankings: list[list[RankedResult]],
+        variants: Sequence[str],
+        paraphrases: Sequence[str],
+        top_k: int,
+        *,
+        trace_id: str | None,
+        session_id: str | None,
+    ) -> list[RankedResult]:
+        """RRF-fuse the per-variant rankings into the arm's RankedResult contract."""
+        current_settings = get_settings()
         fused = reciprocal_rank_fusion(arm_rankings, k=current_settings.multipath_rrf_k)
         # reciprocal_rank_fusion returns list[FusedResult]; this arm's contract
         # is list[RankedResult] (matching lexical_recall_arm and the arm

@@ -903,6 +903,73 @@ class TestErrorHandling:
 
         # Should return empty results gracefully
         assert len(result.conversations) == 0
+        # FRE-1481, ADR-0148 D1: "empty gracefully" and "not connected" are the same
+        # value to the caller unless the path names the cause.
+        assert result.arms_failed == ["not_connected"]
+
+    @pytest.mark.asyncio
+    async def test_query_memory_healthy_run_leaves_arms_failed_empty(
+        self, memory_service, clean_test_data
+    ):
+        """FRE-1481: the companion to the raising cases below -- without it, those
+        could pass for the wrong reason.
+        """
+        conversation = ConversationNode(
+            conversation_id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
+            user_message="What is Rust?",
+            assistant_response="Rust is a systems programming language.",
+            key_entities=["Rust"],
+        )
+        await memory_service.create_conversation(conversation)
+
+        result = await memory_service.query_memory(MemoryQuery(entity_names=["Rust"]))
+
+        assert result.arms_failed == []
+
+    @pytest.mark.asyncio
+    async def test_query_memory_outer_failure_reports_its_own_name(
+        self, memory_service, clean_test_data
+    ):
+        """FRE-1481, ADR-0148 D1: a failure below the outer try must not collapse to
+        the same bare ``MemoryQueryResult()`` an honest empty query returns.
+        """
+        with patch.object(
+            memory_service, "_log_query_quality_metrics", side_effect=RuntimeError("boom")
+        ):
+            result = await memory_service.query_memory(MemoryQuery(entity_names=["Rust"]))
+
+        assert "query_memory" in result.arms_failed
+
+    @pytest.mark.asyncio
+    async def test_query_memory_vector_search_failure_reports_its_own_name(
+        self, memory_service, clean_test_data
+    ):
+        """The inner hybrid vector-search sub-step degrades silently today; FRE-1481
+        names it, without failing the overall (still-completing) call.
+        """
+        conversation = ConversationNode(
+            conversation_id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
+            user_message="What is Rust?",
+            assistant_response="Rust is a systems programming language.",
+            key_entities=["Rust"],
+        )
+        await memory_service.create_conversation(conversation)
+
+        async def raising_embed(*_a: object, **_k: object) -> list[float]:
+            raise RuntimeError("embedder unreachable")
+
+        with patch("personal_agent.memory.service.generate_embedding", raising_embed):
+            result = await memory_service.query_memory(
+                MemoryQuery(entity_names=["Rust"]), query_text="tell me about rust"
+            )
+
+        assert "query_memory_vector_search" in result.arms_failed
+        assert "query_memory" not in result.arms_failed
+        # The sub-step degrades; the overall call still completes and returns the
+        # candidate it found through the non-vector path.
+        assert len(result.conversations) >= 1
 
     @pytest.mark.asyncio
     async def test_create_conversation_without_connection(self):

@@ -50,7 +50,7 @@ class TestZeroEmbeddingIsReported:
             AsyncMock(return_value=[0.0] * _DIMENSIONS),
         )
         service = _service()
-        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
 
         result = await service._multipath_fused_recall("sailing", path="broad", trace_id="t")
 
@@ -68,7 +68,7 @@ class TestZeroEmbeddingIsReported:
             AsyncMock(return_value=[0.1] * _DIMENSIONS),
         )
         service = _service()
-        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
         service._dense_vector_search_ranked = AsyncMock(return_value=[RankedResult("e2", 1)])
         service.driver = _FakeDriver()
 
@@ -89,7 +89,7 @@ class TestRaisingEmbedderIsReported:
             AsyncMock(side_effect=RuntimeError("embedder unreachable")),
         )
         service = _service()
-        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
 
         result = await service._multipath_fused_recall("sailing", path="broad", trace_id="t")
 

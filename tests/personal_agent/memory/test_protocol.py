@@ -11,6 +11,7 @@ from personal_agent.events import AccessContext
 from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 from personal_agent.memory.protocol import (
     BroadRecallResult,
+    EntityResolutionResult,
     Episode,
     MemoryProtocol,
     MemoryRecallQuery,
@@ -254,8 +255,8 @@ class TestProtocolIsRuntimeCheckable:
                 self,
                 message: str,
                 trace_id: str,
-            ) -> list[str]:
-                return []
+            ) -> EntityResolutionResult:
+                return EntityResolutionResult(names=[])
 
             async def get_current_stances(
                 self,
@@ -469,7 +470,7 @@ class TestMemoryServiceAdapterSlice2:
             authenticated=True,
         )
 
-        assert result == ["Melon"]
+        assert result == EntityResolutionResult(names=["Melon"])
         mock_service.resolve_message_entity_names.assert_awaited_once_with(
             "I would like to make a melon/canteloupe ice cream",
             trace_id="t",
@@ -478,10 +479,16 @@ class TestMemoryServiceAdapterSlice2:
         )
 
     @pytest.mark.asyncio
-    async def test_resolve_message_entities_fails_to_empty(self) -> None:
-        """A resolver failure degrades to no hints rather than failing the turn."""
+    async def test_resolve_message_entities_reports_failure(self) -> None:
+        """A resolver failure degrades recall rather than failing the turn, but is named
+        rather than read as "the graph names nothing here" (ADR-0148 D1, FRE-1481).
+        """
         mock_service = MagicMock()
         mock_service.resolve_message_entity_names = AsyncMock(side_effect=RuntimeError("down"))
 
         adapter = MemoryServiceAdapter(service=mock_service)
-        assert await adapter.resolve_message_entities("a melon", trace_id="t") == []
+        result = await adapter.resolve_message_entities("a melon", trace_id="t")
+
+        assert result.names == []
+        assert result.failed is True
+        assert result.failure_cause == "entity_resolution_failed"

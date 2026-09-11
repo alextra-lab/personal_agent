@@ -15,7 +15,7 @@ from uuid import UUID
 
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.expansion_types import SubAgentMode
-from personal_agent.orchestrator.worker_types import Thoroughness, WorkerType
+from personal_agent.orchestrator.worker_types import Thoroughness, WorkerReport, WorkerType
 
 #: Why a sub-agent's loop ended (ADR-0149 D3). Every terminal path declares one.
 #:
@@ -240,6 +240,20 @@ class SubAgentResult:
             per-call timeout with no time left). ``"length"`` here always carries
             ``report_kind`` of ``"narration"`` or ``"ledger"``, never
             ``"synthesized"`` — the cut is checked before the content is read.
+        report: The parsed, validated ``worker_report_v1`` model (ADR-0150 D1),
+            or ``None`` on every row of the validity table but the first — a
+            worker whose type declares a schema but whose landing failed, was
+            empty, or ran on a dialect declared ``False`` all carry ``None``
+            here, the same as a text-reporting worker.
+        report_schema: The report schema's name (``"worker_report_v1"``) when
+            ``report`` is set, else ``None`` — including when the worker's type
+            declares a schema but the dialect does not accept it (ADR-0150 D1's
+            "reports as text that turn" row).
+        findings_dropped_invalid_source: Count of findings dropped from
+            ``report.findings`` because ``source_url`` did not begin with
+            ``http://`` or ``https://`` (ADR-0150 D1) — an unusable source is
+            not a finding, and the citation handle (FRE-1486) must be a URL.
+            ``0`` when ``report`` is ``None`` or nothing was dropped.
     """
 
     task_id: UUID
@@ -263,3 +277,6 @@ class SubAgentResult:
     stop_reason: SubAgentStopReason = "completed"
     report_kind: SubAgentReportKind = "synthesized"
     finish_reason: str | None = None
+    report: WorkerReport | None = None
+    report_schema: str | None = None
+    findings_dropped_invalid_source: int = 0

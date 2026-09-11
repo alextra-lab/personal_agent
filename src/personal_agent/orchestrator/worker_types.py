@@ -22,15 +22,27 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.config.settings import THOROUGHNESS_LEVELS, Thoroughness
 
 __all__ = [
     "THOROUGHNESS_LEVELS",
+    "WORKER_REPORT_RESPONSE_FORMAT",
+    "WORKER_REPORT_SCHEMA_NAME",
     "WORKER_TYPES",
+    "Finding",
+    "Gap",
     "Thoroughness",
+    "WorkerReport",
     "WorkerType",
     "WorkerTypeSpec",
+    "render_report_instruction",
+    "render_worker_report_body",
+    "render_worker_report_findings",
+    "render_worker_report_summary",
     "worker_types_declaring",
 ]
 
@@ -65,6 +77,188 @@ class WorkerTypeSpec:
     default_thoroughness: Thoroughness
 
 
+# ADR-0150 D1 — the schema every property required, every object closed. No
+# field carries a default: a default would make Pydantic's JSON Schema mark it
+# optional, and every property here is required by design — a "may be empty"
+# field is still always present, just allowed to hold "".
+class Finding(BaseModel):
+    """One data point a schema-backed worker found, with its source (ADR-0150 D1)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    claim: str = Field(..., min_length=1, max_length=400)
+    source_url: str = Field(..., min_length=1, max_length=200)
+    date_or_period: str = Field(..., max_length=60)
+    why_it_matters: str = Field(..., min_length=1, max_length=150)
+
+
+class Gap(BaseModel):
+    """One thing the task asked for that the worker did not find (ADR-0150 D1)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    looked_for: str = Field(..., min_length=1, max_length=150)
+    where: str = Field(..., min_length=1, max_length=200)
+
+
+class WorkerReport(BaseModel):
+    """``worker_report_v1`` — the schema a schema-backed worker's landing call returns.
+
+    Key order is part of the contract: ``working_notes`` first, so the model
+    writes free text before it commits to the constrained fields (ADR-0150 D1,
+    the reasoning-before-constraining literature the ADR cites).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    working_notes: str = Field(..., max_length=1000)
+    findings: list[Finding] = Field(..., max_length=20)
+    gaps: list[Gap] = Field(..., max_length=10)
+    tool_gap: str = Field(..., max_length=60)
+
+
+WORKER_REPORT_SCHEMA_NAME = "worker_report_v1"
+
+
+def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Resolve every ``$ref``/``$defs`` pair into one self-contained schema.
+
+    Pydantic v2 emits nested models as ``$ref`` into a top-level ``$defs``
+    block. Kept as-is, a strict-mode consumer that dislikes sibling keys next
+    to a ``$ref`` (OpenAI's structured-outputs contract) could reject it, and
+    a schema split across ``$defs`` is one more thing a grammar compiler has
+    to resolve. Inlining removes both concerns.
+
+    Args:
+        schema: The output of ``WorkerReport.model_json_schema()``.
+
+    Returns:
+        The same schema with every ``$ref`` replaced by its definition and no
+        ``$defs`` block remaining.
+    """
+    defs = schema.get("$defs", {})
+
+    def _resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref_name = node["$ref"].rsplit("/", 1)[-1]
+                resolved = _resolve(defs[ref_name])
+                overrides = {k: v for k, v in node.items() if k != "$ref"}
+                return {**resolved, **overrides}
+            return {k: _resolve(v) for k, v in node.items() if k != "$defs"}
+        if isinstance(node, list):
+            return [_resolve(v) for v in node]
+        return node
+
+    resolved_schema: dict[str, Any] = _resolve(schema)
+    resolved_schema.pop("$defs", None)
+    return resolved_schema
+
+
+WORKER_REPORT_JSON_SCHEMA: Mapping[str, Any] = MappingProxyType(
+    _inline_refs(WorkerReport.model_json_schema())
+)
+
+#: ADR-0150 D1's constrained-landing request shape: ``response_format`` for the
+#: report-writing call of a schema-backed worker whose dialect accepts it.
+WORKER_REPORT_RESPONSE_FORMAT: Mapping[str, Any] = MappingProxyType(
+    {
+        "type": "json_schema",
+        "json_schema": {
+            "name": WORKER_REPORT_SCHEMA_NAME,
+            "schema": WORKER_REPORT_JSON_SCHEMA,
+            "strict": True,
+        },
+    }
+)
+
+# ADR-0150 D5's task-message report line, rendered from the schema in words so
+# the model plans for the limits rather than discovering them by truncation.
+_WORKER_REPORT_INSTRUCTION = (
+    "Report: working notes (up to 1000 characters, may be empty); up to 20 "
+    "findings, each a claim (up to 400 characters), a source URL (up to 200 "
+    "characters), a date or period (up to 60 characters, may be empty), and why "
+    "it matters (up to 150 characters); up to 10 gaps, each what you looked for "
+    "(up to 150 characters) and where you looked (up to 200 characters); and one "
+    "tool name you lacked, if any (up to 60 characters, may be empty)."
+)
+_TEXT_REPORT_INSTRUCTION = "Report in text."
+
+
+def render_report_instruction(worker_type: "WorkerType") -> str:
+    """The task message's report line for this type (ADR-0150 D5).
+
+    Args:
+        worker_type: The registry type running the task.
+
+    Returns:
+        The schema description in words for a schema-backed type, else
+        ``"Report in text."``.
+    """
+    if WORKER_TYPES[worker_type].report_schema is None:
+        return _TEXT_REPORT_INSTRUCTION
+    return _WORKER_REPORT_INSTRUCTION
+
+
+def render_worker_report_findings(report: WorkerReport) -> list[str]:
+    """Render every finding as one line: ``claim — why_it_matters [source_url] (date)``.
+
+    Args:
+        report: A validated worker report.
+
+    Returns:
+        One rendered line per finding, in the report's own order.
+    """
+    lines = []
+    for f in report.findings:
+        date_suffix = f" ({f.date_or_period})" if f.date_or_period else ""
+        lines.append(f"{f.claim} — {f.why_it_matters} [{f.source_url}]{date_suffix}")
+    return lines
+
+
+def render_worker_report_body(report: WorkerReport) -> str:
+    """Render a report's findings and notes — no gaps section (ADR-0150 D4).
+
+    ``_build_synthesis_context`` uses this: every worker's gaps are combined
+    into one ``Not found`` section at the end of the turn's context rather
+    than repeated per worker.
+
+    Args:
+        report: A validated worker report.
+
+    Returns:
+        The rendered findings, then the notes if any.
+    """
+    lines = render_worker_report_findings(report)
+    if report.working_notes:
+        lines.append("")
+        lines.append(report.working_notes)
+    return "\n".join(lines)
+
+
+def render_worker_report_summary(report: WorkerReport) -> str:
+    """Render the whole report: findings, then ``Not found``, then notes (ADR-0150 D1).
+
+    This is ``SubAgentResult.summary`` for a ``synthesized`` schema-backed
+    landing — complete on its own, unlike :func:`render_worker_report_body`.
+
+    Args:
+        report: A validated worker report.
+
+    Returns:
+        The deterministic markdown rendering of the whole report.
+    """
+    lines = render_worker_report_findings(report)
+    if report.gaps:
+        lines.append("")
+        lines.append("Not found:")
+        lines.extend(f"- {g.looked_for} (looked: {g.where})" for g in report.gaps)
+    if report.working_notes:
+        lines.append("")
+        lines.append(report.working_notes)
+    return "\n".join(lines)
+
+
 # ADR-0150 D5, verbatim through the self-stop sentence. Two departures, both
 # deliberate:
 #   - The absence sentence (the one beginning "A report that something is
@@ -89,7 +283,8 @@ _RESEARCHER_BLOCK = (
     "A report that something is absent, naming what you searched and where, is "
     "complete for that part. It needs no apology and no substitute answer. Absence "
     "you did not search for is not a finding.\n"
-    "Stop searching when your last two searches returned the same facts. Then write "
+    "Stop searching when your last two searches returned the same facts. To finish, "
+    "reply with the single word DONE and no tool calls. You will then be asked for "
     "your report."
 )
 
@@ -102,7 +297,7 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
             ),
             prompt_block=_RESEARCHER_BLOCK,
             tools=("web_search",),
-            report_schema="worker_report_v1",
+            report_schema=WORKER_REPORT_SCHEMA_NAME,
             default_thoroughness="standard",
         ),
         WorkerType.GENERAL: WorkerTypeSpec(

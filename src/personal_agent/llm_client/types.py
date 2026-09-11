@@ -128,6 +128,11 @@ class LLMResponse(TypedDict):
             ``"stop"`` and "we did not look" must stay distinguishable — a caller
             that cannot tell a truncated reply from a complete one reads a sizing
             fault as a format fault (FRE-996).
+        refusal: The provider's refusal message, when a constrained
+            (``response_format``) call declines to answer in the requested shape
+            (ADR-0150 D1) — populated from the message's own ``refusal`` field
+            where the provider surfaces one. ``None``/absent on every ordinary
+            response, which is the overwhelming majority.
     """
 
     role: str  # "assistant"
@@ -139,6 +144,7 @@ class LLMResponse(TypedDict):
     raw: dict[str, Any]
     cost_usd: NotRequired[float]
     finish_reason: NotRequired[str | None]
+    refusal: NotRequired[str | None]
 
 
 class LLMStreamEvent(TypedDict):

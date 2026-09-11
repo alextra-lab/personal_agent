@@ -238,6 +238,58 @@ def synthesis_retains_tools(dialect: Dialect | None) -> bool:
     return SYNTHESIS_RETAINS_TOOLS[dialect]
 
 
+#: Whether a dialect's report-writing landing call accepts a constrained
+#: ``response_format`` (ADR-0150 D1), on the :data:`SYNTHESIS_RETAINS_TOOLS`
+#: pattern.
+#:
+#: - ``LLAMACPP_QWEN`` — ``True`` from master's probe (ADR-0150 Context):
+#:   ``response_format`` with ``json_schema``/``strict: true`` alongside
+#:   retained ``tools`` and ``tool_choice: "none"`` returned valid JSON, zero
+#:   tool calls, ``finish_reason: stop``.
+#: - ``OPENAI_GPT5`` — ``True`` from the documented strict-mode contract.
+#: - ``OVH_QWEN`` — ``True`` provisionally; the console lists ``json_schema``
+#:   among its output formats. T3 (FRE-1494) verifies this with one probe
+#:   before the value is trusted; see that ticket's close comment.
+#: - ``ANTHROPIC_ADAPTIVE`` / ``ANTHROPIC_BUDGET`` — ``False`` until probed.
+#:   Anthropic's structured outputs use ``output_config.format``, and whether
+#:   litellm translates ``response_format`` for that dialect is not known.
+#:
+#: A ``False`` dialect gets the prose landing (``report = None``,
+#: ``report_schema = None``) with a WARNING naming the provider.
+LANDING_ACCEPTS_JSON_SCHEMA: Mapping[Dialect, bool] = {
+    Dialect.LLAMACPP_QWEN: True,
+    Dialect.OVH_QWEN: True,
+    Dialect.OPENAI_GPT5: True,
+    Dialect.ANTHROPIC_ADAPTIVE: False,
+    Dialect.ANTHROPIC_BUDGET: False,
+}
+
+
+def landing_accepts_json_schema(dialect: Dialect | None) -> bool:
+    """Whether this dialect's report-writing landing call accepts a schema (ADR-0150 D1).
+
+    Args:
+        dialect: The resolved dialect of the model being dispatched to, or
+            ``None`` when the deployment is not catalog-backed.
+
+    Returns:
+        ``True`` when the dialect declares support. An unresolved dialect
+        returns ``False`` and logs ``landing_dialect_unresolved`` at WARNING —
+        the opposite direction from :func:`synthesis_retains_tools`, because
+        sending a schema-shaped request to an unknown dialect risks a hard
+        provider rejection, while dropping the array on a provider that would
+        have tolerated it only costs a cache miss.
+    """
+    if dialect is None:
+        logger.warning(
+            "landing_dialect_unresolved",
+            accepts=False,
+            reason="no dialect resolved for this deployment; the landing reports as text",
+        )
+        return False
+    return LANDING_ACCEPTS_JSON_SCHEMA[dialect]
+
+
 def dialect_accepts(dialect: Dialect, param: str) -> bool:
     """Whether a **call-site** parameter name is in this dialect's vocabulary (ADR-0145 D2/D3a).
 

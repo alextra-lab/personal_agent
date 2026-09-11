@@ -1646,6 +1646,10 @@ class LiteLLMClient:
             # complete one (FRE-996). Reachable via `raw` before this, which meant in
             # practice nobody read it and truncation arrived disguised as a parse error.
             finish_reason=choice.finish_reason,
+            # ADR-0150 D1: a constrained (response_format) call's decline, surfaced
+            # from the provider message where one exists. Absent on every ordinary
+            # response and on a provider/SDK version that does not carry the field.
+            refusal=getattr(message, "refusal", None),
             raw=response.model_dump() if hasattr(response, "model_dump") else {},
         )
 

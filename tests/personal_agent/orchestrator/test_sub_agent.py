@@ -1889,11 +1889,25 @@ def _typed_spec(
 
 
 async def _first_call(spec: SubAgentSpec) -> dict[str, Any]:
-    """Run one worker whose model stops at once, and return its first call's kwargs."""
+    """Run one worker whose model stops at once, and return its first call's kwargs.
+
+    Snapshots ``messages`` at call time (``list(...)``, a shallow copy): every
+    call shares one mutable list (``_ToolLoopState.messages``), appended to in
+    place, so reading ``call_args_list[0].kwargs["messages"]`` after the run
+    completes would return whatever the list holds by then — for a
+    schema-backed worker (ADR-0150 D1) that now includes the voluntary-stop
+    landing call's own appended note, not just what the first call actually saw.
+    """
+    calls: list[dict[str, Any]] = []
+
+    async def _respond(**kwargs: Any) -> dict[str, Any]:
+        calls.append({**kwargs, "messages": list(kwargs["messages"])})
+        return _llm_response("done")
+
     client = AsyncMock()
-    client.respond = AsyncMock(return_value=_llm_response("done"))
+    client.respond = AsyncMock(side_effect=_respond)
     await run_sub_agent(spec=spec, llm_client=client, trace_id="t")
-    return dict(client.respond.call_args_list[0].kwargs)
+    return calls[0]
 
 
 class TestTypedPrefix:

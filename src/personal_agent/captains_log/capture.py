@@ -182,6 +182,12 @@ class SubAgentCapture(BaseModel):
     # `None` on a path that made no such call. `rounds[].finish_reason` carries the
     # same value per round, including tool rounds.
     finish_reason: str | None = None
+    # ADR-0150 D1 (FRE-1494): the report schema's name when the landing validated
+    # (`None` on every other row of the validity table, including a schema-backed
+    # type whose dialect declared `False`), and the count of findings dropped for
+    # an unusable `source_url`.
+    report_schema: str | None = None
+    findings_dropped_invalid_source: int = 0
 
     # Output — full text, the injected digest, and the truncation ratio
     full_output: str

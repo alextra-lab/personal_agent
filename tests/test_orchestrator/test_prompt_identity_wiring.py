@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.request_gateway.memory_status import RenderStageReport
+
 
 @pytest.fixture(autouse=True)
 def _reset_executor_tool_registry() -> object:
@@ -91,7 +93,11 @@ async def _drive(
         ),
         patch(
             "personal_agent.orchestrator.executor._render_memory_section_with_ids",
-            return_value=(memory_section_text, ("placeholder",) if memory_section_text else ()),
+            return_value=(
+                memory_section_text,
+                ("placeholder",) if memory_section_text else (),
+                RenderStageReport(ran=True, recall_emitted=1 if memory_section_text else 0),
+            ),
         ),
     ):
         from personal_agent.orchestrator.executor import step_llm_call

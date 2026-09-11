@@ -192,7 +192,7 @@ class TestCompetingClaimSurvives:
     def test_competing_claim_still_rendered(self) -> None:
         from personal_agent.orchestrator.executor import _render_memory_section_with_ids
 
-        section, ids = _render_memory_section_with_ids([SUSAN_ENTITY])
+        section, ids, _report = _render_memory_section_with_ids([SUSAN_ENTITY])
 
         assert "Susan" in section
         assert "The user's stated name in the conversation." in section
@@ -204,7 +204,7 @@ class TestCompetingClaimSurvives:
         """
         from personal_agent.orchestrator.executor import _render_memory_section_with_ids
 
-        section, _ = _render_memory_section_with_ids([SUSAN_ENTITY])
+        section, _, _report = _render_memory_section_with_ids([SUSAN_ENTITY])
 
         assert "directly answer questions about what the user" not in section
         assert "not who you are speaking with" in section
@@ -224,7 +224,7 @@ class TestCompetingClaimSurvives:
             _render_memory_section_with_ids,
         )
 
-        section, _ = _render_memory_section_with_ids([SUSAN_ENTITY])
+        section, _, _report = _render_memory_section_with_ids([SUSAN_ENTITY])
         messages = [{"role": "user", "content": "Good evening"}]
         out, outcome = _inline_volatile_with_outcome(messages, section)
 

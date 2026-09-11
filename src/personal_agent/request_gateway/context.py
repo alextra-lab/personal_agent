@@ -963,10 +963,13 @@ async def assemble_context(
     memory_context: list[dict[str, Any]] | None = None
     memory_scores: dict[str, float] = {}
     discard_report = RecallDiscardReport()
-    # FRE-1476: no adapter means memory was never wired for this turn. The default report
-    # says nothing, and a report that says nothing composes UNAVAILABLE (ADR-0148 D3) —
-    # never absence, and never a status read off the item count.
-    recall_report = RecallStageReport()
+    # FRE-1476: no adapter means memory was never wired for this turn. The outcome stays
+    # the default NOT_REPORTED, and a report that says nothing composes UNAVAILABLE
+    # (ADR-0148 D3) — never absence, and never a status read off the item count.
+    # FRE-1478: the cause is named so the turn-evidence record can tell this apart from
+    # an arm that ran and failed (ADR-0148 D1) — both compose UNAVAILABLE, but the two
+    # causes must not collapse into one value in the record.
+    recall_report = RecallStageReport(cause="memory_not_wired")
 
     # Include session history
     messages.extend(session_messages)

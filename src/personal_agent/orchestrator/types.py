@@ -28,6 +28,7 @@ from personal_agent.grounding.enforcement_selection import EnforcementSelection
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.loop_gate import ToolLoopGate
+from personal_agent.request_gateway.memory_status import MemoryStatusReport
 from personal_agent.request_gateway.types import GatewayOutput
 
 if TYPE_CHECKING:
@@ -384,6 +385,12 @@ class ExecutionContext:
 
     # Memory enrichment (Phase 2.2)
     memory_context: list[dict[str, Any]] | None = None  # Retrieved conversations for context
+    # ADR-0148 D1/D2 (FRE-1478): what the model may honestly conclude about recalled
+    # memory, threaded from the gateway path (`gw.context.memory_status`) and updated
+    # once the renderer reports its own drops. Defaults to the weaker claim — a turn
+    # that never sets this (a legacy in-executor path, or none at all) composes
+    # UNAVAILABLE rather than absence (D3), never a status read off the item count.
+    memory_status: MemoryStatusReport = field(default_factory=MemoryStatusReport)
     # ADR-0125 D3 item 5 (FRE-1004): everything recall offered this turn, captured
     # before budget trimming so a dropped item stays nameable; and the turn's evidence
     # record, built once at the admission point and read by TaskCapture.

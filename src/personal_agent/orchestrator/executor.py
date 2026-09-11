@@ -11,6 +11,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import Token
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
@@ -88,6 +89,11 @@ from personal_agent.orchestrator.types import (
     TaskState,
 )
 from personal_agent.orchestrator.unmeasured_claim import detect_unmeasured_claim
+from personal_agent.request_gateway.memory_status import (
+    MEMORY_STATE_LINES,
+    MemoryStatus,
+    RenderStageReport,
+)
 from personal_agent.telemetry import (
     LLM_STEP_COMPLETED,
     MODEL_CALL_ERROR,
@@ -1470,6 +1476,23 @@ def _record_turn_evidence(
             prompt_component_ids=prompt_component_ids,
             operator_identity=ctx.operator_name or None,
             operator_assertion=ctx.operator_assertion or None,
+            # ADR-0148 D1/D2 (FRE-1478): the rendered state, and the cause the rendered
+            # vocabulary collapses — an arm failure and an unwired turn both render
+            # "unavailable" and must not read back as the same cause here. Checked in
+            # the same precedence order `MemoryStatusReport.status` composes in: a
+            # recall-stage cause names an UNAVAILABLE turn, a render-stage cause names a
+            # WITHHELD-by-renderer turn, and the budget flag names a WITHHELD-by-budget
+            # one when neither of the others fired.
+            memory_state=ctx.memory_status.status.value,
+            memory_state_cause=(
+                ctx.memory_status.recall.cause
+                or ctx.memory_status.render.cause
+                or (
+                    "budget_dropped_recall_items"
+                    if ctx.memory_status.budget_dropped_recall_items
+                    else None
+                )
+            ),
         )
     except Exception:
         log.exception(
@@ -3672,7 +3695,7 @@ def _stance_line(item: dict[str, Any], identifier: str | None = None) -> str:
 def _render_memory_section_with_ids(
     items: list[dict[str, Any]],
     registry: "SourceRegistry | None" = None,
-) -> tuple[str, tuple[str, ...]]:
+) -> tuple[str, tuple[str, ...], RenderStageReport]:
     """Render recalled memory for the volatile tail, dispatching **per item kind**.
 
     Replaces a branch selected by the *first* item's type (FRE-1010). That selection
@@ -3703,8 +3726,9 @@ def _render_memory_section_with_ids(
             None).
 
     Returns:
-        Tuple of (section string, identities that actually rendered content). Both
-        empty when nothing renders.
+        Tuple of (section string, identities that actually rendered content, this
+        call's own report of what it emitted (ADR-0148 D1, FRE-1478)). The first two
+        are both empty when nothing renders.
     """
     entities: list[dict[str, Any]] = []
     episodes: list[dict[str, Any]] = []
@@ -3791,7 +3815,16 @@ def _render_memory_section_with_ids(
         section += "\n".join(_stance_line(m, _identifier_for(m)) for m in stances)
         sections.append(section)
 
-    return "".join(sections), tuple(rendered_ids)
+    # ADR-0148 D1 (FRE-1478): the recall layer's own emitted count, excluding
+    # `behavioural` — standing behavioural stances are outside the recall layer (D2) and
+    # counting them here would report a turn as populated when only that layer rendered.
+    recall_emitted = len(described) + len(recalled) + len(stances)
+    render_report = RenderStageReport(
+        ran=True,
+        recall_emitted=recall_emitted,
+        cause=None if recall_emitted else "render_dropped_all_recall_items",
+    )
+    return "".join(sections), tuple(rendered_ids), render_report
 
 
 async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
@@ -4889,6 +4922,10 @@ async def step_init(
         # memory context to fit budget, ``memory_context`` is None but the candidates
         # are exactly what has to be recorded as dropped.
         ctx.recall_candidates = gw.context.recall_candidates
+        # ADR-0148 D1/D2 (FRE-1478): unconditional, unlike memory_context below — a
+        # NOTHING_RELEVANT turn and an UNAVAILABLE one both carry an empty
+        # memory_context, and the status is exactly what tells them apart.
+        ctx.memory_status = gw.context.memory_status
         if gw.context.memory_context:
             ctx.memory_context = gw.context.memory_context
             log.info(
@@ -5995,12 +6032,28 @@ async def step_llm_call(
         # conversation renderer as empty bullets.
         _rendered_memory_ids: tuple[str, ...] = ()
         if ctx.memory_context:
-            _section_text, _rendered_memory_ids = _render_memory_section_with_ids(
+            _section_text, _rendered_memory_ids, _render_report = _render_memory_section_with_ids(
                 ctx.memory_context, ctx.source_registry
             )
             memory_section = _section_text or None
             if memory_section is None:
                 _rendered_memory_ids = ()
+            # ADR-0148 D1 (FRE-1478): the renderer's own report replaces the mirror
+            # `classify_recall_admission` inferred at context assembly (before the
+            # renderer existed to speak for itself) with the fact of what actually
+            # rendered.
+            ctx.memory_status = replace(ctx.memory_status, render=_render_report)
+
+        # ADR-0148 D2/D5 (FRE-1478): the memory section is always present — silence
+        # stops being a state. In the three non-populated states it carries one line
+        # naming the state, a hint for the model rather than enforcement (D5). Placed
+        # after the render call above so a POPULATED turn whose context was only
+        # standing behavioural stances (no recall content) still gets the line: the
+        # status is scoped to the recall layer (D2), not to whether a section rendered.
+        _memory_state = ctx.memory_status.status
+        if _memory_state is not MemoryStatus.POPULATED:
+            _state_line = MEMORY_STATE_LINES[_memory_state]
+            memory_section = f"{memory_section}\n\n{_state_line}" if memory_section else _state_line
 
         # If we are passing tools (native or prompt-injected), include tool-use guidance
         # in the system prompt to reduce malformed tool calls and looping (ADR-0032).

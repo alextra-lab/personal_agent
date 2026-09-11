@@ -10,7 +10,9 @@ the arm for one stack frame, the budget drop is known at ``budget.py``, and a re
 is known only at the renderer. Each reports what it did and the turn composes those
 reports here.
 
-Nothing renders the status yet. FRE-1478 is the rendering half.
+The rendering half (FRE-1478, ADR-0148 D5) lives in ``orchestrator/executor.py``, which
+renders :data:`MEMORY_STATE_LINES` and reports the renderer's own drops back into
+:class:`RenderStageReport`.
 """
 
 from __future__ import annotations
@@ -44,6 +46,27 @@ class MemoryStatus(StrEnum):
     NOTHING_RELEVANT = "nothing_relevant"
     WITHHELD = "withheld"
     UNAVAILABLE = "unavailable"
+
+
+MEMORY_STATE_LINES: dict[MemoryStatus, str] = {
+    MemoryStatus.NOTHING_RELEVANT: (
+        "Memory: no usable record of this exists in memory for this turn."
+    ),
+    MemoryStatus.WITHHELD: (
+        "Memory: records on this topic exist and could not be presented in this turn."
+    ),
+    MemoryStatus.UNAVAILABLE: ("Memory: records could not be reached for this turn."),
+}
+"""The one line each non-populated state renders (ADR-0148 D2/D5, FRE-1478).
+
+``POPULATED`` has no entry — the rendered items speak for themselves. The other three
+carry the ADR's own licensed wording: ``NOTHING_RELEVANT`` says "no *usable* record",
+never "no record", because a name can match with an empty description (FRE-1115);
+``WITHHELD`` says "could not be presented", not "could not fit", because a renderer's
+unsupported-kind drop is not a capacity fact; ``UNAVAILABLE`` says "could not be
+reached". This is a hint, not enforcement (D5) — the existing citation contract still
+does that job, and this module adds none.
+"""
 
 
 class RecallOutcome(StrEnum):
@@ -80,11 +103,13 @@ class RecallStageReport:
 
 @dataclass(frozen=True)
 class RenderStageReport:
-    """What the renderer emitted of what it was handed (ADR-0148 D1).
+    """What the renderer emitted of what it was handed (ADR-0148 D1, FRE-1478).
 
-    Nothing populates this yet; FRE-1478 does. It is here because the composition cannot
-    resolve "every arm completed but the renderer dropped every item" without it, and that
-    case is one of FRE-1476's own criteria.
+    Populated by ``_render_memory_section_with_ids`` (``orchestrator/executor.py``) after
+    it runs, replacing the mirror ``classify_recall_admission`` infers from the raw
+    context with the fact of what actually rendered. It is here because the composition
+    cannot resolve "every arm completed but the renderer dropped every item" without it,
+    and that case is one of FRE-1476's own criteria.
 
     Attributes:
         ran: Whether the renderer reported at all. False means the status below is the
@@ -201,8 +226,9 @@ SESSION is absent deliberately: not rendering session items is an explicit FRE-1
 non-goal, because two incompatible session shapes exist. A session item carrying real
 content is therefore admitted, unsupported, and WITHHELD.
 
-Inferred here only until FRE-1478 wires the renderer's own report, which replaces the
-inference with the fact.
+This classification runs at context assembly, before the renderer exists to speak for
+itself, so it stays a mirror of the renderer's own filters. ``RenderStageReport``
+(FRE-1478) carries the fact this mirror predicts, sourced from the render call itself.
 """
 
 

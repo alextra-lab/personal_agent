@@ -291,7 +291,8 @@ class TestRendererDispatchesPerItemKind:
     def _render(self, items: list[dict[str, Any]]) -> tuple[str, tuple[str, ...]]:
         from personal_agent.orchestrator.executor import _render_memory_section_with_ids
 
-        return _render_memory_section_with_ids(items)
+        text, ids, _report = _render_memory_section_with_ids(items)
+        return text, ids
 
     def test_mixed_set_renders_both_kinds(self) -> None:
         text, ids = self._render([_episode("t1", "a past chat"), _entity("Sorbet", "icy")])
@@ -440,7 +441,8 @@ class TestRendererEmbedsCitationIdentifiers:
     ) -> tuple[str, tuple[str, ...]]:
         from personal_agent.orchestrator.executor import _render_memory_section_with_ids
 
-        return _render_memory_section_with_ids(items, registry)
+        text, ids, _report = _render_memory_section_with_ids(items, registry)
+        return text, ids
 
     def test_entity_line_carries_its_registered_identifier(self) -> None:
         from personal_agent.grounding.source_registry import SourceRegistry
@@ -525,7 +527,8 @@ class TestRendererIsBoundedByStatedConstants:
     def _render(self, items: list[dict[str, Any]]) -> tuple[str, tuple[str, ...]]:
         from personal_agent.orchestrator.executor import _render_memory_section_with_ids
 
-        return _render_memory_section_with_ids(items)
+        text, ids, _report = _render_memory_section_with_ids(items)
+        return text, ids
 
     def test_oversized_summary_is_marked_not_silently_clipped(self) -> None:
         from personal_agent.orchestrator.executor import _MAX_ITEM_CHARS

@@ -395,6 +395,17 @@ class RecallAdmissionRecord(BaseModel):
             covers every *discard* those paths perform; it does not extend to a retrieval
             bound (a graph query's own ``top_k``), because a row never fetched cannot be
             named by a per-turn record at all.
+        memory_state: The rendered ``MemoryStatus`` value (ADR-0148 D2, FRE-1478) — one of
+            "populated", "nothing_relevant", "withheld" or "unavailable" — as a plain
+            string rather than the enum, so this module stays free of a
+            ``request_gateway`` import. Defaults to "unavailable", the weakest claim
+            (D3), so a record built before this field existed reads back as the
+            conservative state rather than an over-claim.
+        memory_state_cause: The cause behind ``memory_state``, when one is known. The
+            rendered vocabulary is deliberately four values; this is where the ADR's
+            "more than four values are useful and harmless" recorded vocabulary lives —
+            an arm failure and an unwired turn both render "unavailable" and must not
+            collapse to the same cause here.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -404,6 +415,8 @@ class RecallAdmissionRecord(BaseModel):
     admitted_count: int
     items: list[RecalledMemoryRecord] = Field(default_factory=list)
     candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION
+    memory_state: str = "unavailable"
+    memory_state_cause: str | None = None
 
 
 class ContextMessageRecord(BaseModel):
@@ -769,6 +782,8 @@ def build_turn_evidence(
     prompt_component_ids: Sequence[str] = (),
     operator_identity: str | None = None,
     operator_assertion: str | None = None,
+    memory_state: str = "unavailable",
+    memory_state_cause: str | None = None,
 ) -> TurnEvidence:
     """Build both D3 records for one turn from its final serialized model input.
 
@@ -794,6 +809,11 @@ def build_turn_evidence(
         operator_identity: Name the operator component asserted, None when unresolved.
         operator_assertion: The operator stanza's identity claim and authority rule; the
             model bounds its length.
+        memory_state: The rendered ``MemoryStatus`` value for this turn (ADR-0148 D2,
+            FRE-1478), as a plain string. The default is the weakest claim, so a caller
+            that does not pass it cannot over-claim completeness (D3).
+        memory_state_cause: The cause behind ``memory_state``, when the caller has one —
+            what the rendered vocabulary collapses and this record preserves.
 
     Returns:
         A :class:`TurnEvidence` whose two halves describe the same model call.
@@ -831,6 +851,8 @@ def build_turn_evidence(
         admitted_count=len(admitted_identities),
         items=items,
         candidate_population=candidate_population,
+        memory_state=memory_state,
+        memory_state_cause=memory_state_cause,
     )
 
     slice_records = [

@@ -61,7 +61,6 @@ def _spec(tools: list[str], task: str = "test task", timeout: float = 300.0) -> 
     return SubAgentSpec(
         task=task,
         context=[{"role": "user", "content": "do the thing"}],
-        output_format="text",
         max_tokens=1024,
         timeout_seconds=timeout,
         tools=tools,

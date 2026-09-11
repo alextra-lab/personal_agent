@@ -15,6 +15,7 @@ from uuid import UUID
 
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.expansion_types import SubAgentMode
+from personal_agent.orchestrator.worker_types import Thoroughness, WorkerType
 
 #: Why a sub-agent's loop ended (ADR-0149 D3). Every terminal path declares one.
 #:
@@ -56,8 +57,6 @@ class SubAgentSpec:
         task: Human-readable description of the sub-task to perform.
         context: Subset of context relevant to this sub-task
             (messages, retrieved docs, tool results, etc.).
-        output_format: Expected output shape — e.g. "text", "json",
-            "bullet_list", "code". Used by synthesiser to interpret results.
         max_tokens: Token ceiling for this sub-agent's response. ``None`` (the
             default) defers to the deployment's own catalog-declared ceiling
             (FRE-1379) — a caller passing an explicit value is a deliberate
@@ -108,11 +107,19 @@ class SubAgentSpec:
             than a date being invented. On 2026-09-10 a worker with no date spent
             all five of its rounds searching 2025 events, which is the defect this
             field closes.
+        worker_type: The registry type running this task (ADR-0150 D2). Selects
+            the prompt block appended to the base system prompt, so every worker
+            of one type renders the same system bytes.
+        thoroughness: The task's level (ADR-0150 D3). Its round budget is
+            rendered into the task message and binds the loop's countdown and
+            forced synthesis.
+        sibling_tasks: The names of the other tasks in this fan-out (ADR-0150
+            D5), rendered into the task message so the worker stays inside its
+            own partition. Empty renders as "none".
     """
 
     task: str
     context: list[dict[str, Any]]
-    output_format: str = "text"
     max_tokens: int | None = None
     timeout_seconds: float | None = None
     hard_deadline_seconds: float | None = None
@@ -126,6 +133,9 @@ class SubAgentSpec:
     loaded_skills: frozenset[str] = field(default_factory=frozenset)
     denied_tools: tuple[str, ...] = field(default_factory=tuple)
     turn_started_at: datetime | None = None
+    worker_type: WorkerType = WorkerType.GENERAL
+    thoroughness: Thoroughness = "quick"
+    sibling_tasks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

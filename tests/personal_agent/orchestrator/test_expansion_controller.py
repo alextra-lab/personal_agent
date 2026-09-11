@@ -21,7 +21,9 @@ from personal_agent.orchestrator.expansion_controller import (
     ExpansionController,
     _validate_plan_json,
 )
+from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult
+from personal_agent.orchestrator.worker_types import WORKER_TYPES, Thoroughness, WorkerType
 
 # Force-import _run_dispatch's own lazy imports at module load rather than on
 # first call. Several tests below assert fan-out-window arithmetic against a
@@ -41,7 +43,7 @@ def _make_plan_json(tasks: int = 3) -> str:
                 "name": f"task_{i}",
                 "goal": f"Goal for task {i}",
                 "constraints": [f"constraint_{i}"],
-                "expected_output": "text",
+                "type": "general",
             }
             for i in range(tasks)
         ],
@@ -92,32 +94,35 @@ class TestValidatePlanJson:
         assert _validate_plan_json('{"strategy": "HYBRID", "tasks": []}') is None
 
     def test_task_missing_name(self) -> None:
-        bad = '{"strategy": "HYBRID", "tasks": [{"goal": "g"}]}'
+        bad = '{"strategy": "HYBRID", "tasks": [{"goal": "g", "type": "general"}]}'
         assert _validate_plan_json(bad) is None
 
     def test_task_missing_goal(self) -> None:
-        bad = '{"strategy": "HYBRID", "tasks": [{"name": "n"}]}'
+        bad = '{"strategy": "HYBRID", "tasks": [{"name": "n", "type": "general"}]}'
         assert _validate_plan_json(bad) is None
 
     def test_caps_task_count_hybrid(self) -> None:
+        """ADR-0150 D4: HYBRID holds at most 3 tasks — no reserved combine slot."""
         plan = _validate_plan_json(_make_plan_json(10))
-        # HYBRID caps at 4+1 = 5
         assert plan is not None
-        assert len(plan.tasks) <= 5
+        assert len(plan.tasks) == 3
+
+    def test_caps_task_count_decompose(self) -> None:
+        plan = _validate_plan_json(_make_plan_json(10), "DECOMPOSE")
+        assert plan is not None
+        assert len(plan.tasks) == 5
 
 
 class TestPlannerDiscoveryRetired:
-    """FRE-884 — ADR-0086's tooled discovery-slice ``mode`` is retired.
+    """FRE-884 / ADR-0150 D2 — retired plan fields are ignored, never obeyed.
 
-    A raw plan carrying the old discovery-slice ``mode`` field is still
-    ignored — ``SubAgentMode`` only has PARALLEL_INFERENCE. ``tools`` is a
-    SEPARATE, still-live field (FRE-1389): it is now parsed and later
-    filtered against the sub-agent tool grant set at dispatch time, not
-    dropped at parse time.
+    The old discovery-slice ``mode`` field is still ignored — ``SubAgentMode``
+    only has PARALLEL_INFERENCE. The per-task ``tools`` list and free-text
+    ``expected_output`` (FRE-1389) are ignored too: the worker type decides both.
     """
 
     @staticmethod
-    def _tooled_plan(tools: list[str]) -> str:
+    def _legacy_plan(tools: object) -> str:
         return json.dumps(
             {
                 "strategy": "HYBRID",
@@ -125,8 +130,10 @@ class TestPlannerDiscoveryRetired:
                     {
                         "name": "discover_flow",
                         "goal": "map the request flow",
+                        "type": "general",
                         "mode": "tooled_sequential",
                         "tools": tools,
+                        "expected_output": "a table",
                     }
                 ],
             }
@@ -135,29 +142,20 @@ class TestPlannerDiscoveryRetired:
     def test_mode_field_is_still_ignored(self) -> None:
         from personal_agent.orchestrator.expansion_types import SubAgentMode
 
-        plan = _validate_plan_json(self._tooled_plan(["bash", "read"]))
+        plan = _validate_plan_json(self._legacy_plan(["bash", "read"]))
         assert plan is not None
         assert plan.tasks[0].mode == SubAgentMode.PARALLEL_INFERENCE
 
-    def test_tools_field_is_now_parsed(self) -> None:
-        """FRE-1389: closes the FRE-884 gap — the planner's tools request now
-        reaches PlanTask.tools, where dispatch-time governance filters it.
-        """
-        plan = _validate_plan_json(self._tooled_plan(["bash", "read"]))
+    def test_legacy_tools_field_is_ignored(self) -> None:
+        """ADR-0150 D2: a planner that still writes `tools` gets its type's tools, not these."""
+        plan = _validate_plan_json(self._legacy_plan(["bash", "read"]))
         assert plan is not None
-        assert plan.tasks[0].tools == ["bash", "read"]
+        assert plan.tasks[0].type == WorkerType.GENERAL
+        assert not hasattr(plan.tasks[0], "tools")
 
     def test_non_list_tools_field_is_ignored(self) -> None:
-        """A malformed (non-list) tools field must not be iterated char-by-char."""
-        raw = json.dumps(
-            {
-                "strategy": "HYBRID",
-                "tasks": [{"name": "t", "goal": "g", "tools": "run_python"}],
-            }
-        )
-        plan = _validate_plan_json(raw)
+        plan = _validate_plan_json(self._legacy_plan("run_python"))
         assert plan is not None
-        assert plan.tasks[0].tools == []
 
     def test_planner_prompt_never_mentions_tooled_sequential(self) -> None:
         from personal_agent.orchestrator.expansion_controller import (
@@ -169,24 +167,47 @@ class TestPlannerDiscoveryRetired:
 
 
 class TestPlannerPromptToolSurface:
-    """FRE-1389: the planner prompt advertises the LIVE sub-agent tool grant."""
+    """FRE-1389 / ADR-0150 D2: the planner prompt renders the registry with the LIVE grant."""
 
-    def test_lists_available_tools(self) -> None:
+    def test_each_type_shows_its_description_and_granted_tools(self) -> None:
         from personal_agent.orchestrator.expansion_controller import (
             _build_planner_system_prompt,
         )
 
-        prompt = _build_planner_system_prompt(["run_python"])
-        assert "run_python" in prompt
-        assert '"tools"' in prompt
+        prompt = _build_planner_system_prompt(["web_search", "run_python"])
+        researcher = WORKER_TYPES[WorkerType.RESEARCHER].description
+        general = WORKER_TYPES[WorkerType.GENERAL].description
+        assert f"  - researcher: {researcher}. Tools granted now: web_search" in prompt
+        assert f"  - general: {general}. Tools granted now: run_python" in prompt
 
-    def test_empty_surface_tells_planner_to_omit(self) -> None:
+    def test_the_schema_asks_for_type_and_thoroughness_not_tools(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        prompt = _build_planner_system_prompt(["web_search"])
+        assert '"type": "researcher|general"' in prompt
+        assert '"thoroughness": "quick|standard|thorough"' in prompt
+        assert '"tools"' not in prompt
+        assert '"expected_output"' not in prompt
+
+    def test_empty_surface_keeps_every_type_with_no_tools(self) -> None:
+        """A type stays pickable with no tools — a general worker can still answer."""
         from personal_agent.orchestrator.expansion_controller import (
             _build_planner_system_prompt,
         )
 
         prompt = _build_planner_system_prompt([])
-        assert "no tools are currently available" in prompt
+        assert prompt.count("Tools granted now: none") == 2
+        assert "  - researcher: " in prompt
+        assert "  - general: " in prompt
+
+    def test_a_granted_tool_no_type_declares_is_never_rendered(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        assert "fetch_url" not in _build_planner_system_prompt(["fetch_url", "web_search"])
 
     def test_surface_lookup_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A governance/mode lookup error yields an empty surface, not a crash."""
@@ -206,7 +227,7 @@ class TestPlannerPromptToolSurface:
 
         ``sub_agent_tools`` is a mapping now, so iterating it would offer every
         key to the planner, refusals included. The planner would then request a
-        tool the grant evaluation refuses, on every turn.
+        tool the grant evaluation then refuses, on every turn.
         """
         from personal_agent.governance.models import GovernanceConfig, SubAgentToolDecision
         from personal_agent.orchestrator import expansion_controller as ec
@@ -783,11 +804,11 @@ class TestSerializedDispatch:
         admission reasons.
         """
         from personal_agent.orchestrator.expansion_controller import ExpansionResult
-        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
+        from personal_agent.orchestrator.expansion_types import ExpansionPlan
 
         plan = ExpansionPlan(
             strategy="DECOMPOSE",
-            tasks=[PlanTask(name=f"task_{i}", goal=f"Goal for task {i}") for i in range(8)],
+            tasks=[_task(f"task_{i}", f"Goal for task {i}") for i in range(8)],
         )
         expansion_result = ExpansionResult()
 
@@ -836,7 +857,7 @@ class TestTurnBudgetBound:
         """AC-2/AC-3 — 4 tasks at ~0.05s each against a budget covering only some."""
         from personal_agent.orchestrator.expansion_controller import ExpansionResult
 
-        plan = _validate_plan_json(_make_plan_json(4))
+        plan = _validate_plan_json(_make_plan_json(4), "DECOMPOSE")
         assert plan is not None
         expansion_result = ExpansionResult()
         call_count = {"n": 0}
@@ -1089,18 +1110,96 @@ class TestSynthesisContextTerminalFacts:
         assert "sub-tasks completed" not in context
 
 
+def _task(
+    name: str = "task_0",
+    goal: str = "Goal for task 0",
+    type_: WorkerType = WorkerType.GENERAL,
+    thoroughness: Thoroughness = "quick",
+) -> PlanTask:
+    return PlanTask(name=name, goal=goal, type=type_, thoroughness=thoroughness)
+
+
+def _one_task_plan(type_: WorkerType = WorkerType.GENERAL) -> ExpansionPlan:
+    return ExpansionPlan(strategy="HYBRID", tasks=[_task(type_=type_)])
+
+
+def _hermetic_config(granted: tuple[str, ...]) -> Any:
+    """An in-memory governance config granting exactly ``granted`` to sub-agents."""
+    from personal_agent.governance.models import GovernanceConfig, SubAgentToolDecision
+
+    return GovernanceConfig(
+        modes={},
+        tools={},
+        sub_agent_tools={
+            name: SubAgentToolDecision(granted=True, reason="granted for this test")
+            for name in granted
+        },
+        mode_constraints={},
+    )
+
+
+def _stub_registry_knowing(*names: str) -> MagicMock:
+    """A get_shared_tool_execution_layer() stub whose registry recognizes ``names``."""
+    layer = MagicMock()
+    layer.registry.get_tool = lambda n: object() if n in names else None
+    return layer
+
+
+async def _dispatch_hermetic(
+    controller: ExpansionController,
+    plan: ExpansionPlan,
+    run: Any,
+    *,
+    granted: tuple[str, ...] = (),
+    known: tuple[str, ...] = (),
+    mode: Mode = Mode.NORMAL,
+    config_error: Exception | None = None,
+) -> list[SubAgentResult]:
+    """Drive ``_run_dispatch`` with hermetic governance, registry and worker."""
+    from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+    config_patch = (
+        {"side_effect": config_error}
+        if config_error is not None
+        else {"return_value": _hermetic_config(granted)}
+    )
+    with (
+        patch(
+            "personal_agent.orchestrator.expansion_controller.get_current_mode",
+            return_value=mode,
+        ),
+        patch(
+            "personal_agent.orchestrator.expansion_controller.load_governance_config",
+            **config_patch,
+        ),
+        patch(
+            "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+            return_value=_stub_registry_knowing(*known),
+        ),
+        patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=run,
+        ),
+    ):
+        return await controller._run_dispatch(
+            plan=plan,
+            llm_client=AsyncMock(),
+            trace_id="t-hermetic",
+            messages=[],
+            result=ExpansionResult(),
+        )
+
+
+_GENERAL_TOOLS = WORKER_TYPES[WorkerType.GENERAL].tools
+
+
 class TestSubAgentToolGrant:
-    """FRE-1388 — a sub-agent's requested tools are filtered against the
+    """FRE-1388 — a task's tools are filtered against the sub-agent grant set before dispatch.
 
-    sub-agent tool principal's grant set before dispatch. Drives
-    ``_run_dispatch`` with a hand-built plan carrying real tool names
-    (bypassing the planner-JSON path, which always zeroes ``tools`` per
-    FRE-884) so the grant filter has something real to refuse — a seeded
-    negative, not a vacuous check against an empty request (AC-3).
-
-    ``load_governance_config`` is patched to a hermetic, in-memory config in
-    every test here so these assertions depend only on the dispatch logic
-    under test, never on what ``config/governance/tools.yaml`` currently says.
+    ADR-0150 D2: the request is the task type's closed tool list; the filter is
+    unchanged. Governance is hermetic in every test here, so these assertions
+    depend only on the dispatch logic under test, never on what
+    ``config/governance/tools.yaml`` currently says.
     """
 
     @pytest.fixture
@@ -1108,110 +1207,44 @@ class TestSubAgentToolGrant:
         return ExpansionController()
 
     @staticmethod
-    def _hermetic_config() -> Any:
-        from personal_agent.governance.models import GovernanceConfig, SubAgentToolDecision
-
-        return GovernanceConfig(
-            modes={},
-            tools={},
-            sub_agent_tools={
-                "run_python": SubAgentToolDecision(granted=True, reason="granted for this test")
-            },
-            mode_constraints={},
-        )
-
-    @staticmethod
-    def _one_task_plan(tools: list[str]) -> Any:
-        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
-
-        return ExpansionPlan(
-            strategy="HYBRID",
-            tasks=[PlanTask(name="task_0", goal="Goal for task 0", tools=tools)],
-        )
-
-    @pytest.mark.asyncio
-    async def test_tool_outside_grant_set_is_stripped_before_dispatch(
-        self, controller: ExpansionController
-    ) -> None:
-        """AC-2/AC-3: bash (outside the grant set) is refused; run_python (granted) passes."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = self._one_task_plan(["bash", "run_python"])
-        captured_specs: list[Any] = []
-
-        async def _capture_spec(**kwargs: Any) -> SubAgentResult:
+    def _capture(specs: list[Any]) -> Any:
+        async def _run(**kwargs: Any) -> SubAgentResult:
             spec = kwargs["spec"]
-            captured_specs.append(spec)
-            # Mirrors sub_agent.run_sub_agent's real contract: denied_tools is
-            # threaded from the spec into every terminal result (tested directly
-            # in test_sub_agent.py) — echoed here since run_sub_agent is mocked.
+            specs.append(spec)
+            # Mirrors run_sub_agent's real contract: denied_tools is threaded from
+            # the spec into every terminal result (tested in test_sub_agent.py).
             return _make_sub_agent_result("task_0", denied_tools=spec.denied_tools)
 
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_capture_spec,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="test-trace-tool-grant",
-                messages=[],
-                result=ExpansionResult(),
-            )
+        return _run
 
-        assert len(captured_specs) == 1
-        spec = captured_specs[0]
-        assert spec.tools == ["run_python"]
-        assert spec.denied_tools == ("bash",)
-        assert results[0].denied_tools == ("bash",)
+    @pytest.mark.asyncio
+    async def test_type_tools_outside_grant_set_are_stripped(
+        self, controller: ExpansionController
+    ) -> None:
+        """AC-2/AC-3: of general's three tools, only the granted one is passed."""
+        specs: list[Any] = []
+        results = await _dispatch_hermetic(
+            controller, _one_task_plan(), self._capture(specs), granted=("run_python",)
+        )
+
+        assert specs[0].tools == ["run_python"]
+        assert specs[0].denied_tools == ("search_memory", "recall_personal_history")
+        assert results[0].denied_tools == ("search_memory", "recall_personal_history")
 
     @pytest.mark.asyncio
     async def test_denial_is_legible_in_the_synthesis_context(
         self, controller: ExpansionController
     ) -> None:
         """AC-4: the refusal reaches the primary's report, not only a log line."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        specs: list[Any] = []
+        plan = _one_task_plan(WorkerType.RESEARCHER)
+        results = await _dispatch_hermetic(
+            controller, plan, self._capture(specs), granted=("run_python",)
+        )
+        context = controller._build_synthesis_context(plan=plan, sub_results=results)
 
-        plan = self._one_task_plan(["bash"])
-
-        async def _echo_denial(**kwargs: Any) -> SubAgentResult:
-            spec = kwargs["spec"]
-            return _make_sub_agent_result("task_0", denied_tools=spec.denied_tools)
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_echo_denial,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="test-trace-tool-grant-synth",
-                messages=[],
-                result=ExpansionResult(),
-            )
-            context = controller._build_synthesis_context(plan=plan, sub_results=results)
-
-        assert "bash" in context
+        assert specs[0].denied_tools == ("web_search",)
+        assert "web_search" in context
         assert "not granted" in context
 
     @pytest.mark.asyncio
@@ -1219,79 +1252,31 @@ class TestSubAgentToolGrant:
         self, controller: ExpansionController
     ) -> None:
         """Owner directive: sub-agents hold no tools in ALERT — even run_python."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        specs: list[Any] = []
+        await _dispatch_hermetic(
+            controller,
+            _one_task_plan(),
+            self._capture(specs),
+            granted=_GENERAL_TOOLS,
+            mode=Mode.ALERT,
+        )
 
-        plan = self._one_task_plan(["run_python"])
-        captured_specs: list[Any] = []
-
-        async def _capture_spec(**kwargs: Any) -> SubAgentResult:
-            captured_specs.append(kwargs["spec"])
-            return _make_sub_agent_result("task_0")
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.ALERT,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_capture_spec,
-            ),
-        ):
-            await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="test-trace-tool-grant-alert",
-                messages=[],
-                result=ExpansionResult(),
-            )
-
-        assert captured_specs[0].tools == []
-        assert captured_specs[0].denied_tools == ("run_python",)
+        assert specs[0].tools == []
+        assert specs[0].denied_tools == _GENERAL_TOOLS
 
     @pytest.mark.asyncio
-    async def test_no_tools_requested_leaves_spec_and_synthesis_unaffected(
+    async def test_a_fully_granted_type_leaves_spec_and_synthesis_unaffected(
         self, controller: ExpansionController
     ) -> None:
-        """AC-5: today's real shape (planner never requests tools) is unchanged."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        specs: list[Any] = []
+        plan = _one_task_plan()
+        results = await _dispatch_hermetic(
+            controller, plan, self._capture(specs), granted=_GENERAL_TOOLS
+        )
+        context = controller._build_synthesis_context(plan=plan, sub_results=results)
 
-        plan = self._one_task_plan([])
-        captured_specs: list[Any] = []
-
-        async def _capture_spec(**kwargs: Any) -> SubAgentResult:
-            captured_specs.append(kwargs["spec"])
-            return _make_sub_agent_result("task_0")
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_capture_spec,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="test-trace-tool-grant-noop",
-                messages=[],
-                result=ExpansionResult(),
-            )
-            context = controller._build_synthesis_context(plan=plan, sub_results=results)
-
-        assert captured_specs[0].tools == []
-        assert captured_specs[0].denied_tools == ()
+        assert specs[0].tools == list(_GENERAL_TOOLS)
+        assert specs[0].denied_tools == ()
         assert "denied" not in context.lower()
 
     @pytest.mark.asyncio
@@ -1300,300 +1285,185 @@ class TestSubAgentToolGrant:
     ) -> None:
         """A config-load error denies every requested tool rather than aborting the turn."""
         from personal_agent.config import GovernanceConfigError
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
 
-        plan = self._one_task_plan(["run_python"])
-        captured_specs: list[Any] = []
+        specs: list[Any] = []
+        results = await _dispatch_hermetic(
+            controller,
+            _one_task_plan(),
+            self._capture(specs),
+            config_error=GovernanceConfigError("config directory missing"),
+        )
 
-        async def _capture_spec(**kwargs: Any) -> SubAgentResult:
-            spec = kwargs["spec"]
-            captured_specs.append(spec)
-            return _make_sub_agent_result("task_0", denied_tools=spec.denied_tools)
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                side_effect=GovernanceConfigError("config directory missing"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_capture_spec,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="test-trace-tool-grant-failsafe",
-                messages=[],
-                result=ExpansionResult(),
-            )
-
-        assert captured_specs[0].tools == []
-        assert captured_specs[0].denied_tools == ("run_python",)
+        assert specs[0].tools == []
+        assert specs[0].denied_tools == _GENERAL_TOOLS
         assert results[0].success is True
 
 
 class TestSubAgentGapRedispatch:
-    """FRE-1389 AC-5 — a stated tool gap gets ONE replacement dispatch, never a
+    """FRE-1493 AC-6 (ADR-0150 D2) — the gap redispatch, closed by type.
 
-    sub-agent acquiring the tool itself. ``_maybe_redispatch_on_gap`` is
-    exercised through ``_run_dispatch`` end to end, using the same hermetic
-    governance-mocking pattern as ``TestSubAgentToolGrant``.
+    A stated or refused tool gets ONE replacement, and only as the one other
+    registry type that declares the tool — never a same-type worker with a
+    widened list, never a second replacement.
     """
 
     @pytest.fixture
     def controller(self) -> ExpansionController:
         return ExpansionController()
 
-    @staticmethod
-    def _hermetic_config(sub_agent_tools: list[str]) -> Any:
-        from personal_agent.governance.models import GovernanceConfig, SubAgentToolDecision
-
-        return GovernanceConfig(
-            modes={},
-            tools={},
-            sub_agent_tools={
-                name: SubAgentToolDecision(granted=True, reason="granted for this test")
-                for name in sub_agent_tools
-            },
-            mode_constraints={},
-        )
-
-    @staticmethod
-    def _one_task_plan(tools: list[str] | None = None) -> Any:
-        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
-
-        return ExpansionPlan(
+    @pytest.mark.asyncio
+    async def test_general_stating_web_search_gets_one_researcher_replacement(
+        self, controller: ExpansionController
+    ) -> None:
+        plan = ExpansionPlan(
             strategy="HYBRID",
-            tasks=[PlanTask(name="task_0", goal="Goal for task 0", tools=tools or [])],
+            tasks=[
+                _task("find_facts", "Goal A", WorkerType.GENERAL, "thorough"),
+                _task("other_part", "Goal B", WorkerType.GENERAL, "quick"),
+            ],
+        )
+        calls: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            calls.append(spec)
+            if spec.task == "Goal A":
+                return _make_sub_agent_result("find_facts", stated_tool_gap="web_search")
+            return _make_sub_agent_result(spec.task)
+
+        results = await _dispatch_hermetic(
+            controller, plan, _run, granted=("web_search", "run_python"), known=("web_search",)
         )
 
-    @staticmethod
-    def _stub_registry_knowing(*names: str) -> MagicMock:
-        """A get_shared_tool_execution_layer() stub whose registry recognizes ``names``."""
-        layer = MagicMock()
-        layer.registry.get_tool = lambda n: object() if n in names else None
-        return layer
+        assert len(calls) == 3  # Goal A, its one replacement, Goal B
+        original, replacement = calls[0], calls[1]
+        assert replacement.worker_type == WorkerType.RESEARCHER
+        assert replacement.tools == ["web_search"]
+        assert replacement.task.startswith("Goal A")
+        assert "retry" in replacement.task
+        assert replacement.thoroughness == original.thoroughness == "thorough"
+        assert replacement.sibling_tasks == original.sibling_tasks == ("other_part",)
+        assert calls[2].task == "Goal B"
+        assert len(results) == 3
 
     @pytest.mark.asyncio
-    async def test_refused_attempt_triggers_one_replacement_dispatch(
+    async def test_refused_attempt_triggers_the_same_replacement(
         self, controller: ExpansionController
     ) -> None:
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = self._one_task_plan()
         calls: list[Any] = []
 
-        async def _dispatch(**kwargs: Any) -> SubAgentResult:
-            spec = kwargs["spec"]
-            calls.append(spec)
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            calls.append(kwargs["spec"])
             if len(calls) == 1:
-                return _make_sub_agent_result("task_0", refused_tool_attempts=("run_python",))
+                return _make_sub_agent_result("task_0", refused_tool_attempts=("web_search",))
             return _make_sub_agent_result("task_0")
 
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(["run_python"]),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
-                return_value=self._stub_registry_knowing("run_python"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_dispatch,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="t-gap-refused",
-                messages=[],
-                result=ExpansionResult(),
-            )
+        results = await _dispatch_hermetic(
+            controller, _one_task_plan(), _run, granted=("web_search",), known=("web_search",)
+        )
 
         assert len(calls) == 2
-        assert calls[1].tools == ["run_python"]
-        assert "retry" in calls[1].task
-        assert len(results) == 2
-
-    @pytest.mark.asyncio
-    async def test_stated_tool_gap_triggers_one_replacement_dispatch(
-        self, controller: ExpansionController
-    ) -> None:
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = self._one_task_plan()
-        calls: list[Any] = []
-
-        async def _dispatch(**kwargs: Any) -> SubAgentResult:
-            spec = kwargs["spec"]
-            calls.append(spec)
-            if len(calls) == 1:
-                return _make_sub_agent_result("task_0", stated_tool_gap="run_python")
-            return _make_sub_agent_result("task_0")
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(["run_python"]),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
-                return_value=self._stub_registry_knowing("run_python"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_dispatch,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="t-gap-stated",
-                messages=[],
-                result=ExpansionResult(),
-            )
-
-        assert len(calls) == 2
-        assert calls[1].tools == ["run_python"]
+        assert calls[1].worker_type == WorkerType.RESEARCHER
         assert len(results) == 2
 
     @pytest.mark.asyncio
     async def test_retry_is_single_shot(self, controller: ExpansionController) -> None:
         """The replacement's OWN stated gap is never acted on — no chained retries."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = self._one_task_plan()
         calls: list[Any] = []
 
         async def _always_states_a_gap(**kwargs: Any) -> SubAgentResult:
             calls.append(kwargs["spec"])
             return _make_sub_agent_result("task_0", stated_tool_gap="run_python")
 
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(["run_python"]),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
-                return_value=self._stub_registry_knowing("run_python"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_always_states_a_gap,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="t-gap-single-shot",
-                messages=[],
-                result=ExpansionResult(),
-            )
+        # general states web_search first; the researcher replacement then states
+        # run_python, which general declares — and nothing acts on it.
+        first = True
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            nonlocal first
+            if first:
+                first = False
+                calls.append(kwargs["spec"])
+                return _make_sub_agent_result("task_0", stated_tool_gap="web_search")
+            return await _always_states_a_gap(**kwargs)
+
+        results = await _dispatch_hermetic(
+            controller,
+            _one_task_plan(),
+            _run,
+            granted=("web_search", "run_python"),
+            known=("web_search", "run_python"),
+        )
 
         assert len(calls) == 2  # original + exactly one replacement, never a third
         assert len(results) == 2
 
     @pytest.mark.asyncio
-    async def test_unregistered_gap_name_is_ignored(self, controller: ExpansionController) -> None:
-        """A hallucinated name that isn't even a registered tool spends no retry."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = self._one_task_plan()
-        calls: list[Any] = []
-
-        async def _dispatch(**kwargs: Any) -> SubAgentResult:
-            calls.append(kwargs["spec"])
-            return _make_sub_agent_result("task_0", stated_tool_gap="not_a_real_tool")
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(["run_python"]),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
-                return_value=self._stub_registry_knowing("run_python"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_dispatch,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="t-gap-unregistered",
-                messages=[],
-                result=ExpansionResult(),
-            )
-
-        assert len(calls) == 1
-        assert len(results) == 1
-
-    @pytest.mark.asyncio
-    async def test_gap_still_denied_on_retry_yields_no_extra_result(
+    async def test_a_tool_no_type_declares_triggers_none_and_reaches_the_result(
         self, controller: ExpansionController
     ) -> None:
-        """A gap outside the sub-agent grant surface entirely stays denied — no retry."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = self._one_task_plan()
         calls: list[Any] = []
 
-        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            calls.append(kwargs["spec"])
+            return _make_sub_agent_result("task_0", stated_tool_gap="fetch_url")
+
+        results = await _dispatch_hermetic(
+            controller, _one_task_plan(), _run, granted=("fetch_url",), known=("fetch_url",)
+        )
+
+        assert len(calls) == 1
+        assert results[0].stated_tool_gap == "fetch_url"
+
+    @pytest.mark.asyncio
+    async def test_a_same_type_gap_is_never_widened(self, controller: ExpansionController) -> None:
+        """A researcher naming web_search, which only its own type declares, gets nothing."""
+        calls: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
             calls.append(kwargs["spec"])
             return _make_sub_agent_result("task_0", stated_tool_gap="web_search")
 
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                # web_search is registered but NOT in the sub-agent grant surface.
-                return_value=self._hermetic_config(["run_python"]),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
-                return_value=self._stub_registry_knowing("run_python", "web_search"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_dispatch,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="t-gap-still-denied",
-                messages=[],
-                result=ExpansionResult(),
-            )
+        await _dispatch_hermetic(
+            controller,
+            _one_task_plan(WorkerType.RESEARCHER),
+            _run,
+            granted=("web_search",),
+            known=("web_search",),
+        )
+
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_unregistered_gap_name_is_ignored(self, controller: ExpansionController) -> None:
+        """A hallucinated name that isn't even a registered tool spends no retry."""
+        calls: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            calls.append(kwargs["spec"])
+            return _make_sub_agent_result("task_0", stated_tool_gap="web_search")
+
+        # Declared by researcher and granted, but the registry does not know it.
+        await _dispatch_hermetic(
+            controller, _one_task_plan(), _run, granted=("web_search",), known=()
+        )
+
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_gap_still_denied_for_the_target_type_yields_no_replacement(
+        self, controller: ExpansionController
+    ) -> None:
+        calls: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            calls.append(kwargs["spec"])
+            return _make_sub_agent_result("task_0", stated_tool_gap="web_search")
+
+        # web_search is registered but NOT in the sub-agent grant surface.
+        results = await _dispatch_hermetic(
+            controller, _one_task_plan(), _run, granted=("run_python",), known=("web_search",)
+        )
 
         assert len(calls) == 1
         assert len(results) == 1
@@ -1603,52 +1473,24 @@ class TestSubAgentGapRedispatch:
         self, controller: ExpansionController
     ) -> None:
         """An earlier task's raw dispatch exception must not shift the retry pairing."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
-
         plan = ExpansionPlan(
             strategy="HYBRID",
-            tasks=[
-                PlanTask(name="task_boom", goal="raises"),
-                PlanTask(name="task_gap", goal="states a gap"),
-            ],
+            tasks=[_task("task_boom", "raises"), _task("task_gap", "states a gap")],
         )
         calls: list[Any] = []
 
-        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+        async def _run(**kwargs: Any) -> SubAgentResult:
             spec = kwargs["spec"]
             calls.append(spec)
             if "raises" in spec.task:
                 raise RuntimeError("boom")
             if "retry" in spec.task:
                 return _make_sub_agent_result("task_gap")
-            return _make_sub_agent_result("task_gap", stated_tool_gap="run_python")
+            return _make_sub_agent_result("task_gap", stated_tool_gap="web_search")
 
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(["run_python"]),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
-                return_value=self._stub_registry_knowing("run_python"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_dispatch,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="t-gap-alignment",
-                messages=[],
-                result=ExpansionResult(),
-            )
+        results = await _dispatch_hermetic(
+            controller, plan, _run, granted=("web_search",), known=("web_search",)
+        )
 
         # task_boom's exception drops it entirely; task_gap gets its own retry,
         # correctly paired (not confused with task_boom's slot).
@@ -1659,102 +1501,19 @@ class TestSubAgentGapRedispatch:
     @pytest.mark.asyncio
     async def test_replacement_cost_is_not_dropped(self, controller: ExpansionController) -> None:
         """AC-6: the original attempt's cost survives even though it was incomplete."""
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-
-        plan = self._one_task_plan()
         calls: list[Any] = []
 
-        async def _dispatch(**kwargs: Any) -> SubAgentResult:
+        async def _run(**kwargs: Any) -> SubAgentResult:
             calls.append(kwargs["spec"])
             if len(calls) == 1:
-                return _make_sub_agent_result("task_0", stated_tool_gap="run_python", cost_usd=0.01)
+                return _make_sub_agent_result("task_0", stated_tool_gap="web_search", cost_usd=0.01)
             return _make_sub_agent_result("task_0", cost_usd=0.02)
 
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                return_value=self._hermetic_config(["run_python"]),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
-                return_value=self._stub_registry_knowing("run_python"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_dispatch,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="t-gap-cost",
-                messages=[],
-                result=ExpansionResult(),
-            )
+        results = await _dispatch_hermetic(
+            controller, _one_task_plan(), _run, granted=("web_search",), known=("web_search",)
+        )
 
         assert sum(r.cost_usd for r in results) == pytest.approx(0.03)
-
-    @pytest.mark.asyncio
-    async def test_gap_for_an_already_denied_requested_tool_is_not_retried(
-        self, controller: ExpansionController
-    ) -> None:
-        """A partially-granted task's gap must compare against what was actually
-
-        GRANTED (spec.tools), not merely requested (task.tools) — a gap for a
-        tool the planner already asked for and governance already denied must
-        not spend a retry re-asking the same, unchanged question.
-        """
-        from personal_agent.orchestrator.expansion_controller import ExpansionResult
-        from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
-
-        # bash was requested but denied; run_python was requested and granted.
-        plan = ExpansionPlan(
-            strategy="HYBRID",
-            tasks=[PlanTask(name="task_0", goal="Goal for task 0", tools=["bash", "run_python"])],
-        )
-        calls: list[Any] = []
-
-        async def _dispatch(**kwargs: Any) -> SubAgentResult:
-            spec = kwargs["spec"]
-            calls.append(spec)
-            return _make_sub_agent_result(
-                "task_0", denied_tools=spec.denied_tools, refused_tool_attempts=("bash",)
-            )
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_current_mode",
-                return_value=Mode.NORMAL,
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.load_governance_config",
-                # bash is never in the sub-agent grant surface — always denied.
-                return_value=self._hermetic_config(["run_python"]),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
-                return_value=self._stub_registry_knowing("run_python", "bash"),
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=_dispatch,
-            ),
-        ):
-            results = await controller._run_dispatch(
-                plan=plan,
-                llm_client=AsyncMock(),
-                trace_id="t-gap-already-denied",
-                messages=[],
-                result=ExpansionResult(),
-            )
-
-        assert calls[0].tools == ["run_python"]
-        assert len(calls) == 1  # no retry — bash was already, and still, denied
-        assert len(results) == 1
 
 
 class TestSynthesisContextExcludesFullOutput:
@@ -2036,7 +1795,8 @@ class TestPlannerServerErrorFallback:
         assert result.plan is not None
         assert result.plan.is_fallback is True
         assert result.degraded is False
-        assert result.successful_count == 4
+        # One task per entity; no combine task since ADR-0150 D4.
+        assert result.successful_count == 3
 
 
 # ==========================================================================
@@ -2045,14 +1805,14 @@ class TestPlannerServerErrorFallback:
 
 
 class TestPlannerKnowsTheWorkerBudget:
-    """ADR-0149 D2 — what does not vary per task today is scope.
+    """ADR-0149 D2 / ADR-0150 D3 — the planner is told what each level buys.
 
     The planner wrote "research events in Mallorca for that week" with no
-    knowledge that the worker had five rounds to answer it in. The tool surface
-    is already rendered live from governance; the budget now is too.
+    knowledge that the worker had five rounds to answer it in. The budget per
+    thoroughness level is rendered live from the settings.
     """
 
-    def test_prompt_names_the_round_budget_from_settings(
+    def test_prompt_names_each_level_budget_from_settings(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from personal_agent.config import get_settings
@@ -2064,25 +1824,26 @@ class TestPlannerKnowsTheWorkerBudget:
 
         prompt = _build_planner_system_prompt(["web_search"])
 
-        assert "Each sub-agent has at most 4 tool round(s)" in prompt
-        assert "Scope every task so a worker can answer it inside that budget." in prompt
+        assert (
+            "quick (4 tool round(s)), standard (4 tool round(s)), thorough (4 tool round(s))"
+            in prompt
+        )
+        assert "Scope every task so a worker can answer it inside its budget." in prompt
 
-    def test_the_number_tracks_the_setting_rather_than_being_written_in(
+    def test_the_numbers_track_the_setting_rather_than_being_written_in(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Seeded negative for the live render: change the setting, change the prompt.
-
-        A hardcoded number here is the drift FRE-1389 AC-1 already ruled out for
-        the tool surface — it reads correct and silently stops being true.
-        """
+        """Seeded negative for the live render: change the setting, change the prompt."""
         from personal_agent.config import get_settings
         from personal_agent.orchestrator.expansion_controller import (
             _build_planner_system_prompt,
         )
 
         monkeypatch.setattr(get_settings(), "sub_agent_max_tool_iterations", 9)
+        monkeypatch.setattr(get_settings(), "sub_agent_rounds_by_thoroughness", {"quick": 2})
 
-        assert "at most 9 tool round(s)" in _build_planner_system_prompt(["web_search"])
+        prompt = _build_planner_system_prompt(["web_search"])
+        assert "quick (2 tool round(s)), standard (9 tool round(s))" in prompt
 
 
 class TestTurnTimestampReachesEverySpec:
@@ -2148,3 +1909,222 @@ class TestTurnTimestampReachesEverySpec:
 
         assert specs
         assert all(spec.turn_started_at is None for spec in specs)
+
+
+# ==========================================================================
+# ADR-0150 T2 (FRE-1493) — typed plans, no combine task, siblings
+# ==========================================================================
+
+
+def _typed_plan_json(*tasks: dict[str, Any], strategy: str = "HYBRID") -> str:
+    return json.dumps({"strategy": strategy, "tasks": list(tasks)})
+
+
+class TestPlanTypes:
+    """FRE-1493 AC-3 (ADR-0150 AC-7, fixture half) — the planner picks registry types."""
+
+    def test_unknown_type_is_rejected(self) -> None:
+        raw = _typed_plan_json({"name": "a", "goal": "g", "type": "analyst"})
+        assert _validate_plan_json(raw) is None
+
+    def test_missing_type_is_rejected(self) -> None:
+        assert _validate_plan_json(_typed_plan_json({"name": "a", "goal": "g"})) is None
+
+    def test_one_unknown_type_rejects_the_whole_plan(self) -> None:
+        raw = _typed_plan_json(
+            {"name": "a", "goal": "g", "type": "researcher"},
+            {"name": "b", "goal": "g", "type": "analyst"},
+        )
+        assert _validate_plan_json(raw) is None
+
+    def test_unknown_thoroughness_is_rejected(self) -> None:
+        raw = _typed_plan_json(
+            {"name": "a", "goal": "g", "type": "researcher", "thoroughness": "exhaustive"}
+        )
+        assert _validate_plan_json(raw) is None
+
+    def test_missing_thoroughness_takes_the_type_default(self) -> None:
+        plan = _validate_plan_json(
+            _typed_plan_json(
+                {"name": "a", "goal": "g", "type": "researcher"},
+                {"name": "b", "goal": "g", "type": "general"},
+            )
+        )
+        assert plan is not None
+        assert [t.thoroughness for t in plan.tasks] == ["standard", "quick"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_plan_dispatches_both_with_their_tools(self) -> None:
+        plan = _validate_plan_json(
+            _typed_plan_json(
+                {
+                    "name": "find_events",
+                    "goal": "g1",
+                    "type": "researcher",
+                    "thoroughness": "quick",
+                },
+                {"name": "sum_costs", "goal": "g2", "type": "general", "thoroughness": "thorough"},
+            )
+        )
+        assert plan is not None
+        specs: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            specs.append(kwargs["spec"])
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        await _dispatch_hermetic(
+            ExpansionController(),
+            plan,
+            _run,
+            granted=("web_search", *_GENERAL_TOOLS),
+        )
+
+        assert [(s.worker_type, s.thoroughness) for s in specs] == [
+            (WorkerType.RESEARCHER, "quick"),
+            (WorkerType.GENERAL, "thorough"),
+        ]
+        assert specs[0].tools == ["web_search"]
+        assert specs[1].tools == list(_GENERAL_TOOLS)
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_type_never_reaches_dispatch(self) -> None:
+        """Seeded end to end: the invalid plan falls back, and every dispatched spec is typed."""
+        specs: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            specs.append(kwargs["spec"])
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        client = AsyncMock()
+        client.respond = AsyncMock(
+            return_value={
+                "content": _typed_plan_json({"name": "a", "goal": "g", "type": "analyst"}),
+                "cost_usd": 0.0,
+            }
+        )
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent", side_effect=_run
+        ):
+            result = await ExpansionController().execute(
+                query="what is on in Palma this week",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="t",
+                messages=[],
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is True
+        assert specs
+        assert all(isinstance(s.worker_type, WorkerType) for s in specs)
+
+
+# The real 2026-09-11 evidence plan (session bbc0ddaa, read from
+# agent-captains-captures-subagents-2026-09): two research tasks and one combine
+# task. Goals shortened; names are illustrative — captures record goals only.
+_RECORDED_EVENTS_GOAL = (
+    "Identify all events, festivals, concerts, markets, and cultural happenings taking "
+    "place in Mallorca between September 19 and September 26, 2026."
+)
+_RECORDED_PLACES_GOAL = (
+    "Compile a curated list of the best towns, beaches, and archaeological sites to "
+    "visit in Mallorca, within about one hour's drive of Playa de Palma."
+)
+_RECORDED_COMBINE_GOAL = (
+    "Combine the events research and the towns/beaches/archaeology research into a "
+    "single cohesive 7-day trip guide."
+)
+
+
+class TestNoCombineTask:
+    """FRE-1493 AC-4 (ADR-0150 AC-8, structural) — no reserved slot, no combine rule."""
+
+    def test_max_tasks_holds_no_reserved_slot(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import _MAX_TASKS
+
+        assert _MAX_TASKS == {"HYBRID": 3, "DECOMPOSE": 5}
+
+    def test_the_planner_prompt_holds_no_combine_instruction(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        prompt = _build_planner_system_prompt(["web_search"])
+        assert "synthesis task" not in prompt
+        assert "recommendation task" not in prompt
+        assert "+ 1" not in prompt
+        assert "- HYBRID: 1-3 tasks\n" in prompt
+        assert "- DECOMPOSE: 2-5 tasks\n" in prompt
+        assert "do not add a task that combines or synthesises other tasks' results" in prompt
+
+    def test_three_research_tasks_plus_a_combine_task_yield_three(self) -> None:
+        """The ticket's seeded form: the combine task, last, is cut by the cap."""
+        raw = _typed_plan_json(
+            {"name": "find_events", "goal": _RECORDED_EVENTS_GOAL, "type": "researcher"},
+            {"name": "find_places", "goal": _RECORDED_PLACES_GOAL, "type": "researcher"},
+            {"name": "find_food", "goal": "Find restaurants near Palma.", "type": "researcher"},
+            {"name": "combine_guide", "goal": _RECORDED_COMBINE_GOAL, "type": "general"},
+        )
+        plan = _validate_plan_json(raw, "HYBRID")
+        assert plan is not None
+        assert [t.name for t in plan.tasks] == ["find_events", "find_places", "find_food"]
+
+    def test_the_recorded_plan_shows_the_cap_cannot_see_a_combine_task(self) -> None:
+        """The real plan was 2+1, which fits the cap: validation keeps the combine task.
+
+        Recorded so the gate sees it: removal of a combine task inside the cap rests
+        on the planner prompt's rule alone, because the validator reads shape, not
+        meaning.
+        """
+        raw = _typed_plan_json(
+            {"name": "find_events", "goal": _RECORDED_EVENTS_GOAL, "type": "researcher"},
+            {"name": "find_places", "goal": _RECORDED_PLACES_GOAL, "type": "researcher"},
+            {"name": "combine_guide", "goal": _RECORDED_COMBINE_GOAL, "type": "general"},
+        )
+        plan = _validate_plan_json(raw, "HYBRID")
+        assert plan is not None
+        assert len(plan.tasks) == 3
+
+
+class TestSiblingLine:
+    """FRE-1493 AC-5 (ADR-0150 AC-9) — each worker is told what its siblings own."""
+
+    @staticmethod
+    async def _specs(plan: ExpansionPlan) -> list[Any]:
+        specs: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            specs.append(kwargs["spec"])
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        await _dispatch_hermetic(ExpansionController(), plan, _run, granted=("web_search",))
+        return specs
+
+    @pytest.mark.asyncio
+    async def test_two_task_fanout_each_names_the_other(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _build_task_message
+
+        plan = ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[
+                _task("find_events", "g1", WorkerType.RESEARCHER),
+                _task("find_places", "g2", WorkerType.RESEARCHER),
+            ],
+        )
+        specs = await self._specs(plan)
+
+        assert [s.sibling_tasks for s in specs] == [("find_places",), ("find_events",)]
+        first = _build_task_message(specs[0], "t", None)
+        second = _build_task_message(specs[1], "t", None)
+        assert "Other workers in this turn own: find_places. Stay inside your task." in first
+        assert "Other workers in this turn own: find_events. Stay inside your task." in second
+
+    @pytest.mark.asyncio
+    async def test_a_one_task_fanout_reads_none(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _build_task_message
+
+        specs = await self._specs(_one_task_plan(WorkerType.RESEARCHER))
+
+        assert specs[0].sibling_tasks == ()
+        assert "Other workers in this turn own: none." in _build_task_message(specs[0], "t", None)

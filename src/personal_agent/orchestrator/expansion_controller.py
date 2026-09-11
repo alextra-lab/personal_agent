@@ -47,11 +47,19 @@ from personal_agent.orchestrator.fallback_planner import generate_fallback_plan
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 from personal_agent.orchestrator.tool_dispatch import get_shared_tool_execution_layer
+from personal_agent.orchestrator.worker_types import (
+    THOROUGHNESS_LEVELS,
+    WORKER_TYPES,
+    WorkerType,
+    worker_types_declaring,
+)
 
 logger = structlog.get_logger(__name__)
 
-# Plan schema: max entity tasks per strategy (synthesis task is additional)
-_MAX_TASKS = {"HYBRID": 4, "DECOMPOSE": 6}
+# Plan schema: max tasks per strategy. ADR-0150 D4: no reserved extra slot — the
+# combine task it held re-did the research with none of the sibling reports, and
+# the primary synthesises over every result anyway.
+_MAX_TASKS = {"HYBRID": 3, "DECOMPOSE": 5}
 # FRE-1389: bound on how many out-of-grant gap signals one dispatch pass acts
 # on — a defensive cap, not an expected count (a result's own signals are
 # already capped at the source; this bounds the union across every task).
@@ -103,38 +111,46 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
     Returns:
         The complete planner system prompt.
     """
-    if available_sub_agent_tools:
-        tools_rule = (
-            "list of tool names this task needs, chosen ONLY from: "
-            f"{', '.join(available_sub_agent_tools)} (omit or leave empty if none needed)"
-        )
-    else:
-        tools_rule = "no tools are currently available to sub-agents — always omit or leave empty"
-    # ADR-0149 D2: what does NOT vary per task today is scope. The planner wrote
-    # "research events in Mallorca for that week" with no knowledge that the
-    # worker had five rounds to do it in. Rendered live from the setting for the
-    # reason FRE-1389 AC-1 gave for the tool surface above — a hardcoded number
-    # here drifts from the value that binds, and nothing detects it.
-    budget_rule = (
-        f"Each sub-agent has at most {get_settings().sub_agent_max_tool_iterations} tool "
-        "round(s) before it must write its report (a round may hold several parallel "
-        "tool calls). Scope every task so a worker can answer it inside that budget. "
-        "Prefer one precise task over one broad one."
+    # ADR-0150 D2: the planner picks a registry type per task, never tools. Each
+    # type's description is rendered live from the registry, with the part of its
+    # closed tool list governance grants right now — so the prompt still never
+    # advertises a refused tool (FRE-1463), and a type stays pickable with no
+    # tools (a `general` worker can answer from its own knowledge).
+    surface = set(available_sub_agent_tools)
+    type_lines = "\n".join(
+        f"  - {worker_type.value}: {spec.description}. Tools granted now: "
+        f"{', '.join(t for t in spec.tools if t in surface) or 'none'}"
+        for worker_type, spec in WORKER_TYPES.items()
     )
+    # ADR-0149 D2 / ADR-0150 D3: the planner is told what each level buys, rendered
+    # live from the setting — a hardcoded number here drifts from the value that
+    # binds, and nothing detects it (the reason FRE-1389 AC-1 gave for the tools).
+    levels = ", ".join(
+        f"{level} ({get_settings().sub_agent_rounds_for(level)} tool round(s))"
+        for level in THOROUGHNESS_LEVELS
+    )
+    type_names = "|".join(t.value for t in WORKER_TYPES)
+    level_names = "|".join(THOROUGHNESS_LEVELS)
     return (
         "You are a task decomposition planner. Given a user query and a strategy, "
         "produce a JSON plan that breaks the query into independent sub-tasks.\n\n"
         "Output ONLY valid JSON matching this schema:\n"
         '{"strategy": "HYBRID|DECOMPOSE", "tasks": [{"name": "string", '
-        '"goal": "string", "constraints": ["string"], "expected_output": "string", '
-        '"tools": ["string"]}]}\n\n'
+        f'"goal": "string", "constraints": ["string"], "type": "{type_names}", '
+        f'"thoroughness": "{level_names}"}}]}}\n\n'
         "Rules:\n"
-        "- Each task must be independently answerable\n"
-        "- HYBRID: 2-3 tasks + 1 synthesis task (max 4)\n"
-        "- DECOMPOSE: 3-5 tasks + 1 recommendation task (max 6)\n"
+        "- Each task must be independently answerable. No task sees another task's "
+        "result, and the final answer is written from all task reports together, so "
+        "do not add a task that combines or synthesises other tasks' results\n"
+        "- HYBRID: 1-3 tasks\n"
+        "- DECOMPOSE: 2-5 tasks\n"
         "- task names must be snake_case identifiers\n"
-        f"- tools: {tools_rule}\n"
-        f"- {budget_rule}\n"
+        "- type: the kind of worker that runs the task, one of:\n"
+        f"{type_lines}\n"
+        f"- thoroughness: how much work the task needs, one of: {levels}. Omit it to "
+        "use the type's default. A round may hold several parallel tool calls. Scope "
+        "every task so a worker can answer it inside its budget. Prefer one precise "
+        "task over one broad one.\n"
         "- Do NOT answer the question — only produce the plan"
     )
 
@@ -198,16 +214,18 @@ def _compute_sub_agent_grants(
     tasks: list[PlanTask],
     trace_id: str,
 ) -> list[SubAgentToolGrant]:
-    """Filter each task's requested tools against the sub-agent tool grant set (FRE-1388).
+    """Filter each task's type tools against the sub-agent tool grant set (FRE-1388).
+
+    A task requests exactly its worker type's closed tool list (ADR-0150 D2); the
+    type is a request, and this filter is what governs it, unchanged.
 
     Fails safe: a governance-config or mode-lookup error denies every tool this
     dispatch requested rather than aborting the whole expansion turn. The grant
     set's own policy is already default-deny, so degrading to "deny everything"
-    on a lookup failure changes no correctness guarantee — it only matters once
-    a task actually requests a tool, which the planner never does today (FRE-884).
+    on a lookup failure changes no correctness guarantee.
 
     Args:
-        tasks: Plan tasks whose ``tools`` field to filter.
+        tasks: Plan tasks whose type's tools to filter.
         trace_id: Request trace identifier, for logging.
 
     Returns:
@@ -225,14 +243,17 @@ def _compute_sub_agent_grants(
         return [
             SubAgentToolGrant(
                 granted=(),
-                denied=tuple(task.tools),
+                denied=WORKER_TYPES[task.type].tools,
                 denial_reason=f"governance lookup failed: {exc}",
             )
             for task in tasks
         ]
 
     grants = [
-        evaluate_sub_agent_tool_grant(task.tools, current_mode, governance_config) for task in tasks
+        evaluate_sub_agent_tool_grant(
+            WORKER_TYPES[task.type].tools, current_mode, governance_config
+        )
+        for task in tasks
     ]
     for task, grant in zip(tasks, grants, strict=True):
         if grant.denied:
@@ -476,10 +497,13 @@ class ExpansionController:
 
         logger.info("planner_started", strategy=strategy, trace_id=trace_id)
 
+        # Read once, inside the try (an unexpected lookup error still reaches the
+        # fallback), and shared with the fallback planner so both plan against the
+        # same grant surface. Empty until read, which fails closed to `general`.
+        tool_surface: list[str] = []
         try:
-            planner_system_prompt = _build_planner_system_prompt(
-                _current_sub_agent_tool_surface(trace_id)
-            )
+            tool_surface = _current_sub_agent_tool_surface(trace_id)
+            planner_system_prompt = _build_planner_system_prompt(tool_surface)
             planner_messages = [
                 {"role": "system", "content": planner_system_prompt},
                 {
@@ -536,6 +560,8 @@ class ExpansionController:
                 logger.info(
                     "planner_completed",
                     plan_task_count=len(plan.tasks),
+                    task_types=[task.type.value for task in plan.tasks],
+                    task_thoroughness=[task.thoroughness for task in plan.tasks],
                     parse_success=True,
                     fallback_used=False,
                     trace_id=trace_id,
@@ -573,7 +599,9 @@ class ExpansionController:
             )
 
         # --- Fallback planner ---
-        fallback_plan = generate_fallback_plan(query=query, strategy=strategy)
+        fallback_plan = generate_fallback_plan(
+            query=query, strategy=strategy, sub_agent_tool_surface=tool_surface
+        )
         duration_ms = time.monotonic() * 1000 - start_ms
 
         result.phase_results.append(
@@ -680,9 +708,9 @@ class ExpansionController:
         )
 
         # FRE-1388: a sub-agent is a distinct governance principal from the
-        # primary. task.tools is model-authored (the planner's output) and is
-        # filtered against the sub-agent tool grant set here — never passed
-        # through unfiltered, and never checked against the primary's own
+        # primary. The task's type tools (ADR-0150 D2, the type the planner
+        # picked) are filtered against the sub-agent tool grant set here — never
+        # passed through unfiltered, and never checked against the primary's own
         # per-tool `allowed_in_modes`.
         grants = _compute_sub_agent_grants(plan.tasks, trace_id)
 
@@ -690,7 +718,6 @@ class ExpansionController:
             SubAgentSpec(
                 task=task.goal,
                 context=messages[-4:] if messages else [],
-                output_format=task.expected_output,
                 # FRE-1379: no max_tokens override here — SubAgentSpec's own
                 # default (None) defers to the deployment's catalog-declared
                 # ceiling. settings.sub_agent_max_tokens used to be passed here
@@ -708,6 +735,11 @@ class ExpansionController:
                 mode=task.mode,
                 denied_tools=grant.denied,
                 turn_started_at=turn_started_at,
+                worker_type=task.type,
+                thoroughness=task.thoroughness,
+                # ADR-0150 D5: isolation by partition — each worker is told what
+                # its siblings own, so it stays inside its own task.
+                sibling_tasks=tuple(other.name for other in plan.tasks if other is not task),
             )
             for task, grant in zip(plan.tasks, grants, strict=True)
         ]
@@ -869,9 +901,14 @@ class ExpansionController:
         ``TOOL_GAP: <name>`` sentinel (``stated_tool_gap``) — it never
         acquires the tool itself. This method, acting on the controller's
         behalf (the "primary" in the ticket's architecture section), is the
-        only thing that may construct a replacement with an expanded grant,
-        and it does so at most once per task: the replacement's own gap
-        signals, if any, are never checked, so a task cannot chain retries.
+        only thing that may dispatch a replacement, and it does so at most once
+        per task: the replacement's own gap signals, if any, are never checked,
+        so a task cannot chain retries.
+
+        Closed by type (ADR-0150 D2): the replacement is a worker of the one
+        other registry type whose tool list declares the gap-named tool, with the
+        same task, thoroughness and sibling list. Every worker that runs is a
+        registry type; none runs with a widened list.
 
         Args:
             task: The plan task that produced ``original_result``.
@@ -901,10 +938,10 @@ class ExpansionController:
 
         Returns:
             The replacement SubAgentResult, or ``None`` when there was no gap,
-            the gap named nothing actually registered, a re-check of the
-            grant still denies it (the original refusal already stands via
-            ``denied_tools``/the synthesis context), or the turn's budget is
-            already exhausted.
+            the gap named nothing actually registered, no other type (or more
+            than one) declares it, governance does not grant it to that type
+            (the original refusal already stands via ``denied_tools``/the
+            synthesis context), or the turn's budget is already exhausted.
         """
         from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
         from personal_agent.transport.events import Phase  # noqa: PLC0415
@@ -940,33 +977,46 @@ class ExpansionController:
         if not gap_names:
             return None
 
+        # ADR-0150 D2: closed by type. A same-type worker with a widened list would
+        # breach the registry, so the replacement is the ONE other type whose
+        # closed list declares a gap-named tool. None, or more than one, and no
+        # replacement runs — the gap reaches the primary on the original result.
+        target_types = {
+            declaring
+            for name in gap_names
+            for declaring in worker_types_declaring(name)
+            if declaring != spec.worker_type
+        }
+        if len(target_types) != 1:
+            return None
+        (target_type,) = target_types
+
         # Reuses _compute_sub_agent_grants's existing fail-closed lookup
         # (GovernanceConfigError/ModeManagerError → deny everything) rather
         # than a second hand-rolled try/except around the same lookup.
-        (new_grant,) = _compute_sub_agent_grants(
-            [replace(task, tools=list(dict.fromkeys([*task.tools, *gap_names])))], trace_id
-        )
-        # Compare against spec.tools (what was ACTUALLY granted before this
-        # retry), not task.tools (what the planner merely requested) — granted
-        # is always a subset of requested, so a name denied in the original
-        # request would otherwise be excluded from this check for free and
-        # mask a real expansion on the rare case governance state itself
-        # changes between the original dispatch and this redispatch check.
-        newly_grantable = set(new_grant.granted) - set(spec.tools)
-        if not newly_grantable:
+        (new_grant,) = _compute_sub_agent_grants([replace(task, type=target_type)], trace_id)
+        # The replacement must actually hold the tool the gap named; a target
+        # type whose gap tool governance still refuses would re-run the same
+        # task without it.
+        if not set(gap_names) & set(new_grant.granted):
             return None
 
         logger.info(
             "sub_agent_redispatched_with_expanded_grant",
             task_name=task.name,
             stated_gap=gap_names,
+            from_type=spec.worker_type.value,
+            to_type=target_type.value,
             expanded_grant=list(new_grant.granted),
             trace_id=trace_id,
         )
 
+        # Same task, thoroughness, siblings, context and date — only the type and
+        # its grant change (dataclasses.replace carries the rest over).
         replacement_spec = replace(
             spec,
-            task=f"{task.goal} (retry: expanded tool grant)",
+            task=f"{task.goal} (retry: {target_type.value} worker)",
+            worker_type=target_type,
             tools=list(new_grant.granted),
             denied_tools=new_grant.denied,
         )
@@ -1106,10 +1156,12 @@ def _validate_plan_json(
     if not isinstance(tasks_raw, list) or len(tasks_raw) == 0:
         return None
 
-    max_tasks = _MAX_TASKS.get(strategy, 4)
+    max_tasks = _MAX_TASKS.get(strategy, _MAX_TASKS["HYBRID"])
     tasks: list[PlanTask] = []
 
-    for t in tasks_raw[: max_tasks + 1]:  # +1 for synthesis/recommendation task
+    # ADR-0150 D4: no reserved slot. A legacy `tools` / `expected_output` key is
+    # ignored — the type decides both now.
+    for t in tasks_raw[:max_tasks]:
         if not isinstance(t, dict):
             continue
         name = t.get("name")
@@ -1117,16 +1169,29 @@ def _validate_plan_json(
         if not name or not goal:
             return None
 
-        raw_tools = t.get("tools", [])
-        tools = [str(x) for x in raw_tools] if isinstance(raw_tools, list) else []
+        # ADR-0150 D2: the registry is closed. A missing or unknown type makes
+        # the whole plan invalid, which reaches the fallback planner — an unknown
+        # type never reaches dispatch.
+        try:
+            worker_type = WorkerType(t.get("type"))
+        except ValueError:
+            return None
+        raw_level = t.get("thoroughness")
+        if raw_level is None:
+            thoroughness = WORKER_TYPES[worker_type].default_thoroughness
+        else:
+            level = next((lvl for lvl in THOROUGHNESS_LEVELS if lvl == raw_level), None)
+            if level is None:
+                return None
+            thoroughness = level
 
         tasks.append(
             PlanTask(
                 name=str(name),
                 goal=str(goal),
+                type=worker_type,
+                thoroughness=thoroughness,
                 constraints=[str(c) for c in t.get("constraints", [])],
-                expected_output=str(t.get("expected_output", "text")),
-                tools=tools,
             )
         )
 

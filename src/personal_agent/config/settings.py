@@ -30,6 +30,13 @@ from personal_agent.config.validators import (
 
 log = structlog.get_logger(__name__)
 
+#: How much searching a sub-agent task needs (ADR-0150 D3). The planner names a
+#: level per task; ``sub_agent_rounds_by_thoroughness`` maps a level to a round
+#: budget. Defined here, not in ``orchestrator.worker_types``, because the
+#: orchestrator package imports the executor and config cannot import it back.
+Thoroughness = Literal["quick", "standard", "thorough"]
+THOROUGHNESS_LEVELS: tuple[Thoroughness, ...] = ("quick", "standard", "thorough")
+
 
 class AppConfig(BaseSettings):
     """Unified application configuration.
@@ -259,6 +266,17 @@ class AppConfig(BaseSettings):
             "on the PARENT turn's TaskType — the wrong axis for a sub-agent's own bounded-"
             "worker budget. Lower than the primary's cap because a sub-agent is a single "
             "focused task, not an open-ended turn."
+        ),
+    )
+    sub_agent_rounds_by_thoroughness: dict[Thoroughness, int] = Field(
+        default_factory=dict,
+        description=(
+            "ADR-0150 D3: an explicit round budget per thoroughness level (quick, "
+            "standard, thorough). A level not set here reads sub_agent_max_tool_iterations "
+            "(see sub_agent_rounds_for), so by default every level equals the cap and "
+            "nothing changes on merge. Each value is refused at load when above the cap. "
+            "Env form: AGENT_SUB_AGENT_ROUNDS_BY_THOROUGHNESS='{\"quick\": 2}'. The "
+            "numbers are FRE-1487's to set, on the owner's decision."
         ),
     )
     orchestrator_max_repeated_tool_calls: int = Field(
@@ -3045,6 +3063,46 @@ class AppConfig(BaseSettings):
         # the server root, not under it.
         origin = self.slm_base_url.rstrip("/").removesuffix("/v1")
         return f"{origin}/health"
+
+    def sub_agent_rounds_for(self, level: Thoroughness) -> int:
+        """The round budget a sub-agent task of ``level`` runs under (ADR-0150 D3).
+
+        Read at use rather than filled in at load, so a level with no explicit
+        value follows the cap wherever the cap is set — the FRE-1487 study raises
+        and later restores it, and the budget follows both ways without a
+        restart-breaking mismatch.
+
+        Args:
+            level: The task's thoroughness level.
+
+        Returns:
+            The explicit value for ``level``, else ``sub_agent_max_tool_iterations``.
+        """
+        return self.sub_agent_rounds_by_thoroughness.get(level, self.sub_agent_max_tool_iterations)
+
+    @model_validator(mode="after")
+    def _validate_sub_agent_rounds_by_thoroughness(self) -> "AppConfig":
+        """Refuse a thoroughness budget above the sub-agent cap, or below zero (ADR-0150 AC-6).
+
+        Refused, not clamped: a clamp would let an over-cap value load, and the
+        cap is the limit no per-level number may exceed.
+
+        Raises:
+            ValueError: When any explicit value is negative or above
+                ``sub_agent_max_tool_iterations``.
+        """
+        cap = self.sub_agent_max_tool_iterations
+        bad = {
+            level: rounds
+            for level, rounds in self.sub_agent_rounds_by_thoroughness.items()
+            if rounds < 0 or rounds > cap
+        }
+        if bad:
+            raise ValueError(
+                f"sub_agent_rounds_by_thoroughness values must be between 0 and "
+                f"sub_agent_max_tool_iterations ({cap}); offending: {bad}."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_compression_geometry(self) -> "AppConfig":

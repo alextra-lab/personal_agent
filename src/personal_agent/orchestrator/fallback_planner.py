@@ -4,8 +4,11 @@ Generates an ExpansionPlan from prompt structure when the LLM planner
 fails (timeout, schema validation failure, empty plan). Scoped to
 prompts with explicitly enumerated entities or dimensions.
 
-For open-ended prompts without enumerable structure, produces a generic
-2-task split (research + recommendation).
+For open-ended prompts without enumerable structure, produces a single
+research task.
+
+No task combines the others' results (ADR-0150 D4): the primary synthesises
+over every worker's report, so a combine task only re-does the research.
 
 See: ADR-0036 Decision 3 (scoped to enumerated comparisons)
 """
@@ -13,6 +16,7 @@ See: ADR-0036 Decision 3 (scoped to enumerated comparisons)
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 import structlog
 
@@ -20,6 +24,7 @@ from personal_agent.orchestrator.expansion_types import (
     ExpansionPlan,
     PlanTask,
 )
+from personal_agent.orchestrator.worker_types import WORKER_TYPES, WorkerType
 
 logger = structlog.get_logger(__name__)
 
@@ -49,22 +54,29 @@ _MAX_DECOMPOSE_TASKS = 5
 def generate_fallback_plan(
     query: str,
     strategy: str,
+    sub_agent_tool_surface: Sequence[str] = (),
 ) -> ExpansionPlan:
     """Generate a deterministic plan from prompt structure.
 
     Args:
         query: The user's original query text.
         strategy: "HYBRID" or "DECOMPOSE".
+        sub_agent_tool_surface: Tool names grantable to a sub-agent in the
+            current mode. Every task is a ``researcher`` when a researcher tool
+            is in it, else a ``general`` worker (ADR-0150 D2). Empty — the
+            default, and what a failed governance lookup yields — fails closed to
+            ``general``.
 
     Returns:
         ExpansionPlan with is_fallback=True.
     """
+    worker_type = _fallback_worker_type(sub_agent_tool_surface)
     entities = _extract_entities(query)
 
     if entities:
-        tasks = _build_entity_tasks(entities, query, strategy)
+        tasks = _build_entity_tasks(entities, query, strategy, worker_type)
     else:
-        tasks = _build_generic_tasks(query, strategy)
+        tasks = _build_generic_tasks(query, worker_type)
 
     plan = ExpansionPlan(
         strategy=strategy,
@@ -76,11 +88,20 @@ def generate_fallback_plan(
         "fallback_plan_generated",
         strategy=strategy,
         task_count=len(tasks),
+        worker_type=worker_type.value,
         entities_found=len(entities),
         entity_names=[e.strip() for e in entities],
     )
 
     return plan
+
+
+def _fallback_worker_type(sub_agent_tool_surface: Sequence[str]) -> WorkerType:
+    """``researcher`` when any of its tools is grantable now, else ``general``."""
+    researcher_tools = WORKER_TYPES[WorkerType.RESEARCHER].tools
+    if any(tool in sub_agent_tool_surface for tool in researcher_tools):
+        return WorkerType.RESEARCHER
+    return WorkerType.GENERAL
 
 
 def _clean_entity(raw: str) -> str:
@@ -122,76 +143,52 @@ def _build_entity_tasks(
     entities: list[str],
     query: str,
     strategy: str,
+    worker_type: WorkerType,
 ) -> list[PlanTask]:
-    """Build tasks from extracted entities.
+    """Build one task per extracted entity.
 
     Args:
         entities: Extracted entity names.
         query: Original query for context.
         strategy: HYBRID or DECOMPOSE.
+        worker_type: The registry type every task runs as.
 
     Returns:
         List of PlanTask instances.
     """
     max_tasks = _MAX_HYBRID_TASKS if strategy == "HYBRID" else _MAX_DECOMPOSE_TASKS
-    entity_tasks = entities[:max_tasks]
-
-    tasks: list[PlanTask] = []
-    for entity in entity_tasks:
-        tasks.append(
-            PlanTask(
-                name=f"evaluate_{_slugify(entity)}",
-                goal=f"Evaluate {entity} in the context of: {query}",
-                constraints=[
-                    f"Focus specifically on {entity}",
-                    "Include strengths, weaknesses, and trade-offs",
-                ],
-                expected_output="Evaluation summary with key findings",
-            )
-        )
-
-    # Add synthesis/recommendation task
-    entity_list = ", ".join(entity_tasks)
-    tasks.append(
+    return [
         PlanTask(
-            name="synthesize_recommendation",
-            goal=f"Synthesize findings across {entity_list} and provide a recommendation",
+            name=f"evaluate_{_slugify(entity)}",
+            goal=f"Evaluate {entity} in the context of: {query}",
+            type=worker_type,
+            thoroughness=WORKER_TYPES[worker_type].default_thoroughness,
             constraints=[
-                "Reference specific findings from sub-agent evaluations",
-                "Provide a clear recommendation with reasoning",
+                f"Focus specifically on {entity}",
+                "Include strengths, weaknesses, and trade-offs",
             ],
-            expected_output="Comparative synthesis with recommendation",
         )
-    )
+        for entity in entities[:max_tasks]
+    ]
 
-    return tasks
 
-
-def _build_generic_tasks(query: str, strategy: str) -> list[PlanTask]:
-    """Build generic 2-task split for prompts without enumerable structure.
+def _build_generic_tasks(query: str, worker_type: WorkerType) -> list[PlanTask]:
+    """Build the single research task for a prompt without enumerable structure.
 
     Args:
         query: Original query text.
-        strategy: HYBRID or DECOMPOSE.
+        worker_type: The registry type the task runs as.
 
     Returns:
-        Two-task plan: research/analysis + recommendation/synthesis.
+        A one-task plan.
     """
     return [
         PlanTask(
             name="research_analysis",
             goal=f"Research and analyze: {query}" if query else "Research the topic",
+            type=worker_type,
+            thoroughness=WORKER_TYPES[worker_type].default_thoroughness,
             constraints=["Be thorough but focused", "Identify key considerations"],
-            expected_output="Analysis with key findings",
-        ),
-        PlanTask(
-            name="synthesize_recommendation",
-            goal="Synthesize the research into a clear recommendation",
-            constraints=[
-                "Reference specific findings from the analysis",
-                "Provide actionable guidance",
-            ],
-            expected_output="Recommendation with supporting evidence",
         ),
     ]
 

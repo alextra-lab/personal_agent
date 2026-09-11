@@ -126,7 +126,6 @@ async def test_run_sub_agent_threads_session_id() -> None:
     spec = SubAgentSpec(
         task="test",
         context=[{"role": "user", "content": "go"}],
-        output_format="text",
         max_tokens=256,
         timeout_seconds=30.0,
     )

@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from personal_agent.orchestrator.worker_types import Thoroughness, WorkerType
+
 
 class SubAgentMode(Enum):
     """Execution mode for a sub-agent task.
@@ -43,20 +45,22 @@ class PlanTask:
     Args:
         name: Task identifier (e.g., "compare_performance").
         goal: What this sub-agent should answer or produce.
+        type: The registry worker type that runs this task (ADR-0150 D2). The
+            type, not the planner, decides the tools, the prompt block and the
+            report shape; the per-task ``tools`` list and free-text
+            ``expected_output`` this field replaced are gone.
+        thoroughness: The task's named level (ADR-0150 D3), mapped to a round
+            budget by ``settings.sub_agent_rounds_for``.
         constraints: Scope or focus limits for the sub-agent.
-        expected_output: Output shape description ("text", "comparison table", etc.).
         mode: Execution mode (currently always PARALLEL_INFERENCE).
-        tools: Tool names this task requests (FRE-1389) — model-authored by the
-            planner, filtered against the sub-agent tool grant set before
-            dispatch (FRE-1388) and never passed through unfiltered.
     """
 
     name: str
     goal: str
+    type: WorkerType
+    thoroughness: Thoroughness
     constraints: list[str] = field(default_factory=list)
-    expected_output: str = "text"
     mode: SubAgentMode = SubAgentMode.PARALLEL_INFERENCE
-    tools: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

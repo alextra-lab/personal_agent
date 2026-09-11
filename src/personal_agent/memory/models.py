@@ -297,6 +297,27 @@ class MemoryQuery(BaseModel):
     authenticated: bool = False
 
 
+class RelevanceValue(BaseModel):
+    """One item's relevance score and the component that produced it (ADR-0148 D4).
+
+    The two travel together because a bound is calibrated against one component's score
+    space and says nothing about another's -- FRE-695 measured reranker scales as
+    "arbitrary and not comparable across arms". A score with no named producer cannot be
+    compared against a bound at all, so the pair is the unit rather than the number.
+
+    Attributes:
+        score: The value the scorer produced, in that scorer's own space.
+        model: The model identifier that produced it, as the serving configuration names
+            it. Never a synthesised or defaulted name -- an unattributed score is not a
+            relevance value, and the producer omits the pair entirely in that case.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    score: float
+    model: str
+
+
 class MemoryQueryResult(BaseModel):
     """Result of a memory query."""
 
@@ -304,6 +325,29 @@ class MemoryQueryResult(BaseModel):
     entities: list[EntityNode] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
     relevance_scores: dict[str, float] = Field(default_factory=dict)  # turn_id -> score
+    relevance_values: dict[str, RelevanceValue] = Field(
+        default_factory=dict,
+        description=(
+            "The relevance value of each scored item, for the admission boundary to gate "
+            "on (ADR-0148 D4, FRE-1480). Distinct from `relevance_scores`, which stays "
+            "the fused-rank sort key the service contract already publishes -- the two "
+            "are different facts, and rank order is not a relevance measure. Keyed "
+            "`entity:<name>` / `turn:<turn_id>`: `EntityNode.entity_id` is the entity's "
+            "name and a turn's identity is its id, so the two spaces are not disjoint "
+            "and an unnamespaced key would let one kind take another's provenance. An "
+            "item no model scored is absent rather than present with a default."
+        ),
+    )
+    relevance_scored: bool = Field(
+        default=False,
+        description=(
+            "Whether the reranking branch produced this result (ADR-0148 D4, FRE-1480). "
+            "False on every early return and on the legacy single-path branch, which "
+            "never reranks -- a bound measured on reranker scores describes only a "
+            "reranked set, so the consumer must be able to tell which it has. Defaults "
+            "False so a path that says nothing cannot be read as having been scored."
+        ),
+    )
     arms_failed: list[str] = Field(
         default_factory=list,
         description=(

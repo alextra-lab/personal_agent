@@ -648,6 +648,47 @@ class AppConfig(BaseSettings):
             "nothing)."
         ),
     )
+
+    # --- Entity-match relevance bound (ADR-0148 D4, FRE-1480) --------------------
+    #
+    # The entity-match path's own bound, in the SERVING RERANKER's own score space -- the
+    # same component the broad-recall bound above is measured against, because
+    # `_multipath_fused_recall`'s `path` argument is telemetry only and both paths run one
+    # core. It is still a separate setting behind a separate artifact: ADR-0148 D4 carries
+    # one bound per path and AC-10 names this artifact explicitly, the two cores are free
+    # to diverge, and a recalibration of one path must not silently move the other's gate.
+    #
+    # Measured 2026-09-11 against Voyage rerank-2.5 by re-running FRE-1479's harness at
+    # --artifact config/calibration/entity_match_relevance_bound.json. It reproduced that
+    # run exactly -- bound 0.338891, 93.3% of 119 labelled positives admitted (entity 93.0%,
+    # turn 93.5%), negative median 0.337891 -- which is a reproducibility result about the
+    # endpoint, not independent evidence about this path's population. See
+    # docs/research/2026-09-11-fre-1480-entity-match-relevance-value.md.
+    #
+    # NOT comparable to `proactive_memory_relevance_bound`, which lives in normalized Neo4j
+    # embedding space (FRE-695: reranker scales are "arbitrary and not comparable").
+    entity_match_relevance_bound: float | None = Field(
+        default=0.338891,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "ADR-0148 D4: minimum reranker score for an item admitted by the entity-match "
+            "path. Calibrated against the serving reranker -- the committed source is "
+            "config/calibration/entity_match_relevance_bound.json, and config_guard's "
+            "entity_match_bound_calibration check binds this value to it. None means no "
+            "calibration is in force and the gate does not fire; it never silently "
+            "defaults to zero."
+        ),
+    )
+    entity_match_relevance_gate_enabled: bool = Field(
+        default=True,
+        description=(
+            "ADR-0148 D4: apply the entity-match relevance bound. Off restores the "
+            "pre-FRE-1480 admission behaviour exactly, which is what makes the gate's own "
+            "tests able to fail (a test passing both before and after a change proves "
+            "nothing)."
+        ),
+    )
     reranker_input_cap: int = Field(
         default=25,
         ge=1,

@@ -260,6 +260,10 @@ class TestAssembleContext:
                         "key_entities": [],
                     }
                 ],
+                # FRE-1480: stated explicitly -- MagicMock would auto-create it truthy and
+                # arm the relevance gate against a fixture carrying no score. This test is
+                # about truncation marking, not admission.
+                relevance_scored=False,
             )
         )
 
@@ -511,6 +515,10 @@ class TestStanceEnrichment:
                 ],
                 episodes=[],
                 relevance_scores={},
+                # FRE-1480: MagicMock auto-creates this truthy, which would arm the
+                # relevance gate against a fixture that carries no score and drop
+                # every item. These stance tests are about enrichment, not admission.
+                relevance_scored=False,
             )
         )
         return mock_adapter
@@ -631,6 +639,10 @@ class TestStanceEnrichment:
                 ],
                 episodes=[],
                 relevance_scores={},
+                # FRE-1480: MagicMock auto-creates this truthy, which would arm the
+                # relevance gate against a fixture that carries no score and drop
+                # every item. These stance tests are about enrichment, not admission.
+                relevance_scored=False,
             )
         )
         # Query returns Beta before Alpha -- out of entity-recall order.

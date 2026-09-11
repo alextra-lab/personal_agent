@@ -29,6 +29,7 @@ from personal_agent.captains_log.turn_evidence import (
     memory_item_identity,
 )
 from personal_agent.config import settings
+from personal_agent.config.calibration import ENTITY_MATCH_RELEVANCE_BOUND_FILE
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
 from personal_agent.request_gateway.memory_status import (
@@ -87,6 +88,44 @@ def _arms_cause(arms_failed: Sequence[str]) -> str | None:
         A short machine-readable cause for the evidence record, or None.
     """
     return f"recall_arms_failed:{','.join(arms_failed)}" if arms_failed else None
+
+
+#: Cause recorded when a path could not establish relevance for at least one candidate.
+RELEVANCE_UNAVAILABLE_CAUSE = "recall_relevance_unavailable"
+
+
+def _unavailable_cause(discards: ProactiveDiscards) -> str | None:
+    """Name the no-relevance-value condition, when any candidate hit it (ADR-0148 D4).
+
+    A ``RECALL_RELEVANCE_UNAVAILABLE`` drop means the path could not measure that
+    candidate at all -- the reranker was off, the call degraded to a passthrough whose
+    "scores" are rank order, a fallback model answered on a scale the bound does not
+    describe, or the response simply omitted that index. D4's rule is that such a path
+    "has not established relevance, so it may not admit on the strength of order alone,
+    and it equally may not claim absence".
+
+    **One such drop is enough, whatever else the turn admitted.** ADR-0148 D2 states the
+    precedence as "fixed and total": ``UNAVAILABLE`` outranks everything, "if any arm
+    failed to run to completion, the turn did not establish what exists, whatever else
+    happened", and "a partially degraded recall is therefore UNAVAILABLE, never
+    NOTHING_RELEVANT". An earlier revision required that nothing was admitted, which let a
+    rerank response that scored one item and omitted another compose POPULATED -- a turn
+    presenting partial evidence as though the record were complete (codex plan-review).
+
+    A candidate that was measured and fell *below* the bound is a different fact and is
+    deliberately not named here: relevance was established for it, so the turn may still
+    compose NOTHING_RELEVANT.
+
+    Args:
+        discards: The candidates a path's gates removed.
+
+    Returns:
+        The cause, or None when every candidate the path dropped was measured.
+    """
+    unavailable = any(
+        reason is DropReason.RECALL_RELEVANCE_UNAVAILABLE for _, _, reason in discards
+    )
+    return RELEVANCE_UNAVAILABLE_CAUSE if unavailable else None
 
 
 def _stage_report(failure_cause: str | None) -> RecallStageReport:
@@ -148,9 +187,9 @@ def _freshness_score_modifier(last_accessed_at: datetime | None) -> float:
     return 1.0
 
 
-@lru_cache(maxsize=1)
-def _calibrated_reranker_model() -> str | None:
-    """The reranker the configured broad-recall bound was calibrated against (FRE-1479).
+@lru_cache(maxsize=4)
+def _calibrated_reranker_model(filename: str | None = None) -> str | None:
+    """The reranker one path's configured bound was calibrated against (FRE-1479/1480).
 
     Cached: the artifact is committed repository state, read once per process, exactly as
     ``AppConfig`` itself is. Without the cache this would be a file read on every
@@ -162,6 +201,10 @@ def _calibrated_reranker_model() -> str | None:
     happens to be configured now. Those differ exactly when a bound has gone stale, which
     is the case ``config_guard.check_broad_recall_bound_calibration`` reports and this
     function must not paper over.
+
+    Args:
+        filename: The path's committed artifact filename. None reads the broad-recall
+            artifact, which is what every pre-FRE-1480 caller meant.
 
     Returns:
         The calibrated model identifier, or None when no artifact stands behind the
@@ -177,7 +220,7 @@ def _calibrated_reranker_model() -> str | None:
 
     try:
         calibration = load_reranker_calibration(
-            repository_root(), BROAD_RECALL_RELEVANCE_BOUND_FILE
+            repository_root(), filename or BROAD_RECALL_RELEVANCE_BOUND_FILE
         )
     except ValueError:
         # A malformed artifact is config_guard's finding to raise, not this path's to
@@ -186,15 +229,26 @@ def _calibrated_reranker_model() -> str | None:
     return None if calibration is None else calibration.component.model
 
 
-def _broad_recall_relevance_verdict(
-    entity: dict[str, Any], calibrated_model: str | None
+def _relevance_verdict(
+    item: dict[str, Any],
+    *,
+    bound: float | None,
+    gate_enabled: bool,
+    calibrated_model: str | None,
 ) -> DropReason | None:
-    """Decide whether the broad-recall relevance gate rejects one entity (ADR-0148 D4).
+    """Decide whether a path's relevance gate rejects one item (ADR-0148 D4).
 
     The obligation D4 states is that every item entering ``memory_context`` carries a
     relevance value, and that an item below its path's calibrated bound is not admitted
-    whatever any non-relevance signal says. For this path the relevance value is the
-    reranker's score, which FRE-1479 plumbed here from ``_rerank_fused_items``.
+    whatever any non-relevance signal says. For both reranker-scored paths the relevance
+    value is the reranker's score: FRE-1479 plumbed it to the broad-recall boundary, and
+    FRE-1480 to the entity-match one.
+
+    **One predicate, parameterised, rather than one copy per path** (FRE-1480). ADR-0148 D4
+    states one rule for every path — what differs between them is the bound, the flag and
+    the calibrated component, and those are data. A second copy would become a second rule
+    the moment either changed, which is the argument FRE-1479's own harness made when it
+    imported ``choose_bound`` rather than copying it.
 
     Three conditions must all hold before a score is a relevance value at all, and the
     first two are not formalities:
@@ -217,20 +271,21 @@ def _broad_recall_relevance_verdict(
     corpus holding nothing relevant (FRE-1170).
 
     Args:
-        entity: One entity payload from the broad recall result.
+        item: One entity or episode payload from a recall result.
+        bound: This path's calibrated bound, or None when no calibration is in force.
+        gate_enabled: Whether this path's gate is armed.
         calibrated_model: The reranker the configured bound was calibrated against, or
             None when no calibration is in force.
 
     Returns:
-        The drop reason, or None when the entity is admitted.
+        The drop reason, or None when the item is admitted.
     """
-    score = entity.get("relevance_score")
-    model = entity.get("relevance_model")
-    bound = settings.broad_recall_relevance_bound
+    score = item.get("relevance_score")
+    model = item.get("relevance_model")
     # A missing calibration leaves the gate inert and never defaults to zero (ADR-0148
     # D4). Checked before anything else, so an unconfigured deployment behaves exactly as
-    # it did before FRE-1479.
-    if bound is None or not settings.broad_recall_relevance_gate_enabled:
+    # it did before this gate landed.
+    if bound is None or not gate_enabled:
         return None
     if not isinstance(score, (int, float)) or isinstance(score, bool) or model is None:
         return DropReason.RECALL_RELEVANCE_UNAVAILABLE
@@ -304,7 +359,12 @@ def _format_broad_recall_context(
     for entity_type, entities in broad.entities_by_type.items():
         for entity in entities:
             verdict = (
-                _broad_recall_relevance_verdict(entity, calibrated_model)
+                _relevance_verdict(
+                    entity,
+                    bound=settings.broad_recall_relevance_bound,
+                    gate_enabled=settings.broad_recall_relevance_gate_enabled,
+                    calibrated_model=calibrated_model,
+                )
                 if broad.relevance_scored
                 else None
             )
@@ -570,9 +630,21 @@ async def _query_memory_for_intent(
 
     Returns:
         Tuple of (memory context list or None, relevance scores keyed by item
-        identity, discard report, stage report). The proactive and entity-match paths
-        both supply real scores; the broad-recall path computes none and returns an empty
-        mapping rather than a fabricated one (ADR-0125 D3 item 5, FRE-1004).
+        identity, discard report, stage report).
+
+        **All three paths now supply a real relevance value, and each means something
+        different by it.** Proactive returns its combined score (FRE-1004). Broad recall
+        and entity match both return the serving reranker's score for every item they
+        admit, plumbed to the boundary by FRE-1479 and FRE-1480 respectively — where the
+        set was reranked at all. A path that established no relevance value returns no
+        score for that item rather than a fabricated or defaulted one, and says so through
+        the stage report below.
+
+        An earlier revision of this paragraph said the broad-recall path "computes none
+        and returns an empty mapping" (ADR-0125 D3 item 5). That was true when it was
+        written and is now stale in both halves: FRE-1479 gave broad recall the reranker's
+        score, and FRE-1480 replaced entity match's fused-rank map — ``(total - position)
+        / total``, rank order rather than relevance — with the same reranker score.
 
         The fourth element is a :class:`RecallStageReport` (FRE-1476, ADR-0148 D1). It is
         COMPLETED only where this function has positive evidence the path ran to
@@ -629,7 +701,17 @@ async def _query_memory_for_intent(
                 broad_context,
                 broad_scores,
                 RecallDiscardReport(broad_discards),
-                _stage_report(_arms_cause(broad.arms_failed)),
+                # FRE-1480 fold-in: FRE-1479 routed its RECALL_RELEVANCE_UNAVAILABLE drops
+                # into the discard report and stopped there, so a broad turn whose reranker
+                # was silent still composed NOTHING_RELEVANT -- the false-absence claim its
+                # own AC-4 named and D4 forbids. The same rule now binds both paths, since
+                # leaving them to answer D4's no-score question differently would be worse
+                # than the divergence this closes.
+                _stage_report(
+                    _arms_cause(broad.arms_failed)
+                    or (None if broad.relevance_scored else RELEVANCE_UNAVAILABLE_CAUSE)
+                    or _unavailable_cause(broad_discards)
+                ),
             )
 
         # FRE-1041: both consumers below share one graph-anchored resolution. The
@@ -716,6 +798,60 @@ async def _query_memory_for_intent(
         )
         result = await memory_adapter.recall(query, trace_id=trace_id)
         context: list[dict[str, Any]] = []
+        # ADR-0148 D4 (FRE-1480): this is the admission boundary for the entity-match path.
+        # Before this it admitted on name resolution plus a 30-day window and computed no
+        # relevance value at all, while its episodes carried `(total - position) / total`
+        # -- fused rank wearing the score field. Both are now gated on the reranker's own
+        # score, which the core already produced and `_multipath_query_memory` discarded.
+        entity_scores: dict[str, float] = {}
+        entity_discards: list[tuple[dict[str, Any], float | None, DropReason]] = []
+        calibrated = _calibrated_reranker_model(ENTITY_MATCH_RELEVANCE_BOUND_FILE)
+        # The bound is measured on reranker scores, so it describes only a reranked result.
+        # The legacy single-path branch never reranks, by design rather than by degradation
+        # -- gating it would reject every item on the strength of a number that never saw
+        # them (FRE-1479's reasoning, kept). It establishes no relevance value either, so
+        # D4's no-score rule applies and the turn is UNAVAILABLE: admitted, but not a
+        # record the model may treat as complete.
+        if not result.relevance_scored:
+            logger.warning(
+                "entity_match_relevance_bound_not_applicable",
+                reason="multipath_recall_disabled",
+                gate_armed=bool(
+                    settings.entity_match_relevance_bound is not None
+                    and settings.entity_match_relevance_gate_enabled
+                ),
+                entity_count=len(result.entities),
+                episode_count=len(result.episodes),
+                trace_id=trace_id,
+            )
+
+        def _admit(payload: dict[str, Any], raw: dict[str, Any]) -> bool:
+            """Gate one item, recording its score or its drop. True when admitted."""
+            verdict = (
+                _relevance_verdict(
+                    raw,
+                    bound=settings.entity_match_relevance_bound,
+                    gate_enabled=settings.entity_match_relevance_gate_enabled,
+                    calibrated_model=calibrated,
+                )
+                if result.relevance_scored
+                else None
+            )
+            raw_score = raw.get("relevance_score")
+            numeric = (
+                float(raw_score)
+                if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool)
+                else None
+            )
+            if verdict is not None:
+                entity_discards.append((dict(raw), numeric, verdict))
+                return False
+            # The score rides a sibling map, never the rendered item -- ADR-0148 D6: "a
+            # rendered item carries no score and no band" (FRE-1004's pattern).
+            if numeric is not None and (identity := memory_item_identity(payload)[1]):
+                entity_scores[identity] = numeric
+            return True
+
         for entity in result.entities:
             # D4: derive freshness modifier from ADR-0042 access-tracking field
             raw_ts = entity.get("last_accessed_at")
@@ -728,48 +864,57 @@ async def _query_memory_for_intent(
                 except ValueError:
                     ent_last_accessed = None
 
-            context.append(
-                {
-                    "type": "entity",
-                    "name": entity.get("name", "unknown"),
-                    "entity_type": entity.get("entity_type"),
-                    "description": entity.get("description"),
-                    "mention_count": entity.get("mention_count", 0),
-                    # D4: freshness modifier for downstream relevance scoring
-                    "freshness_modifier": _freshness_score_modifier(ent_last_accessed),
-                }
-            )
+            entity_payload = {
+                "type": "entity",
+                "name": entity.get("name", "unknown"),
+                "entity_type": entity.get("entity_type"),
+                "description": entity.get("description"),
+                "mention_count": entity.get("mention_count", 0),
+                # D4: freshness modifier for downstream relevance scoring
+                "freshness_modifier": _freshness_score_modifier(ent_last_accessed),
+            }
+            if _admit(entity_payload, entity):
+                context.append(entity_payload)
         for ep in result.episodes:
-            context.append(
-                {
-                    "type": "episode",
-                    # FRE-1004: the episode's durable identity. The adapter supplies it
-                    # (protocol_adapter builds episodes with ``turn_id``) and this dict
-                    # dropped it, so every episode on this path was anonymous — and this
-                    # is the default path, since proactive_memory_enabled defaults False.
-                    # Without it the evidence record cannot name which episode was used,
-                    # and two episodes in one turn are indistinguishable.
-                    "conversation_id": ep.get("turn_id"),
-                    "user_message": ep.get("user_message"),
-                    # ADR-0125 D5: the "worst instance" — a digest-less episode
-                    # carries no assistant text on this shape at all (the episode
-                    # payload proactive.py builds has no assistant_response field;
-                    # restoring that is a separate, deeper gap than this marker fix).
-                    # 800 chars clears the re-derived p99 user-message length (400,
-                    # measured 2026-07-27 against agent-captains-captures-*, N=1864)
-                    # with margin, so this is a safety cap, not the dominant case.
-                    "summary": ep.get("summary") or mark_truncated(ep.get("user_message", ""), 800),
-                    "key_entities": ep.get("key_entities", []),
-                }
-            )
-        # FRE-1004: relevance_scores is keyed by turn_id (memory/service.py sorts
-        # conversations by ``relevance_scores.get(c.turn_id)``), which is exactly the
-        # episode identity above, so the scores land on the right items.
+            episode_payload = {
+                "type": "episode",
+                # FRE-1004: the episode's durable identity. The adapter supplies it
+                # (protocol_adapter builds episodes with ``turn_id``) and this dict
+                # dropped it, so every episode on this path was anonymous — and this
+                # is the default path, since proactive_memory_enabled defaults False.
+                # Without it the evidence record cannot name which episode was used,
+                # and two episodes in one turn are indistinguishable.
+                "conversation_id": ep.get("turn_id"),
+                "user_message": ep.get("user_message"),
+                # ADR-0125 D5: the "worst instance" — a digest-less episode
+                # carries no assistant text on this shape at all (the episode
+                # payload proactive.py builds has no assistant_response field;
+                # restoring that is a separate, deeper gap than this marker fix).
+                # 800 chars clears the re-derived p99 user-message length (400,
+                # measured 2026-07-27 against agent-captains-captures-*, N=1864)
+                # with margin, so this is a safety cap, not the dominant case.
+                "summary": ep.get("summary") or mark_truncated(ep.get("user_message", ""), 800),
+                "key_entities": ep.get("key_entities", []),
+            }
+            if _admit(episode_payload, ep):
+                context.append(episode_payload)
+        # FRE-1480: the sibling map now carries each admitted item's **relevance value**,
+        # not `result.relevance_scores`. That map holds the fused-rank sort key
+        # `(total - position) / total`, which is rank order rather than a relevance
+        # measure, and handing it on as the turn's scores is precisely what made this
+        # path's evidence record read as though relevance had been established.
         return (
             (context if context else None),
-            dict(result.relevance_scores),
-            RecallDiscardReport(discards),
-            _stage_report(failure_cause or _arms_cause(result.arms_failed)),
+            entity_scores,
+            RecallDiscardReport((*discards, *entity_discards)),
+            _stage_report(
+                failure_cause
+                or _arms_cause(result.arms_failed)
+                # D4's no-score rule. An unreranked set establishes no relevance value at
+                # all, so the turn is UNAVAILABLE even though its items are admitted.
+                or (None if result.relevance_scored else RELEVANCE_UNAVAILABLE_CAUSE)
+                or _unavailable_cause(tuple(entity_discards))
+            ),
         )
 
     except Exception:

@@ -122,6 +122,14 @@ def _use_working_real_recall_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(settings, "multipath_recall_enabled", True)
     monkeypatch.setattr(settings, "lexical_arm_enabled", True)
+    # FRE-1480 (ADR-0148 D4): this suite is about stance push, not admission. No reranker
+    # serves in the test environment, so `rerank()` degrades to a passthrough whose scores
+    # are rank order with no model id -- and the entity-match relevance gate correctly
+    # refuses to admit on that, which would leave every probe with no parent entity for a
+    # stance to attach to. Disarming the gate keeps this suite measuring what it exists to
+    # measure. The gate's own behaviour under a degraded reranker is pinned directly in
+    # tests/personal_agent/memory/test_entity_match_relevance.py.
+    monkeypatch.setattr(settings, "entity_match_relevance_gate_enabled", False)
 
 
 async def _seed_discussed_entity(

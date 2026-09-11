@@ -44,7 +44,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 
 <!-- AUTOGEN:AppConfig START — regenerate via scripts/audit/config_inventory.py generate -->
 
-**344 typed scalar/path parameters** live in `src/personal_agent/config/settings.py` (`AppConfig`, a pydantic `BaseSettings` with `env_prefix="AGENT_"`). Every field is read through the process-wide `from personal_agent.config import settings` singleton (`settings.<field>`), so the **reader** is uniformly that accessor; **validation** is pydantic type coercion at load (`AppConfig()` raises `ValidationError` on a bad value). The **Env var** column shows `AGENT_<FIELD>` (the prefix+name form, **always valid**); where a field also declares an `alias=`, that alias is shown after `·` as an **additional** accepted spelling — empirically both bind (e.g. `debug` accepts `AGENT_DEBUG` *and* `APP_DEBUG`). A field's default is overridable by either; the *profile-divergence* for scalars is the set of `docker-compose*.yml` `environment:` blocks that override it (see §8).
+**346 typed scalar/path parameters** live in `src/personal_agent/config/settings.py` (`AppConfig`, a pydantic `BaseSettings` with `env_prefix="AGENT_"`). Every field is read through the process-wide `from personal_agent.config import settings` singleton (`settings.<field>`), so the **reader** is uniformly that accessor; **validation** is pydantic type coercion at load (`AppConfig()` raises `ValidationError` on a bad value). The **Env var** column shows `AGENT_<FIELD>` (the prefix+name form, **always valid**); where a field also declares an `alias=`, that alias is shown after `·` as an **additional** accepted spelling — empirically both bind (e.g. `debug` accepts `AGENT_DEBUG` *and* `APP_DEBUG`). A field's default is overridable by either; the *profile-divergence* for scalars is the set of `docker-compose*.yml` `environment:` blocks that override it (see §8).
 
 | # | Field (`settings.X`) | Env var | Type | Default | Secret | In `.env.example` |
 |---|---|---|---|---|---|---|
@@ -129,269 +129,271 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 79 | `enable_second_brain` | `AGENT_ENABLE_SECOND_BRAIN` | `bool` | `False` |  | ✅ |
 | 80 | `entity_extraction_fewshot_exemplars_enabled` | `AGENT_ENTITY_EXTRACTION_FEWSHOT_EXEMPLARS_ENABLED` | `bool` | `False` |  | — |
 | 81 | `entity_extraction_timeout_seconds` | `AGENT_ENTITY_EXTRACTION_TIMEOUT_SECONDS` | `int` | `90` |  | — |
-| 82 | `environment` | `AGENT_ENVIRONMENT` | `Environment` | `<Environment.PRODUCTION: 'production'>` |  | — |
-| 83 | `error_monitor_enabled` | `AGENT_ERROR_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
-| 84 | `error_monitor_max_patterns_per_scan` | `AGENT_ERROR_MONITOR_MAX_PATTERNS_PER_SCAN` | `int` | `50` |  | ✅ |
-| 85 | `error_monitor_min_occurrences` | `AGENT_ERROR_MONITOR_MIN_OCCURRENCES` | `int` | `5` |  | ✅ |
-| 86 | `error_monitor_window_hours` | `AGENT_ERROR_MONITOR_WINDOW_HOURS` | `int` | `24` |  | ✅ |
-| 87 | `eur_usd_rate` | `AGENT_EUR_USD_RATE` | `float` | `1.14` |  | — |
-| 88 | `event_bus_ack_timeout_seconds` | `AGENT_EVENT_BUS_ACK_TIMEOUT_SECONDS` | `int` | `300` |  | ✅ |
-| 89 | `event_bus_consumer_poll_interval_ms` | `AGENT_EVENT_BUS_CONSUMER_POLL_INTERVAL_MS` | `int` | `100` |  | ✅ |
-| 90 | `event_bus_dead_letter_stream` | `AGENT_EVENT_BUS_DEAD_LETTER_STREAM` | `str` | `'stream:dead_letter'` |  | ✅ |
-| 91 | `event_bus_enabled` | `AGENT_EVENT_BUS_ENABLED` | `bool` | `False` |  | ✅ |
-| 92 | `event_bus_max_retries` | `AGENT_EVENT_BUS_MAX_RETRIES` | `int` | `3` |  | ✅ |
-| 93 | `event_bus_redis_url` | `AGENT_EVENT_BUS_REDIS_URL` | `str` | `'redis://localhost:6379/0'` |  | ✅ |
-| 94 | `expansion_budget_max` | `AGENT_EXPANSION_BUDGET_MAX` | `int` | `3` |  | — |
-| 95 | `experimental_openai_base_llm_http_handler` | `AGENT_EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER` · `EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER` | `bool` | `False` |  | — |
-| 96 | `failure_path_reflection_enabled` | `AGENT_FAILURE_PATH_REFLECTION_ENABLED` | `bool` | `False` |  | ✅ |
-| 97 | `feedback_defer_revisit_days` | `AGENT_FEEDBACK_DEFER_REVISIT_DAYS` | `int` | `90` |  | ✅ |
-| 98 | `feedback_max_reevaluations` | `AGENT_FEEDBACK_MAX_REEVALUATIONS` | `int` | `2` |  | ✅ |
-| 99 | `feedback_polling_enabled` | `AGENT_FEEDBACK_POLLING_ENABLED` | `bool` | `True` |  | ✅ |
-| 100 | `feedback_polling_hour_utc` | `AGENT_FEEDBACK_POLLING_HOUR_UTC` | `int` | `7` |  | ✅ |
-| 101 | `feedback_suppression_days` | `AGENT_FEEDBACK_SUPPRESSION_DAYS` | `int` | `30` |  | ✅ |
-| 102 | `freshness_backfill_confirm` | `AGENT_FRESHNESS_BACKFILL_CONFIRM` | `bool` | `False` |  | ✅ |
-| 103 | `freshness_cold_threshold_days` | `AGENT_FRESHNESS_COLD_THRESHOLD_DAYS` | `float` | `180.0` |  | ✅ |
-| 104 | `freshness_consumer_batch_max_events` | `AGENT_FRESHNESS_CONSUMER_BATCH_MAX_EVENTS` | `int` | `50` |  | ✅ |
-| 105 | `freshness_consumer_batch_window_seconds` | `AGENT_FRESHNESS_CONSUMER_BATCH_WINDOW_SECONDS` | `float` | `5.0` |  | ✅ |
-| 106 | `freshness_dormant_entity_proposal_threshold` | `AGENT_FRESHNESS_DORMANT_ENTITY_PROPOSAL_THRESHOLD` | `int` | `10` |  | ✅ |
-| 107 | `freshness_dormant_relationship_proposal_threshold` | `AGENT_FRESHNESS_DORMANT_RELATIONSHIP_PROPOSAL_THRESHOLD` | `int` | `10` |  | ✅ |
-| 108 | `freshness_enabled` | `AGENT_FRESHNESS_ENABLED` | `bool` | `False` |  | ✅ |
-| 109 | `freshness_frequency_boost_alpha` | `AGENT_FRESHNESS_FREQUENCY_BOOST_ALPHA` | `float` | `0.1` |  | ✅ |
-| 110 | `freshness_frequency_boost_max` | `AGENT_FRESHNESS_FREQUENCY_BOOST_MAX` | `float` | `1.5` |  | ✅ |
-| 111 | `freshness_half_life_days` | `AGENT_FRESHNESS_HALF_LIFE_DAYS` | `float` | `30.0` |  | ✅ |
-| 112 | `freshness_never_accessed_noise_days` | `AGENT_FRESHNESS_NEVER_ACCESSED_NOISE_DAYS` | `float` | `30.0` |  | ✅ |
-| 113 | `freshness_relevance_weight` | `AGENT_FRESHNESS_RELEVANCE_WEIGHT` | `float` | `0.15` |  | ✅ |
-| 114 | `freshness_review_schedule_cron` | `AGENT_FRESHNESS_REVIEW_SCHEDULE_CRON` | `str` | `'0 3 * * 0'` |  | ✅ |
-| 115 | `freshness_tier_factors` | `AGENT_FRESHNESS_TIER_FACTORS` | `dict` | `{'warm': 1.0, 'cooling': 0.85, 'cold': 0.6, 'dormant': 0.3}` |  | — |
-| 116 | `freshness_tier_reranking_enabled` | `AGENT_FRESHNESS_TIER_RERANKING_ENABLED` | `bool` | `True` |  | — |
-| 117 | `gateway_access_config` | `AGENT_GATEWAY_ACCESS_CONFIG` | `str` | `'config/gateway_access.yaml'` |  | — |
-| 118 | `gateway_auth_enabled` | `AGENT_GATEWAY_AUTH_ENABLED` | `bool` | `False` |  | ✅ |
-| 119 | `gateway_mount_local` | `AGENT_GATEWAY_MOUNT_LOCAL` | `bool` | `True` |  | — |
-| 120 | `governance_config_path` | `AGENT_GOVERNANCE_CONFIG_PATH` | `Path` | `PosixPath('config/governance')` |  | ✅ |
-| 121 | `graph_quality_governance_enabled` | `AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED` | `bool` | `False` |  | — |
-| 122 | `graph_quality_stream_enabled` | `AGENT_GRAPH_QUALITY_STREAM_ENABLED` | `bool` | `True` |  | — |
-| 123 | `grounding_compliance_bar` | `AGENT_GROUNDING_COMPLIANCE_BAR` | `float` | `0.95` |  | — |
-| 124 | `grounding_compliance_max_window_age_hours` | `AGENT_GROUNDING_COMPLIANCE_MAX_WINDOW_AGE_HOURS` | `int` | `1440` |  | — |
-| 125 | `grounding_compliance_min_samples` | `AGENT_GROUNDING_COMPLIANCE_MIN_SAMPLES` | `int` | `20` |  | — |
-| 126 | `grounding_compliance_window_size` | `AGENT_GROUNDING_COMPLIANCE_WINDOW_SIZE` | `int` | `100` |  | — |
-| 127 | `grounding_enforcement_cooldown_hours` | `AGENT_GROUNDING_ENFORCEMENT_COOLDOWN_HOURS` | `int` | `24` |  | — |
-| 128 | `grounding_enforcement_demote_below` | `AGENT_GROUNDING_ENFORCEMENT_DEMOTE_BELOW` | `float` | `0.9` |  | — |
-| 129 | `grounding_enforcement_probation_rate` | `AGENT_GROUNDING_ENFORCEMENT_PROBATION_RATE` | `float` | `0.35` |  | — |
-| 130 | `grounding_entailment_latency_budget_ms` | `AGENT_GROUNDING_ENTAILMENT_LATENCY_BUDGET_MS` | `int` | `4000` |  | — |
-| 131 | `grounding_entailment_max_excerpt_chars` | `AGENT_GROUNDING_ENTAILMENT_MAX_EXCERPT_CHARS` | `int` | `6000` |  | — |
-| 132 | `grounding_entailment_max_inline_checks` | `AGENT_GROUNDING_ENTAILMENT_MAX_INLINE_CHECKS` | `int` | `8` |  | — |
-| 133 | `grounding_entailment_sample_rate` | `AGENT_GROUNDING_ENTAILMENT_SAMPLE_RATE` | `float` | `0.05` |  | — |
-| 134 | `grounding_max_generation_attempts` | `AGENT_GROUNDING_MAX_GENERATION_ATTEMPTS` | `int` | `2` |  | — |
-| 135 | `grounding_verification_mode` | `AGENT_GROUNDING_VERIFICATION_MODE` | `Literal` | `'off'` |  | — |
-| 136 | `insights_enabled` | `AGENT_INSIGHTS_ENABLED` | `bool` | `True` |  | ✅ |
-| 137 | `insights_wiring_enabled` | `AGENT_INSIGHTS_WIRING_ENABLED` | `bool` | `True` |  | ✅ |
-| 138 | `joinability_probe_enabled` | `AGENT_JOINABILITY_PROBE_ENABLED` | `bool` | `True` |  | — |
-| 139 | `joinability_probe_index_prefix` | `AGENT_JOINABILITY_PROBE_INDEX_PREFIX` | `str` | `'agent-monitors-joinability'` |  | — |
-| 140 | `joinability_probe_interval_seconds` | `AGENT_JOINABILITY_PROBE_INTERVAL_SECONDS` | `int` | `3600` |  | — |
-| 141 | `joinability_probe_window_hours` | `AGENT_JOINABILITY_PROBE_WINDOW_HOURS` | `int` | `24` |  | — |
-| 142 | `kg_stats_projection_schedule_cron` | `AGENT_KG_STATS_PROJECTION_SCHEDULE_CRON` | `str` | `'0 4 * * *'` |  | — |
-| 143 | `lexical_arm_enabled` | `AGENT_LEXICAL_ARM_ENABLED` | `bool` | `False` |  | — |
-| 144 | `linear_agent_rate_limit_per_day` | `AGENT_LINEAR_AGENT_RATE_LIMIT_PER_DAY` | `int` | `10` |  | ✅ |
-| 145 | `linear_api_key` | `AGENT_LINEAR_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 146 | `linear_personal_agent_label_id` | `AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID` | `str \| None` | `'25004aac-3b32-4fa4-bdc2-55ff348ea842'` |  | ✅ |
-| 147 | `linear_promotion_project` | `AGENT_LINEAR_PROMOTION_PROJECT` | `str` | `'Linear Async Feedback Channel'` |  | ✅ |
-| 148 | `linear_team_name` | `AGENT_LINEAR_TEAM_NAME` | `str` | `'FrenchForest'` |  | ✅ |
-| 149 | `llm_append_no_think_to_tool_prompts` | `AGENT_LLM_APPEND_NO_THINK_TO_TOOL_PROMPTS` | `bool` | `False` |  | ✅ |
-| 150 | `llm_max_retries` | `AGENT_LLM_MAX_RETRIES` | `int` | `3` |  | ✅ |
-| 151 | `llm_no_think_suffix` | `AGENT_LLM_NO_THINK_SUFFIX` | `str` | `'/no_think'` |  | ✅ |
-| 152 | `llm_timeout_seconds` | `AGENT_LLM_TIMEOUT_SECONDS` | `int` | `120` |  | ✅ |
-| 153 | `local_fallback_embedding_endpoint` | `AGENT_LOCAL_FALLBACK_EMBEDDING_ENDPOINT` | `str \| None` | `None` |  | ✅ |
-| 154 | `local_fallback_embedding_model` | `AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL` | `str` | `'Qwen/Qwen3-Embedding-8B'` |  | ✅ |
-| 155 | `location_enabled` | `AGENT_LOCATION_ENABLED` | `bool` | `False` |  | ✅ |
-| 156 | `location_precision` | `AGENT_LOCATION_PRECISION` | `str` | `'precise'` |  | — |
-| 157 | `log_dir` | `AGENT_LOG_DIR` | `Path` | `PosixPath('telemetry/logs')` |  | ✅ |
-| 158 | `log_format` | `AGENT_LOG_FORMAT` · `APP_LOG_FORMAT` | `str` | `'json'` |  | ✅ |
-| 159 | `log_level` | `AGENT_LOG_LEVEL` · `APP_LOG_LEVEL` | `str` | `'INFO'` |  | ✅ |
-| 160 | `managed_database_url` | `AGENT_MANAGED_DATABASE_URL` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 161 | `managed_elasticsearch_url` | `AGENT_MANAGED_ELASTICSEARCH_URL` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 162 | `managed_embedding_endpoint` | `AGENT_MANAGED_EMBEDDING_ENDPOINT` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 163 | `managed_embedding_model` | `AGENT_MANAGED_EMBEDDING_MODEL` | `str` | `'Qwen3-Embedding-8B'` |  | ✅ |
-| 164 | `managed_embedding_token` | `AGENT_MANAGED_EMBEDDING_TOKEN` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 165 | `managed_neo4j_uri` | `AGENT_MANAGED_NEO4J_URI` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 166 | `managed_reranker_endpoint` | `AGENT_MANAGED_RERANKER_ENDPOINT` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 167 | `managed_slm_endpoint` | `AGENT_MANAGED_SLM_ENDPOINT` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 168 | `mcp_gateway_command` | `AGENT_MCP_GATEWAY_COMMAND` | `list` | `['docker', 'mcp', 'gateway', 'run']` |  | ✅ |
-| 169 | `mcp_gateway_enabled` | `AGENT_MCP_GATEWAY_ENABLED` | `bool` | `False` |  | ✅ |
-| 170 | `mcp_gateway_enabled_servers` | `AGENT_MCP_GATEWAY_ENABLED_SERVERS` | `list` | `[]` |  | ✅ |
-| 171 | `mcp_gateway_timeout_seconds` | `AGENT_MCP_GATEWAY_TIMEOUT_SECONDS` | `int` | `60` |  | ✅ |
-| 172 | `metrics_daemon_buffer_size` | `AGENT_METRICS_DAEMON_BUFFER_SIZE` | `int` | `720` |  | — |
-| 173 | `metrics_daemon_es_emit_interval_seconds` | `AGENT_METRICS_DAEMON_ES_EMIT_INTERVAL_SECONDS` | `float` | `30.0` |  | — |
-| 174 | `metrics_daemon_poll_interval_seconds` | `AGENT_METRICS_DAEMON_POLL_INTERVAL_SECONDS` | `float` | `5.0` |  | — |
-| 175 | `metrics_sampled_stream_maxlen` | `AGENT_METRICS_SAMPLED_STREAM_MAXLEN` | `int` | `720` |  | — |
-| 176 | `mode_calibration_anomaly_threshold` | `AGENT_MODE_CALIBRATION_ANOMALY_THRESHOLD` | `int` | `3` |  | — |
-| 177 | `mode_controller_enabled` | `AGENT_MODE_CONTROLLER_ENABLED` | `bool` | `True` |  | — |
-| 178 | `mode_evaluation_interval_seconds` | `AGENT_MODE_EVALUATION_INTERVAL_SECONDS` | `float` | `30.0` |  | — |
-| 179 | `mode_window_size` | `AGENT_MODE_WINDOW_SIZE` | `int` | `12` |  | — |
-| 180 | `multipath_arm_top_k` | `AGENT_MULTIPATH_ARM_TOP_K` | `int` | `50` |  | — |
-| 181 | `multipath_paraphrase_count` | `AGENT_MULTIPATH_PARAPHRASE_COUNT` | `int` | `3` |  | — |
-| 182 | `multipath_recall_enabled` | `AGENT_MULTIPATH_RECALL_ENABLED` | `bool` | `False` |  | — |
-| 183 | `multipath_rrf_k` | `AGENT_MULTIPATH_RRF_K` | `int` | `60` |  | — |
-| 184 | `multiquery_arm_enabled` | `AGENT_MULTIQUERY_ARM_ENABLED` | `bool` | `False` |  | — |
-| 185 | `neo4j_password` | `AGENT_NEO4J_PASSWORD` | `str` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 186 | `neo4j_uri` | `AGENT_NEO4J_URI` | `str` | `'bolt://localhost:7687'` |  | ✅ |
-| 187 | `neo4j_user` | `AGENT_NEO4J_USER` | `str` | `'neo4j'` |  | ✅ |
-| 188 | `openai_api_key` | `AGENT_OPENAI_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 189 | `orchestrator_creditable_pause_limit` | `AGENT_ORCHESTRATOR_CREDITABLE_PAUSE_LIMIT` | `int` | `3` |  | — |
-| 190 | `orchestrator_max_concurrent_tasks` | `AGENT_ORCHESTRATOR_MAX_CONCURRENT_TASKS` | `int` | `5` |  | ✅ |
-| 191 | `orchestrator_max_repeated_tool_calls` | `AGENT_ORCHESTRATOR_MAX_REPEATED_TOOL_CALLS` | `int` | `1` |  | ✅ |
-| 192 | `orchestrator_max_tool_iterations` | `AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS` | `int` | `25` |  | ✅ |
-| 193 | `orchestrator_max_tool_iterations_by_task_type` | `AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS_BY_TASK_TYPE` | `dict` | `{'conversational': 6, 'memory_recall': 8, 'analysis': 25, 'planning': 25, 'tool_use': 25, 'delegation': 25, 'self_improve': 25}` |  | — |
-| 194 | `orchestrator_task_timeout_seconds` | `AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS` | `int` | `900` |  | ✅ |
-| 195 | `orchestrator_turn_lifetime_seconds` | `AGENT_ORCHESTRATOR_TURN_LIFETIME_SECONDS` | `int` | `1800` |  | — |
-| 196 | `otel_exporter_endpoint` | `AGENT_OTEL_EXPORTER_ENDPOINT` | `str` | `'localhost:4319'` |  | ✅ |
-| 197 | `outcome_ingestion_enabled` | `AGENT_OUTCOME_INGESTION_ENABLED` | `bool` | `True` |  | ✅ |
-| 198 | `outcome_ingestion_hour_utc` | `AGENT_OUTCOME_INGESTION_HOUR_UTC` | `int` | `8` |  | ✅ |
-| 199 | `owner_name` | `AGENT_OWNER_NAME` | `str` | `''` |  | ✅ |
-| 200 | `owner_storage_allowlist` | `AGENT_OWNER_STORAGE_ALLOWLIST` | `list` | `['postgres', 'neo4j', 'elasticsearch']` |  | ✅ |
-| 201 | `perplexity_api_key` | `AGENT_PERPLEXITY_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 202 | `perplexity_base_url` | `AGENT_PERPLEXITY_BASE_URL` | `str` | `'https://api.perplexity.ai'` |  | ✅ |
-| 203 | `perplexity_timeout_seconds` | `AGENT_PERPLEXITY_TIMEOUT_SECONDS` | `int` | `90` |  | ✅ |
-| 204 | `planner_timeout_seconds` | `AGENT_PLANNER_TIMEOUT_SECONDS` | `float` | `600.0` |  | — |
-| 205 | `prefer_primitives_enabled` | `AGENT_PREFER_PRIMITIVES_ENABLED` · `AGENT_PREFER_PRIMITIVES` | `bool` | `True` |  | ✅ |
-| 206 | `primitive_tools_enabled` | `AGENT_PRIMITIVE_TOOLS_ENABLED` | `bool` | `False` |  | ✅ |
-| 207 | `proactive_memory_diminishing_score_floor` | `AGENT_PROACTIVE_MEMORY_DIMINISHING_SCORE_FLOOR` | `float` | `0.35` |  | ✅ |
-| 208 | `proactive_memory_diminishing_score_gap` | `AGENT_PROACTIVE_MEMORY_DIMINISHING_SCORE_GAP` | `float` | `0.15` |  | ✅ |
-| 209 | `proactive_memory_enabled` | `AGENT_PROACTIVE_MEMORY_ENABLED` | `bool` | `False` |  | ✅ |
-| 210 | `proactive_memory_max_candidates` | `AGENT_PROACTIVE_MEMORY_MAX_CANDIDATES` | `int` | `10` |  | ✅ |
-| 211 | `proactive_memory_max_injected_items` | `AGENT_PROACTIVE_MEMORY_MAX_INJECTED_ITEMS` | `int` | `5` |  | ✅ |
-| 212 | `proactive_memory_max_tokens` | `AGENT_PROACTIVE_MEMORY_MAX_TOKENS` | `int` | `500` |  | ✅ |
-| 213 | `proactive_memory_min_score` | `AGENT_PROACTIVE_MEMORY_MIN_SCORE` | `float` | `0.3` |  | ✅ |
-| 214 | `proactive_memory_recency_half_life_days` | `AGENT_PROACTIVE_MEMORY_RECENCY_HALF_LIFE_DAYS` | `float` | `30.0` |  | ✅ |
-| 215 | `proactive_memory_relevance_bound` | `AGENT_PROACTIVE_MEMORY_RELEVANCE_BOUND` | `float \| None` | `None` |  | — |
-| 216 | `proactive_memory_relevance_gate_enabled` | `AGENT_PROACTIVE_MEMORY_RELEVANCE_GATE_ENABLED` | `bool` | `True` |  | — |
-| 217 | `proactive_memory_vector_top_k` | `AGENT_PROACTIVE_MEMORY_VECTOR_TOP_K` | `int` | `20` |  | ✅ |
-| 218 | `proactive_memory_w_embedding` | `AGENT_PROACTIVE_MEMORY_W_EMBEDDING` | `float` | `0.45` |  | ✅ |
-| 219 | `proactive_memory_w_entity` | `AGENT_PROACTIVE_MEMORY_W_ENTITY` | `float` | `0.25` |  | ✅ |
-| 220 | `proactive_memory_w_recency` | `AGENT_PROACTIVE_MEMORY_W_RECENCY` | `float` | `0.2` |  | ✅ |
-| 221 | `proactive_memory_w_topic` | `AGENT_PROACTIVE_MEMORY_W_TOPIC` | `float` | `0.1` |  | ✅ |
-| 222 | `project_name` | `AGENT_PROJECT_NAME` | `str` | `'Personal Local AI Collaborator'` |  | ✅ |
-| 223 | `promotion_initial_cap` | `AGENT_PROMOTION_INITIAL_CAP` | `int` | `5` |  | ✅ |
-| 224 | `promotion_min_seen_count` | `AGENT_PROMOTION_MIN_SEEN_COUNT` | `int` | `3` |  | ✅ |
-| 225 | `promotion_pipeline_enabled` | `AGENT_PROMOTION_PIPELINE_ENABLED` | `bool` | `True` |  | ✅ |
-| 226 | `pwa_public_origin` | `AGENT_PWA_PUBLIC_ORIGIN` | `str` | `'https://<deployment-host>'` |  | ✅ |
-| 227 | `quality_monitor_anomaly_window_days` | `AGENT_QUALITY_MONITOR_ANOMALY_WINDOW_DAYS` | `int` | `7` |  | ✅ |
-| 228 | `quality_monitor_daily_run_hour_utc` | `AGENT_QUALITY_MONITOR_DAILY_RUN_HOUR_UTC` | `int` | `5` |  | ✅ |
-| 229 | `quality_monitor_enabled` | `AGENT_QUALITY_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
-| 230 | `r2_access_key_id` | `AGENT_R2_ACCESS_KEY_ID` | `str \| None` | `None` |  | ✅ |
-| 231 | `r2_bucket_name` | `AGENT_R2_BUCKET_NAME` | `str` | `'seshat-artifacts'` |  | ✅ |
-| 232 | `r2_endpoint_url` | `AGENT_R2_ENDPOINT_URL` | `str \| None` | `None` |  | ✅ |
-| 233 | `r2_region` | `AGENT_R2_REGION` | `str` | `'auto'` |  | ✅ |
-| 234 | `r2_secret_access_key` | `AGENT_R2_SECRET_ACCESS_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 235 | `recall_candidate_cap` | `AGENT_RECALL_CANDIDATE_CAP` | `int` | `500` |  | — |
-| 236 | `recall_per_entity_turn_cap` | `AGENT_RECALL_PER_ENTITY_TURN_CAP` | `int` | `10` |  | — |
-| 237 | `recall_similarity_floor` | `AGENT_RECALL_SIMILARITY_FLOOR` | `float` | `0.0` |  | — |
-| 238 | `relevance_bounded_recall_enabled` | `AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED` | `bool` | `False` |  | — |
-| 239 | `request_monitoring_enabled` | `AGENT_REQUEST_MONITORING_ENABLED` | `bool` | `True` |  | ✅ |
-| 240 | `request_monitoring_include_gpu` | `AGENT_REQUEST_MONITORING_INCLUDE_GPU` | `bool` | `True` |  | ✅ |
-| 241 | `request_monitoring_interval_seconds` | `AGENT_REQUEST_MONITORING_INTERVAL_SECONDS` | `float` | `5.0` |  | ✅ |
-| 242 | `reranker_enabled` | `AGENT_RERANKER_ENABLED` | `bool` | `True` |  | ✅ |
-| 243 | `reranker_input_cap` | `AGENT_RERANKER_INPUT_CAP` | `int` | `25` |  | — |
-| 244 | `reranker_top_k` | `AGENT_RERANKER_TOP_K` | `int` | `10` |  | ✅ |
-| 245 | `route_trace_preview_chars` | `AGENT_ROUTE_TRACE_PREVIEW_CHARS` | `int` | `280` |  | ✅ |
-| 246 | `route_trace_store_preview` | `AGENT_ROUTE_TRACE_STORE_PREVIEW` | `bool` | `False` |  | ✅ |
-| 247 | `router_role` | `AGENT_ROUTER_ROLE` | `str` | `'ROUTER'` |  | ✅ |
-| 248 | `router_timeout_seconds` | `AGENT_ROUTER_TIMEOUT_SECONDS` | `float` | `6.0` |  | ✅ |
-| 249 | `routing_heuristic_threshold` | `AGENT_ROUTING_HEURISTIC_THRESHOLD` | `float` | `0.85` |  | ✅ |
-| 250 | `routing_policy` | `AGENT_ROUTING_POLICY` | `str` | `'heuristic_then_llm'` |  | ✅ |
-| 251 | `sandbox_image` | `AGENT_SANDBOX_IMAGE` | `str` | `'seshat-sandbox-python:0.1'` |  | ✅ |
-| 252 | `sandbox_network` | `AGENT_SANDBOX_NETWORK` | `str` | `'seshat_cloud-sim'` |  | — |
-| 253 | `sandbox_scratch_root` | `AGENT_SANDBOX_SCRATCH_ROOT` | `str` | `'/app/agent_workspace/sandbox'` |  | ✅ |
-| 254 | `searxng_base_url` | `AGENT_SEARXNG_BASE_URL` | `str` | `'http://localhost:8888'` |  | ✅ |
-| 255 | `searxng_default_categories` | `AGENT_SEARXNG_DEFAULT_CATEGORIES` | `str` | `'general'` |  | — |
-| 256 | `searxng_max_results` | `AGENT_SEARXNG_MAX_RESULTS` | `int` | `10` |  | — |
-| 257 | `searxng_timeout_seconds` | `AGENT_SEARXNG_TIMEOUT_SECONDS` | `int` | `12` |  | — |
-| 258 | `second_brain_cpu_threshold` | `AGENT_SECOND_BRAIN_CPU_THRESHOLD` | `float` | `50.0` |  | ✅ |
-| 259 | `second_brain_idle_time_seconds` | `AGENT_SECOND_BRAIN_IDLE_TIME_SECONDS` | `float` | `300.0` |  | ✅ |
-| 260 | `second_brain_memory_threshold` | `AGENT_SECOND_BRAIN_MEMORY_THRESHOLD` | `float` | `70.0` |  | ✅ |
-| 261 | `second_brain_min_interval_seconds` | `AGENT_SECOND_BRAIN_MIN_INTERVAL_SECONDS` | `float` | `3600.0` |  | ✅ |
-| 262 | `second_brain_resource_gating_enabled` | `AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED` | `bool` | `True` |  | ✅ |
-| 263 | `service_host` | `AGENT_SERVICE_HOST` | `str` | `'0.0.0.0'` |  | ✅ |
-| 264 | `service_port` | `AGENT_SERVICE_PORT` | `int` | `9000` |  | ✅ |
-| 265 | `service_url` | `AGENT_SERVICE_URL` · `SERVICE_URL` | `str` | `'http://localhost:9000'` |  | ✅ |
-| 266 | `seshat_open_ticket_cap` | `AGENT_SESHAT_OPEN_TICKET_CAP` | `int` | `10` |  | ✅ |
-| 267 | `session_digest_max_tokens` | `AGENT_SESSION_DIGEST_MAX_TOKENS` | `int` | `400` |  | ✅ |
-| 268 | `session_digest_structured_output` | `AGENT_SESSION_DIGEST_STRUCTURED_OUTPUT` | `bool` | `True` |  | ✅ |
-| 269 | `session_digest_target_tokens` | `AGENT_SESSION_DIGEST_TARGET_TOKENS` | `int` | `120` |  | ✅ |
-| 270 | `session_retention_days` | `AGENT_SESSION_RETENTION_DAYS` | `int` | `180` |  | ✅ |
-| 271 | `session_retention_sweep_interval_seconds` | `AGENT_SESSION_RETENTION_SWEEP_INTERVAL_SECONDS` | `int` | `86400` |  | ✅ |
-| 272 | `session_summary_enabled` | `AGENT_SESSION_SUMMARY_ENABLED` | `bool` | `True` |  | ✅ |
-| 273 | `session_summary_idle_threshold_seconds` | `AGENT_SESSION_SUMMARY_IDLE_THRESHOLD_SECONDS` | `float` | `900.0` |  | ✅ |
-| 274 | `session_summary_max_attempts` | `AGENT_SESSION_SUMMARY_MAX_ATTEMPTS` | `int` | `2` |  | ✅ |
-| 275 | `session_summary_retry_backoff_base_seconds` | `AGENT_SESSION_SUMMARY_RETRY_BACKOFF_BASE_SECONDS` | `float` | `900.0` |  | ✅ |
-| 276 | `session_summary_retry_backoff_max_seconds` | `AGENT_SESSION_SUMMARY_RETRY_BACKOFF_MAX_SECONDS` | `float` | `21600.0` |  | ✅ |
-| 277 | `session_summary_sweep_interval_seconds` | `AGENT_SESSION_SUMMARY_SWEEP_INTERVAL_SECONDS` | `float` | `300.0` |  | ✅ |
-| 278 | `session_write_wait_timeout_seconds` | `AGENT_SESSION_WRITE_WAIT_TIMEOUT_SECONDS` | `float` | `10.0` |  | — |
-| 279 | `signal_priority_clamp` | `AGENT_SIGNAL_PRIORITY_CLAMP` | `float` | `0.5` |  | ✅ |
-| 280 | `signal_smoothing_prior` | `AGENT_SIGNAL_SMOOTHING_PRIOR` | `float` | `2.0` |  | ✅ |
-| 281 | `signal_suppression_cooldown_days` | `AGENT_SIGNAL_SUPPRESSION_COOLDOWN_DAYS` | `int` | `30` |  | ✅ |
-| 282 | `signal_suppression_min_n` | `AGENT_SIGNAL_SUPPRESSION_MIN_N` | `int` | `5` |  | ✅ |
-| 283 | `signal_suppression_threshold` | `AGENT_SIGNAL_SUPPRESSION_THRESHOLD` | `float` | `-0.4` |  | ✅ |
-| 284 | `signal_window_days` | `AGENT_SIGNAL_WINDOW_DAYS` | `int` | `90` |  | ✅ |
-| 285 | `skill_index_max_tokens` | `AGENT_SKILL_INDEX_MAX_TOKENS` | `int` | `2048` |  | ✅ |
-| 286 | `skill_index_p95_token_threshold` | `AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD` | `int` | `6000` |  | ✅ |
-| 287 | `skill_nudge_enabled` | `AGENT_SKILL_NUDGE_ENABLED` | `bool` | `True` |  | ✅ |
-| 288 | `skill_routing_mode` | `AGENT_SKILL_ROUTING_MODE` | `str` | `'hybrid'` |  | ✅ |
-| 289 | `skill_routing_model_key` | `AGENT_SKILL_ROUTING_MODEL_KEY` | `str` | `'claude_haiku'` |  | ✅ |
-| 290 | `skill_routing_threshold_monitor_enabled` | `AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
-| 291 | `skill_routing_threshold_monitor_hour_utc` | `AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC` | `int` | `5` |  | ✅ |
-| 292 | `slm_base_url` | `AGENT_SLM_BASE_URL` | `str \| None` | `None` |  | ✅ |
-| 293 | `slm_gpu_util_degraded_pct` | `AGENT_SLM_GPU_UTIL_DEGRADED_PCT` | `float` | `95.0` |  | — |
-| 294 | `slm_health_cache_ttl_seconds` | `AGENT_SLM_HEALTH_CACHE_TTL_SECONDS` | `float` | `45.0` |  | — |
-| 295 | `slm_health_index_prefix` | `AGENT_SLM_HEALTH_INDEX_PREFIX` | `str` | `'agent-monitors-slm-health'` |  | — |
-| 296 | `slm_health_probe_enabled` | `AGENT_SLM_HEALTH_PROBE_ENABLED` | `bool` | `True` |  | — |
-| 297 | `slm_health_probe_interval_seconds` | `AGENT_SLM_HEALTH_PROBE_INTERVAL_SECONDS` | `float` | `300.0` |  | — |
-| 298 | `slm_health_url` | `AGENT_SLM_HEALTH_URL` | `str \| None` | `None` |  | — |
-| 299 | `slm_queue_depth_degraded` | `AGENT_SLM_QUEUE_DEPTH_DEGRADED` | `int` | `4` |  | — |
-| 300 | `structural_arm_enabled` | `AGENT_STRUCTURAL_ARM_ENABLED` | `bool` | `False` |  | — |
-| 301 | `structural_arm_top_k` | `AGENT_STRUCTURAL_ARM_TOP_K` | `int` | `50` |  | — |
-| 302 | `structural_class_predicate_enabled` | `AGENT_STRUCTURAL_CLASS_PREDICATE_ENABLED` | `bool` | `False` |  | — |
-| 303 | `structural_type_predicate_enabled` | `AGENT_STRUCTURAL_TYPE_PREDICATE_ENABLED` | `bool` | `False` |  | — |
-| 304 | `sub_agent_max_tool_iterations` | `AGENT_SUB_AGENT_MAX_TOOL_ITERATIONS` | `int` | `5` |  | ✅ |
-| 305 | `substrate_profile` | `AGENT_SUBSTRATE_PROFILE` | `str` | `'private'` |  | ✅ |
-| 306 | `synthesis_timeout_seconds` | `AGENT_SYNTHESIS_TIMEOUT_SECONDS` | `float` | `25.0` |  | — |
-| 307 | `sysgraph_database_url` | `AGENT_SYSGRAPH_DATABASE_URL` | `str` | `'postgresql+asyncpg://<redacted>@localhost:5432/personal_agent'` |  | ✅ |
-| 308 | `sysgraph_maintenance_enabled` | `AGENT_SYSGRAPH_MAINTENANCE_ENABLED` | `bool` | `True` |  | — |
-| 309 | `sysgraph_maintenance_hour_utc` | `AGENT_SYSGRAPH_MAINTENANCE_HOUR_UTC` | `int` | `9` |  | — |
-| 310 | `tool_result_compression_enabled` | `AGENT_TOOL_RESULT_COMPRESSION_ENABLED` | `bool` | `False` |  | — |
-| 311 | `tool_result_digest_exclude_tools` | `AGENT_TOOL_RESULT_DIGEST_EXCLUDE_TOOLS` | `list` | `[]` |  | — |
-| 312 | `tool_result_digest_head_lines` | `AGENT_TOOL_RESULT_DIGEST_HEAD_LINES` | `int` | `40` |  | — |
-| 313 | `tool_result_digest_keep` | `AGENT_TOOL_RESULT_DIGEST_KEEP` | `int` | `3` |  | — |
-| 314 | `tool_result_digest_max_expand_tokens` | `AGENT_TOOL_RESULT_DIGEST_MAX_EXPAND_TOKENS` | `int` | `8000` |  | — |
-| 315 | `tool_result_digest_min_savings_tokens` | `AGENT_TOOL_RESULT_DIGEST_MIN_SAVINGS_TOKENS` | `int` | `500` |  | — |
-| 316 | `tool_result_digest_pin_ttl_turns` | `AGENT_TOOL_RESULT_DIGEST_PIN_TTL_TURNS` | `int` | `4` |  | — |
-| 317 | `tool_result_digest_put_timeout_ms` | `AGENT_TOOL_RESULT_DIGEST_PUT_TIMEOUT_MS` | `int` | `2000` |  | — |
-| 318 | `tool_result_digest_tail_lines` | `AGENT_TOOL_RESULT_DIGEST_TAIL_LINES` | `int` | `20` |  | — |
-| 319 | `tool_result_digest_threshold_tokens` | `AGENT_TOOL_RESULT_DIGEST_THRESHOLD_TOKENS` | `int` | `1500` |  | — |
-| 320 | `turn_observed_stream_maxlen` | `AGENT_TURN_OBSERVED_STREAM_MAXLEN` | `int` | `10000` |  | — |
-| 321 | `turn_projector_enabled` | `AGENT_TURN_PROJECTOR_ENABLED` | `bool` | `True` |  | — |
-| 322 | `upload_max_size_bytes` | `AGENT_UPLOAD_MAX_SIZE_BYTES` | `int` | `52428800` |  | — |
-| 323 | `url_guard_allowlist` | `AGENT_URL_GUARD_ALLOWLIST` | `list` | `[]` |  | — |
-| 324 | `url_guard_cache_ttl_seconds` | `AGENT_URL_GUARD_CACHE_TTL_SECONDS` | `int` | `3600` |  | — |
-| 325 | `url_guard_enabled` | `AGENT_URL_GUARD_ENABLED` | `bool` | `True` |  | — |
-| 326 | `url_guard_mode` | `AGENT_URL_GUARD_MODE` | `str` | `'blocklist'` |  | — |
-| 327 | `url_guard_novelty_window_days` | `AGENT_URL_GUARD_NOVELTY_WINDOW_DAYS` | `int` | `14` |  | — |
-| 328 | `use_service_mode` | `AGENT_USE_SERVICE_MODE` | `bool` | `True` |  | — |
-| 329 | `user_display_names_json` | `AGENT_USER_DISPLAY_NAMES_JSON` | `str` | `'{}'` |  | ✅ |
-| 330 | `version` | `AGENT_VERSION` | `str` | `'0.1.0'` |  | ✅ |
-| 331 | `voyage_api_key` | `AGENT_VOYAGE_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
-| 332 | `within_session_compression_enabled` | `AGENT_WITHIN_SESSION_COMPRESSION_ENABLED` | `bool` | `True` |  | — |
-| 333 | `within_session_compression_refire_after_messages` | `AGENT_WITHIN_SESSION_COMPRESSION_REFIRE_AFTER_MESSAGES` | `int` | `4` |  | — |
-| 334 | `within_session_hard_threshold_ratio` | `AGENT_WITHIN_SESSION_HARD_THRESHOLD_RATIO` | `float` | `0.85` |  | — |
-| 335 | `within_session_max_tail_ratio` | `AGENT_WITHIN_SESSION_MAX_TAIL_RATIO` | `float` | `0.35` |  | — |
-| 336 | `within_session_min_tail_ratio` | `AGENT_WITHIN_SESSION_MIN_TAIL_RATIO` | `float` | `0.25` |  | — |
-| 337 | `within_session_pre_pass_threshold_tokens` | `AGENT_WITHIN_SESSION_PRE_PASS_THRESHOLD_TOKENS` | `int` | `800` |  | — |
-| 338 | `worker_queue_absorption_seconds` | `AGENT_WORKER_QUEUE_ABSORPTION_SECONDS` | `float` | `25.0` |  | — |
-| 339 | `ws_event_queue_size` | `AGENT_WS_EVENT_QUEUE_SIZE` | `int` | `500` |  | — |
-| 340 | `ws_event_ttl_hours` | `AGENT_WS_EVENT_TTL_HOURS` | `int` | `24` |  | — |
-| 341 | `ws_max_message_size` | `AGENT_WS_MAX_MESSAGE_SIZE` | `int` | `8192` |  | — |
-| 342 | `ws_ping_timeout_seconds` | `AGENT_WS_PING_TIMEOUT_SECONDS` | `int` | `60` |  | — |
-| 343 | `ws_rate_limit_per_second` | `AGENT_WS_RATE_LIMIT_PER_SECOND` | `int` | `20` |  | — |
-| 344 | `ws_ticket_ttl_seconds` | `AGENT_WS_TICKET_TTL_SECONDS` | `int` | `30` |  | — |
+| 82 | `entity_match_relevance_bound` | `AGENT_ENTITY_MATCH_RELEVANCE_BOUND` | `float \| None` | `0.338891` |  | — |
+| 83 | `entity_match_relevance_gate_enabled` | `AGENT_ENTITY_MATCH_RELEVANCE_GATE_ENABLED` | `bool` | `True` |  | — |
+| 84 | `environment` | `AGENT_ENVIRONMENT` | `Environment` | `<Environment.PRODUCTION: 'production'>` |  | — |
+| 85 | `error_monitor_enabled` | `AGENT_ERROR_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
+| 86 | `error_monitor_max_patterns_per_scan` | `AGENT_ERROR_MONITOR_MAX_PATTERNS_PER_SCAN` | `int` | `50` |  | ✅ |
+| 87 | `error_monitor_min_occurrences` | `AGENT_ERROR_MONITOR_MIN_OCCURRENCES` | `int` | `5` |  | ✅ |
+| 88 | `error_monitor_window_hours` | `AGENT_ERROR_MONITOR_WINDOW_HOURS` | `int` | `24` |  | ✅ |
+| 89 | `eur_usd_rate` | `AGENT_EUR_USD_RATE` | `float` | `1.14` |  | — |
+| 90 | `event_bus_ack_timeout_seconds` | `AGENT_EVENT_BUS_ACK_TIMEOUT_SECONDS` | `int` | `300` |  | ✅ |
+| 91 | `event_bus_consumer_poll_interval_ms` | `AGENT_EVENT_BUS_CONSUMER_POLL_INTERVAL_MS` | `int` | `100` |  | ✅ |
+| 92 | `event_bus_dead_letter_stream` | `AGENT_EVENT_BUS_DEAD_LETTER_STREAM` | `str` | `'stream:dead_letter'` |  | ✅ |
+| 93 | `event_bus_enabled` | `AGENT_EVENT_BUS_ENABLED` | `bool` | `False` |  | ✅ |
+| 94 | `event_bus_max_retries` | `AGENT_EVENT_BUS_MAX_RETRIES` | `int` | `3` |  | ✅ |
+| 95 | `event_bus_redis_url` | `AGENT_EVENT_BUS_REDIS_URL` | `str` | `'redis://localhost:6379/0'` |  | ✅ |
+| 96 | `expansion_budget_max` | `AGENT_EXPANSION_BUDGET_MAX` | `int` | `3` |  | — |
+| 97 | `experimental_openai_base_llm_http_handler` | `AGENT_EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER` · `EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER` | `bool` | `False` |  | — |
+| 98 | `failure_path_reflection_enabled` | `AGENT_FAILURE_PATH_REFLECTION_ENABLED` | `bool` | `False` |  | ✅ |
+| 99 | `feedback_defer_revisit_days` | `AGENT_FEEDBACK_DEFER_REVISIT_DAYS` | `int` | `90` |  | ✅ |
+| 100 | `feedback_max_reevaluations` | `AGENT_FEEDBACK_MAX_REEVALUATIONS` | `int` | `2` |  | ✅ |
+| 101 | `feedback_polling_enabled` | `AGENT_FEEDBACK_POLLING_ENABLED` | `bool` | `True` |  | ✅ |
+| 102 | `feedback_polling_hour_utc` | `AGENT_FEEDBACK_POLLING_HOUR_UTC` | `int` | `7` |  | ✅ |
+| 103 | `feedback_suppression_days` | `AGENT_FEEDBACK_SUPPRESSION_DAYS` | `int` | `30` |  | ✅ |
+| 104 | `freshness_backfill_confirm` | `AGENT_FRESHNESS_BACKFILL_CONFIRM` | `bool` | `False` |  | ✅ |
+| 105 | `freshness_cold_threshold_days` | `AGENT_FRESHNESS_COLD_THRESHOLD_DAYS` | `float` | `180.0` |  | ✅ |
+| 106 | `freshness_consumer_batch_max_events` | `AGENT_FRESHNESS_CONSUMER_BATCH_MAX_EVENTS` | `int` | `50` |  | ✅ |
+| 107 | `freshness_consumer_batch_window_seconds` | `AGENT_FRESHNESS_CONSUMER_BATCH_WINDOW_SECONDS` | `float` | `5.0` |  | ✅ |
+| 108 | `freshness_dormant_entity_proposal_threshold` | `AGENT_FRESHNESS_DORMANT_ENTITY_PROPOSAL_THRESHOLD` | `int` | `10` |  | ✅ |
+| 109 | `freshness_dormant_relationship_proposal_threshold` | `AGENT_FRESHNESS_DORMANT_RELATIONSHIP_PROPOSAL_THRESHOLD` | `int` | `10` |  | ✅ |
+| 110 | `freshness_enabled` | `AGENT_FRESHNESS_ENABLED` | `bool` | `False` |  | ✅ |
+| 111 | `freshness_frequency_boost_alpha` | `AGENT_FRESHNESS_FREQUENCY_BOOST_ALPHA` | `float` | `0.1` |  | ✅ |
+| 112 | `freshness_frequency_boost_max` | `AGENT_FRESHNESS_FREQUENCY_BOOST_MAX` | `float` | `1.5` |  | ✅ |
+| 113 | `freshness_half_life_days` | `AGENT_FRESHNESS_HALF_LIFE_DAYS` | `float` | `30.0` |  | ✅ |
+| 114 | `freshness_never_accessed_noise_days` | `AGENT_FRESHNESS_NEVER_ACCESSED_NOISE_DAYS` | `float` | `30.0` |  | ✅ |
+| 115 | `freshness_relevance_weight` | `AGENT_FRESHNESS_RELEVANCE_WEIGHT` | `float` | `0.15` |  | ✅ |
+| 116 | `freshness_review_schedule_cron` | `AGENT_FRESHNESS_REVIEW_SCHEDULE_CRON` | `str` | `'0 3 * * 0'` |  | ✅ |
+| 117 | `freshness_tier_factors` | `AGENT_FRESHNESS_TIER_FACTORS` | `dict` | `{'warm': 1.0, 'cooling': 0.85, 'cold': 0.6, 'dormant': 0.3}` |  | — |
+| 118 | `freshness_tier_reranking_enabled` | `AGENT_FRESHNESS_TIER_RERANKING_ENABLED` | `bool` | `True` |  | — |
+| 119 | `gateway_access_config` | `AGENT_GATEWAY_ACCESS_CONFIG` | `str` | `'config/gateway_access.yaml'` |  | — |
+| 120 | `gateway_auth_enabled` | `AGENT_GATEWAY_AUTH_ENABLED` | `bool` | `False` |  | ✅ |
+| 121 | `gateway_mount_local` | `AGENT_GATEWAY_MOUNT_LOCAL` | `bool` | `True` |  | — |
+| 122 | `governance_config_path` | `AGENT_GOVERNANCE_CONFIG_PATH` | `Path` | `PosixPath('config/governance')` |  | ✅ |
+| 123 | `graph_quality_governance_enabled` | `AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED` | `bool` | `False` |  | — |
+| 124 | `graph_quality_stream_enabled` | `AGENT_GRAPH_QUALITY_STREAM_ENABLED` | `bool` | `True` |  | — |
+| 125 | `grounding_compliance_bar` | `AGENT_GROUNDING_COMPLIANCE_BAR` | `float` | `0.95` |  | — |
+| 126 | `grounding_compliance_max_window_age_hours` | `AGENT_GROUNDING_COMPLIANCE_MAX_WINDOW_AGE_HOURS` | `int` | `1440` |  | — |
+| 127 | `grounding_compliance_min_samples` | `AGENT_GROUNDING_COMPLIANCE_MIN_SAMPLES` | `int` | `20` |  | — |
+| 128 | `grounding_compliance_window_size` | `AGENT_GROUNDING_COMPLIANCE_WINDOW_SIZE` | `int` | `100` |  | — |
+| 129 | `grounding_enforcement_cooldown_hours` | `AGENT_GROUNDING_ENFORCEMENT_COOLDOWN_HOURS` | `int` | `24` |  | — |
+| 130 | `grounding_enforcement_demote_below` | `AGENT_GROUNDING_ENFORCEMENT_DEMOTE_BELOW` | `float` | `0.9` |  | — |
+| 131 | `grounding_enforcement_probation_rate` | `AGENT_GROUNDING_ENFORCEMENT_PROBATION_RATE` | `float` | `0.35` |  | — |
+| 132 | `grounding_entailment_latency_budget_ms` | `AGENT_GROUNDING_ENTAILMENT_LATENCY_BUDGET_MS` | `int` | `4000` |  | — |
+| 133 | `grounding_entailment_max_excerpt_chars` | `AGENT_GROUNDING_ENTAILMENT_MAX_EXCERPT_CHARS` | `int` | `6000` |  | — |
+| 134 | `grounding_entailment_max_inline_checks` | `AGENT_GROUNDING_ENTAILMENT_MAX_INLINE_CHECKS` | `int` | `8` |  | — |
+| 135 | `grounding_entailment_sample_rate` | `AGENT_GROUNDING_ENTAILMENT_SAMPLE_RATE` | `float` | `0.05` |  | — |
+| 136 | `grounding_max_generation_attempts` | `AGENT_GROUNDING_MAX_GENERATION_ATTEMPTS` | `int` | `2` |  | — |
+| 137 | `grounding_verification_mode` | `AGENT_GROUNDING_VERIFICATION_MODE` | `Literal` | `'off'` |  | — |
+| 138 | `insights_enabled` | `AGENT_INSIGHTS_ENABLED` | `bool` | `True` |  | ✅ |
+| 139 | `insights_wiring_enabled` | `AGENT_INSIGHTS_WIRING_ENABLED` | `bool` | `True` |  | ✅ |
+| 140 | `joinability_probe_enabled` | `AGENT_JOINABILITY_PROBE_ENABLED` | `bool` | `True` |  | — |
+| 141 | `joinability_probe_index_prefix` | `AGENT_JOINABILITY_PROBE_INDEX_PREFIX` | `str` | `'agent-monitors-joinability'` |  | — |
+| 142 | `joinability_probe_interval_seconds` | `AGENT_JOINABILITY_PROBE_INTERVAL_SECONDS` | `int` | `3600` |  | — |
+| 143 | `joinability_probe_window_hours` | `AGENT_JOINABILITY_PROBE_WINDOW_HOURS` | `int` | `24` |  | — |
+| 144 | `kg_stats_projection_schedule_cron` | `AGENT_KG_STATS_PROJECTION_SCHEDULE_CRON` | `str` | `'0 4 * * *'` |  | — |
+| 145 | `lexical_arm_enabled` | `AGENT_LEXICAL_ARM_ENABLED` | `bool` | `False` |  | — |
+| 146 | `linear_agent_rate_limit_per_day` | `AGENT_LINEAR_AGENT_RATE_LIMIT_PER_DAY` | `int` | `10` |  | ✅ |
+| 147 | `linear_api_key` | `AGENT_LINEAR_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 148 | `linear_personal_agent_label_id` | `AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID` | `str \| None` | `'25004aac-3b32-4fa4-bdc2-55ff348ea842'` |  | ✅ |
+| 149 | `linear_promotion_project` | `AGENT_LINEAR_PROMOTION_PROJECT` | `str` | `'Linear Async Feedback Channel'` |  | ✅ |
+| 150 | `linear_team_name` | `AGENT_LINEAR_TEAM_NAME` | `str` | `'FrenchForest'` |  | ✅ |
+| 151 | `llm_append_no_think_to_tool_prompts` | `AGENT_LLM_APPEND_NO_THINK_TO_TOOL_PROMPTS` | `bool` | `False` |  | ✅ |
+| 152 | `llm_max_retries` | `AGENT_LLM_MAX_RETRIES` | `int` | `3` |  | ✅ |
+| 153 | `llm_no_think_suffix` | `AGENT_LLM_NO_THINK_SUFFIX` | `str` | `'/no_think'` |  | ✅ |
+| 154 | `llm_timeout_seconds` | `AGENT_LLM_TIMEOUT_SECONDS` | `int` | `120` |  | ✅ |
+| 155 | `local_fallback_embedding_endpoint` | `AGENT_LOCAL_FALLBACK_EMBEDDING_ENDPOINT` | `str \| None` | `None` |  | ✅ |
+| 156 | `local_fallback_embedding_model` | `AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL` | `str` | `'Qwen/Qwen3-Embedding-8B'` |  | ✅ |
+| 157 | `location_enabled` | `AGENT_LOCATION_ENABLED` | `bool` | `False` |  | ✅ |
+| 158 | `location_precision` | `AGENT_LOCATION_PRECISION` | `str` | `'precise'` |  | — |
+| 159 | `log_dir` | `AGENT_LOG_DIR` | `Path` | `PosixPath('telemetry/logs')` |  | ✅ |
+| 160 | `log_format` | `AGENT_LOG_FORMAT` · `APP_LOG_FORMAT` | `str` | `'json'` |  | ✅ |
+| 161 | `log_level` | `AGENT_LOG_LEVEL` · `APP_LOG_LEVEL` | `str` | `'INFO'` |  | ✅ |
+| 162 | `managed_database_url` | `AGENT_MANAGED_DATABASE_URL` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 163 | `managed_elasticsearch_url` | `AGENT_MANAGED_ELASTICSEARCH_URL` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 164 | `managed_embedding_endpoint` | `AGENT_MANAGED_EMBEDDING_ENDPOINT` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 165 | `managed_embedding_model` | `AGENT_MANAGED_EMBEDDING_MODEL` | `str` | `'Qwen3-Embedding-8B'` |  | ✅ |
+| 166 | `managed_embedding_token` | `AGENT_MANAGED_EMBEDDING_TOKEN` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 167 | `managed_neo4j_uri` | `AGENT_MANAGED_NEO4J_URI` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 168 | `managed_reranker_endpoint` | `AGENT_MANAGED_RERANKER_ENDPOINT` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 169 | `managed_slm_endpoint` | `AGENT_MANAGED_SLM_ENDPOINT` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 170 | `mcp_gateway_command` | `AGENT_MCP_GATEWAY_COMMAND` | `list` | `['docker', 'mcp', 'gateway', 'run']` |  | ✅ |
+| 171 | `mcp_gateway_enabled` | `AGENT_MCP_GATEWAY_ENABLED` | `bool` | `False` |  | ✅ |
+| 172 | `mcp_gateway_enabled_servers` | `AGENT_MCP_GATEWAY_ENABLED_SERVERS` | `list` | `[]` |  | ✅ |
+| 173 | `mcp_gateway_timeout_seconds` | `AGENT_MCP_GATEWAY_TIMEOUT_SECONDS` | `int` | `60` |  | ✅ |
+| 174 | `metrics_daemon_buffer_size` | `AGENT_METRICS_DAEMON_BUFFER_SIZE` | `int` | `720` |  | — |
+| 175 | `metrics_daemon_es_emit_interval_seconds` | `AGENT_METRICS_DAEMON_ES_EMIT_INTERVAL_SECONDS` | `float` | `30.0` |  | — |
+| 176 | `metrics_daemon_poll_interval_seconds` | `AGENT_METRICS_DAEMON_POLL_INTERVAL_SECONDS` | `float` | `5.0` |  | — |
+| 177 | `metrics_sampled_stream_maxlen` | `AGENT_METRICS_SAMPLED_STREAM_MAXLEN` | `int` | `720` |  | — |
+| 178 | `mode_calibration_anomaly_threshold` | `AGENT_MODE_CALIBRATION_ANOMALY_THRESHOLD` | `int` | `3` |  | — |
+| 179 | `mode_controller_enabled` | `AGENT_MODE_CONTROLLER_ENABLED` | `bool` | `True` |  | — |
+| 180 | `mode_evaluation_interval_seconds` | `AGENT_MODE_EVALUATION_INTERVAL_SECONDS` | `float` | `30.0` |  | — |
+| 181 | `mode_window_size` | `AGENT_MODE_WINDOW_SIZE` | `int` | `12` |  | — |
+| 182 | `multipath_arm_top_k` | `AGENT_MULTIPATH_ARM_TOP_K` | `int` | `50` |  | — |
+| 183 | `multipath_paraphrase_count` | `AGENT_MULTIPATH_PARAPHRASE_COUNT` | `int` | `3` |  | — |
+| 184 | `multipath_recall_enabled` | `AGENT_MULTIPATH_RECALL_ENABLED` | `bool` | `False` |  | — |
+| 185 | `multipath_rrf_k` | `AGENT_MULTIPATH_RRF_K` | `int` | `60` |  | — |
+| 186 | `multiquery_arm_enabled` | `AGENT_MULTIQUERY_ARM_ENABLED` | `bool` | `False` |  | — |
+| 187 | `neo4j_password` | `AGENT_NEO4J_PASSWORD` | `str` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 188 | `neo4j_uri` | `AGENT_NEO4J_URI` | `str` | `'bolt://localhost:7687'` |  | ✅ |
+| 189 | `neo4j_user` | `AGENT_NEO4J_USER` | `str` | `'neo4j'` |  | ✅ |
+| 190 | `openai_api_key` | `AGENT_OPENAI_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 191 | `orchestrator_creditable_pause_limit` | `AGENT_ORCHESTRATOR_CREDITABLE_PAUSE_LIMIT` | `int` | `3` |  | — |
+| 192 | `orchestrator_max_concurrent_tasks` | `AGENT_ORCHESTRATOR_MAX_CONCURRENT_TASKS` | `int` | `5` |  | ✅ |
+| 193 | `orchestrator_max_repeated_tool_calls` | `AGENT_ORCHESTRATOR_MAX_REPEATED_TOOL_CALLS` | `int` | `1` |  | ✅ |
+| 194 | `orchestrator_max_tool_iterations` | `AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS` | `int` | `25` |  | ✅ |
+| 195 | `orchestrator_max_tool_iterations_by_task_type` | `AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS_BY_TASK_TYPE` | `dict` | `{'conversational': 6, 'memory_recall': 8, 'analysis': 25, 'planning': 25, 'tool_use': 25, 'delegation': 25, 'self_improve': 25}` |  | — |
+| 196 | `orchestrator_task_timeout_seconds` | `AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS` | `int` | `900` |  | ✅ |
+| 197 | `orchestrator_turn_lifetime_seconds` | `AGENT_ORCHESTRATOR_TURN_LIFETIME_SECONDS` | `int` | `1800` |  | — |
+| 198 | `otel_exporter_endpoint` | `AGENT_OTEL_EXPORTER_ENDPOINT` | `str` | `'localhost:4319'` |  | ✅ |
+| 199 | `outcome_ingestion_enabled` | `AGENT_OUTCOME_INGESTION_ENABLED` | `bool` | `True` |  | ✅ |
+| 200 | `outcome_ingestion_hour_utc` | `AGENT_OUTCOME_INGESTION_HOUR_UTC` | `int` | `8` |  | ✅ |
+| 201 | `owner_name` | `AGENT_OWNER_NAME` | `str` | `''` |  | ✅ |
+| 202 | `owner_storage_allowlist` | `AGENT_OWNER_STORAGE_ALLOWLIST` | `list` | `['postgres', 'neo4j', 'elasticsearch']` |  | ✅ |
+| 203 | `perplexity_api_key` | `AGENT_PERPLEXITY_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 204 | `perplexity_base_url` | `AGENT_PERPLEXITY_BASE_URL` | `str` | `'https://api.perplexity.ai'` |  | ✅ |
+| 205 | `perplexity_timeout_seconds` | `AGENT_PERPLEXITY_TIMEOUT_SECONDS` | `int` | `90` |  | ✅ |
+| 206 | `planner_timeout_seconds` | `AGENT_PLANNER_TIMEOUT_SECONDS` | `float` | `600.0` |  | — |
+| 207 | `prefer_primitives_enabled` | `AGENT_PREFER_PRIMITIVES_ENABLED` · `AGENT_PREFER_PRIMITIVES` | `bool` | `True` |  | ✅ |
+| 208 | `primitive_tools_enabled` | `AGENT_PRIMITIVE_TOOLS_ENABLED` | `bool` | `False` |  | ✅ |
+| 209 | `proactive_memory_diminishing_score_floor` | `AGENT_PROACTIVE_MEMORY_DIMINISHING_SCORE_FLOOR` | `float` | `0.35` |  | ✅ |
+| 210 | `proactive_memory_diminishing_score_gap` | `AGENT_PROACTIVE_MEMORY_DIMINISHING_SCORE_GAP` | `float` | `0.15` |  | ✅ |
+| 211 | `proactive_memory_enabled` | `AGENT_PROACTIVE_MEMORY_ENABLED` | `bool` | `False` |  | ✅ |
+| 212 | `proactive_memory_max_candidates` | `AGENT_PROACTIVE_MEMORY_MAX_CANDIDATES` | `int` | `10` |  | ✅ |
+| 213 | `proactive_memory_max_injected_items` | `AGENT_PROACTIVE_MEMORY_MAX_INJECTED_ITEMS` | `int` | `5` |  | ✅ |
+| 214 | `proactive_memory_max_tokens` | `AGENT_PROACTIVE_MEMORY_MAX_TOKENS` | `int` | `500` |  | ✅ |
+| 215 | `proactive_memory_min_score` | `AGENT_PROACTIVE_MEMORY_MIN_SCORE` | `float` | `0.3` |  | ✅ |
+| 216 | `proactive_memory_recency_half_life_days` | `AGENT_PROACTIVE_MEMORY_RECENCY_HALF_LIFE_DAYS` | `float` | `30.0` |  | ✅ |
+| 217 | `proactive_memory_relevance_bound` | `AGENT_PROACTIVE_MEMORY_RELEVANCE_BOUND` | `float \| None` | `None` |  | — |
+| 218 | `proactive_memory_relevance_gate_enabled` | `AGENT_PROACTIVE_MEMORY_RELEVANCE_GATE_ENABLED` | `bool` | `True` |  | — |
+| 219 | `proactive_memory_vector_top_k` | `AGENT_PROACTIVE_MEMORY_VECTOR_TOP_K` | `int` | `20` |  | ✅ |
+| 220 | `proactive_memory_w_embedding` | `AGENT_PROACTIVE_MEMORY_W_EMBEDDING` | `float` | `0.45` |  | ✅ |
+| 221 | `proactive_memory_w_entity` | `AGENT_PROACTIVE_MEMORY_W_ENTITY` | `float` | `0.25` |  | ✅ |
+| 222 | `proactive_memory_w_recency` | `AGENT_PROACTIVE_MEMORY_W_RECENCY` | `float` | `0.2` |  | ✅ |
+| 223 | `proactive_memory_w_topic` | `AGENT_PROACTIVE_MEMORY_W_TOPIC` | `float` | `0.1` |  | ✅ |
+| 224 | `project_name` | `AGENT_PROJECT_NAME` | `str` | `'Personal Local AI Collaborator'` |  | ✅ |
+| 225 | `promotion_initial_cap` | `AGENT_PROMOTION_INITIAL_CAP` | `int` | `5` |  | ✅ |
+| 226 | `promotion_min_seen_count` | `AGENT_PROMOTION_MIN_SEEN_COUNT` | `int` | `3` |  | ✅ |
+| 227 | `promotion_pipeline_enabled` | `AGENT_PROMOTION_PIPELINE_ENABLED` | `bool` | `True` |  | ✅ |
+| 228 | `pwa_public_origin` | `AGENT_PWA_PUBLIC_ORIGIN` | `str` | `'https://<deployment-host>'` |  | ✅ |
+| 229 | `quality_monitor_anomaly_window_days` | `AGENT_QUALITY_MONITOR_ANOMALY_WINDOW_DAYS` | `int` | `7` |  | ✅ |
+| 230 | `quality_monitor_daily_run_hour_utc` | `AGENT_QUALITY_MONITOR_DAILY_RUN_HOUR_UTC` | `int` | `5` |  | ✅ |
+| 231 | `quality_monitor_enabled` | `AGENT_QUALITY_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
+| 232 | `r2_access_key_id` | `AGENT_R2_ACCESS_KEY_ID` | `str \| None` | `None` |  | ✅ |
+| 233 | `r2_bucket_name` | `AGENT_R2_BUCKET_NAME` | `str` | `'seshat-artifacts'` |  | ✅ |
+| 234 | `r2_endpoint_url` | `AGENT_R2_ENDPOINT_URL` | `str \| None` | `None` |  | ✅ |
+| 235 | `r2_region` | `AGENT_R2_REGION` | `str` | `'auto'` |  | ✅ |
+| 236 | `r2_secret_access_key` | `AGENT_R2_SECRET_ACCESS_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 237 | `recall_candidate_cap` | `AGENT_RECALL_CANDIDATE_CAP` | `int` | `500` |  | — |
+| 238 | `recall_per_entity_turn_cap` | `AGENT_RECALL_PER_ENTITY_TURN_CAP` | `int` | `10` |  | — |
+| 239 | `recall_similarity_floor` | `AGENT_RECALL_SIMILARITY_FLOOR` | `float` | `0.0` |  | — |
+| 240 | `relevance_bounded_recall_enabled` | `AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED` | `bool` | `False` |  | — |
+| 241 | `request_monitoring_enabled` | `AGENT_REQUEST_MONITORING_ENABLED` | `bool` | `True` |  | ✅ |
+| 242 | `request_monitoring_include_gpu` | `AGENT_REQUEST_MONITORING_INCLUDE_GPU` | `bool` | `True` |  | ✅ |
+| 243 | `request_monitoring_interval_seconds` | `AGENT_REQUEST_MONITORING_INTERVAL_SECONDS` | `float` | `5.0` |  | ✅ |
+| 244 | `reranker_enabled` | `AGENT_RERANKER_ENABLED` | `bool` | `True` |  | ✅ |
+| 245 | `reranker_input_cap` | `AGENT_RERANKER_INPUT_CAP` | `int` | `25` |  | — |
+| 246 | `reranker_top_k` | `AGENT_RERANKER_TOP_K` | `int` | `10` |  | ✅ |
+| 247 | `route_trace_preview_chars` | `AGENT_ROUTE_TRACE_PREVIEW_CHARS` | `int` | `280` |  | ✅ |
+| 248 | `route_trace_store_preview` | `AGENT_ROUTE_TRACE_STORE_PREVIEW` | `bool` | `False` |  | ✅ |
+| 249 | `router_role` | `AGENT_ROUTER_ROLE` | `str` | `'ROUTER'` |  | ✅ |
+| 250 | `router_timeout_seconds` | `AGENT_ROUTER_TIMEOUT_SECONDS` | `float` | `6.0` |  | ✅ |
+| 251 | `routing_heuristic_threshold` | `AGENT_ROUTING_HEURISTIC_THRESHOLD` | `float` | `0.85` |  | ✅ |
+| 252 | `routing_policy` | `AGENT_ROUTING_POLICY` | `str` | `'heuristic_then_llm'` |  | ✅ |
+| 253 | `sandbox_image` | `AGENT_SANDBOX_IMAGE` | `str` | `'seshat-sandbox-python:0.1'` |  | ✅ |
+| 254 | `sandbox_network` | `AGENT_SANDBOX_NETWORK` | `str` | `'seshat_cloud-sim'` |  | — |
+| 255 | `sandbox_scratch_root` | `AGENT_SANDBOX_SCRATCH_ROOT` | `str` | `'/app/agent_workspace/sandbox'` |  | ✅ |
+| 256 | `searxng_base_url` | `AGENT_SEARXNG_BASE_URL` | `str` | `'http://localhost:8888'` |  | ✅ |
+| 257 | `searxng_default_categories` | `AGENT_SEARXNG_DEFAULT_CATEGORIES` | `str` | `'general'` |  | — |
+| 258 | `searxng_max_results` | `AGENT_SEARXNG_MAX_RESULTS` | `int` | `10` |  | — |
+| 259 | `searxng_timeout_seconds` | `AGENT_SEARXNG_TIMEOUT_SECONDS` | `int` | `12` |  | — |
+| 260 | `second_brain_cpu_threshold` | `AGENT_SECOND_BRAIN_CPU_THRESHOLD` | `float` | `50.0` |  | ✅ |
+| 261 | `second_brain_idle_time_seconds` | `AGENT_SECOND_BRAIN_IDLE_TIME_SECONDS` | `float` | `300.0` |  | ✅ |
+| 262 | `second_brain_memory_threshold` | `AGENT_SECOND_BRAIN_MEMORY_THRESHOLD` | `float` | `70.0` |  | ✅ |
+| 263 | `second_brain_min_interval_seconds` | `AGENT_SECOND_BRAIN_MIN_INTERVAL_SECONDS` | `float` | `3600.0` |  | ✅ |
+| 264 | `second_brain_resource_gating_enabled` | `AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED` | `bool` | `True` |  | ✅ |
+| 265 | `service_host` | `AGENT_SERVICE_HOST` | `str` | `'0.0.0.0'` |  | ✅ |
+| 266 | `service_port` | `AGENT_SERVICE_PORT` | `int` | `9000` |  | ✅ |
+| 267 | `service_url` | `AGENT_SERVICE_URL` · `SERVICE_URL` | `str` | `'http://localhost:9000'` |  | ✅ |
+| 268 | `seshat_open_ticket_cap` | `AGENT_SESHAT_OPEN_TICKET_CAP` | `int` | `10` |  | ✅ |
+| 269 | `session_digest_max_tokens` | `AGENT_SESSION_DIGEST_MAX_TOKENS` | `int` | `400` |  | ✅ |
+| 270 | `session_digest_structured_output` | `AGENT_SESSION_DIGEST_STRUCTURED_OUTPUT` | `bool` | `True` |  | ✅ |
+| 271 | `session_digest_target_tokens` | `AGENT_SESSION_DIGEST_TARGET_TOKENS` | `int` | `120` |  | ✅ |
+| 272 | `session_retention_days` | `AGENT_SESSION_RETENTION_DAYS` | `int` | `180` |  | ✅ |
+| 273 | `session_retention_sweep_interval_seconds` | `AGENT_SESSION_RETENTION_SWEEP_INTERVAL_SECONDS` | `int` | `86400` |  | ✅ |
+| 274 | `session_summary_enabled` | `AGENT_SESSION_SUMMARY_ENABLED` | `bool` | `True` |  | ✅ |
+| 275 | `session_summary_idle_threshold_seconds` | `AGENT_SESSION_SUMMARY_IDLE_THRESHOLD_SECONDS` | `float` | `900.0` |  | ✅ |
+| 276 | `session_summary_max_attempts` | `AGENT_SESSION_SUMMARY_MAX_ATTEMPTS` | `int` | `2` |  | ✅ |
+| 277 | `session_summary_retry_backoff_base_seconds` | `AGENT_SESSION_SUMMARY_RETRY_BACKOFF_BASE_SECONDS` | `float` | `900.0` |  | ✅ |
+| 278 | `session_summary_retry_backoff_max_seconds` | `AGENT_SESSION_SUMMARY_RETRY_BACKOFF_MAX_SECONDS` | `float` | `21600.0` |  | ✅ |
+| 279 | `session_summary_sweep_interval_seconds` | `AGENT_SESSION_SUMMARY_SWEEP_INTERVAL_SECONDS` | `float` | `300.0` |  | ✅ |
+| 280 | `session_write_wait_timeout_seconds` | `AGENT_SESSION_WRITE_WAIT_TIMEOUT_SECONDS` | `float` | `10.0` |  | — |
+| 281 | `signal_priority_clamp` | `AGENT_SIGNAL_PRIORITY_CLAMP` | `float` | `0.5` |  | ✅ |
+| 282 | `signal_smoothing_prior` | `AGENT_SIGNAL_SMOOTHING_PRIOR` | `float` | `2.0` |  | ✅ |
+| 283 | `signal_suppression_cooldown_days` | `AGENT_SIGNAL_SUPPRESSION_COOLDOWN_DAYS` | `int` | `30` |  | ✅ |
+| 284 | `signal_suppression_min_n` | `AGENT_SIGNAL_SUPPRESSION_MIN_N` | `int` | `5` |  | ✅ |
+| 285 | `signal_suppression_threshold` | `AGENT_SIGNAL_SUPPRESSION_THRESHOLD` | `float` | `-0.4` |  | ✅ |
+| 286 | `signal_window_days` | `AGENT_SIGNAL_WINDOW_DAYS` | `int` | `90` |  | ✅ |
+| 287 | `skill_index_max_tokens` | `AGENT_SKILL_INDEX_MAX_TOKENS` | `int` | `2048` |  | ✅ |
+| 288 | `skill_index_p95_token_threshold` | `AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD` | `int` | `6000` |  | ✅ |
+| 289 | `skill_nudge_enabled` | `AGENT_SKILL_NUDGE_ENABLED` | `bool` | `True` |  | ✅ |
+| 290 | `skill_routing_mode` | `AGENT_SKILL_ROUTING_MODE` | `str` | `'hybrid'` |  | ✅ |
+| 291 | `skill_routing_model_key` | `AGENT_SKILL_ROUTING_MODEL_KEY` | `str` | `'claude_haiku'` |  | ✅ |
+| 292 | `skill_routing_threshold_monitor_enabled` | `AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED` | `bool` | `True` |  | ✅ |
+| 293 | `skill_routing_threshold_monitor_hour_utc` | `AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC` | `int` | `5` |  | ✅ |
+| 294 | `slm_base_url` | `AGENT_SLM_BASE_URL` | `str \| None` | `None` |  | ✅ |
+| 295 | `slm_gpu_util_degraded_pct` | `AGENT_SLM_GPU_UTIL_DEGRADED_PCT` | `float` | `95.0` |  | — |
+| 296 | `slm_health_cache_ttl_seconds` | `AGENT_SLM_HEALTH_CACHE_TTL_SECONDS` | `float` | `45.0` |  | — |
+| 297 | `slm_health_index_prefix` | `AGENT_SLM_HEALTH_INDEX_PREFIX` | `str` | `'agent-monitors-slm-health'` |  | — |
+| 298 | `slm_health_probe_enabled` | `AGENT_SLM_HEALTH_PROBE_ENABLED` | `bool` | `True` |  | — |
+| 299 | `slm_health_probe_interval_seconds` | `AGENT_SLM_HEALTH_PROBE_INTERVAL_SECONDS` | `float` | `300.0` |  | — |
+| 300 | `slm_health_url` | `AGENT_SLM_HEALTH_URL` | `str \| None` | `None` |  | — |
+| 301 | `slm_queue_depth_degraded` | `AGENT_SLM_QUEUE_DEPTH_DEGRADED` | `int` | `4` |  | — |
+| 302 | `structural_arm_enabled` | `AGENT_STRUCTURAL_ARM_ENABLED` | `bool` | `False` |  | — |
+| 303 | `structural_arm_top_k` | `AGENT_STRUCTURAL_ARM_TOP_K` | `int` | `50` |  | — |
+| 304 | `structural_class_predicate_enabled` | `AGENT_STRUCTURAL_CLASS_PREDICATE_ENABLED` | `bool` | `False` |  | — |
+| 305 | `structural_type_predicate_enabled` | `AGENT_STRUCTURAL_TYPE_PREDICATE_ENABLED` | `bool` | `False` |  | — |
+| 306 | `sub_agent_max_tool_iterations` | `AGENT_SUB_AGENT_MAX_TOOL_ITERATIONS` | `int` | `5` |  | ✅ |
+| 307 | `substrate_profile` | `AGENT_SUBSTRATE_PROFILE` | `str` | `'private'` |  | ✅ |
+| 308 | `synthesis_timeout_seconds` | `AGENT_SYNTHESIS_TIMEOUT_SECONDS` | `float` | `25.0` |  | — |
+| 309 | `sysgraph_database_url` | `AGENT_SYSGRAPH_DATABASE_URL` | `str` | `'postgresql+asyncpg://<redacted>@localhost:5432/personal_agent'` |  | ✅ |
+| 310 | `sysgraph_maintenance_enabled` | `AGENT_SYSGRAPH_MAINTENANCE_ENABLED` | `bool` | `True` |  | — |
+| 311 | `sysgraph_maintenance_hour_utc` | `AGENT_SYSGRAPH_MAINTENANCE_HOUR_UTC` | `int` | `9` |  | — |
+| 312 | `tool_result_compression_enabled` | `AGENT_TOOL_RESULT_COMPRESSION_ENABLED` | `bool` | `False` |  | — |
+| 313 | `tool_result_digest_exclude_tools` | `AGENT_TOOL_RESULT_DIGEST_EXCLUDE_TOOLS` | `list` | `[]` |  | — |
+| 314 | `tool_result_digest_head_lines` | `AGENT_TOOL_RESULT_DIGEST_HEAD_LINES` | `int` | `40` |  | — |
+| 315 | `tool_result_digest_keep` | `AGENT_TOOL_RESULT_DIGEST_KEEP` | `int` | `3` |  | — |
+| 316 | `tool_result_digest_max_expand_tokens` | `AGENT_TOOL_RESULT_DIGEST_MAX_EXPAND_TOKENS` | `int` | `8000` |  | — |
+| 317 | `tool_result_digest_min_savings_tokens` | `AGENT_TOOL_RESULT_DIGEST_MIN_SAVINGS_TOKENS` | `int` | `500` |  | — |
+| 318 | `tool_result_digest_pin_ttl_turns` | `AGENT_TOOL_RESULT_DIGEST_PIN_TTL_TURNS` | `int` | `4` |  | — |
+| 319 | `tool_result_digest_put_timeout_ms` | `AGENT_TOOL_RESULT_DIGEST_PUT_TIMEOUT_MS` | `int` | `2000` |  | — |
+| 320 | `tool_result_digest_tail_lines` | `AGENT_TOOL_RESULT_DIGEST_TAIL_LINES` | `int` | `20` |  | — |
+| 321 | `tool_result_digest_threshold_tokens` | `AGENT_TOOL_RESULT_DIGEST_THRESHOLD_TOKENS` | `int` | `1500` |  | — |
+| 322 | `turn_observed_stream_maxlen` | `AGENT_TURN_OBSERVED_STREAM_MAXLEN` | `int` | `10000` |  | — |
+| 323 | `turn_projector_enabled` | `AGENT_TURN_PROJECTOR_ENABLED` | `bool` | `True` |  | — |
+| 324 | `upload_max_size_bytes` | `AGENT_UPLOAD_MAX_SIZE_BYTES` | `int` | `52428800` |  | — |
+| 325 | `url_guard_allowlist` | `AGENT_URL_GUARD_ALLOWLIST` | `list` | `[]` |  | — |
+| 326 | `url_guard_cache_ttl_seconds` | `AGENT_URL_GUARD_CACHE_TTL_SECONDS` | `int` | `3600` |  | — |
+| 327 | `url_guard_enabled` | `AGENT_URL_GUARD_ENABLED` | `bool` | `True` |  | — |
+| 328 | `url_guard_mode` | `AGENT_URL_GUARD_MODE` | `str` | `'blocklist'` |  | — |
+| 329 | `url_guard_novelty_window_days` | `AGENT_URL_GUARD_NOVELTY_WINDOW_DAYS` | `int` | `14` |  | — |
+| 330 | `use_service_mode` | `AGENT_USE_SERVICE_MODE` | `bool` | `True` |  | — |
+| 331 | `user_display_names_json` | `AGENT_USER_DISPLAY_NAMES_JSON` | `str` | `'{}'` |  | ✅ |
+| 332 | `version` | `AGENT_VERSION` | `str` | `'0.1.0'` |  | ✅ |
+| 333 | `voyage_api_key` | `AGENT_VOYAGE_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
+| 334 | `within_session_compression_enabled` | `AGENT_WITHIN_SESSION_COMPRESSION_ENABLED` | `bool` | `True` |  | — |
+| 335 | `within_session_compression_refire_after_messages` | `AGENT_WITHIN_SESSION_COMPRESSION_REFIRE_AFTER_MESSAGES` | `int` | `4` |  | — |
+| 336 | `within_session_hard_threshold_ratio` | `AGENT_WITHIN_SESSION_HARD_THRESHOLD_RATIO` | `float` | `0.85` |  | — |
+| 337 | `within_session_max_tail_ratio` | `AGENT_WITHIN_SESSION_MAX_TAIL_RATIO` | `float` | `0.35` |  | — |
+| 338 | `within_session_min_tail_ratio` | `AGENT_WITHIN_SESSION_MIN_TAIL_RATIO` | `float` | `0.25` |  | — |
+| 339 | `within_session_pre_pass_threshold_tokens` | `AGENT_WITHIN_SESSION_PRE_PASS_THRESHOLD_TOKENS` | `int` | `800` |  | — |
+| 340 | `worker_queue_absorption_seconds` | `AGENT_WORKER_QUEUE_ABSORPTION_SECONDS` | `float` | `25.0` |  | — |
+| 341 | `ws_event_queue_size` | `AGENT_WS_EVENT_QUEUE_SIZE` | `int` | `500` |  | — |
+| 342 | `ws_event_ttl_hours` | `AGENT_WS_EVENT_TTL_HOURS` | `int` | `24` |  | — |
+| 343 | `ws_max_message_size` | `AGENT_WS_MAX_MESSAGE_SIZE` | `int` | `8192` |  | — |
+| 344 | `ws_ping_timeout_seconds` | `AGENT_WS_PING_TIMEOUT_SECONDS` | `int` | `60` |  | — |
+| 345 | `ws_rate_limit_per_second` | `AGENT_WS_RATE_LIMIT_PER_SECOND` | `int` | `20` |  | — |
+| 346 | `ws_ticket_ttl_seconds` | `AGENT_WS_TICKET_TTL_SECONDS` | `int` | `30` |  | — |
 
 ### Orphan `AGENT_*` keys in `.env.example` (1)
 
@@ -399,11 +401,11 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 
 - `AGENT_HOST`
 
-### AppConfig fields not documented in `.env.example` (150)
+### AppConfig fields not documented in `.env.example` (152)
 
 Fields with no matching env-var line in `.env.example` — the coverage gap ADR-0099 D4 flags as a *policy* finding (undocumented config surface):
 
-<details><summary>150 undocumented fields</summary>
+<details><summary>152 undocumented fields</summary>
 
 - `artifact_envelope_probe_enabled`
 - `artifact_envelope_probe_timeout_s`
@@ -450,6 +452,8 @@ Fields with no matching env-var line in `.env.example` — the coverage gap ADR-
 - `embedding_backfill_enabled`
 - `entity_extraction_fewshot_exemplars_enabled`
 - `entity_extraction_timeout_seconds`
+- `entity_match_relevance_bound`
+- `entity_match_relevance_gate_enabled`
 - `environment`
 - `eur_usd_rate`
 - `expansion_budget_max`

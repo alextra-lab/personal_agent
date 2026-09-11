@@ -16,7 +16,7 @@ import structlog
 
 from personal_agent.events import AccessContext
 from personal_agent.memory.embeddings import generate_embedding
-from personal_agent.memory.models import MemoryQuery
+from personal_agent.memory.models import MemoryQuery, MemoryQueryResult
 from personal_agent.memory.proactive import build_proactive_suggestions
 from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 from personal_agent.memory.protocol import (
@@ -25,10 +25,36 @@ from personal_agent.memory.protocol import (
     MemoryRecallQuery,
     MemoryRecallResult,
 )
-from personal_agent.memory.service import MemoryService
+from personal_agent.memory.service import MemoryService, relevance_value_key
 
 log = structlog.get_logger(__name__)
 logger = log  # alias used by earlier methods
+
+
+def _relevance_fields(result: MemoryQueryResult, kind: str, identity: str) -> dict[str, object]:
+    """The relevance fields for one recalled item, or nothing when it was never scored.
+
+    ADR-0148 D4 (FRE-1480). Returns an **empty mapping** for an unscored item rather than
+    ``{"relevance_score": None}``: the admission boundary distinguishes "no relevance value
+    was established" from "a value was established and it is low", and the two license
+    different conclusions -- ``UNAVAILABLE`` against ``NOTHING_RELEVANT``. A key present
+    with a null value blurs exactly that line.
+
+    The field names match the broad-recall path's (FRE-1479) so one verdict predicate reads
+    both paths' items.
+
+    Args:
+        result: The service result carrying the namespaced relevance values.
+        kind: ``"turn"`` or ``"entity"``.
+        identity: The item's identity within that kind.
+
+    Returns:
+        ``{"relevance_score": float, "relevance_model": str}``, or an empty mapping.
+    """
+    value = result.relevance_values.get(relevance_value_key(kind, identity))
+    if value is None:
+        return {}
+    return {"relevance_score": value.score, "relevance_model": value.model}
 
 
 class MemoryServiceAdapter:
@@ -79,6 +105,10 @@ class MemoryServiceAdapter:
                     "user_message": c.user_message,
                     "assistant_response": c.assistant_response,
                     "key_entities": c.key_entities,
+                    # FRE-1480 (ADR-0148 D4): the relevance value the admission boundary
+                    # gates on, in the same two field names the broad-recall path already
+                    # carries (FRE-1479), so one predicate reads both.
+                    **_relevance_fields(result, "turn", c.turn_id),
                 }
                 for c in result.conversations
             ],
@@ -89,6 +119,7 @@ class MemoryServiceAdapter:
                     "entity_type": e.entity_type,
                     "description": e.description,
                     "mention_count": e.mention_count,
+                    **_relevance_fields(result, "entity", e.entity_id),
                 }
                 for e in result.entities
             ],
@@ -96,6 +127,7 @@ class MemoryServiceAdapter:
             # FRE-1476: carried so the assembler can tell a failed recall from an empty
             # one. Both arrive here as empty lists.
             arms_failed=tuple(result.arms_failed),
+            relevance_scored=result.relevance_scored,
         )
 
     async def recall_broad(

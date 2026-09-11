@@ -382,10 +382,16 @@ T3.
 
 **What this relies on from ADR-0149, and what is unbuilt.** The failed-landing guard — the
 `sub_agent_fanout_incomplete` pause, `stop_and_show`, and the trailer — is ADR-0149 D4, ticketed
-as FRE-1484 and unbuilt on 2026-09-11. This ADR adds nothing to it and changes nothing in it: D1
-sets `success` and `report_kind`, which is what its predicate reads. Removing the combine worker
-does not depend on it. The A/B (T4) does: a run whose failed landings are not surfaced cannot be
-scored, so T4 depends on FRE-1484.
+as FRE-1484 and unbuilt on 2026-09-11. This ADR adds nothing to it: D1 sets `success` and
+`report_kind`, which is what its predicate reads. ADR-0149 D4 was amended in place on 2026-09-11
+(its Status Updates, PR #1132): the pause fires on `report_kind` of `ledger` or `narration` or a
+skipped task, never on `success` alone, so a capped worker with a validated report proceeds with
+the trailer; and a headless caller's default is `answer_from_partial` with the trailer, not
+`stop_and_show`. Both matter here. Under D1 a cut schema-backed landing is `narration` and pauses;
+a capped one with a validated report does not. And T4's A/B scores the answer, so its prose arm —
+where cut landings are common — must return answers, which the amended default guarantees.
+Removing the combine worker does not depend on FRE-1484. The A/B (T4) does: a run whose failed
+landings are not surfaced cannot be scored, so T4 depends on FRE-1484.
 
 ### D5 — What the worker is told beyond its task
 
@@ -495,7 +501,7 @@ same recovery.
 **Why Rejected:** Same quality, one long call more. And ADR-0149 D3 rules out "a second
 summarizer call over the raw results"; this is a second call over the report, not the raw
 results, but it is a second call, and adopting it would be a further revision of ADR-0149.
-Recorded as the fallback if AC-2 fails: this ADR then stays Proposed, is not Implemented, and
+Recorded as the fallback if AC-2 fails: this ADR is then not Implemented, and
 the switch to this form is its own decision — a Status Update here with the measured numbers,
 and a row in the ADR-0149 revisions table with the call's budget and terminal behaviour — not
 something T4 builds on its own authority.
@@ -570,8 +576,10 @@ knowing which call is the landing.
   the negative-finding rule live on `researcher` and nowhere else.
 - One worker and its failure class disappear. The evidence run's only fatal failure was the
   combine worker.
-- A cut landing is visible. ADR-0149 D4's pause, once FRE-1484 lands, fires on the failure it
-  was built for.
+- A cut landing is visible as `narration`, and under ADR-0149 D4 as amended on 2026-09-11 that
+  is what the pause fires on. This ADR does not make the pause rare by itself: the combine
+  worker's deletion removes the overflow failure, not the cap; the amendment removes the cap from
+  the predicate.
 - Same-type workers share one prefix across a fan-out, across turns and across thoroughness
   levels; the tools bytes are part of that guarantee for the first time.
 - `source_url` per finding is the handle ADR-0149 T4's shared source registry needs.
@@ -838,22 +846,29 @@ ordering. This ADR revises four ADR-0149 clauses, and FRE-1485 rewrites
 on the worker. Building the revision before the thing it revises invites a rebuild.
 
 **The owner's caveat — "if appropriate and not superseded" — is live, not formal.** Two of this
-ADR's premises are under active challenge at the time of acceptance, and each ticket must be
-re-read against the outcome rather than started on the strength of this acceptance alone:
+ADR's premises were under active challenge at the time of acceptance. Both were resolved the same
+afternoon by the amendment of ADR-0149 D4 (PR #1132, the adr seat, on master's request relaying
+the owner), and are recorded here so the acceptance is read against the outcome:
 
 - A codex design review of FRE-1484 returned two High findings against **ADR-0149 D4**, which this
-  ADR relies on and explicitly does not change. One of them is that the `eval_mode` default returns
-  a raw worker-report bundle instead of a synthesized answer for every headless incomplete fan-out.
-  **That would silently invalidate T4 (FRE-1495)**, this ADR's own decisive A/B, which runs on
-  `channel=EVAL`, depends on FRE-1484, and scores the *answer*. An amendment to ADR-0149 D4 is with
-  the adr seat.
-- The second finding disputes this ADR's claim at line 573 that deleting the combine worker makes
-  ADR-0149 D4's pause "fire on the failure it was built for". The counter-argument is that capped
-  workers are marked unsuccessful even with usable reports, which this ADR does not change. That is
-  a measurable question once T2 (FRE-1493) lands, not an arguable one now.
+  ADR relies on. One was that the `eval_mode` default returned a raw worker-report bundle instead
+  of a synthesized answer for every headless incomplete fan-out, which **would have silently
+  invalidated T4 (FRE-1495)**, this ADR's own decisive A/B: it runs on `channel=EVAL`, depends on
+  FRE-1484, and scores the *answer*. **Resolved:** the adr seat agreed, and found the interaction
+  worse than stated — in the A/B's prose arm cut landings are common, so it would have compared
+  bundles against answers. ADR-0149 D4's headless default is now `answer_from_partial` with the
+  trailer, and the applied option is recorded on the turn's evidence. T4 stands as written, and
+  its ticket carries a note.
+- The second finding disputed this ADR's claim at its Positive Consequences that deleting the
+  combine worker makes ADR-0149 D4's pause "fire on the failure it was built for", because capped
+  workers were marked unsuccessful even with usable reports, which this ADR does not change.
+  **Resolved by concession:** the adr seat agreed the claim was wrong — the deletion removes the
+  overflow failure, not the cap mapping — and reworded it in PR #1132. The pause itself was
+  amended in ADR-0149 to fire on a failed landing (`ledger`, `narration`, a skipped task) and never
+  on `success` alone, which is what makes it rare.
 
-Accepted with those two open, deliberately: neither touches D1's schema, D2's registry, D3's
-thoroughness levels or D5's prompt, which is the bulk of the work. Both touch T4 alone.
+Neither resolution touches D1's schema, D2's registry, D3's thoroughness levels or D5's prompt,
+which is the bulk of the work. Both touched T4 alone, and T4 is now consistent with the pair.
 
 **AC-8 holds at acceptance.** No limit is changed by this ADR, including the landing `max_tokens`.
 FRE-1487's study limits remain raised under the owner's separate direction and are unrelated to

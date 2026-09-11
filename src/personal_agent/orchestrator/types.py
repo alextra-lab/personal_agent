@@ -567,6 +567,16 @@ class ExecutionContext:
     # ``None`` when no turn-start ask ran (no ``artifact_build_intent`` signal).
     artifact_builder_planning_note: str | None = None
 
+    # --- ADR-0149 D4 (FRE-1484) — the deterministic trailer ---
+    # Set in ``step_init`` when an incomplete sub-agent fan-out is resolved
+    # ``answer_from_partial``. ``step_synthesis`` appends it to both
+    # ``ctx.final_reply`` and the assistant message in ``ctx.messages`` once
+    # generation completes, outside the model's control — unlike a disclosure,
+    # the trailer is deliberately stored in history so the persisted turn equals
+    # the wire form (ADR-0081). ``None`` when the fan-out completed, or the
+    # decision was ``stop_and_show``.
+    fanout_trailer: str | None = None
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

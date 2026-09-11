@@ -2306,6 +2306,58 @@ class TestStepSynthesisAttachmentDisclosure:
         assert ctx.final_reply == "Here's what I see."
 
 
+class TestStepSynthesisFanoutTrailer:
+    """ADR-0149 D4 (FRE-1484) AC-3 — the trailer is the final answer's last lines.
+
+    Unlike a disclosure, the trailer must also land in the persisted assistant
+    message (``ctx.messages``), not only ``ctx.final_reply`` — the wire form and
+    the persisted history must agree (ADR-0081).
+    """
+
+    @staticmethod
+    def _make_ctx(final_reply: str, trailer: str | None) -> ExecutionContext:
+        ctx = ExecutionContext(
+            session_id="sess-1484-synth",
+            trace_id="trace-1484-synth",
+            user_message="research this",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+        )
+        ctx.final_reply = final_reply
+        ctx.fanout_trailer = trailer
+        ctx.messages = [
+            {"role": "user", "content": "research this"},
+            {"role": "assistant", "content": final_reply},
+        ]
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_trailer_appended_to_final_reply_and_persisted_message(self) -> None:
+        ctx = self._make_ctx(
+            "Here is the itinerary.", "\n\n— Research note: 1 of 2 sub-tasks did not complete."
+        )
+        trace_ctx = TraceContext(trace_id="trace-1484-synth", session_id="sess-1484-synth")
+        session_manager = SessionManager()
+        session_manager.create_session(Mode.NORMAL, Channel.CHAT, session_id=ctx.session_id)
+
+        await step_synthesis(ctx, session_manager, trace_ctx)
+
+        assert ctx.final_reply is not None
+        assert ctx.final_reply.endswith("— Research note: 1 of 2 sub-tasks did not complete.")
+        assert ctx.messages[-1]["content"] == ctx.final_reply
+
+    @pytest.mark.asyncio
+    async def test_no_trailer_leaves_final_reply_unchanged(self) -> None:
+        ctx = self._make_ctx("Here is the itinerary.", None)
+        trace_ctx = TraceContext(trace_id="trace-1484-synth", session_id="sess-1484-synth")
+        session_manager = SessionManager()
+        session_manager.create_session(Mode.NORMAL, Channel.CHAT, session_id=ctx.session_id)
+
+        await step_synthesis(ctx, session_manager, trace_ctx)
+
+        assert ctx.final_reply == "Here is the itinerary."
+
+
 class TestStepSynthesisDecisionDisclosure:
     """FRE-928 AC-3 — a default applied with no user decision is stated in the reply.
 

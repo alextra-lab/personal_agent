@@ -1141,6 +1141,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.memory.service import MemoryService
     from personal_agent.orchestrator.cache_reset_scheduler import ResetDecision
     from personal_agent.orchestrator.constraint_options import ConstraintDecision
+    from personal_agent.orchestrator.sub_agent_types import SubAgentResult
     from personal_agent.service.repositories.session_repository import SessionRepository
     from personal_agent.transport.events import ConstraintName
 
@@ -4655,6 +4656,89 @@ async def _maybe_resolve_artifact_builder(ctx: ExecutionContext) -> None:
     )
 
 
+def _fanout_incomplete_tasks(
+    sub_agent_results: "list[SubAgentResult]", skipped_tasks: list[str]
+) -> list[tuple[str, str]]:
+    """Task-name/stop-reason pairs for every task a fan-out did not land (ADR-0149 D4).
+
+    The predicate reads ``success`` and ``report_kind``, not ``stop_reason`` alone:
+    a worker that completed with empty text carries ``stop_reason == "completed"``
+    and is still a failed landing (ADR-0149 D3's Completed-path table).
+
+    Args:
+        sub_agent_results: Dispatched workers' results.
+        skipped_tasks: Plan task names never dispatched because the turn's budget
+            was exhausted first (FRE-1397).
+
+    Returns:
+        ``(task_name, stop_reason)`` for every dispatched result with
+        ``success == False`` or ``report_kind == "ledger"``, followed by every
+        skipped task with the pseudo stop reason ``"not_dispatched"``. Empty when
+        the fan-out is complete.
+    """
+    incomplete: list[tuple[str, str]] = [
+        (r.spec_task, r.stop_reason)
+        for r in sub_agent_results
+        if not r.success or r.report_kind == "ledger"
+    ]
+    incomplete.extend((task, "not_dispatched") for task in skipped_tasks)
+    return incomplete
+
+
+def _fanout_trailer_text(
+    sub_agent_results: "list[SubAgentResult]", skipped_tasks: list[str]
+) -> str:
+    """The deterministic trailer for an ``answer_from_partial`` decision (ADR-0149 D4).
+
+    Appended to the final answer outside the model's control — the model cannot
+    remove or reword it.
+
+    Args:
+        sub_agent_results: Dispatched workers' results.
+        skipped_tasks: Plan task names never dispatched.
+
+    Returns:
+        The trailer text, prefixed with a blank line so it reads as its own
+        paragraph after the synthesized answer.
+    """
+    incomplete = _fanout_incomplete_tasks(sub_agent_results, skipped_tasks)
+    total = len(sub_agent_results) + len(skipped_tasks)
+    named = ", ".join(f"{task}: {reason}" for task, reason in incomplete)
+    return (
+        f"\n\n— Research note: {len(incomplete)} of {total} sub-tasks did not "
+        f"complete ({named}). Claims on those topics rest on partial results and "
+        "are not verified by this turn's research."
+    )
+
+
+def _compose_fanout_stop_and_show(
+    sub_agent_results: "list[SubAgentResult]", skipped_tasks: list[str]
+) -> str:
+    """Deterministic ``stop_and_show`` response — no model call (ADR-0149 D4).
+
+    Args:
+        sub_agent_results: Dispatched workers' results.
+        skipped_tasks: Plan task names never dispatched.
+
+    Returns:
+        Every dispatched task's name, terminal facts and report in full, then
+        every skipped task.
+    """
+    parts = ["The sub-agent fan-out did not complete. Here is what each worker returned:\n"]
+    for r in sub_agent_results:
+        parts.append(
+            f"\n### {r.spec_task} — stop={r.stop_reason}, report={r.report_kind}, "
+            f"{r.tool_iterations} round(s), {r.tool_result_chars_absorbed:,} chars "
+            f"absorbed\n{r.full_output}\n"
+        )
+    if skipped_tasks:
+        parts.append(
+            "\n### Not dispatched — the turn's time budget was exhausted first\n"
+            f"{', '.join(skipped_tasks)}\n"
+        )
+    return "".join(parts)
+
+
 async def step_init(
     ctx: ExecutionContext, session_manager: SessionManager, trace_ctx: TraceContext
 ) -> TaskState:
@@ -5103,6 +5187,64 @@ async def step_init(
                         }
                     )
 
+            # ADR-0149 D4 (FRE-1484): the caller cannot hide a failed landing. An
+            # incomplete fan-out — a worker that did not land, or a task the
+            # turn's budget never reached — is paused in front of the owner
+            # before the primary ever synthesizes a confident answer over it.
+            # Placed before the synthesis message is built, so a paused fan-out
+            # never reaches the synthesis LLM call unpaused.
+            incomplete_tasks = _fanout_incomplete_tasks(
+                expansion_result.sub_agent_results, expansion_result.skipped_tasks
+            )
+            if incomplete_tasks:
+                names = ", ".join(f"{task} ({reason})" for task, reason in incomplete_tasks)
+                if ctx.eval_mode:
+                    # A headless eval caller has nobody to answer a pause — apply
+                    # the stored preference (or the safe default) at once, with no
+                    # pause event and no wait on constraint_pause_timeout_seconds.
+                    pref = await _load_constraint_preference(
+                        ctx.user_id,
+                        "sub_agent_fanout_incomplete",
+                        trace_id=ctx.trace_id,
+                        session_id=ctx.session_id,
+                    )
+                    fanout_decision = (
+                        pref
+                        if pref in ("answer_from_partial", "stop_and_show")
+                        else "stop_and_show"
+                    )
+                else:
+                    fanout_decision = await _maybe_pause_for_constraint(
+                        session_id=ctx.session_id,
+                        trace_id=ctx.trace_id,
+                        user_id=ctx.user_id,
+                        constraint="sub_agent_fanout_incomplete",
+                        context=(
+                            f"{len(incomplete_tasks)} sub-task(s) did not complete: "
+                            f"{names}. Answer from what was gathered, or stop and "
+                            "show the worker reports?"
+                        ),
+                        ctx=ctx,
+                    )
+                log.info(
+                    "sub_agent_fanout_incomplete_decided",
+                    decision=str(fanout_decision),
+                    eval_mode=ctx.eval_mode,
+                    incomplete_count=len(incomplete_tasks),
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                )
+                if fanout_decision == "stop_and_show":
+                    ctx.final_reply = _compose_fanout_stop_and_show(
+                        expansion_result.sub_agent_results, expansion_result.skipped_tasks
+                    )
+                    return TaskState.SYNTHESIS
+                # answer_from_partial: the trailer is appended once generation
+                # completes (step_synthesis), outside the model's control.
+                ctx.fanout_trailer = _fanout_trailer_text(
+                    expansion_result.sub_agent_results, expansion_result.skipped_tasks
+                )
+
             # Build synthesis context and append to messages. FRE-1397: also
             # fires when every task was skipped for turn-budget exhaustion
             # (sub_agent_results empty but skipped_tasks not) — otherwise the
@@ -5113,7 +5255,6 @@ async def step_init(
                     "role": "user",
                     "content": (
                         f"{expansion_result.synthesis_context}\n"
-                        "The sub-tasks above have been completed. "
                         "Synthesize the results into a coherent response "
                         "for the user's original question."
                     ),
@@ -7123,6 +7264,18 @@ async def step_synthesis(
     if all_disclosures:
         disclosure_text = "\n\n".join(f"Note: {d}" for d in all_disclosures)
         ctx.final_reply = f"{ctx.final_reply}\n\n{disclosure_text}"
+
+    # ADR-0149 D4 (FRE-1484): the trailer for an incomplete fan-out resolved
+    # answer_from_partial — appended last, so it is the final answer's closing
+    # lines. Unlike a disclosure, it is written into the persisted assistant
+    # message too, not only ctx.final_reply, so the persisted history equals the
+    # wire form (ADR-0081) and the next turn replays it as a forward extension.
+    if ctx.fanout_trailer:
+        ctx.final_reply = f"{ctx.final_reply}{ctx.fanout_trailer}"
+        if ctx.messages and ctx.messages[-1].get("role") == "assistant":
+            ctx.messages[-1]["content"] = (
+                f"{ctx.messages[-1].get('content', '')}{ctx.fanout_trailer}"
+            )
 
     # Update session with new messages
     session_manager.update_session(ctx.session_id, messages=ctx.messages)

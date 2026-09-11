@@ -1024,9 +1024,18 @@ class ExpansionController:
         """
         parts = [f"## Expansion Results (strategy: {plan.strategy})\n\n"]
 
+        n_ok = 0
+        n_ledger = 0
         for r in sub_results:
             status = "OK" if r.success else f"FAILED: {r.error}"
-            parts.append(f"### {r.spec_task} [{status}]\n{r.summary}\n\n")
+            # ADR-0149 D4 (FRE-1484): the header carries the terminal facts, not
+            # just OK/FAILED — a worker that completed with an empty report and a
+            # worker that never got the chance to write one must not read alike.
+            parts.append(
+                f"### {r.spec_task} [{status}: stop={r.stop_reason}, "
+                f"report={r.report_kind}, {r.tool_iterations} round(s), "
+                f"{r.tool_result_chars_absorbed:,} chars absorbed]\n{r.summary}\n\n"
+            )
             if r.denied_tools:
                 # FRE-1388 AC-4: denial is deterministic and lands in the report
                 # itself, not only a log line — the recovery path is the primary
@@ -1035,6 +1044,10 @@ class ExpansionController:
                     f"*Tool access denied:* {', '.join(r.denied_tools)} was requested "
                     "but not granted to sub-agents; this sub-task ran without it.\n\n"
                 )
+            if r.success:
+                n_ok += 1
+            elif r.report_kind == "ledger":
+                n_ledger += 1
 
         if any(not r.success for r in sub_results):
             failed = [r.spec_task for r in sub_results if not r.success]
@@ -1048,6 +1061,21 @@ class ExpansionController:
                 f"\n**Note:** The following sub-tasks were not run — the turn's time "
                 f"budget was exhausted before dispatch reached them: {', '.join(skipped_tasks)}. "
                 "Synthesize from available results and note this gap.\n"
+            )
+
+        if sub_results:
+            # ADR-0149 D4 (FRE-1484): replaces the old "the sub-tasks above have
+            # been completed" close, which followed the failure note even when
+            # every worker failed. The last sentence is an instruction and not
+            # the enforcement (that is the D4 pause) — kept because it is true.
+            n_partial = len(sub_results) - n_ok - n_ledger
+            parts.append(
+                f"\n{n_ok} of {len(sub_results)} sub-tasks completed. {n_partial} "
+                "stopped at their budget and wrote a partial report. "
+                f"{n_ledger} stopped without a report; their ledger lists what "
+                "they searched. Synthesize from these results only. Where a "
+                "sub-task did not complete, say so in your answer rather than "
+                "filling the gap from memory.\n"
             )
 
         return "".join(parts)

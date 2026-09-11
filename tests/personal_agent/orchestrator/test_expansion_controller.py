@@ -1014,6 +1014,81 @@ class TestTurnBudgetBound:
         assert "not run" in context.lower()
 
 
+class TestSynthesisContextTerminalFacts:
+    """ADR-0149 D4 (FRE-1484) AC-5 — the synthesis context tells the truth.
+
+    Each worker's header carries its terminal facts, and the closing sentence
+    is replaced with counts rather than the flat "completed" claim.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    def test_header_carries_stop_reason_and_report_kind(
+        self, controller: ExpansionController
+    ) -> None:
+        """A failed worker's header is not just FAILED: <error> as before."""
+        plan = _validate_plan_json(_make_plan_json(1))
+        assert plan is not None
+        from dataclasses import replace
+
+        result = replace(
+            _make_sub_agent_result("task_0", success=False),
+            stop_reason="cap",
+            report_kind="synthesized",
+            tool_iterations=5,
+            tool_result_chars_absorbed=154_755,
+        )
+
+        context = controller._build_synthesis_context(plan=plan, sub_results=[result])
+
+        assert "stop=cap" in context
+        assert "report=synthesized" in context
+        assert "5 round(s)" in context
+        assert "154,755 chars absorbed" in context
+
+    def test_closing_sentence_is_counted_not_flat(self, controller: ExpansionController) -> None:
+        """The old flat close is gone; the new one reports real counts."""
+        from dataclasses import replace
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        results = [
+            _make_sub_agent_result("task_0", success=True),
+            replace(
+                _make_sub_agent_result("task_1", success=False),
+                stop_reason="cap",
+                report_kind="synthesized",
+            ),
+            replace(
+                _make_sub_agent_result("task_2", success=False),
+                stop_reason="deadline",
+                report_kind="ledger",
+            ),
+        ]
+
+        context = controller._build_synthesis_context(plan=plan, sub_results=results)
+
+        assert "The sub-tasks above have been completed" not in context
+        assert "1 of 3 sub-tasks completed" in context
+        assert "1 stopped at their budget and wrote a partial report" in context
+        assert "1 stopped without a report" in context
+
+    def test_no_closing_sentence_when_no_results_dispatched(
+        self, controller: ExpansionController
+    ) -> None:
+        """No dispatched results (only skipped tasks) yields no n-of-0 claim."""
+        plan = _validate_plan_json(_make_plan_json(1))
+        assert plan is not None
+
+        context = controller._build_synthesis_context(
+            plan=plan, sub_results=[], skipped_tasks=["task_0"]
+        )
+
+        assert "sub-tasks completed" not in context
+
+
 class TestSubAgentToolGrant:
     """FRE-1388 — a sub-agent's requested tools are filtered against the
 

@@ -5,6 +5,7 @@ import re
 import statistics
 import time
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -5347,6 +5348,21 @@ class MemoryService:
         ones. The reranker never drops an item — a disabled/failed/empty reranker
         returns the fused order unchanged. It orders; it does not gate.
 
+        FRE-1479 (ADR-0148 D4): a scored item now also *carries* the score and the
+        model that produced it, on ``rerank_score``/``rerank_model``. Before this the
+        scores went into a local map, were used to sort, and were discarded — so the
+        admission boundary one layer up had nothing to gate on and admitted on rank
+        order. Nothing about the ordering contract changes: this method still applies
+        no threshold and still returns every item it was given (ADR-0103 §4,
+        ADR-0104 AC-5). It stops discarding the number it ordered by, and that is all.
+
+        An item keeps ``rerank_score=None`` whenever no model scored it — the reranker
+        disabled, a blank query, one item or fewer, the call raising, an empty response,
+        or an index the response simply omitted. ``rerank()`` itself never raises and
+        never returns empty: it degrades to a passthrough whose scores are rank order
+        and whose ``model_id`` is None, and those are filtered out here rather than
+        recorded as measurements.
+
         Args:
             query_text: The recall query the reranker scores against.
             fused_items: The capped fused set (already RRF-ordered).
@@ -5355,7 +5371,7 @@ class MemoryService:
 
         Returns:
             The fused items, reordered by rerank score; a permutation of the input
-            (never a subset).
+            (never a subset). Scored items carry their score and its provenance.
         """
         current_settings = get_settings()
         items = list(fused_items)
@@ -5385,12 +5401,28 @@ class MemoryService:
         if not rerank_results:
             return items
 
-        scored: dict[int, float] = {
+        # A passthrough result carries model_id=None and a score that is a function of
+        # rank position alone (reranker.py::_passthrough). Admitting it here would let a
+        # silently degraded reranker supply "relevance" that is really rank order — the
+        # FRE-1170 pathology — so an unattributed result orders but never scores.
+        scored: dict[int, tuple[float, str]] = {
+            rr.index: (rr.score, rr.model_id)
+            for rr in rerank_results
+            if 0 <= rr.index < len(items) and rr.model_id is not None
+        }
+        ordering: dict[int, float] = {
             rr.index: rr.score for rr in rerank_results if 0 <= rr.index < len(items)
         }
-        scored_order = sorted(scored, key=lambda i: (-scored[i], i))
-        unscored_order = [i for i in range(len(items)) if i not in scored]
-        return [items[i] for i in [*scored_order, *unscored_order]]
+        scored_order = sorted(ordering, key=lambda i: (-ordering[i], i))
+        unscored_order = [i for i in range(len(items)) if i not in ordering]
+        return [
+            (
+                replace(items[i], rerank_score=scored[i][0], rerank_model=scored[i][1])
+                if i in scored
+                else items[i]
+            )
+            for i in [*scored_order, *unscored_order]
+        ]
 
     async def _multipath_broad_entities(
         self,
@@ -5528,7 +5560,22 @@ class MemoryService:
                 if entity_types and ent.get("type") not in entity_types:
                     continue
                 seen_names.add(name)
-                ordered.append(ent)
+                # FRE-1479 (ADR-0148 D4): carry the fused item's reranker score to the
+                # admission boundary, which had no relevance value to gate on and
+                # therefore admitted on fused rank order. A turn item expanding to
+                # several entities gives each the *turn's* score, because the turn's
+                # document is what the reranker read. Name-dedup keeps the first
+                # occurrence, which is the highest-ranked, so the retained score is the
+                # highest. A new dict rather than a mutation: `by_entity_id` values are
+                # shared, and stamping one in place would be an aliasing bug waiting for
+                # the first caller that resolves an id twice.
+                ordered.append(
+                    {
+                        **ent,
+                        "relevance_score": item.rerank_score,
+                        "relevance_model": item.rerank_model,
+                    }
+                )
                 if len(ordered) >= limit:
                     return ordered, arms_failed
         return ordered, arms_failed

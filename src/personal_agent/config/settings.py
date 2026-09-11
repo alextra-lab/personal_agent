@@ -613,6 +613,41 @@ class AppConfig(BaseSettings):
         default=10,
         description="Number of top candidates to re-score with reranker",
     )
+    # --- Broad-recall relevance bound (ADR-0148 D4, FRE-1479) --------------------
+    #
+    # Its space is the SERVING RERANKER's own, and it is not comparable to
+    # `proactive_memory_relevance_bound`, which lives in normalized Neo4j embedding space.
+    # FRE-695 measured that "reranker score scales are arbitrary and not comparable across
+    # arms", which is why ADR-0148 D4 carries one bound per path rather than one number.
+    # The same reasoning forbids applying this bound to the reranker *fallback* model's
+    # scores: the admission gate checks which model produced a score before comparing it.
+    # Measured 2026-09-10 against Voyage rerank-2.5 over the FRE-670 probe set: it rejects
+    # the negative median (0.337891) and admits 93.3% of the 119 labelled positives, clearing
+    # D4's 90%. Both document populations clear it separately too -- entity 93.0%, turn 93.5%
+    # -- so neither shape is dragging the other. See
+    # docs/research/2026-09-10-fre-1479-reranker-relevance-calibration.md.
+    broad_recall_relevance_bound: float | None = Field(
+        default=0.338891,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "ADR-0148 D4: minimum reranker score for an entity admitted by the broad-recall "
+            "path. Calibrated against the serving reranker -- the committed source is "
+            "config/calibration/broad_recall_relevance_bound.json, and config_guard's "
+            "broad_recall_bound_calibration check binds this value to it. None means no "
+            "calibration is in force and the gate does not fire; it never silently "
+            "defaults to zero."
+        ),
+    )
+    broad_recall_relevance_gate_enabled: bool = Field(
+        default=True,
+        description=(
+            "ADR-0148 D4: apply the broad-recall relevance bound. Off restores the "
+            "pre-FRE-1479 admission behaviour exactly, which is what makes the gate's own "
+            "tests able to fail (a test passing both before and after a change proves "
+            "nothing)."
+        ),
+    )
     reranker_input_cap: int = Field(
         default=25,
         ge=1,

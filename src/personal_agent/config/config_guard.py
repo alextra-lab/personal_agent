@@ -812,6 +812,126 @@ def check_relevance_bound_calibration(
     return findings
 
 
+def check_broad_recall_bound_calibration(
+    root: Path, settings: AppConfig | None = None
+) -> list[Finding]:
+    """ADR-0148 D4 / AC-10 (FRE-1479) — the broad-recall bound traces to a live calibration.
+
+    The reranker sibling of :func:`check_relevance_bound_calibration`, and separate from it
+    because the two bounds live in incomparable score spaces (FRE-695) and are measured
+    against different components. The five reportable states are the same, and none of them
+    changes the configured value: this check reports, which is what leaves the previous
+    bound in force while a staleness finding stands.
+
+    * A bound is configured with no committed artifact behind it.
+    * The artifact names a reranker other than the one now serving.
+    * The artifact's bound and the configured value disagree.
+    * A bound is configured even though the artifact reports that no value satisfies
+      ADR-0148 D4's two constraints.
+    * The artifact is malformed.
+
+    A standing incompatibility with **no** bound configured is deliberately not a finding,
+    for the reason FRE-1477 recorded: ``scripts/check_config.py`` fails CI on any finding,
+    so making it one would wedge every build until the owner decides.
+
+    The serving reranker is read through the ``reranker`` role, which is what
+    ``memory/reranker.py`` itself resolves — not from a settings field — so the check
+    compares against what would actually score a turn.
+
+    Args:
+        root: The repository root.
+        settings: The ``AppConfig`` to check. ``None`` constructs a fresh default instance.
+
+    Returns:
+        Every finding raised, or an empty list when the configured state is consistent.
+    """
+    from personal_agent.config.calibration import (  # noqa: PLC0415 — avoid import cycle
+        load_reranker_calibration,
+    )
+    from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
+
+    if settings is None:
+        settings = AppConfig()
+
+    configured = settings.broad_recall_relevance_bound
+    try:
+        calibration = load_reranker_calibration(root)
+    except ValueError as exc:
+        return [Finding("broad_recall_bound_calibration_malformed", "policy", str(exc))]
+
+    if calibration is None:
+        if configured is None:
+            return []
+        return [
+            Finding(
+                "broad_recall_bound_calibration_missing",
+                "policy",
+                f"broad_recall_relevance_bound is set to {configured} but no committed "
+                "calibration stands behind it (ADR-0148 AC-10: a hand-written constant with "
+                "no artifact is exactly the condition this fails on)",
+            )
+        ]
+
+    findings: list[Finding] = []
+    serving = _serving_reranker_model()
+    measured = calibration.component.model
+    if serving is not None and serving != measured:
+        findings.append(
+            Finding(
+                "broad_recall_bound_calibration_stale",
+                "policy",
+                f"the broad-recall relevance bound was calibrated against {measured} on "
+                f"{calibration.measured_on}, but {serving} is serving. Reranker score "
+                "scales are arbitrary and not comparable across arms (FRE-695), so the "
+                "bound must be re-measured. The previous bound stays in force until it is.",
+            )
+        )
+    if calibration.incompatible and configured is not None:
+        findings.append(
+            Finding(
+                "broad_recall_bound_configured_despite_incompatibility",
+                "policy",
+                f"broad_recall_relevance_bound is set to {configured}, but the calibration "
+                f"of {measured} on {calibration.measured_on} found no bound satisfying "
+                f"ADR-0148 D4: {calibration.incompatible_reason} A bound configured in that "
+                "reserved case is chosen, not measured, which is the condition ADR-0148 "
+                "AC-5 fails on.",
+            )
+        )
+    if configured != calibration.bound:
+        findings.append(
+            Finding(
+                "broad_recall_bound_calibration_mismatch",
+                "policy",
+                f"broad_recall_relevance_bound is {configured} but the committed "
+                f"calibration reports {calibration.bound}. The configured value must be "
+                "the measured one.",
+            )
+        )
+    return findings
+
+
+def _serving_reranker_model() -> str | None:
+    """The model id the ``reranker`` role resolves to, or None when it cannot resolve.
+
+    Returns:
+        The serving reranker's model id, or None. None suppresses only the staleness
+        comparison — an unresolvable role is ``check_model_roles``'s finding to raise, and
+        reporting it twice would say the bound is stale when the truth is that the role is
+        broken.
+    """
+    from personal_agent.config.model_loader import (  # noqa: PLC0415 — avoid import cycle
+        ModelRoleError,
+        resolve_role_definition,
+    )
+
+    try:
+        model_def = resolve_role_definition("reranker")
+    except (KeyError, ModelRoleError):
+        return None
+    return None if model_def is None else model_def.id
+
+
 def _strip_provider_prefix(model_id: str) -> str:
     """Strip a leading ``'<org>/'`` provider prefix (e.g. ``'Qwen/'``), if present."""
     return model_id.split("/", 1)[1] if "/" in model_id else model_id
@@ -1618,6 +1738,7 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_dev_test_profile_isolation(root))
     findings.extend(check_embedding_fallback_identity())
     findings.extend(check_relevance_bound_calibration(root))
+    findings.extend(check_broad_recall_bound_calibration(root))
     findings.extend(check_budget_role_coverage(root))
     findings.extend(check_reasoning_declaration(root))
     return findings

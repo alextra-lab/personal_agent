@@ -569,12 +569,23 @@ class ExecutionContext:
 
     # --- ADR-0149 D4 (FRE-1484) — the deterministic trailer ---
     # Set in ``step_init`` when an incomplete sub-agent fan-out is resolved
-    # ``answer_from_partial``. ``step_synthesis`` appends it to both
-    # ``ctx.final_reply`` and the assistant message in ``ctx.messages`` once
-    # generation completes, outside the model's control — unlike a disclosure,
-    # the trailer is deliberately stored in history so the persisted turn equals
-    # the wire form (ADR-0081). ``None`` when the fan-out completed, or the
-    # decision was ``stop_and_show``.
+    # ``answer_from_partial``. ``step_synthesis`` appends it to
+    # ``ctx.final_reply`` and, when an assistant message exists to carry it
+    # (the normal case — including a grounding-enforced replacement of
+    # ``final_reply``, which the sync accounts for), to that message in
+    # ``ctx.messages`` too, so the persisted history equals the wire form
+    # (ADR-0081) unlike a disclosure. A turn salvaged by
+    # ``_stop_turn_for_deadline``/``_lifetime_cap``/``_cancel`` never appends an
+    # assistant message at all (trailer or not), so on that exit the wire reply
+    # still carries the trailer but persisted history does not — consistent
+    # with every other salvaged reply, not a regression this field introduces.
+    # A synthesis-call exception (``step_llm_call`` → ``TaskState.FAILED``)
+    # never reaches ``step_synthesis``, so the trailer is not applied at all —
+    # there is no synthesized answer for it to caveat. Cleared by
+    # ``step_synthesis`` once consumed, or left set (and simply unused) on
+    # every path that never reaches it. ``None`` when the fan-out completed,
+    # or the decision was ``stop_and_show`` (which appends its own assistant
+    # message directly in ``step_init``).
     fanout_trailer: str | None = None
 
 

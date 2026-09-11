@@ -5238,6 +5238,13 @@ async def step_init(
                     ctx.final_reply = _compose_fanout_stop_and_show(
                         expansion_result.sub_agent_results, expansion_result.skipped_tasks
                     )
+                    # step_llm_call always appends the assistant's reply to
+                    # ctx.messages before setting final_reply; this deterministic
+                    # path must do the same, or a reusable Orchestrator/
+                    # SessionManager caller loses the report from in-memory
+                    # history (the HTTP path is unaffected — it persists
+                    # result["reply"] separately via RequestCompletedEvent).
+                    ctx.messages.append({"role": "assistant", "content": ctx.final_reply})
                     # FRE-1375 convention (_stop_turn_for_deadline/_lifetime_cap/
                     # _cancel): a deterministic, ungenerated reply is not a claim to
                     # verify — mark the turn stopped early so step_synthesis skips
@@ -7277,12 +7284,24 @@ async def step_synthesis(
     # lines. Unlike a disclosure, it is written into the persisted assistant
     # message too, not only ctx.final_reply, so the persisted history equals the
     # wire form (ADR-0081) and the next turn replays it as a forward extension.
+    # Cleared once consumed: a fresh turn on a fresh ctx sets its own, and
+    # nothing on this ctx should re-render a trailer already delivered.
     if ctx.fanout_trailer:
-        ctx.final_reply = f"{ctx.final_reply}{ctx.fanout_trailer}"
+        trailer = ctx.fanout_trailer
+        ctx.fanout_trailer = None
+        ctx.final_reply = f"{ctx.final_reply}{trailer}"
         if ctx.messages and ctx.messages[-1].get("role") == "assistant":
-            ctx.messages[-1]["content"] = (
-                f"{ctx.messages[-1].get('content', '')}{ctx.fanout_trailer}"
-            )
+            # Sync FROM the now-finalized final_reply rather than appending onto
+            # messages[-1]'s own content: grounding enforcement above can have
+            # already replaced final_reply (TERMINAL_NO_SOURCE) without touching
+            # the assistant message, and appending the trailer onto that stale
+            # content would leave history and the wire reply disagreeing on more
+            # than just the trailer.
+            ctx.messages[-1]["content"] = ctx.final_reply
+        # Else: no assistant message exists on this turn to carry it (a
+        # deadline/lifetime-cap/cancel salvage never appends one) — the wire
+        # reply still carries the trailer; persisted history does not, the
+        # same as every other salvaged reply on this turn.
 
     # Update session with new messages
     session_manager.update_session(ctx.session_id, messages=ctx.messages)

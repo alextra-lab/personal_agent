@@ -2345,6 +2345,8 @@ class TestStepSynthesisFanoutTrailer:
         assert ctx.final_reply is not None
         assert ctx.final_reply.endswith("— Research note: 1 of 2 sub-tasks did not complete.")
         assert ctx.messages[-1]["content"] == ctx.final_reply
+        # The carrier is consumed once applied — nothing should re-render it.
+        assert ctx.fanout_trailer is None
 
     @pytest.mark.asyncio
     async def test_no_trailer_leaves_final_reply_unchanged(self) -> None:

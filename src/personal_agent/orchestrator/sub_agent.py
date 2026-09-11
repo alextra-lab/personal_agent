@@ -1634,22 +1634,17 @@ async def run_sub_agent(
             why="the worker's outer deadline fired with no time left to write",
         )
 
-    except LLMTimeout as exc:
-        # FRE-1379: the client's own wall-clock generation budget fired. Since
-        # ADR-0149 the loop catches this itself and attempts one synthesis, so
-        # reaching here means the SYNTHESIS call was the one that timed out —
-        # its own partial is in state.progress and the ledger quotes it.
-        duration_ms = int(time.monotonic() * 1000) - start_ms
-        result = _killed_result(
-            task_id,
-            spec,
-            duration_ms,
-            state,
-            error=f"Timeout after {duration_ms / 1000:.1f}s (generation budget): {exc}",
-            stop_reason="timeout",
-            why="the generation budget fired while the report was being written",
-        )
-
+    # FRE-1379 had an `except LLMTimeout` here, for the client's own generation
+    # budget firing. ADR-0149 removes it, because nothing can reach it any more:
+    # both `respond()` call sites are inside the loop, and both are already
+    # handled — the round call by `_run_tool_loop`'s own `except LLMTimeout`,
+    # which attempts one synthesis, and the synthesis call by
+    # `_forced_synthesis`'s `except Exception`, of which `LLMTimeout` is one.
+    # Keeping it would have been worse than dead: it hardcoded
+    # `stop_reason="timeout"`, so had it ever fired it would have relabelled a
+    # capped worker's failed synthesis as a timeout — the mislabelling the
+    # in-loop handling exists to avoid. Anything genuinely unforeseen still
+    # lands in the `except Exception` below, honestly labelled `error`.
     except asyncio.CancelledError:
         # The outer dispatch can cancel us on a global timeout (expansion_controller).
         # CancelledError is a BaseException — not caught by `except Exception` — so we

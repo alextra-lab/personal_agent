@@ -137,8 +137,8 @@ logs:
 
 rebuild:
 	@[ -n "$(SERVICE)" ] || { echo "Usage: make rebuild SERVICE=<name>  (run 'make services' to list)"; exit 1; }
-	@$(COMPOSE) build $(SERVICE)
-	@$(COMPOSE) up -d $(SERVICE)
+	@BUILD_FINGERPRINT=$$(uv run python -m scripts.eval.gateway_freshness --print-fingerprint) $(COMPOSE) build $(SERVICE)
+	@BUILD_FINGERPRINT=$$(uv run python -m scripts.eval.gateway_freshness --print-fingerprint) $(COMPOSE) up -d $(SERVICE)
 
 shell:
 	@[ -n "$(SERVICE)" ] || { echo "Usage: make shell SERVICE=<name>  (run 'make services' to list)"; exit 1; }

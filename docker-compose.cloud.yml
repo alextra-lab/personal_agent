@@ -297,6 +297,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gateway
+      # FRE-1341 bakes a content fingerprint of the build inputs into the image so a
+      # running gateway can report what it is actually running (/health's
+      # build_fingerprint). docker-compose.eval.yml passed this arg; this file did not,
+      # so every cloud gateway reported "unknown" and /health could not answer "what is
+      # deployed". `make rebuild SERVICE=seshat-gateway` computes the value.
+      args:
+        BUILD_FINGERPRINT: ${BUILD_FINGERPRINT:-unknown}
     container_name: cloud-sim-seshat-gateway
     # env_file passes ALL vars from .env into the container.
     # New feature flags and secrets only need to be set in .env — no compose change required.

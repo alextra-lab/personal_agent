@@ -205,6 +205,27 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     return resolved
 
 
+def _tool_budget_message(remaining: int) -> str:
+    """Build the tool-budget countdown message for the given rounds remaining (ADR-0149 D1).
+
+    Args:
+        remaining: Tool rounds left before the primary loses tool access this turn.
+
+    Returns:
+        The user-role message text to inject into the transcript.
+    """
+    if remaining == 0:
+        return (
+            "⚠️ Tool budget: this is your last round. Your next reply will have no tools available. "
+            "Gather what you still need now, in parallel, and be ready to write your answer."
+        )
+    return (
+        f"⚠️ Tool budget: {remaining} tool round(s) remaining "
+        "(a round may hold several parallel calls). Prioritize synthesis — "
+        "start another round only if it is strictly necessary to answer the user's question."
+    )
+
+
 def _turn_deadline_remaining(ctx: "ExecutionContext") -> float:
     """Seconds left in this turn's work budget (FRE-973, credited per ADR-0142 D4a).
 
@@ -6221,17 +6242,7 @@ async def step_llm_call(
         elif not is_synthesizing and ctx.tool_iteration_count >= _resolve_max_iterations(ctx) - 2:
             _effective_max = _resolve_max_iterations(ctx)
             _budget_remaining = _effective_max - ctx.tool_iteration_count
-            if _budget_remaining == 0:
-                budget_message = (
-                    "⚠️ Tool budget: this is your last round. Your next reply will have no tools available. "
-                    "Gather what you still need now, in parallel, and be ready to write your answer."
-                )
-            else:
-                budget_message = (
-                    f"⚠️ Tool budget: {_budget_remaining} tool round(s) remaining "
-                    "(a round may hold several parallel calls). Prioritize synthesis — "
-                    "start another round only if it is strictly necessary to answer the user's question."
-                )
+            budget_message = _tool_budget_message(_budget_remaining)
             ctx.messages.append(
                 {
                     "role": "user",

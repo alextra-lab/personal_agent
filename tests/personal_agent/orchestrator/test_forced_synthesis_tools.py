@@ -20,6 +20,7 @@ from personal_agent.llm_client.models import Dialect
 from personal_agent.orchestrator.executor import (
     _SYNTHESIS_PLACEHOLDER_TOOL,
     _forced_synthesis_tool_overrides,
+    _tool_budget_message,
     _transcript_has_tool_blocks,
 )
 
@@ -137,32 +138,37 @@ def test_cache_enabled_with_history_but_no_tool_defs_uses_placeholder() -> None:
 # and provide correct zero-case text (AC-1).
 
 
-def test_countdown_message_uses_round_not_call_at_remaining_2() -> None:
-    """At max-2 (remaining=2), message should say 'tool round(s)'."""
-    # Import here to avoid circular dependency
-    from personal_agent.orchestrator.executor import _resolve_max_iterations
-
-    message_text = (
+def test_tool_budget_message_at_remaining_2() -> None:
+    """At max-2 (remaining=2), the production helper names the unit as rounds."""
+    message = _tool_budget_message(2)
+    assert message == (
         "⚠️ Tool budget: 2 tool round(s) remaining "
         "(a round may hold several parallel calls). Prioritize synthesis — "
         "start another round only if it is strictly necessary to answer the user's question."
     )
-    assert "tool round(s)" in message_text
-    assert "tool call(s)" not in message_text
 
 
-def test_countdown_message_at_zero_remaining() -> None:
-    """At max (remaining=0), message should be the last-round text."""
-    message_text = (
+def test_tool_budget_message_at_remaining_1() -> None:
+    """At max-1 (remaining=1), the production helper still counts down in rounds."""
+    message = _tool_budget_message(1)
+    assert message == (
+        "⚠️ Tool budget: 1 tool round(s) remaining "
+        "(a round may hold several parallel calls). Prioritize synthesis — "
+        "start another round only if it is strictly necessary to answer the user's question."
+    )
+
+
+def test_tool_budget_message_at_remaining_0_is_last_round_text() -> None:
+    """At max (remaining=0), the production helper returns the last-round text,
+    not an invitation to call a tool that will then be dropped.
+    """
+    message = _tool_budget_message(0)
+    assert message == (
         "⚠️ Tool budget: this is your last round. Your next reply will have no tools available. "
         "Gather what you still need now, in parallel, and be ready to write your answer."
     )
-    assert "this is your last round" in message_text
-    assert "0 tool" not in message_text
-    assert (
-        "remaining" not in message_text
-        or "Your next reply will have no tools available" in message_text
-    )
+    assert "tool call(s)" not in message
+    assert "0 tool round(s)" not in message
 
 
 # ── AC-2: Seeded negative for cache miss ────────────────────────────────────────

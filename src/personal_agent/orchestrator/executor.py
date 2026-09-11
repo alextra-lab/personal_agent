@@ -92,7 +92,11 @@ from personal_agent.orchestrator.unmeasured_claim import detect_unmeasured_claim
 from personal_agent.request_gateway.memory_status import (
     MEMORY_STATE_LINES,
     MemoryStatus,
+    MemoryStatusReport,
+    RecallOutcome,
+    RecallStageReport,
     RenderStageReport,
+    classify_recall_admission,
 )
 from personal_agent.telemetry import (
     LLM_STEP_COMPLETED,
@@ -3819,10 +3823,19 @@ def _render_memory_section_with_ids(
     # `behavioural` — standing behavioural stances are outside the recall layer (D2) and
     # counting them here would report a turn as populated when only that layer rendered.
     recall_emitted = len(described) + len(recalled) + len(stances)
+    # AC-6 (master bounce, PR #1131): a zero count is only a genuine drop when the
+    # recall layer actually admitted something to drop — a turn carrying only
+    # standing behavioural stances (or nothing at all) has nothing here to drop, and
+    # tagging it "render_dropped_all_recall_items" persisted a false cause into the
+    # turn-evidence record for exactly the NOTHING_RELEVANT case AC-6 exists to get
+    # right. `classify_recall_admission` is the one true source for "was there
+    # anything admitted" — including kinds (e.g. session) this function never even
+    # buckets locally, so a local list-length check would under-count.
+    had_something_to_drop = recall_emitted == 0 and classify_recall_admission(items).admitted > 0
     render_report = RenderStageReport(
         ran=True,
         recall_emitted=recall_emitted,
-        cause=None if recall_emitted else "render_dropped_all_recall_items",
+        cause="render_dropped_all_recall_items" if had_something_to_drop else None,
     )
     return "".join(sections), tuple(rendered_ids), render_report
 
@@ -5219,6 +5232,16 @@ async def step_init(
 
     # Query memory graph for relevant context (Phase 2.2)
     if settings.enable_memory_graph:
+        # ADR-0148 D1 (master bounce, PR #1131): this path is reachable — both service
+        # entrypoints fall back here with gateway_output=None whenever the gateway
+        # pipeline raises — so it must report its own outcome. Left at its
+        # NOT_REPORTED default (which composes UNAVAILABLE, D3) this branch could
+        # populate real memory into ctx.memory_context while the rendered state told
+        # the model its records could not be reached — a lie during exactly the
+        # moment (graceful degradation) that makes it worst. Coarser-grained than the
+        # gateway path's per-arm reporting (this legacy path has no equivalent), but
+        # each of the two sub-paths below reports COMPLETED/FAILED for what it did.
+        _legacy_recall = RecallStageReport(cause="legacy_recall_not_attempted")
         try:
             from personal_agent.memory.models import MemoryQuery
             from personal_agent.memory.service import MemoryService
@@ -5292,6 +5315,7 @@ async def step_init(
                             entity_type_hints=entity_type_hints,
                             entities_found=len(broad.get("entities", [])),
                         )
+                        _legacy_recall = RecallStageReport(RecallOutcome.COMPLETED)
                     except Exception as broad_err:
                         log.warning(
                             "memory_recall_broad_query_failed",
@@ -5304,6 +5328,9 @@ async def step_init(
                             entity_type_hints=entity_type_hints,
                             entities_found=0,
                             query_error=str(broad_err),
+                        )
+                        _legacy_recall = RecallStageReport(
+                            RecallOutcome.FAILED, "legacy_broad_recall_failed"
                         )
                 else:
                     # Entity-name match path (existing)
@@ -5357,12 +5384,26 @@ async def step_init(
                                 trace_id=ctx.trace_id,
                                 conversations_found=conversations_found,
                             )
+                            _legacy_recall = RecallStageReport(RecallOutcome.COMPLETED)
                         except Exception as entity_match_err:
                             log.warning(
                                 "memory_entity_match_query_failed",
                                 trace_id=ctx.trace_id,
                                 error=str(entity_match_err),
                             )
+                            _legacy_recall = RecallStageReport(
+                                RecallOutcome.FAILED, "legacy_entity_match_failed"
+                            )
+                    else:
+                        # No candidate names in the message to match against. Mirrors
+                        # request_gateway/context.py's own declared limit for the
+                        # identical case (FRE-1476): this cannot distinguish "the
+                        # message genuinely names nothing" from "name resolution
+                        # failed", and over-claims COMPLETED in the second case.
+                        # FRE-1481 (Needs Approval) owns fixing that class of
+                        # collapse; this path stays consistent with the gateway
+                        # path's own answer rather than diverging on it here.
+                        _legacy_recall = RecallStageReport(RecallOutcome.COMPLETED)
 
                 # ADR-0126 T2 (FRE-1017): standing behavioural stances, independent of
                 # what either recall sub-branch above selected -- present whenever
@@ -5411,9 +5452,10 @@ async def step_init(
                     entities_found=0,
                     skipped_reason="memory_service_unavailable",
                 )
+                _legacy_recall = RecallStageReport(RecallOutcome.FAILED, "memory_not_connected")
             else:
                 # Memory graph enabled but service not connected and not a recall-only path.
-                pass
+                _legacy_recall = RecallStageReport(RecallOutcome.FAILED, "memory_not_connected")
         except Exception as e:
             log.warning(
                 "memory_enrichment_failed",
@@ -5421,6 +5463,17 @@ async def step_init(
                 error=str(e),
                 exc_info=True,
             )
+            _legacy_recall = RecallStageReport(RecallOutcome.FAILED, "memory_enrichment_failed")
+
+        # ADR-0148 D1 (master bounce, PR #1131): compose from whatever ctx.memory_context
+        # actually ended up holding — after the behavioural-stance injection above, so a
+        # standing-stance-only context still classifies as NOTHING_RELEVANT rather than
+        # POPULATED (D2 scopes the status to the recall layer here exactly as it does on
+        # the gateway path).
+        ctx.memory_status = MemoryStatusReport(
+            recall=_legacy_recall,
+            admission=classify_recall_admission(ctx.memory_context),
+        )
 
     needs_planning = False
 

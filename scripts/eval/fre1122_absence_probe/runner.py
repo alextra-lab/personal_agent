@@ -919,9 +919,14 @@ def _phase_report(args: argparse.Namespace, probe_set: ProbeSet) -> int:
     for answer in answers:
         span = answer["evidence_span"].replace("|", "\\|")[:160]
         why = answer["reason"].replace("|", "\\|")[:160]
+        # A pre-FRE-1478 or resumed artifact never wrote this key at all — .get()
+        # here, not answer["memory_state"], so a historical artifact reports the
+        # documented unknown fallback instead of crashing the whole report (master
+        # bounce, PR #1131).
+        memory_state = answer.get("memory_state") or _MEMORY_STATE_UNKNOWN
         lines.append(
             f"| {answer['probe_id']} | {answer['status']} | {answer['outcome']} | "
-            f"{answer['memory_state']} | {span} | {why} |"
+            f"{memory_state} | {span} | {why} |"
         )
 
     # AC-6 is a same-probe guarantee, so the report names the identifiers the

@@ -339,3 +339,35 @@ class TestRenderStageReportWiredFromTheRealRender:
         assert ctx.memory_status.render.ran is True  # type: ignore[attr-defined]
         assert ctx.memory_status.render.recall_emitted == 0  # type: ignore[attr-defined]
         assert ctx.memory_status.status is MemoryStatus.WITHHELD  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_withheld_render_report_carries_a_real_cause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-6 (master bounce, PR #1131): the session item genuinely had content the
+        renderer dropped, so the cause must be present and true.
+        """
+        ctx = _withheld_ctx()
+        await _run(ctx, monkeypatch)
+
+        assert ctx.memory_status.render.cause == "render_dropped_all_recall_items"  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_nothing_relevant_with_behavioural_carries_no_false_drop_cause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-6 (master bounce, PR #1131): nothing from the recall layer was ever
+        admitted here — only a standing behavioural stance — so there was nothing to
+        drop. Before the fix this persisted ``render_dropped_all_recall_items`` for a
+        turn where nothing was dropped at all.
+        """
+        ctx = _nothing_relevant_with_behavioural_ctx()
+        await _run(ctx, monkeypatch)
+
+        assert ctx.memory_status.status is MemoryStatus.NOTHING_RELEVANT  # type: ignore[attr-defined]
+        assert ctx.memory_status.render.cause is None  # type: ignore[attr-defined]
+        # The persisted evidence record is what master's finding was about directly —
+        # asserted here too, not only on the intermediate RenderStageReport.
+        assert ctx.turn_evidence is not None  # type: ignore[attr-defined]
+        assert ctx.turn_evidence.recall.memory_state == "nothing_relevant"  # type: ignore[attr-defined]
+        assert ctx.turn_evidence.recall.memory_state_cause is None  # type: ignore[attr-defined]

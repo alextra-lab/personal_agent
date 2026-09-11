@@ -9,16 +9,23 @@ turn and an ``UNAVAILABLE`` one both render an empty item list.
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 
+import yaml
+from scripts.eval.fre1122_absence_probe.manifest import write_manifest
+from scripts.eval.fre1122_absence_probe.probes import load_probe_set
 from scripts.eval.fre1122_absence_probe.runner import (
     _CAPTURE_MISSING,
     _MEMORY_STATE_UNKNOWN,
     _load_memory_state,
     _load_rendered_memory,
+    _phase_report,
     _read_capture,
 )
+
+_USER = "22222222-2222-2222-2222-222222222222"
 
 
 def _write_capture(root: pathlib.Path, trace_id: str, recall_admission: dict) -> None:
@@ -105,3 +112,104 @@ class TestLoadRenderedMemoryUnchanged:
         capture = _read_capture(tmp_path, "t-1")
 
         assert _load_rendered_memory(capture) == ("Sailing (score=0.8)",)
+
+
+def _report_fixture(tmp_path: pathlib.Path) -> argparse.Namespace:
+    """A one-probe manifest plus the args ``_phase_report`` expects."""
+    probe_set_path = tmp_path / "probe_set.yaml"
+    probe_set_path.write_text(
+        yaml.safe_dump(
+            {
+                "probes": [
+                    {
+                        "probe_id": "absent-01",
+                        "status": "absent",
+                        "question": "What is my boat called?",
+                        "subject_terms": ["boat"],
+                        "personal_scope_rationale": (
+                            "a private fact about the owner's life, unobtainable "
+                            "from training data or any public source"
+                        ),
+                    }
+                ]
+            }
+        )
+    )
+    probe_set = load_probe_set(probe_set_path)
+    artifact_root = tmp_path / "artifacts"
+    write_manifest(
+        artifact_root,
+        probes=probe_set.probes,
+        user_id=_USER,
+        probe_set_path=probe_set_path,
+        ground_truth_holds=True,
+        replacements=(),
+        created_at="2026-09-11T00:00:00+00:00",
+    )
+    from scripts.eval.fre1122_absence_probe.manifest import load_manifest
+
+    manifest = load_manifest(
+        artifact_root, probe_set=probe_set, probe_set_path=probe_set_path, user_id=_USER
+    )
+    (artifact_root / "run_answers.json").write_text(
+        json.dumps(
+            {
+                "session_ids": ["session-01"],
+                "authorized_by": "the owner",
+                "auth_email": "fre1122@example.test",
+                "manifest_digest": manifest.digest,
+                "attempts": {},
+                # A pre-FRE-1478 (or resumed, pre-fix) artifact: no "memory_state" key
+                # at all -- exactly the historical shape master's bounce named.
+                "answers": [
+                    {
+                        "probe_id": "absent-01",
+                        "status": "absent",
+                        "question": "What is my boat called?",
+                        "outcome": "declared_absence",
+                        "trace_id": "trace-01",
+                        "evidence_span": "I have no record of that.",
+                        "reason": "matched the absence phrase list",
+                        "rendered_memory": [],
+                    }
+                ],
+            }
+        )
+    )
+    return argparse.Namespace(
+        artifact_root=artifact_root,
+        probe_set=probe_set_path,
+        user_id=_USER,
+    )
+
+
+class TestPhaseReportBackwardCompatibility:
+    """AC-7 (master bounce, PR #1131): a historical artifact must not crash the report.
+
+    Validation never backfills ``memory_state`` onto an answer that predates it, and
+    rendering used to index ``answer["memory_state"]`` directly -- raising ``KeyError``
+    instead of falling back to the documented unknown value.
+    """
+
+    def test_a_historical_artifact_with_no_memory_state_key_does_not_raise(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        args = self._prepared(tmp_path)
+
+        assert _phase_report(args, load_probe_set(args.probe_set)) == 0
+
+    def test_the_report_names_the_probe_as_unknown_not_a_fabricated_state(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        args = self._prepared(tmp_path)
+
+        _phase_report(args, load_probe_set(args.probe_set))
+
+        report = (args.artifact_root / "report.md").read_text()
+        assert _MEMORY_STATE_UNKNOWN in report
+        assert "nothing_relevant" not in report
+        assert "populated" not in report
+
+    @staticmethod
+    def _prepared(tmp_path: pathlib.Path) -> argparse.Namespace:
+        return _report_fixture(tmp_path)

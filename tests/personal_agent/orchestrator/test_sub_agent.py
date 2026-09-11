@@ -15,6 +15,7 @@ import structlog.testing
 from personal_agent.llm_client.types import GenerationProgress
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
+from personal_agent.orchestrator.worker_types import WORKER_TYPES, Thoroughness, WorkerType
 
 
 def _spec(
@@ -23,7 +24,6 @@ def _spec(
     return SubAgentSpec(
         task=task,
         context=[{"role": "user", "content": "do the thing"}],
-        output_format="text",
         max_tokens=1024,
         timeout_seconds=timeout,
         hard_deadline_seconds=hard_deadline,
@@ -36,7 +36,6 @@ def _spec_with_tools(
     return SubAgentSpec(
         task="test task",
         context=[{"role": "user", "content": "do the thing"}],
-        output_format="text",
         max_tokens=1024,
         timeout_seconds=timeout,
         hard_deadline_seconds=hard_deadline,
@@ -48,7 +47,6 @@ def _spec_with_denied_tools(denied_tools: tuple[str, ...], timeout: float = 30.0
     return SubAgentSpec(
         task="test task",
         context=[{"role": "user", "content": "do the thing"}],
-        output_format="text",
         max_tokens=1024,
         timeout_seconds=timeout,
         denied_tools=denied_tools,
@@ -1752,10 +1750,14 @@ class TestBudgetAndCountdown:
     """ADR-0149 AC-4 / AC-4a — the worker can see the budget it is spending."""
 
     @pytest.mark.asyncio
-    async def test_budget_is_stated_in_the_system_prompt(
+    async def test_budget_is_stated_in_the_task_message(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC-4a: move 1, rendered from the setting, before any round is spent."""
+        """ADR-0150 D3 (revising ADR-0149 move 1): the number is in the task message.
+
+        The system prompt keeps only how the budget works. The number varies per
+        task by level, and in the system prompt it would split the type's prefix.
+        """
         from personal_agent.config import settings
 
         monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 7)
@@ -1764,18 +1766,20 @@ class TestBudgetAndCountdown:
 
         await run_sub_agent(spec=_spec(), llm_client=client, trace_id="t")
 
-        system = client.respond.call_args.kwargs["messages"][0]
-        assert system["role"] == "system"
-        assert "You have a budget of 7 tool round(s)." in system["content"]
+        messages = client.respond.call_args.kwargs["messages"]
+        assert messages[0]["role"] == "system"
+        assert "Your task states your budget of tool rounds." in messages[0]["content"]
+        assert "budget of 7" not in messages[0]["content"]
+        assert "You have a budget of 7 tool round(s)." in messages[-1]["content"]
 
     @pytest.mark.asyncio
-    async def test_the_bytes_are_identical_across_workers_and_across_turns(
+    async def test_the_bytes_are_identical_across_same_type_workers_and_turns(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC-4a: one shared string, so nothing in it can drift per worker or per turn.
+        """ADR-0150's revision of AC-4a: identical across the workers of one type.
 
-        This is why the date lives in the task message instead: a date here would
-        change these bytes on every turn, and with them the cached prefix.
+        This is why the date and the budget live in the task message instead: either
+        here would change these bytes per turn or per task, and with them the prefix.
         """
         from personal_agent.config import settings
 
@@ -1792,10 +1796,9 @@ class TestBudgetAndCountdown:
             await run_sub_agent(spec=spec, llm_client=client, trace_id="t")
             prompts.append(client.respond.call_args.kwargs["messages"][0]["content"])
 
-        assert len(set(prompts)) == 1
         # Including the grant-less workers: a fan-out can mix granted and
-        # grant-less tasks, and AC-4a admits no per-worker variation.
-        assert "You have a budget of 5 tool round(s)." in prompts[0]
+        # grant-less tasks of one type, and the revision admits no variation.
+        assert len(set(prompts)) == 1
 
     @pytest.mark.asyncio
     async def test_countdown_follows_every_round_and_precedes_none(
@@ -1860,6 +1863,200 @@ class TestBudgetAndCountdown:
         assert sent[1][-1]["content"] == first
         assert sent[1][-2]["role"] == "tool"
         assert sent[2][: len(sent[1])] == sent[1]
+
+
+def _typed_spec(
+    worker_type: WorkerType,
+    thoroughness: Thoroughness,
+    task: str = "test task",
+    sibling_tasks: tuple[str, ...] = (),
+) -> SubAgentSpec:
+    return SubAgentSpec(
+        task=task,
+        context=[
+            {"role": "user", "content": "pinned one"},
+            {"role": "assistant", "content": "pinned two"},
+            {"role": "user", "content": "pinned three"},
+            {"role": "assistant", "content": "pinned four"},
+        ],
+        max_tokens=1024,
+        timeout_seconds=30.0,
+        tools=list(WORKER_TYPES[worker_type].tools),
+        worker_type=worker_type,
+        thoroughness=thoroughness,
+        sibling_tasks=sibling_tasks,
+    )
+
+
+async def _first_call(spec: SubAgentSpec) -> dict[str, Any]:
+    """Run one worker whose model stops at once, and return its first call's kwargs."""
+    client = AsyncMock()
+    client.respond = AsyncMock(return_value=_llm_response("done"))
+    await run_sub_agent(spec=spec, llm_client=client, trace_id="t")
+    return dict(client.respond.call_args_list[0].kwargs)
+
+
+class TestTypedPrefix:
+    """FRE-1493 AC-1 (ADR-0150 AC-5), unit half: the bytes that make the cached prefix.
+
+    The prefix a worker shares is the system message and the tools array (Qwen chat
+    templates render tools inside the system region). The live
+    ``cache_read_tokens >= 0.95 x P`` measurement needs the local backend and is
+    master's post-deploy check; this pins the input that ratio depends on.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _levels(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        monkeypatch.setattr(
+            settings, "sub_agent_rounds_by_thoroughness", {"quick": 2, "thorough": 5}
+        )
+
+    @pytest.mark.asyncio
+    async def test_same_type_workers_share_system_and_tools_bytes_across_levels(self) -> None:
+        quick = await _first_call(
+            _typed_spec(WorkerType.RESEARCHER, "quick", "find a", sibling_tasks=("find_b",))
+        )
+        thorough = await _first_call(
+            _typed_spec(WorkerType.RESEARCHER, "thorough", "find b", sibling_tasks=("find_a",))
+        )
+
+        assert quick["messages"][0] == thorough["messages"][0]
+        assert quick["tools"] == thorough["tools"]
+        assert quick["tools"]
+        # The context slice between them is identical too, so the shared prefix
+        # runs up to the task message — the only per-worker part.
+        assert quick["messages"][1:5] == thorough["messages"][1:5]
+        assert quick["messages"][-1] != thorough["messages"][-1]
+
+    @pytest.mark.asyncio
+    async def test_type_boundary_changes_the_prefix(self) -> None:
+        researcher = await _first_call(_typed_spec(WorkerType.RESEARCHER, "quick"))
+        general = await _first_call(_typed_spec(WorkerType.GENERAL, "quick"))
+
+        assert researcher["messages"][0] != general["messages"][0]
+        assert researcher["tools"] != general["tools"]
+
+    @pytest.mark.asyncio
+    async def test_researcher_gets_its_block_and_general_gets_none(self) -> None:
+        researcher = await _first_call(_typed_spec(WorkerType.RESEARCHER, "quick"))
+        general = await _first_call(_typed_spec(WorkerType.GENERAL, "quick"))
+
+        block = WORKER_TYPES[WorkerType.RESEARCHER].prompt_block
+        assert block in researcher["messages"][0]["content"]
+        assert "You research one bounded question" not in general["messages"][0]["content"]
+
+
+class TestThoroughnessBinds:
+    """FRE-1493 AC-2 (ADR-0150 AC-6): the level's budget binds the loop."""
+
+    @pytest.mark.asyncio
+    async def test_quick_task_spends_two_rounds_then_forced_synthesis(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        monkeypatch.setattr(
+            settings,
+            "sub_agent_rounds_by_thoroughness",
+            {"quick": 2, "standard": 4, "thorough": 5},
+        )
+        sent: list[list[dict[str, Any]]] = []
+        call_kwargs: list[dict[str, Any]] = []
+
+        async def _respond(**kwargs: Any) -> dict[str, Any]:
+            sent.append([dict(m) for m in kwargs["messages"]])
+            call_kwargs.append(kwargs)
+            if kwargs.get("tool_choice") == "none" or not kwargs.get("tools"):
+                return _llm_response("the report")
+            n = len(sent)
+            return _llm_response(
+                "", tool_calls=[{"id": f"c{n}", "name": "run_python", "arguments": "{}"}]
+            )
+
+        client = AsyncMock()
+        client.dialect_for_role = MagicMock(return_value=None)
+        client.respond = AsyncMock(side_effect=_respond)
+        dispatch = AsyncMock(return_value=_dispatch_result("c", "run_python", "x" * 10))
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch),
+        ):
+            result = await run_sub_agent(
+                spec=_typed_spec(WorkerType.GENERAL, "quick"), llm_client=client, trace_id="t"
+            )
+
+        task_message = sent[0][-1]["content"]
+        assert "Thoroughness: quick. You have a budget of 2 tool round(s)." in task_message
+        assert "budget of 5" not in task_message
+        countdowns = [str(m["content"]) for m in sent[1] if str(m["content"]).startswith("Tool")]
+        assert countdowns == [countdowns[0]]
+        assert countdowns[0].startswith("Tool budget: 1 of 2 round(s) remaining.")
+        # Two tool rounds, then the forced synthesis — never a third round.
+        assert dispatch.await_count == 2
+        assert len(sent) == 3
+        assert result.stop_reason == "cap"
+        assert result.tool_iterations == 2
+
+
+class TestTaskMessage:
+    """FRE-1493 AC-5 (ADR-0150 AC-9) and D5: what the worker is told beyond its task."""
+
+    @pytest.mark.asyncio
+    async def test_the_sibling_line_names_the_other_tasks(self) -> None:
+        call = await _first_call(
+            _typed_spec(WorkerType.RESEARCHER, "quick", sibling_tasks=("find_b", "find_c"))
+        )
+        assert (
+            "Other workers in this turn own: find_b, find_c. Stay inside your task."
+            in call["messages"][-1]["content"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_lone_worker_reads_none(self) -> None:
+        call = await _first_call(_typed_spec(WorkerType.RESEARCHER, "quick"))
+        assert (
+            "Other workers in this turn own: none. Stay inside your task."
+            in call["messages"][-1]["content"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_task_message_order_and_report_line(self) -> None:
+        call = await _first_call(
+            _typed_spec(WorkerType.GENERAL, "quick", task="add two numbers", sibling_tasks=("x",))
+        )
+        lines = call["messages"][-1]["content"].splitlines()
+        assert lines[-4] == "Task: add two numbers"
+        assert lines[-3].startswith("Other workers in this turn own: x.")
+        assert lines[-2].startswith("Thoroughness: quick. You have a budget of ")
+        assert lines[-1] == "Report in text."
+
+    @pytest.mark.asyncio
+    async def test_base_prompt_carries_the_d5_lines_verbatim(self) -> None:
+        system = (await _first_call(_typed_spec(WorkerType.GENERAL, "quick")))["messages"][0][
+            "content"
+        ]
+        for line in (
+            "You are a focused sub-agent executing a specific sub-task. Do not ask follow-up "
+            "questions.",
+            "Do not invent missing facts, inputs, tool results, or assumptions. When the "
+            "evidence is not there, say what you could not determine.",
+            "Complete only the assigned task. Do not broaden its scope or solve the parent task.",
+            "Only what you write in your report reaches the parent. Nothing else you read or "
+            "did survives.",
+            "(one tool name, no other text on that line).",
+        ):
+            assert line in system.splitlines() or line in system
+        assert 'end your response with a final line reading exactly "TOOL_GAP: <tool_name>"' in (
+            system
+        )
 
 
 class TestWorkerKnowsTheDate:

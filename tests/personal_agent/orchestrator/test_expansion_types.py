@@ -7,6 +7,7 @@ from personal_agent.orchestrator.expansion_types import (
     PlanTask,
     SubAgentMode,
 )
+from personal_agent.orchestrator.worker_types import WorkerType
 
 
 class TestSubAgentMode:
@@ -26,19 +27,17 @@ class TestPlanTask:
         task = PlanTask(
             name="compare_performance",
             goal="Compare Redis and Memcached on raw throughput",
+            type=WorkerType.RESEARCHER,
+            thoroughness="thorough",
             constraints=["Focus on 10k rps scenario"],
-            expected_output="Performance comparison with recommendation signal",
         )
         assert task.name == "compare_performance"
+        assert task.type == WorkerType.RESEARCHER
+        assert task.thoroughness == "thorough"
         assert len(task.constraints) == 1
 
     def test_frozen(self) -> None:
-        task = PlanTask(
-            name="t1",
-            goal="g1",
-            constraints=[],
-            expected_output="text",
-        )
+        task = PlanTask(name="t1", goal="g1", type=WorkerType.GENERAL, thoroughness="quick")
         try:
             task.name = "t2"  # type: ignore[misc]
             assert False, "Should be frozen"
@@ -46,14 +45,15 @@ class TestPlanTask:
             pass
 
     def test_defaults(self) -> None:
-        task = PlanTask(
-            name="t1",
-            goal="g1",
-        )
+        task = PlanTask(name="t1", goal="g1", type=WorkerType.GENERAL, thoroughness="quick")
         assert task.constraints == []
-        assert task.expected_output == "text"
         assert task.mode == SubAgentMode.PARALLEL_INFERENCE
-        assert task.tools == []
+
+    def test_the_planner_no_longer_picks_tools_or_output_shape(self) -> None:
+        """ADR-0150 D2: the type decides both; the fields are gone, not defaulted."""
+        fields = PlanTask.__dataclass_fields__
+        assert "tools" not in fields
+        assert "expected_output" not in fields
 
 
 class TestExpansionPlan:
@@ -61,8 +61,8 @@ class TestExpansionPlan:
         plan = ExpansionPlan(
             strategy="HYBRID",
             tasks=[
-                PlanTask(name="t1", goal="g1"),
-                PlanTask(name="t2", goal="g2"),
+                PlanTask(name="t1", goal="g1", type=WorkerType.RESEARCHER, thoroughness="standard"),
+                PlanTask(name="t2", goal="g2", type=WorkerType.GENERAL, thoroughness="quick"),
             ],
         )
         assert plan.strategy == "HYBRID"

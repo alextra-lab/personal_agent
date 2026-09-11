@@ -32,7 +32,6 @@ def _spec(tools: list[str] | None = None) -> SubAgentSpec:
     return SubAgentSpec(
         task="test task",
         context=[{"role": "user", "content": "do the thing"}],
-        output_format="text",
         max_tokens=1024,
         timeout_seconds=30.0,
         tools=tools or [],
@@ -304,8 +303,16 @@ class TestExpansionThreadsIdentityToEveryWorker:
     @staticmethod
     def _plan_with_one_task() -> Any:
         from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
+        from personal_agent.orchestrator.worker_types import WorkerType
 
-        return ExpansionPlan(strategy="HYBRID", tasks=[PlanTask(name="t1", goal="do a thing")])
+        return ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[
+                PlanTask(
+                    name="t1", goal="do a thing", type=WorkerType.GENERAL, thoroughness="quick"
+                )
+            ],
+        )
 
     @pytest.mark.asyncio
     async def test_execute_threads_identity_into_dispatch(self) -> None:
@@ -373,7 +380,9 @@ class TestExpansionThreadsIdentityToEveryWorker:
 
         async def _dispatch(**kwargs: Any) -> SubAgentResult:
             calls.append(kwargs)
-            gap = None if "retry" in kwargs["spec"].task else "search_memory"
+            # ADR-0150 D2: a general worker naming web_search is replaced by a
+            # researcher — the only way a gap produces a second dispatch now.
+            gap = None if "retry" in kwargs["spec"].task else "web_search"
             return SubAgentResult(
                 task_id=uuid4(),
                 spec_task="t1",
@@ -391,7 +400,7 @@ class TestExpansionThreadsIdentityToEveryWorker:
             patch.object(
                 ec,
                 "get_shared_tool_execution_layer",
-                lambda: _stub_tool_layer("search_memory"),
+                lambda: _stub_tool_layer("web_search"),
             ),
             patch.object(ec, "run_sub_agent", _dispatch),
         ):

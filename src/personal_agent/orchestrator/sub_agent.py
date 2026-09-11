@@ -82,6 +82,7 @@ from personal_agent.orchestrator.tool_dispatch import (
     dispatch_tool_call,
     get_shared_tool_execution_layer,
 )
+from personal_agent.orchestrator.worker_types import WORKER_TYPES
 from personal_agent.telemetry.trace import TraceContext
 
 logger = structlog.get_logger(__name__)
@@ -115,27 +116,52 @@ _CONTEXT_PREVIEW_CHARS = 200
 # ordinary output.
 _SUMMARY_CAP_CHARS = 25_000
 
-# System prompt for sub-agents: focused, no personality
+# The base system prompt every worker type shares, byte-identical (ADR-0150 D5).
+# Kept from before: the role line, "do not ask follow-up questions", and the
+# TOOL_GAP sentence verbatim — `_extract_stated_tool_gap` reads the whole rest of
+# the sentinel line as the name. Lines 2-4 are D5's three, verbatim. Line 5 is the
+# owner's 2026-09-11 absence requirement on FRE-1493: stated neutrally, tied to
+# what was tried, never encouraged. The old "respond with the requested output
+# format only" and "no preamble" sentences are gone with the output format.
 _SUB_AGENT_SYSTEM_PROMPT = (
-    "You are a focused sub-agent executing a specific sub-task. "
-    "Be concise and direct. Respond with the requested output format only. "
-    "Do not ask follow-up questions. Do not add preamble or explanation "
-    "beyond what was requested. "
+    "You are a focused sub-agent executing a specific sub-task. Do not ask follow-up "
+    "questions.\n"
+    "Do not invent missing facts, inputs, tool results, or assumptions. When the "
+    "evidence is not there, say what you could not determine.\n"
+    "Complete only the assigned task. Do not broaden its scope or solve the parent task.\n"
+    "Only what you write in your report reaches the parent. Nothing else you read or "
+    "did survives.\n"
+    "When you tried and could not determine something, saying so and naming what you "
+    "tried and where is a complete answer for that part. It needs no apology and no "
+    "guess in its place.\n"
     "You cannot request additional tools mid-task. If you cannot complete this "
     "task because you lack a specific tool, do the best you can with what you "
     "have, then end your response with a final line reading exactly "
     f'"{_TOOL_GAP_PREFIX} <tool_name>" (one tool name, no other text on that line).'
 )
 
-# ADR-0149 D3 move 1: the worker is told its budget before it spends any of it.
-# Rendered from the setting rather than hardcoded — FRE-1389 AC-1 already ruled a
-# hardcoded number out for the tool surface, and the same drift applies here.
-_BUDGET_BLOCK_TEMPLATE = (
-    "You have a budget of {n} tool round(s). A round is one reply that calls tools; "
-    "it may call several tools in parallel. After each round you will be told how "
-    "much budget remains. When the budget is spent, your next reply will have no "
+# ADR-0150 D3 (revising ADR-0149 move 1): the system prompt states how the budget
+# works, and the task message states the number. The number varies per task by
+# thoroughness level, and a per-task number here would split each type's shared
+# prefix by level.
+_BUDGET_MECHANISM = (
+    "Your task states your budget of tool rounds. A round is one reply that calls "
+    "tools; it may call several tools in parallel. After each round you will be told "
+    "how much budget remains. When the budget is spent, your next reply will have no "
     "tools available, and you must write your report from the results you already hold."
 )
+
+# ADR-0150 D5: the task message's budget line, rendered from the task's level via
+# `settings.sub_agent_rounds_for` — never a literal, for the drift FRE-1389 AC-1
+# ruled out.
+_BUDGET_BLOCK_TEMPLATE = "Thoroughness: {level}. You have a budget of {n} tool round(s)."
+
+# ADR-0150 D5: the isolation-by-partition line (Qwen Code builtin-agents.ts:376).
+_SIBLING_LINE_TEMPLATE = "Other workers in this turn own: {siblings}. Stay inside your task."
+
+# ADR-0150 D5: every worker reports in text until T3 (FRE-1494) gives a
+# schema-backed type its report schema and replaces this line for it.
+_REPORT_LINE = "Report in text."
 
 # ADR-0149 D3 move 3: appended after every round's tool results, at the tail only.
 # Characters are reported alongside rounds because context growth is what actually
@@ -151,8 +177,7 @@ _SYNTHESIS_INSTRUCTION = (
     "{opening} Do NOT call any more tools. Using only the tool results already in "
     "this conversation, write your report now. State every fact you found that "
     "answers the task, each with the source it came from. Then list what you "
-    "searched for and did not find. Keep the report under 400 words. "
-    "Output format: {output_format}."
+    "searched for and did not find. Keep the report under 400 words. " + _REPORT_LINE
 )
 _SYNTHESIS_OPENING_CAP = "Your tool budget is spent."
 _SYNTHESIS_OPENING_RESERVE = "Your time budget is nearly spent."
@@ -606,40 +631,40 @@ def _terminal_error(outcome: "_ToolLoopOutcome", state: "_ToolLoopState") -> str
     return f"stopped: {outcome.stop_reason} (report: {outcome.report_kind})"
 
 
-def _build_sub_agent_system_prompt(skill_index_block: str) -> str:
-    """Build the worker's system prompt, including its round budget (ADR-0149 move 1).
+def _build_sub_agent_system_prompt(spec: SubAgentSpec) -> str:
+    """Build the worker's system prompt: base, budget mechanism, type block (ADR-0150 D5).
 
-    The budget paragraph is rendered from ``settings.sub_agent_max_tool_iterations``
-    rather than written as a literal, for the reason FRE-1389 AC-1 gave for the tool
-    surface: a hardcoded number drifts away from the value that actually binds, and
-    nothing detects it.
-
-    It is rendered for every worker, including one holding no tools. A grant-less
-    worker still runs the same loop, and AC-4a requires the bytes to be identical
-    across the workers of one fan-out — which can mix granted and grant-less tasks.
+    A function of the worker's type and ``spec.skill_index_block``, which no
+    dispatch path sets today (measured at 0 characters on every worker, ADR-0150
+    Context). Nothing per-task is rendered here — not the date (ADR-0149 move 2),
+    not the round budget (ADR-0150 D3) — so every worker of one type has the same
+    system bytes across a fan-out, across turns and across thoroughness levels
+    (ADR-0150's revision of ADR-0149 AC-4a). A caller that starts setting the skill
+    index per turn gives up the across-turn half of that guarantee.
 
     Args:
-        skill_index_block: The parent's compact skill index, appended when present.
+        spec: The sub-agent specification. Its ``worker_type`` selects the type
+            block; its ``skill_index_block``, when present, is appended last.
 
     Returns:
         The complete system prompt.
     """
-    parts = [
-        _SUB_AGENT_SYSTEM_PROMPT,
-        _BUDGET_BLOCK_TEMPLATE.format(n=settings.sub_agent_max_tool_iterations),
-    ]
-    if skill_index_block:
-        parts.append(skill_index_block)
+    parts = [_SUB_AGENT_SYSTEM_PROMPT, _BUDGET_MECHANISM]
+    type_block = WORKER_TYPES[spec.worker_type].prompt_block
+    if type_block:
+        parts.append(type_block)
+    if spec.skill_index_block:
+        parts.append(spec.skill_index_block)
     return "\n\n".join(parts)
 
 
 def _build_task_message(spec: SubAgentSpec, trace_id: str, session_id: str | None) -> str:
-    """Build the worker's task user message, with the turn's date (ADR-0149 move 2).
+    """Build the worker's task user message (ADR-0149 move 2, ADR-0150 D5).
 
-    The date lives here rather than in the system prompt because the prompt is one
-    shared, byte-identical string and a date would change it on every turn. On
-    2026-09-10 a worker with no date spent all five of its rounds searching 2025
-    events, against a question about 2026.
+    Everything per-task lives here rather than in the system prompt, which is
+    shared per type: the turn's date (on 2026-09-10 a worker with no date spent
+    all five of its rounds searching 2025 events), the sibling line, and the
+    task's round budget.
 
     Args:
         spec: The sub-agent specification.
@@ -649,7 +674,16 @@ def _build_task_message(spec: SubAgentSpec, trace_id: str, session_id: str | Non
     Returns:
         The task message content.
     """
-    body = f"Task: {spec.task}\nOutput format: {spec.output_format}\nRespond with the result only."
+    body = "\n".join(
+        (
+            f"Task: {spec.task}",
+            _SIBLING_LINE_TEMPLATE.format(siblings=", ".join(spec.sibling_tasks) or "none"),
+            _BUDGET_BLOCK_TEMPLATE.format(
+                level=spec.thoroughness, n=settings.sub_agent_rounds_for(spec.thoroughness)
+            ),
+            _REPORT_LINE,
+        )
+    )
     if spec.turn_started_at is None:
         # A caller outside a turn. The block is omitted rather than a date being
         # invented from `now`, which would silently differ from the turn's own
@@ -1022,9 +1056,7 @@ async def _forced_synthesis(
     state.messages.append(
         {
             "role": "user",
-            "content": _SYNTHESIS_INSTRUCTION.format(
-                opening=opening, output_format=spec.output_format
-            ),
+            "content": _SYNTHESIS_INSTRUCTION.format(opening=opening),
         }
     )
 
@@ -1204,7 +1236,9 @@ async def _run_tool_loop(
         the bounded function returns its result.
     """
     tool_choice = "auto" if tool_defs else None
-    max_iterations = settings.sub_agent_max_tool_iterations
+    # ADR-0150 D3: the task's own budget, not the global cap. The countdown below
+    # and the forced synthesis on the cap both read this one number.
+    max_iterations = settings.sub_agent_rounds_for(spec.thoroughness)
     while True:
         # ADR-0149 D3 move 5, FIRST — before any inference call. The primary's
         # loop checks its cap AFTER the call, so the model spends one whole
@@ -1595,7 +1629,7 @@ async def run_sub_agent(
     # Built before the try so the FRE-505 input-context breakdown is available on every
     # terminal path (success/timeout/exception/cancel), and so cancellation — which
     # raises BaseException, not Exception — can still emit an audit record.
-    _system_content = _build_sub_agent_system_prompt(spec.skill_index_block)
+    _system_content = _build_sub_agent_system_prompt(spec)
     _context_breakdown = _summarize_input_context(_system_content, spec)
 
     # FRE-1389: tool defs restricted to exactly this spec's granted subset —
@@ -1628,7 +1662,10 @@ async def run_sub_agent(
             "sub_agent_start",
             task_id=task_id_str,
             task=spec.task,
-            output_format=spec.output_format,
+            worker_type=spec.worker_type.value,
+            thoroughness=spec.thoroughness,
+            round_budget=settings.sub_agent_rounds_for(spec.thoroughness),
+            sibling_tasks=list(spec.sibling_tasks),
             max_tokens=spec.max_tokens,
             timeout=effective_timeout,
             trace_id=trace_id,

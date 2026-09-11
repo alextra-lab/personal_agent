@@ -6,6 +6,7 @@ import pytest
 
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
+from personal_agent.orchestrator.worker_types import WorkerType
 
 # ---------------------------------------------------------------------------
 # SubAgentSpec
@@ -18,7 +19,11 @@ class TestSubAgentSpec:
         spec = SubAgentSpec(task="Summarise the document.", context=[])
         assert spec.task == "Summarise the document."
         assert spec.context == []
-        assert spec.output_format == "text"
+        # ADR-0150 D2/D3/D5: a spec built outside a plan is a general worker at
+        # general's default level, with no siblings.
+        assert spec.worker_type == WorkerType.GENERAL
+        assert spec.thoroughness == "quick"
+        assert spec.sibling_tasks == ()
         # FRE-1379: None means "defer to the deployment's catalog max_tokens" —
         # a hardcoded 4096 default here used to silently shadow that.
         assert spec.max_tokens is None
@@ -36,14 +41,18 @@ class TestSubAgentSpec:
         spec = SubAgentSpec(
             task="Deep analysis",
             context=ctx,
-            output_format="json",
             max_tokens=2048,
             timeout_seconds=60.0,
             tools=["search", "read_file"],
             background="Parent task: architecture review.",
             model_role=ModelRole.PRIMARY,
+            worker_type=WorkerType.RESEARCHER,
+            thoroughness="thorough",
+            sibling_tasks=("other_task",),
         )
-        assert spec.output_format == "json"
+        assert spec.worker_type == WorkerType.RESEARCHER
+        assert spec.thoroughness == "thorough"
+        assert spec.sibling_tasks == ("other_task",)
         assert spec.max_tokens == 2048
         assert spec.timeout_seconds == 60.0
         assert spec.tools == ["search", "read_file"]

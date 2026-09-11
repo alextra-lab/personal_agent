@@ -6,11 +6,14 @@ planner fails. Scoped to enumerated comparisons per ADR-0036 Decision 3.
 
 from personal_agent.orchestrator.expansion_types import ExpansionPlan, SubAgentMode
 from personal_agent.orchestrator.fallback_planner import generate_fallback_plan
+from personal_agent.orchestrator.worker_types import WorkerType
+
+_WEB = ("web_search", "run_python")
 
 
 class TestHybridFallback:
     def test_enumerated_entities(self) -> None:
-        """HYBRID with explicit named entities → one task per entity + synthesis."""
+        """HYBRID with explicit named entities → one task per entity, no combine task."""
         plan = generate_fallback_plan(
             query="Compare Redis, Memcached, and Hazelcast for our session caching",
             strategy="HYBRID",
@@ -18,15 +21,12 @@ class TestHybridFallback:
         assert isinstance(plan, ExpansionPlan)
         assert plan.is_fallback is True
         assert plan.strategy == "HYBRID"
-        # 3 entities + 1 synthesis = 4 tasks
-        assert len(plan.tasks) == 4
         # Entity names should be clean (no trailing "for our session caching")
-        entity_task_names = [t.name for t in plan.tasks[:-1]]
-        assert "evaluate_redis" in entity_task_names
-        assert "evaluate_memcached" in entity_task_names
-        assert "evaluate_hazelcast" in entity_task_names
-        # Last task is synthesis
-        assert "synth" in plan.tasks[-1].name.lower() or "recommend" in plan.tasks[-1].name.lower()
+        assert [t.name for t in plan.tasks] == [
+            "evaluate_redis",
+            "evaluate_memcached",
+            "evaluate_hazelcast",
+        ]
 
     def test_enumerated_dimensions(self) -> None:
         """HYBRID with explicit dimensions → one task per dimension."""
@@ -35,8 +35,7 @@ class TestHybridFallback:
             strategy="HYBRID",
         )
         assert plan.is_fallback is True
-        # 3 dimensions + 1 synthesis = 4 tasks
-        assert len(plan.tasks) == 4
+        assert len(plan.tasks) == 3
 
     def test_vs_pattern(self) -> None:
         """X vs Y pattern → two entities extracted cleanly."""
@@ -45,64 +44,98 @@ class TestHybridFallback:
             strategy="HYBRID",
         )
         assert plan.is_fallback is True
-        # 2 entities + 1 synthesis = 3 tasks
-        assert len(plan.tasks) == 3
-        entity_task_names = [t.name for t in plan.tasks[:-1]]
-        assert "evaluate_redis" in entity_task_names
-        assert "evaluate_memcached" in entity_task_names
+        assert [t.name for t in plan.tasks] == ["evaluate_redis", "evaluate_memcached"]
 
-    def test_no_entities_generic_split(self) -> None:
-        """No enumerable structure → generic 2-task split."""
+    def test_no_entities_generic_single_task(self) -> None:
+        """No enumerable structure → one research task."""
         plan = generate_fallback_plan(
             query="Research the best approach to scaling our API layer",
             strategy="HYBRID",
         )
         assert plan.is_fallback is True
-        assert len(plan.tasks) == 2  # research + recommendation
+        assert [t.name for t in plan.tasks] == ["research_analysis"]
 
 
 class TestDecomposeFallback:
     def test_enumerated_entities(self) -> None:
-        """DECOMPOSE with entities → one task per entity + recommendation."""
+        """DECOMPOSE with entities → one task per entity."""
         plan = generate_fallback_plan(
             query="Evaluate Redis, Memcached, and Hazelcast for 10k rps microservices",
             strategy="DECOMPOSE",
         )
         assert plan.is_fallback is True
         assert plan.strategy == "DECOMPOSE"
-        # 3 entities + 1 synthesis = 4 tasks
-        assert len(plan.tasks) == 4
-        entity_task_names = [t.name for t in plan.tasks[:-1]]
-        assert "evaluate_redis" in entity_task_names
-        assert "evaluate_memcached" in entity_task_names
-        assert "evaluate_hazelcast" in entity_task_names
+        assert [t.name for t in plan.tasks] == [
+            "evaluate_redis",
+            "evaluate_memcached",
+            "evaluate_hazelcast",
+        ]
 
     def test_generic_decompose(self) -> None:
-        """No enumerable structure → 2-task split."""
         plan = generate_fallback_plan(
             query="Design a comprehensive monitoring strategy",
             strategy="DECOMPOSE",
         )
         assert plan.is_fallback is True
-        assert len(plan.tasks) == 2
+        assert len(plan.tasks) == 1
 
 
-class TestToolAssignment:
+class TestNoCombineTask:
+    """FRE-1493 AC-4 / ADR-0150 D4: the fallback planner holds no combine task either."""
+
+    def test_no_task_synthesises_the_others(self) -> None:
+        for query in (
+            "Compare Redis, Memcached, and Hazelcast for our session caching",
+            "Compare Redis vs Memcached for caching",
+            "Research the best approach to scaling our API layer",
+        ):
+            plan = generate_fallback_plan(query=query, strategy="HYBRID")
+            for task in plan.tasks:
+                assert "synth" not in task.name and "recommend" not in task.name
+
+
+class TestTypeAssignment:
+    """FRE-1493 AC-3 (ADR-0150 AC-7 fixture half): the fallback's type rule."""
+
+    def test_researcher_when_web_search_is_grantable(self) -> None:
+        plan = generate_fallback_plan(
+            query="Compare Redis vs Memcached for caching",
+            strategy="HYBRID",
+            sub_agent_tool_surface=_WEB,
+        )
+        assert {t.type for t in plan.tasks} == {WorkerType.RESEARCHER}
+        assert {t.thoroughness for t in plan.tasks} == {"standard"}
+
+    def test_general_when_web_search_is_not_grantable(self) -> None:
+        plan = generate_fallback_plan(
+            query="Compare Redis vs Memcached for caching",
+            strategy="HYBRID",
+            sub_agent_tool_surface=("run_python",),
+        )
+        assert {t.type for t in plan.tasks} == {WorkerType.GENERAL}
+        assert {t.thoroughness for t in plan.tasks} == {"quick"}
+
+    def test_an_empty_surface_fails_closed_to_general(self) -> None:
+        plan = generate_fallback_plan(query="Research something", strategy="HYBRID")
+        assert {t.type for t in plan.tasks} == {WorkerType.GENERAL}
+
     def test_research_tasks_default_to_parallel_inference(self) -> None:
         """The fallback planner never assigns a tooled mode — always PARALLEL_INFERENCE."""
         plan = generate_fallback_plan(
             query="Research and compare Redis vs Memcached performance benchmarks",
             strategy="HYBRID",
+            sub_agent_tool_surface=_WEB,
         )
         assert all(t.mode == SubAgentMode.PARALLEL_INFERENCE for t in plan.tasks)
 
 
 class TestEdgeCases:
     def test_empty_query(self) -> None:
-        """Empty query → generic 2-task split."""
+        """Empty query → one generic task."""
         plan = generate_fallback_plan(query="", strategy="HYBRID")
         assert plan.is_fallback is True
-        assert len(plan.tasks) == 2
+        assert len(plan.tasks) == 1
+        assert plan.tasks[0].goal == "Research the topic"
 
     def test_single_entity(self) -> None:
         """Single entity → still produces a valid plan."""
@@ -111,4 +144,4 @@ class TestEdgeCases:
             strategy="HYBRID",
         )
         assert plan.is_fallback is True
-        assert len(plan.tasks) >= 2
+        assert len(plan.tasks) >= 1

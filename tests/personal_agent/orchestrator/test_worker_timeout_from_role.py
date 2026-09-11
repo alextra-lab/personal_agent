@@ -235,6 +235,10 @@ def _cloud_response() -> MagicMock:
     response.choices = [MagicMock()]
     response.choices[0].message.content = "ok"
     response.choices[0].message.tool_calls = None
+    # ADR-0150 D6 (FRE-1492): finish_reason is now read and threaded onto
+    # SubAgentCapture, whose field is strictly `str | None` — an unconfigured
+    # MagicMock attribute here fails that validation.
+    response.choices[0].finish_reason = "stop"
     response.usage = usage
     response.id = "resp_fre1444"
     return response

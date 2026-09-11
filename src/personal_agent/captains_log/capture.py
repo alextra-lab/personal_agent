@@ -178,6 +178,10 @@ class SubAgentCapture(BaseModel):
     stop_reason: str = "completed"
     report_kind: str = "synthesized"
     rounds: list[dict[str, Any]] = Field(default_factory=list)
+    # ADR-0150 D6 (FRE-1492): the terminal report-writing call's own finish_reason.
+    # `None` on a path that made no such call. `rounds[].finish_reason` carries the
+    # same value per round, including tool rounds.
+    finish_reason: str | None = None
 
     # Output — full text, the injected digest, and the truncation ratio
     full_output: str

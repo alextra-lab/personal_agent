@@ -122,10 +122,12 @@ class LLMResponse(TypedDict):
             executor can accumulate ``turn_cost_usd`` for the live status bar;
             omitted on self-hosted (free) local calls (read as 0.0 by callers).
         finish_reason: Why generation stopped, in OpenAI's vocabulary (``stop``,
-            ``length``, ``tool_calls``, …). Populated on cloud calls; **absent**
-            elsewhere rather than defaulted, because ``"stop"`` and "we did not look"
-            must stay distinguishable — a caller that cannot tell a truncated reply
-            from a complete one reads a sizing fault as a format fault (FRE-996).
+            ``length``, ``tool_calls``, …). Populated on both the cloud and local
+            (llama-server/vLLM/LM Studio) adapters (FRE-1413); **absent** only when a
+            caller builds an ``LLMResponse`` by hand without setting it, because
+            ``"stop"`` and "we did not look" must stay distinguishable — a caller
+            that cannot tell a truncated reply from a complete one reads a sizing
+            fault as a format fault (FRE-996).
     """
 
     role: str  # "assistant"

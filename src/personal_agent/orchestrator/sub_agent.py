@@ -182,6 +182,21 @@ def _extract_call_cost(response: Any) -> float:
     return 0.0
 
 
+def _extract_finish_reason(response: Any) -> str | None:
+    """Pull ``finish_reason`` from an LLM response (ADR-0150 D6).
+
+    Args:
+        response: The value returned by ``llm_client.respond``.
+
+    Returns:
+        The provider's finish reason, or ``None`` when absent or the response
+        is a bare string.
+    """
+    if isinstance(response, Mapping):
+        return response.get("finish_reason")
+    return None
+
+
 def _extract_tool_calls(response: Any) -> list[dict[str, Any]]:
     """Pull the raw ``tool_calls`` list from an LLM response.
 
@@ -453,6 +468,7 @@ def _emit_sub_agent_capture(
         narrative_synthesized=result.narrative_synthesized,
         stop_reason=result.stop_reason,
         report_kind=result.report_kind,
+        finish_reason=result.finish_reason,
         rounds=rounds if rounds is not None else [],
         full_output=result.full_output,
         full_output_chars=full_output_chars,
@@ -739,6 +755,10 @@ class _ToolCallRecord:
         wall_s: Wall-clock of the whole round this call belonged to, back-filled
             when the round closes. ``None`` while the round is still open, which
             is how a kill mid-round is distinguishable from a completed one.
+        finish_reason: The generating round's own ``finish_reason`` (ADR-0150 D6),
+            stamped onto every tool call dispatched, refused or malformed in that
+            round — one inference call may carry several tool calls, and all of
+            them share its provider-declared stop.
     """
 
     round_num: int
@@ -746,6 +766,7 @@ class _ToolCallRecord:
     arguments: str
     result_chars: int
     wall_s: float | None = None
+    finish_reason: str | None = None
 
 
 @dataclass
@@ -824,6 +845,7 @@ class _ToolLoopState:
                 "args_chars": len(record.arguments),
                 "result_chars": record.result_chars,
                 "wall_s": record.wall_s,
+                "finish_reason": record.finish_reason,
             }
             for record in self.tool_calls
         ]
@@ -846,12 +868,15 @@ class _ToolLoopOutcome:
         stated_tool_gap: A ``TOOL_GAP:`` name stripped from a completed reply.
         stop_reason: Why the loop ended.
         report_kind: What ``content`` is.
+        finish_reason: The report-writing call's own ``finish_reason`` (ADR-0150
+            D6). ``None`` on a path that made no such call.
     """
 
     content: str
     stated_tool_gap: str | None
     stop_reason: SubAgentStopReason
     report_kind: SubAgentReportKind
+    finish_reason: str | None = None
 
 
 def _clip(text: str, cap: int) -> str:
@@ -1065,6 +1090,34 @@ async def _forced_synthesis(
         )
 
     state.cost_usd += _extract_call_cost(raw_response)
+    finish_reason = _extract_finish_reason(raw_response)
+    if finish_reason == "length":
+        # ADR-0150 D6: checked before the content is read as a report. A cut
+        # landing is never `synthesized`, regardless of stop_reason.
+        partial = _parse_llm_response(raw_response)
+        if partial.strip():
+            return _ToolLoopOutcome(
+                content=(
+                    f"{partial}\n\n"
+                    f"{_build_ledger(state, stop_reason, 'the report was cut off at the token ceiling')}"
+                ),
+                stated_tool_gap=None,
+                stop_reason=stop_reason,
+                report_kind="narration",
+                finish_reason=finish_reason,
+            )
+        return _ToolLoopOutcome(
+            content=_build_ledger(
+                state,
+                stop_reason,
+                "the report was cut off at the token ceiling before any text was written",
+            ),
+            stated_tool_gap=None,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+            finish_reason=finish_reason,
+        )
+
     content, stated_tool_gap = _extract_stated_tool_gap(_parse_llm_response(raw_response))
     if content.strip():
         return _ToolLoopOutcome(
@@ -1072,12 +1125,14 @@ async def _forced_synthesis(
             stated_tool_gap=stated_tool_gap,
             stop_reason=stop_reason,
             report_kind="synthesized",
+            finish_reason=finish_reason,
         )
     return _ToolLoopOutcome(
         content=_build_ledger(state, stop_reason, "the synthesis call returned no text"),
         stated_tool_gap=stated_tool_gap,
         stop_reason=stop_reason,
         report_kind="ledger",
+        finish_reason=finish_reason,
     )
 
 
@@ -1248,6 +1303,36 @@ async def _run_tool_loop(
             )
         state.cost_usd += _extract_call_cost(raw_response)
         raw_tool_calls = _extract_tool_calls(raw_response)
+        round_finish_reason = _extract_finish_reason(raw_response)
+
+        if not raw_tool_calls and round_finish_reason == "length":
+            # ADR-0150 D6: decided before the content is read anywhere else —
+            # before FRE-1399's round_texts bookkeeping below, so a cut reply
+            # is never repeated inside its own ledger's "Model notes per round".
+            partial = _parse_llm_response(raw_response)
+            if partial.strip():
+                return _ToolLoopOutcome(
+                    content=(
+                        f"{partial}\n\n"
+                        f"{_build_ledger(state, 'completed', 'the completed reply was cut off at the token ceiling')}"
+                    ),
+                    stated_tool_gap=None,
+                    stop_reason="completed",
+                    report_kind="narration",
+                    finish_reason=round_finish_reason,
+                )
+            return _ToolLoopOutcome(
+                content=_build_ledger(
+                    state,
+                    "completed",
+                    "the completed reply was cut off at the token ceiling before any text was written",
+                ),
+                stated_tool_gap=None,
+                stop_reason="completed",
+                report_kind="ledger",
+                finish_reason=round_finish_reason,
+            )
+
         response_content = _parse_llm_response(raw_response)
         # FRE-1399: keep every round's own text, not just the round that ends up
         # tripping the cap below — whitespace-only content (" \n") counts as no
@@ -1263,6 +1348,7 @@ async def _run_tool_loop(
                     stated_tool_gap=stated_tool_gap,
                     stop_reason="completed",
                     report_kind="synthesized",
+                    finish_reason=round_finish_reason,
                 )
             # ADR-0149 D3: empty content is not a report. The worker stopped of
             # its own accord and said nothing, which reaches the caller as a
@@ -1272,6 +1358,7 @@ async def _run_tool_loop(
                 stated_tool_gap=stated_tool_gap,
                 stop_reason="completed",
                 report_kind="ledger",
+                finish_reason=round_finish_reason,
             )
 
         state.tool_iterations += 1
@@ -1280,7 +1367,14 @@ async def _run_tool_loop(
             {"role": "assistant", "content": response_content, "tool_calls": normalized_calls}
         )
 
-        def _absorb(tool_call_id: str, tool_name: str, raw_arguments: str, content: str) -> None:
+        def _absorb(
+            tool_call_id: str,
+            tool_name: str,
+            raw_arguments: str,
+            content: str,
+            *,
+            _round_finish_reason: str | None = round_finish_reason,
+        ) -> None:
             """Feed one tool result back to the model and record it for the ledger.
 
             Every tool-role message the loop appends goes through here — a real
@@ -1293,6 +1387,11 @@ async def _run_tool_loop(
                 tool_name: The tool the model asked for.
                 raw_arguments: The model's raw argument string.
                 content: The tool-role content fed back.
+                _round_finish_reason: This round's ``finish_reason``, bound as a
+                    default at definition time (not read from the enclosing
+                    scope) so it stays this round's value rather than late-binding
+                    to whatever the loop variable holds when a caller finally
+                    invokes it (ruff B023).
             """
             state.tool_result_chars_absorbed += len(content)
             state.tool_calls.append(
@@ -1301,6 +1400,7 @@ async def _run_tool_loop(
                     tool=tool_name,
                     arguments=_clip(raw_arguments, _LEDGER_ARGS_CAP_CHARS),
                     result_chars=len(content),
+                    finish_reason=_round_finish_reason,
                 )
             )
             state.messages.append(
@@ -1614,6 +1714,7 @@ async def run_sub_agent(
             # FRE-1399's flag, on the condition ADR-0149 D3 restates for it: the
             # worker did work and no model text survived to describe it.
             narrative_synthesized=outcome.report_kind == "ledger",
+            finish_reason=outcome.finish_reason,
         )
 
     except asyncio.TimeoutError:

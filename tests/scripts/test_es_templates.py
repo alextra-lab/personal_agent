@@ -396,6 +396,13 @@ def test_subagents_pins_tool_loop_fields() -> None:
     assert props["stated_tool_gap"]["type"] == "keyword"
 
 
+def test_subagents_pins_finish_reason() -> None:
+    """ADR-0150 D6 (FRE-1492): finish_reason is explicit at the top level and per round."""
+    props = _props(_load("captains-subagents-index-template.json"))
+    assert props["finish_reason"]["type"] == "keyword"
+    assert props["rounds"]["properties"]["finish_reason"]["type"] == "keyword"
+
+
 # --------------------------------------------------------------------------- #
 # Self-improvement funnel (ADR-0105 D6, FRE-719).
 # --------------------------------------------------------------------------- #

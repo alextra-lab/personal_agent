@@ -1035,6 +1035,14 @@ class MemoryService:
 
         Returns:
             Row dicts for :func:`personal_agent.memory.proactive.build_proactive_suggestions`.
+            Empty when disconnected or the embedding is a zero vector -- each an
+            outcome, never a failure.
+
+        Raises:
+            Exception: The database query did not complete (logged as
+                "suggest_proactive_raw_failed" before re-raising; FRE-1481,
+                ADR-0148 D1 -- the single caller, ``suggest_relevant``, reports this
+                as a failure rather than an honest empty result).
         """
         cfg = get_settings()
         top_k = cfg.proactive_memory_vector_top_k

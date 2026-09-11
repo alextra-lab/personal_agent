@@ -267,6 +267,76 @@ class TestStopAndShowMakesNoModelCall:
             m.get("role") == "user" and "Synthesize the results" in str(m.get("content", ""))
             for m in ctx.messages
         )
+        # FRE-1375 convention: a deterministic, ungenerated reply is not a claim
+        # to verify — step_synthesis must skip grounding verification for it
+        # exactly as it does for a deadline/lifetime-cap/user-cancel stop.
+        assert ctx.turn_stopped_early is True
+
+    @pytest.mark.asyncio
+    async def test_stop_and_show_reply_survives_grounding_enforce_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The composed reply is not re-verified, retried, or overwritten.
+
+        Without ``turn_stopped_early``, ``step_synthesis`` under
+        ``grounding_verification_mode == "enforce"`` would run an entailment
+        model call over this deterministic text and could replace it with a
+        retry directive or a generic "no source" statement — silently losing
+        the worker reports this mechanism exists to surface verbatim.
+        """
+        from unittest.mock import patch
+
+        from personal_agent.orchestrator.executor import step_synthesis
+
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[
+                _sub_result("a", success=False, stop_reason="cap", full_output="MARKER_REPORT_A")
+            ],
+            synthesis_context="SYN",
+        )
+        _patch_expansion(monkeypatch, exp_result)
+        monkeypatch.setattr(
+            ex,
+            "_maybe_pause_for_constraint",
+            AsyncMock(return_value=ConstraintDecision("stop_and_show", "user_choice")),
+        )
+
+        from personal_agent.grounding.source_registry import SourceRegistry
+
+        ctx = _ctx()
+        trace_ctx = TraceContext(trace_id="t1", session_id="s1")
+        state = await ex.step_init(ctx, _session_manager(), trace_ctx)
+        assert state == TaskState.SYNTHESIS
+        composed_reply = ctx.final_reply
+        # A real turn has a source registry by the time step_synthesis runs
+        # (built in execute_task before step_init) — without it, _verify_grounding
+        # short-circuits to "unavailable" regardless of turn_stopped_early, which
+        # would make this test pass vacuously.
+        ctx.source_registry = SourceRegistry(turn_id=ctx.trace_id)
+
+        entailment_extract = AsyncMock()
+        session_manager = _session_manager()
+        session_manager.update_session = MagicMock()
+        with (
+            patch("personal_agent.orchestrator.executor.settings") as cfg,
+            patch(
+                "personal_agent.grounding.extractor.ModelSpanExtractor",
+                return_value=MagicMock(extract=entailment_extract),
+            ),
+        ):
+            cfg.grounding_verification_mode = "enforce"
+            cfg.grounding_max_generation_attempts = 2
+            cfg.environment = "test"
+            cfg.grounding_entailment_sample_rate = 0.0
+            cfg.grounding_entailment_max_inline_checks = 8
+            cfg.grounding_entailment_latency_budget_ms = 4000
+            cfg.grounding_entailment_max_excerpt_chars = 6000
+            final_state = await step_synthesis(ctx, session_manager, trace_ctx)
+
+        assert final_state == TaskState.COMPLETED
+        assert ctx.final_reply == composed_reply
+        entailment_extract.assert_not_called()
 
 
 class TestAnswerFromPartialCarriesTrailer:

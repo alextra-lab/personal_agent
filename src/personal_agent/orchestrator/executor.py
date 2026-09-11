@@ -5238,6 +5238,13 @@ async def step_init(
                     ctx.final_reply = _compose_fanout_stop_and_show(
                         expansion_result.sub_agent_results, expansion_result.skipped_tasks
                     )
+                    # FRE-1375 convention (_stop_turn_for_deadline/_lifetime_cap/
+                    # _cancel): a deterministic, ungenerated reply is not a claim to
+                    # verify — mark the turn stopped early so step_synthesis skips
+                    # grounding verification instead of running an extra model call
+                    # over (or, under "enforce", replacing) the worker reports this
+                    # composes verbatim.
+                    ctx.turn_stopped_early = True
                     return TaskState.SYNTHESIS
                 # answer_from_partial: the trailer is appended once generation
                 # completes (step_synthesis), outside the model's control.

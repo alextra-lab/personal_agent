@@ -162,37 +162,49 @@ runtime, which is FRE-1389's rule.
 
 ### D1 — The worker returns a schema, not prose
 
-**When the constrained call happens.** A typed worker makes exactly one constrained landing call,
-on every path. The cap, the time reserve and the per-call timeout already reach
-`_forced_synthesis` (`sub_agent.py:1165`, `:1196`, `:1237`). The voluntary stop — the model
-replies with no tool calls (`:1258`) — today returns that reply as the report. For a typed
-worker it no longer does: the reply's content, if any, is appended to the transcript as an
-assistant message, and the loop makes the same landing call with `stop_reason = "completed"`.
-The worker cannot be asked to emit JSON on a call that might also emit tool calls, because
-whether a call is the landing is known only after it returns; and constraining the tool rounds
-would forbid the tool-call syntax. So the landing is always its own call, tools retained,
-`tool_choice: "none"`, prefix cached (D6 form). The `researcher` block tells the worker to end its
-search with a reply of the single word `DONE` and no tool calls; if it writes prose instead, that
-prose stays in the transcript as notes and costs generation time, and the landing still runs.
-An untyped (`general`) worker keeps today's path: its no-tool-call reply is the report.
+**Two kinds of worker.** A type whose registry entry names a report schema is
+**schema-backed** (`researcher`). A type whose entry names none is **text-reporting**
+(`general`), and keeps today's contract on every path.
+
+**When the constrained call happens.** A schema-backed worker's report is written by exactly one
+dedicated report-writing call, and that call is constrained when the dialect accepts the schema
+(the table below) and unconstrained otherwise. ADR-0149 already makes that call on the cap, the
+time reserve, and the per-call timeout with time left (`sub_agent.py:1165`, `:1196`, `:1237`).
+The voluntary stop — the model replies with no tool calls (`:1258`) — today returns that reply as
+the report. For a schema-backed worker it no longer does: the reply's content, if any, is appended
+to the transcript as an assistant message, and the loop makes the same report-writing call with
+`stop_reason = "completed"`. The worker cannot be asked to emit JSON on a call that might also
+emit tool calls, because whether a call is the landing is known only after it returns; and
+constraining the tool rounds would forbid the tool-call syntax. So the landing is always its own
+call, tools retained, `tool_choice: "none"`, prefix cached (D6 form). The paths on which ADR-0149
+makes no call — the outer deadline, cancellation, an upstream error, a timeout with no time left
+— are unchanged: the ledger, with no report-writing call. The `researcher` block tells the worker
+to end its search with a reply of the single word `DONE` and no tool calls; if it writes prose
+instead, that prose stays in the transcript as notes and costs generation time, and the landing
+still runs.
 
 **The schema, `worker_report_v1`.** Every object sets `additionalProperties: false`. Every
 property of every object is required — the OpenAI strict subset demands it, and the llama.cpp
-converter honours it. A field with nothing to say is an empty string or an empty array.
+converter honours it. `minLength` and `maxLength` are in both subsets for standard models. A
+field marked `may be empty` is the only kind that may hold `""`.
 
 ```
 {
-  "working_notes":  string   maxLength 1000  — free text first: what was found, what conflicts, what is uncertain
+  "working_notes":  string   maxLength 1000, may be empty  — free text first: found, conflicting, uncertain
   "findings": array maxItems 20, items:
-      "claim":           string maxLength 400  — one fact, self-contained
-      "source_url":      string maxLength 200
-      "date_or_period":  string maxLength 60   — "" when the claim is not time-bound
-      "why_it_matters":  string maxLength 150  — the worker's relevance judgement for the task
+      "claim":           string minLength 1, maxLength 400  — one fact, self-contained
+      "source_url":      string minLength 1, maxLength 200
+      "date_or_period":  string maxLength 60, may be empty   — "" when the claim is not time-bound
+      "why_it_matters":  string minLength 1, maxLength 150  — the worker's relevance judgement for the task
   "gaps": array maxItems 10, items:
-      "looked_for":      string maxLength 150  — what the task asked for that was not found
-      "where":           string maxLength 200  — the queries or sources tried for it
+      "looked_for":      string minLength 1, maxLength 150  — what the task asked for that was not found
+      "where":           string minLength 1, maxLength 200  — the queries or sources tried for it
 }
 ```
+
+The grammar enforces `minLength`; a deterministic check after validation strips whitespace from
+every `minLength 1` field and treats a whitespace-only value as a validation failure, so a
+blank row cannot pass as content on a dialect whose grammar is lax.
 
 Key order is part of the contract: `working_notes` is emitted first so the model writes before
 it commits, which is the reasoning room the evidence demands, in one call. `why_it_matters` stays
@@ -204,14 +216,23 @@ its own actions is not evidence. The section list mirrors Qwen Code line 67 and 
 three-part template: result with evidence, what is missing, and the notes.
 
 **The limits fit under the ceiling that exists; the ceiling is not raised.** Every `maxLength`
-is under 2,000 characters (the llama.cpp grammar bound). The serialised worst case under these
-limits is about 22,500 characters before JSON escaping: 20 findings × 810 characters of values
-plus about 66 of keys each, 10 gaps × 350 plus about 30 each, 1,000 of notes, and the envelope.
-T3 measures it in tokens with a full-fill probe on the local tokenizer and records the landing
-ceiling actually in effect (the unexplained 8,192 above). The rule is: the worst case must be at
-most 90% of the ceiling. If it is not, T3 **shrinks the limits** until it is. The ceiling is a
-limit and this ADR does not raise it; AC-8 names it. The task message states the limits in words
-so the model plans for them.
+is under 2,000 characters (the llama.cpp grammar bound). The character budget under these limits
+is about 22,500 before JSON escaping: 20 findings × 810 characters of values plus about 66 of
+keys each, 10 gaps × 350 plus about 30 each, 1,000 of notes, and the envelope. Characters do not
+bound tokens — escaping doubles a quote, and a non-ASCII character can cost several tokens — so
+"worst case" is **defined** by a procedure, not a formula: the **full-fill probe** builds a report
+with every array at `maxItems` and every string at `maxLength`, filled with English prose that
+contains one escaped quote per 100 characters, and counts its tokens on the tokenizer of each
+dialect declared `True` in the table below. That count, plus a 25% margin, is the worst case.
+T3 records the landing ceiling actually in effect for each such dialect (the unexplained 8,192
+above is resolved there). The rule is: the worst case must be at most 90% of the ceiling. If it
+is not, T3 **shrinks the limits in this order** until it is: `findings.maxItems` 20 → 15 → 10,
+then `claim.maxLength` 400 → 300 → 200, then `working_notes.maxLength` 1000 → 600. If the
+report does not fit at the floor of that order (10 findings, 200-character claims, 600-character
+notes), the ceiling is too small for a data report, and T3 reports that to the owner as a finding
+on FRE-1491 rather than resolving it by a raise. The ceiling is a limit and this ADR does not
+raise it; AC-8 names it. The task message states the limits in words so the model plans for
+them.
 
 **Validity is deterministic, and every finish reason has a disposition.**
 
@@ -219,7 +240,7 @@ so the model plans for them.
 |---|---|---|---|
 | `finish_reason == "stop"`, content parses, validates, and holds at least one finding or one gap | `synthesized` | `True` only when `stop_reason == "completed"` (ADR-0149 rule) | The report |
 | `finish_reason == "stop"`, valid, but `findings` and `gaps` both empty | `ledger` | `False` | `{why}` = "the model reported no findings and no gaps". ADR-0149's "empty content is not a report", at the schema level. |
-| `finish_reason == "length"` | `narration` | `False` | The partial JSON followed by the ledger. The cut is visible. |
+| `finish_reason == "length"` | `narration` | `False` | The partial JSON followed by the ledger. The cut is visible. This row is D6's and belongs to T1; it applies to every report-writing call, schema-backed or text-reporting, and is checked before the content is read. |
 | `finish_reason == "stop"`, content empty, or fails to parse or validate | `ledger` | `False` | `{why}` quotes the first 200 characters of the content, or the provider's refusal when the client surfaces one. On llama.cpp the grammar makes this path unreachable; on a cloud dialect it is a refusal or a provider ignoring `strict`, and the WARNING names the provider. No retry. |
 | any other `finish_reason`, or `None` | `ledger` | `False` | `{why}` names the finish reason. |
 
@@ -241,11 +262,14 @@ on every such call. Fine-tuned OpenAI deployments, which do not support `maxLeng
 scope: no such deployment is in the catalog.
 
 **What crosses to the primary.** `SubAgentResult` gains `report: WorkerReport | None`, the parsed
-frozen model, and `report_schema: str | None`. `summary` holds a deterministic markdown rendering
-of the whole report — findings as `claim — why_it_matters [source_url] (date)`, then `Not found:`
-with each gap and where it was looked for, then the notes — so ADR-0149 D4's `stop_and_show` and
-the capture digest are complete per worker. `full_output` holds the JSON. The synthesis context
-(D4) renders from `report`, not from `summary`, and lays the gaps out once.
+frozen model (`None` on every row of the table but the first), and `report_schema: str | None`.
+On the first row, `summary` holds a deterministic markdown rendering of the whole report —
+findings as `claim — why_it_matters [source_url] (date)`, then `Not found:` with each gap and
+where it was looked for, then the notes — so ADR-0149 D4's `stop_and_show` and the capture digest
+are complete per worker, and `full_output` holds the validated JSON. On every other row,
+`summary` and `full_output` hold what ADR-0149 assigns to that `report_kind`: the partial plus
+the ledger, or the ledger. The synthesis context (D4) renders from `report` when it is present,
+and lays the gaps out once.
 
 ### D2 — A typed worker registry, closed, with two types
 
@@ -271,6 +295,17 @@ enum, which invalidates the plan and reaches the fallback planner. The fallback 
 `_compute_sub_agent_grants` against `config/governance/tools.yaml` as every request is today. A
 type cannot grant what governance refuses; a denied tool still lands in `denied_tools`. The union
 of the two lists is exactly today's granted set, so no tool becomes unreachable from a fan-out.
+
+**The gap redispatch is kept, and it is closed.** `_maybe_redispatch_on_gap`
+(`expansion_controller.py:855-991`) today reads `task.tools`, adds the gap-named tool, and
+dispatches one replacement with the widened grant. `task.tools` no longer exists, and a
+same-type worker with a widened list would breach the registry. The replacement is instead a
+worker of the **type that declares the gap-named tool**: when the tool named by
+`stated_tool_gap` or `refused_tool_attempts` is in exactly one other type's list and is
+grantable, the controller dispatches that type once with the same task, thoroughness and sibling
+list. When no type declares it, or more than one does, no replacement is dispatched and the gap
+reaches the primary in the result as today. The worker still never acquires a tool; the
+controller still decides once; and every worker that runs is a registry type.
 
 **Cache.** The prefix a worker shares is the base system prompt, the type block and the tools
 array, because Qwen chat templates render the tools inside the system region (ADR-0149 D6).
@@ -314,12 +349,13 @@ without the `+ 1`). HYBRID is 1–3 tasks; DECOMPOSE is 2–5. No task in a plan
 output, because no task can: the fan-out is one round of independent workers and one synthesis
 call by the primary, which is what `_build_synthesis_context` already implements.
 
-`_build_synthesis_context` renders each typed worker's section from `report` under the header
-ADR-0149 D4 specifies (`stop`, `report`, rounds, characters): the findings and the notes. It then
-renders every worker's gaps once, at the end, under one `Not found` heading, each gap attributed
-to its task, so the primary sees the turn's absence in one place and no gap is rendered twice.
-Untyped workers render `summary` as today. This rendering, per worker and combined, is one
-obligation and belongs to T3.
+`_build_synthesis_context` renders each schema-backed worker's section from `report` under the
+header ADR-0149 D4 specifies (`stop`, `report`, rounds, characters): the findings and the notes.
+It then renders every worker's gaps once, at the end, under one `Not found` heading, each gap
+attributed to its task, so the primary sees the turn's absence in one place and no gap is
+rendered twice. A worker with no `report` — text-reporting, or any failure row — renders
+`summary` as today. This rendering, per worker and combined, is one obligation and belongs to
+T3.
 
 **What this relies on from ADR-0149, and what is unbuilt.** The failed-landing guard — the
 `sub_agent_fanout_incomplete` pause, `stop_and_show`, and the trailer — is ADR-0149 D4, ticketed
@@ -380,27 +416,32 @@ stands, and a `recaller` type is its natural home.
 
 Every worker inference call records `finish_reason` from the response into the round record
 (`rounds[].finish_reason` on the capture) and, for the terminal call, onto `SubAgentResult` and
-`SubAgentCapture` as `finish_reason: str | None`. On the landing call, `length` yields
-`report_kind = narration` and `success = False` as D1's table states, for typed and untyped
-workers alike, on every path that writes a report. On a tool round, `length` is recorded and the
-loop continues; a tool call whose arguments were cut fails at dispatch as a malformed-argument
-error, which the loop already absorbs and the ledger already lists. This is the at-limit
-behaviour for the generation ceiling — the owner's precondition for any later change to it —
-and it is the first ticket in the chain, because every quality measurement built on report
-content is corrupted until it lands.
+`SubAgentCapture` as `finish_reason: str | None`. On every report-writing call, `length` yields
+`report_kind = narration` and `success = False`, for schema-backed and text-reporting workers
+alike, checked before the content is read; this row of D1's table is D6's and is T1's. On a tool
+round, `length` is recorded and the loop continues; a tool call whose arguments were cut fails at
+dispatch as a malformed-argument error, which the loop already absorbs and the ledger already
+lists. T1 also corrects the `LLMResponse.finish_reason` docstring (`types.py:124`), which says
+the field is cloud-only while the local adapter populates it. This is the at-limit behaviour for
+the generation ceiling — the owner's precondition for any later change to it — and it is the
+first ticket in the chain, because every quality measurement built on report content is
+corrupted until it lands.
 
 ### Revisions to ADR-0149
 
-ADR-0149 stays Accepted. Two clauses are revised by this ADR, and master records the revision in
+ADR-0149 stays Accepted. Four clauses are revised by this ADR, and master records the revision in
 ADR-0149's Status Updates on merge:
 
 | ADR-0149 clause | Revision |
 |---|---|
 | AC-4a: "the bytes are identical across two workers in one turn" | Identical across the workers of one **type** in one turn, and across turns. The tools array is part of the guarantee. |
 | D3 move 1: the round budget "appended to `_SUB_AGENT_SYSTEM_PROMPT`, rendered once from the setting" | The mechanism sentence stays in the system prompt. The number is rendered into the task message from the task's thoroughness level. |
+| D3 terminal paths, "Completed": "The content is the report, `report_kind = synthesized`, only if it is non-empty" | For a schema-backed worker the no-tool-call reply is transcript notes, and the report is written by the dedicated report-writing call that follows, with `stop_reason = completed`. For a text-reporting worker the row is unchanged. |
+| D3, "What 'report' means": "The validity predicate is deterministic and weak on purpose: non-empty text" | For a schema-backed worker the predicate is D1's table: `finish_reason`, parse, schema validation with `minLength`, the whitespace check, and at least one finding or gap. Still deterministic; no longer weak. For a text-reporting worker the predicate is unchanged, except that D6 adds the `finish_reason == "length"` row for every worker. |
 
-Nothing else in ADR-0149 changes: the countdown, the reserve, the forced synthesis, the ledger,
-the terminal paths, D4's pause and trailer, D6's cache form, and AC-8's three values.
+Nothing else in ADR-0149 changes: the countdown, the reserve, the forced synthesis on the cap,
+the reserve and the timeout, the ledger and the paths that return it, D4's pause and trailer,
+D6's cache form, and AC-8's three values.
 
 ---
 
@@ -514,7 +555,7 @@ knowing which call is the landing.
   assumed. If it measures worse, Option 2 is the recorded fallback.
 - Length limits truncate rather than compress. The limits are generous, stated to the model,
   sized under the ceiling, and a value at its limit is detectable (AC-2's second check).
-- A typed worker that stops voluntarily makes one more call than today: the landing. Its
+- A schema-backed worker that stops voluntarily makes one more call than today: the landing. Its
   prefix is cached; its generation is the report the worker owed anyway. ADR-0149 D5's runway
   arithmetic gains that call and FRE-1487 measures it.
 - The planner prompt changes shape (`type`, `thoroughness`; no `tools`, no `expected_output`).
@@ -541,10 +582,10 @@ knowing which call is the landing.
 
 | Ticket | Scope | Tier | Depends on |
 |---|---|---|---|
-| T1 | D6: `finish_reason` on every worker call, onto the round record, `SubAgentResult`, `SubAgentCapture` and the ES template; `length` on any report-writing call → `narration`, `success = False`. AC-3. | Tier-2 | this ADR |
-| T2 | D2, D3, D4 (removal), D5: `WorkerType` registry with `researcher` and `general`; `PlanTask.type` and `.thoroughness` replacing `.tools` and `.expected_output`; the planner prompt, `_validate_plan_json` and the fallback planner; `sub_agent_rounds_by_thoroughness` shipped equal to the cap and validated at load; the budget number moved to the task message and read by the countdown and the forced synthesis; the combine task removed from the prompt and `_MAX_TASKS`; the base-prompt lines, the `researcher` block, the sibling line, `SubAgentSpec.worker_type` / `.thoroughness` / `.sibling_tasks`. AC-5, AC-6, AC-7, AC-8, AC-9. | Tier-1 | T1 |
-| T3 | D1 and D4 (rendering): `worker_report_v1` schema and its frozen model; the voluntary-stop landing for typed workers; `response_format` on the landing call; the validity table; `LANDING_ACCEPTS_JSON_SCHEMA` and the OVH probe; `refusal` on `LLMResponse`; `report` and `report_schema` on result and capture; `summary` rendering and the synthesis-context rendering with the combined `Not found` section; the full-fill probe, the ceiling in effect recorded, and the limits shrunk if needed. AC-1, AC-4. | Tier-2 | T2 |
-| T4 (eval) | AC-2: the A/B on the study's query set — prose landing vs `worker_report_v1`, plus the register-instruction arm — scored on the study's quality criterion, on `channel=EVAL`, with the query set and the scoring rubric committed under `tests/eval/` before the first run. Decides whether Option 2 replaces the single call. Also records how often a typed worker writes prose instead of `DONE`. | Tier-1 | T3, FRE-1484, FRE-1487 |
+| T1 | D6: `finish_reason` on every worker call, onto the round record, `SubAgentResult`, `SubAgentCapture` and the ES template; the `length` row of D1's table — `narration`, `success = False` — applied on every report-writing call before the content is read; the `finish_reason` docstring corrected. AC-3. | Tier-2 | this ADR |
+| T2 | D2, D3, D4 (removal), D5: `WorkerType` registry with `researcher` and `general`; `PlanTask.type` and `.thoroughness` replacing `.tools` and `.expected_output`; the planner prompt, `_validate_plan_json` and the fallback planner; the closed gap redispatch by type; `sub_agent_rounds_by_thoroughness` shipped equal to the cap and validated at load; the budget number moved to the task message and read by the countdown and the forced synthesis; the combine task removed from the prompt and `_MAX_TASKS`; the base-prompt lines, the `researcher` block, the sibling line, `SubAgentSpec.worker_type` / `.thoroughness` / `.sibling_tasks`. AC-5, AC-6, AC-7, AC-8, AC-9. | Tier-1 | T1 |
+| T3 | D1 and D4 (rendering): `worker_report_v1` schema and its frozen model; the voluntary-stop landing for schema-backed workers; `response_format` on the report-writing call; every row of the validity table except the `length` row; `LANDING_ACCEPTS_JSON_SCHEMA` and the OVH probe; `refusal` on `LLMResponse`; `report` and `report_schema` on result and capture; `summary` rendering and the synthesis-context rendering with the combined `Not found` section; the full-fill probe per `True` dialect, the ceiling in effect recorded, and the limits shrunk in the stated order if needed. AC-1, AC-4. | Tier-2 | T2 |
+| T4 (eval) | AC-2: the A/B on the study's query set — prose landing vs `worker_report_v1`, plus the register-instruction arm — scored on the study's quality criterion, on `channel=EVAL`, with the query set and the scoring rubric committed under `tests/eval/` before the first run. Decides whether Option 2 replaces the single call. Also records how often a schema-backed worker writes prose instead of `DONE`. | Tier-1 | T3, FRE-1484, FRE-1487 |
 
 Files touched: `orchestrator/sub_agent.py` (`_SUB_AGENT_SYSTEM_PROMPT`, `_BUDGET_BLOCK_TEMPLATE`,
 `_build_sub_agent_system_prompt`, `_build_task_message`, `_forced_synthesis`, `_run_tool_loop`
@@ -574,21 +615,27 @@ three items in a stated window, one of which does not exist (the FRE-1122 absenc
 a named event with no listing anywhere). The seeded absent item is the discriminator between a
 report that says what it did not find and one that fabricates completeness.
 
-**AC-1 — A typed worker's report carries its findings and its gaps as data, and a report that
-is not data is not accepted.** *Check (seeded, three fixtures on the same stub tool set):* the
-stub tool returns results carrying `K` coined marker tokens with coined source strings, and the
-task names one item no result contains. Fixture A's stub model returns a JSON string the test
-built from the markers with the absent item under `gaps`; assert the request carried
+**AC-1 — A schema-backed worker's report carries its findings and its gaps as data, and a
+report that is not data is not accepted.** *Check (seeded, four fixtures on the same stub tool
+set):* the stub tool returns results carrying `K` coined marker tokens with coined source strings,
+and the task names one item no result contains. Fixture A's stub model returns a JSON string the
+test built from the markers with the absent item under `gaps`; assert the request carried
 `response_format` with `strict: true`, `tools` and `tool_choice = "none"`, and that the result's
 `report.findings` holds all `K` markers with their sources, `report.gaps` names the absent item,
 `report_kind == "synthesized"`, `report_schema == "worker_report_v1"`, and `summary` renders every
 marker and the gap. Fixture B's stub returns prose; assert `report_kind == "ledger"` and
 `success == False`. Fixture C's stub returns `{"working_notes":"","findings":[],"gaps":[]}`;
-assert `ledger` and the "no findings and no gaps" reason. *Live:* on the absence probe, every
-`researcher` capture holds a validated report, and the capture for the task that owns the absent
-item names it under `gaps` and not under `findings`. *Fails if* a typed landing yields
-`synthesized` without a validated non-empty report, if fixture B or C passes as `synthesized`, or
-if the absent item appears as a finding.
+assert `ledger` and the "no findings and no gaps" reason. Fixture D's stub returns one finding
+whose four strings are `" "`; assert `ledger` with a validation reason. *Live:* on the absence
+probe, every `researcher` capture holds a validated report, and the capture for the task that
+owns the absent item names it under `gaps` and not under `findings`. *Seeded negatives:* the
+validator and the whitespace check disabled — fixtures B, C and D become `synthesized`. The
+`response_format` withheld on the live backend, validator intact — the live check fails: no
+`researcher` capture holds a validated report, because the model writes prose (the recorded
+0-of-2), and every landing is a `ledger`. The mechanism's effect is only observable with a real
+model, so its negative is the live one. *Fails if* a schema-backed landing yields `synthesized`
+without a validated non-empty report, if fixture B, C or D passes as `synthesized`, or if the
+absent item appears as a finding.
 
 **AC-2 — The schema does not cost quality.** *Check:* T4 runs the committed query set twice on
 `channel=EVAL`, same limits, same model, same prompts except the landing form: prose (today's
@@ -609,26 +656,31 @@ ledger, and the capture's `finish_reason == "length"`. A second fixture returns
 `finish_reason = None`; assert `ledger`. *Live:* on T4's runs, the number of sub-agent captures
 equals the number of workers the plans dispatched (no emission is missing), and no capture
 carries `finish_reason == "length"` together with `report_kind == "synthesized"`. Today's worker
-1 record is the seeded negative for the live form. *Fails if* a capture is missing, or the
-contradiction exists.
+1 record is the seeded negative for the live form. *Seeded negative for the fixture:* with the
+`finish_reason` check disabled, the cut JSON prefix reaches the content path and becomes a
+`ledger` (parse failure) or, on a text-reporting worker, `synthesized`; either way the asserted
+`narration` is absent. *Fails if* a capture is missing, or the contradiction exists.
 
 **AC-4 — The primary receives data it can read, and says what was not found.** *Check
-(fixture):* `_build_synthesis_context` on two typed results with `F` findings and `G` gaps in
+(fixture):* `_build_synthesis_context` on two schema-backed results with `F` findings and `G` gaps in
 total renders exactly `F` finding lines and exactly `G` gap lines under one `Not found` heading,
 and contains no `{` character from the JSON. *Live:* on the absence probe, the primary's final
 answer states that the absent item was not found, and does not assert a date, venue or source
 for it. *Fails if* a finding or gap is dropped or duplicated in the rendering, if raw JSON reaches
 the context, or if the answer asserts the absent item (the FRE-1484 confabulation shape).
 
-**AC-5 — Same-type workers share one prefix across thoroughness levels.** *Check:* in a fan-out
-of two `researcher` workers on the local backend, one `quick` and one `thorough` (test settings
-giving them different budgets), the second worker's first call reports `cache_read_tokens` of at
-least 90% of its prompt tokens. *Seeded negative:* render the budget number back into the system
-prompt; the second worker's `cache_read_tokens` falls to at most the length of the base prompt.
-*Type boundary:* with the second worker typed `general`, `cache_read_tokens` is at most the base
-prompt plus the tools that both types share (none), which the test asserts as at most the base
-prompt length. *Fails if* two same-type workers of different levels miss, or the negative does
-not fall.
+**AC-5 — Same-type workers share one prefix across thoroughness levels.** *Setup:* the test pins
+`context` to a fixed four-message list for both workers. It measures two token counts on the
+local backend once, from a call whose user message is empty: `P`, the prompt tokens of the base
+system prompt plus the `researcher` block plus the `researcher` tools; and `B`, the prompt tokens
+of the base system prompt alone with no tools. *Check:* in a fan-out of two `researcher` workers,
+one `quick` and one `thorough` (test settings giving them different budgets), the second worker's
+first call reports `cache_read_tokens` of at least `0.95 × P`. The comparison is against the
+static prefix, not the whole prompt, so the per-worker task tail does not dilute it. *Seeded
+negative:* render the budget number back into the system prompt; the second worker's
+`cache_read_tokens` falls to at most `B`. *Type boundary:* with the second worker typed
+`general`, `cache_read_tokens` is at most `B`. *Fails if* two same-type workers of different
+levels read fewer than `0.95 × P` cached tokens, or the negative does not fall to at most `B`.
 
 **AC-6 — The thoroughness level binds.** *Mechanism check for D3.* *Check (seeded):* with
 `sub_agent_rounds_by_thoroughness = {quick: 2, standard: 4, thorough: 5}` in test settings, a
@@ -662,9 +714,9 @@ sibling in a multi-task plan.
 
 | Mechanism disabled | Criterion that must fail |
 |---|---|
-| `response_format` on the landing call | AC-1 (fixture B's prose becomes `synthesized`) |
-| The non-emptiness predicate | AC-1 (fixture C becomes `synthesized`) |
-| `finish_reason` read on the landing | AC-3 (the cut report reads `synthesized`) |
+| `response_format` on the landing call (live) | AC-1 (no `researcher` capture holds a validated report) |
+| The validator and the whitespace check | AC-1 (fixtures B, C and D become `synthesized`) |
+| `finish_reason` read on the landing | AC-3 (the cut report is not `narration`) |
 | Deterministic rendering in the synthesis context | AC-4 (JSON in the context, or a count mismatch) |
 | Budget number kept out of the system prompt | AC-5 (cache ratio falls between levels) |
 | Per-task budget read by the loop | AC-6 (a third round runs) |
@@ -719,5 +771,11 @@ numbers the study supplies. Codex round 1 (16 blocking findings) resolved: the l
 its own call so the voluntary stop can be constrained; every nested property is required; the
 schema's worst case is sized under the existing ceiling rather than the ceiling raised; every
 finish reason has a disposition and an empty report is a ledger; `general`'s tools are a closed
-list; the gaps are rendered once; the dialect capability is declared; ADR-0149's two revised
-clauses are named; and the criteria gained the absence probe as their discriminator.
+list; the gaps are rendered once; the dialect capability is declared; ADR-0149's revised
+clauses are named; and the criteria gained the absence probe as their discriminator. Codex round
+2 (8 blocking) resolved: the Completed path and the validity predicate are added to the ADR-0149
+revisions; the landing semantics are stated per path and per dialect; `minLength` and a
+whitespace check with a blank-row fixture; the worst case is a defined procedure with a shrink
+order and a floor; the `length` row is T1's alone; the gap redispatch is kept and closed by type;
+AC-1's `response_format` negative is the live one; AC-5 compares against the measured static
+prefix.

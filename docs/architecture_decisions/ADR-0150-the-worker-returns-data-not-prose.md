@@ -199,12 +199,29 @@ field marked `may be empty` is the only kind that may hold `""`.
   "gaps": array maxItems 10, items:
       "looked_for":      string minLength 1, maxLength 150  — what the task asked for that was not found
       "where":           string minLength 1, maxLength 200  — the queries or sources tried for it
+  "tool_gap":       string   maxLength 60, may be empty     — one tool name the task needed and the worker lacked, else ""
 }
 ```
 
-The grammar enforces `minLength`; a deterministic check after validation strips whitespace from
-every `minLength 1` field and treats a whitespace-only value as a validation failure, so a
-blank row cannot pass as content on a dialect whose grammar is lax.
+`tool_gap` is the `TOOL_GAP:` sentinel's home inside a schema-backed report: a JSON landing
+cannot emit a trailing sentinel line, so the field carries the same one-name value and
+`stated_tool_gap` is set from it when it is non-empty. The sentinel line itself remains the
+protocol for a text-reporting worker's report and for the voluntary-stop reply (below).
+
+The grammar enforces `minLength`; two deterministic checks run after validation. The first
+strips whitespace from every `minLength 1` field and treats a whitespace-only value as a
+validation failure, so a blank row cannot pass as content on a dialect whose grammar is lax.
+The second requires `source_url` to begin with `http://` or `https://`; a finding that fails it
+is dropped from `report.findings`, the count of dropped findings is recorded on the capture as
+`findings_dropped_invalid_source`, and the non-emptiness rule below is applied to what remains.
+An unusable source is not a finding, and the citation handle (FRE-1486) must be a URL.
+
+**The voluntary-stop reply and the tool gap.** Before the no-tool-call reply is appended to the
+transcript as notes, it passes through `_extract_stated_tool_gap` (`sub_agent.py:340`): the
+sentinel line is removed from the notes and the extracted name is carried onto the landing
+outcome, where `report.tool_gap`, if non-empty, takes precedence. So a schema-backed worker can
+state a gap on either its stop reply or its report, and the controller's redispatch (D2) reads
+one value either way.
 
 Key order is part of the contract: `working_notes` is emitted first so the model writes before
 it commits, which is the reasoning room the evidence demands, in one call. `why_it_matters` stays
@@ -220,12 +237,17 @@ is under 2,000 characters (the llama.cpp grammar bound). The character budget un
 is about 22,500 before JSON escaping: 20 findings × 810 characters of values plus about 66 of
 keys each, 10 gaps × 350 plus about 30 each, 1,000 of notes, and the envelope. Characters do not
 bound tokens — escaping doubles a quote, and a non-ASCII character can cost several tokens — so
-"worst case" is **defined** by a procedure, not a formula: the **full-fill probe** builds a report
-with every array at `maxItems` and every string at `maxLength`, filled with English prose that
-contains one escaped quote per 100 characters, and counts its tokens on the tokenizer of each
-dialect declared `True` in the table below. That count, plus a 25% margin, is the worst case.
-T3 records the landing ceiling actually in effect for each such dialect (the unexplained 8,192
-above is resolved there). The rule is: the worst case must be at most 90% of the ceiling. If it
+"worst case" is **defined** by a procedure, not a formula: the **full-fill probe** is a committed
+test fixture, `tests/personal_agent/orchestrator/fixtures/worker_report_full_fill.py`, that
+builds a report with every array at `maxItems` and every string at `maxLength` from one fixed
+English paragraph (committed in the fixture, repeated and cut to length) with the sequence `\"`
+substituted at every 100th character. Its serialised JSON is committed beside it. Token counts are
+taken per **deployment**, not per dialect: for each deployment the `sub_agent` role can resolve
+to whose dialect is declared `True` in the table below — today `qwen3.8-flash-next` on
+llama-server (via its `/tokenize` endpoint) and the OVH Qwen deployment (via `usage.prompt_tokens`
+on a probe call carrying the fixture) — the count, plus a 25% margin, is that deployment's worst
+case, and T3 commits the counts next to the fixture. T3 records the landing ceiling actually in
+effect for each such deployment (the unexplained 8,192 above is resolved there). The rule is: the worst case must be at most 90% of the ceiling. If it
 is not, T3 **shrinks the limits in this order** until it is: `findings.maxItems` 20 → 15 → 10,
 then `claim.maxLength` 400 → 300 → 200, then `working_notes.maxLength` 1000 → 600. If the
 report does not fit at the floor of that order (10 findings, 200-character claims, 600-character
@@ -241,8 +263,9 @@ them.
 | `finish_reason == "stop"`, content parses, validates, and holds at least one finding or one gap | `synthesized` | `True` only when `stop_reason == "completed"` (ADR-0149 rule) | The report |
 | `finish_reason == "stop"`, valid, but `findings` and `gaps` both empty | `ledger` | `False` | `{why}` = "the model reported no findings and no gaps". ADR-0149's "empty content is not a report", at the schema level. |
 | `finish_reason == "length"` | `narration` | `False` | The partial JSON followed by the ledger. The cut is visible. This row is D6's and belongs to T1; it applies to every report-writing call, schema-backed or text-reporting, and is checked before the content is read. |
-| `finish_reason == "stop"`, content empty, or fails to parse or validate | `ledger` | `False` | `{why}` quotes the first 200 characters of the content, or the provider's refusal when the client surfaces one. On llama.cpp the grammar makes this path unreachable; on a cloud dialect it is a refusal or a provider ignoring `strict`, and the WARNING names the provider. No retry. |
+| `finish_reason == "stop"`, content empty, or fails to parse or validate | `ledger` | `False` | `{why}` quotes the first 200 characters of the content, or the provider's refusal when the client surfaces one. On llama.cpp the grammar makes a parse or structural-schema failure unreachable (the whitespace and URL checks remain reachable); on a cloud dialect it is a refusal or a provider ignoring `strict`, and the WARNING names the provider. No retry. |
 | any other `finish_reason`, or `None` | `ledger` | `False` | `{why}` names the finish reason. |
+| The dialect is declared `False` (no constrained landing) | as ADR-0149's prose predicate: `synthesized` when non-empty text, else `ledger` | as ADR-0149 | The worker is schema-backed by type but reports as text on this turn: `report = None`, `report_schema = None`, `summary` is the prose, and the WARNING `structured_landing_unsupported_declared` is logged. The `length` row still applies. |
 
 The client does not surface a provider refusal today (`LLMResponse` has no such field). T3 adds
 `refusal: NotRequired[str | None]` to `LLMResponse`, filled from the provider message where one
@@ -469,9 +492,13 @@ on 2026-09-11, about 315 s at 19 tok/s), on a backend where three serialised wor
 not fit 900 s (ADR-0149 D5). The prose report is still cut at the ceiling, so the extraction reads
 a truncated input. dottxt and JSONSchemaBench show a reasoning-first field in one call achieves the
 same recovery.
-**Why Rejected:** Same quality, one long call more. Recorded as the fallback if AC-2 fails: if the
-single constrained call measures worse than prose on the study's criterion, T4 switches the
-landing to this form rather than reverting to prose.
+**Why Rejected:** Same quality, one long call more. And ADR-0149 D3 rules out "a second
+summarizer call over the raw results"; this is a second call over the report, not the raw
+results, but it is a second call, and adopting it would be a further revision of ADR-0149.
+Recorded as the fallback if AC-2 fails: this ADR then stays Proposed, is not Implemented, and
+the switch to this form is its own decision — a Status Update here with the measured numbers,
+and a row in the ADR-0149 revisions table with the call's budget and terminal behaviour — not
+something T4 builds on its own authority.
 
 ### Option 3: A planner-generated schema per task
 **Description:** `expected_output` becomes a JSON schema the planner writes for each task.
@@ -623,19 +650,22 @@ test built from the markers with the absent item under `gaps`; assert the reques
 `response_format` with `strict: true`, `tools` and `tool_choice = "none"`, and that the result's
 `report.findings` holds all `K` markers with their sources, `report.gaps` names the absent item,
 `report_kind == "synthesized"`, `report_schema == "worker_report_v1"`, and `summary` renders every
-marker and the gap. Fixture B's stub returns prose; assert `report_kind == "ledger"` and
-`success == False`. Fixture C's stub returns `{"working_notes":"","findings":[],"gaps":[]}`;
-assert `ledger` and the "no findings and no gaps" reason. Fixture D's stub returns one finding
-whose four strings are `" "`; assert `ledger` with a validation reason. *Live:* on the absence
-probe, every `researcher` capture holds a validated report, and the capture for the task that
-owns the absent item names it under `gaps` and not under `findings`. *Seeded negatives:* the
-validator and the whitespace check disabled — fixtures B, C and D become `synthesized`. The
-`response_format` withheld on the live backend, validator intact — the live check fails: no
-`researcher` capture holds a validated report, because the model writes prose (the recorded
-0-of-2), and every landing is a `ledger`. The mechanism's effect is only observable with a real
-model, so its negative is the live one. *Fails if* a schema-backed landing yields `synthesized`
-without a validated non-empty report, if fixture B, C or D passes as `synthesized`, or if the
-absent item appears as a finding.
+marker and the gap. The stub model in every fixture is **format-sensitive**: it returns its JSON
+only when the request carries `response_format`, and prose otherwise. Fixture B's stub returns
+prose regardless; assert `report_kind == "ledger"` and `success == False`. Fixture C's stub
+returns `{"working_notes":"","findings":[],"gaps":[],"tool_gap":""}`; assert `ledger` and the
+"no findings and no gaps" reason. Fixture D's stub returns one finding whose four strings are
+`" "`; assert `ledger` with a validation reason. *Live (local dialect):* on the absence probe,
+every `researcher` capture holds a validated report, and the capture for the task that owns the
+absent item names it under `gaps` and not under `findings`. *Seeded negatives, one per
+predicate:* `response_format` withheld from the landing request — fixture A's stub returns prose
+and A fails (`ledger`, no `report`). JSON parsing bypassed (content accepted as text) — fixture B
+becomes `synthesized`. The non-emptiness rule disabled — fixture C becomes `synthesized`. The
+`minLength` and whitespace checks disabled — fixture D becomes `synthesized`. The live no-format
+run is recorded by T4 as an observation, not a criterion, because an unconstrained model may
+emit JSON by chance. *Fails if* a schema-backed landing yields `synthesized` without a validated
+non-empty report, if fixture B, C or D passes as `synthesized`, or if the absent item appears as
+a finding.
 
 **AC-2 — The schema does not cost quality.** *Check:* T4 runs the committed query set twice on
 `channel=EVAL`, same limits, same model, same prompts except the landing form: prose (today's
@@ -690,20 +720,28 @@ the call after round 2 is the forced synthesis with `stop_reason == "cap"`. A va
 round, the message states the global cap, or an over-cap value loads.
 
 **AC-7 — The planner picks types the registry declares, and picks `researcher` for research.**
-*Check:* T4's committed query set labels each query `research` or `other` (the owner's label).
-On every `research` query, every plan task is `researcher`; on every query, every task type is in
-the enum. A fixture plan with `type: "analyst"` is rejected by `_validate_plan_json` and the
-fallback planner's tasks carry `researcher` when `web_search` is grantable. *Fails if* an unknown
-type reaches dispatch, or a `research` query's plan carries a `general` task.
+*Check:* T4's committed query set gives each query the set of types its plan may contain (the
+owner's label): `{researcher}` for a pure research question, `{researcher, general}` for one that
+also needs a computation or the user's memory, `{general}` for one that needs no web fact. On
+every query, every plan task's type is in the enum and in that query's allowed set, and a query
+whose set contains `researcher` gets at least one `researcher` task. A fixture plan with
+`type: "analyst"` is rejected by `_validate_plan_json`; a fixture plan mixing one `researcher` and
+one `general` task validates and dispatches both; the fallback planner's tasks carry `researcher`
+when `web_search` is grantable. *Fails if* an unknown type reaches dispatch, if a task's type is
+outside its query's allowed set, or if a research query gets no `researcher`.
 
 **AC-8 — No limit changed, no combine task exists.** *Guard, not a discriminating criterion;
 here because ADR-0149 AC-8 and FRE-1487 AC-6 demand it.* *Check:* in the merged diff,
 `sub_agent_max_tool_iterations`, the `sub_agent` role's `default_timeout`, and
 `orchestrator_task_timeout_seconds` are unchanged; every value of
 `sub_agent_rounds_by_thoroughness` equals `sub_agent_max_tool_iterations`; and the landing call's
-`max_tokens` is not above the ceiling T3 records as in effect before its change. On T4's runs, no
-plan holds a task whose name or goal names synthesis, combination or recommendation, and no
-worker's input context contains another worker's digest.
+`max_tokens` is not above the ceiling T3 records as in effect before its change. The combine
+check is structural: `_validate_plan_json` accepts at most `_MAX_TASKS[strategy]` tasks with no
+reserved extra slot, the planner prompt contains no instruction to add a synthesis or
+recommendation task, and the recorded 2026-09-11 plan (three research tasks plus its combine
+task) seeded into `_validate_plan_json` under HYBRID yields three tasks. On T4's runs, no plan
+holds a task whose goal names another task of the same plan, and no worker's input context
+contains another worker's digest.
 
 **AC-9 — The worker is told its siblings.** *Mechanism check for D5.* *Check:* in a two-task
 fan-out, each worker's task message names the other task; in a one-task fan-out the line reads
@@ -714,8 +752,10 @@ sibling in a multi-task plan.
 
 | Mechanism disabled | Criterion that must fail |
 |---|---|
-| `response_format` on the landing call (live) | AC-1 (no `researcher` capture holds a validated report) |
-| The validator and the whitespace check | AC-1 (fixtures B, C and D become `synthesized`) |
+| `response_format` on the landing request | AC-1 (the format-sensitive stub returns prose; fixture A fails) |
+| JSON parsing | AC-1 (fixture B becomes `synthesized`) |
+| The non-emptiness rule | AC-1 (fixture C becomes `synthesized`) |
+| `minLength` and the whitespace check | AC-1 (fixture D becomes `synthesized`) |
 | `finish_reason` read on the landing | AC-3 (the cut report is not `narration`) |
 | Deterministic rendering in the synthesis context | AC-4 (JSON in the context, or a count mismatch) |
 | Budget number kept out of the system prompt | AC-5 (cache ratio falls between levels) |
@@ -778,4 +818,10 @@ revisions; the landing semantics are stated per path and per dialect; `minLength
 whitespace check with a blank-row fixture; the worst case is a defined procedure with a shrink
 order and a floor; the `length` row is T1's alone; the gap redispatch is kept and closed by type;
 AC-1's `response_format` negative is the live one; AC-5 compares against the measured static
-prefix.
+prefix. Codex round 3 (8 blocking) resolved: a `False` dialect gets an explicit validity row
+(reports as text that turn); Option 2 is not T4's to build — an AC-2 failure leaves the ADR
+Proposed and the switch is its own decision naming ADR-0149's second-call rule; AC-1's negatives
+are one per predicate with a format-sensitive stub, and the live no-format run is an observation;
+the voluntary-stop reply passes through the `TOOL_GAP` parser and the schema gains `tool_gap`;
+the full-fill probe is a committed fixture counted per deployment; AC-7 labels the allowed type
+set per query with a mixed-plan fixture; AC-8's combine check is structural.

@@ -33,10 +33,12 @@ SubAgentStopReason = Literal[
 #: What kind of thing the worker's terminal content actually is (ADR-0149 D3).
 #:
 #: ``synthesized`` — a model call wrote it: either a completed reply or a
-#: completed tools-off synthesis call. ``narration`` — the synthesis call was cut
-#: mid-write and left a streamed partial, so the content is that partial followed
-#: by the ledger. ``ledger`` — no model-written report was possible, so the
-#: content is the deterministic ledger alone.
+#: completed tools-off synthesis call. ``narration`` — the report-writing call (an
+#: ordinary completed reply or the forced synthesis) was cut at the token ceiling
+#: (``finish_reason == "length"``, ADR-0150 D6) and left a streamed partial, so
+#: the content is that partial followed by the ledger. ``ledger`` — no
+#: model-written report was possible, so the content is the deterministic ledger
+#: alone.
 #:
 #: ADR-0149 D3 assigns ``synthesized`` and ``ledger`` explicitly and describes the
 #: cut-synthesis case without naming a kind for it; ``narration`` is that case.
@@ -222,6 +224,12 @@ class SubAgentResult:
             completed with empty text carries ``stop_reason == "completed"`` and
             is still a failed landing, which is why the caller's predicate
             (FRE-1484) reads both and never ``stop_reason`` alone.
+        finish_reason: Why the report-writing call itself stopped, in the provider's
+            vocabulary (``stop``, ``length``, …) — ADR-0150 D6. ``None`` on a path
+            that made no such call (deadline, cancellation, an upstream error, or a
+            per-call timeout with no time left). ``"length"`` here always carries
+            ``report_kind`` of ``"narration"`` or ``"ledger"``, never
+            ``"synthesized"`` — the cut is checked before the content is read.
     """
 
     task_id: UUID
@@ -244,3 +252,4 @@ class SubAgentResult:
     narrative_synthesized: bool = False
     stop_reason: SubAgentStopReason = "completed"
     report_kind: SubAgentReportKind = "synthesized"
+    finish_reason: str | None = None

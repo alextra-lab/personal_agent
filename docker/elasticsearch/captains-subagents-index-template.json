@@ -72,6 +72,7 @@
         "stated_tool_gap": { "type": "keyword" },
         "stop_reason": { "type": "keyword" },
         "report_kind": { "type": "keyword" },
+        "finish_reason": { "type": "keyword" },
         "rounds": {
           "type": "nested",
           "properties": {
@@ -79,7 +80,8 @@
             "tool": { "type": "keyword" },
             "args_chars": { "type": "integer" },
             "result_chars": { "type": "long" },
-            "wall_s": { "type": "float" }
+            "wall_s": { "type": "float" },
+            "finish_reason": { "type": "keyword" }
           }
         },
         "duration_ms": { "type": "float" },

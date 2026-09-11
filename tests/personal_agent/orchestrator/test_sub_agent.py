@@ -1559,6 +1559,15 @@ def _llm_response_with_cost(
     return resp
 
 
+def _llm_response_with_finish_reason(
+    content: str, finish_reason: str | None, tool_calls: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """An LLMResponse-shaped dict carrying an explicit finish_reason (ADR-0150 D6)."""
+    resp = _llm_response(content, tool_calls)
+    resp["finish_reason"] = finish_reason
+    return resp
+
+
 class TestSubAgentCost:
     """FRE-501 — per-call cost_usd is captured and summed onto SubAgentResult."""
 
@@ -2123,6 +2132,194 @@ class TestTerminalPathsDeclareAReport:
         assert captured[0].rounds[0]["tool"] == "web_search"
         assert captured[0].rounds[0]["result_chars"] == 1500
         assert captured[0].rounds[0]["wall_s"] is not None
+
+
+class TestFinishReasonOnCutLanding:
+    """ADR-0150 D6 / AC-3 (FRE-1492) — a cut landing is never reported as complete."""
+
+    @staticmethod
+    def _capture(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+        import personal_agent.orchestrator.sub_agent as sa
+
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_cap_path_cut_landing_is_narration_not_synthesized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1: the forced-synthesis call, cut at the ceiling, is narration, never synthesized.
+
+        Checked before the content is trusted as a report.
+        """
+        from personal_agent.config import settings
+
+        # Three rounds, like TestForcedSynthesisReportsEvidence — sub_agent_max_tool_iterations=1
+        # trips the landing RESERVE before the first round ever runs (the reserve is sized
+        # from `mean_round_s + effective_timeout`, which floors at two full budgets), so the
+        # cap path needs at least this many rounds to actually reach the cap check.
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 3)
+        captured = self._capture(monkeypatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "", tool_calls=[{"id": f"c{i}", "name": "web_search", "arguments": "{}"}]
+                )
+                for i in range(3)
+            ]
+            + [_llm_response_with_finish_reason("Found ZORPTAL (source: brevik", "length")]
+        )
+        mock_client.dialect_for_role = MagicMock(return_value=None)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "web_search", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.stop_reason == "cap"
+        assert result.report_kind == "narration"
+        assert result.success is False
+        assert result.finish_reason == "length"
+        assert "Found ZORPTAL (source: brevik" in result.summary
+        assert "cut off at the token ceiling" in result.summary
+        # ADR-0150's own AC-3: the capture carries the same finish_reason.
+        assert captured[-1].finish_reason == "length"
+
+    @pytest.mark.asyncio
+    async def test_completed_path_cut_landing_is_narration_not_synthesized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1, repeated on the completed path: no tool calls, cut at the ceiling."""
+        captured = self._capture(monkeypatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            return_value=_llm_response_with_finish_reason("Here is a partial find", "length")
+        )
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.stop_reason == "completed"
+        assert result.report_kind == "narration"
+        assert result.success is False
+        assert result.finish_reason == "length"
+        assert "Here is a partial find" in result.summary
+        assert "cut off at the token ceiling" in result.summary
+        assert captured[-1].finish_reason == "length"
+
+    @pytest.mark.asyncio
+    async def test_unset_finish_reason_with_empty_content_still_yields_ledger(self) -> None:
+        """AC-2, scoped per the plan doc's Scope decision.
+
+        Adding the field must not disturb the pre-existing empty-content ledger path
+        when finish_reason is unset.
+        """
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value=_llm_response_with_finish_reason("   ", None))
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.stop_reason == "completed"
+        assert result.report_kind == "ledger"
+        assert result.success is False
+        assert result.finish_reason is None
+
+    @pytest.mark.asyncio
+    async def test_every_round_records_its_own_finish_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-3: rounds[] carries each round's own finish_reason.
+
+        The terminal call carries its own value on SubAgentResult/SubAgentCapture.
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        captured = self._capture(monkeypatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response_with_finish_reason(
+                    "",
+                    "tool_calls",
+                    tool_calls=[{"id": f"c{i}", "name": "web_search", "arguments": "{}"}],
+                )
+                for i in range(3)
+            ]
+            + [_llm_response_with_finish_reason("final report", "stop")]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "web_search", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.finish_reason == "stop"
+        assert result.report_kind == "synthesized"
+        cap = captured[-1]
+        assert len(cap.rounds) == 3
+        assert all(r["finish_reason"] == "tool_calls" for r in cap.rounds)
+
+    @pytest.mark.asyncio
+    async def test_seeded_negative_without_the_length_check(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-5: disable the check and the cut cap-path reads as synthesized (wrong)."""
+        import personal_agent.orchestrator.sub_agent as sa
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 3)
+        monkeypatch.setattr(sa, "_extract_finish_reason", lambda response: None)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "", tool_calls=[{"id": f"c{i}", "name": "web_search", "arguments": "{}"}]
+                )
+                for i in range(3)
+            ]
+            + [_llm_response_with_finish_reason("Found ZORPTAL (source: brevik", "length")]
+        )
+        mock_client.dialect_for_role = MagicMock(return_value=None)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "web_search", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.report_kind == "synthesized"
 
 
 class TestSynthesisWireForm:

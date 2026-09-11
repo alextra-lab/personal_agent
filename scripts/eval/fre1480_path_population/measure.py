@@ -248,6 +248,15 @@ def report(classifications: Sequence[TurnClassification]) -> dict[str, Any]:
     reached = entity_match.turns + reached_no_admit.turns
     per_turn = entity_match.items_per_turn
 
+    # The classifier's one blind spot, reported rather than left implicit (codex plan-review).
+    # A turn is attributed to the path only when proactive left drops behind. Proactive can
+    # also fall through having produced no candidates AND no discards -- `suggest_relevant`
+    # returning nothing at all, or the flag being off -- and such a turn is indistinguishable
+    # here from one where the recall layer never ran. Those land in PATH_NO_RECALL, so the
+    # bucket is an upper bound on what `reached_turns` may be undercounting by. It is
+    # published next to the figure it qualifies so a reader cannot take one without the other.
+    undercount_ceiling = summaries.get(PATH_NO_RECALL, PathSummary()).turns
+
     return {
         "window": {
             "first_capture": classifications[0].timestamp,
@@ -257,6 +266,7 @@ def report(classifications: Sequence[TurnClassification]) -> dict[str, Any]:
         "entity_match_path": {
             "reached_turns": reached,
             "reached_share": round(reached / total, 4),
+            "reached_undercount_ceiling": undercount_ceiling,
             "admitting_turns": entity_match.turns,
             "admitting_share": round(entity_match.turns / total, 4),
             "items_admitted": sum(per_turn),
@@ -305,7 +315,8 @@ def _render(result: dict[str, Any]) -> str:
     lines += [
         "",
         "entity-match path (AC-1):",
-        f"  reached   {path['reached_turns']:4d} turns ({100 * path['reached_share']:.1f}%)",
+        f"  reached   {path['reached_turns']:4d} turns ({100 * path['reached_share']:.1f}%)"
+        f"   [undercount ceiling: {path['reached_undercount_ceiling']} turns]",
         f"  admitting {path['admitting_turns']:4d} turns ({100 * path['admitting_share']:.1f}%)",
         f"  items admitted: {path['items_admitted']}  by kind {path['items_by_kind']}",
         f"  carrying NO relevance value: {path['unscored_items_by_kind']}",

@@ -45,9 +45,16 @@ Two facts the table settles, and a limit on it:
 2. **The defect is wider than the ticket states.** The ticket names the entities, which carry no
    score. The 10 episodes carry `(total - position) / total` — rank order wearing the score field.
    That is the same defect FRE-1479 removed one path over, and it is present here too.
-3. **Limit.** Captures exist only for completed turns, and ES loses events episodically (FRE-1051).
-   The absolute turn counts are a lower bound. The ratios and the per-item findings are read off the
-   item records themselves and do not depend on the corpus being complete.
+3. **Two limits, both measured rather than asserted.**
+   * Captures exist only for completed turns, and ES loses events episodically (FRE-1051). The
+     absolute turn counts are a lower bound. The ratios and the per-item findings are read off the
+     item records themselves and do not depend on the corpus being complete.
+   * The classifier attributes a turn to this path only when proactive left drops behind. Proactive
+     can also fall through having produced no candidates **and** no discards, and such a turn is
+     indistinguishable from one where the recall layer never ran (codex plan-review). That bucket is
+     the ceiling on what `reached_turns` may undercount, the script reports it beside the figure it
+     qualifies, and over this window it is **0 turns** — so the gap is real in principle and empty
+     in fact here.
 
 Reproduce: `scripts/eval/fre1480_path_population/measure.py` (committed with this change).
 
@@ -163,9 +170,17 @@ The score exists on `FusedResult`; three hops carry it out.
 
 1. `memory/models.py` — `MemoryQueryResult` gains
    `relevance_values: dict[str, RelevanceValue]`, where `RelevanceValue` is a frozen model of
-   `(score, model)`. Keyed by the identity the adapter will use: `TurnNode.turn_id` for turns,
-   `EntityNode.entity_id` for entities. Also `relevance_scored: bool`, False unless the reranking
-   branch produced the set — FRE-1479's own field, for the same reason.
+   `(score, model)`. Also `relevance_scored: bool`, False unless the reranking branch produced the
+   set — FRE-1479's own field, for the same reason.
+
+   **The key is namespaced by kind** (codex plan-review, confirmed in source). The two identifier
+   spaces are not the same and are not disjoint: `EntityNode.entity_id` is populated from
+   `node.name` (`service.py:447`), while `TurnNode.turn_id` is a turn identifier, and
+   `FusedResult.item_id` is a Neo4j `elementId` for entity-kind items and a `turn_id` for turn-kind
+   ones (`fusion.py:24-30`). An unnamespaced map lets one kind overwrite the other whenever an
+   entity's name equals a turn id, and the item that loses gets another item's score and provenance.
+   The key is therefore built from `memory_item_identity`'s own kind, the same namespacing
+   discipline `turn_evidence.py` already applies to stance targets and for the same reason.
 2. `memory/service.py::_multipath_query_memory` — in the existing walk over `recall.items`, where
    both the fused item and its resolved node are already in hand, record
    `relevance_values[node identity] = RelevanceValue(item.rerank_score, item.rerank_model)` when
@@ -205,18 +220,32 @@ from `recall.outcome is not COMPLETED`. What is missing is the report: a `RECALL
 drop never reaches the stage report, so a turn whose scorer was silent composes `NOTHING_RELEVANT`
 today — the false-absence claim D4 forbids.
 
-The rule, stated precisely so it is minimal:
+The rule:
 
-> The path reports FAILED when it **admitted nothing** and **at least one** candidate was dropped as
-> `RECALL_RELEVANCE_UNAVAILABLE`.
+> The path reports FAILED whenever **at least one** candidate was dropped as
+> `RECALL_RELEVANCE_UNAVAILABLE`, whatever else the turn admitted.
 
-A turn that admitted something established relevance for what it admitted and makes no absence
-claim, so it is not degraded. A turn whose every candidate was measured and fell below the bound
-composes `NOTHING_RELEVANT`, which is correct — relevance was measured and nothing cleared it. Only
-the false-absence case is caught.
+**An earlier draft of this plan added "and it admitted nothing", and that was wrong.** Codex
+plan-review caught it and ADR-0148 settles it in its own words (lines 266-277): the state ordering
+is *"fixed and total"*, rule 1 is *"`UNAVAILABLE` outranks everything. If any arm failed to run to
+completion, the turn did not establish what exists, **whatever else happened**"*, and the section
+closes *"A partially degraded recall is therefore `UNAVAILABLE`, never `NOTHING_RELEVANT`."*
 
-*Verify (AC-6):* two tests — the scorer disabled, and the scorer raising — each asserting no item is
-admitted and the composed status is `UNAVAILABLE`.
+The case the weaker predicate got wrong is not hypothetical. `_rerank_fused_items` can score some
+indices and omit others from one response (`service.py:5408-5424`), and FRE-1479's own shipped test
+constructs exactly that mixed result (`test_broad_recall_relevance.py:323-331`). Under the weaker
+rule such a turn admitted the scored item, reported COMPLETED, and composed `POPULATED` — a turn
+presenting partial evidence as if the corpus had been searched to completion.
+
+A turn whose every candidate **was** measured and fell below the bound still composes
+`NOTHING_RELEVANT`, which stays correct: relevance was measured, and nothing cleared it.
+
+Note the consequence, which is intended rather than tolerated: a turn can now be `UNAVAILABLE`
+**while showing items**. Rule 1 outranks `POPULATED` by design — the items are shown, and the turn
+may not claim the record is complete.
+
+*Verify (AC-6):* three tests — the scorer disabled, the scorer raising, and the partial response
+that scores one item and omits another — each asserting the composed status is `UNAVAILABLE`.
 
 ### Step 9 — Fold-in: the same composition for broad recall
 
@@ -226,26 +255,65 @@ the identical false-absence defect its own AC-4 named. Folding it in is one line
 same defect alive in the neighbouring path while this ticket closes it here (skill step 5: fold in,
 do not over-ticket). Flagged explicitly in the handoff.
 
-*Verify:* a broad-recall test with the reranker disabled asserting `UNAVAILABLE`.
+Step 11's second half folds in here too, for the same reason: broad recall's
+`relevance_scored == False` branch establishes no relevance value either, and leaving the two paths
+answering D4's no-score rule differently would be worse than the divergence this closes.
 
-### Step 10 — AC-8: genuinely relevant entity recall survives
+*Verify:* broad-recall tests with the reranker disabled, and with `relevance_scored=False`, each
+asserting `UNAVAILABLE`.
 
-The bound's admitted share of the whole labelled positive set is the measurement, and the artifact
-records it whole so the denominator cannot be re-cut. A test asserts the committed artifact's
-`positive_admitted_share >= 0.90` against both document halves separately, so neither shape can drag
-the other.
+### Step 10 — AC-8: genuinely relevant entity recall survives, proved end to end and per probe
 
-*Verify:* that test, plus the artifact's own entity/turn split.
+The artifact's admitted share is necessary and **not sufficient**, which codex plan-review is right
+about: it measures the bound against a score list and proves nothing about the plumbing, the
+resolution or the admission decision that sit between the reranker and `memory_context`. A
+regression in any of those would leave the share untouched.
 
-### Step 11 — The declared limit: the legacy branch is not gated
+Two checks, both required:
+
+1. **The bound retains the calibrated positives.** The committed artifact's
+   `positive_admitted_share >= 0.90`, asserted for the entity half and the turn half **separately**,
+   so neither shape can drag the other.
+2. **Relevant recall survives the whole chain, per probe.** Drive a probe set of positives end to
+   end — core, resolver, adapter, boundary — with the gate disabled to establish each probe's
+   pre-change outcome, then again with it armed, and compare **per probe identifier**. Scores come
+   from the committed artifact's own `positive_scores`, so the fixture population is the measured
+   one rather than an invented one.
+
+Per probe, not in aggregate. ADR-0148's own AC-6 states the reason: *"An aggregate count that holds
+while individual probes swap outcomes is a failure, not a pass."*
+
+*Verify:* both tests.
+
+### Step 11 — The unreranked branch: the bound stays off it, and the turn is `UNAVAILABLE`
 
 When `multipath_recall_enabled` is off, or `query_text` is empty, `query_memory` uses the legacy
-Cypher branch, which never reranks. The bound describes a reranked result and says nothing about
-that set. FRE-1479 made the same call for the ADR-0100 single-path branch — inert, with one warning
-per turn naming the reason. Matched exactly, so the two paths behave alike, and stated as a limit
-rather than silently widened. Production runs multipath, so this is not the served case.
+Cypher branch, which never reranks.
 
-*Verify:* a test that the legacy branch admits unchanged and logs the warning.
+**An earlier draft said only "the gate is inert here", copying FRE-1479's choice. Codex
+plan-review showed that contradicts AC-2** — the plan would have claimed every admitted item carries
+a relevance value while deliberately admitting unscored items on this branch. The contradiction is
+real, and resolving it exposes that FRE-1479 answered one question where D4 asks two:
+
+* **Does the bound apply?** No. The bound was measured on reranker scores and describes only a
+  reranked result. Applying it to a set the reranker never saw would reject every item on the
+  strength of a number that never described them. FRE-1479's reasoning is right and is kept.
+* **Has the path established relevance?** No — and FRE-1479 never asked this. D4's no-score rule is
+  unconditional: *"A path with a calibrated fallback value it can compute … uses that rather than
+  reporting `UNAVAILABLE`. A path with neither reports `UNAVAILABLE`."* The only candidate fallback
+  here is a dense similarity, and FRE-1477 measured the serving embedder as admitting **no**
+  calibrated bound. So there is no calibrated fallback, and the rule applies.
+
+**So: admit unchanged, and report `UNAVAILABLE`.** The items are shown, and the turn may not reason
+from them as though the record were complete. AC-2 then holds without qualification for every item
+admitted under an armed gate, and a branch that establishes no relevance value cannot license
+unqualified reasoning.
+
+Production runs multipath, so this is not the served case — but it is the case that makes the claim
+honest.
+
+*Verify:* a test that the unreranked branch admits unchanged, logs the warning naming the reason,
+and composes `UNAVAILABLE`.
 
 ### Step 12 — Documentation
 
@@ -259,14 +327,14 @@ rather than silently widened. Production runs multipath, so this is not the serv
 
 | AC | What it demands | How it is met | Where the proof is |
 |---|---|---|---|
-| AC-1 | Population measured before the mechanism is chosen | 258 turns, 2026-08-13..09-10: reached 24 (9.3%), admitted 8 (3.1%), 38 items, all 28 entities unscored | Step 1; the table above; ticket comment |
-| AC-2 | Every admitted item carries a relevance value | Unscored items are dropped by the gate, so admission implies a value | Step 7 test |
+| AC-1 | Population measured before the mechanism is chosen | 258 turns, 2026-08-13..09-10: reached 24 (9.3%), undercount ceiling 0, admitted 8 (3.1%), 38 items, all 28 entities unscored | Step 1; the table above; ticket comment |
+| AC-2 | Every admitted item carries a relevance value | Under an armed gate, unscored items are dropped, so admission implies a value. An unreranked branch arms no gate and reports `UNAVAILABLE` instead, so it licenses no unqualified reasoning either | Steps 7 and 11 tests |
 | AC-3 | Gate rejects at the calibrated median non-match, in its own space | Fixture at `negative_median_rerank`, name resolving, age inside 30 days | Step 7 test |
 | AC-4 | That test can fail | Same fixture, `entity_match_relevance_gate_enabled=False` | Step 7 test |
 | AC-5 | The gated value is the path's own scorer output | Assert equality with `_rerank_fused_items`'s score; assert it is not the RRF or rank value | Step 6 test |
-| AC-6 | No value means no admission, and `UNAVAILABLE` not `NOTHING_RELEVANT` | Step 8's rule, composed through `MemoryStatusReport` | Step 8 tests (disabled, raising) |
-| AC-7 | Bound traces to an artifact naming the component | `entity_match_relevance_bound.json`, role `reranker`, plus the `config_guard` staleness check | Steps 2, 3, 5 |
-| AC-8 | Genuinely relevant recall survives | Committed `positive_admitted_share >= 0.90`, both halves separately | Step 10 test |
+| AC-6 | No value means no admission, and `UNAVAILABLE` not `NOTHING_RELEVANT` | Step 8's rule: **any** unavailable drop reports FAILED, per ADR-0148's total ordering | Step 8 tests (disabled, raising, partial response) |
+| AC-7 | Bound traces to an artifact naming the component | `entity_match_relevance_bound.json`, role `reranker`, plus the `config_guard` staleness check. ADR-0148 AC-10 names this artifact explicitly | Steps 2, 3, 5 |
+| AC-8 | Genuinely relevant recall survives | Committed `positive_admitted_share >= 0.90` per document half, **and** a per-probe end-to-end comparison gate-off against gate-on | Step 10 tests |
 
 ---
 
@@ -286,3 +354,25 @@ rather than silently widened. Production runs multipath, so this is not the serv
 * FRE-1170 — the reranker degrades to passthrough silently
 * `memory/service.py:4224`, `:5160-5200`, `:5336-5425`, `:5602-5730`; `memory/fusion.py:52-77`;
   `request_gateway/context.py:151-360`, `:693-773`; `request_gateway/memory_status.py`
+
+---
+
+## Codex plan-review — round 1
+
+Five findings. Three were accepted as stated, two were accepted and then measured rather than
+argued. Nothing was waved away.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Step 8's predicate reported a **partially degraded** rerank response as COMPLETED, so a turn admitting one scored item while dropping another composed `POPULATED` | **Accepted, rewritten.** ADR-0148's ordering is "fixed and total" and rule 1 says `UNAVAILABLE` outranks everything "whatever else happened". The predicate is now any unavailable drop, with no admitted-count qualifier |
+| 2 | The `relevance_values` key was unnamespaced across two identifier spaces that are not disjoint — `EntityNode.entity_id` is the entity **name** (`service.py:447`), `TurnNode.turn_id` is a turn id | **Accepted.** Verified in source. The key is namespaced by kind, which costs nothing and removes the class |
+| 3 | AC-2 claimed every admitted item carries a value while Step 11 deliberately admitted unscored legacy items | **Accepted, and it exposed more than the contradiction.** D4 asks two questions where FRE-1479 answered one. The bound still does not apply to an unreranked set; the turn now reports `UNAVAILABLE` |
+| 4 | The AC-1 classifier misses a fall-through where proactive left no drops | **Accepted, then measured.** The script now publishes that bucket as an explicit undercount ceiling beside the figure it qualifies. Over this window it is **0 turns** |
+| 5 | AC-8 substituted calibration retention for an end-to-end regression proof | **Accepted.** The artifact share is kept and a per-probe end-to-end comparison is added, per ADR-0148 AC-6's own rule against aggregates |
+
+Two of codex's verdicts were confirmations rather than defects, and both are load-bearing: the
+mechanism claim (`path` is telemetry only, so the two paths share one score space) was verified
+against `service.py:5203-5275`, and the separate-artifact decision turns out to be named outright by
+ADR-0148 AC-10 — *"the entity-match bound against whichever scorer that path acquires"*. Codex also
+noted, correctly, that the rerun is provenance rather than a statistically distinct population; that
+is recorded in the research document rather than claimed otherwise.

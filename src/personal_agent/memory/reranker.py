@@ -51,11 +51,24 @@ class RerankResult:
         index: Original index of this document in the input list.
         score: Relevance score from the reranker (higher = more relevant).
         document: The original document text.
+        model_id: The model that produced ``score``, or ``None`` when no model did
+            (:func:`_passthrough`). This is the score's *provenance*, not a label, and a
+            consumer that compares ``score`` against a calibrated bound must check it
+            first (ADR-0148 D4, FRE-1479).
+
+            Two conditions make it load-bearing, and both are ordinary rather than rare.
+            :func:`rerank` never raises and never returns empty -- it degrades to
+            :func:`_passthrough`, whose scores are ``1 / (i + 1)``, i.e. rank order
+            wearing this field. And a primary outage falls back to a *different model*
+            (``config/models.yaml:557``) whose real scores sit on a different scale;
+            FRE-695 measured that scales "are arbitrary and not comparable across arms",
+            so a bound calibrated on one arm decides nothing about the other.
     """
 
     index: int
     score: float
     document: str
+    model_id: str | None = None
 
 
 def _resolve_reranker_role_config(role: str, default_endpoint: str) -> tuple[str, str]:
@@ -232,6 +245,9 @@ async def _attempt_rerank(
                 index=idx,
                 score=float(item["relevance_score"]),
                 document=documents[idx],
+                # The model that actually scored this pair -- primary or fallback. The
+                # caller cannot infer it from the result otherwise (FRE-1479).
+                model_id=model_id,
             )
         )
 
@@ -512,7 +528,15 @@ def _log_reranker_applied(
 
 
 def _passthrough(documents: Sequence[str]) -> list[RerankResult]:
-    """Return documents in original order with default scores."""
+    """Return documents in original order with default scores.
+
+    ``score`` here is ``1 / (i + 1)`` -- a function of *rank position only*. No model read
+    the query or the document. ``model_id`` is therefore ``None``, and a consumer must
+    treat these as no relevance evidence rather than as low relevance (ADR-0148 D4).
+    Without that distinction a disabled or failed reranker degrades silently into rank
+    order, which is FRE-1170's complaint about this component.
+    """
     return [
-        RerankResult(index=i, score=1.0 / (i + 1), document=doc) for i, doc in enumerate(documents)
+        RerankResult(index=i, score=1.0 / (i + 1), document=doc, model_id=None)
+        for i, doc in enumerate(documents)
     ]

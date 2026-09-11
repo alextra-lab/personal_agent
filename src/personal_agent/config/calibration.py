@@ -28,6 +28,21 @@ CALIBRATION_DIR = "config/calibration"
 #: Filename of the proactive path's embedder-arm calibration.
 PROACTIVE_RELEVANCE_BOUND_FILE = "proactive_relevance_bound.json"
 
+#: Filename of the broad-recall path's reranker calibration (FRE-1479).
+BROAD_RECALL_RELEVANCE_BOUND_FILE = "broad_recall_relevance_bound.json"
+
+
+def repository_root() -> Path:
+    """The repository root, resolved from this module's own location.
+
+    Follows the package rather than the working directory, so a calibration resolves
+    identically from the service, a test and a script.
+
+    Returns:
+        The repository root directory.
+    """
+    return Path(__file__).resolve().parents[3]
+
 
 class CalibrationComponent(BaseModel):
     """The component whose scores a calibration measured.
@@ -149,6 +164,108 @@ class RelevanceCalibration(BaseModel):
     parity: ParityRecord
 
 
+class RerankerParityRecord(BaseModel):
+    """The parity evidence a reranker calibration must carry (FRE-1479).
+
+    ``RelevanceCalibration``'s ``ParityRecord`` does not transfer. Its ``P2`` compares the
+    Neo4j vector index's score against a client-side cosine over the vectors the index
+    holds, and **a reranker has no index**: the model reads the query and the document and
+    emits a number, with nothing in between to be unfaithful. Substituting a vacuous
+    second check would report a validated instrument on no evidence, so the second check
+    here is FRE-695's own instrument-sanity gate instead.
+
+    Attributes:
+        tolerance: Maximum absolute difference P1 may show. FRE-694's own value, 0.02.
+        p1_production_aggregates: ``pos_median`` / ``neg_median`` / ``neg_p95`` /
+            ``neg_max`` measured through the production ``rerank()`` call. The first three
+            are gated at ``tolerance``; ``neg_max`` is reported only. Two independently
+            built corpora agree on which entity ranks top but not on its exact score, and
+            the maximum of 54 such values is governed by the single largest draw -- FRE-695
+            records the same extremum sensitivity at this sample size and uses robust
+            percentiles for it.
+        p1_independent_aggregates: The same four from ``separation_benchmark.py``'s
+            independently authored Voyage arm -- its own corpus build, HTTP client and
+            response parser.
+        sanity_relevant_score: The trivially relevant document's score.
+        sanity_irrelevant_score: The trivially irrelevant document's score. The gate is
+            that the first outranks the second; the raw pair is recorded so a re-run
+            recomputes the assertion rather than re-reading a stored conclusion.
+        listwise_max_delta: Largest per-document score movement when the candidate set
+            shrinks from the whole corpus to the production input cap (P3). The harness
+            scores the whole corpus; production reranks a capped fused set, and a rerank
+            request is listwise, so this measures whether that difference moves a score
+            rather than asserting that it does not.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tolerance: float = Field(gt=0.0, description="Maximum absolute difference P1 may show.")
+    p1_production_aggregates: dict[str, float] = Field(
+        description="pos_median / neg_median / neg_max through the production rerank call."
+    )
+    p1_independent_aggregates: dict[str, float] = Field(
+        description="The same three from the independently authored harness."
+    )
+    sanity_relevant_score: float
+    sanity_irrelevant_score: float
+    listwise_max_delta: float = Field(ge=0.0)
+
+
+class RerankerRelevanceCalibration(BaseModel):
+    """One committed reranker relevance-bound calibration (ADR-0148 D4, FRE-1479).
+
+    A sibling of :class:`RelevanceCalibration` rather than a subclass. The two share a
+    *rule* -- report a bound only when one satisfies both of D4's constraints, otherwise
+    record the incompatibility and carry no bound -- but not a *score space*, and their
+    bound fields are named for the space they live in. ``RelevanceCalibration`` carries
+    ``bound_neo4j_space`` and ``bound_embedding_term`` because the proactive path scores
+    on a transform of a Neo4j vector-index score. A reranker emits one number in its own
+    arbitrary scale (FRE-695), so there is one bound and no transform. Forcing a shared
+    base would either rename the committed proactive artifact's fields or leave a base
+    class whose field names describe only one of its two children.
+
+    The bound governs both document populations the broad-recall path gates: entity
+    documents (``name + ' ' + description``) and turn documents
+    (``coalesce(summary, user_message, '')``), which reach the boundary as the entities a
+    turn discusses. Both are recorded separately as well as combined, so a reader can see
+    whether one shape drags the other.
+
+    Attributes:
+        component: What produced the scores. ``role`` is ``"reranker"``.
+        measured_on: The date the measurement ran.
+        probe_set: Repository path of the labelled probe set.
+        incompatible: True when no bound satisfies both of D4's constraints.
+        incompatible_reason: Why, when ``incompatible``. None otherwise.
+        bound: The chosen bound in the reranker's own score space, or None.
+        positive_scores: Every labelled positive, both populations combined. AC-7's
+            denominator, stored whole so it cannot be re-cut after the fact.
+        negative_scores: Each query's strongest non-match, both populations combined.
+        entity_positive_scores: The entity-document half of ``positive_scores``.
+        turn_positive_scores: The turn-document half of ``positive_scores``.
+        positive_admitted_share: Share of ``positive_scores`` the bound admits, or None
+            when incompatible.
+        negative_median_rerank: Median of ``negative_scores`` -- the value the bound must
+            reject, and the value a gate test drives its fixture at.
+        parity: The instrument validation.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    component: CalibrationComponent
+    measured_on: date
+    probe_set: str
+    incompatible: bool
+    incompatible_reason: str | None = None
+    bound: float | None = Field(default=None, ge=0.0, le=1.0)
+    positive_scores: list[float]
+    negative_scores: list[float]
+    entity_positive_scores: list[float] = Field(default_factory=list)
+    turn_positive_scores: list[float] = Field(default_factory=list)
+    positive_admitted_share: float | None = Field(default=None, ge=0.0, le=1.0)
+    negative_median_rerank: float = Field(ge=0.0, le=1.0)
+    parity: RerankerParityRecord
+
+
 def calibration_path(root: Path, filename: str = PROACTIVE_RELEVANCE_BOUND_FILE) -> Path:
     """Resolve a calibration artifact's path under the repository root.
 
@@ -182,11 +299,51 @@ def load_relevance_calibration(
             schema. A malformed artifact is never treated as an absent one -- that would
             silently downgrade a corrupted measurement into "not calibrated yet".
     """
-    path = calibration_path(root, filename)
+    payload = _read_artifact(calibration_path(root, filename))
+    return None if payload is None else RelevanceCalibration.model_validate(payload)
+
+
+def load_reranker_calibration(
+    root: Path, filename: str = BROAD_RECALL_RELEVANCE_BOUND_FILE
+) -> RerankerRelevanceCalibration | None:
+    """Load a committed reranker relevance calibration (FRE-1479).
+
+    Args:
+        root: The repository root.
+        filename: The artifact filename.
+
+    Returns:
+        The parsed calibration, or None when the artifact does not exist. A missing
+        artifact is a reportable state rather than an error, for the same reason as
+        :func:`load_relevance_calibration`: ADR-0148 D4 requires it to raise a
+        ``config_guard`` finding while leaving the previous bound in force.
+
+    Raises:
+        ValueError: If the artifact exists but is not valid JSON, or does not match the
+            schema.
+    """
+    payload = _read_artifact(calibration_path(root, filename))
+    return None if payload is None else RerankerRelevanceCalibration.model_validate(payload)
+
+
+def _read_artifact(path: Path) -> object | None:
+    """Read and decode one calibration artifact, or None when it does not exist.
+
+    Args:
+        path: The artifact path.
+
+    Returns:
+        The decoded JSON payload, or None when the file is absent.
+
+    Raises:
+        ValueError: If the file exists but is not valid JSON. A malformed artifact is
+            never treated as an absent one -- that would silently downgrade a corrupted
+            measurement into "not calibrated yet".
+    """
     if not path.is_file():
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"calibration artifact {path} is not valid JSON: {exc}") from exc
-    return RelevanceCalibration.model_validate(payload)
+    return payload

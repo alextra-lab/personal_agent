@@ -161,6 +161,19 @@ class DropReason(StrEnum):
     # this one says "the candidate was never relevant", which is a corpus question. Folding
     # them together would make a relevance rejection unreadable in the discard report.
     RECALL_RELEVANCE_BOUND = "recall_relevance_bound"
+    # RECALL_RELEVANCE_UNAVAILABLE (FRE-1479, ADR-0148 D4) is the neighbouring but
+    # different fact: RECALL_RELEVANCE_BOUND says "measured, and below the bound", while
+    # this one says "never measured, or measured by something the bound does not
+    # describe". A path in that condition has established nothing, so it may neither
+    # admit the item nor report its absence -- D3's rule one level down.
+    #
+    # It fires on the broad-recall path when the reranker was disabled, when the response
+    # omitted the item, when the call degraded to a passthrough whose scores are rank
+    # order, and when a primary outage produced real scores from the *fallback* model,
+    # whose scale the bound does not describe (FRE-695). Merging it into the bound member
+    # would make a silently degraded reranker read as a corpus with nothing relevant in
+    # it, which is the FRE-1170 pathology this separation exists to keep visible.
+    RECALL_RELEVANCE_UNAVAILABLE = "recall_relevance_unavailable"
     RECALL_SCORE_THRESHOLD = "recall_score_threshold"
     RECALL_CANDIDATE_CAP = "recall_candidate_cap"
     RECALL_ITEM_CAP = "recall_item_cap"

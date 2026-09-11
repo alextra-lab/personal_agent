@@ -58,12 +58,22 @@ class FusedResult:
         arm_count: Number of distinct arms that surfaced this item (the agreement count).
         kind: The item's kind ("entity"/"turn"), propagated from the arms that
             surfaced it. All occurrences of one item_id share a single kind.
+        rerank_score: The reranker's score for this item, or None when no reranker
+            scored it. Distinct from ``score``, which stays the RRF rank-fusion value --
+            the two are different facts and the fusion value is not a relevance measure.
+            Carried so the admission boundary has something to gate on (ADR-0148 D4,
+            FRE-1479); the core itself still never thresholds on it.
+        rerank_model: The model that produced ``rerank_score``, or None. A bound is
+            calibrated against one component's score space and says nothing about
+            another's (FRE-695), so the consumer checks this before comparing.
     """
 
     item_id: str
     score: float
     arm_count: int
     kind: ItemKind = "entity"
+    rerank_score: float | None = None
+    rerank_model: str | None = None
 
 
 @dataclass(frozen=True)

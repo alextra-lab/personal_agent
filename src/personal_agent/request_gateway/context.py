@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
@@ -147,26 +148,176 @@ def _freshness_score_modifier(last_accessed_at: datetime | None) -> float:
     return 1.0
 
 
+@lru_cache(maxsize=1)
+def _calibrated_reranker_model() -> str | None:
+    """The reranker the configured broad-recall bound was calibrated against (FRE-1479).
+
+    Cached: the artifact is committed repository state, read once per process, exactly as
+    ``AppConfig`` itself is. Without the cache this would be a file read on every
+    ``MEMORY_RECALL`` turn. A newly committed calibration takes effect on the next restart,
+    which is the same lifecycle every other configured value already has.
+
+    Read from the committed calibration artifact rather than from the serving role, so
+    the gate compares a score's producer against **what was measured**, not against what
+    happens to be configured now. Those differ exactly when a bound has gone stale, which
+    is the case ``config_guard.check_broad_recall_bound_calibration`` reports and this
+    function must not paper over.
+
+    Returns:
+        The calibrated model identifier, or None when no artifact stands behind the
+        configured bound. None disables only the producer check — the bound comparison
+        still applies — because a missing artifact is already a ``config_guard`` finding
+        and must not silently widen admission here as well.
+    """
+    from personal_agent.config.calibration import (  # noqa: PLC0415 — avoid import cycle
+        BROAD_RECALL_RELEVANCE_BOUND_FILE,
+        load_reranker_calibration,
+        repository_root,
+    )
+
+    try:
+        calibration = load_reranker_calibration(
+            repository_root(), BROAD_RECALL_RELEVANCE_BOUND_FILE
+        )
+    except ValueError:
+        # A malformed artifact is config_guard's finding to raise, not this path's to
+        # fail a turn on. The bound comparison still binds.
+        return None
+    return None if calibration is None else calibration.component.model
+
+
+def _broad_recall_relevance_verdict(
+    entity: dict[str, Any], calibrated_model: str | None
+) -> DropReason | None:
+    """Decide whether the broad-recall relevance gate rejects one entity (ADR-0148 D4).
+
+    The obligation D4 states is that every item entering ``memory_context`` carries a
+    relevance value, and that an item below its path's calibrated bound is not admitted
+    whatever any non-relevance signal says. For this path the relevance value is the
+    reranker's score, which FRE-1479 plumbed here from ``_rerank_fused_items``.
+
+    Three conditions must all hold before a score is a relevance value at all, and the
+    first two are not formalities:
+
+    * A score exists. ``_rerank_fused_items`` leaves it None for a disabled reranker, a
+      blank query, a one-item set, a raising call, an empty response, an index the
+      response omitted, and the whole legacy single-path branch.
+    * A model produced it. ``rerank()`` never raises and never returns empty — it
+      degrades to a passthrough whose "scores" are ``1 / (i + 1)``, rank order wearing
+      the score field. Comparing that against a calibrated bound would decide admission
+      on rank position, which is the defect this gate exists to remove.
+    * That model is the one the bound was calibrated against. A primary outage falls back
+      to a different reranker whose real scores sit on a different scale; FRE-695
+      measured those scales as "arbitrary and not comparable across arms", so the bound
+      says nothing about them. This case is the ordinary one on an outage, not an edge.
+
+    Failing the last check is deliberately reported as UNAVAILABLE rather than as a
+    bound rejection: the path did not establish that the item is irrelevant, only that it
+    cannot tell. Conflating the two would let a silently degraded reranker read as a
+    corpus holding nothing relevant (FRE-1170).
+
+    Args:
+        entity: One entity payload from the broad recall result.
+        calibrated_model: The reranker the configured bound was calibrated against, or
+            None when no calibration is in force.
+
+    Returns:
+        The drop reason, or None when the entity is admitted.
+    """
+    score = entity.get("relevance_score")
+    model = entity.get("relevance_model")
+    bound = settings.broad_recall_relevance_bound
+    # A missing calibration leaves the gate inert and never defaults to zero (ADR-0148
+    # D4). Checked before anything else, so an unconfigured deployment behaves exactly as
+    # it did before FRE-1479.
+    if bound is None or not settings.broad_recall_relevance_gate_enabled:
+        return None
+    if not isinstance(score, (int, float)) or isinstance(score, bool) or model is None:
+        return DropReason.RECALL_RELEVANCE_UNAVAILABLE
+    if calibrated_model is not None and model != calibrated_model:
+        return DropReason.RECALL_RELEVANCE_UNAVAILABLE
+    # Below the bound is rejected — the `>=` convention the dense arm already uses at
+    # memory/service.py:5020, matched rather than fought (ADR-0148 D4).
+    return None if float(score) >= bound else DropReason.RECALL_RELEVANCE_BOUND
+
+
 def _format_broad_recall_context(
     broad: BroadRecallResult,
-) -> list[dict[str, Any]]:
-    """Format broad recall result as memory context for the LLM.
+) -> tuple[list[dict[str, Any]], dict[str, float], ProactiveDiscards]:
+    """Format broad recall result as memory context for the LLM, gating on relevance.
 
     D4 (ADR-0047): when ``last_accessed_at`` is present on an entity dict,
     a ``freshness_modifier`` field is included so downstream consumers can
     apply the score adjustment.  The modifier itself does not reorder the
     returned list — that is left to the caller's ranking step.
 
+    ADR-0148 D4 (FRE-1479): this is the admission boundary for the broad-recall path, so
+    the relevance gate binds here rather than in the recall core. The core's contract is
+    untouched — ``memory/service.py`` still "never applies a score threshold to the fused
+    or reranked set — the reranker orders, it does not gate" (ADR-0103 §4, ADR-0104 AC-5).
+    Ordering stays the core's job; the turn-level admission decision belongs here.
+
+    ``recent_sessions`` are not gated. The reranker never scored a session summary row —
+    they come from a separate Cypher read (``service.py:5980``) and carry no relevance
+    value of any kind — so gating them on a bound calibrated over entity and turn
+    documents would be applying a number to a population it never measured. Stated as a
+    limit rather than silently widened.
+
     Args:
         broad: The broad recall result from Seshat.
 
     Returns:
-        List of formatted memory context items.
+        Tuple of (formatted memory context items, admitted relevance scores keyed by item
+        identity, the candidates the relevance gate removed).
+
+        The score rides a **sibling map**, never the rendered item — FRE-1004's pattern on
+        the proactive path, and what ADR-0148 D6 requires: "a rendered item carries no
+        score and no band". Before this the broad path returned an empty mapping because
+        it computed no score at all (ADR-0125 D3 item 5); it now has one to report.
+
+        The third element feeds ``RecallDiscardReport`` so a relevance rejection is
+        readable in the turn-evidence record, and so the two rejection kinds stay
+        distinguishable there.
     """
     context: list[dict[str, Any]] = []
+    scores: dict[str, float] = {}
+    discards: list[tuple[dict[str, Any], float | None, DropReason]] = []
+    calibrated_model = _calibrated_reranker_model()
+
+    # The bound is measured on reranker scores, so it describes only a result the reranker
+    # produced. `relevance_scored` is False on the ADR-0100 single-path branch, which never
+    # reranks by design rather than by degradation — gating it would reject every entity on
+    # the strength of a number that never saw them, which is the same error as applying an
+    # entity-document bound to turn documents. Reported once per turn rather than silently,
+    # because a path this bound cannot govern is a fact about the deployment.
+    if not broad.relevance_scored:
+        logger.warning(
+            "broad_recall_relevance_bound_not_applicable",
+            reason="multipath_recall_disabled",
+            gate_armed=bool(
+                settings.broad_recall_relevance_bound is not None
+                and settings.broad_recall_relevance_gate_enabled
+            ),
+            entity_count=broad.total_entity_count,
+        )
 
     for entity_type, entities in broad.entities_by_type.items():
         for entity in entities:
+            verdict = (
+                _broad_recall_relevance_verdict(entity, calibrated_model)
+                if broad.relevance_scored
+                else None
+            )
+            if verdict is not None:
+                raw_score = entity.get("relevance_score")
+                discards.append(
+                    (
+                        dict(entity),
+                        float(raw_score) if isinstance(raw_score, (int, float)) else None,
+                        verdict,
+                    )
+                )
+                continue
             # D4: derive freshness modifier from ADR-0042 access-tracking field
             raw_ts = entity.get("last_accessed_at")
             last_accessed_at: datetime | None = None
@@ -180,17 +331,20 @@ def _format_broad_recall_context(
 
             freshness_mod = _freshness_score_modifier(last_accessed_at)
 
-            context.append(
-                {
-                    "type": "entity",
-                    "entity_type": entity_type,
-                    "name": entity.get("name", "unknown"),
-                    "description": entity.get("description"),
-                    "mention_count": entity.get("mention_count", 0),
-                    # D4: freshness modifier for downstream relevance scoring
-                    "freshness_modifier": freshness_mod,
-                }
-            )
+            payload = {
+                "type": "entity",
+                "entity_type": entity_type,
+                "name": entity.get("name", "unknown"),
+                "description": entity.get("description"),
+                "mention_count": entity.get("mention_count", 0),
+                # D4: freshness modifier for downstream relevance scoring
+                "freshness_modifier": freshness_mod,
+            }
+            context.append(payload)
+            admitted_score = entity.get("relevance_score")
+            if isinstance(admitted_score, (int, float)) and not isinstance(admitted_score, bool):
+                if identity := memory_item_identity(payload)[1]:
+                    scores[identity] = float(admitted_score)
 
     for session in broad.recent_sessions:
         context.append(
@@ -202,7 +356,7 @@ def _format_broad_recall_context(
             }
         )
 
-    return context
+    return context, scores, tuple(discards)
 
 
 def _entity_names_from_memory_context(memory_context: list[dict[str, Any]]) -> list[str]:
@@ -467,11 +621,14 @@ async def _query_memory_for_intent(
                 query_text=user_message,
             )
             # POST_SELECTION: recall_broad bounds its own read with `limit` and reports
-            # nothing about what that cut.
+            # nothing about what that cut. FRE-1479 adds the relevance gate's own drops to
+            # the report — they are named, but the population still is not complete, so
+            # the flag stays POST_SELECTION.
+            broad_context, broad_scores, broad_discards = _format_broad_recall_context(broad)
             return (
-                _format_broad_recall_context(broad),
-                {},
-                RecallDiscardReport(),
+                broad_context,
+                broad_scores,
+                RecallDiscardReport(broad_discards),
                 _stage_report(_arms_cause(broad.arms_failed)),
             )
 

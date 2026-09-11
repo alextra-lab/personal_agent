@@ -144,6 +144,9 @@ class MemoryServiceAdapter:
             total_entity_count=len(entities),
             # FRE-1476: see recall() above.
             arms_failed=tuple(raw.get("arms_failed", ())),
+            # FRE-1479: False unless the reranking branch produced this set, including on
+            # every early-return payload — nothing was scored on those either.
+            relevance_scored=bool(raw.get("relevance_scored", False)),
         )
 
     async def store_episode(self, episode: Episode, trace_id: str) -> str:

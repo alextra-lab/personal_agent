@@ -127,7 +127,9 @@ async def test_ac4a_claim_never_reaches_the_serialized_provider_request(
         build_wire_messages,
     )
 
-    memory_section, _rendered_ids = _render_memory_section_with_ids(result.memory_context or [])
+    memory_section, _rendered_ids, _report = _render_memory_section_with_ids(
+        result.memory_context or []
+    )
     final_messages, _outcome = _inline_volatile_with_outcome(result.messages, memory_section)
     wire = build_wire_messages(final_messages, "", "ac4a-trace")
 

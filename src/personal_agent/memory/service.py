@@ -5973,6 +5973,12 @@ class MemoryService:
               - arms_failed: tuple of arms or steps that did not run to completion
                 (ADR-0148 D1, FRE-1476). Empty means the path completed; an empty
                 ``entities`` alone never establishes that.
+              - relevance_scored: whether the multi-path (reranking) branch produced this
+                entity set (ADR-0148 D4, FRE-1479). False on the legacy single-path
+                branch, which never reranks, so the broad-recall relevance bound --
+                measured on reranker scores -- does not describe its output. Absent from
+                the early-return payloads below, where it defaults to False for the same
+                reason: nothing was scored.
         """
         if not self.connected or not self.driver:
             return {
@@ -5999,7 +6005,14 @@ class MemoryService:
                 # fused+reranked core and resolved back to the broad payload shape.
                 # Flag off reproduces the ADR-0100 / legacy entity path below,
                 # byte-for-byte.
+                # FRE-1479: which branch ran decides whether the broad-recall relevance
+                # bound describes this result at all. The bound is measured on reranker
+                # scores; the legacy branch below never reranks, so it produces no value
+                # the bound can speak to. Recorded here, where the branch is known, rather
+                # than inferred downstream from an absent key.
+                relevance_scored = False
                 if current_settings.multipath_recall_enabled and query_text:
+                    relevance_scored = True
                     entities, arms_failed = await self._multipath_broad_entities(
                         query_text,
                         limit=limit,
@@ -6139,6 +6152,8 @@ class MemoryService:
                     "sessions": sessions,
                     "turns_summary": turns,
                     "arms_failed": arms_failed,
+                    # FRE-1479: see the branch above.
+                    "relevance_scored": relevance_scored,
                 }
 
                 # Publish memory access event (Phase 4 / ADR-0042)

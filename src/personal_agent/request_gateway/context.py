@@ -284,9 +284,30 @@ def _format_broad_recall_context(
     discards: list[tuple[dict[str, Any], float | None, DropReason]] = []
     calibrated_model = _calibrated_reranker_model()
 
+    # The bound is measured on reranker scores, so it describes only a result the reranker
+    # produced. `relevance_scored` is False on the ADR-0100 single-path branch, which never
+    # reranks by design rather than by degradation — gating it would reject every entity on
+    # the strength of a number that never saw them, which is the same error as applying an
+    # entity-document bound to turn documents. Reported once per turn rather than silently,
+    # because a path this bound cannot govern is a fact about the deployment.
+    if not broad.relevance_scored:
+        logger.warning(
+            "broad_recall_relevance_bound_not_applicable",
+            reason="multipath_recall_disabled",
+            gate_armed=bool(
+                settings.broad_recall_relevance_bound is not None
+                and settings.broad_recall_relevance_gate_enabled
+            ),
+            entity_count=broad.total_entity_count,
+        )
+
     for entity_type, entities in broad.entities_by_type.items():
         for entity in entities:
-            verdict = _broad_recall_relevance_verdict(entity, calibrated_model)
+            verdict = (
+                _broad_recall_relevance_verdict(entity, calibrated_model)
+                if broad.relevance_scored
+                else None
+            )
             if verdict is not None:
                 raw_score = entity.get("relevance_score")
                 discards.append(

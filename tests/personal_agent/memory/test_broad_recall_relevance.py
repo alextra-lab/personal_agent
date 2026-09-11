@@ -84,13 +84,20 @@ def _service_with_entity_rows(rows: list[dict[str, Any]]) -> MemoryService:
     return service
 
 
-def _broad(entities: list[dict[str, Any]]) -> BroadRecallResult:
-    """Group entity dicts into a BroadRecallResult the way the protocol adapter does."""
+def _broad(entities: list[dict[str, Any]], *, relevance_scored: bool = True) -> BroadRecallResult:
+    """Group entity dicts into a BroadRecallResult the way the protocol adapter does.
+
+    ``relevance_scored`` defaults True: every test here but one drives the multi-path
+    branch, which is what production runs and what the bound was measured on.
+    """
     by_type: dict[str, list[dict[str, Any]]] = {}
     for entity in entities:
         by_type.setdefault(str(entity.get("type", "Unknown")), []).append(entity)
     return BroadRecallResult(
-        entities_by_type=by_type, recent_sessions=[], total_entity_count=len(entities)
+        entities_by_type=by_type,
+        recent_sessions=[],
+        total_entity_count=len(entities),
+        relevance_scored=relevance_scored,
     )
 
 
@@ -153,7 +160,7 @@ class TestScoreReachesTheBoundary:
                 path="broad",
             )
         )
-        entities = await service._multipath_broad_entities(
+        entities, _ = await service._multipath_broad_entities(
             "q",
             limit=5,
             entity_types=None,
@@ -198,7 +205,7 @@ class TestScoreReachesTheBoundary:
 
         resolver = _service_with_entity_rows([_entity_row("e1", "Kafka")])
         resolver._multipath_fused_recall = AsyncMock(return_value=recall)
-        entities = await resolver._multipath_broad_entities(
+        entities, _ = await resolver._multipath_broad_entities(
             "q",
             limit=5,
             entity_types=None,
@@ -324,10 +331,9 @@ class TestNoRelevanceValueNeverAdmitsOnOrder:
         assert [d[2] for d in discards] == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
 
     @pytest.mark.asyncio
-    async def test_legacy_single_path_branch_carries_no_relevance_value(self, monkeypatch) -> None:
-        """multipath_recall_enabled=False never reranks, so it never establishes relevance."""
+    async def test_an_item_the_reranker_skipped_is_not_admitted(self, monkeypatch) -> None:
+        """The reranker ran and did not score this item: the bound binds, and rejects it."""
         _arm_bound(monkeypatch, 0.50)
-        # The legacy branch builds entity dicts with no relevance key at all.
         items, _, discards = _format_broad_recall_context(_broad([_entity_row("e1", "Kafka")]))
         assert items == []
         assert [d[2] for d in discards] == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
@@ -353,6 +359,44 @@ class TestNoRelevanceValueNeverAdmitsOnOrder:
         assert discards == ()
 
 
+class TestTheBoundOnlyGovernsThePathItMeasured:
+    """A reranker bound describes a reranked result, and nothing else.
+
+    Both reviewers flagged the same interaction: with the gate armed and
+    ``multipath_recall_enabled`` off, every broad-recall entity was rejected. The legacy
+    ADR-0100 single-path branch never reranks *by design* rather than by degradation, so a
+    bound measured on reranker scores says nothing about its output. Rejecting on it is the
+    same error as applying an entity-document bound to turn documents.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_legacy_branch_is_not_gated(self, monkeypatch) -> None:
+        _arm_bound(monkeypatch, 0.50)
+        items, _, discards = _format_broad_recall_context(
+            _broad([_entity_row("e1", "Kafka")], relevance_scored=False)
+        )
+        assert len(items) == 1, "a bound measured on reranker scores rejected an unreranked path"
+        assert discards == ()
+
+    @pytest.mark.asyncio
+    async def test_the_same_fixture_is_gated_when_the_reranker_ran(self, monkeypatch) -> None:
+        """The companion assertion: the exemption is the branch, not the missing score."""
+        _arm_bound(monkeypatch, 0.50)
+        items, _, discards = _format_broad_recall_context(
+            _broad([_entity_row("e1", "Kafka")], relevance_scored=True)
+        )
+        assert items == []
+        assert [d[2] for d in discards] == [DropReason.RECALL_RELEVANCE_UNAVAILABLE]
+
+    @pytest.mark.asyncio
+    async def test_a_scored_item_still_gates_normally(self, monkeypatch) -> None:
+        """The exemption does not leak into the reranked path."""
+        _arm_bound(monkeypatch, 0.50)
+        low = _entity_row("e1", "Kafka") | {"relevance_score": 0.10, "relevance_model": SERVING}
+        items, _, _ = _format_broad_recall_context(_broad([low], relevance_scored=True))
+        assert items == []
+
+
 class TestSessionsAreUnchanged:
     """The reranker never scored a session summary row, and this ticket does not gate one."""
 
@@ -363,6 +407,7 @@ class TestSessionsAreUnchanged:
             entities_by_type={"Concept": [_entity_row("e1", "Kafka")]},
             recent_sessions=[{"session_id": "s1", "session_summary": "a talk"}],
             total_entity_count=1,
+            relevance_scored=True,
         )
         items, _, _ = _format_broad_recall_context(broad)
         assert [i["type"] for i in items] == ["session"]

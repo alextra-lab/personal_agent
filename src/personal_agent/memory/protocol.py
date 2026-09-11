@@ -149,12 +149,24 @@ class BroadRecallResult:
         total_entity_count: Total entities in memory.
         arms_failed: Recall arms, or resolution steps, that did not run to completion
             (ADR-0148 D1, FRE-1476). See :class:`MemoryRecallResult`.
+        relevance_scored: Whether the component whose calibrated bound governs this path
+            -- the reranker -- ran at all (ADR-0148 D4, FRE-1479).
+
+            False on the ADR-0100 single-path branch, which is reached when
+            ``multipath_recall_enabled`` is off and which never reranks *by design*
+            rather than by degradation. The broad-recall bound is measured on reranker
+            scores, so it describes nothing about that path, and applying it there would
+            reject every entity on the strength of a number that never saw them. Distinct
+            from a per-item ``relevance_score`` of None, which means the reranker ran and
+            did not score *that item* -- there the bound does bind, and the item is not
+            admitted.
     """
 
     entities_by_type: dict[str, list[dict[str, Any]]]
     recent_sessions: list[dict[str, Any]]
     total_entity_count: int
     arms_failed: tuple[str, ...] = ()
+    relevance_scored: bool = False
 
 
 @runtime_checkable

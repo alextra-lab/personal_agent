@@ -1,6 +1,6 @@
 # ADR-0150: The Worker Returns Data, Not Prose — a Typed Worker Registry, a Report Schema, and the Prompt That Was Never Configured
 
-**Status:** Proposed — 2026-09-11
+**Status:** Accepted — 2026-09-11 (owner)
 **Date:** 2026-09-11
 **Deciders:** Owner (design direction, the type-registry observation, and the go, 2026-09-11), adr seat at Fable 5.1 (author, owner-directed model), master (the measurements in FRE-1491)
 **Tags:** orchestrator, sub-agent, worker-contract, structured-output, prompt-cache, planner, expansion
@@ -825,3 +825,36 @@ are one per predicate with a format-sensitive stub, and the live no-format run i
 the voluntary-stop reply passes through the `TOOL_GAP` parser and the schema gains `tool_gap`;
 the full-fill probe is a committed fixture counted per deployment; AC-7 labels the allowed type
 set per query with a mixed-plan fixture; AC-8's combine check is structural.
+
+### 2026-09-11 — Accepted
+**Changed By:** master, on the owner's ruling of 2026-09-11
+**Reason:** Accepted the same day it was written. The owner's words: *"The prompt adr is approved.
+Queue to execute after t2 and t3 of appropriate and not superceded."*
+
+The implementation chain is sequenced behind ADR-0149's remaining work per that ruling: FRE-1492
+(T1) waits on **FRE-1484** and **FRE-1485**, ADR-0149's T2 and T3. That is not merely deference to
+ordering. This ADR revises four ADR-0149 clauses, and FRE-1485 rewrites
+`_forced_synthesis_tool_overrides` on the primary while this ADR's T3 rewrites `_forced_synthesis`
+on the worker. Building the revision before the thing it revises invites a rebuild.
+
+**The owner's caveat — "if appropriate and not superseded" — is live, not formal.** Two of this
+ADR's premises are under active challenge at the time of acceptance, and each ticket must be
+re-read against the outcome rather than started on the strength of this acceptance alone:
+
+- A codex design review of FRE-1484 returned two High findings against **ADR-0149 D4**, which this
+  ADR relies on and explicitly does not change. One of them is that the `eval_mode` default returns
+  a raw worker-report bundle instead of a synthesized answer for every headless incomplete fan-out.
+  **That would silently invalidate T4 (FRE-1495)**, this ADR's own decisive A/B, which runs on
+  `channel=EVAL`, depends on FRE-1484, and scores the *answer*. An amendment to ADR-0149 D4 is with
+  the adr seat.
+- The second finding disputes this ADR's claim at line 573 that deleting the combine worker makes
+  ADR-0149 D4's pause "fire on the failure it was built for". The counter-argument is that capped
+  workers are marked unsuccessful even with usable reports, which this ADR does not change. That is
+  a measurable question once T2 (FRE-1493) lands, not an arguable one now.
+
+Accepted with those two open, deliberately: neither touches D1's schema, D2's registry, D3's
+thoroughness levels or D5's prompt, which is the bulk of the work. Both touch T4 alone.
+
+**AC-8 holds at acceptance.** No limit is changed by this ADR, including the landing `max_tokens`.
+FRE-1487's study limits remain raised under the owner's separate direction and are unrelated to
+this decision.

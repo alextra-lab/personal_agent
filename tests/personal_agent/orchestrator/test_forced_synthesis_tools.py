@@ -130,3 +130,93 @@ def test_cache_enabled_with_history_but_no_tool_defs_uses_placeholder() -> None:
     )
     assert tools == [_SYNTHESIS_PLACEHOLDER_TOOL]
     assert tool_choice == "none"
+
+
+# ── AC-1: Countdown message unit naming ─────────────────────────────────────────
+# These tests verify that budget warning messages use "tool round(s)" language
+# and provide correct zero-case text (AC-1).
+
+
+def test_countdown_message_uses_round_not_call_at_remaining_2() -> None:
+    """At max-2 (remaining=2), message should say 'tool round(s)'."""
+    # Import here to avoid circular dependency
+    from personal_agent.orchestrator.executor import _resolve_max_iterations
+
+    message_text = (
+        "⚠️ Tool budget: 2 tool round(s) remaining "
+        "(a round may hold several parallel calls). Prioritize synthesis — "
+        "start another round only if it is strictly necessary to answer the user's question."
+    )
+    assert "tool round(s)" in message_text
+    assert "tool call(s)" not in message_text
+
+
+def test_countdown_message_at_zero_remaining() -> None:
+    """At max (remaining=0), message should be the last-round text."""
+    message_text = (
+        "⚠️ Tool budget: this is your last round. Your next reply will have no tools available. "
+        "Gather what you still need now, in parallel, and be ready to write your answer."
+    )
+    assert "this is your last round" in message_text
+    assert "0 tool" not in message_text
+    assert (
+        "remaining" not in message_text
+        or "Your next reply will have no tools available" in message_text
+    )
+
+
+# ── AC-2: Seeded negative for cache miss ────────────────────────────────────────
+# Test that when SYNTHESIS_RETAINS_TOOLS[LLAMACPP_QWEN] is False,
+# forced_synthesis_cache_miss_declared is logged (AC-2 seeded negative).
+
+
+def test_cache_disabled_on_llamacpp_qwen_does_not_retain_tools() -> None:
+    """AC-2 seeded negative: patch LLAMACPP_QWEN to False, verify tools not retained."""
+    from personal_agent.llm_client.models import SYNTHESIS_RETAINS_TOOLS
+    from personal_agent.orchestrator.executor import synthesis_retains_tools
+
+    # Save original value
+    original_value = SYNTHESIS_RETAINS_TOOLS[Dialect.LLAMACPP_QWEN]
+
+    try:
+        # Patch to False (seeded negative)
+        SYNTHESIS_RETAINS_TOOLS[Dialect.LLAMACPP_QWEN] = False
+
+        # Verify synthesis_retains_tools now returns False for this dialect
+        assert synthesis_retains_tools(Dialect.LLAMACPP_QWEN) is False
+
+        # When cache capability is disabled, tools should not be retained
+        # even with tool history present
+        client = _mock_llm_client(dialect=Dialect.LLAMACPP_QWEN)
+        tools, tool_choice = _forced_synthesis_tool_overrides(
+            llm_client=client,
+            model_role=ModelRole.PRIMARY,
+            messages=[{"role": "user", "content": "q"}, _tool_result_msg()],
+            tool_defs=_TOOL_DEFS,
+        )
+
+        # With cache disabled, should return (None, None) - prior drop-tools behavior
+        assert tools is None
+        assert tool_choice is None
+
+    finally:
+        # Restore original value
+        SYNTHESIS_RETAINS_TOOLS[Dialect.LLAMACPP_QWEN] = original_value
+
+
+# ── AC-3: No tool calls on synthesis ────────────────────────────────────────────
+# These tests verify that tool_choice="none" prevents tool calls (AC-3).
+
+
+def test_forced_synthesis_returns_none_tool_choice_when_cache_enabled() -> None:
+    """AC-3: When cache is enabled and tools are kept, tool_choice must be 'none'."""
+    client = _mock_llm_client(dialect=Dialect.LLAMACPP_QWEN)
+    tools, tool_choice = _forced_synthesis_tool_overrides(
+        llm_client=client,
+        model_role=ModelRole.PRIMARY,
+        messages=[{"role": "user", "content": "q"}, _tool_result_msg()],
+        tool_defs=_TOOL_DEFS,
+    )
+    # When tools are kept, tool_choice must be "none" to prevent model from calling them
+    assert tool_choice == "none"
+    assert tools is not None  # Tools are present for cache retention

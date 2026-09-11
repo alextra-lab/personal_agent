@@ -688,6 +688,29 @@ the model (Fable 5.1), and set its binding constraint — *"We dont raise limits
 properly implemented the behavior when the limits are reached."* AC-8 guards that, and the three
 values are unchanged.
 
+### 2026-09-11 — Accepted (four clauses revised by ADR-0150)
+**Changed By:** master, on merging ADR-0150 (`e59683b6`, PR #1128, FRE-1491)
+**Reason:** **This ADR stays Accepted.** ADR-0150 ("The worker returns data, not prose") revises
+four of its clauses and names them rather than diverging silently. Recorded here so a reader of
+this document is not misled by a clause ADR-0150 has superseded.
+
+| Clause here | Revised by ADR-0150 to |
+|---|---|
+| **AC-4a** — "the bytes are identical across two workers in one turn" | Identical across the workers of one **type** in one turn, and across turns. The tools array is part of the guarantee. |
+| **D3 move 1** — the round budget "appended to `_SUB_AGENT_SYSTEM_PROMPT`, rendered once from the setting" | The mechanism sentence stays in the system prompt. The **number** moves to the task message, rendered from the task's thoroughness level. |
+| **D3 terminal paths, "Completed"** — content is the report, `report_kind = synthesized`, if non-empty | For a **schema-backed** worker the no-tool-call reply is transcript notes, and the report comes from the dedicated report-writing call that follows. Unchanged for a text-reporting worker. |
+| **D3, "What 'report' means"** — "deterministic and weak on purpose: non-empty text" | For a **schema-backed** worker, ADR-0150 D1's validity table: `finish_reason`, parse, schema validation with `minLength`, a whitespace check, and at least one finding or gap. Still deterministic, no longer weak. Unchanged for a text-reporting worker, except ADR-0150 D6 adds the `finish_reason == "length"` row for **every** worker. |
+
+**Everything else in this ADR stands**, and ADR-0150 says so explicitly: the countdown, the
+reserve, the forced synthesis on the cap, the timeout, the ledger and the paths that return it,
+**D4's pause and trailer**, D6's cache form, and AC-8's three values.
+
+That last point is load-bearing for sequencing. FRE-1484 implements D4 and was at master's gate
+when ADR-0150 merged; ADR-0150's own T4 **depends on FRE-1484 landing**. The two are ordered, not
+in conflict.
+
+ADR-0150 is **Proposed**. These revisions bind when the owner accepts it.
+
 **D6 was verified independently before acceptance.** Master re-ran the cache probe against the
 live local backend rather than accepting the adr seat's numbers, because D6 reverses advice master
 had already given the implementing seat. Four calls on one prefix: tools present and warm, 2083

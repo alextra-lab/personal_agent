@@ -289,12 +289,22 @@ The primary is already told "Synthesize from available results and note any gaps
 verified factual errors. An instruction is not enforcement. Two mechanisms are, and neither is an
 instruction.
 
-**Mechanism 1 — a constraint pause before synthesis.** When the fan-out returns and any result has
-`success == False` or `report_kind == "ledger"`, or any task was skipped (FRE-1397), the executor
-opens an ADR-0076 pause of a new kind, `sub_agent_fanout_incomplete`, before the synthesis LLM call
-at `executor.py:5107`. The predicate reads `success` and `report_kind`, not `stop_reason` alone: a
-worker that completed with empty text carries `stop_reason == "completed"` and is still a failed
-landing.
+**Mechanism 1 — a constraint pause before synthesis.** *(Amended 2026-09-11; see Status Updates.
+The original predicate read `success == False or report_kind == "ledger"`.)* When the fan-out
+returns and any result has `report_kind` of `"ledger"` or `"narration"`, or any task was skipped
+(FRE-1397), the executor opens an ADR-0076 pause of a new kind, `sub_agent_fanout_incomplete`,
+before the synthesis LLM call at `executor.py:5107`. The predicate reads `report_kind` and the
+skipped list, never `success` and never `stop_reason` alone. Two facts are kept apart:
+`success == False` means the task was not finished; the pause guards a landing that **failed**. A
+worker that stopped at its cap or its reserve and wrote a `synthesized` report landed. Its task is
+incomplete, and that is disclosed by mechanism 2 and by the synthesis context, not by a pause. A
+worker that completed with empty text carries `stop_reason == "completed"` and `report_kind ==
+"ledger"`, and is still a failed landing. A worker whose report-writing call was cut carries
+`"narration"`, and is a failed landing the same way. Under the original predicate every research
+turn paused (the Negative Consequences below said so), the card offered no repair, and a stored
+dismissal of the expected cap case would have silenced the exceptional ledger case — the guard
+would have removed itself on first use, which is the ADR-0076 rule against pausing on a condition
+expected on every call.
 
 | `action_id` | Label | Effect |
 |---|---|---|
@@ -312,21 +322,32 @@ lifetime cap (`orchestrator_turn_lifetime_seconds`). That is how every ADR-0076 
 works: time spent waiting for a human is not work time. The 900 s work budget is unchanged. The
 lifetime cap still ends the turn.
 
-**Callers with no one to ask.** `_maybe_pause_for_constraint` waits the full
+**Callers with no one to ask.** *(Amended 2026-09-11; see Status Updates. The original default for
+a headless caller was `stop_and_show`.)* `_maybe_pause_for_constraint` waits the full
 `constraint_pause_timeout_seconds` (180 s) for a headless caller before applying the default
 (`executor.py:700-704`). An eval run with three incomplete workers would wait nine minutes for
 answers nobody will give. The call site therefore applies this rule before opening a pause: when
-`ctx.eval_mode` is true, read the stored preference for the eval identity; if it is one of this
-pause's actionable options (`answer_from_partial` or `stop_and_show`), apply it; otherwise — no
-preference, or the reserved `always_pause` — apply the safe default (`stop_and_show`) immediately.
-In `eval_mode` no pause event is emitted on any branch, and `always_pause` cannot open one, because
-`_maybe_pause_for_constraint` would otherwise register and wait on it (`executor.py:760-835`). An
-eval that wants synthesis over partial results stores `answer_from_partial` as its preference — the
-platform's existing mechanism, not a new flag. An interactive session with a momentarily absent socket keeps
+`ctx.eval_mode` is true, read the stored preference for the eval identity; if it is
+`stop_and_show`, apply it; otherwise — no preference, `answer_from_partial`, or the reserved
+`always_pause` — apply `answer_from_partial` immediately, with the trailer. In `eval_mode` no pause
+event is emitted on any branch, and `always_pause` cannot open one, because
+`_maybe_pause_for_constraint` would otherwise register and wait on it (`executor.py:760-835`). The
+option applied, and whether it came from a stored preference or the default, is recorded on the
+turn's evidence record (the route trace and the Captain's Log turn capture), so a study can read
+which policy each of its turns ran under. This is still the platform's existing mechanism and not a
+new flag; only the default and the record change. The reasons: a headless caller's artifact is the
+answer, and a study scores the answer — `stop_and_show` returns no answer and no synthesis call, so
+it changes both the measured artifact and the call count silently, and a stored preference is
+invisible to the study that runs under it. `stop_and_show` remains the safe default for a human
+card (ADR-0144); for a caller with no human, the trailer is the safety, because it is deterministic
+and the model cannot remove it. An interactive session with a momentarily absent socket keeps
 FRE-928's behaviour: the pause is registered and a reconnecting client is replayed the card.
 
-**Mechanism 2 — a deterministic trailer.** When `answer_from_partial` is chosen, the executor
-appends to the final answer, after generation and outside the model's control:
+**Mechanism 2 — a deterministic trailer.** *(Amended 2026-09-11: the trigger was "when
+`answer_from_partial` is chosen".)* Whenever a synthesis call runs over a fan-out in which any
+result has `success == False` or any task was skipped — with or without a pause, and whichever
+option was applied — the executor appends to the final answer, after generation and outside the
+model's control:
 
 ```
 — Research note: {k} of {n} sub-tasks did not complete ({task_name}: {stop_reason}, ...).
@@ -506,8 +527,11 @@ which FRE-1387 ruled out for the digest. With D6 the large-context call is cheap
   call generates a few tokens. Measured, not capped.
 - A three-worker local fan-out does not fit 900 s. Later workers take fewer rounds. That is the
   runway question D5 hands back with numbers.
-- A pause on every incomplete fan-out. Today that is every research turn. It is the observation
-  surface the owner asked for, and a stored preference silences it.
+- A pause on every fan-out with a failed landing — a `ledger`, a `narration`, or a skipped task.
+  *(Amended 2026-09-11. As first written this read "on every incomplete fan-out. Today that is
+  every research turn", which is the defect the amendment removes: a capped worker with a report
+  now proceeds with the trailer, and the pause is reserved for the exceptional case.)* A stored
+  preference still silences it, and that is now an informed choice about the exceptional case.
 - Additive ES fields on the sub-agent capture template (a reversible deploy class).
 - FRE-1389's "no wrap-up round" decision is reversed, with the reason stated.
 
@@ -518,8 +542,8 @@ which FRE-1387 ruled out for the digest. With D6 the large-context call is cheap
 | The synthesis call itself times out on a large context | Medium | D6 keeps prefill cached. The report is asked for under 400 words. A cut synthesis keeps its streamed partial on the local path, and the ledger follows on every path. |
 | The model ignores the countdown | Low | The countdown is advice. The enforcement is the tools-off call, which the model cannot bypass. |
 | `tool_choice="none"` is not honoured by a provider | Medium | Verified on llama-server (D6) and Anthropic (FRE-484). OVH is verified by T1 with the same probe before its dialect flag is trusted. A dialect with `SYNTHESIS_RETAINS_TOOLS[dialect] == False` gets the drop-tools form with the miss logged. A runtime rejection despite the declaration is a `ledger` and a config finding, never a retry. |
-| The D4 pause fires on an eval run with nobody to answer | Medium | `eval_mode` resolves the stored preference or applies the safe default at once, with no pause event and no 180 s wait (D4). |
-| The pause becomes noise | Low | Stored preference. The card carries the stop reasons, so silencing it is an informed choice. |
+| The D4 pause fires on an eval run with nobody to answer | Medium | `eval_mode` applies `answer_from_partial` with the trailer at once unless `stop_and_show` is stored, with no pause event and no 180 s wait, and records the applied option (D4 as amended). |
+| The pause becomes noise | Low | The amended predicate fires only on a failed landing, not on every capped worker. A stored preference remains, and the card carries the stop reasons, so silencing it is an informed choice about the exceptional case. |
 | Move 4 under-estimates a round and the synthesis still gets cut | Low | The estimate is the worker's own measured mean, conservative before the first round. A cut synthesis still returns its partial and its ledger. |
 | The ledger's queries disclose search terms to the primary's provider | Low | The primary already receives the worker's task text and digest over the same channel (`tools.yaml` reasoning for `search_memory`). No new destination. |
 
@@ -587,16 +611,22 @@ attempt. *Fails if* the retained call re-prefills its prefix, if the declared-fa
 sends tools, or if a rejection triggers a second call. The seeded negative for the retained form:
 drop the tools and the ratio falls to zero.
 
-**AC-7 — The caller cannot hide a failed landing.** *Check:* a fan-out with one worker returning
-`success == False`, `stop_reason == "cap"`, `report_kind == "synthesized"` — and, in a second
-fixture, `success == False`, `stop_reason == "completed"`, `report_kind == "ledger"` — emits a
-`sub_agent_fanout_incomplete` pause before the synthesis call.
-`stop_and_show` produces a response containing every worker's report and makes no model call.
-`answer_from_partial` produces a final answer whose last lines are the trailer naming the task and its
-stop reason. The same fan-out with `ctx.eval_mode = True` and no stored preference emits no pause
-event, applies `stop_and_show`, and resolves in under one second. *Fails if* a fan-out with all
-workers `completed` emits the pause or the trailer, if an incomplete one reaches the synthesis call
-without the pause, or if an eval fan-out waits on the pause timeout.
+**AC-7 — The caller cannot hide a failed landing.** *(Amended 2026-09-11 with D4.)* *Check,
+three fixtures:* **A** — one worker `success == False`, `stop_reason == "cap"`, `report_kind ==
+"synthesized"`: **no** pause is emitted, the synthesis call runs, and the final answer's last lines
+are the trailer naming the task and `cap`. **B** — one worker `success == False`, `stop_reason ==
+"completed"`, `report_kind == "ledger"`: a `sub_agent_fanout_incomplete` pause is emitted before
+the synthesis call. **C** — one worker `report_kind == "narration"`: the same pause. On B and C,
+`stop_and_show` produces a response containing every worker's report and makes no model call;
+`answer_from_partial` produces a final answer whose last lines are the trailer. Fixture B with
+`ctx.eval_mode = True` and no stored preference emits no pause event, applies
+`answer_from_partial`, runs the synthesis call, carries the trailer, records the applied option
+and its source on the turn's evidence, and resolves the decision in under one second; the same
+fixture with a stored `stop_and_show` for the eval identity applies it and makes no model call.
+*Fails if* a fan-out with all workers `completed` emits the pause or the trailer, if fixture A
+pauses, if B or C reaches the synthesis call without the pause, if an eval fan-out waits on the
+pause timeout, or if an eval fan-out with no stored preference returns a report bundle instead of
+an answer.
 
 **AC-8 — No limit changed.** *Check:* `sub_agent_max_tool_iterations`, `sub_agent.default_timeout`
 and `orchestrator_task_timeout_seconds` (the 900 s turn budget) are unchanged in the merged diff. *This is a guard, not a
@@ -622,9 +652,9 @@ must fail. A criterion that passes with its mechanism disabled is not measuring 
 | Move 4 (time reserve) | AC-3 |
 | Move 5 (forced synthesis) | AC-1 (zero markers, every narration line) |
 | Ledger on the killed paths | AC-2 |
-| D4 pause | AC-7 (an incomplete fan-out reaches synthesis unpaused) |
-| D4 trailer | AC-7 (no trailer after `answer_from_partial`) |
-| D4 `eval_mode` rule | AC-7 (an eval fan-out waits on the pause timeout) |
+| D4 pause | AC-7 (a fan-out with a ledger or a narration reaches synthesis unpaused) |
+| D4 trailer | AC-7 (no trailer on fixture A, or after `answer_from_partial`) |
+| D4 `eval_mode` rule | AC-7 (an eval fan-out waits on the pause timeout, or returns a bundle by default) |
 | D6 retained form | AC-6 (cache ratio falls to zero) |
 
 ---
@@ -688,29 +718,6 @@ the model (Fable 5.1), and set its binding constraint — *"We dont raise limits
 properly implemented the behavior when the limits are reached."* AC-8 guards that, and the three
 values are unchanged.
 
-### 2026-09-11 — Accepted (four clauses revised by ADR-0150)
-**Changed By:** master, on merging ADR-0150 (`e59683b6`, PR #1128, FRE-1491)
-**Reason:** **This ADR stays Accepted.** ADR-0150 ("The worker returns data, not prose") revises
-four of its clauses and names them rather than diverging silently. Recorded here so a reader of
-this document is not misled by a clause ADR-0150 has superseded.
-
-| Clause here | Revised by ADR-0150 to |
-|---|---|
-| **AC-4a** — "the bytes are identical across two workers in one turn" | Identical across the workers of one **type** in one turn, and across turns. The tools array is part of the guarantee. |
-| **D3 move 1** — the round budget "appended to `_SUB_AGENT_SYSTEM_PROMPT`, rendered once from the setting" | The mechanism sentence stays in the system prompt. The **number** moves to the task message, rendered from the task's thoroughness level. |
-| **D3 terminal paths, "Completed"** — content is the report, `report_kind = synthesized`, if non-empty | For a **schema-backed** worker the no-tool-call reply is transcript notes, and the report comes from the dedicated report-writing call that follows. Unchanged for a text-reporting worker. |
-| **D3, "What 'report' means"** — "deterministic and weak on purpose: non-empty text" | For a **schema-backed** worker, ADR-0150 D1's validity table: `finish_reason`, parse, schema validation with `minLength`, a whitespace check, and at least one finding or gap. Still deterministic, no longer weak. Unchanged for a text-reporting worker, except ADR-0150 D6 adds the `finish_reason == "length"` row for **every** worker. |
-
-**Everything else in this ADR stands**, and ADR-0150 says so explicitly: the countdown, the
-reserve, the forced synthesis on the cap, the timeout, the ledger and the paths that return it,
-**D4's pause and trailer**, D6's cache form, and AC-8's three values.
-
-That last point is load-bearing for sequencing. FRE-1484 implements D4 and was at master's gate
-when ADR-0150 merged; ADR-0150's own T4 **depends on FRE-1484 landing**. The two are ordered, not
-in conflict.
-
-ADR-0150 is **Proposed**. These revisions bind when the owner accepts it.
-
 **D6 was verified independently before acceptance.** Master re-ran the cache probe against the
 live local backend rather than accepting the adr seat's numbers, because D6 reverses advice master
 had already given the implementing seat. Four calls on one prefix: tools present and warm, 2083
@@ -725,3 +732,72 @@ including the tools-off behaviour that causes the miss above. That would have ad
 re-prefill to the last call a capped worker makes — on the OVH path that already dies at a 90 s
 per-call timeout. The review found it, and found the same defect live on the primary
 (`executor.py:3126`), now FRE-1485.
+
+### 2026-09-11 — Accepted (four clauses revised by ADR-0150)
+**Changed By:** master, on merging ADR-0150 (`e59683b6`, PR #1128, FRE-1491)
+**Reason:** **This ADR stays Accepted.** ADR-0150 ("The worker returns data, not prose") revises
+four of its clauses and names them rather than diverging silently. Recorded here so a reader of
+this document is not misled by a clause ADR-0150 has superseded.
+
+| Clause here | Revised by ADR-0150 to |
+|---|---|
+| **AC-4a** — "the bytes are identical across two workers in one turn" | Identical across the workers of one **type** in one turn, and across turns. The tools array is part of the guarantee. |
+| **D3 move 1** — the round budget "appended to `_SUB_AGENT_SYSTEM_PROMPT`, rendered once from the setting" | The mechanism sentence stays in the system prompt. The **number** moves to the task message, rendered from the task's thoroughness level. |
+| **D3 terminal paths, "Completed"** — content is the report, `report_kind = synthesized`, if non-empty | For a **schema-backed** worker the no-tool-call reply is transcript notes, and the report comes from the dedicated report-writing call that follows. Unchanged for a text-reporting worker. |
+| **D3, "What 'report' means"** — "deterministic and weak on purpose: non-empty text" | For a **schema-backed** worker, ADR-0150 D1's validity table: `finish_reason`, parse, schema validation with `minLength`, a whitespace check, and at least one finding or gap. Still deterministic, no longer weak. Unchanged for a text-reporting worker, except ADR-0150 D6 adds the `finish_reason == "length"` row for **every** worker. |
+
+**Everything else in this ADR stood at that point**, and ADR-0150 said so explicitly: the
+countdown, the reserve, the forced synthesis on the cap, the timeout, the ledger and the paths that
+return it, D4's pause and trailer, D6's cache form, and AC-8's three values. D4 did not stand for
+long: it was amended later the same day, for reasons of its own and not ADR-0150's — the next entry.
+
+FRE-1484 implements D4 and was at master's gate when ADR-0150 merged; ADR-0150's own T4
+**depends on FRE-1484 landing**. The two are ordered, not in conflict.
+
+ADR-0150 was **Accepted** by the owner the same day (PR #1133, 15:43 UTC), so these four
+revisions **bind**.
+
+### 2026-09-11 — Accepted (D4 amended at FRE-1484's gate)
+**Changed By:** adr seat (Fable 5.1), on master's request relaying the owner, after codex's
+gate review of PR #1129 (FRE-1484). PR #1132.
+**Reason:** FRE-1484 implemented D4 faithfully, and codex's plan-review at the gate found two
+HIGH findings against D4 itself. Both hold, and D4, its Negative Consequences bullet, its two
+risk rows and AC-7 are amended in place, each marked *(Amended 2026-09-11)* with the original
+text quoted. This is the third event in this ADR's sequence: accepted on 2026-09-10; four clauses
+revised by ADR-0150 on 2026-09-11 (the entry above, which touched D3, AC-4a and the validity
+predicate and left D4 alone); and D4 amended the same afternoon on the evidence from its own
+implementation's review.
+
+**The predicate.** As written, the pause fired on `success == False`, which every capped or
+time-reserve worker carries even with a good `synthesized` report, so every research turn paused
+(this ADR said so in its Negative Consequences as first written). Neither option repaired
+anything, and a stored dismissal of that expected case would have silenced the exceptional
+`ledger` case the guard exists for. The conflation was between "the task finished" (`success`)
+and "the landing failed" (`report_kind`). Now the pause reads `report_kind in {ledger,
+narration}` or a skipped task, and the trailer is appended whenever any worker did not complete,
+pause or no pause. ADR-0150's deletion of the combine worker was not an answer to this: it removes
+the overflow failure, not the cap mapping. ADR-0150's claim to the contrary at its Positive
+Consequences is conceded and reworded in PR #1132, and ADR-0150's acceptance entry records the
+challenge as resolved.
+
+**The headless default.** As written, an eval turn with an incomplete fan-out and no stored
+preference applied `stop_and_show` and returned a raw report bundle with no synthesis call.
+`app.py:2313-2324` sets `eval_mode` for every `channel=EVAL` request, so every automated research
+turn's artifact and call count changed silently, and a stored preference is invisible to the study
+that runs under it. The interaction with ADR-0150 T4 (FRE-1495) decided it: that A/B scores the
+answer, and in its prose arm cut landings are common, so the prose arm would have returned
+bundles while the schema arm returned answers. Now the headless default is `answer_from_partial`
+with the trailer, `stop_and_show` needs an explicitly stored preference, and the applied option
+and its source are recorded on the turn's evidence. No new flag.
+
+**What this changes for FRE-1484.** As built at PR #1129 it contradicts the amended D4 on four
+points: fixture A (cap + `synthesized`) pauses and must not; there is no `narration` fixture and
+one must pause; the trailer fires only after `answer_from_partial` and must fire on every
+incomplete fan-out that synthesises; and the headless default is `stop_and_show` and must be
+`answer_from_partial` with the applied option recorded. Its AC-1, AC-3 and AC-4 follow this
+amended text. Master holds PR #1129 and carries the conformance to build2; the adr seat did not
+touch that branch.
+
+**What this changes for FRE-1487.** Nothing in its artifact. Until FRE-1484 lands, the study's
+turns run with no pause and no trailer; the amended default produces that same synthesised
+answer plus the trailer. The deploy coupling master flagged on FRE-1487 that morning is removed.

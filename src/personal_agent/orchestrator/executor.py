@@ -6220,15 +6220,15 @@ async def step_llm_call(
         # Budget warning: when 2 calls from the per-TaskType limit, ask the LLM to wrap up
         elif not is_synthesizing and ctx.tool_iteration_count >= _resolve_max_iterations(ctx) - 2:
             _effective_max = _resolve_max_iterations(ctx)
-            _remaining = _effective_max - ctx.tool_iteration_count
-            if _remaining == 0:
+            _budget_remaining = _effective_max - ctx.tool_iteration_count
+            if _budget_remaining == 0:
                 budget_message = (
                     "⚠️ Tool budget: this is your last round. Your next reply will have no tools available. "
                     "Gather what you still need now, in parallel, and be ready to write your answer."
                 )
             else:
                 budget_message = (
-                    f"⚠️ Tool budget: {_remaining} tool round(s) remaining "
+                    f"⚠️ Tool budget: {_budget_remaining} tool round(s) remaining "
                     "(a round may hold several parallel calls). Prioritize synthesis — "
                     "start another round only if it is strictly necessary to answer the user's question."
                 )
@@ -6241,7 +6241,7 @@ async def step_llm_call(
             log.info(
                 "tool_budget_warning_injected",
                 trace_id=ctx.trace_id,
-                remaining=_remaining,
+                remaining=_budget_remaining,
             )
 
         if not is_synthesizing and tool_strategy != ToolCallingStrategy.DISABLED:
@@ -6553,7 +6553,7 @@ async def step_llm_call(
         # so the tighter of the two always wins.
         _deadline_remaining = _turn_deadline_remaining(ctx)
         _lifetime_remaining = _turn_lifetime_remaining(ctx)
-        _remaining = min(_deadline_remaining, _lifetime_remaining)
+        _remaining: float = min(_deadline_remaining, _lifetime_remaining)
         if _remaining <= 0:
             if _lifetime_remaining <= _deadline_remaining:
                 log.warning(

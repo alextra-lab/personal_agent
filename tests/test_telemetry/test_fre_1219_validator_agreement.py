@@ -148,8 +148,8 @@ class TestRemovalSites:
         monkeypatch.setattr(s, "reranker_enabled", False, raising=False)
 
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("t1", 1, kind="turn")])
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[RankedResult("t1", 1, kind="turn")])
         with patch("personal_agent.memory.service.log") as mock_log:
             await service._multipath_fused_recall("vision", path="broad", trace_id="t")
 

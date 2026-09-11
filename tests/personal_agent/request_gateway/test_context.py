@@ -12,6 +12,7 @@ from personal_agent.memory.proactive_types import (
     ProactiveMemorySuggestions,
     ProactiveScoreComponents,
 )
+from personal_agent.memory.protocol import EntityResolutionResult
 from personal_agent.request_gateway.context import assemble_context
 from personal_agent.request_gateway.types import (
     AssembledContext,
@@ -213,6 +214,9 @@ class TestAssembleContext:
         )
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=[])
+        )
         mock_adapter.suggest_relevant = AsyncMock(
             return_value=ProactiveMemorySuggestions(candidates=[cand])
         )
@@ -249,6 +253,9 @@ class TestAssembleContext:
         long_user_message = "considering the tradeoffs between options " * 20  # > 800 chars
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=["Athens"])
+        )
         mock_adapter.recall = AsyncMock(
             return_value=MagicMock(
                 entities=[],
@@ -334,7 +341,9 @@ class TestGraphAnchoredEntityHints:
         )
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
-        mock_adapter.resolve_message_entities = AsyncMock(return_value=["Melon", "Ice cream"])
+        mock_adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=["Melon", "Ice cream"])
+        )
         mock_adapter.suggest_relevant = AsyncMock(
             return_value=ProactiveMemorySuggestions(candidates=[])
         )
@@ -375,7 +384,9 @@ class TestGraphAnchoredEntityHints:
         )
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
-        mock_adapter.resolve_message_entities = AsyncMock(return_value=["Melon"])
+        mock_adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=["Melon"])
+        )
         mock_adapter.recall = AsyncMock(return_value=MagicMock(entities=[], episodes=[]))
 
         await assemble_context(
@@ -414,7 +425,9 @@ class TestGraphAnchoredEntityHints:
         )
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
-        mock_adapter.resolve_message_entities = AsyncMock(return_value=[])
+        mock_adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=[])
+        )
 
         result = await assemble_context(
             user_message="What should I cook tonight?",
@@ -503,6 +516,9 @@ class TestStanceEnrichment:
     def _mock_adapter_with_entity(self, name: str = "Python") -> AsyncMock:
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=[name])
+        )
         mock_adapter.recall = AsyncMock(
             return_value=MagicMock(
                 entities=[
@@ -631,6 +647,9 @@ class TestStanceEnrichment:
         """
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=["Alpha", "Beta"])
+        )
         mock_adapter.recall = AsyncMock(
             return_value=MagicMock(
                 entities=[

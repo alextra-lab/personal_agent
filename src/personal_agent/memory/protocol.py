@@ -175,6 +175,25 @@ class BroadRecallResult:
     relevance_scored: bool = False
 
 
+@dataclass(frozen=True)
+class EntityResolutionResult:
+    """Names the graph resolved from a message, or why resolution did not complete (FRE-1481).
+
+    ``resolve_message_entities`` used to return a bare ``list[str]``, so an empty list was
+    the same value for "the graph names nothing in this message" and "resolution failed" —
+    the ADR-0148 D1 collapse this type closes, mirroring ``ProactiveMemorySuggestions.failed``.
+
+    Args:
+        names: Mentioned entity names, best-first, in the backend's own casing.
+        failed: Whether resolution did not run to completion (ADR-0148 D1).
+        failure_cause: Short machine-readable cause when ``failed``, for the evidence record.
+    """
+
+    names: list[str]
+    failed: bool = False
+    failure_cause: str | None = None
+
+
 @runtime_checkable
 class MemoryProtocol(Protocol):
     """Abstract memory interface -- the Seshat contract.
@@ -307,7 +326,7 @@ class MemoryProtocol(Protocol):
         trace_id: str,
         user_id: UUID | None = None,
         authenticated: bool = False,
-    ) -> list[str]:
+    ) -> EntityResolutionResult:
         """Return known entity names the message literally mentions (FRE-1041).
 
         The entity-hint source for recall. Implementations ask the backend which of the
@@ -322,8 +341,9 @@ class MemoryProtocol(Protocol):
             authenticated: Whether the caller is authenticated.
 
         Returns:
-            Mentioned entity names, best-first, in the backend's own casing. On failure
-            implementations return empty rather than raising.
+            The resolved names, best-first, in the backend's own casing, or the failure
+            that kept resolution from completing (ADR-0148 D1, FRE-1481) — an empty
+            ``names`` list on its own no longer means "resolution failed."
         """
         ...
 

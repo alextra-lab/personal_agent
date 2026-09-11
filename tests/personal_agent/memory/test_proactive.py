@@ -82,6 +82,12 @@ def test_episode_payload_marks_long_user_message_fallback_summary() -> None:
 
 @pytest.mark.asyncio
 async def test_failure_fallback_empty_suggestions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1481, ADR-0148 D1: a raised DB failure is reported, not swallowed to an
+    empty result indistinguishable from an honest zero-row query. The cause is the
+    site-specific ``proactive_raw_query_failed`` -- a narrow catch at the call site
+    preserves it rather than letting it collapse into the function's generic
+    ``proactive_recall_failed`` outer catch.
+    """
     mock_service = MagicMock()
     mock_service.fetch_session_discussed_entity_names = AsyncMock(return_value=[])
     mock_service.suggest_proactive_raw = AsyncMock(side_effect=RuntimeError("neo4j"))
@@ -103,6 +109,39 @@ async def test_failure_fallback_empty_suggestions(monkeypatch: pytest.MonkeyPatc
         trace_id="t1",
     )
     assert result.candidates == []
+    assert result.failed is True
+    assert result.failure_cause == "proactive_raw_query_failed"
+
+
+@pytest.mark.asyncio
+async def test_an_honest_empty_raw_query_is_not_reported_as_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The companion: without it, the case above could pass for the wrong reason --
+    a zero-row query is an honest outcome, not a failure.
+    """
+    mock_service = MagicMock()
+    mock_service.fetch_session_discussed_entity_names = AsyncMock(return_value=[])
+    mock_service.suggest_proactive_raw = AsyncMock(return_value=[])
+
+    async def fake_embed(*_a: object, **_k: object) -> list[float]:
+        return [0.1, 0.2]
+
+    monkeypatch.setattr(
+        "personal_agent.memory.protocol_adapter.generate_embedding",
+        fake_embed,
+    )
+    adapter = MemoryServiceAdapter(service=mock_service)
+
+    result = await adapter.suggest_relevant(
+        user_message="hi",
+        session_entity_names=[],
+        session_topic_hint=None,
+        current_session_id="s1",
+        trace_id="t1",
+    )
+    assert result.candidates == []
+    assert result.failed is False
 
 
 @pytest.mark.asyncio

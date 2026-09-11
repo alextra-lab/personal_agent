@@ -185,10 +185,10 @@ class TestScoreReachesTheBoundary:
         core._resolve_item_texts = AsyncMock(return_value={"e1": "a", "e2": "b"})
         # Two distinct items on purpose: _rerank_fused_items returns early at
         # `len(items) <= 1`, so a one-item fused set is never scored at all.
-        core.multi_query_recall_arm = AsyncMock(
+        core._multi_query_recall_arm_strict = AsyncMock(
             return_value=[RankedResult("e1", 1), RankedResult("e2", 2)]
         )
-        core.lexical_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        core._lexical_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
         monkeypatch.setattr(get_settings(), "multiquery_arm_enabled", True, raising=False)
         monkeypatch.setattr(get_settings(), "lexical_arm_enabled", True, raising=False)
         monkeypatch.setattr(get_settings(), "structural_arm_enabled", False, raising=False)

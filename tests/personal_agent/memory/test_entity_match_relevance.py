@@ -25,6 +25,7 @@ from personal_agent.captains_log.turn_evidence import DropReason
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.fusion import FusedResult, MultiPathRecallResult, RankedResult
 from personal_agent.memory.models import MemoryQuery
+from personal_agent.memory.protocol import EntityResolutionResult
 from personal_agent.memory.reranker import RerankResult
 from personal_agent.memory.service import MemoryService
 from personal_agent.request_gateway.context import RELEVANCE_UNAVAILABLE_CAUSE
@@ -183,10 +184,10 @@ class TestTheScoreReachesTheBoundary:
         monkeypatch.setattr(get_settings(), "structural_arm_enabled", False, raising=False)
         core = _core()
         core._resolve_item_texts = AsyncMock(return_value={"e-elem-1": "a", "e-elem-2": "b"})
-        core.multi_query_recall_arm = AsyncMock(
+        core._multi_query_recall_arm_strict = AsyncMock(
             return_value=[RankedResult("e-elem-1", 1), RankedResult("e-elem-2", 2)]
         )
-        core.lexical_recall_arm = AsyncMock(return_value=[RankedResult("e-elem-1", 1)])
+        core._lexical_recall_arm_strict = AsyncMock(return_value=[RankedResult("e-elem-1", 1)])
 
         async def _fake_rerank(**kwargs: object) -> list[RerankResult]:
             return [
@@ -309,7 +310,9 @@ async def _drive(
 
     adapter = MagicMock()
     adapter.is_connected = AsyncMock(return_value=True)
-    adapter.resolve_message_entities = AsyncMock(return_value=["Kafka"])
+    adapter.resolve_message_entities = AsyncMock(
+        return_value=EntityResolutionResult(names=["Kafka"])
+    )
     adapter.get_current_stances = AsyncMock(return_value=[])
     adapter.recall = AsyncMock(
         return_value=MemoryRecallResult(

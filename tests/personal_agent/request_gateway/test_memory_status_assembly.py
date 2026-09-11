@@ -17,7 +17,11 @@ from personal_agent.memory.proactive_types import (
     ProactiveMemorySuggestions,
     ProactiveScoreComponents,
 )
-from personal_agent.memory.protocol import BroadRecallResult, MemoryRecallResult
+from personal_agent.memory.protocol import (
+    BroadRecallResult,
+    EntityResolutionResult,
+    MemoryRecallResult,
+)
 from personal_agent.request_gateway.budget import apply_budget
 from personal_agent.request_gateway.context import assemble_context
 from personal_agent.request_gateway.memory_status import (
@@ -39,7 +43,7 @@ def _adapter(*, stances: list[dict] | None = None) -> MagicMock:
     """An adapter that connects, resolves no entities, and holds the curated stances."""
     adapter = MagicMock()
     adapter.is_connected = AsyncMock(return_value=True)
-    adapter.resolve_message_entities = AsyncMock(return_value=[])
+    adapter.resolve_message_entities = AsyncMock(return_value=EntityResolutionResult(names=[]))
     adapter.get_current_stances = AsyncMock(return_value=stances if stances is not None else [])
     return adapter
 
@@ -191,7 +195,9 @@ class TestAc5PartialFailureIsNotAbsence:
             raising=False,
         )
         adapter = _adapter()
-        adapter.resolve_message_entities = AsyncMock(return_value=["Sailing"])
+        adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=["Sailing"])
+        )
         adapter.suggest_relevant = AsyncMock(
             return_value=ProactiveMemorySuggestions(
                 candidates=[], failed=True, failure_cause="zero_embedding"
@@ -207,6 +213,118 @@ class TestAc5PartialFailureIsNotAbsence:
         result = await _assemble(adapter)
 
         assert result.memory_status.recall.cause == "zero_embedding"
+        assert result.memory_status.status is MemoryStatus.UNAVAILABLE
+
+    @pytest.mark.asyncio
+    async def test_broad_recall_with_a_failed_multi_query_arm_is_unavailable(self) -> None:
+        """FRE-1481, AC-3: the same composition mechanism the dense-arm sibling test
+        above proves must also handle "multi_query" as the failed arm name -- proving
+        nothing in the composition path hardcodes "dense" specifically. The service-level
+        proof that a zero-vector variant actually puts "multi_query" in
+        ``MultiPathRecallResult.arms_failed`` lives in
+        ``test_multiquery_arm_reports_failure.py``; this is the sibling proof that the
+        name, once reported, reaches ``AssembledContext.memory_status.status``.
+        """
+        adapter = _adapter()
+        adapter.recall_broad = AsyncMock(
+            return_value=BroadRecallResult(
+                entities_by_type={"Topic": [{"name": "Sailing", "description": "a real record"}]},
+                recent_sessions=[],
+                total_entity_count=1,
+                arms_failed=("multi_query",),
+            )
+        )
+
+        result = await _assemble(adapter, task_type=TaskType.MEMORY_RECALL)
+
+        assert result.memory_status.recall.outcome is RecallOutcome.FAILED
+        assert result.memory_status.recall.cause == "recall_arms_failed:multi_query"
+        assert result.memory_status.status is MemoryStatus.UNAVAILABLE
+
+
+class TestEntityResolutionFailureIsNotAbsence:
+    """FRE-1481: ``resolve_message_entities`` reporting failure must compose the same
+    way a proactive or arm failure already does -- and the two must not overwrite each
+    other's cause when both fail (codex plan-review finding).
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_failed_resolution_is_not_rescued_by_proactive_success(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.proactive_memory_enabled",
+            True,
+            raising=False,
+        )
+        adapter = _adapter()
+        adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(
+                names=[], failed=True, failure_cause="entity_resolution_failed"
+            )
+        )
+        adapter.suggest_relevant = AsyncMock(
+            return_value=ProactiveMemorySuggestions(
+                candidates=[
+                    ProactiveMemoryCandidate(
+                        kind="entity",
+                        payload={"type": "entity", "name": "Sailing", "description": "a record"},
+                        relevance_score=0.9,
+                        score_components=ProactiveScoreComponents(
+                            embedding=0.9, entity_overlap=0.0, recency=0.0, topic_coherence=0.0
+                        ),
+                    )
+                ]
+            )
+        )
+
+        result = await _assemble(adapter)
+
+        assert result.memory_status.recall.cause == "entity_resolution_failed"
+        assert result.memory_status.status is MemoryStatus.UNAVAILABLE
+
+    @pytest.mark.asyncio
+    async def test_a_failed_resolution_reaches_the_entity_match_fallthrough(self) -> None:
+        """Proactive disabled: the failure must still surface on the fall-through path."""
+        adapter = _adapter()
+        adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(
+                names=[], failed=True, failure_cause="entity_resolution_failed"
+            )
+        )
+
+        result = await _assemble(adapter)
+
+        assert result.memory_status.recall.cause == "entity_resolution_failed"
+        assert result.memory_status.status is MemoryStatus.UNAVAILABLE
+
+    @pytest.mark.asyncio
+    async def test_both_resolution_and_proactive_failing_name_both_causes(
+        self, monkeypatch
+    ) -> None:
+        """Codex plan-review: the second failure must not silently overwrite the first
+        -- the evidence record should name every stage that failed.
+        """
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.proactive_memory_enabled",
+            True,
+            raising=False,
+        )
+        adapter = _adapter()
+        adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(
+                names=[], failed=True, failure_cause="entity_resolution_failed"
+            )
+        )
+        adapter.suggest_relevant = AsyncMock(
+            return_value=ProactiveMemorySuggestions(
+                candidates=[], failed=True, failure_cause="zero_embedding"
+            )
+        )
+
+        result = await _assemble(adapter)
+
+        assert result.memory_status.recall.cause == "entity_resolution_failed,zero_embedding"
         assert result.memory_status.status is MemoryStatus.UNAVAILABLE
 
 
@@ -256,7 +374,9 @@ class TestBudgetStageReportsItsDrop:
             raising=False,
         )
         adapter = _adapter()
-        adapter.resolve_message_entities = AsyncMock(return_value=["Sailing"])
+        adapter.resolve_message_entities = AsyncMock(
+            return_value=EntityResolutionResult(names=["Sailing"])
+        )
         adapter.suggest_relevant = AsyncMock(
             return_value=ProactiveMemorySuggestions(
                 candidates=[

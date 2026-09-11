@@ -9,12 +9,15 @@ Substrate-free: the arm methods and the reranker are mocked, so these run under
 * Operating point — an all-arms-miss recall yields an empty fused set (the
   "no prior discussions" condition), never a per-arm hard gate.
 
-The dense arm is mocked at ``_dense_recall_arm_strict``, not at the public
-``dense_recall_arm`` (FRE-1476): the core calls the strict variant so that an arm
-failure reaches ``arms_failed`` instead of arriving as an empty list. Mocking the
-public name here silently stopped intercepting when that changed, leaving these tests
-to run the real embedding call and record the dense arm as failed — they still passed,
-because none of their assertions read the value the dead mock was supplying.
+Every arm is mocked at its ``_..._strict`` name, not at its public one (FRE-1476 for
+dense; FRE-1481 for lexical, structural, and multi-query): the core gathers the strict
+variant of each arm so a failure reaches ``arms_failed`` instead of arriving as an empty
+list. Mocking a public name here silently stops intercepting the moment the gather
+switches to its strict sibling, leaving a test to run the real (unmocked) arm and record
+it as failed — it can still pass, because none of its assertions read the value the dead
+mock was supplying. This bit FRE-1481 during implementation: these mocks were still on
+the public names when the gather was switched, and several tests started failing for the
+wrong reason (a spurious lexical failure) until migrated.
 """
 
 from __future__ import annotations
@@ -58,10 +61,10 @@ class TestArmAssembly:
     async def test_two_arms_run_and_fuse_by_rank(self, monkeypatch) -> None:
         _enable(monkeypatch, multiquery=True, lexical=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(
+        service._multi_query_recall_arm_strict = AsyncMock(
             return_value=[RankedResult("e1", 1), RankedResult("e2", 2)]
         )
-        service.lexical_recall_arm = AsyncMock(
+        service._lexical_recall_arm_strict = AsyncMock(
             return_value=[RankedResult("e1", 1), RankedResult("t1", 3, kind="turn")]
         )
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
@@ -77,8 +80,8 @@ class TestArmAssembly:
         """An executed arm that returns nothing stays visible in telemetry (AC-1)."""
         _enable(monkeypatch, multiquery=True, lexical=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.lexical_recall_arm = AsyncMock(return_value=[])
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[])
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         assert set(result.arms_executed) == {"multi_query", "lexical"}
         assert result.per_arm_counts["lexical"] == 0
@@ -90,7 +93,9 @@ class TestArmAssembly:
         _enable(monkeypatch, multiquery=False, lexical=True)
         service = _service()
         service._dense_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("t1", 1, kind="turn")])
+        service._lexical_recall_arm_strict = AsyncMock(
+            return_value=[RankedResult("t1", 1, kind="turn")]
+        )
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         assert "dense" in result.arms_executed
         assert "multi_query" not in result.arms_executed
@@ -104,8 +109,8 @@ class TestArmAssembly:
         """A raising arm falls to arms_failed; recall still returns the other arm."""
         _enable(monkeypatch, multiquery=True, lexical=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.lexical_recall_arm = AsyncMock(side_effect=RuntimeError("boom"))
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._lexical_recall_arm_strict = AsyncMock(side_effect=RuntimeError("boom"))
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         assert "lexical" in result.arms_failed
         assert result.per_arm_counts["lexical"] == 0
@@ -127,8 +132,8 @@ class TestStructuralArm:
         """Flag on: structural runs and its RankedResult identity is preserved."""
         _enable(monkeypatch, multiquery=True, lexical=False, structural=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.structural_recall_arm_ranked = AsyncMock(
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._structural_recall_arm_ranked_strict = AsyncMock(
             return_value=[RankedResult("e2", 1, kind="entity")]
         )
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
@@ -141,14 +146,14 @@ class TestStructuralArm:
         """The shipped default (structural_arm_enabled=False): no behavior change."""
         _enable(monkeypatch, multiquery=True, lexical=True, structural=False)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.lexical_recall_arm = AsyncMock(return_value=[])
-        service.structural_recall_arm_ranked = AsyncMock(
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[])
+        service._structural_recall_arm_ranked_strict = AsyncMock(
             return_value=[RankedResult("e2", 1, kind="entity")]
         )
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         assert "structural" not in result.arms_executed
-        service.structural_recall_arm_ranked.assert_not_called()
+        service._structural_recall_arm_ranked_strict.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_structural_plus_dense_meets_ac1_floor(self, monkeypatch) -> None:
@@ -156,7 +161,7 @@ class TestStructuralArm:
         _enable(monkeypatch, multiquery=False, lexical=False, structural=True)
         service = _service()
         service._dense_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.structural_recall_arm_ranked = AsyncMock(
+        service._structural_recall_arm_ranked_strict = AsyncMock(
             return_value=[RankedResult("e2", 1, kind="entity")]
         )
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
@@ -169,8 +174,8 @@ class TestStructuralArm:
         _enable(monkeypatch, multiquery=False, lexical=True, structural=True)
         service = _service()
         service._dense_recall_arm_strict = AsyncMock(return_value=[RankedResult("solo", 1)])
-        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.structural_recall_arm_ranked = AsyncMock(
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._structural_recall_arm_ranked_strict = AsyncMock(
             return_value=[RankedResult("e1", 2, kind="entity")]
         )
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
@@ -182,8 +187,8 @@ class TestStructuralArm:
         """A raising structural arm falls to arms_failed; other arms still return."""
         _enable(monkeypatch, multiquery=True, lexical=False, structural=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.structural_recall_arm_ranked = AsyncMock(side_effect=RuntimeError("boom"))
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._structural_recall_arm_ranked_strict = AsyncMock(side_effect=RuntimeError("boom"))
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         assert "structural" in result.arms_failed
         assert result.per_arm_counts["structural"] == 0
@@ -202,8 +207,10 @@ class TestTailCaseMechanism:
     async def test_lexical_recovers_dense_family_miss(self, monkeypatch) -> None:
         _enable(monkeypatch, multiquery=True, lexical=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[])  # OOV for dense
-        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("t-oov", 1, kind="turn")])
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[])  # OOV for dense
+        service._lexical_recall_arm_strict = AsyncMock(
+            return_value=[RankedResult("t-oov", 1, kind="turn")]
+        )
         result = await service._multipath_fused_recall("perception", path="broad", trace_id="t")
         assert any(i.item_id == "t-oov" for i in result.items)
 
@@ -212,7 +219,7 @@ class TestTailCaseMechanism:
         """With the lexical arm off, the OOV target is not recovered (the off arm)."""
         _enable(monkeypatch, multiquery=True, lexical=False)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[])
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[])
         result = await service._multipath_fused_recall("perception", path="broad", trace_id="t")
         assert list(result.items) == []
 
@@ -225,10 +232,10 @@ class TestCapAndOperatingPoint:
         _enable(monkeypatch, multiquery=True, lexical=True)
         monkeypatch.setattr(get_settings(), "reranker_input_cap", 5, raising=False)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(
+        service._multi_query_recall_arm_strict = AsyncMock(
             return_value=[RankedResult(f"e{i}", i + 1) for i in range(10)]
         )
-        service.lexical_recall_arm = AsyncMock(
+        service._lexical_recall_arm_strict = AsyncMock(
             return_value=[RankedResult(f"x{i}", i + 1) for i in range(10)]
         )
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
@@ -240,8 +247,8 @@ class TestCapAndOperatingPoint:
         """Empty fused set = every arm missed (the 'no prior discussions' condition)."""
         _enable(monkeypatch, multiquery=True, lexical=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[])
-        service.lexical_recall_arm = AsyncMock(return_value=[])
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[])
         result = await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         assert list(result.items) == []
         assert result.fused_set_size == 0
@@ -259,8 +266,10 @@ class TestLatencyTelemetry:
     async def test_latency_ms_not_emitted(self, monkeypatch) -> None:
         _enable(monkeypatch, multiquery=True, lexical=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
-        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("t1", 1, kind="turn")])
+        service._multi_query_recall_arm_strict = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service._lexical_recall_arm_strict = AsyncMock(
+            return_value=[RankedResult("t1", 1, kind="turn")]
+        )
         with patch("personal_agent.memory.service.log") as mock_log:
             await service._multipath_fused_recall("vision", path="broad", trace_id="t")
         events = [
@@ -279,10 +288,10 @@ class TestRerankNeverGates:
     async def test_rerank_reorders_and_keeps_every_item(self, monkeypatch) -> None:
         _enable(monkeypatch, multiquery=True, lexical=True, reranker=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(
+        service._multi_query_recall_arm_strict = AsyncMock(
             return_value=[RankedResult("e1", 1), RankedResult("e2", 2), RankedResult("e3", 3)]
         )
-        service.lexical_recall_arm = AsyncMock(return_value=[])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[])
         service._resolve_item_texts = AsyncMock(return_value={"e1": "a", "e2": "b", "e3": "c"})
         # Reranker inverts the order with uniformly low scores — must not drop any.
         rerank_stub = AsyncMock(
@@ -301,10 +310,10 @@ class TestRerankNeverGates:
     async def test_rerank_failure_keeps_fused_order(self, monkeypatch) -> None:
         _enable(monkeypatch, multiquery=True, lexical=True, reranker=True)
         service = _service()
-        service.multi_query_recall_arm = AsyncMock(
+        service._multi_query_recall_arm_strict = AsyncMock(
             return_value=[RankedResult("e1", 1), RankedResult("e2", 2)]
         )
-        service.lexical_recall_arm = AsyncMock(return_value=[])
+        service._lexical_recall_arm_strict = AsyncMock(return_value=[])
         service._resolve_item_texts = AsyncMock(return_value={"e1": "a", "e2": "b"})
         with patch(
             "personal_agent.memory.reranker.rerank",

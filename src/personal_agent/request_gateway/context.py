@@ -671,7 +671,11 @@ async def _query_memory_for_intent(
     discards: ProactiveDiscards = ()
     # FRE-1476: bound before the try for the same reason `discards` is — the handler
     # below must report a failure, not a completed run that happened to find nothing.
-    failure_cause: str | None = None
+    # FRE-1481: a list, not a single cause, so a resolution failure and a subsequent
+    # proactive failure both survive rather than the second silently overwriting the
+    # first — the evidence record should name every stage that failed, not just the
+    # last one to report (`_arms_cause` one function above joins the same way).
+    failure_causes: list[str] = []
     try:
         if not await memory_adapter.is_connected():
             logger.warning("memory_unavailable", trace_id=trace_id)
@@ -720,12 +724,19 @@ async def _query_memory_for_intent(
         # discusses; and it emitted sentence-initial stopwords ("What", "Only") as
         # entity names. Asking the graph which of its entities the message names fixes
         # both directions at once, and cannot invent a name the graph does not hold.
-        entity_names = await memory_adapter.resolve_message_entities(
+        resolution = await memory_adapter.resolve_message_entities(
             user_message,
             trace_id=trace_id,
             user_id=user_id,
             authenticated=authenticated,
         )
+        entity_names = resolution.names
+        # FRE-1481: held across the fall-through exactly as the proactive failure below
+        # is — a resolution failure cannot be rescued into a completed run by whatever
+        # runs after it, since neither proactive nor entity-match can establish what the
+        # unresolved names would have gated.
+        if resolution.failed:
+            failure_causes.append(resolution.failure_cause or "entity_resolution_failed")
 
         # FRE-1060: populated *before* the emptiness test below, so the discards survive
         # the fall-through. A turn where every proactive candidate was discarded is exactly
@@ -753,7 +764,7 @@ async def _query_memory_for_intent(
             # cannot be rescued into a completed run by the entity-match path that follows
             # it — the turn still did not establish what the proactive population held.
             if suggestions.failed:
-                failure_cause = suggestions.failure_cause or "proactive_recall_failed"
+                failure_causes.append(suggestions.failure_cause or "proactive_recall_failed")
             if suggestions.candidates:
                 # FRE-1004: the payload is returned unchanged — the score rides a
                 # sibling map rather than the item, so nothing the model sees or the
@@ -769,7 +780,7 @@ async def _query_memory_for_intent(
                     [c.payload for c in suggestions.candidates],
                     scores,
                     RecallDiscardReport(discards, CandidatePopulation.OFFERED),
-                    _stage_report(failure_cause),
+                    _stage_report(",".join(failure_causes) if failure_causes else None),
                 )
 
         # Entity-name matching for analysis and other task types (Slice 2). Reached
@@ -781,12 +792,12 @@ async def _query_memory_for_intent(
         # cut, and `recall` truncates again internally, so the record must not claim its
         # population is complete even though the proactive drops it carries are named.
         if not entity_names:
-            # FRE-1476, a declared limit: `resolve_message_entities` converts its own
-            # failures to an empty list (`protocol_adapter.py`), so this branch cannot
-            # distinguish "the graph names nothing in this message" from "resolution
-            # failed". It reports COMPLETED, which over-claims in the second case. Fixing
-            # it belongs with the other adapter-level collapses, not in this ticket.
-            return None, {}, RecallDiscardReport(discards), _stage_report(failure_cause)
+            return (
+                None,
+                {},
+                RecallDiscardReport(discards),
+                _stage_report(",".join(failure_causes) if failure_causes else None),
+            )
 
         query = MemoryRecallQuery(
             entity_names=entity_names[:5],
@@ -908,7 +919,7 @@ async def _query_memory_for_intent(
             entity_scores,
             RecallDiscardReport((*discards, *entity_discards)),
             _stage_report(
-                failure_cause
+                (",".join(failure_causes) if failure_causes else None)
                 or _arms_cause(result.arms_failed)
                 # D4's no-score rule. An unreranked set establishes no relevance value at
                 # all, so the turn is UNAVAILABLE even though its items are admitted.

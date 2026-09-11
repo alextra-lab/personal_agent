@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
@@ -403,14 +404,24 @@ class TestEffectiveHardDeadline:
 
         assert _effective_hard_deadline(_spec(timeout=60.0), 60.0) == 85.0
 
-    def test_tools_scale_by_iteration_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_tools_scale_by_iteration_cap_plus_the_synthesis_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ADR-0149: N rounds AND the forced-synthesis call that follows them.
+
+        Was ``N`` budgets. A capped worker's last inference used to be one of the
+        N rounds; since ADR-0149 it is a separate tools-off call that writes the
+        report, so a net sized at N would cut exactly the call the ADR adds —
+        and the landing reserve, which wants ``mean_round + one budget`` of
+        headroom, would fire before the first round instead of near the end.
+        """
         from personal_agent.config import settings
         from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
 
         monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
 
         assert (
-            _effective_hard_deadline(_spec_with_tools(["run_python"], timeout=60.0), 60.0) == 300.0
+            _effective_hard_deadline(_spec_with_tools(["run_python"], timeout=60.0), 60.0) == 360.0
         )
 
     def test_explicit_hard_deadline_still_wins_if_larger(
@@ -846,20 +857,29 @@ class TestSubAgentToolLoop:
 
 
 class TestIterationCapNarrative:
-    """FRE-1399 — a capped worker must always report what it absorbed.
+    """FRE-1399, as ADR-0149 leaves it — a capped worker always reports something.
 
-    The iteration-cap terminal path used to keep only the CAPPING round's own
-    ``response_content``. That is frequently empty because a tool-call round
-    commonly carries no assistant text — which is why the same cap produced
-    1,677 characters in one real trace and 0 in another: purely a property of
-    whether that one round's completion happened to include text.
+    FRE-1399's own mechanism was to join every round's assistant text, because
+    the cap path used to keep only the CAPPING round's ``response_content`` and
+    that is frequently empty. ADR-0149 replaces the mechanism and keeps the
+    obligation: the cap now forces one tools-off call, so the report is written
+    rather than salvaged. The round texts survive as the ledger's "Model notes
+    per round" on the paths where no synthesis text exists, and
+    ``narrative_synthesized`` keeps its original meaning — the worker did work
+    and no model-written report describes it.
     """
 
     @pytest.mark.asyncio
-    async def test_recovers_earlier_round_text_even_when_capping_round_is_empty(
+    async def test_cap_forces_a_synthesis_call_that_writes_the_report(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC-1/AC-2: an earlier round's real text survives a later empty-text cap."""
+        """ADR-0149 D3 move 5: the call after the last round writes, it does not search.
+
+        Was FRE-1399's ``test_recovers_earlier_round_text_even_when_capping_round_is_empty``,
+        which asserted the terminal content was the joined round texts. That is
+        exactly what the ADR removed: on 2026-09-10 those joined texts were five
+        stage directions against 154,755 absorbed characters.
+        """
         from personal_agent.config import settings
 
         monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 2)
@@ -868,15 +888,15 @@ class TestIterationCapNarrative:
         mock_client.respond = AsyncMock(
             side_effect=[
                 _llm_response(
-                    "Found partial result X",
+                    "Now let me check the first source",
                     tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}],
                 ),
                 _llm_response(
                     "", tool_calls=[{"id": "c1", "name": "run_python", "arguments": "{}"}]
                 ),
-                _llm_response(
-                    "", tool_calls=[{"id": "c2", "name": "run_python", "arguments": "{}"}]
-                ),
+                # The cap fires BEFORE this call, so it is dispatched tools-off
+                # and the model writes instead of emitting a third tool batch.
+                _llm_response("Finding: the answer is 42, from source S."),
             ]
         )
 
@@ -894,19 +914,30 @@ class TestIterationCapNarrative:
                 spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
             )
 
-        assert result.success is False
-        assert "Found partial result X" in result.summary
+        assert result.stop_reason == "cap"
+        assert result.report_kind == "synthesized"
+        assert result.summary == "Finding: the answer is 42, from source S."
+        # The narration is NOT the report. That is the whole change.
+        assert "Now let me check" not in result.summary
         assert result.narrative_synthesized is False
+        # Stopping at the cap is not finishing the task (FRE-1389 AC-2).
+        assert result.success is False
+        # Two executed rounds plus the synthesis call — the same call count as
+        # before, with the last one writing rather than being discarded.
+        assert mock_client.respond.call_count == 3
+        assert result.tool_iterations == 2
 
     @pytest.mark.asyncio
-    async def test_multiple_rounds_of_text_are_joined_in_order(
+    async def test_round_texts_survive_in_the_ledger_when_synthesis_writes_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The join is genuine accumulation, not "keep the one non-empty round" —
+        """Every round's text is kept, in order, and reaches the ledger.
 
-        two or more rounds of real text must both survive, in order. A test with
-        only one non-empty round (above) cannot tell "recovered one earlier round"
-        apart from "correctly concatenates several".
+        Was ``test_multiple_rounds_of_text_are_joined_in_order``. The accumulation
+        it guards is still real and still load-bearing — it is now the ledger's
+        "Model notes per round" section rather than the report itself, so the
+        seeded distinction it existed for ("recovered one earlier round" versus
+        "concatenates several") is preserved on the path where it still applies.
         """
         from personal_agent.config import settings
 
@@ -923,9 +954,8 @@ class TestIterationCapNarrative:
                     "Beta finding",
                     tool_calls=[{"id": "c1", "name": "run_python", "arguments": "{}"}],
                 ),
-                _llm_response(
-                    "", tool_calls=[{"id": "c2", "name": "run_python", "arguments": "{}"}]
-                ),
+                # The synthesis call itself returns nothing.
+                _llm_response(""),
             ]
         )
 
@@ -943,7 +973,9 @@ class TestIterationCapNarrative:
                 spec=_spec_with_tools(["run_python"]), llm_client=mock_client, trace_id="t"
             )
 
-        assert result.narrative_synthesized is False
+        assert result.stop_reason == "cap"
+        assert result.report_kind == "ledger"
+        assert result.narrative_synthesized is True
         assert "Alpha finding" in result.summary
         assert "Beta finding" in result.summary
         assert result.summary.index("Alpha finding") < result.summary.index("Beta finding")
@@ -1176,8 +1208,15 @@ class TestPartialProgressOnKill:
         # The stub had appended at least one word by 0.15s (each step is 0.05s).
         assert result.full_output.strip() != ""
         assert result.summary == result.full_output
-        assert result.tokens_generated == len(result.full_output.split())
+        # ADR-0149: the content is now the ledger, which QUOTES the partial
+        # rather than being it. `tokens_generated` still counts what the model
+        # generated — counting the ledger's own deterministic prose would
+        # inflate every killed worker's figure with text this process wrote.
+        assert result.stop_reason == "deadline"
+        assert result.report_kind == "ledger"
+        assert "Partial text from the interrupted call:" in result.full_output
         assert result.tokens_generated > 0
+        assert result.tokens_generated < len(result.full_output.split())
         assert result.elapsed_generation_ms is not None
         assert result.elapsed_generation_ms >= 0
 
@@ -1336,8 +1375,14 @@ class TestSubAgentCaptureEmitted:
         assert len(captured) == 1
         cap = captured[0]
         assert cap.success is False
-        assert cap.truncation_ratio == 0.0
-        assert cap.full_output == ""
+        # ADR-0149: an upstream error is a declared terminal path with a ledger,
+        # not the empty record it wrote before. `full_output == ""` was the
+        # defect — a worker that raised looked identical to one that found
+        # nothing, on the one surface anyone reads afterwards.
+        assert cap.stop_reason == "error"
+        assert cap.report_kind == "ledger"
+        assert "boom" in cap.full_output
+        assert cap.truncation_ratio == 1.0
 
     @pytest.mark.asyncio
     async def test_capture_carries_tool_loop_activity(
@@ -1552,3 +1597,670 @@ class TestSubAgentCost:
 
         complete = [e for e in cap_logs if e.get("event") == "sub_agent_complete"]
         assert complete[0]["cost_usd"] == pytest.approx(0.005)
+
+
+# ==========================================================================
+# ADR-0149 — land before the cut (FRE-1482)
+# ==========================================================================
+
+
+_MARKERS = ("ZORPTAL", "QUVIREX", "MELDWAY")
+_SOURCES = ("brevik.example", "santolan.example", "kirrowe.example")
+
+
+def _seeded_tool_content(idx: int) -> str:
+    """A stub tool result carrying a coined marker and its coined source.
+
+    Coined so the test OWNS the token: a marker cannot be in the model's
+    parametric recall, so its absence from the report is a real failure rather
+    than an ambiguity. This is the distinction ADR-0147 drew when it rejected a
+    live lexical check and accepted a seeded one.
+    """
+    return f"Result: event {_MARKERS[idx]} takes place, per {_SOURCES[idx]}."
+
+
+class TestForcedSynthesisReportsEvidence:
+    """ADR-0149 AC-1 — a capped worker's report carries its findings, not its narration."""
+
+    @staticmethod
+    def _client(rounds: int) -> AsyncMock:
+        """A stub model that narrates while it has tools and reports when it does not."""
+        client = AsyncMock()
+        calls: list[dict[str, Any]] = []
+
+        async def _respond(**kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            if kwargs.get("tool_choice") == "none":
+                body = " ".join(
+                    f"Found {_MARKERS[i]} (source: {_SOURCES[i]})." for i in range(rounds)
+                )
+                return _llm_response(body)
+            idx = len([c for c in calls if c.get("tool_choice") != "none"]) - 1
+            return _llm_response(
+                f"Now let me check source {idx}.",
+                tool_calls=[{"id": f"c{idx}", "name": "web_search", "arguments": "{}"}],
+            )
+
+        client.respond = AsyncMock(side_effect=_respond)
+        client.dialect_for_role = MagicMock(return_value=None)
+        client.recorded_calls = calls
+        return client
+
+    @pytest.mark.asyncio
+    async def test_report_names_every_marker_and_no_narration_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 3)
+        client = self._client(rounds=3)
+        dispatched = {"n": 0}
+
+        async def _dispatch(**kwargs: Any) -> dict[str, Any]:
+            content = _seeded_tool_content(dispatched["n"])
+            dispatched["n"] += 1
+            return _dispatch_result(kwargs["tool_call_id"], "web_search", content)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(side_effect=_dispatch),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=client, trace_id="t"
+            )
+
+        assert result.stop_reason == "cap"
+        assert result.report_kind == "synthesized"
+        for marker, source in zip(_MARKERS, _SOURCES, strict=True):
+            assert marker in result.summary
+            assert source in result.summary
+        assert "Now let me check" not in result.summary
+
+        synthesis_call = client.recorded_calls[-1]
+        assert synthesis_call["tool_choice"] == "none"
+        assert synthesis_call["tools"] is not None
+        assert synthesis_call["tools"][0]["function"]["name"] == "web_search"
+
+    @pytest.mark.asyncio
+    async def test_seeded_negative_without_forced_synthesis(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Disable the mechanism and the criterion must fail (FRE-1482 AC-6).
+
+        Forced synthesis is disabled by making the loop's cap unreachable within
+        the stub's script, so the terminal content falls back to the round texts
+        the way it did before ADR-0149. Zero markers, every narration line —
+        which is exactly what the owner received on 2026-09-10.
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 3)
+        client = self._client(rounds=3)
+        dispatched = {"n": 0}
+
+        async def _dispatch(**kwargs: Any) -> dict[str, Any]:
+            content = _seeded_tool_content(dispatched["n"])
+            dispatched["n"] += 1
+            return _dispatch_result(kwargs["tool_call_id"], "web_search", content)
+
+        import personal_agent.orchestrator.sub_agent as sa
+
+        async def _no_synthesis(*args: Any, **kwargs: Any) -> Any:
+            state = args[0]
+            return sa._ToolLoopOutcome(
+                content="\n\n".join(state.round_texts),
+                stated_tool_gap=None,
+                stop_reason="cap",
+                report_kind="narration",
+            )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(side_effect=_dispatch),
+            ),
+            patch.object(sa, "_forced_synthesis", _no_synthesis),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=client, trace_id="t"
+            )
+
+        assert all(marker not in result.summary for marker in _MARKERS)
+        assert "Now let me check" in result.summary
+
+
+class TestBudgetAndCountdown:
+    """ADR-0149 AC-4 / AC-4a — the worker can see the budget it is spending."""
+
+    @pytest.mark.asyncio
+    async def test_budget_is_stated_in_the_system_prompt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-4a: move 1, rendered from the setting, before any round is spent."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 7)
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value=_llm_response("done"))
+
+        await run_sub_agent(spec=_spec(), llm_client=client, trace_id="t")
+
+        system = client.respond.call_args.kwargs["messages"][0]
+        assert system["role"] == "system"
+        assert "You have a budget of 7 tool round(s)." in system["content"]
+
+    @pytest.mark.asyncio
+    async def test_the_bytes_are_identical_across_workers_and_across_turns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-4a: one shared string, so nothing in it can drift per worker or per turn.
+
+        This is why the date lives in the task message instead: a date here would
+        change these bytes on every turn, and with them the cached prefix.
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        prompts: list[str] = []
+
+        for spec in (
+            _spec(task="worker one"),
+            _spec_with_tools(["run_python"]),
+            _spec(task="worker three"),
+        ):
+            client = AsyncMock()
+            client.respond = AsyncMock(return_value=_llm_response("done"))
+            await run_sub_agent(spec=spec, llm_client=client, trace_id="t")
+            prompts.append(client.respond.call_args.kwargs["messages"][0]["content"])
+
+        assert len(set(prompts)) == 1
+        # Including the grant-less workers: a fan-out can mix granted and
+        # grant-less tasks, and AC-4a admits no per-worker variation.
+        assert "You have a budget of 5 tool round(s)." in prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_countdown_follows_every_round_and_precedes_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-4: move 3, after each round's tool results, at the tail only."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 3)
+        # The loop mutates ONE message list in place, so call_args_list holds the
+        # same object on every call and shows only the final state. Snapshot it.
+        sent: list[list[dict[str, Any]]] = []
+        scripted = [
+            _llm_response("", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]),
+            _llm_response("", tool_calls=[{"id": "c1", "name": "run_python", "arguments": "{}"}]),
+            _llm_response("final"),
+        ]
+
+        async def _respond(**kwargs: Any) -> dict[str, Any]:
+            sent.append([dict(m) for m in kwargs["messages"]])
+            return scripted[len(sent) - 1]
+
+        client = AsyncMock()
+        client.dialect_for_role = MagicMock(return_value=None)
+        client.respond = AsyncMock(side_effect=_respond)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "x" * 500)),
+            ),
+        ):
+            await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=client, trace_id="t"
+            )
+
+        def _countdowns(messages: list[dict[str, Any]]) -> list[str]:
+            return [
+                str(m["content"])
+                for m in messages
+                if str(m.get("content")).startswith("Tool budget:")
+            ]
+
+        # None precedes the first round; one follows each round thereafter.
+        assert _countdowns(sent[0]) == []
+        assert len(_countdowns(sent[1])) == 1
+        assert len(_countdowns(sent[2])) == 2
+
+        first, second = _countdowns(sent[2])
+        assert "Tool budget: 2 of 3 round(s) remaining." in first
+        assert "Tool budget: 1 of 3 round(s) remaining." in second
+        # The characters absorbed are reported too, because context growth is
+        # what actually binds even though the enforced cap counts rounds.
+        assert "Absorbed so far: 500 characters" in first
+        assert "Absorbed so far: 1,000 characters" in second
+        # Tail append: the countdown directly follows the round's tool results,
+        # and nothing above it is rewritten (ADR-0081 D2).
+        assert sent[1][-1]["content"] == first
+        assert sent[1][-2]["role"] == "tool"
+        assert sent[2][: len(sent[1])] == sent[1]
+
+
+class TestWorkerKnowsTheDate:
+    """ADR-0149 AC-5 — move 2, the date travels a stated path into the task message."""
+
+    @pytest.mark.asyncio
+    async def test_task_message_carries_the_turn_timestamp(self) -> None:
+        from datetime import datetime, timezone
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value=_llm_response("done"))
+        spec = replace(_spec(), turn_started_at=datetime(2026, 9, 10, 12, 17, tzinfo=timezone.utc))
+
+        await run_sub_agent(spec=spec, llm_client=client, trace_id="t")
+
+        task_message = client.respond.call_args.kwargs["messages"][-1]["content"]
+        assert "## Current Date & Time" in task_message
+        assert "Current date: 2026-09-10" in task_message
+        # The date is NOT in the system prompt — that string must stay identical
+        # across turns (AC-4a).
+        system = client.respond.call_args.kwargs["messages"][0]["content"]
+        assert "Current date" not in system
+
+    @pytest.mark.asyncio
+    async def test_no_timestamp_omits_the_block_and_warns(self) -> None:
+        """Seeded negative for move 2, and the honest behaviour for a caller
+        outside a turn: no date is invented from ``now``.
+        """
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value=_llm_response("done"))
+
+        with structlog.testing.capture_logs() as logs:
+            await run_sub_agent(spec=_spec(), llm_client=client, trace_id="t", session_id="s")
+
+        task_message = client.respond.call_args.kwargs["messages"][-1]["content"]
+        assert "## Current Date & Time" not in task_message
+        warnings = [e for e in logs if e.get("event") == "sub_agent_no_turn_timestamp"]
+        assert len(warnings) == 1
+        assert warnings[0]["log_level"] == "warning"
+
+
+class TestLandingReserve:
+    """ADR-0149 AC-3 — the worker lands before it is cut."""
+
+    @pytest.mark.asyncio
+    async def test_reserve_stops_a_round_it_cannot_finish_and_writes_instead(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The third worker of a fan-out lands with fewer rounds rather than dying.
+
+        ``max_deadline_seconds`` is the shrinking per-worker budget FRE-1397
+        hands down. Set below ``mean_round_s + effective_timeout`` and the loop
+        must not start another round.
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        sent: list[dict[str, Any]] = []
+
+        async def _respond(**kwargs: Any) -> dict[str, Any]:
+            sent.append(kwargs)
+            if kwargs.get("tool_choice") == "none":
+                return _llm_response("Report from what I gathered.")
+            return _llm_response(
+                "searching",
+                tool_calls=[{"id": f"c{len(sent)}", "name": "run_python", "arguments": "{}"}],
+            )
+
+        client = AsyncMock()
+        client.respond = AsyncMock(side_effect=_respond)
+        client.dialect_for_role = MagicMock(return_value=None)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+                # Below 10 (mean estimate) + 10 (budget), so the reserve fires
+                # before any round starts.
+                max_deadline_seconds=15.0,
+            )
+
+        assert result.stop_reason == "time_reserve"
+        assert result.report_kind == "synthesized"
+        assert result.tool_iterations == 0
+        # Exactly one call, and it was the tools-off one.
+        assert len(sent) == 1
+        assert sent[0]["tool_choice"] == "none"
+        assert "Your time budget is nearly spent." in str(sent[0]["messages"][-1]["content"])
+
+    @pytest.mark.asyncio
+    async def test_seeded_negative_ample_budget_runs_rounds_normally(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With room to work, the reserve must not fire — or it measures nothing."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 2)
+        client = AsyncMock()
+        client.dialect_for_role = MagicMock(return_value=None)
+        client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response("done"),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "completed"
+        assert result.tool_iterations == 1
+
+
+class TestTerminalPathsDeclareAReport:
+    """ADR-0149 AC-2 — every terminal path yields a declared report, never silence."""
+
+    @staticmethod
+    def _two_rounds_then(raiser: Any) -> AsyncMock:
+        """A client that completes two tool rounds and then fails the way given."""
+        state = {"n": 0}
+
+        async def _respond(**kwargs: Any) -> dict[str, Any]:
+            state["n"] += 1
+            if state["n"] <= 2:
+                return _llm_response(
+                    f"round {state['n']}",
+                    tool_calls=[
+                        {
+                            "id": f"c{state['n']}",
+                            "name": "web_search",
+                            "arguments": '{"query": "mallorca events"}',
+                        }
+                    ],
+                )
+            raise raiser
+
+        client = AsyncMock()
+        client.respond = AsyncMock(side_effect=_respond)
+        client.dialect_for_role = MagicMock(return_value=None)
+        return client
+
+    @staticmethod
+    def _patches() -> Any:
+        return (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "web_search", "x" * 1500)),
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_per_call_timeout_after_two_rounds_yields_a_ledger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1482 AC-3: this is the OVH failure — 6 searches, zero characters."""
+        from personal_agent.config import settings
+        from personal_agent.llm_client.types import LLMTimeout
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        client = self._two_rounds_then(LLMTimeout("Timeout passed=90.0"))
+        layer_patch, dispatch_patch = self._patches()
+
+        with layer_patch, dispatch_patch:
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "timeout"
+        assert result.report_kind == "ledger"
+        # The ledger lists BOTH completed rounds with their arguments and sizes.
+        assert result.summary.count("web_search(") == 2
+        assert "mallorca events" in result.summary
+        assert "1,500 chars" in result.summary
+        # Never zero characters again.
+        assert len(result.full_output) > 0
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_yields_a_ledger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        client = self._two_rounds_then(RuntimeError("upstream 503"))
+        layer_patch, dispatch_patch = self._patches()
+
+        with layer_patch, dispatch_patch:
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        # The loop's own synthesis attempt is what catches this, so the stop
+        # reason is the path that triggered it.
+        assert result.report_kind == "ledger"
+        assert result.summary.count("web_search(") == 2
+        assert "upstream 503" in result.summary
+
+    @pytest.mark.asyncio
+    async def test_completed_with_empty_text_is_a_failed_landing(self) -> None:
+        """ADR-0149 D3: empty content is not a report, however politely it stopped."""
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value=_llm_response("   "))
+
+        result = await run_sub_agent(spec=_spec(), llm_client=client, trace_id="t")
+
+        assert result.stop_reason == "completed"
+        assert result.report_kind == "ledger"
+        assert result.success is False
+        assert "the model returned no text" in result.summary
+
+    @pytest.mark.asyncio
+    async def test_cancellation_writes_the_capture_and_still_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ADR-0149 D3: the ledger goes to the capture; the cancellation is re-raised."""
+        import personal_agent.orchestrator.sub_agent as sa
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+
+        client = self._two_rounds_then(asyncio.CancelledError())
+        layer_patch, dispatch_patch = self._patches()
+
+        with layer_patch, dispatch_patch, pytest.raises(asyncio.CancelledError):
+            await run_sub_agent(
+                spec=_spec_with_tools(["web_search"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert len(captured) == 1
+        assert captured[0].stop_reason == "cancelled"
+        assert captured[0].report_kind == "ledger"
+        assert captured[0].full_output.count("web_search(") == 2
+        # The per-round record the raise decision reads (ADR-0149 D5).
+        assert len(captured[0].rounds) == 2
+        assert captured[0].rounds[0]["tool"] == "web_search"
+        assert captured[0].rounds[0]["result_chars"] == 1500
+        assert captured[0].rounds[0]["wall_s"] is not None
+
+
+class TestSynthesisWireForm:
+    """ADR-0149 AC-6 — the declared form is the form actually sent."""
+
+    @staticmethod
+    def _capped_client(dialect: Any) -> AsyncMock:
+        calls: list[dict[str, Any]] = []
+
+        async def _respond(**kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            if kwargs.get("tools") is None or kwargs.get("tool_choice") == "none":
+                return _llm_response("the report")
+            return _llm_response(
+                "", tool_calls=[{"id": "c", "name": "run_python", "arguments": "{}"}]
+            )
+
+        client = AsyncMock()
+        client.respond = AsyncMock(side_effect=_respond)
+        client.dialect_for_role = MagicMock(return_value=dialect)
+        client.provider = "slm_local"
+        client.recorded_calls = calls
+        return client
+
+    @staticmethod
+    async def _run(client: AsyncMock) -> Any:
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            return await run_sub_agent(
+                spec=_spec_with_tools(["run_python"]), llm_client=client, trace_id="t"
+            )
+
+    @pytest.mark.asyncio
+    async def test_declared_true_keeps_the_tools_and_pins_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cache-preserving form: the array stays, the choice forbids calling."""
+        from personal_agent.config import settings
+        from personal_agent.llm_client.models import Dialect
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+        client = self._capped_client(Dialect.LLAMACPP_QWEN)
+
+        result = await self._run(client)
+
+        synthesis = client.recorded_calls[-1]
+        assert synthesis["tools"] is not None
+        assert synthesis["tool_choice"] == "none"
+        assert result.report_kind == "synthesized"
+
+    @pytest.mark.asyncio
+    async def test_declared_false_drops_the_tools_and_logs_the_miss(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Seeded negative for D6: patch the declaration and the wire form changes."""
+        import personal_agent.llm_client.models as models
+        from personal_agent.config import settings
+        from personal_agent.llm_client.models import Dialect
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+        monkeypatch.setattr(
+            models,
+            "SYNTHESIS_RETAINS_TOOLS",
+            {**models.SYNTHESIS_RETAINS_TOOLS, Dialect.LLAMACPP_QWEN: False},
+        )
+        client = self._capped_client(Dialect.LLAMACPP_QWEN)
+
+        with structlog.testing.capture_logs() as logs:
+            await self._run(client)
+
+        synthesis = client.recorded_calls[-1]
+        assert synthesis["tools"] is None
+        assert synthesis["tool_choice"] is None
+        misses = [e for e in logs if e.get("event") == "forced_synthesis_cache_miss_declared"]
+        assert len(misses) == 1
+        assert misses[0]["log_level"] == "warning"
+
+    @pytest.mark.asyncio
+    async def test_a_runtime_rejection_is_one_attempt_and_a_ledger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A provider that refuses the declared form is a config defect, not a retry.
+
+        ADR-0149 D6: there is no drop-tools fallback. The worker recovers from
+        its own limits; it does not retry the world.
+        """
+        from personal_agent.config import settings
+        from personal_agent.llm_client.models import Dialect
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+        calls: list[dict[str, Any]] = []
+
+        async def _respond(**kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            if kwargs.get("tool_choice") == "none":
+                raise ValueError("tool_choice 'none' is not supported")
+            return _llm_response(
+                "", tool_calls=[{"id": "c", "name": "run_python", "arguments": "{}"}]
+            )
+
+        client = AsyncMock()
+        client.respond = AsyncMock(side_effect=_respond)
+        client.dialect_for_role = MagicMock(return_value=Dialect.OVH_QWEN)
+        client.provider = "ovhcloud"
+
+        result = await self._run(client)
+
+        assert result.report_kind == "ledger"
+        assert len([c for c in calls if c.get("tool_choice") == "none"]) == 1
+        assert "ovhcloud" in result.summary
+        assert "ovh_qwen" in result.summary
+
+    @pytest.mark.asyncio
+    async def test_a_client_without_the_seam_still_keeps_its_tools(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defensive: `llm_client` is Any here and not always a LiteLLMClient.
+
+        An AsyncMock answers every attribute with a coroutine factory. Handing
+        that to the dialect table would raise a KeyError out of the worker,
+        turning a capped worker into a crashed one.
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+        client = self._capped_client(None)
+        del client.dialect_for_role
+
+        result = await self._run(client)
+
+        synthesis = client.recorded_calls[-1]
+        assert synthesis["tool_choice"] == "none"
+        assert result.report_kind == "synthesized"

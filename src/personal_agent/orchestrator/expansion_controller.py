@@ -21,6 +21,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -109,6 +110,17 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         )
     else:
         tools_rule = "no tools are currently available to sub-agents — always omit or leave empty"
+    # ADR-0149 D2: what does NOT vary per task today is scope. The planner wrote
+    # "research events in Mallorca for that week" with no knowledge that the
+    # worker had five rounds to do it in. Rendered live from the setting for the
+    # reason FRE-1389 AC-1 gave for the tool surface above — a hardcoded number
+    # here drifts from the value that binds, and nothing detects it.
+    budget_rule = (
+        f"Each sub-agent has at most {get_settings().sub_agent_max_tool_iterations} tool "
+        "round(s) before it must write its report (a round may hold several parallel "
+        "tool calls). Scope every task so a worker can answer it inside that budget. "
+        "Prefer one precise task over one broad one."
+    )
     return (
         "You are a task decomposition planner. Given a user query and a strategy, "
         "produce a JSON plan that breaks the query into independent sub-tasks.\n\n"
@@ -122,6 +134,7 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "- DECOMPOSE: 3-5 tasks + 1 recommendation task (max 6)\n"
         "- task names must be snake_case identifiers\n"
         f"- tools: {tools_rule}\n"
+        f"- {budget_rule}\n"
         "- Do NOT answer the question — only produce the plan"
     )
 
@@ -263,6 +276,7 @@ class ExpansionController:
         turn_deadline_monotonic: float | None = None,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        turn_started_at: datetime | None = None,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -305,6 +319,13 @@ class ExpansionController:
                 (FRE-229 / FRE-673). Threaded with ``user_id``; the two are read
                 together by the memory visibility filter and separating them
                 would half-open it.
+            turn_started_at: The turn's captured timestamp (ADR-0149 D3 move 2),
+                set on every dispatched spec so the worker is told today's date.
+                The primary has had this since FRE-960's volatile block; the
+                worker never did, and on 2026-09-10 one spent all five of its
+                rounds searching the wrong year. ``None`` (the default) leaves a
+                caller that has not been updated exactly as it is today, with the
+                worker logging that it was given no timestamp.
 
         Returns:
             ExpansionResult with plan, sub-agent results, and synthesis context.
@@ -363,6 +384,7 @@ class ExpansionController:
             turn_deadline_monotonic=turn_deadline_monotonic,
             user_id=user_id,
             authenticated=authenticated,
+            turn_started_at=turn_started_at,
         )
         result.sub_agent_results = sub_results
 
@@ -583,6 +605,7 @@ class ExpansionController:
         turn_deadline_monotonic: float | None = None,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        turn_started_at: datetime | None = None,
     ) -> list[SubAgentResult]:
         """Phase 2: Dispatch sub-agents sequentially, one task at a time.
 
@@ -629,6 +652,11 @@ class ExpansionController:
                 first attempt and fails on the retry.
             authenticated: Whether the turn carries a verified identity, threaded
                 on the same two paths as ``user_id``.
+            turn_started_at: The turn's captured timestamp (ADR-0149 D3 move 2),
+                set on every spec this method builds — the per-task specs below
+                and, through ``dataclasses.replace``, the replacement spec in
+                ``_maybe_redispatch_on_gap``. Both, or a retried worker loses the
+                date the first attempt had.
 
         Returns:
             List of SubAgentResult, in dispatch order — one entry per task that
@@ -679,6 +707,7 @@ class ExpansionController:
                 background=(f"Sub-task: {task.name}. Constraints: {', '.join(task.constraints)}"),
                 mode=task.mode,
                 denied_tools=grant.denied,
+                turn_started_at=turn_started_at,
             )
             for task, grant in zip(plan.tasks, grants, strict=True)
         ]

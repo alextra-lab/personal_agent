@@ -5051,6 +5051,10 @@ async def step_init(
                 # search_memory read falls to its fail-closed path.
                 user_id=ctx.user_id,
                 authenticated=ctx.authenticated,
+                # ADR-0149 D3 move 2: the same instant the primary's own volatile
+                # block renders from, so a worker and its caller never disagree
+                # about what day it is. The worker had no date at all before this.
+                turn_started_at=ctx.turn_started_at,
             )
 
             ctx.expansion_plan = expansion_result.plan

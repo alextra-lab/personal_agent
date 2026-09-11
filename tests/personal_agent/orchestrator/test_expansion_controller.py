@@ -1962,3 +1962,114 @@ class TestPlannerServerErrorFallback:
         assert result.plan.is_fallback is True
         assert result.degraded is False
         assert result.successful_count == 4
+
+
+# ==========================================================================
+# ADR-0149 — the planner is told the worker's budget, and the date travels
+# ==========================================================================
+
+
+class TestPlannerKnowsTheWorkerBudget:
+    """ADR-0149 D2 — what does not vary per task today is scope.
+
+    The planner wrote "research events in Mallorca for that week" with no
+    knowledge that the worker had five rounds to answer it in. The tool surface
+    is already rendered live from governance; the budget now is too.
+    """
+
+    def test_prompt_names_the_round_budget_from_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import get_settings
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        monkeypatch.setattr(get_settings(), "sub_agent_max_tool_iterations", 4)
+
+        prompt = _build_planner_system_prompt(["web_search"])
+
+        assert "Each sub-agent has at most 4 tool round(s)" in prompt
+        assert "Scope every task so a worker can answer it inside that budget." in prompt
+
+    def test_the_number_tracks_the_setting_rather_than_being_written_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Seeded negative for the live render: change the setting, change the prompt.
+
+        A hardcoded number here is the drift FRE-1389 AC-1 already ruled out for
+        the tool surface — it reads correct and silently stops being true.
+        """
+        from personal_agent.config import get_settings
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        monkeypatch.setattr(get_settings(), "sub_agent_max_tool_iterations", 9)
+
+        assert "at most 9 tool round(s)" in _build_planner_system_prompt(["web_search"])
+
+
+class TestTurnTimestampReachesEverySpec:
+    """ADR-0149 D3 move 2 — the date travels one stated path, end to end."""
+
+    @pytest.mark.asyncio
+    async def test_every_dispatched_spec_carries_the_turn_timestamp(self) -> None:
+        from datetime import datetime, timezone
+
+        from personal_agent.orchestrator.expansion_controller import ExpansionController
+
+        turn_started_at = datetime(2026, 9, 10, 12, 17, tzinfo=timezone.utc)
+        specs: list[Any] = []
+
+        async def _capture(**kwargs: Any) -> Any:
+            specs.append(kwargs["spec"])
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value="not-json")
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_capture,
+        ):
+            await ExpansionController().execute(
+                query="what is on this week",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="t",
+                messages=[],
+                turn_started_at=turn_started_at,
+            )
+
+        assert specs
+        assert all(spec.turn_started_at == turn_started_at for spec in specs)
+
+    @pytest.mark.asyncio
+    async def test_a_caller_that_passes_none_leaves_the_specs_dateless(self) -> None:
+        """Seeded negative, and the honest default for a caller not yet updated."""
+        from personal_agent.orchestrator.expansion_controller import ExpansionController
+
+        specs: list[Any] = []
+
+        async def _capture(**kwargs: Any) -> Any:
+            specs.append(kwargs["spec"])
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value="not-json")
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_capture,
+        ):
+            await ExpansionController().execute(
+                query="what is on this week",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="t",
+                messages=[],
+            )
+
+        assert specs
+        assert all(spec.turn_started_at is None for spec in specs)

@@ -168,6 +168,16 @@ class SubAgentCapture(BaseModel):
     # any round and built a deterministic description instead of quoting the model —
     # distinguishes "found nothing" from "did work, could not report it".
     narrative_synthesized: bool = False
+    # ADR-0149 D3/D5: the declared terminal path and the kind of report it
+    # produced, on EVERY path including a cancelled one. Before this, three of
+    # the four terminal paths wrote a record that could not be told apart from a
+    # worker that simply found nothing. `rounds` is the per-tool-call record —
+    # round, tool, argument size, result size, the round's wall-clock — and it is
+    # the evidence D5 requires of any proposal to raise the round cap, the
+    # per-call timeout or the turn budget. None of those three changed here.
+    stop_reason: str = "completed"
+    report_kind: str = "synthesized"
+    rounds: list[dict[str, Any]] = Field(default_factory=list)
 
     # Output — full text, the injected digest, and the truncation ratio
     full_output: str

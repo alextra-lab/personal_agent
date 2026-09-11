@@ -1,6 +1,6 @@
 # ADR-0148: Absence Must Be Reachable and Sayable
 
-**Status:** Proposed
+**Status:** Accepted — 2026-09-11 (owner)
 **Date:** 2026-09-10
 **Deciders:** Owner (design direction, 2026-09-09 and 2026-09-10), adr seat (author)
 **Tags:** memory, recall, grounding, context-assembly, orchestrator
@@ -825,3 +825,29 @@ That is recorded here for the owner rather than left implicit.
 
 **Template Version:** 1.1
 **Based On:** [Michael Nygard's ADR pattern](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions)
+
+### 2026-09-11 — Accepted
+**Changed By:** master, on the owner's ruling of 2026-09-11
+**Reason:** Accepted a day after it was written, and after most of it was already built. The owner
+was asked for this one acceptance specifically, because four of its implementations were merged
+and queued in a pending gateway rebuild while the design they implement had never been accepted.
+
+**State at acceptance.** D4 shipped as FRE-1477 and FRE-1480. D1/D2/D5 shipped as FRE-1478,
+merged 2026-09-11 (`0bcfe343`). D1's remainder is FRE-1481, in build. Nothing is deployed — the
+whole queue is held behind FRE-1487's study.
+
+**One deploy gate carried on FRE-1478.** A codex design review found that a swallowed
+entity-resolution failure surfaces as a *spoken* `NOTHING_RELEVANT`: `resolve_message_entities`
+converts every exception to an empty list, the empty-names branch reports `COMPLETED`, and zero
+admitted plus `COMPLETED` composes `NOTHING_RELEVANT`. `context.py:783` already declares this
+limit in a comment and defers it to FRE-1481 — which is precisely D1's remainder. So the ADR's own
+design closes it; the sequencing is that FRE-1478 must not deploy ahead of FRE-1481.
+
+**A premise correction this ADR is not responsible for, recorded because it touches the same
+ground.** FRE-1487's AC-5 assumed `channel=EVAL` gates knowledge-graph writes. It does not, and
+that is deliberate: FRE-523 (Done, owner decision) redesigned `eval_mode` suppression so the
+memory pipeline *runs* during eval runs and only external side effects are suppressed. A study
+turn on 2026-09-11 wrote 49 entities and a Turn node with `eval_mode: True`, exactly as FRE-523
+intends. AC-5 asks for a guarantee the system was deliberately built not to give, and the study's
+contamination control has to come from an isolated substrate or per-query cleanup instead. Master
+had reported this twice as a defect before finding FRE-523; it is not one.

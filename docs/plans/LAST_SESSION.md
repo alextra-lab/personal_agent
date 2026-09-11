@@ -1,90 +1,80 @@
-# Last session — 2026-09-08 into 09-09
+# Last session — 2026-09-10 into 09-11
 
 ## Doing / discussing  (≤5 sentences)
-The owner's own research turn failed three times on the same question, and chasing that produced
-most of the day. It opened a design conversation the owner drove — **memory belongs to the
-planner** — which became ADR-0147, merged Proposed. The owner corrected master twice, and the
-second is the most important thing on this page. Nine PRs merged; the reset gate then caught a
-ticket master had left half-closed.
+The owner's own research turn failed three times, and chasing it consumed the day and produced
+most of what shipped. It ended with **FRE-1487's study running live**: four sub-agent limits are
+raised on the deployed gateway, query 1 of six is done, and **the owner directed that the limits
+stay raised across the reset**. Read "The restore obligation" below before doing anything else.
+Two deploys are deliberately held behind the study.
 
 ## What was decided and why
 
-**The owner's correction: `sub_agent` was ALWAYS local. Master said otherwise and was wrong.**
-Master claimed ADR-0145 D1's `inherit` moved sub-agents from OVH to local, and built that on a
-*comment inside the `qwen3.8-flash-next` catalog entry* explaining why that entry does not
-self-pair. That is not the role binding. `git log` on `config/model_roles.yaml` settles it:
-`sub_agent` read `qwen3.8-flash-next-instruct` from `d044003c` until `inherit` landed. So the
-local model has been carrying every sub-agent since then. **This is a standing condition the
-owner's OVH selection revealed, not a regression we introduced.** Read a binding from the
-binding, never from a neighbouring comment.
+**The sub-agent was never incapable. It was interrupted.** Four hypotheses were tested and
+falsified against live evidence: the local model's capability (OVH failed *worse*, on a different
+limit), search quality (Exa live at ~1,900 chars/result — identical outcome), the wrong year (stated
+explicitly — identical outcome), and thin results forcing repeated searching (154,755 characters
+absorbed, same behaviour). What survived: **the worker was never told it had a budget.** It paced
+for an open-ended search and was guillotined. The primary — same model — gets a budget warning, a
+forced-synthesis pass and the date; the worker got none of the three.
 
-**The local model cannot do sub-agent work reliably, and this is now measured.** All 10
-`model_call_error` events on 2026-09-08 are on local models; zero on OVH, OpenAI or Anthropic.
-Both malformed tool calls — an empty required `query` — are local. The cleanest comparison is
-two turns on the same question in the same minute: local 17 searches / ~15 min / 3,445 chars;
-OVH 8 / 5.7 min / 5,094 chars. In-flight model calls **never exceeded 1** — the fan-out is fully
-serialised behind one llama-server. Not a general weakness: five short factual probes and a
-four-step arithmetic probe were all clean. The failure is specific to multi-round tool use.
-**Open decision:** bind `sub_agent` to `qwen3.8-27b-ovh`. Owner has not ruled.
+**Master was wrong twice and both errors are instructive.** First: master told the build seat to
+copy the primary's forced synthesis *verbatim*, including its tools-off behaviour. Fable's design
+review measured that dropping the tools array discards the entire cached prefix — master re-ran it
+independently (4 of 2,083 prefilled retained vs 1,832 dropped; ~7x on a 2k prefix). That call is the
+*last* one a capped worker makes, on the path that already dies at 90s under a cloud primary — the
+"fix" would have made the failing case fail more often. ADR-0149 D6 keeps the tools and pins
+`tool_choice="none"`. Second: master judged worker reports by character count, which the owner
+rejected as insufficient; the actual instrument is *what the text says*.
 
-**A master hypothesis was disproven by test, and the disproof found the real defect.** Master
-believed a client-side abort left the llama.cpp slot busy, poisoning the next call. Tested
-against the live server: three aborts, each followed immediately by a 200, plus a clean control.
-False. What it exposed instead: the SLM health probe is liveness-only, reads `up` on both sides
-of a 20-second window where every generation returned 503, and its own `degraded` branch depends
-on `model_loaded`, which is always `None` — a check that cannot fire. FRE-1474.
+**The owner's design review earned its cost, and that is the transferable lesson.** Master judged
+the fix "almost copy-and-paste". The owner insisted a more capable model review the thing being
+copied. It found a live defect in the primary nobody had noticed (`executor.py:3126`, now FRE-1485).
 
-**The owner's two challenges each moved ADR-0147, and the second retracted master's advice.**
-First: a sub-agent's task is a better recall query than the raw question — correct, and gateway
-recall runs one query on `user_message`. Second: *"subagents have low reasoning — are they
-capable of deciding they need a memory recall search?"* That killed master's pull-at-the-worker
-recommendation. The codebase already agreed: FRE-1390 put the planner on `PRIMARY` precisely
-because judgment is not worker work.
+**"No limit raises until the at-limit behaviour is implemented"** (owner, 09-10) shaped FRE-1482's
+scope and is now satisfied — the behaviour shipped, so FRE-1487 measures what the limits should be.
 
-**ADR-0147 then corrected three premises the owner and master had agreed.** The "cheap variant"
-is ~700 estimated tokens unbounded — *dearer* than the 516 full section — so D4 bounds it at
-20 items / 120 chars / 300 tokens. FRE-960 is a quality ceiling, not a blocker: `ctx.memory_context`
-is already in hand when the planner runs, so no design here issues a recall query. And
-`ctx.memory_context` is a **superset** of what the primary renders, so a digest over the raw set
-could show a worker a fact the answering model never sees.
+**Exa was added to SearXNG's `general` category at weight 3** (owner-directed; they bought it for
+this). Measured 15,701 chars vs 2,171 same-query. **This makes every `web_search` bill Exa** — the
+cost note in `config/governance/tools.yaml` ("only opt-in `categories=exa` reaches a paid vendor")
+is now stale and was not corrected.
 
-**FRE-1467 removed the ability to distinguish principals downstream** — a sub-agent's
-`TraceContext` is now identical to the primary's, so any code needing to tell them apart must be
-*passed* the principal, never infer it. FRE-1473's clamp does exactly that.
-
-**Escalated diffs merged without owner ultra** under the 2026-08-31 directive, except one: the
-`recall_personal_history` grant, which reversed a refusal the owner made twice. Owner ruled
-merge-and-bound. Live at 30 days / 10 turns, **pending confirmation** — those are master's numbers.
+**Two wedges cost ~13 hours between them, both self-inflicted by polling loops.** A hung
+`codex-rescue` kept Remote Control "busy" while the pane was idle (38 dispatch ticks blocked). And a
+seat's own watcher ran `pgrep -f "fre1479_reranker_calibration.calibrate"` — which **matched its own
+command line**, so the loop could never exit. Both memory files were updated.
 
 ## Worktrees — anything special
-Nothing unpushed. `telemetry/dispatch_state.json.bak-163808` is untracked and the owner's.
+`build` and `build2` hold merged branches that could not be deleted (worktree-held) — harmless.
+Three untracked `*.bak-*` files at root are deliberate backups, named below.
 
 ## Sequence position + drift
-**FRE-1426's thirteen ACs were master's declared first task at 17:35 and were never adjudicated.**
-It is still Awaiting Deploy. That is the one real drift of the day and it should lead the next
-session.
-
-The 2026-09-05 fast-track directive's retirement condition is **unmet**: it retires when FRE-1394
-reaches Done, and FRE-1394 is `Needs Approval` and never started. The previous session delta
-called the directive discharged because ADR-0145 completed — that is a session judgment, not the
-console's recorded condition. Do not retire it.
-
-Seats wedged on interactive dialogs **five times**, each cleared by hand. FRE-1457's detector
-shipped and is deployed, but its production path has never been observed firing — master cleared
-each wedge faster than the two-to-three tick threshold. Watch whether the next one surfaces alone.
+**The working tree is intentionally dirty.** `config/model_roles.yaml` carries the study edit, by
+owner direction. This is the one deviation from the normal clean-tree invariant and it is not drift.
 
 ## Answers for the fresh start
 
-- **First task?** Adjudicate **FRE-1426**. Owed since yesterday, still Awaiting Deploy.
-- **What is dispatchable?** **Nothing.** All three lanes computed NONE at 13:00. PR #1113
-  (FRE-1475) is the only work in flight. Progress is owner-gated now, not seat-gated.
-- **Read FRE-1118's 2026-09-09 comment before touching memory work.** The adr seat found it
-  half-shipped — the prompt prohibition landed in PR #955 on 2026-08-25 — which makes ADR-0147's
-  reservation partly stale and FRE-1122's run no longer the "pre-FRE-1118" baseline its own
-  ticket describes. Two owner questions sit unanswered there.
-- **What is blocked on the owner?** The 30/10 ceilings (FRE-1473) · ADR-0147 acceptance ·
-  FRE-1471/1472/1469/1474 approval · FRE-1359 · the `sub_agent` binding · FRE-1122's run ·
-  FRE-1427 AC-3 · FRE-1402's three live turns · FRE-1467 AC-2.
-- **Anything the owner parked?** The PWA context meter, explicitly **not** a priority until the
-  local model is usable again.
-- **Is `main` green?** Yes. Gateway rebuilt seven times today, healthy each time.
+- **First task?** Decide with the owner whether to continue FRE-1487 (five queries remain, ~1h
+  each) or restore the limits. **Do not silently revert** — the owner said keep them.
+- **The restore obligation.** Four limits are raised on the live gateway:
+  `AGENT_SUB_AGENT_MAX_TOOL_ITERATIONS=20` and `AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS=3600` (appended
+  to `.env`, marked "FRE-1487 STUDY ONLY — REVERT"), plus `max_tokens: 8192` and
+  `default_timeout: 600` on the `sub_agent` binding in `config/model_roles.yaml`. Baselines: 5, 900,
+  2048, 90. Backups: `.env.bak-fre1487-043817`, `config/model_roles.yaml.bak-fre1487`. Restoring
+  needs a `seshat-gateway` rebuild. **FRE-1487 AC-6 requires the study to change no limit** — the
+  raise is the owner's decision on the evidence.
+- **What the study has found so far (query 1, session `31e8f1a1`).** Worker 1: `stop_reason:
+  completed` at **6 rounds of 20** — the model stopped by itself, so *we were one round short*.
+  14,592 chars out, 201s generation. Worker 2: 7 rounds, 30% more absorbed (250,797), and **2.2x the
+  wall-clock** — one call exceeded 600s, then the outer deadline cut it at 1,213s; it returned a
+  2,780-char ledger rather than nothing. **Cost appears superlinear in accumulated context**, which
+  points at prefill and therefore cache behaviour on the worker path. That is the open question.
+- **Deploys held (do not ship until the limits are restored).** FRE-1480 is merged (`58660071`) and
+  undeployed. If FRE-1478 lands, hold it too.
+- **What is blocked on the owner?** FRE-1484 and FRE-1485 (ADR-0149 T2/T3, both `Needs Approval`,
+  both unblocked). FRE-1478's stream label. Whether to continue the study.
+- **A correction master owes the owner.** Master said Perplexity was unavailable, having checked only
+  SearXNG's engine list. `AGENT_PERPLEXITY_API_KEY` **is** set in the environment — there may be a
+  separate integration. Unverified; do not repeat the original claim.
+- **Is `main` green?** Yes. Gateway rebuilt six times, healthy each time. Disk went 84% → 38% after
+  a `docker builder prune` (94 GB reclaimed). `%commit` runs 107–126% daily with no swap — stable,
+  but it is why background tasks get OOM-killed at ~65% real usage.

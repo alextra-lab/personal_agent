@@ -3,12 +3,16 @@
 This module defines the schema for model configuration loaded from config/models.yaml.
 """
 
+from collections.abc import Mapping
 from enum import Enum
 from typing import Literal
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from personal_agent.llm_client.priority import InferencePriority
+
+logger = structlog.get_logger(__name__)
 
 
 class ToolCallingStrategy(str, Enum):
@@ -176,6 +180,62 @@ DIALECT_VALUE_DOMAINS: dict[Dialect, dict[str, frozenset[str]]] = {
         "reasoning_effort": frozenset({"none", "low", "medium", "high", "xhigh"})
     },
 }
+
+
+#: Whether a dialect's forced-synthesis call keeps its ``tools`` array and pins
+#: ``tool_choice="none"`` (ADR-0149 D6), rather than dropping the array.
+#:
+#: Tools render first in a chat template's prefix, so changing them invalidates
+#: everything after. Dropping the array therefore discards the entire cached
+#: prefix, and the synthesis call is the LAST call a capped worker makes — the one
+#: holding the largest prefix it will ever hold. Measured, never assumed:
+#:
+#: - ``LLAMACPP_QWEN`` — ADR-0149 D6, re-run independently by master before
+#:   acceptance. Tools retained with ``"none"``: 4 of 4,191 prefilled. Dropped:
+#:   3,915 of 3,915, 9.8 s. Prefill runs at ~350 tok/s there, so a worker holding
+#:   40k tokens would pay ~110 s to re-prefill, past its 90 s budget.
+#: - ``ANTHROPIC_ADAPTIVE`` / ``ANTHROPIC_BUDGET`` — FRE-484.
+#: - ``OVH_QWEN`` / ``OPENAI_GPT5`` — FRE-1482's own five-call probe, 2026-09-11.
+#:   OpenAI reports it directly: 5,504 of 5,863 cached with tools retained, 0 with
+#:   them dropped. OVH's gateway declares no cache metrics, so its evidence is
+#:   latency: 0.85 s retained against 5.90 s dropped, the same direction and
+#:   magnitude. Both emitted no tool call under ``tool_choice="none"``.
+#:
+#: A dialect declared ``False`` gets the drop-tools form with the miss logged. A
+#: provider that rejects ``tool_choice="none"`` at runtime despite a ``True``
+#: declaration is a configuration defect, not a reason to retry without tools.
+SYNTHESIS_RETAINS_TOOLS: Mapping[Dialect, bool] = {
+    Dialect.LLAMACPP_QWEN: True,
+    Dialect.OVH_QWEN: True,
+    Dialect.OPENAI_GPT5: True,
+    Dialect.ANTHROPIC_ADAPTIVE: True,
+    Dialect.ANTHROPIC_BUDGET: True,
+}
+
+
+def synthesis_retains_tools(dialect: Dialect | None) -> bool:
+    """Whether this dialect's forced-synthesis call keeps its tools (ADR-0149 D6).
+
+    Args:
+        dialect: The resolved dialect of the model being dispatched to, or
+            ``None`` when the deployment is not catalog-backed.
+
+    Returns:
+        ``True`` to keep the ``tools`` array and pin ``tool_choice="none"``,
+        ``False`` to drop the array. An unresolved dialect returns ``True`` and
+        logs ``synthesis_dialect_unresolved`` at WARNING — the safe direction,
+        because the cache-preserving form costs nothing on a provider that would
+        have tolerated either, while the other way round costs a full re-prefill
+        on the one call a capped worker cannot afford to lose.
+    """
+    if dialect is None:
+        logger.warning(
+            "synthesis_dialect_unresolved",
+            retains_tools=True,
+            reason="no dialect resolved for this deployment; taking the cache-preserving form",
+        )
+        return True
+    return SYNTHESIS_RETAINS_TOOLS[dialect]
 
 
 def dialect_accepts(dialect: Dialect, param: str) -> bool:

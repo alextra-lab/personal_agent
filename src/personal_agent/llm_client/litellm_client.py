@@ -893,6 +893,37 @@ class LiteLLMClient:
             return None
         return self.model_def.resolve_dialect(provider_def)
 
+    def dialect_for_role(self, role: "ModelRole") -> Dialect | None:
+        """This client's resolved wire vocabulary (ADR-0149 D6).
+
+        Exposed because the sub-agent's forced-synthesis call must know, *before*
+        it dispatches, whether to keep its ``tools`` array and pin
+        ``tool_choice="none"`` or to drop the array — the difference between a
+        cached prefix and a full re-prefill on the last call a capped worker
+        makes. The resolution otherwise happens privately inside the dispatch
+        branches, after the decision has already been taken.
+
+        Args:
+            role: The role this caller is dispatching as. A client is bound to one
+                deployment at construction, so this does not select the
+                deployment — it is the caller naming its own role, kept in the
+                signature so the ADR's `dialect_for_role(role)` seam reads the
+                same at every call site and so a future multi-deployment client
+                needs no signature change. It is recorded on the resolution log
+                line and nothing else.
+
+        Returns:
+            The resolved :class:`Dialect`, or ``None`` for a client built without
+            a definition — a direct construction outside the factory. Callers
+            pass that ``None`` straight to
+            :func:`~personal_agent.llm_client.models.synthesis_retains_tools`,
+            which decides what an unresolved dialect means.
+        """
+        from personal_agent.config import load_model_config  # noqa: PLC0415
+
+        provider_def = load_model_config().providers.get(self.provider)
+        return self._resolve_dialect(provider_def)
+
     def _forwards_effort_natively(self) -> bool:
         """Whether litellm's own map already carries ``reasoning_effort`` for this model.
 

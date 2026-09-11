@@ -51,11 +51,12 @@ See: docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 4.6
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -64,12 +65,19 @@ import structlog
 
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
 from personal_agent.config import settings
+from personal_agent.llm_client.models import Dialect, synthesis_retains_tools
 from personal_agent.llm_client.types import GenerationProgress, LLMTimeout
+from personal_agent.orchestrator.prompts import render_current_datetime_block
 from personal_agent.orchestrator.sub_agent_approval import (
     get_sub_agent_approval_broker,
     resolve_sub_agent_approval_requirements,
 )
-from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
+from personal_agent.orchestrator.sub_agent_types import (
+    SubAgentReportKind,
+    SubAgentResult,
+    SubAgentSpec,
+    SubAgentStopReason,
+)
 from personal_agent.orchestrator.tool_dispatch import (
     dispatch_tool_call,
     get_shared_tool_execution_layer,
@@ -118,6 +126,42 @@ _SUB_AGENT_SYSTEM_PROMPT = (
     "have, then end your response with a final line reading exactly "
     f'"{_TOOL_GAP_PREFIX} <tool_name>" (one tool name, no other text on that line).'
 )
+
+# ADR-0149 D3 move 1: the worker is told its budget before it spends any of it.
+# Rendered from the setting rather than hardcoded — FRE-1389 AC-1 already ruled a
+# hardcoded number out for the tool surface, and the same drift applies here.
+_BUDGET_BLOCK_TEMPLATE = (
+    "You have a budget of {n} tool round(s). A round is one reply that calls tools; "
+    "it may call several tools in parallel. After each round you will be told how "
+    "much budget remains. When the budget is spent, your next reply will have no "
+    "tools available, and you must write your report from the results you already hold."
+)
+
+# ADR-0149 D3 move 3: appended after every round's tool results, at the tail only.
+# Characters are reported alongside rounds because context growth is what actually
+# binds (D1), even though the enforced cap stays round-denominated.
+_COUNTDOWN_TEMPLATE = (
+    "Tool budget: {remaining} of {n} round(s) remaining. Absorbed so far: "
+    "{chars:,} characters of tool output. Time remaining: about {seconds} s."
+)
+
+# ADR-0149 D3 move 5: the forced-synthesis instruction. The text is advice; the
+# absence of callable tools is the enforcement.
+_SYNTHESIS_INSTRUCTION = (
+    "{opening} Do NOT call any more tools. Using only the tool results already in "
+    "this conversation, write your report now. State every fact you found that "
+    "answers the task, each with the source it came from. Then list what you "
+    "searched for and did not find. Keep the report under 400 words. "
+    "Output format: {output_format}."
+)
+_SYNTHESIS_OPENING_CAP = "Your tool budget is spent."
+_SYNTHESIS_OPENING_RESERVE = "Your time budget is nearly spent."
+
+# Bound on the tool arguments the ledger reproduces, per call. The ledger exists so
+# the primary can re-run a query, so the arguments must survive; but they are
+# model-authored and a `run_python` body has no natural size. 1,000 characters is far
+# above any real search query, and a clipped value says so rather than looking whole.
+_LEDGER_ARGS_CAP_CHARS = 1_000
 
 
 def _extract_call_cost(response: Any) -> float:
@@ -277,7 +321,20 @@ def _effective_hard_deadline(spec: SubAgentSpec, effective_timeout: float) -> fl
     )
     if not spec.tools:
         return single_call_deadline
-    return max(single_call_deadline, effective_timeout * settings.sub_agent_max_tool_iterations)
+    # `+ 1` for the forced-synthesis call (ADR-0149 D3 move 5). Before it, a capped
+    # worker's last inference WAS one of the N rounds, so N budgets sized the loop
+    # exactly. Now the loop makes at most N rounds AND one call that writes the
+    # report, so a net sized at N would be guaranteed to cut the very call this
+    # ADR adds — and the landing reserve, which asks for `mean_round + one budget`
+    # of headroom, would fire before the first round rather than near the end.
+    # This is the derived safety net, not one of the three values AC-8 protects:
+    # the round cap, the role's generation budget and the turn budget are
+    # unchanged, and `max_deadline_seconds` still shrinks this via min() so a
+    # fan-out can never outlive its turn.
+    return max(
+        single_call_deadline,
+        effective_timeout * (settings.sub_agent_max_tool_iterations + 1),
+    )
 
 
 def _extract_stated_tool_gap(content: str) -> tuple[str, str | None]:
@@ -354,6 +411,7 @@ def _emit_sub_agent_capture(
     trace_id: str,
     session_id: str | None,
     eval_mode: bool = False,
+    rounds: list[dict[str, Any]] | None = None,
 ) -> None:
     """Build and write the per-sub-agent audit record (FRE-505), best-effort.
 
@@ -368,6 +426,10 @@ def _emit_sub_agent_capture(
         trace_id: Parent request trace identifier.
         session_id: Originating session id.
         eval_mode: True when the parent turn originated from an eval run (FRE-523).
+        rounds: Per-tool-call record — round, tool, argument size, result size and
+            the round's wall-clock (ADR-0149 D5). This is the evidence a proposal
+            to raise any of the three limits must cite; a proposal without it
+            fails that ADR's own bar. ``None`` normalizes to an empty list.
     """
     full_output_chars = len(result.full_output)
     digest_chars = len(result.summary)
@@ -389,6 +451,9 @@ def _emit_sub_agent_capture(
         refused_tool_attempts=list(result.refused_tool_attempts),
         stated_tool_gap=result.stated_tool_gap,
         narrative_synthesized=result.narrative_synthesized,
+        stop_reason=result.stop_reason,
+        report_kind=result.report_kind,
+        rounds=rounds if rounds is not None else [],
         full_output=result.full_output,
         full_output_chars=full_output_chars,
         injected_digest=result.summary,
@@ -467,72 +532,220 @@ def _warn_if_narrative_synthesized(
     )
 
 
+def _resolve_synthesis_dialect(llm_client: Any, role: Any) -> "Dialect | None":
+    """Resolve the client's dialect for the forced-synthesis call, or ``None``.
+
+    Defensive on purpose. ``llm_client`` is typed ``Any`` throughout this module
+    and is not always a ``LiteLLMClient``: the PARALLEL_INFERENCE path and every
+    test double pass something else, and an ``AsyncMock`` answers *any* attribute
+    with a coroutine factory. Handing that straight to
+    :func:`~personal_agent.llm_client.models.synthesis_retains_tools` raises a
+    ``KeyError`` out of the worker, turning a capped worker into a crashed one —
+    the exact opposite of what ADR-0149 is for.
+
+    Anything that is not a real :class:`Dialect` resolves to ``None``, which
+    :func:`synthesis_retains_tools` turns into the cache-preserving form with a
+    WARNING. That is the safe direction: keeping the tools costs nothing on a
+    provider that would have tolerated either form.
+
+    Args:
+        llm_client: The client this sub-agent dispatches through.
+        role: The model role this worker runs as.
+
+    Returns:
+        The resolved dialect, or ``None`` when the client does not implement the
+        seam, raises, or answers with something that is not a dialect.
+    """
+    resolver = getattr(llm_client, "dialect_for_role", None)
+    if resolver is None:
+        return None
+    try:
+        resolved = resolver(role)
+    except Exception as exc:
+        logger.warning("synthesis_dialect_lookup_failed", error=str(exc))
+        return None
+    if isinstance(resolved, Dialect):
+        return resolved
+    if inspect.iscoroutine(resolved):
+        # Close it rather than leave an un-awaited coroutine behind.
+        resolved.close()
+    return None
+
+
+def _terminal_error(outcome: "_ToolLoopOutcome", state: "_ToolLoopState") -> str:
+    """Describe a non-successful loop outcome for ``SubAgentResult.error``.
+
+    Args:
+        outcome: The loop's terminal outcome.
+        state: The loop accumulator, for the round count.
+
+    Returns:
+        A short human-readable reason naming the path and what was reported.
+    """
+    if outcome.stop_reason == "cap":
+        return (
+            f"tool iteration limit reached after {state.tool_iterations} rounds "
+            f"(report: {outcome.report_kind})"
+        )
+    return f"stopped: {outcome.stop_reason} (report: {outcome.report_kind})"
+
+
+def _build_sub_agent_system_prompt(skill_index_block: str) -> str:
+    """Build the worker's system prompt, including its round budget (ADR-0149 move 1).
+
+    The budget paragraph is rendered from ``settings.sub_agent_max_tool_iterations``
+    rather than written as a literal, for the reason FRE-1389 AC-1 gave for the tool
+    surface: a hardcoded number drifts away from the value that actually binds, and
+    nothing detects it.
+
+    It is rendered for every worker, including one holding no tools. A grant-less
+    worker still runs the same loop, and AC-4a requires the bytes to be identical
+    across the workers of one fan-out — which can mix granted and grant-less tasks.
+
+    Args:
+        skill_index_block: The parent's compact skill index, appended when present.
+
+    Returns:
+        The complete system prompt.
+    """
+    parts = [
+        _SUB_AGENT_SYSTEM_PROMPT,
+        _BUDGET_BLOCK_TEMPLATE.format(n=settings.sub_agent_max_tool_iterations),
+    ]
+    if skill_index_block:
+        parts.append(skill_index_block)
+    return "\n\n".join(parts)
+
+
+def _build_task_message(spec: SubAgentSpec, trace_id: str, session_id: str | None) -> str:
+    """Build the worker's task user message, with the turn's date (ADR-0149 move 2).
+
+    The date lives here rather than in the system prompt because the prompt is one
+    shared, byte-identical string and a date would change it on every turn. On
+    2026-09-10 a worker with no date spent all five of its rounds searching 2025
+    events, against a question about 2026.
+
+    Args:
+        spec: The sub-agent specification.
+        trace_id: Parent request trace identifier.
+        session_id: Originating session id.
+
+    Returns:
+        The task message content.
+    """
+    body = f"Task: {spec.task}\nOutput format: {spec.output_format}\nRespond with the result only."
+    if spec.turn_started_at is None:
+        # A caller outside a turn. The block is omitted rather than a date being
+        # invented from `now`, which would silently differ from the turn's own
+        # instant on every other model call this turn makes.
+        logger.warning(
+            "sub_agent_no_turn_timestamp",
+            task=spec.task,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return body
+    return f"{render_current_datetime_block(spec.turn_started_at)}\n\n{body}"
+
+
 def _killed_result(
     task_id: uuid.UUID,
     spec: SubAgentSpec,
     duration_ms: float,
-    progress: GenerationProgress,
+    state: "_ToolLoopState",
     error: str,
-    cost_usd: float = 0.0,
-    tools_used: list[str] | None = None,
-    tool_iterations: int = 0,
-    tool_result_chars_absorbed: int = 0,
-    refused_tool_attempts: tuple[str, ...] = (),
+    stop_reason: SubAgentStopReason,
+    why: str,
 ) -> SubAgentResult:
     """Build a SubAgentResult for a sub-agent that never returned (FRE-1379).
 
-    Recovers whatever the streaming client captured into ``progress`` before
-    the call was cancelled out from under it, so a killed worker still reports
-    partial content, an estimated token count, and generation-only elapsed
-    time — instead of the empty ``digest_chars=0, full_output_chars=0`` record
-    every timeout/cancellation produced before this. Shared by the outer
-    hard-deadline timeout, the inner generation-budget timeout, and a global
-    dispatch cancellation — all three are the same "killed with whatever
-    progress was captured" shape, just different triggers.
+    FRE-1379 recovered the streaming client's in-flight fragment here, so a
+    killed worker stopped reporting the empty ``digest_chars=0,
+    full_output_chars=0`` record. ADR-0149 finds that insufficient and replaces
+    the fragment with the ledger: on 2026-09-10 two OVH workers died on the
+    90 s per-call timeout after 6 and 15 successful searches and reported zero
+    characters each, because the fragment was empty — the call that died was a
+    *tool* call, not a writing call, so there was nothing to recover.
+
+    The fragment is not discarded. It is quoted inside the ledger, under
+    "Partial text from the interrupted call", alongside the queries the worker
+    made and the sizes of what they returned.
+
+    Shared by the outer hard-deadline timeout, a global dispatch cancellation,
+    and any unexpected exception — all the same "killed with whatever state was
+    accumulated" shape, just different triggers.
 
     Args:
         task_id: This sub-agent invocation's identifier.
         spec: The sub-agent specification.
         duration_ms: Wall-clock time since spawn.
-        progress: Whatever the streaming client recorded before cancellation.
+        state: The loop accumulator, holding every completed round's activity.
         error: Human-readable reason, distinguishing which budget fired.
-        cost_usd: Cost of every COMPLETED round before the kill, summed by the
-            caller (FRE-1389 AC-6) — 0.0 unless the caller tracked one.
-        tools_used: Tools actually dispatched in completed rounds before the
-            kill (FRE-1389). ``None`` normalizes to an empty list.
-        tool_iterations: Tool-execution rounds completed before the kill.
-        tool_result_chars_absorbed: Raw tool-result chars absorbed in
-            completed rounds before the kill.
-        refused_tool_attempts: Out-of-grant attempts refused in completed
-            rounds before the kill.
+        stop_reason: The declared terminal path.
+        why: A short clause completing "no model-written report was possible
+            because …".
 
     Returns:
-        A failed SubAgentResult carrying whatever partial state is available.
+        A failed SubAgentResult whose content is the ledger.
     """
-    partial = progress.content
+    partial = state.progress.content
+    ledger = _build_ledger(state, stop_reason, why, partial)
     elapsed_generation_ms = (
-        (time.monotonic() - progress.generation_started_monotonic) * 1000
-        if progress.generation_started_monotonic is not None
+        (time.monotonic() - state.progress.generation_started_monotonic) * 1000
+        if state.progress.generation_started_monotonic is not None
         else None
     )
     return SubAgentResult(
         task_id=task_id,
         spec_task=spec.task,
-        summary=partial[:_SUMMARY_CAP_CHARS],
-        full_output=partial,
-        tools_used=tools_used if tools_used is not None else [],
+        summary=ledger[:_SUMMARY_CAP_CHARS],
+        full_output=ledger,
+        tools_used=state.tools_used,
         token_count=0,
+        # From what the MODEL generated, never from the ledger: the ledger is
+        # deterministic text this function wrote, and counting it as generation
+        # would inflate every killed worker's figure.
         tokens_generated=len(partial.split()) if partial else 0,
         elapsed_generation_ms=elapsed_generation_ms,
         duration_ms=duration_ms,
         success=False,
         error=error,
-        cost_usd=cost_usd,
+        cost_usd=state.cost_usd,
         denied_tools=spec.denied_tools,
-        tool_iterations=tool_iterations,
-        tool_result_chars_absorbed=tool_result_chars_absorbed,
-        refused_tool_attempts=refused_tool_attempts,
+        tool_iterations=state.tool_iterations,
+        tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+        refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
+        stop_reason=stop_reason,
+        report_kind="ledger",
+        narrative_synthesized=True,
     )
+
+
+@dataclass(frozen=True)
+class _ToolCallRecord:
+    """One dispatched, refused or malformed tool call, for the ledger (ADR-0149 D3).
+
+    Holds the call's arguments and the SIZE of its result, never the result body.
+    That asymmetry is the point: the queries are what make a ledger actionable —
+    the primary can re-run one — while the raw results are exactly what context
+    isolation exists to keep out of the parent's synthesis context (FRE-1389 AC-4).
+
+    Attributes:
+        round_num: The 1-based round this call belonged to.
+        tool: The tool name the model asked for, whether or not it was dispatched.
+        arguments: The raw argument string, clipped at
+            :data:`_LEDGER_ARGS_CAP_CHARS` with an explicit marker.
+        result_chars: Length of the tool-role content fed back to the model.
+        wall_s: Wall-clock of the whole round this call belonged to, back-filled
+            when the round closes. ``None`` while the round is still open, which
+            is how a kill mid-round is distinguishable from a completed one.
+    """
+
+    round_num: int
+    tool: str
+    arguments: str
+    result_chars: int
+    wall_s: float | None = None
 
 
 @dataclass
@@ -545,6 +758,8 @@ class _ToolLoopState:
     same pattern across a multi-round loop (FRE-1389): every completed
     round's activity lands here as it happens, so a kill mid-round still
     reports every prior round's cost/tools/chars, not just the in-flight one.
+    ADR-0149 extends it once more, to the per-round record the ledger is built
+    from and the per-round wall-clock the landing reserve is sized against.
     """
 
     messages: list[dict[str, Any]]
@@ -559,50 +774,311 @@ class _ToolLoopState:
     # round's completion — which is frequently empty when a tool-call round carries
     # no accompanying text. Only non-whitespace text is kept (see _run_tool_loop).
     round_texts: list[str] = field(default_factory=list)
+    # ADR-0149 D3: the ledger's raw material, and the reserve's clock.
+    tool_calls: list[_ToolCallRecord] = field(default_factory=list)
+    round_wall_s: list[float] = field(default_factory=list)
+
+    def mean_round_s(self, fallback: float) -> float:
+        """Mean wall-clock of the rounds completed so far in this worker.
+
+        Args:
+            fallback: The conservative estimate to use before any round has
+                completed — the generation budget, which is the most a single
+                round's inference can cost.
+
+        Returns:
+            The measured mean, or ``fallback`` when nothing is measured yet.
+        """
+        if not self.round_wall_s:
+            return fallback
+        return sum(self.round_wall_s) / len(self.round_wall_s)
+
+    def close_round(self, wall_s: float) -> None:
+        """Record a completed round's wall-clock and stamp it onto that round's calls.
+
+        Args:
+            wall_s: Wall-clock of the round, from the start of its inference call
+                to the end of its tool execution.
+        """
+        self.round_wall_s.append(wall_s)
+        self.tool_calls[:] = [
+            replace(record, wall_s=wall_s)
+            if record.round_num == self.tool_iterations and record.wall_s is None
+            else record
+            for record in self.tool_calls
+        ]
+
+    def capture_rounds(self) -> list[dict[str, Any]]:
+        """The per-call record in the shape the audit record stores (ADR-0149 D5).
+
+        Returns:
+            One mapping per tool call: round number, tool name, argument size,
+            result size and the round's wall-clock. Argument *sizes*, not the
+            arguments themselves — the capture is a metrics surface, and a raise
+            proposal reads it in aggregate.
+        """
+        return [
+            {
+                "round": record.round_num,
+                "tool": record.tool,
+                "args_chars": len(record.arguments),
+                "result_chars": record.result_chars,
+                "wall_s": record.wall_s,
+            }
+            for record in self.tool_calls
+        ]
 
 
-class _ToolIterationLimitReached(Exception):
-    """Raised when the sub-agent's own tool-loop cap (AC-2) is hit.
+@dataclass(frozen=True)
+class _ToolLoopOutcome:
+    """What the tool loop returns on every terminal path (ADR-0149 D3).
 
-    Carries whatever text the loop recovered so the caller can still report
-    it — the sub-agent stays a pure bounded function: no injected "please
-    wrap up" round, just a stop. ``narrative_synthesized`` (FRE-1399) tells
-    the caller whether ``partial_content`` is the model's own text or a
-    deterministic fallback built because no round ever produced any.
+    Replaces the former ``_ToolIterationLimitReached`` exception. FRE-1389 made the
+    cap a raise because the worker was "a pure bounded function: no injected 'please
+    wrap up' round, just a stop". ADR-0149 reverses that with the reason stated: a
+    pure function that returns 57 characters against 156,749 absorbed is not
+    measurable either, and the one thing FRE-1389 left out is that the function must
+    return its result. The cap is now an ordinary return carrying a report.
+
+    Attributes:
+        content: The terminal content — a model-written report, a cut partial
+            followed by the ledger, or the ledger alone.
+        stated_tool_gap: A ``TOOL_GAP:`` name stripped from a completed reply.
+        stop_reason: Why the loop ended.
+        report_kind: What ``content`` is.
     """
 
-    def __init__(self, partial_content: str, narrative_synthesized: bool) -> None:
-        super().__init__("sub-agent tool iteration limit reached")
-        self.partial_content = partial_content
-        self.narrative_synthesized = narrative_synthesized
+    content: str
+    stated_tool_gap: str | None
+    stop_reason: SubAgentStopReason
+    report_kind: SubAgentReportKind
 
 
-def _build_capped_partial_content(state: "_ToolLoopState") -> tuple[str, bool]:
-    """Build what a capped worker reports, and whether it is a synthesized fallback.
-
-    ``state.round_texts`` holds every round's own assistant text, including the
-    round that trips the cap — recovered here instead of trusting only that one
-    round's ``response_content``, which is frequently empty when a tool-call round
-    carries no accompanying text (FRE-1399: the same cap produced 1,677 characters
-    in one real trace and 0 in another, purely because of whether that one round's
-    completion happened to include text). Falls back to a deterministic,
-    non-generated description when no round ever produced text — never a second
-    inference call (FRE-1387 ruled that out for the digest cap; the same reasoning
-    applies to this terminal path).
+def _clip(text: str, cap: int) -> str:
+    """Clip text to a cap, marking the clip so it never reads as complete.
 
     Args:
-        state: The tool loop's accumulator at the moment the cap fires.
+        text: The text to bound.
+        cap: Maximum characters to keep.
 
     Returns:
-        A tuple of (content to report, whether it is a synthesized fallback).
+        The text unchanged when it fits, else the first ``cap`` characters with a
+        marker naming how many were dropped.
     """
+    if len(text) <= cap:
+        return text
+    return f"{text[:cap]}…[truncated {len(text) - cap} chars]"
+
+
+def _build_ledger(
+    state: _ToolLoopState,
+    stop_reason: SubAgentStopReason,
+    why: str,
+    partial_text: str = "",
+) -> str:
+    """Build the deterministic account of a worker that could not write a report.
+
+    No inference, no free-text parsing — assembled from :class:`_ToolLoopState`
+    alone, so it is available on every path including one that was cancelled out
+    from under the loop. It replaces the bare in-flight fragment that every
+    killed worker used to return, and which on 2026-09-10 was zero characters on
+    both OVH failures after real, billed research.
+
+    What it carries and what it deliberately does not: the tool calls with their
+    arguments and result SIZES, so the primary can re-run a query; never the
+    results themselves, which is what context isolation exists to prevent
+    (FRE-1389 AC-4).
+
+    Args:
+        state: The loop accumulator at the moment the path terminated.
+        stop_reason: The declared terminal path.
+        why: A short clause completing "no model-written report was possible
+            because …".
+        partial_text: Streamed text from the interrupted call, if any.
+
+    Returns:
+        The ledger text.
+    """
+    lines = [
+        f"[Worker stopped: {stop_reason} after {state.tool_iterations} tool round(s); "
+        f"absorbed {state.tool_result_chars_absorbed:,} characters of tool output; "
+        f"no model-written report was possible because {why}.]"
+    ]
+
+    if state.tool_calls:
+        lines.append("Tool calls made:")
+        lines.extend(
+            f"  {idx}. {record.tool}({record.arguments}) → {record.result_chars:,} chars"
+            for idx, record in enumerate(state.tool_calls, start=1)
+        )
+
     if state.round_texts:
-        return "\n\n".join(state.round_texts), False
-    return (
-        f"[Reached the tool-iteration limit after {state.tool_iterations} round(s) "
-        "of tool calls with no assistant text; absorbed "
-        f"{state.tool_result_chars_absorbed} characters of tool output.]"
-    ), True
+        lines.append("Model notes per round:")
+        lines.extend(f"  - round {idx}: {text!r}" for idx, text in enumerate(state.round_texts, 1))
+
+    if partial_text.strip():
+        # Never clipped here. ADR-0149's own instructive case is worker 4 of
+        # session 606ae6a4: cut mid-generation, it still returned 7,203 useful
+        # characters, because the call that died was a WRITING call. A local cap
+        # would discard most of that. `_SUMMARY_CAP_CHARS` is the circuit breaker
+        # for a runaway, and it is sized for exactly this job.
+        lines.append("Partial text from the interrupted call:")
+        lines.append(f"  {partial_text!r}")
+
+    return "\n".join(lines)
+
+
+async def _forced_synthesis(
+    state: _ToolLoopState,
+    spec: SubAgentSpec,
+    llm_client: Any,
+    tool_defs: list[dict[str, Any]] | None,
+    trace_ctx: TraceContext,
+    trace_id: str,
+    session_id: str | None,
+    effective_timeout: float,
+    deadline_monotonic: float,
+    stop_reason: SubAgentStopReason,
+) -> _ToolLoopOutcome:
+    """Make the one tools-off call that turns absorbed results into a report.
+
+    ADR-0149 D3 move 5. Today the call after the last executed round emits tool
+    calls that are discarded; after this it writes the report instead, so the
+    number of inference calls a capped worker makes is unchanged and the last one
+    is useful. On 2026-09-10 a worker reached its cap holding 154,755 characters
+    that contained the answer and reported five stage directions.
+
+    The call keeps its ``tools`` array and pins ``tool_choice="none"`` wherever the
+    resolved dialect declares that form (D6). Dropping the array would re-render
+    the whole prefix and lose the cache on the largest prefix the worker will ever
+    hold — which on the OVH path, already dying at a 90 s per-call timeout, would
+    have made this ticket's own failure mode more frequent, not less.
+
+    Exactly one attempt is made. A provider that rejects ``tool_choice="none"``
+    despite declaring it is a configuration defect, and the worker reports a
+    ledger naming the provider and dialect rather than retrying without tools:
+    the worker recovers from its own limits, it does not retry the world.
+
+    Args:
+        state: The loop accumulator; its message list is appended to.
+        spec: The sub-agent specification.
+        llm_client: LLM client instance.
+        tool_defs: The worker's granted tool definitions, retained on the call
+            when the dialect declares the cache-preserving form.
+        trace_ctx: The sub-agent's identity context.
+        trace_id: Parent request trace identifier.
+        session_id: Originating session id.
+        effective_timeout: The generation budget.
+        deadline_monotonic: This worker's absolute deadline.
+        stop_reason: The path that triggered this call, carried onto the outcome.
+
+    Returns:
+        The terminal outcome: a ``synthesized`` report, a ``narration`` partial
+        followed by the ledger, or the ledger alone.
+    """
+    # Recomputed here, never inherited: on the timeout path the caller's own
+    # figure is stale by a whole generation budget.
+    remaining_s = deadline_monotonic - time.monotonic()
+    if remaining_s <= 0:
+        # The triggering path keeps its own name. A per-call timeout with nothing
+        # left is still `timeout`; `deadline` belongs to the outer wait_for alone.
+        return _ToolLoopOutcome(
+            content=_build_ledger(
+                state, stop_reason, "no time remained to write one", state.progress.content
+            ),
+            stated_tool_gap=None,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+        )
+
+    opening = (
+        _SYNTHESIS_OPENING_RESERVE if stop_reason == "time_reserve" else _SYNTHESIS_OPENING_CAP
+    )
+    state.messages.append(
+        {
+            "role": "user",
+            "content": _SYNTHESIS_INSTRUCTION.format(
+                opening=opening, output_format=spec.output_format
+            ),
+        }
+    )
+
+    dialect = _resolve_synthesis_dialect(llm_client, spec.model_role)
+    retains_tools = synthesis_retains_tools(dialect)
+    if not retains_tools:
+        logger.warning(
+            "forced_synthesis_cache_miss_declared",
+            dialect=getattr(dialect, "value", None),
+            provider=getattr(llm_client, "provider", None),
+            task=spec.task,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+    # Its own sink: a cut synthesis call's streamed partial IS the report
+    # (ADR-0149 D3 move 5), and the round sink holds the previous round's text.
+    synthesis_progress = GenerationProgress()
+    state.progress = synthesis_progress
+    logger.info(
+        "sub_agent_forced_synthesis",
+        stop_reason=stop_reason,
+        retains_tools=retains_tools,
+        dialect=getattr(dialect, "value", None),
+        tool_iterations=state.tool_iterations,
+        tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+        trace_id=trace_id,
+        session_id=session_id,
+    )
+    try:
+        raw_response = await llm_client.respond(
+            role=spec.model_role,
+            messages=state.messages,
+            max_tokens=spec.max_tokens,
+            trace_ctx=trace_ctx,
+            timeout_s=min(effective_timeout, remaining_s),
+            progress_sink=synthesis_progress,
+            tools=tool_defs if retains_tools else None,
+            tool_choice="none" if retains_tools and tool_defs else None,
+        )
+    # `Exception`, never `BaseException`: a CancelledError raised inside this call
+    # must reach run_sub_agent's cancel handler, which writes the audit record and
+    # re-raises. Swallowing it here would turn a cancelled turn into a result.
+    except Exception as exc:
+        partial = synthesis_progress.content
+        why = (
+            f"the synthesis call failed on provider "
+            f"{getattr(llm_client, 'provider', None)!r} "
+            f"(dialect {getattr(dialect, 'value', None)!r}): {exc}"
+        )
+        if partial.strip():
+            return _ToolLoopOutcome(
+                content=f"{partial}\n\n{_build_ledger(state, stop_reason, why)}",
+                stated_tool_gap=None,
+                stop_reason=stop_reason,
+                report_kind="narration",
+            )
+        return _ToolLoopOutcome(
+            content=_build_ledger(state, stop_reason, why),
+            stated_tool_gap=None,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+        )
+
+    state.cost_usd += _extract_call_cost(raw_response)
+    content, stated_tool_gap = _extract_stated_tool_gap(_parse_llm_response(raw_response))
+    if content.strip():
+        return _ToolLoopOutcome(
+            content=content,
+            stated_tool_gap=stated_tool_gap,
+            stop_reason=stop_reason,
+            report_kind="synthesized",
+        )
+    return _ToolLoopOutcome(
+        content=_build_ledger(state, stop_reason, "the synthesis call returned no text"),
+        stated_tool_gap=stated_tool_gap,
+        stop_reason=stop_reason,
+        report_kind="ledger",
+    )
 
 
 async def _run_tool_loop(
@@ -618,8 +1094,8 @@ async def _run_tool_loop(
     effective_timeout: float,
     approval_required_tools: frozenset[str],
     deadline_monotonic: float,
-) -> tuple[str, str | None]:
-    """Run inference/tool-execution rounds until the model stops or the cap fires.
+) -> _ToolLoopOutcome:
+    """Run inference/tool-execution rounds until the model stops or a limit fires.
 
     Mutates ``state`` in place after every completed round so a caller that
     cancels this coroutine mid-round still sees every prior round's activity.
@@ -666,24 +1142,110 @@ async def _run_tool_loop(
             only when enough of it remains for the worker to outlive its own wait,
             so a refusal is always recorded rather than lost to a mid-pause kill.
 
-    Raises:
-        _ToolIterationLimitReached: When another tool batch would exceed
-            ``settings.sub_agent_max_tool_iterations``.
+    Returns:
+        The terminal :class:`_ToolLoopOutcome`, declaring both why the loop ended
+        and what kind of report its content is. Every exit is a return: the cap
+        used to raise (FRE-1389's "just a stop"), and ADR-0149 reverses that so
+        the bounded function returns its result.
     """
     tool_choice = "auto" if tool_defs else None
+    max_iterations = settings.sub_agent_max_tool_iterations
     while True:
+        # ADR-0149 D3 move 5, FIRST — before any inference call. The primary's
+        # loop checks its cap AFTER the call, so the model spends one whole
+        # generation emitting tool calls that are then dropped, and only then
+        # does the tools-off call follow (ADR-0149 D1 defect 2). On a five-round
+        # budget that is a sixth of the loop, and on OVH it is the call that dies
+        # at 90 s. Checking here makes the sixth call the report instead.
+        # Ungated by `tool_defs` deliberately. A grant-less worker should never
+        # reach a second round, but the cap is also the only thing bounding a
+        # model that emits tool calls it was never offered — every one is refused
+        # below, and without this check the loop would refuse them forever.
+        if state.tool_iterations >= max_iterations:
+            return await _forced_synthesis(
+                state,
+                spec,
+                llm_client,
+                tool_defs,
+                trace_ctx,
+                trace_id,
+                session_id,
+                effective_timeout,
+                deadline_monotonic,
+                stop_reason="cap",
+            )
+
+        # ADR-0149 D3 move 4: reserve the landing. Gated on `tool_defs` — a
+        # grant-less worker makes exactly one call, and its hard deadline is sized
+        # for one call (`_effective_hard_deadline`), so the reserve would fire on
+        # every such worker and replace its only real call with a synthesis call
+        # holding nothing to synthesise from.
+        if tool_defs:
+            remaining_s = deadline_monotonic - time.monotonic()
+            mean_round_s = state.mean_round_s(effective_timeout)
+            if remaining_s < mean_round_s + effective_timeout:
+                logger.info(
+                    "sub_agent_landing_reserved",
+                    remaining_s=round(remaining_s, 2),
+                    mean_round_s=round(mean_round_s, 2),
+                    effective_timeout=effective_timeout,
+                    tool_iterations=state.tool_iterations,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
+                return await _forced_synthesis(
+                    state,
+                    spec,
+                    llm_client,
+                    tool_defs,
+                    trace_ctx,
+                    trace_id,
+                    session_id,
+                    effective_timeout,
+                    deadline_monotonic,
+                    stop_reason="time_reserve",
+                )
+
+        round_started = time.monotonic()
         round_progress = GenerationProgress()
         state.progress = round_progress
-        raw_response = await llm_client.respond(
-            role=spec.model_role,
-            messages=state.messages,
-            max_tokens=spec.max_tokens,
-            trace_ctx=trace_ctx,
-            timeout_s=effective_timeout,
-            progress_sink=round_progress,
-            tools=tool_defs,
-            tool_choice=tool_choice,
-        )
+        try:
+            raw_response = await llm_client.respond(
+                role=spec.model_role,
+                messages=state.messages,
+                max_tokens=spec.max_tokens,
+                trace_ctx=trace_ctx,
+                timeout_s=effective_timeout,
+                progress_sink=round_progress,
+                tools=tool_defs,
+                tool_choice=tool_choice,
+            )
+        except LLMTimeout as exc:
+            # The generation budget fired on a tool round. One synthesis attempt
+            # if any time remains — _forced_synthesis recomputes that itself and
+            # returns a ledger when it does not. Before ADR-0149 this path went
+            # straight to _killed_result and returned zero characters, which is
+            # what both OVH workers did on 2026-09-10 after billed research.
+            if state.round_texts or state.tool_calls:
+                logger.warning(
+                    "sub_agent_round_timeout_attempting_synthesis",
+                    error=str(exc),
+                    tool_iterations=state.tool_iterations,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
+            return await _forced_synthesis(
+                state,
+                spec,
+                llm_client,
+                tool_defs,
+                trace_ctx,
+                trace_id,
+                session_id,
+                effective_timeout,
+                deadline_monotonic,
+                stop_reason="timeout",
+            )
         state.cost_usd += _extract_call_cost(raw_response)
         raw_tool_calls = _extract_tool_calls(raw_response)
         response_content = _parse_llm_response(raw_response)
@@ -694,11 +1256,23 @@ async def _run_tool_loop(
             state.round_texts.append(response_content)
 
         if not raw_tool_calls:
-            return _extract_stated_tool_gap(response_content)
-
-        if state.tool_iterations >= settings.sub_agent_max_tool_iterations:
-            partial_content, narrative_synthesized = _build_capped_partial_content(state)
-            raise _ToolIterationLimitReached(partial_content, narrative_synthesized)
+            content, stated_tool_gap = _extract_stated_tool_gap(response_content)
+            if content.strip():
+                return _ToolLoopOutcome(
+                    content=content,
+                    stated_tool_gap=stated_tool_gap,
+                    stop_reason="completed",
+                    report_kind="synthesized",
+                )
+            # ADR-0149 D3: empty content is not a report. The worker stopped of
+            # its own accord and said nothing, which reaches the caller as a
+            # failed landing rather than a success carrying an empty digest.
+            return _ToolLoopOutcome(
+                content=_build_ledger(state, "completed", "the model returned no text"),
+                stated_tool_gap=stated_tool_gap,
+                stop_reason="completed",
+                report_kind="ledger",
+            )
 
         state.tool_iterations += 1
         normalized_calls = _normalize_tool_calls(raw_tool_calls, state.tool_iterations)
@@ -706,44 +1280,74 @@ async def _run_tool_loop(
             {"role": "assistant", "content": response_content, "tool_calls": normalized_calls}
         )
 
+        def _absorb(tool_call_id: str, tool_name: str, raw_arguments: str, content: str) -> None:
+            """Feed one tool result back to the model and record it for the ledger.
+
+            Every tool-role message the loop appends goes through here — a real
+            dispatch, an out-of-grant refusal, a malformed-argument error and an
+            approval denial alike. All four are context the worker absorbed, and
+            all four are things the primary may want to see it tried.
+
+            Args:
+                tool_call_id: The normalized call id this result answers.
+                tool_name: The tool the model asked for.
+                raw_arguments: The model's raw argument string.
+                content: The tool-role content fed back.
+            """
+            state.tool_result_chars_absorbed += len(content)
+            state.tool_calls.append(
+                _ToolCallRecord(
+                    round_num=state.tool_iterations,
+                    tool=tool_name,
+                    arguments=_clip(raw_arguments, _LEDGER_ARGS_CAP_CHARS),
+                    result_chars=len(content),
+                )
+            )
+            state.messages.append(
+                {
+                    "tool_call_id": tool_call_id,
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": content,
+                }
+            )
+
         for call, raw_call in zip(normalized_calls, raw_tool_calls, strict=True):
             tool_call_id = call["id"]
             tool_name = call["function"]["name"]
+            raw_arguments = str(raw_call.get("arguments") or "{}")
 
             if tool_name not in spec.tools:
                 if len(state.refused_tool_attempts) < _MAX_REFUSED_TOOL_ATTEMPTS:
                     state.refused_tool_attempts.append(tool_name)
-                error_content = json.dumps(
-                    {"status": "error", "hint": f"{tool_name} is not available to this sub-agent."}
-                )
-                state.tool_result_chars_absorbed += len(error_content)
-                state.messages.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": error_content,
-                    }
+                _absorb(
+                    tool_call_id,
+                    tool_name,
+                    raw_arguments,
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "hint": f"{tool_name} is not available to this sub-agent.",
+                        }
+                    ),
                 )
                 continue
 
             try:
-                arguments = json.loads(raw_call.get("arguments") or "{}")
+                arguments = json.loads(raw_arguments)
             except json.JSONDecodeError:
-                error_content = json.dumps(
-                    {
-                        "status": "retry",
-                        "hint": "Arguments were not valid JSON. Retry with valid JSON arguments.",
-                    }
-                )
-                state.tool_result_chars_absorbed += len(error_content)
-                state.messages.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": error_content,
-                    }
+                _absorb(
+                    tool_call_id,
+                    tool_name,
+                    raw_arguments,
+                    json.dumps(
+                        {
+                            "status": "retry",
+                            "hint": (
+                                "Arguments were not valid JSON. Retry with valid JSON arguments."
+                            ),
+                        }
+                    ),
                 )
                 continue
 
@@ -773,23 +1377,19 @@ async def _run_tool_loop(
                         trace_id=trace_id,
                         session_id=session_id,
                     )
-                    error_content = json.dumps(
-                        {
-                            "status": "error",
-                            "hint": (
-                                f"{tool_name} was not approved for this turn "
-                                f"({outcome_reason}). Continue without it."
-                            ),
-                        }
-                    )
-                    state.tool_result_chars_absorbed += len(error_content)
-                    state.messages.append(
-                        {
-                            "tool_call_id": tool_call_id,
-                            "role": "tool",
-                            "name": tool_name,
-                            "content": error_content,
-                        }
+                    _absorb(
+                        tool_call_id,
+                        tool_name,
+                        raw_arguments,
+                        json.dumps(
+                            {
+                                "status": "error",
+                                "hint": (
+                                    f"{tool_name} was not approved for this turn "
+                                    f"({outcome_reason}). Continue without it."
+                                ),
+                            }
+                        ),
                     )
                     continue
 
@@ -805,16 +1405,28 @@ async def _run_tool_loop(
                 principal="sub_agent",
             )
             state.tools_used.append(tool_name)
-            content = str(dispatch_result["content"])
-            state.tool_result_chars_absorbed += len(content)
-            state.messages.append(
-                {
-                    "tool_call_id": tool_call_id,
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": content,
-                }
-            )
+            _absorb(tool_call_id, tool_name, raw_arguments, str(dispatch_result["content"]))
+
+        # The round is closed only here, after its tool execution — so the mean the
+        # landing reserve reads is the real cost of a round, inference plus tools,
+        # and a kill mid-round leaves this round's calls with wall_s None rather
+        # than a figure that was never measured.
+        state.close_round(time.monotonic() - round_started)
+
+        # ADR-0149 D3 move 3: the countdown, appended after the round's tool
+        # results and nowhere else. Every injection is a tail append, so nothing
+        # above it changes and the prefix stays cacheable (ADR-0081 D2).
+        state.messages.append(
+            {
+                "role": "user",
+                "content": _COUNTDOWN_TEMPLATE.format(
+                    remaining=max(max_iterations - state.tool_iterations, 0),
+                    n=max_iterations,
+                    chars=state.tool_result_chars_absorbed,
+                    seconds=max(int(deadline_monotonic - time.monotonic()), 0),
+                ),
+            }
+        )
 
 
 async def run_sub_agent(
@@ -883,9 +1495,7 @@ async def run_sub_agent(
     # Built before the try so the FRE-505 input-context breakdown is available on every
     # terminal path (success/timeout/exception/cancel), and so cancellation — which
     # raises BaseException, not Exception — can still emit an audit record.
-    _system_content = _SUB_AGENT_SYSTEM_PROMPT
-    if spec.skill_index_block:
-        _system_content = f"{_system_content}\n\n{spec.skill_index_block}"
+    _system_content = _build_sub_agent_system_prompt(spec.skill_index_block)
     _context_breakdown = _summarize_input_context(_system_content, spec)
 
     # FRE-1389: tool defs restricted to exactly this spec's granted subset —
@@ -899,16 +1509,7 @@ async def run_sub_agent(
         {"role": "system", "content": _system_content},
     ]
     messages.extend(spec.context)
-    messages.append(
-        {
-            "role": "user",
-            "content": (
-                f"Task: {spec.task}\n"
-                f"Output format: {spec.output_format}\n"
-                "Respond with the result only."
-            ),
-        }
-    )
+    messages.append({"role": "user", "content": _build_task_message(spec, trace_id, session_id)})
     # External to the loop coroutine's own frame (see _ToolLoopState) so a
     # cancellation mid-round still leaves every completed round's activity
     # readable from here in the except blocks below.
@@ -958,7 +1559,7 @@ async def run_sub_agent(
         # so the approval gate can ask how much of THIS worker's budget is left.
         deadline_monotonic = time.monotonic() + hard_deadline
 
-        response_content, stated_tool_gap = await asyncio.wait_for(
+        outcome = await asyncio.wait_for(
             _run_tool_loop(
                 state,
                 spec,
@@ -983,89 +1584,67 @@ async def run_sub_agent(
             else None
         )
 
+        # ADR-0149 D3: `success` reads `report_kind`, not "the content is
+        # non-empty". The ledger is always non-empty, so a content test alone
+        # would report a failed landing as a success. A worker that stopped at
+        # its cap and wrote a good partial report is still not a success: it did
+        # not finish its task, and FRE-1389 AC-2's distinct terminal state holds
+        # for the new paths as it did for the cap.
+        succeeded = outcome.stop_reason == "completed" and outcome.report_kind == "synthesized"
         result = SubAgentResult(
             task_id=task_id,
             spec_task=spec.task,
-            summary=response_content[:_SUMMARY_CAP_CHARS],
-            full_output=response_content,
+            summary=outcome.content[:_SUMMARY_CAP_CHARS],
+            full_output=outcome.content,
             tools_used=state.tools_used,
-            token_count=len(response_content.split()),
-            tokens_generated=len(response_content.split()),
+            token_count=len(outcome.content.split()),
+            tokens_generated=len(outcome.content.split()),
             elapsed_generation_ms=elapsed_generation_ms,
             duration_ms=duration_ms,
-            success=True,
+            success=succeeded,
+            error=None if succeeded else _terminal_error(outcome, state),
             cost_usd=state.cost_usd,
             denied_tools=spec.denied_tools,
             tool_iterations=state.tool_iterations,
             tool_result_chars_absorbed=state.tool_result_chars_absorbed,
             refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
-            stated_tool_gap=stated_tool_gap,
-        )
-
-    except _ToolIterationLimitReached as exc:
-        # AC-2: an explicit, distinct terminal state — not a disguised success —
-        # so a caller's failure/degradation checks see an incomplete worker as
-        # incomplete, not as having answered.
-        duration_ms = int(time.monotonic() * 1000) - start_ms
-        result = SubAgentResult(
-            task_id=task_id,
-            spec_task=spec.task,
-            summary=exc.partial_content[:_SUMMARY_CAP_CHARS],
-            full_output=exc.partial_content,
-            tools_used=state.tools_used,
-            token_count=len(exc.partial_content.split()),
-            tokens_generated=len(exc.partial_content.split()),
-            duration_ms=duration_ms,
-            success=False,
-            error=f"tool iteration limit reached after {state.tool_iterations} rounds",
-            cost_usd=state.cost_usd,
-            denied_tools=spec.denied_tools,
-            tool_iterations=state.tool_iterations,
-            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
-            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
-            narrative_synthesized=exc.narrative_synthesized,
+            stated_tool_gap=outcome.stated_tool_gap,
+            stop_reason=outcome.stop_reason,
+            report_kind=outcome.report_kind,
+            # FRE-1399's flag, on the condition ADR-0149 D3 restates for it: the
+            # worker did work and no model text survived to describe it.
+            narrative_synthesized=outcome.report_kind == "ledger",
         )
 
     except asyncio.TimeoutError:
+        # The outer wait_for. By definition no time remains, so there is no
+        # synthesis attempt here — the ledger is the whole obligation.
         duration_ms = int(time.monotonic() * 1000) - start_ms
         result = _killed_result(
             task_id,
             spec,
             duration_ms,
-            state.progress,
+            state,
             # FRE-1374 (AC-2): report the measured elapsed time, not the nominal
             # budget — the hard deadline that actually fired may differ from
             # spec.timeout_seconds, and the old hard-coded value hid exactly the
             # shortfall this ticket exists to make visible.
             error=f"Timeout after {duration_ms / 1000:.1f}s",
-            cost_usd=state.cost_usd,
-            tools_used=state.tools_used,
-            tool_iterations=state.tool_iterations,
-            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
-            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
+            stop_reason="deadline",
+            why="the worker's outer deadline fired with no time left to write",
         )
 
-    except LLMTimeout as exc:
-        # FRE-1379: the client's own wall-clock generation budget fired before
-        # the outer hard-deadline above did — this is the common case now that
-        # the local streaming path enforces spec.timeout_seconds as a real
-        # duration bound, not just a read timeout. Distinct wording from the
-        # outer branch so a reader can tell which budget fired without
-        # cross-referencing durations.
-        duration_ms = int(time.monotonic() * 1000) - start_ms
-        result = _killed_result(
-            task_id,
-            spec,
-            duration_ms,
-            state.progress,
-            error=f"Timeout after {duration_ms / 1000:.1f}s (generation budget): {exc}",
-            cost_usd=state.cost_usd,
-            tools_used=state.tools_used,
-            tool_iterations=state.tool_iterations,
-            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
-            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
-        )
-
+    # FRE-1379 had an `except LLMTimeout` here, for the client's own generation
+    # budget firing. ADR-0149 removes it, because nothing can reach it any more:
+    # both `respond()` call sites are inside the loop, and both are already
+    # handled — the round call by `_run_tool_loop`'s own `except LLMTimeout`,
+    # which attempts one synthesis, and the synthesis call by
+    # `_forced_synthesis`'s `except Exception`, of which `LLMTimeout` is one.
+    # Keeping it would have been worse than dead: it hardcoded
+    # `stop_reason="timeout"`, so had it ever fired it would have relabelled a
+    # capped worker's failed synthesis as a timeout — the mislabelling the
+    # in-loop handling exists to avoid. Anything genuinely unforeseen still
+    # lands in the `except Exception` below, honestly labelled `error`.
     except asyncio.CancelledError:
         # The outer dispatch can cancel us on a global timeout (expansion_controller).
         # CancelledError is a BaseException — not caught by `except Exception` — so we
@@ -1075,16 +1654,23 @@ async def run_sub_agent(
             task_id,
             spec,
             duration_ms,
-            state.progress,
+            state,
             error="cancelled (global dispatch timeout)",
-            cost_usd=state.cost_usd,
-            tools_used=state.tools_used,
-            tool_iterations=state.tool_iterations,
-            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
-            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
+            stop_reason="cancelled",
+            why="the dispatcher cancelled the worker",
         )
+        # ADR-0149 D3: the ledger goes to the CAPTURE and the cancellation is
+        # re-raised. No result reaches _run_dispatch, which catches only
+        # Exception — and a global cancel ends the turn, so no caller could use
+        # one anyway. The obligation on this path is the audit record.
         _emit_sub_agent_capture(
-            cancelled, spec, _context_breakdown, trace_id, session_id, eval_mode
+            cancelled,
+            spec,
+            _context_breakdown,
+            trace_id,
+            session_id,
+            eval_mode,
+            rounds=state.capture_rounds(),
         )
         _warn_if_clipped(cancelled, trace_id, session_id)
         raise
@@ -1095,13 +1681,10 @@ async def run_sub_agent(
             task_id,
             spec,
             duration_ms,
-            state.progress,
+            state,
             error=str(exc),
-            cost_usd=state.cost_usd,
-            tools_used=state.tools_used,
-            tool_iterations=state.tool_iterations,
-            tool_result_chars_absorbed=state.tool_result_chars_absorbed,
-            refused_tool_attempts=tuple(dict.fromkeys(state.refused_tool_attempts)),
+            stop_reason="error",
+            why=f"the worker raised before it could report: {exc}",
         )
 
     _full_output_chars = len(result.full_output)
@@ -1125,7 +1708,15 @@ async def run_sub_agent(
     # FRE-505: durable per-sub-agent audit record (input context + full output +
     # injected digest + truncation ratio) so a decomposition turn is reconstructable
     # from telemetry alone. Best-effort; never raises.
-    _emit_sub_agent_capture(result, spec, _context_breakdown, trace_id, session_id, eval_mode)
+    _emit_sub_agent_capture(
+        result,
+        spec,
+        _context_breakdown,
+        trace_id,
+        session_id,
+        eval_mode,
+        rounds=state.capture_rounds(),
+    )
     _warn_if_clipped(result, trace_id, session_id)
     _warn_if_narrative_synthesized(result, trace_id, session_id)
 

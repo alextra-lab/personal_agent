@@ -9,11 +9,38 @@ Ref: COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 4.6
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 from uuid import UUID
 
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.expansion_types import SubAgentMode
+
+#: Why a sub-agent's loop ended (ADR-0149 D3). Every terminal path declares one.
+#:
+#: ``completed`` — the model replied with no tool calls, which is the only value
+#: a successful worker ever carries. ``cap`` — the round budget was spent.
+#: ``time_reserve`` — the landing reserve fired, so the worker wrote instead of
+#: starting a round it could not finish. ``timeout`` — the per-call generation
+#: budget fired. ``deadline`` — the outer ``wait_for`` fired, and by definition
+#: no time remained for a report. ``cancelled`` — the dispatcher cancelled the
+#: worker; this value only ever reaches a capture, never a result, because the
+#: cancellation is re-raised. ``error`` — anything else.
+SubAgentStopReason = Literal[
+    "completed", "cap", "time_reserve", "timeout", "deadline", "cancelled", "error"
+]
+
+#: What kind of thing the worker's terminal content actually is (ADR-0149 D3).
+#:
+#: ``synthesized`` — a model call wrote it: either a completed reply or a
+#: completed tools-off synthesis call. ``narration`` — the synthesis call was cut
+#: mid-write and left a streamed partial, so the content is that partial followed
+#: by the ledger. ``ledger`` — no model-written report was possible, so the
+#: content is the deterministic ledger alone.
+#:
+#: ADR-0149 D3 assigns ``synthesized`` and ``ledger`` explicitly and describes the
+#: cut-synthesis case without naming a kind for it; ``narration`` is that case.
+SubAgentReportKind = Literal["synthesized", "narration", "ledger"]
 
 
 @dataclass(frozen=True)
@@ -69,6 +96,16 @@ class SubAgentSpec:
             enforces that primitive's own ``allowed_modes``/``forbidden_in_modes``
             on top — the sub-agent principal can never grant access the tool's own
             base policy forbids.
+        turn_started_at: The parent turn's captured timestamp (ADR-0149 D3 move 2),
+            threaded from ``ExecutionContext.turn_started_at`` through
+            ``ExpansionController.execute`` and ``_run_dispatch``. Rendered into
+            the worker's **task user message**, never into the static system
+            prompt — the prompt is one shared, byte-identical string, and a date
+            in it would change those bytes on every turn. ``None`` for a caller
+            outside a turn: the block is omitted and a WARNING is logged rather
+            than a date being invented. On 2026-09-10 a worker with no date spent
+            all five of its rounds searching 2025 events, which is the defect this
+            field closes.
     """
 
     task: str
@@ -86,6 +123,7 @@ class SubAgentSpec:
     # Skills already loaded by parent — sub-agent inherits to avoid re-emitting bodies
     loaded_skills: frozenset[str] = field(default_factory=frozenset)
     denied_tools: tuple[str, ...] = field(default_factory=tuple)
+    turn_started_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -167,7 +205,23 @@ class SubAgentResult:
             report it" (this flag) — both cases now leave ``summary``
             non-empty, so the flag is the only way to tell them apart without
             comparing ``tool_result_chars_absorbed`` against ``summary`` by
-            hand. Always ``False`` on every other terminal path.
+            hand. Always ``False`` on every other terminal path. Since ADR-0149
+            this is exactly ``report_kind == "ledger"`` — the ADR keeps the field
+            so FRE-1399's WARNING keeps firing on the same condition it always
+            named: the worker did work and no model text survived to describe it.
+        stop_reason: Why the loop ended (ADR-0149 D3). ``success`` is ``True``
+            only for ``"completed"`` with a ``synthesized`` report; every other
+            value carries ``success=False``, including a worker that stopped at
+            its cap and wrote a perfectly good partial report. Stopping at the
+            cap means the task was not finished, and FRE-1389 AC-2's "explicit,
+            distinct terminal state" holds for the new paths as it did for the
+            cap alone.
+        report_kind: What the terminal content is (ADR-0149 D3) — a model-written
+            report, a cut partial followed by the ledger, or the ledger alone.
+            Read together with ``stop_reason`` by the caller: a worker that
+            completed with empty text carries ``stop_reason == "completed"`` and
+            is still a failed landing, which is why the caller's predicate
+            (FRE-1484) reads both and never ``stop_reason`` alone.
     """
 
     task_id: UUID
@@ -188,3 +242,5 @@ class SubAgentResult:
     refused_tool_attempts: tuple[str, ...] = field(default_factory=tuple)
     stated_tool_gap: str | None = None
     narrative_synthesized: bool = False
+    stop_reason: SubAgentStopReason = "completed"
+    report_kind: SubAgentReportKind = "synthesized"

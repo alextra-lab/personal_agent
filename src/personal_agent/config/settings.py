@@ -245,7 +245,7 @@ class AppConfig(BaseSettings):
         description=(
             "Maximum tool execution iterations per user request (prevents tool loops). "
             "Raised to 25: compound telemetry/analysis tasks can need 15+ sequential calls. "
-            "At max-3, a budget warning is injected. At max+1, a forced LLM synthesis pass "
+            "At max-2, a budget warning is injected. At max+1, a forced LLM synthesis pass "
             "runs (no tools) so gathered results are never silently discarded."
         ),
     )

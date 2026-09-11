@@ -1,12 +1,11 @@
-"""FRE-484: forced-synthesis tool overrides for the Anthropic path.
+"""ADR-0149 D1: forced-synthesis tool cache retention.
 
 The forced-synthesis path (tool-iteration limit hit) normally drops ``tools=``
-so the model answers from gathered results. On Anthropic, a transcript that
-already contains ``tool_use``/``tool_result`` blocks makes LiteLLM reject the
-call with ``UnsupportedParamsError`` unless ``tools=`` is present. These tests
-pin the decision helpers that keep a non-empty tool list and force
-``tool_choice="none"`` on that path only — leaving every other path
-(local SLM, no tool history) on the prior drop-tools behavior.
+so the model answers from gathered results. On backends that support cache
+retention, keeping ``tools=`` with ``tool_choice="none"`` preserves the
+prompt prefix cache. These tests verify: (1) backends with cache support
+retain tools when history contains tool blocks; (2) backends without cache
+support drop tools; (3) placeholder tools are used when real defs unavailable.
 """
 
 # ruff: noqa: D103
@@ -14,7 +13,10 @@ pin the decision helpers that keep a non-empty tool list and force
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock, patch
 
+from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.models import Dialect
 from personal_agent.orchestrator.executor import (
     _SYNTHESIS_PLACEHOLDER_TOOL,
     _forced_synthesis_tool_overrides,
@@ -47,6 +49,13 @@ def _assistant_tool_call_msg() -> dict[str, Any]:
     }
 
 
+def _mock_llm_client(dialect: Dialect) -> MagicMock:
+    """Create mock llm_client with dialect_for_role returning the given value."""
+    client = MagicMock()
+    client.dialect_for_role.return_value = dialect
+    return client
+
+
 # ── _transcript_has_tool_blocks ──────────────────────────────────────────────
 
 
@@ -71,9 +80,11 @@ def test_transcript_has_tool_blocks_false_for_plain_chat() -> None:
 # ── _forced_synthesis_tool_overrides ─────────────────────────────────────────
 
 
-def test_anthropic_with_tool_history_retains_tools_and_pins_none() -> None:
+def test_cache_enabled_with_tool_history_retains_tools_and_pins_none() -> None:
+    client = _mock_llm_client(dialect=Dialect.LLAMACPP_QWEN)
     tools, tool_choice = _forced_synthesis_tool_overrides(
-        provider="anthropic",
+        llm_client=client,
+        model_role=ModelRole.PRIMARY,
         messages=[{"role": "user", "content": "q"}, _tool_result_msg()],
         tool_defs=_TOOL_DEFS,
     )
@@ -81,9 +92,11 @@ def test_anthropic_with_tool_history_retains_tools_and_pins_none() -> None:
     assert tool_choice == "none"
 
 
-def test_anthropic_without_tool_history_drops_tools() -> None:
+def test_cache_enabled_without_tool_history_drops_tools() -> None:
+    client = _mock_llm_client(dialect=Dialect.LLAMACPP_QWEN)
     tools, tool_choice = _forced_synthesis_tool_overrides(
-        provider="anthropic",
+        llm_client=client,
+        model_role=ModelRole.PRIMARY,
         messages=[{"role": "user", "content": "q"}],
         tool_defs=_TOOL_DEFS,
     )
@@ -91,21 +104,27 @@ def test_anthropic_without_tool_history_drops_tools() -> None:
     assert tool_choice is None
 
 
-def test_local_provider_none_drops_tools_even_with_history() -> None:
-    tools, tool_choice = _forced_synthesis_tool_overrides(
-        provider=None,
-        messages=[{"role": "user", "content": "q"}, _tool_result_msg()],
-        tool_defs=_TOOL_DEFS,
-    )
+def test_none_dialect_drops_tools_even_with_history() -> None:
+    client = _mock_llm_client(dialect=None)
+    with patch(
+        "personal_agent.orchestrator.executor.synthesis_retains_tools",
+        return_value=False,
+    ):
+        tools, tool_choice = _forced_synthesis_tool_overrides(
+            llm_client=client,
+            model_role=ModelRole.PRIMARY,
+            messages=[{"role": "user", "content": "q"}, _tool_result_msg()],
+            tool_defs=_TOOL_DEFS,
+        )
     assert tools is None
     assert tool_choice is None
 
 
-def test_anthropic_with_history_but_no_tool_defs_uses_placeholder() -> None:
-    # Codex gap #4: empty tool_defs must still yield a non-empty tools= so the
-    # Anthropic LiteLLM raise is avoided.
+def test_cache_enabled_with_history_but_no_tool_defs_uses_placeholder() -> None:
+    client = _mock_llm_client(dialect=Dialect.LLAMACPP_QWEN)
     tools, tool_choice = _forced_synthesis_tool_overrides(
-        provider="anthropic",
+        llm_client=client,
+        model_role=ModelRole.PRIMARY,
         messages=[{"role": "user", "content": "q"}, _tool_result_msg()],
         tool_defs=[],
     )

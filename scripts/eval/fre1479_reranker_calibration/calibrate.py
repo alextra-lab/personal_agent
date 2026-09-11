@@ -591,7 +591,10 @@ async def run(args: argparse.Namespace) -> int:
         return 1
 
     proposal = choose_bound(measurement.positives, measurement.negatives)
-    print(f"\n=== FRE-1479 broad-recall relevance bound -- {model} ===")
+    # Named from the artifact rather than hard-coded (FRE-1480). This harness serves every
+    # path whose scorer is the reranker -- `--artifact` is what selects which bound a run
+    # produces -- and a header naming one of them would mislabel every other run.
+    print(f"\n=== relevance bound for {Path(args.artifact).stem} -- {model} ===")
     print(
         f"positives n={len(measurement.positives)} "
         f"(entity {len(measurement.entity_positives)}, turn {len(measurement.turn_positives)})  "

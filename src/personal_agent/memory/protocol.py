@@ -131,12 +131,18 @@ class MemoryRecallResult:
             what makes absence reachable, so it must never be assumed. Without this the
             caller cannot tell a failed recall from an empty one, and both arrive as an
             empty ``entities``.
+        relevance_scored: Whether the reranking branch produced this result (ADR-0148 D4,
+            FRE-1480). The admission bound is measured on reranker scores and describes
+            only a reranked set, so a consumer must be able to tell which it holds.
+            Defaults False, so a path that says nothing is never read as having been
+            scored.
     """
 
     episodes: list[dict[str, Any]]
     entities: list[dict[str, Any]]
     relevance_scores: dict[str, float] = field(default_factory=dict)
     arms_failed: tuple[str, ...] = ()
+    relevance_scored: bool = False
 
 
 @dataclass(frozen=True)

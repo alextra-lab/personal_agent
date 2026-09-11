@@ -846,27 +846,114 @@ def check_broad_recall_bound_calibration(
         Every finding raised, or an empty list when the configured state is consistent.
     """
     from personal_agent.config.calibration import (  # noqa: PLC0415 — avoid import cycle
-        load_reranker_calibration,
+        BROAD_RECALL_RELEVANCE_BOUND_FILE,
     )
     from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
 
     if settings is None:
         settings = AppConfig()
+    return _check_reranker_bound_calibration(
+        root,
+        configured=settings.broad_recall_relevance_bound,
+        filename=BROAD_RECALL_RELEVANCE_BOUND_FILE,
+        finding_prefix="broad_recall_bound_calibration",
+        setting_name="broad_recall_relevance_bound",
+        path_label="broad-recall",
+    )
 
-    configured = settings.broad_recall_relevance_bound
+
+def check_entity_match_bound_calibration(
+    root: Path, settings: AppConfig | None = None
+) -> list[Finding]:
+    """ADR-0148 D4 / AC-10 (FRE-1480) — the entity-match bound traces to a live calibration.
+
+    The entity-match sibling of :func:`check_broad_recall_bound_calibration`. Both measure
+    the same component, because ``_multipath_fused_recall``'s ``path`` argument is telemetry
+    only and one core serves both paths — but AC-10 requires one artifact per configured
+    bound, and the two cores are free to diverge, so each binds to its own.
+
+    Args:
+        root: The repository root.
+        settings: The ``AppConfig`` to check. ``None`` constructs a fresh default instance.
+
+    Returns:
+        Every finding raised, or an empty list when the configured state is consistent.
+    """
+    from personal_agent.config.calibration import (  # noqa: PLC0415 — avoid import cycle
+        ENTITY_MATCH_RELEVANCE_BOUND_FILE,
+    )
+    from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
+
+    if settings is None:
+        settings = AppConfig()
+    return _check_reranker_bound_calibration(
+        root,
+        configured=settings.entity_match_relevance_bound,
+        filename=ENTITY_MATCH_RELEVANCE_BOUND_FILE,
+        finding_prefix="entity_match_bound_calibration",
+        setting_name="entity_match_relevance_bound",
+        path_label="entity-match",
+    )
+
+
+def _check_reranker_bound_calibration(
+    root: Path,
+    *,
+    configured: float | None,
+    filename: str,
+    finding_prefix: str,
+    setting_name: str,
+    path_label: str,
+) -> list[Finding]:
+    """The five reportable states shared by every reranker-scored path's bound.
+
+    One body rather than one per path (FRE-1480). ADR-0148 D4 states one rule for every
+    bound, so a second copy would become a second rule the moment either changed — the same
+    argument FRE-1479's own harness made when it imported ``choose_bound`` instead of
+    copying it.
+
+    None of the five states changes the configured value: this check *reports*, which is
+    what leaves the previous bound in force while a staleness finding stands.
+
+    * A bound is configured with no committed artifact behind it.
+    * The artifact names a reranker other than the one now serving.
+    * The artifact's bound and the configured value disagree.
+    * A bound is configured even though the artifact reports that no value satisfies
+      ADR-0148 D4's two constraints.
+    * The artifact is malformed.
+
+    A standing incompatibility with **no** bound configured is deliberately not a finding,
+    for the reason FRE-1477 recorded: ``scripts/check_config.py`` fails CI on any finding,
+    so making it one would wedge every build until the owner decides.
+
+    Args:
+        root: The repository root.
+        configured: The bound this path has configured, or None.
+        filename: The path's committed artifact filename.
+        finding_prefix: Prefix for this path's finding ids.
+        setting_name: The setting's name, for the finding messages.
+        path_label: Human-readable path name, for the finding messages.
+
+    Returns:
+        Every finding raised, or an empty list when the configured state is consistent.
+    """
+    from personal_agent.config.calibration import (  # noqa: PLC0415 — avoid import cycle
+        load_reranker_calibration,
+    )
+
     try:
-        calibration = load_reranker_calibration(root)
+        calibration = load_reranker_calibration(root, filename)
     except ValueError as exc:
-        return [Finding("broad_recall_bound_calibration_malformed", "policy", str(exc))]
+        return [Finding(f"{finding_prefix}_malformed", "policy", str(exc))]
 
     if calibration is None:
         if configured is None:
             return []
         return [
             Finding(
-                "broad_recall_bound_calibration_missing",
+                f"{finding_prefix}_missing",
                 "policy",
-                f"broad_recall_relevance_bound is set to {configured} but no committed "
+                f"{setting_name} is set to {configured} but no committed "
                 "calibration stands behind it (ADR-0148 AC-10: a hand-written constant with "
                 "no artifact is exactly the condition this fails on)",
             )
@@ -878,9 +965,9 @@ def check_broad_recall_bound_calibration(
     if serving is not None and serving != measured:
         findings.append(
             Finding(
-                "broad_recall_bound_calibration_stale",
+                f"{finding_prefix}_stale",
                 "policy",
-                f"the broad-recall relevance bound was calibrated against {measured} on "
+                f"the {path_label} relevance bound was calibrated against {measured} on "
                 f"{calibration.measured_on}, but {serving} is serving. Reranker score "
                 "scales are arbitrary and not comparable across arms (FRE-695), so the "
                 "bound must be re-measured. The previous bound stays in force until it is.",
@@ -889,9 +976,9 @@ def check_broad_recall_bound_calibration(
     if calibration.incompatible and configured is not None:
         findings.append(
             Finding(
-                "broad_recall_bound_configured_despite_incompatibility",
+                f"{finding_prefix.replace('_calibration', '')}_configured_despite_incompatibility",
                 "policy",
-                f"broad_recall_relevance_bound is set to {configured}, but the calibration "
+                f"{setting_name} is set to {configured}, but the calibration "
                 f"of {measured} on {calibration.measured_on} found no bound satisfying "
                 f"ADR-0148 D4: {calibration.incompatible_reason} A bound configured in that "
                 "reserved case is chosen, not measured, which is the condition ADR-0148 "
@@ -901,9 +988,9 @@ def check_broad_recall_bound_calibration(
     if configured != calibration.bound:
         findings.append(
             Finding(
-                "broad_recall_bound_calibration_mismatch",
+                f"{finding_prefix}_mismatch",
                 "policy",
-                f"broad_recall_relevance_bound is {configured} but the committed "
+                f"{setting_name} is {configured} but the committed "
                 f"calibration reports {calibration.bound}. The configured value must be "
                 "the measured one.",
             )
@@ -1739,6 +1826,7 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_embedding_fallback_identity())
     findings.extend(check_relevance_bound_calibration(root))
     findings.extend(check_broad_recall_bound_calibration(root))
+    findings.extend(check_entity_match_bound_calibration(root))
     findings.extend(check_budget_role_coverage(root))
     findings.extend(check_reasoning_declaration(root))
     return findings

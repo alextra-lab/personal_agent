@@ -31,6 +31,16 @@ PROACTIVE_RELEVANCE_BOUND_FILE = "proactive_relevance_bound.json"
 #: Filename of the broad-recall path's reranker calibration (FRE-1479).
 BROAD_RECALL_RELEVANCE_BOUND_FILE = "broad_recall_relevance_bound.json"
 
+#: Filename of the entity-match path's reranker calibration (FRE-1480).
+#:
+#: A separate file from the broad-recall one because ADR-0148 D4 carries one bound per
+#: path and AC-10 names this artifact outright -- "the entity-match bound against whichever
+#: scorer that path acquires". The two paths happen to share a score space, since
+#: ``_multipath_fused_recall``'s ``path`` argument is telemetry only, so the measurements
+#: coincide today. They are still two bounds: the cores are free to diverge, and a
+#: recalibration of one path must never silently move the other's gate.
+ENTITY_MATCH_RELEVANCE_BOUND_FILE = "entity_match_relevance_bound.json"
+
 
 def repository_root() -> Path:
     """The repository root, resolved from this module's own location.

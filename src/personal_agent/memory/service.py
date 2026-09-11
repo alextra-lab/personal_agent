@@ -53,6 +53,7 @@ from personal_agent.memory.models import (
     MemoryQuery,
     MemoryQueryResult,
     Relationship,
+    RelevanceValue,
     SessionNode,
     Stance,
     TurnNode,
@@ -641,6 +642,55 @@ def _filter_entities_by_hard_recency(
         if ts >= cutoff:
             kept.append(entity)
     return kept
+
+
+def relevance_value_key(kind: str, identity: str) -> str:
+    """Namespace one item's relevance-value key by its kind (ADR-0148 D4, FRE-1480).
+
+    ``MemoryQueryResult.relevance_values`` holds turns and entities in one mapping, and
+    their identifier spaces are **not** disjoint: ``EntityNode.entity_id`` is populated
+    from the node's name, while a turn's identity is its ``turn_id``. An unnamespaced key
+    therefore lets an entity whose name equals some turn's id take that turn's score and
+    provenance, or the reverse -- one item silently gated on another item's measurement.
+    The same namespacing discipline ``captains_log.turn_evidence`` already applies to
+    stance targets, and for the same reason.
+
+    Args:
+        kind: ``"turn"`` or ``"entity"``.
+        identity: The item's identity within that kind.
+
+    Returns:
+        The namespaced key.
+    """
+    return f"{kind}:{identity}"
+
+
+def _record_relevance_value(
+    values: dict[str, RelevanceValue],
+    kind: str,
+    identity: str,
+    item: FusedResult,
+) -> None:
+    """Record one item's relevance value, when a model actually produced one.
+
+    Both halves must be present. ``_rerank_fused_items`` leaves ``rerank_score`` None
+    whenever nothing scored the item, and leaves ``rerank_model`` None when the score came
+    from ``rerank()``'s passthrough -- rank order wearing the score field, which is the
+    FRE-1170 degradation this must never record as a measurement. An item failing either
+    check is **absent** from the mapping rather than present with a default, so the
+    consumer can tell "not scored" from "scored low" (ADR-0148 D4's no-score rule).
+
+    Args:
+        values: The mapping to record into, mutated in place.
+        kind: ``"turn"`` or ``"entity"``.
+        identity: The item's identity within that kind.
+        item: The fused item the core resolved.
+    """
+    if item.rerank_score is None or item.rerank_model is None:
+        return
+    values[relevance_value_key(kind, identity)] = RelevanceValue(
+        score=item.rerank_score, model=item.rerank_model
+    )
 
 
 def _build_memory_recall_event(
@@ -5648,6 +5698,12 @@ class MemoryService:
         conversations: list[TurnNode] = []
         entities: list[EntityNode] = []
         relevance_scores: dict[str, float] = {}
+        # FRE-1480 (ADR-0148 D4): the reranker's own score, kept separate from the fused-rank
+        # map above because the two are different facts. Keyed `entity:<name>` /
+        # `turn:<turn_id>` -- `EntityNode.entity_id` is the entity's name, so the two
+        # identifier spaces are not disjoint and one kind could otherwise take the other's
+        # provenance.
+        relevance_values: dict[str, RelevanceValue] = {}
         # FRE-1476: the arms the core could not run, plus any resolution step below.
         arms_failed: list[str] = list(recall.arms_failed)
         if recall.items and self.driver:
@@ -5676,6 +5732,7 @@ class MemoryService:
                     seen_turns.add(turn.turn_id)
                     conversations.append(turn)
                     relevance_scores[turn.turn_id] = (total - position) / total
+                    _record_relevance_value(relevance_values, "turn", turn.turn_id, item)
                 elif item.kind == "entity":
                     entity = entities_by_id.get(item.item_id)
                     if entity and not _filter_entities_by_hard_recency(
@@ -5686,6 +5743,7 @@ class MemoryService:
                         continue
                     seen_entities.add(entity.entity_id)
                     entities.append(entity)
+                    _record_relevance_value(relevance_values, "entity", entity.entity_id, item)
                 if len(conversations) + len(entities) >= query.limit:
                     break
 
@@ -5726,6 +5784,10 @@ class MemoryService:
             conversations=conversations,
             entities=entities,
             relevance_scores=relevance_scores,
+            relevance_values=relevance_values,
+            # FRE-1480: this branch is the reranking one, so the boundary's bound describes
+            # the set it is about to gate. The legacy branch below leaves this False.
+            relevance_scored=True,
             arms_failed=arms_failed,
         )
 

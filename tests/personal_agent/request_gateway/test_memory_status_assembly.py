@@ -105,9 +105,22 @@ class TestAc3EnrichmentInherits:
         adapter = _adapter(stances=[{"target": "Sailing", "affect": "proud of it"}])
         adapter.recall_broad = AsyncMock(
             return_value=BroadRecallResult(
-                entities_by_type={"Topic": [{"name": "Sailing", "description": ""}]},
+                entities_by_type={
+                    "Topic": [
+                        {
+                            "name": "Sailing",
+                            "description": "",
+                            "relevance_score": 0.8,
+                            "relevance_model": "rerank-2.5",
+                        }
+                    ]
+                },
                 recent_sessions=[],
                 total_entity_count=1,
+                # FRE-1480: a healthy MEMORY_RECALL turn is a *reranked* one. Without the
+                # score and this flag the fixture models a path that established no
+                # relevance value, which ADR-0148 D4 makes UNAVAILABLE, not POPULATED.
+                relevance_scored=True,
             )
         )
 
@@ -145,9 +158,21 @@ class TestAc5PartialFailureIsNotAbsence:
         adapter = _adapter()
         adapter.recall_broad = AsyncMock(
             return_value=BroadRecallResult(
-                entities_by_type={"Topic": [{"name": "Sailing", "description": "a real record"}]},
+                entities_by_type={
+                    "Topic": [
+                        {
+                            "name": "Sailing",
+                            "description": "a real record",
+                            "relevance_score": 0.8,
+                            "relevance_model": "rerank-2.5",
+                        }
+                    ]
+                },
                 recent_sessions=[],
                 total_entity_count=1,
+                # FRE-1480: see the sibling fixture above -- "every arm intact" means the
+                # reranker ran, which is what establishes a relevance value at all.
+                relevance_scored=True,
             )
         )
 

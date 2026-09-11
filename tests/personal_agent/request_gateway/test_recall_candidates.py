@@ -236,8 +236,67 @@ class TestDefaultEntityMatchPath:
         )
 
         by_id = {c.identity: c.score for c in result.recall_candidates}
-        assert by_id["turn-7"] == pytest.approx(0.91)
-        assert by_id["turn-9"] == pytest.approx(0.42)
+        # FRE-1480 (ADR-0148 D4) narrowed what "the score" means on this path, and this
+        # assertion moved with it. `MemoryRecallResult.relevance_scores` holds the fused
+        # rank `(total - position) / total`, which is rank order, not a relevance measure --
+        # publishing it as the turn's score is what made this path's evidence record read
+        # as though relevance had been established. The record now carries the path's
+        # relevance value, and an item whose relevance was never established carries None,
+        # exactly as an unscored broad-recall entity already does.
+        #
+        # FRE-1004's actual obligation is unchanged and still pinned: a score the path
+        # established reaches the record rather than dying at the boundary. The companion
+        # test below drives a reranked fixture and asserts precisely that.
+        assert by_id["turn-7"] is None
+        assert by_id["turn-9"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_relevance_value_reaches_the_record(self, monkeypatch) -> None:
+        """FRE-1004's obligation in FRE-1480's score space: a real value is not discarded."""
+        from personal_agent.memory.protocol import MemoryRecallResult
+
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.proactive_memory_enabled",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context.settings.entity_match_relevance_bound",
+            0.30,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "personal_agent.request_gateway.context._calibrated_reranker_model",
+            lambda _filename=None: "rerank-2.5",
+        )
+        adapter = self._adapter()
+        adapter.recall = AsyncMock(
+            return_value=MemoryRecallResult(
+                episodes=[
+                    {
+                        "turn_id": "turn-7",
+                        "summary": "we discussed Paris",
+                        "key_entities": [],
+                        "relevance_score": 0.77,
+                        "relevance_model": "rerank-2.5",
+                    }
+                ],
+                entities=[],
+                relevance_scores={"turn-7": 0.91},
+                relevance_scored=True,
+            )
+        )
+        result = await assemble_context(
+            user_message="tell me about Paris",
+            session_messages=[],
+            intent=_intent(),
+            memory_adapter=adapter,
+            trace_id="t",
+        )
+
+        by_id = {c.identity: c.score for c in result.recall_candidates}
+        # The reranker's 0.77, never the 0.91 fused rank sitting beside it.
+        assert by_id["turn-7"] == pytest.approx(0.77)
 
     @pytest.mark.asyncio
     async def test_identity_agrees_with_the_renderer(self, monkeypatch) -> None:

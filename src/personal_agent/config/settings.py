@@ -246,7 +246,8 @@ class AppConfig(BaseSettings):
             "Maximum tool execution iterations per user request (prevents tool loops). "
             "Raised to 25: compound telemetry/analysis tasks can need 15+ sequential calls. "
             "At max-2, a budget warning is injected. At max+1, a forced LLM synthesis pass "
-            "runs (no tools) so gathered results are never silently discarded."
+            "runs with tool_choice='none' (retaining tools on cache-enabled backends, dropped "
+            "otherwise) so gathered results are never silently discarded."
         ),
     )
     sub_agent_max_tool_iterations: int = Field(

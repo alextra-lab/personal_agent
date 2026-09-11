@@ -630,9 +630,21 @@ async def _query_memory_for_intent(
 
     Returns:
         Tuple of (memory context list or None, relevance scores keyed by item
-        identity, discard report, stage report). The proactive and entity-match paths
-        both supply real scores; the broad-recall path computes none and returns an empty
-        mapping rather than a fabricated one (ADR-0125 D3 item 5, FRE-1004).
+        identity, discard report, stage report).
+
+        **All three paths now supply a real relevance value, and each means something
+        different by it.** Proactive returns its combined score (FRE-1004). Broad recall
+        and entity match both return the serving reranker's score for every item they
+        admit, plumbed to the boundary by FRE-1479 and FRE-1480 respectively — where the
+        set was reranked at all. A path that established no relevance value returns no
+        score for that item rather than a fabricated or defaulted one, and says so through
+        the stage report below.
+
+        An earlier revision of this paragraph said the broad-recall path "computes none
+        and returns an empty mapping" (ADR-0125 D3 item 5). That was true when it was
+        written and is now stale in both halves: FRE-1479 gave broad recall the reranker's
+        score, and FRE-1480 replaced entity match's fused-rank map — ``(total - position)
+        / total``, rank order rather than relevance — with the same reranker score.
 
         The fourth element is a :class:`RecallStageReport` (FRE-1476, ADR-0148 D1). It is
         COMPLETED only where this function has positive evidence the path ran to

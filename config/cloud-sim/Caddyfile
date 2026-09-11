@@ -96,6 +96,25 @@ localhost {
 # Path-allowlisted to slm-requests-* indices only so a leaked CF Access token can't
 # touch other indices. Full ES Security (native auth / API keys) is the planned
 # follow-up; this is the interim CF-only gate.
+#
+# STALE AS OF 2026-08-07 — the description above no longer matches reality (master,
+# 2026-09-11, from FRE-1487). slm_server removed its ES writer on 2026-08-07 (its own
+# FRE-1071); `telemetry.py` there reports `elasticsearch_export: False`. No
+# `slm-requests-*` index exists on this VPS and nothing has written one since.
+#
+# The origin's per-request records are NOT lost — they moved to OTLP. slm_server emits
+# one span per completed request to a local collector, which exports to the {$OTLP_HOST}
+# listener below; those spans land in Tempo under service.name `slm-server`, in the SAME
+# trace as ours, joined on trace_id. Read them there (slm.prefill_ms, slm.cache_reuse,
+# slm.prompt_n, slm.ttfb_ms, slm.decode_ms, slm.heartbeat_count), not in ES. Two hours
+# were spent on 2026-09-11 concluding "the origin has no telemetry" from the absent index.
+#
+# One gap worth knowing: the origin router's error handler does not emit a span, so a
+# FAILED request leaves no OTLP record at all. Only successful requests appear in Tempo.
+#
+# This listener is therefore an inbound write path that nothing uses. Removing it is a
+# security improvement and a config change needing a deploy, so it is left in place and
+# flagged rather than deleted here — owner's call.
 http://{$ES_HOST:es.example.com}:80 {
 	@allowed path_regexp ^/(slm-requests-[^/]+|_bulk)(/.*)?$
 	handle @allowed {

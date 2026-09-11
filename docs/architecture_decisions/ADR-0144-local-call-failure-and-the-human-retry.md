@@ -16,8 +16,36 @@ The origin caused it. The llama.cpp backend on the owner's Mac hung. Its watchdo
 SIGKILL and restarted the model in 26 seconds. The owner rebuilt llama.cpp at the upstream fix
 and re-ran the identical query. It succeeded in 541.97 seconds with a 3,624-character answer.
 
-**The origin defect is closed and is not ours.** This ADR addresses what the incident exposed in
-our own client. Three things, all reachable from this repo.
+> **Correction, 2026-09-11 (master, from FRE-1487).** The sentence that stood here — *"The origin
+> defect is closed and is not ours"* — was wrong, and the paragraph above records the evidence that
+> misled it. The rebuild restarted the process, and **the restart is what fixed it**, not the build.
+>
+> The defect was the launcher, not llama.cpp. `slm_server` started the backend with `stderr` on a
+> pipe nothing read after startup. The macOS pipe buffer holds 65,440 bytes, llama.cpp queues a
+> further 512 log entries, and then every thread that logs blocks. That is roughly 122 KiB of
+> `stderr` per backend lifetime — 63 to 152 requests, depending on log volume per request.
+>
+> Reproduced on the origin 2026-09-11 with a 0.6B model launched the same way: requests 1–152
+> succeeded, 153 hung, `/health` answered while `/slots` did not, and `SIGTERM` was ignored for 10
+> seconds. **Reading the pipe completed the stalled request immediately**, released the pending
+> `SIGTERM`, and the process exited with code 0 within 2 seconds. 125,037 bytes came out.
+>
+> So the defect was never closed. It recurred nine times between 2026-08-24 and 2026-09-11, and
+> request count predicts those stalls (63, 73, 74, 75, 77, 106, 137) while uptime does not (2.5 to
+> 22.5 hours). The same unread pipe is also why no llama-server log exists for any stall window:
+> the defect destroyed the evidence needed to diagnose it.
+>
+> Fixed on the origin 2026-09-11 — each backend's `stderr` now goes to a log file, with the
+> previous run kept as `.log.prev`.
+>
+> **What this changes for the decisions below: nothing, and that is worth stating.** D1–D4 address
+> client-side defects that are real whether or not the origin was at fault. What it does change is
+> their *motivation* — a silent origin is not a rare event to be tolerated, and FRE-1433's in-flight
+> registry is now the highest-value of them, because our telemetry was blind for the full ten
+> minutes the backend was frozen.
+
+This ADR addresses what the incident exposed in our own client. Three things, all reachable from
+this repo.
 
 ### The proxy limit is a gap bound, not a total bound
 
@@ -661,3 +689,11 @@ ticket.
 **Changed By:** adr session, from FRE-1398
 **Reason:** Owner took D1–D4 on 2026-09-06. The origin defect that triggered the incident is
 closed by an upstream llama.cpp rebuild. This ADR covers the client-side defects it exposed.
+
+### 2026-09-11 - Proposed (premise corrected)
+**Changed By:** master, from FRE-1487
+**Reason:** The origin defect was **not** closed by the rebuild. The rebuild restarted the process,
+which emptied an unread `stderr` pipe; the freeze then recurred nine times between 2026-08-24 and
+2026-09-11. Root cause reproduced on the origin and fixed there on 2026-09-11. See the Correction
+in Context. D1–D4 are unchanged and still stand; FRE-1433 gains weight, because our own telemetry
+emitted nothing for the full ten minutes the backend was frozen.

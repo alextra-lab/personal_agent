@@ -71,6 +71,14 @@ CONSTRAINT_OPTIONS: dict[str, list[ConstraintOption]] = {
         ConstraintOption(action_id="answer_from_partial", label="Answer from what was gathered"),
         ConstraintOption(action_id="stop_and_show", label="Stop and show me the worker reports"),
     ],
+    # ADR-0142 D2/D3/D4b / FRE-1393: tool iterations crossed a configured count
+    # below the turn's effective ceiling. The safe default (last) is answer_now —
+    # a turn nobody is watching does not keep spending past the review point
+    # (D4c: headless/no-client turns terminate at this baseline, not the deadline).
+    "spend_threshold": [
+        ConstraintOption(action_id="continue_turn", label="Continue"),
+        ConstraintOption(action_id="answer_now", label="Answer now"),
+    ],
 }
 
 

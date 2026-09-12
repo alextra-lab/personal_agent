@@ -6999,6 +6999,66 @@ async def step_tool_execution(
     # ADR-0076: push the freshly-incremented tool count to the status bar.
     await _report_turn_progress(ctx)
     _max_iters = _resolve_max_iterations(ctx)
+
+    # ADR-0142 D2/D3 (FRE-1393): ask once when spend crosses a threshold below the
+    # ceiling — the drift control for a turn whose iteration count would otherwise
+    # run unchecked to the ceiling with no chance for the user to intervene. Must
+    # sit strictly below the turn's EFFECTIVE ceiling: the still-live per-task-type
+    # cap (orchestrator_max_tool_iterations_by_task_type, removed only by FRE-1394)
+    # can put that ceiling at or below the configured threshold, in which case the
+    # ordinary tool_iteration_limit check below remains the sole control.
+    if (
+        not ctx.spend_pause_raised
+        and settings.orchestrator_spend_threshold < _max_iters
+        and ctx.tool_iteration_count >= settings.orchestrator_spend_threshold
+    ):
+        ctx.spend_pause_raised = True
+        log.info(
+            "spend_threshold_crossed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            iteration=ctx.tool_iteration_count,
+            threshold=settings.orchestrator_spend_threshold,
+        )
+        # FRE-973 / ADR-0142 D4a: same no-time-left-to-ask treatment as the
+        # tool_iteration_limit check below.
+        if min(_turn_deadline_remaining(ctx), _turn_lifetime_remaining(ctx)) <= 0:
+            log.info(
+                "spend_threshold_pause_skipped_deadline_exceeded",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                iteration=ctx.tool_iteration_count,
+            )
+            spend_action_id = None
+        else:
+            spend_action_id = await _maybe_pause_for_constraint(
+                session_id=ctx.session_id,
+                trace_id=ctx.trace_id,
+                user_id=ctx.user_id,
+                constraint="spend_threshold",
+                context=(
+                    f"This turn has used {ctx.tool_iteration_count} tool calls, crossing "
+                    f"the {settings.orchestrator_spend_threshold}-call review point."
+                ),
+                allow_preference=False,
+                ctx=ctx,
+            )
+        if ctx.turn_stopped_early:
+            return TaskState.SYNTHESIS
+        if spend_action_id != "continue_turn":
+            ctx.steps.append(
+                {
+                    "type": "warning",
+                    "description": "Spend threshold reached; forcing LLM synthesis pass",
+                    "metadata": {
+                        "iteration": ctx.tool_iteration_count,
+                        "threshold": settings.orchestrator_spend_threshold,
+                    },
+                }
+            )
+            ctx.force_synthesis_from_limit = True
+            return TaskState.LLM_CALL
+
     if ctx.tool_iteration_count > _max_iters:
         log.warning(
             "tool_iteration_limit_reached",

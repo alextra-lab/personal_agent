@@ -257,6 +257,22 @@ class AppConfig(BaseSettings):
             "otherwise) so gathered results are never silently discarded."
         ),
     )
+    orchestrator_spend_threshold: int = Field(
+        default=6,
+        ge=1,
+        description=(
+            "ADR-0142 D2/D3 (FRE-1393): tool-iteration count that, once reached, raises the "
+            "spend_threshold constraint pause -- once per turn -- asking the user whether to "
+            "continue or answer now. A count, not a cost estimate: twenty cheap calls and "
+            "twenty expensive ones trip it alike (deliberate, per D2). Sized from the ADR's "
+            "own measurement: across 504 conversational turns the average was 1.42 iterations "
+            "and 13 sat at or above 6, so a threshold in that region asks rarely. Only fires "
+            "when it sits below the turn's EFFECTIVE ceiling (_resolve_max_iterations) -- the "
+            "still-live orchestrator_max_tool_iterations_by_task_type can put that ceiling at "
+            "or below this value until FRE-1394 removes it, in which case the ordinary "
+            "tool_iteration_limit pause remains the sole control for that turn."
+        ),
+    )
     sub_agent_max_tool_iterations: int = Field(
         default=20,
         ge=0,
@@ -3080,6 +3096,29 @@ class AppConfig(BaseSettings):
             The explicit value for ``level``, else ``sub_agent_max_tool_iterations``.
         """
         return self.sub_agent_rounds_by_thoroughness.get(level, self.sub_agent_max_tool_iterations)
+
+    @model_validator(mode="after")
+    def _validate_spend_threshold_below_ceiling(self) -> "AppConfig":
+        """Refuse a spend threshold at or above the global tool-iteration ceiling (ADR-0142 D2).
+
+        A threshold that never sits below the ceiling could never fire "below the
+        ceiling" as D2 requires -- it would only ever coincide with or trail the
+        existing tool_iteration_limit pause. This is a load-time sanity check on
+        the two GLOBAL settings; the runtime trigger additionally compares against
+        the turn's own effective ceiling (which the still-live per-task-type caps
+        can lower further), since that is a per-turn value this validator cannot see.
+
+        Raises:
+            ValueError: When ``orchestrator_spend_threshold`` is not strictly below
+                ``orchestrator_max_tool_iterations``.
+        """
+        if self.orchestrator_spend_threshold >= self.orchestrator_max_tool_iterations:
+            raise ValueError(
+                "orchestrator_spend_threshold "
+                f"({self.orchestrator_spend_threshold}) must be strictly below "
+                f"orchestrator_max_tool_iterations ({self.orchestrator_max_tool_iterations})."
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_sub_agent_rounds_by_thoroughness(self) -> "AppConfig":

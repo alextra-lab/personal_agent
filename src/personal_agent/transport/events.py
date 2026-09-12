@@ -56,6 +56,10 @@ class Phase(str, Enum):
 #: ADR-0149 D4 / FRE-1484 adds ``sub_agent_fanout_incomplete``: raised when a
 #: sub-agent fan-out returns with a failed landing, before the primary
 #: synthesizes an answer over it.
+#: ADR-0142 D2/D3 / FRE-1393 adds ``spend_threshold``: raised once per turn when
+#: tool iterations cross a configured count below the turn's effective ceiling —
+#: the drift control for turns whose spend would otherwise run unchecked to the
+#: ceiling with no chance for the user to intervene.
 ConstraintName = Literal[
     "tool_iteration_limit",
     "context_compression",
@@ -63,6 +67,7 @@ ConstraintName = Literal[
     "artifact_builder",
     "sub_agent_tool_approval",
     "sub_agent_fanout_incomplete",
+    "spend_threshold",
 ]
 
 

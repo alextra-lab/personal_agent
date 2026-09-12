@@ -156,6 +156,8 @@
         "entity_name":         { "type": "keyword" },
         "entity_type":         { "type": "keyword" },
         "tool_name":           { "type": "keyword" },
+        "refused_tool_origins": { "type": "keyword" },
+        "refused_origin_admissibility": { "type": "keyword" },
         "tool_count":          { "type": "integer" },
         "success":             { "type": "boolean" },
         "model_role":          { "type": "keyword" },

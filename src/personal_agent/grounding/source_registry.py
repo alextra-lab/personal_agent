@@ -911,6 +911,11 @@ class SourceRegistry:
         self._by_dedupe_key: dict[tuple[SourceKind, str, str], RegisteredSource] = {}
         self._tainted: set[str] = set()
         self._tool_results_offered = 0
+        # Insertion-ordered sets (ADR-0139 D8, FRE-1359). A dict keyed by the recorded
+        # string keeps refusal order and collapses a repeat, which is what "the distinct
+        # tool origins refused on that turn" asks for.
+        self._refused_tool_origins: dict[str, None] = {}
+        self._refused_origin_admissibility: dict[str, None] = {}
 
     @property
     def turn_id(self) -> str:
@@ -942,6 +947,52 @@ class SourceRegistry:
         return sum(
             1 for s in self._sources if s.kind in (SourceKind.TOOL, SourceKind.DOCUMENTATION)
         )
+
+    @property
+    def refused_tool_origins(self) -> tuple[str, ...]:
+        """The distinct tools this turn offered that registered no source (ADR-0139 D8).
+
+        The ordering signal the wrapper roadmap needs and D1 does not carry: an
+        ``uncitable`` turn admitted nothing, so no registered source can name what it
+        wanted. ADR-0140 AC-3 is not checkable without this.
+
+        **Not the complement of** :attr:`tool_results_admitted`. That count is derived
+        from unique registered sources while :attr:`tool_results_offered` counts calls,
+        so their difference already includes a deduplicated admission. One tool can
+        appear here *and* among this turn's sources — admitted on one call, refused on
+        another.
+        """
+        return tuple(self._refused_tool_origins)
+
+    @property
+    def refused_origin_admissibility(self) -> tuple[str, ...]:
+        """The distinct ``"<tool_name>:<admissibility>"`` pairs refused this turn.
+
+        :attr:`refused_tool_origins` alone cannot order the roadmap, because two of the
+        four refusal shapes are reachable only *after* a tool passed
+        :data:`DOCUMENTATION_TOOLS` or :data:`TYPED_RETRIEVAL_TOOLS`:
+        ``DERIVED_FROM_TURN_WRITE`` and ``NO_CONTENT`` name a tool that already has a
+        typed wrapper, so they are never provisioning demand. Separating them from
+        ``MODEL_AUTHORED_INVOCATION`` and ``UNCLASSIFIED_TOOL`` needs the reason, and
+        recovering it from the DEBUG refusal event is the join ADR-0139 D1 abolished.
+
+        A flat list of joined strings rather than an object keyed by tool name: a dynamic
+        object would mint one Elasticsearch leaf field per tool name.
+        """
+        return tuple(self._refused_origin_admissibility)
+
+    def _record_refusal(self, tool_name: str, admissibility: Admissibility) -> None:
+        """Record one refusal's origin and its reason (ADR-0139 D8, ADR-0140 AC-3).
+
+        Called from every non-``ADMISSIBLE`` return in :meth:`register_tool_result`, so a
+        refusal shape added later cannot silently escape the ordering signal.
+
+        Args:
+            tool_name: The tool whose result registered no source.
+            admissibility: The rule that refused it.
+        """
+        self._refused_tool_origins[tool_name] = None
+        self._refused_origin_admissibility[f"{tool_name}:{admissibility.value}"] = None
 
     def sources(self) -> tuple[RegisteredSource, ...]:
         """Return every registered source, in registration order."""
@@ -1047,6 +1098,7 @@ class SourceRegistry:
 
         if tool_name in ARBITRARY_CODE_TOOLS:
             self._taint(arguments)
+            self._record_refusal(tool_name, Admissibility.MODEL_AUTHORED_INVOCATION)
             return ToolRegistration(
                 source=None,
                 admissibility=Admissibility.MODEL_AUTHORED_INVOCATION,
@@ -1063,6 +1115,7 @@ class SourceRegistry:
             kind = SourceKind.TOOL
         else:
             self._taint(arguments)
+            self._record_refusal(tool_name, Admissibility.UNCLASSIFIED_TOOL)
             return ToolRegistration(
                 source=None,
                 admissibility=Admissibility.UNCLASSIFIED_TOOL,
@@ -1074,6 +1127,7 @@ class SourceRegistry:
             )
 
         if self._reads_tainted(arguments):
+            self._record_refusal(tool_name, Admissibility.DERIVED_FROM_TURN_WRITE)
             return ToolRegistration(
                 source=None,
                 admissibility=Admissibility.DERIVED_FROM_TURN_WRITE,
@@ -1086,6 +1140,7 @@ class SourceRegistry:
 
         admissible = strip_argument_echo(content, arguments) if success else ""
         if not admissible.strip():
+            self._record_refusal(tool_name, Admissibility.NO_CONTENT)
             return ToolRegistration(
                 source=None,
                 admissibility=Admissibility.NO_CONTENT,

@@ -2230,9 +2230,26 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
     # a join nobody ran. Gated on `verification.available`: a turn verification did not
     # run on has no span list these fields could trust, and the ADR scopes the whole
     # table to "on every turn where verification ran".
+    #
+    # ADR-0139 D8 (FRE-1359) adds the two refusal fields below. D1 says *which turns* went
+    # uncitable; it cannot say *which source* they wanted, because an `uncitable` turn
+    # admitted nothing and `source_registry_snapshot` holds only admitted sources. They are
+    # ungated for the same reason the two counters are: both describe the registry, not the
+    # span list. `refused_origin_admissibility` carries the rule alongside the origin because
+    # `DERIVED_FROM_TURN_WRITE` and `NO_CONTENT` are reachable only by a tool that already
+    # passed the policy table — so an origin-only field would rank an existing typed tool as
+    # wrapper demand, and recovering the reason means the DEBUG join D1 abolished.
+    #
+    # Emitted once per generation attempt, like this whole line: a D4 retry writes a second
+    # document carrying the first attempt's origins, so a reader counting documents as turns
+    # double-counts. FRE-1359's preregistered unit of analysis collapses by `trace_id`.
     registry = ctx.source_registry
     tool_results_offered = registry.tool_results_offered if registry is not None else 0
     tool_results_admitted = registry.tool_results_admitted if registry is not None else 0
+    refused_tool_origins = list(registry.refused_tool_origins) if registry is not None else []
+    refused_origin_admissibility = (
+        list(registry.refused_origin_admissibility) if registry is not None else []
+    )
     turn_evidence_class: TurnEvidenceClass | None = None
     near_miss_markers: dict[str, int] | None = None
     observed_span_outcomes: dict[str, int] | None = None
@@ -2282,6 +2299,9 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         turn_evidence_class=turn_evidence_class.value if turn_evidence_class else None,
         tool_results_offered=tool_results_offered,
         tool_results_admitted=tool_results_admitted,
+        # ADR-0139 D8 / ADR-0140 AC-3 (FRE-1359) — the roadmap's ordering signal.
+        refused_tool_origins=refused_tool_origins,
+        refused_origin_admissibility=refused_origin_admissibility,
         observed_span_outcomes=observed_span_outcomes,
         invocation_checked_span_outcomes=invocation_checked_span_outcomes,
         near_miss_markers=near_miss_markers,

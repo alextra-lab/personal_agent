@@ -81,8 +81,8 @@ bindings:
   sub_agent:
     deployment: inherit
     mode: worker
-    max_tokens: 2048
-    default_timeout: 90
+    max_tokens: 8192  # FRE-1496: committed baseline, worker_report_v1 schema bounds the output
+    default_timeout: 600  # FRE-1496: committed baseline, 90s was cutting calls that legitimately run 25-65s
     open: true
     priority: ELEVATED
   entity_extraction:  { deployment: gpt-5.4-mini }

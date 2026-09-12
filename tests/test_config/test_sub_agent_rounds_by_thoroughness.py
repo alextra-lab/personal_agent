@@ -67,13 +67,23 @@ class TestOverCapIsRefused:
 
 
 class TestGuardedLimitsUnchanged:
-    """AC-4 guard (ADR-0149 AC-8, FRE-1487 AC-6): this ticket raises no limit."""
+    """AC-4 guard (FRE-1496): retired limits are committed; every level equals the cap."""
 
-    def test_guarded_limit_defaults_unchanged(self) -> None:
+    def test_guarded_limit_defaults_are_committed(self) -> None:
+        """FRE-1496 AC-1/AC-2: the three retired study values are now baselines."""
         fields = AppConfig.model_fields
-        assert fields["sub_agent_max_tool_iterations"].default == 5
+        assert fields["sub_agent_max_tool_iterations"].default == 20
         assert fields["orchestrator_task_timeout_seconds"].default == 900
 
-    def test_sub_agent_role_default_timeout_unchanged(self) -> None:
+        # Verify every level equals the cap at the committed baseline
+        config = AppConfig()
+        assert all(config.sub_agent_rounds_for(lvl) == 20 for lvl in THOROUGHNESS_LEVELS)
+
+    def test_sub_agent_role_defaults_are_committed(self) -> None:
+        """FRE-1496 AC-1: config/model_roles.yaml has the committed values."""
         roles = yaml.safe_load((_REPO_ROOT / "config" / "model_roles.yaml").read_text())
-        assert roles["bindings"]["sub_agent"]["default_timeout"] == 90
+        assert roles["bindings"]["sub_agent"]["default_timeout"] == 600
+
+        # Verify levels follow a patched cap too
+        config = AppConfig(sub_agent_max_tool_iterations=15)
+        assert all(config.sub_agent_rounds_for(lvl) == 15 for lvl in THOROUGHNESS_LEVELS)

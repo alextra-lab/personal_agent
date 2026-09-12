@@ -829,9 +829,15 @@ class TestSubAgentToolLoop:
             result = await run_sub_agent(spec=spec, llm_client=mock_client, trace_id="t")
             elapsed = time.monotonic() - started
 
-        # The hard bound: generous CI slack, but this fails if the deadline is
-        # not respected.
-        assert elapsed <= hard_deadline + 1.0, (
+        # The slack is measured, not a round number. A correct run takes ~0.43s
+        # (nine 0.1s rounds to trip the landing reserve, plus the synthesis
+        # call); a deadline that stopped being enforced would run to the
+        # 20-round iteration cap plus its synthesis call, ~2.1s. `+0.3` puts
+        # the bound at 1.35s: 3.1x the observed run (won't flake — the
+        # dominant cost is asyncio.sleep(0.1), wall clock, not CPU-load
+        # sensitive) and comfortably under the ~2.1s runaway (will catch a
+        # regression).
+        assert elapsed <= hard_deadline + 0.3, (
             f"loop ran {elapsed:.2f}s against a {hard_deadline:.2f}s hard deadline"
         )
         assert result.success is False

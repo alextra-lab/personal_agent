@@ -88,7 +88,7 @@ def _e2e_patches() -> Generator[Any, None, None]:
         )
 
         with (
-            patch("personal_agent.orchestrator.executor.settings", mock_settings),
+            patch("personal_agent.config.settings", mock_settings),
             patch("personal_agent.llm_client.factory.get_llm_client") as mock_llm_class,
             patch("personal_agent.captains_log.background.run_in_background", lambda coro: None),
             patch("personal_agent.captains_log.capture.write_capture"),

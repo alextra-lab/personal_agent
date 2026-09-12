@@ -235,6 +235,35 @@ class TestAdaptChatCompletionsResponse:
 
         assert result.get("finish_reason") is None
 
+    def test_refusal_propagated_when_present(self) -> None:
+        """ADR-0150 D1: a constrained call's decline reaches the caller."""
+        response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "refusal": "I cannot answer this in the requested shape.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+        result = adapt_chat_completions_response(response_data)
+
+        assert result["refusal"] == "I cannot answer this in the requested shape."
+
+    def test_refusal_absent_stays_absent(self) -> None:
+        response_data = {
+            "choices": [{"message": {"role": "assistant", "content": "Test"}}],
+        }
+
+        result = adapt_chat_completions_response(response_data)
+
+        assert result.get("refusal") is None
+
 
 class TestBuildResponsesRequest:
     """Test building responses API request payload."""

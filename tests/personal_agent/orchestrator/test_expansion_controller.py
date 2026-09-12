@@ -23,7 +23,15 @@ from personal_agent.orchestrator.expansion_controller import (
 )
 from personal_agent.orchestrator.expansion_types import ExpansionPlan, PlanTask
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult
-from personal_agent.orchestrator.worker_types import WORKER_TYPES, Thoroughness, WorkerType
+from personal_agent.orchestrator.worker_types import (
+    WORKER_TYPES,
+    Finding,
+    Gap,
+    Thoroughness,
+    WorkerReport,
+    WorkerType,
+    render_worker_report_summary,
+)
 
 # Force-import _run_dispatch's own lazy imports at module load rather than on
 # first call. Several tests below assert fan-out-window arithmetic against a
@@ -1108,6 +1116,96 @@ class TestSynthesisContextTerminalFacts:
         )
 
         assert "sub-tasks completed" not in context
+
+
+class TestSynthesisContextRendersReports:
+    """ADR-0150 D4 (FRE-1494) AC-5 — the primary receives data it can read."""
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @staticmethod
+    def _schema_result(
+        task_name: str, findings: list[Finding], gaps: list[Gap], notes: str = ""
+    ) -> SubAgentResult:
+        from dataclasses import replace
+
+        report = WorkerReport(working_notes=notes, findings=findings, gaps=gaps, tool_gap="")
+        return replace(
+            _make_sub_agent_result(
+                task_name, success=True, summary=render_worker_report_summary(report)
+            ),
+            report=report,
+            report_schema="worker_report_v1",
+            report_kind="synthesized",
+            stop_reason="completed",
+        )
+
+    def test_renders_exactly_f_findings_and_g_gaps_once(
+        self, controller: ExpansionController
+    ) -> None:
+        plan = _validate_plan_json(_make_plan_json(2))
+        assert plan is not None
+        f1 = Finding(
+            claim="c1", source_url="https://a.example", date_or_period="", why_it_matters="w1"
+        )
+        f2 = Finding(
+            claim="c2", source_url="https://b.example", date_or_period="", why_it_matters="w2"
+        )
+        g1 = Gap(looked_for="missing1", where="web_search")
+        r1 = self._schema_result("task_0", findings=[f1], gaps=[g1])
+        r2 = self._schema_result("task_1", findings=[f2], gaps=[])
+
+        context = controller._build_synthesis_context(plan=plan, sub_results=[r1, r2])
+
+        assert context.count("c1 —") == 1
+        assert context.count("c2 —") == 1
+        assert context.count("missing1") == 1
+        assert context.count("### Not found") == 1
+        assert "{" not in context
+
+    def test_text_reporting_worker_renders_summary_verbatim(
+        self, controller: ExpansionController
+    ) -> None:
+        plan = _validate_plan_json(_make_plan_json(1))
+        assert plan is not None
+        text_result = _make_sub_agent_result("task_0", summary="plain text summary")
+
+        context = controller._build_synthesis_context(plan=plan, sub_results=[text_result])
+
+        assert "plain text summary" in context
+
+    def test_a_schema_workers_own_section_carries_no_gaps(
+        self, controller: ExpansionController
+    ) -> None:
+        """Gaps appear once, in the combined section — never inline per worker."""
+        plan = _validate_plan_json(_make_plan_json(1))
+        assert plan is not None
+        f = Finding(
+            claim="c", source_url="https://a.example", date_or_period="", why_it_matters="w"
+        )
+        g = Gap(looked_for="missing_here", where="somewhere")
+        r = self._schema_result("task_0", findings=[f], gaps=[g])
+
+        context = controller._build_synthesis_context(plan=plan, sub_results=[r])
+
+        header_idx = context.index("### task_0")
+        not_found_idx = context.index("### Not found")
+        assert "missing_here" not in context[header_idx:not_found_idx]
+        assert "missing_here" in context[not_found_idx:]
+
+    def test_no_not_found_section_when_no_gaps(self, controller: ExpansionController) -> None:
+        plan = _validate_plan_json(_make_plan_json(1))
+        assert plan is not None
+        f = Finding(
+            claim="c", source_url="https://a.example", date_or_period="", why_it_matters="w"
+        )
+        r = self._schema_result("task_0", findings=[f], gaps=[])
+
+        context = controller._build_synthesis_context(plan=plan, sub_results=[r])
+
+        assert "Not found" not in context
 
 
 def _task(

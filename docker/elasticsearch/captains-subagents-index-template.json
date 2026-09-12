@@ -73,6 +73,8 @@
         "stop_reason": { "type": "keyword" },
         "report_kind": { "type": "keyword" },
         "finish_reason": { "type": "keyword" },
+        "report_schema": { "type": "keyword" },
+        "findings_dropped_invalid_source": { "type": "integer" },
         "rounds": {
           "type": "nested",
           "properties": {

@@ -51,6 +51,7 @@ from personal_agent.orchestrator.worker_types import (
     THOROUGHNESS_LEVELS,
     WORKER_TYPES,
     WorkerType,
+    render_worker_report_body,
     worker_types_declaring,
 )
 
@@ -1076,15 +1077,27 @@ class ExpansionController:
 
         n_ok = 0
         n_ledger = 0
+        # ADR-0150 D4: every worker's gaps are combined into one `Not found`
+        # section at the end of the turn's context, each attributed to its own
+        # task, rather than repeated per worker.
+        all_gaps: list[tuple[str, str, str]] = []
         for r in sub_results:
             status = "OK" if r.success else f"FAILED: {r.error}"
+            if r.report is not None:
+                # A schema-backed `synthesized` landing: render findings and
+                # notes from the validated report, not `r.summary` (which
+                # includes the gaps this loop pulls out separately).
+                body = render_worker_report_body(r.report)
+                all_gaps.extend((r.spec_task, g.looked_for, g.where) for g in r.report.gaps)
+            else:
+                body = r.summary
             # ADR-0149 D4 (FRE-1484): the header carries the terminal facts, not
             # just OK/FAILED — a worker that completed with an empty report and a
             # worker that never got the chance to write one must not read alike.
             parts.append(
                 f"### {r.spec_task} [{status}: stop={r.stop_reason}, "
                 f"report={r.report_kind}, {r.tool_iterations} round(s), "
-                f"{r.tool_result_chars_absorbed:,} chars absorbed]\n{r.summary}\n\n"
+                f"{r.tool_result_chars_absorbed:,} chars absorbed]\n{body}\n\n"
             )
             if r.denied_tools:
                 # FRE-1388 AC-4: denial is deterministic and lands in the report
@@ -1098,6 +1111,14 @@ class ExpansionController:
                 n_ok += 1
             elif r.report_kind == "ledger":
                 n_ledger += 1
+
+        if all_gaps:
+            parts.append("### Not found\n")
+            parts.extend(
+                f"- [{task_name}] {looked_for} (looked: {where})\n"
+                for task_name, looked_for, where in all_gaps
+            )
+            parts.append("\n")
 
         if any(not r.success for r in sub_results):
             failed = [r.spec_task for r in sub_results if not r.success]

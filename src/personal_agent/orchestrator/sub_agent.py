@@ -62,10 +62,15 @@ from typing import Any
 from uuid import UUID
 
 import structlog
+from pydantic import ValidationError as PydanticValidationError
 
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
 from personal_agent.config import settings
-from personal_agent.llm_client.models import Dialect, synthesis_retains_tools
+from personal_agent.llm_client.models import (
+    Dialect,
+    landing_accepts_json_schema,
+    synthesis_retains_tools,
+)
 from personal_agent.llm_client.types import GenerationProgress, LLMTimeout
 from personal_agent.orchestrator.prompts import render_current_datetime_block
 from personal_agent.orchestrator.sub_agent_approval import (
@@ -82,7 +87,14 @@ from personal_agent.orchestrator.tool_dispatch import (
     dispatch_tool_call,
     get_shared_tool_execution_layer,
 )
-from personal_agent.orchestrator.worker_types import WORKER_TYPES
+from personal_agent.orchestrator.worker_types import (
+    WORKER_REPORT_RESPONSE_FORMAT,
+    WORKER_REPORT_SCHEMA_NAME,
+    WORKER_TYPES,
+    WorkerReport,
+    render_report_instruction,
+    render_worker_report_summary,
+)
 from personal_agent.telemetry.trace import TraceContext
 
 logger = structlog.get_logger(__name__)
@@ -159,10 +171,6 @@ _BUDGET_BLOCK_TEMPLATE = "Thoroughness: {level}. You have a budget of {n} tool r
 # ADR-0150 D5: the isolation-by-partition line (Qwen Code builtin-agents.ts:376).
 _SIBLING_LINE_TEMPLATE = "Other workers in this turn own: {siblings}. Stay inside your task."
 
-# ADR-0150 D5: every worker reports in text until T3 (FRE-1494) gives a
-# schema-backed type its report schema and replaces this line for it.
-_REPORT_LINE = "Report in text."
-
 # ADR-0149 D3 move 3: appended after every round's tool results, at the tail only.
 # Characters are reported alongside rounds because context growth is what actually
 # binds (D1), even though the enforced cap stays round-denominated.
@@ -172,12 +180,16 @@ _COUNTDOWN_TEMPLATE = (
 )
 
 # ADR-0149 D3 move 5: the forced-synthesis instruction. The text is advice; the
-# absence of callable tools is the enforcement.
+# absence of callable tools is the enforcement. `{report_line}` is
+# `render_report_instruction(spec.worker_type)` (ADR-0150 D5) — for a
+# schema-backed worker the constrained landing call enforces shape regardless
+# of this prose, but the field limits are stated here too so the model plans
+# for them rather than discovering them by truncation.
 _SYNTHESIS_INSTRUCTION = (
     "{opening} Do NOT call any more tools. Using only the tool results already in "
     "this conversation, write your report now. State every fact you found that "
     "answers the task, each with the source it came from. Then list what you "
-    "searched for and did not find. Keep the report under 400 words. " + _REPORT_LINE
+    "searched for and did not find. Keep the report under 400 words. {report_line}"
 )
 _SYNTHESIS_OPENING_CAP = "Your tool budget is spent."
 _SYNTHESIS_OPENING_RESERVE = "Your time budget is nearly spent."
@@ -494,6 +506,8 @@ def _emit_sub_agent_capture(
         stop_reason=result.stop_reason,
         report_kind=result.report_kind,
         finish_reason=result.finish_reason,
+        report_schema=result.report_schema,
+        findings_dropped_invalid_source=result.findings_dropped_invalid_source,
         rounds=rounds if rounds is not None else [],
         full_output=result.full_output,
         full_output_chars=full_output_chars,
@@ -528,6 +542,12 @@ def _warn_if_clipped(result: SubAgentResult, trace_id: str, session_id: str | No
         trace_id: Parent request trace identifier.
         session_id: Originating session id.
     """
+    if result.report is not None:
+        # ADR-0150 D1: `summary` is a deliberate rendering of `report`, not a
+        # truncation of `full_output` (the validated JSON) — the two differ by
+        # design on a synthesized schema-backed landing, and comparing their
+        # lengths here would misfire on every one.
+        return
     full_output_chars = len(result.full_output)
     digest_chars = len(result.summary)
     if digest_chars >= full_output_chars:
@@ -681,7 +701,7 @@ def _build_task_message(spec: SubAgentSpec, trace_id: str, session_id: str | Non
             _BUDGET_BLOCK_TEMPLATE.format(
                 level=spec.thoroughness, n=settings.sub_agent_rounds_for(spec.thoroughness)
             ),
-            _REPORT_LINE,
+            render_report_instruction(spec.worker_type),
         )
     )
     if spec.turn_started_at is None:
@@ -904,6 +924,19 @@ class _ToolLoopOutcome:
         report_kind: What ``content`` is.
         finish_reason: The report-writing call's own ``finish_reason`` (ADR-0150
             D6). ``None`` on a path that made no such call.
+        report: The parsed, validated ``worker_report_v1`` model (ADR-0150 D1),
+            set only on a ``synthesized`` schema-backed landing.
+        report_schema: The report schema's name when ``report`` is set, else
+            ``None``.
+        findings_dropped_invalid_source: Count of findings dropped for an
+            unusable ``source_url`` (ADR-0150 D1). ``0`` when ``report`` is
+            ``None`` or nothing was dropped.
+        summary: The deterministic markdown rendering to use as
+            ``SubAgentResult.summary`` (ADR-0150 D1), when it differs from
+            ``content`` — set only on a ``synthesized`` schema-backed landing,
+            where ``content`` is the validated JSON (``full_output``) and this
+            is the rendering. ``None`` everywhere else, meaning "use
+            ``content`` for both".
     """
 
     content: str
@@ -911,6 +944,10 @@ class _ToolLoopOutcome:
     stop_reason: SubAgentStopReason
     report_kind: SubAgentReportKind
     finish_reason: str | None = None
+    report: WorkerReport | None = None
+    report_schema: str | None = None
+    findings_dropped_invalid_source: int = 0
+    summary: str | None = None
 
 
 def _clip(text: str, cap: int) -> str:
@@ -987,6 +1024,415 @@ def _build_ledger(
     return "\n".join(lines)
 
 
+def _landing_response_format() -> dict[str, Any]:
+    """The ``response_format`` payload for a schema-backed landing call.
+
+    Its own function (rather than inlining ``dict(WORKER_REPORT_RESPONSE_FORMAT)``
+    at the call site) so a test can seed the negative for "response_format
+    reaches the wire" independently of dialect acceptance
+    (:func:`~personal_agent.llm_client.models.landing_accepts_json_schema`,
+    which governs the *declared-False* row of the validity table instead).
+
+    Returns:
+        The ``worker_report_v1`` ``response_format`` dict.
+    """
+    return dict(WORKER_REPORT_RESPONSE_FORMAT)
+
+
+def _parse_and_validate_worker_report(content: str) -> WorkerReport | None:
+    """Parse landing content as JSON and validate it against ``worker_report_v1``.
+
+    The grammar (when the landing is actually constrained) makes a structural
+    failure unreachable on llama.cpp; this is the deterministic backstop for a
+    cloud dialect that ignores ``strict`` (ADR-0150 D1).
+
+    Args:
+        content: The report-writing call's raw text content.
+
+    Returns:
+        The validated report, or ``None`` when the content does not parse as
+        JSON or does not satisfy the schema (required fields, lengths, item
+        counts, ``additionalProperties: false``).
+    """
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    try:
+        return WorkerReport.model_validate(data)
+    except PydanticValidationError:
+        return None
+
+
+def _worker_report_fields_nonblank(report: WorkerReport) -> bool:
+    """Whether every ``minLength: 1`` field holds real content, not just whitespace.
+
+    The schema's ``minLength: 1`` forbids an empty string but not ``" "``
+    (ADR-0150 D1's own example) — this is the deterministic check the ADR
+    describes as running "after validation".
+
+    Args:
+        report: A schema-validated report.
+
+    Returns:
+        ``False`` if any finding's ``claim``/``source_url``/``why_it_matters``,
+        or any gap's ``looked_for``/``where``, is whitespace-only.
+    """
+    for f in report.findings:
+        if not f.claim.strip() or not f.source_url.strip() or not f.why_it_matters.strip():
+            return False
+    for g in report.gaps:
+        if not g.looked_for.strip() or not g.where.strip():
+            return False
+    return True
+
+
+def _drop_invalid_source_findings(report: WorkerReport) -> tuple[WorkerReport, int]:
+    """Drop every finding whose ``source_url`` is not an http(s) URL (ADR-0150 D1).
+
+    An unusable source is not a finding, and the citation handle (FRE-1486)
+    must be a URL.
+
+    Args:
+        report: A schema-validated, non-blank report.
+
+    Returns:
+        A tuple of (the report with invalid-source findings removed, the
+        number dropped).
+    """
+    valid = [f for f in report.findings if f.source_url.startswith(("http://", "https://"))]
+    dropped = len(report.findings) - len(valid)
+    if dropped:
+        report = report.model_copy(update={"findings": valid})
+    return report, dropped
+
+
+def _worker_report_nonempty(report: WorkerReport) -> bool:
+    """Whether a validated report holds at least one finding or gap (ADR-0150 D1).
+
+    Args:
+        report: A schema-validated report, after the invalid-source drop.
+
+    Returns:
+        ``False`` when both ``findings`` and ``gaps`` are empty — a valid but
+        empty report, which the validity table maps to ``ledger``.
+    """
+    return bool(report.findings or report.gaps)
+
+
+async def _write_landing_report(
+    state: _ToolLoopState,
+    spec: SubAgentSpec,
+    llm_client: Any,
+    tool_defs: list[dict[str, Any]] | None,
+    trace_ctx: TraceContext,
+    trace_id: str,
+    session_id: str | None,
+    effective_timeout: float,
+    deadline_monotonic: float,
+    stop_reason: SubAgentStopReason,
+    carried_tool_gap: str | None,
+) -> _ToolLoopOutcome:
+    """Make the one report-writing call and interpret it (ADR-0150 D1, D6).
+
+    Shared by :func:`_forced_synthesis` (the cap / time-reserve / per-call
+    timeout paths, which append their own "budget is spent" instruction before
+    calling this) and the voluntary stop's landing call for a schema-backed
+    worker (``_run_tool_loop``, which appends the stripped ``DONE`` reply as an
+    assistant message instead).
+
+    For a schema-backed worker (``WORKER_TYPES[spec.worker_type].report_schema``
+    is not ``None``) whose resolved dialect accepts it
+    (:func:`~personal_agent.llm_client.models.landing_accepts_json_schema`),
+    the call carries ``response_format`` and the response is scored against
+    D1's validity table: parse, schema validation, the whitespace check, the
+    ``source_url`` drop, then non-emptiness. Every other case — a
+    text-reporting worker, or a schema-backed worker whose dialect declares
+    ``False`` — takes today's prose landing, unchanged, with a WARNING logged
+    on the declared-``False`` case (``structured_landing_unsupported_declared``).
+
+    Args:
+        state: The loop accumulator; its message list is appended to.
+        spec: The sub-agent specification.
+        llm_client: LLM client instance.
+        tool_defs: The worker's granted tool definitions, retained on the call
+            when the dialect declares the cache-preserving form.
+        trace_ctx: The sub-agent's identity context.
+        trace_id: Parent request trace identifier.
+        session_id: Originating session id.
+        effective_timeout: The generation budget.
+        deadline_monotonic: This worker's absolute deadline.
+        stop_reason: The path that triggered this call, carried onto the outcome.
+        carried_tool_gap: A ``TOOL_GAP:`` name already extracted from a
+            voluntary-stop reply (ADR-0150 D1) — used when the landing itself
+            states none. ``None`` on the forced-synthesis paths, which have no
+            stop reply to carry one from.
+
+    Returns:
+        The terminal outcome: a ``synthesized`` report, a ``narration`` partial
+        followed by the ledger, or the ledger alone.
+    """
+    remaining_s = deadline_monotonic - time.monotonic()
+    if remaining_s <= 0:
+        return _ToolLoopOutcome(
+            content=_build_ledger(
+                state, stop_reason, "no time remained to write one", state.progress.content
+            ),
+            stated_tool_gap=carried_tool_gap,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+        )
+
+    dialect = _resolve_synthesis_dialect(llm_client, spec.model_role)
+    retains_tools = synthesis_retains_tools(dialect)
+    if not retains_tools:
+        logger.warning(
+            "forced_synthesis_cache_miss_declared",
+            dialect=getattr(dialect, "value", None),
+            provider=getattr(llm_client, "provider", None),
+            task=spec.task,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+    report_schema_name = WORKER_TYPES[spec.worker_type].report_schema
+    response_format: dict[str, Any] | None = None
+    schema_active = False
+    if report_schema_name is not None:
+        if landing_accepts_json_schema(dialect):
+            schema_active = True
+            response_format = _landing_response_format()
+        else:
+            # ADR-0150 D1: reports as text this turn. `report`/`report_schema`
+            # stay None below — the prose branch never sets them.
+            logger.warning(
+                "structured_landing_unsupported_declared",
+                dialect=getattr(dialect, "value", None),
+                provider=getattr(llm_client, "provider", None),
+                report_schema=report_schema_name,
+                task=spec.task,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+
+    # Its own sink: a cut landing call's streamed partial IS the report
+    # (ADR-0149 D3 move 5), and the round sink holds the previous round's text.
+    synthesis_progress = GenerationProgress()
+    state.progress = synthesis_progress
+    logger.info(
+        "sub_agent_forced_synthesis",
+        stop_reason=stop_reason,
+        retains_tools=retains_tools,
+        dialect=getattr(dialect, "value", None),
+        schema_active=schema_active,
+        tool_iterations=state.tool_iterations,
+        tool_result_chars_absorbed=state.tool_result_chars_absorbed,
+        trace_id=trace_id,
+        session_id=session_id,
+    )
+    try:
+        raw_response = await llm_client.respond(
+            role=spec.model_role,
+            messages=state.messages,
+            max_tokens=spec.max_tokens,
+            trace_ctx=trace_ctx,
+            timeout_s=min(effective_timeout, remaining_s),
+            progress_sink=synthesis_progress,
+            tools=tool_defs if retains_tools else None,
+            tool_choice="none" if retains_tools and tool_defs else None,
+            response_format=response_format,
+        )
+    # `Exception`, never `BaseException`: a CancelledError raised inside this call
+    # must reach run_sub_agent's cancel handler, which writes the audit record and
+    # re-raises. Swallowing it here would turn a cancelled turn into a result.
+    except Exception as exc:
+        partial = synthesis_progress.content
+        why = (
+            f"the synthesis call failed on provider "
+            f"{getattr(llm_client, 'provider', None)!r} "
+            f"(dialect {getattr(dialect, 'value', None)!r}): {exc}"
+        )
+        if partial.strip():
+            return _ToolLoopOutcome(
+                content=f"{partial}\n\n{_build_ledger(state, stop_reason, why)}",
+                stated_tool_gap=carried_tool_gap,
+                stop_reason=stop_reason,
+                report_kind="narration",
+            )
+        return _ToolLoopOutcome(
+            content=_build_ledger(state, stop_reason, why),
+            stated_tool_gap=carried_tool_gap,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+        )
+
+    state.cost_usd += _extract_call_cost(raw_response)
+    finish_reason = _extract_finish_reason(raw_response)
+    if finish_reason == "length":
+        # ADR-0150 D6: checked before the content is read as a report. A cut
+        # landing is never `synthesized`, regardless of stop_reason or schema.
+        partial = _parse_llm_response(raw_response)
+        if partial.strip():
+            return _ToolLoopOutcome(
+                content=(
+                    f"{partial}\n\n"
+                    f"{_build_ledger(state, stop_reason, 'the report was cut off at the token ceiling')}"
+                ),
+                stated_tool_gap=carried_tool_gap,
+                stop_reason=stop_reason,
+                report_kind="narration",
+                finish_reason=finish_reason,
+            )
+        return _ToolLoopOutcome(
+            content=_build_ledger(
+                state,
+                stop_reason,
+                "the report was cut off at the token ceiling before any text was written",
+            ),
+            stated_tool_gap=carried_tool_gap,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+            finish_reason=finish_reason,
+        )
+
+    if schema_active:
+        return _score_schema_landing(
+            raw_response,
+            state,
+            llm_client,
+            dialect,
+            stop_reason,
+            finish_reason,
+            carried_tool_gap,
+            task=spec.task,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+    content, stated_tool_gap = _extract_stated_tool_gap(_parse_llm_response(raw_response))
+    stated_tool_gap = stated_tool_gap or carried_tool_gap
+    if content.strip():
+        return _ToolLoopOutcome(
+            content=content,
+            stated_tool_gap=stated_tool_gap,
+            stop_reason=stop_reason,
+            report_kind="synthesized",
+            finish_reason=finish_reason,
+        )
+    return _ToolLoopOutcome(
+        content=_build_ledger(state, stop_reason, "the synthesis call returned no text"),
+        stated_tool_gap=stated_tool_gap,
+        stop_reason=stop_reason,
+        report_kind="ledger",
+        finish_reason=finish_reason,
+    )
+
+
+def _score_schema_landing(
+    raw_response: Any,
+    state: _ToolLoopState,
+    llm_client: Any,
+    dialect: "Dialect | None",
+    stop_reason: SubAgentStopReason,
+    finish_reason: str | None,
+    carried_tool_gap: str | None,
+    *,
+    task: str,
+    trace_id: str,
+    session_id: str | None,
+) -> _ToolLoopOutcome:
+    """Apply ADR-0150 D1's validity table to a constrained landing response.
+
+    Called only when the request actually carried ``response_format`` and
+    ``finish_reason`` is not ``"length"`` (the caller checks both first).
+
+    Args:
+        raw_response: The value returned by ``llm_client.respond``.
+        state: The loop accumulator, for the ledger on a failed row.
+        llm_client: LLM client instance, for the provider name on a WARNING.
+        dialect: The resolved dialect, for the provider/dialect naming on a
+            failed row.
+        stop_reason: The path that triggered this call, carried onto the outcome.
+        finish_reason: This call's own ``finish_reason``.
+        carried_tool_gap: A ``TOOL_GAP:`` name from a voluntary-stop reply,
+            used when ``report.tool_gap`` is empty.
+        task: The worker's task string, for the WARNING on an invalid landing.
+        trace_id: Parent request trace identifier, for the WARNING.
+        session_id: Originating session id, for the WARNING.
+
+    Returns:
+        A ``synthesized`` outcome carrying the validated report, or a
+        ``ledger`` outcome per the table's row for the failure.
+    """
+    if finish_reason != "stop":
+        return _ToolLoopOutcome(
+            content=_build_ledger(
+                state,
+                stop_reason,
+                f"the report-writing call ended with finish_reason {finish_reason!r}",
+            ),
+            stated_tool_gap=carried_tool_gap,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+            finish_reason=finish_reason,
+        )
+
+    content = _parse_llm_response(raw_response)
+    report = _parse_and_validate_worker_report(content)
+    if report is not None and not _worker_report_fields_nonblank(report):
+        report = None
+    if report is None:
+        refusal = raw_response.get("refusal") if isinstance(raw_response, Mapping) else None
+        provider = getattr(llm_client, "provider", None)
+        logger.warning(
+            "structured_landing_invalid",
+            provider=provider,
+            dialect=getattr(dialect, "value", None),
+            refused=bool(refusal),
+            task=task,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        why = (
+            f"the provider refused: {_clip(str(refusal), 200)}"
+            if refusal
+            else f"the report did not parse or validate: {_clip(content, 200)!r}"
+        )
+        return _ToolLoopOutcome(
+            content=_build_ledger(state, stop_reason, why),
+            stated_tool_gap=carried_tool_gap,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+            finish_reason=finish_reason,
+        )
+
+    report, dropped = _drop_invalid_source_findings(report)
+    report_tool_gap = report.tool_gap.strip() or None
+    stated_tool_gap = report_tool_gap or carried_tool_gap
+
+    if not _worker_report_nonempty(report):
+        return _ToolLoopOutcome(
+            content=_build_ledger(state, stop_reason, "the model reported no findings and no gaps"),
+            stated_tool_gap=stated_tool_gap,
+            stop_reason=stop_reason,
+            report_kind="ledger",
+            finish_reason=finish_reason,
+            findings_dropped_invalid_source=dropped,
+        )
+
+    return _ToolLoopOutcome(
+        content=json.dumps(report.model_dump(mode="json")),
+        summary=render_worker_report_summary(report),
+        report=report,
+        report_schema=WORKER_REPORT_SCHEMA_NAME,
+        findings_dropped_invalid_source=dropped,
+        stated_tool_gap=stated_tool_gap,
+        stop_reason=stop_reason,
+        report_kind="synthesized",
+        finish_reason=finish_reason,
+    )
+
+
 async def _forced_synthesis(
     state: _ToolLoopState,
     spec: SubAgentSpec,
@@ -1036,7 +1482,9 @@ async def _forced_synthesis(
         followed by the ledger, or the ledger alone.
     """
     # Recomputed here, never inherited: on the timeout path the caller's own
-    # figure is stale by a whole generation budget.
+    # figure is stale by a whole generation budget. Checked before the
+    # instruction below is appended, so a state about to be ledgered is never
+    # given an instruction it will not act on.
     remaining_s = deadline_monotonic - time.monotonic()
     if remaining_s <= 0:
         # The triggering path keeps its own name. A per-call timeout with nothing
@@ -1056,115 +1504,24 @@ async def _forced_synthesis(
     state.messages.append(
         {
             "role": "user",
-            "content": _SYNTHESIS_INSTRUCTION.format(opening=opening),
+            "content": _SYNTHESIS_INSTRUCTION.format(
+                opening=opening, report_line=render_report_instruction(spec.worker_type)
+            ),
         }
     )
 
-    dialect = _resolve_synthesis_dialect(llm_client, spec.model_role)
-    retains_tools = synthesis_retains_tools(dialect)
-    if not retains_tools:
-        logger.warning(
-            "forced_synthesis_cache_miss_declared",
-            dialect=getattr(dialect, "value", None),
-            provider=getattr(llm_client, "provider", None),
-            task=spec.task,
-            trace_id=trace_id,
-            session_id=session_id,
-        )
-
-    # Its own sink: a cut synthesis call's streamed partial IS the report
-    # (ADR-0149 D3 move 5), and the round sink holds the previous round's text.
-    synthesis_progress = GenerationProgress()
-    state.progress = synthesis_progress
-    logger.info(
-        "sub_agent_forced_synthesis",
-        stop_reason=stop_reason,
-        retains_tools=retains_tools,
-        dialect=getattr(dialect, "value", None),
-        tool_iterations=state.tool_iterations,
-        tool_result_chars_absorbed=state.tool_result_chars_absorbed,
-        trace_id=trace_id,
-        session_id=session_id,
-    )
-    try:
-        raw_response = await llm_client.respond(
-            role=spec.model_role,
-            messages=state.messages,
-            max_tokens=spec.max_tokens,
-            trace_ctx=trace_ctx,
-            timeout_s=min(effective_timeout, remaining_s),
-            progress_sink=synthesis_progress,
-            tools=tool_defs if retains_tools else None,
-            tool_choice="none" if retains_tools and tool_defs else None,
-        )
-    # `Exception`, never `BaseException`: a CancelledError raised inside this call
-    # must reach run_sub_agent's cancel handler, which writes the audit record and
-    # re-raises. Swallowing it here would turn a cancelled turn into a result.
-    except Exception as exc:
-        partial = synthesis_progress.content
-        why = (
-            f"the synthesis call failed on provider "
-            f"{getattr(llm_client, 'provider', None)!r} "
-            f"(dialect {getattr(dialect, 'value', None)!r}): {exc}"
-        )
-        if partial.strip():
-            return _ToolLoopOutcome(
-                content=f"{partial}\n\n{_build_ledger(state, stop_reason, why)}",
-                stated_tool_gap=None,
-                stop_reason=stop_reason,
-                report_kind="narration",
-            )
-        return _ToolLoopOutcome(
-            content=_build_ledger(state, stop_reason, why),
-            stated_tool_gap=None,
-            stop_reason=stop_reason,
-            report_kind="ledger",
-        )
-
-    state.cost_usd += _extract_call_cost(raw_response)
-    finish_reason = _extract_finish_reason(raw_response)
-    if finish_reason == "length":
-        # ADR-0150 D6: checked before the content is read as a report. A cut
-        # landing is never `synthesized`, regardless of stop_reason.
-        partial = _parse_llm_response(raw_response)
-        if partial.strip():
-            return _ToolLoopOutcome(
-                content=(
-                    f"{partial}\n\n"
-                    f"{_build_ledger(state, stop_reason, 'the report was cut off at the token ceiling')}"
-                ),
-                stated_tool_gap=None,
-                stop_reason=stop_reason,
-                report_kind="narration",
-                finish_reason=finish_reason,
-            )
-        return _ToolLoopOutcome(
-            content=_build_ledger(
-                state,
-                stop_reason,
-                "the report was cut off at the token ceiling before any text was written",
-            ),
-            stated_tool_gap=None,
-            stop_reason=stop_reason,
-            report_kind="ledger",
-            finish_reason=finish_reason,
-        )
-
-    content, stated_tool_gap = _extract_stated_tool_gap(_parse_llm_response(raw_response))
-    if content.strip():
-        return _ToolLoopOutcome(
-            content=content,
-            stated_tool_gap=stated_tool_gap,
-            stop_reason=stop_reason,
-            report_kind="synthesized",
-            finish_reason=finish_reason,
-        )
-    return _ToolLoopOutcome(
-        content=_build_ledger(state, stop_reason, "the synthesis call returned no text"),
-        stated_tool_gap=stated_tool_gap,
-        stop_reason=stop_reason,
-        report_kind="ledger",
-        finish_reason=finish_reason,
+    return await _write_landing_report(
+        state,
+        spec,
+        llm_client,
+        tool_defs,
+        trace_ctx,
+        trace_id,
+        session_id,
+        effective_timeout,
+        deadline_monotonic,
+        stop_reason,
+        carried_tool_gap=None,
     )
 
 
@@ -1375,6 +1732,31 @@ async def _run_tool_loop(
             state.round_texts.append(response_content)
 
         if not raw_tool_calls:
+            if WORKER_TYPES[spec.worker_type].report_schema is not None:
+                # ADR-0150 D1: for a schema-backed worker the voluntary-stop
+                # reply is never the report itself. Its content (minus the
+                # sentinel) becomes transcript notes, and the report is
+                # written by a dedicated landing call with
+                # stop_reason="completed" — the only way to know a call will
+                # emit JSON and not tool calls is to make it after the model
+                # has already committed to stopping.
+                remainder, stated_tool_gap = _extract_stated_tool_gap(response_content)
+                if remainder.strip():
+                    state.messages.append({"role": "assistant", "content": remainder})
+                return await _write_landing_report(
+                    state,
+                    spec,
+                    llm_client,
+                    tool_defs,
+                    trace_ctx,
+                    trace_id,
+                    session_id,
+                    effective_timeout,
+                    deadline_monotonic,
+                    stop_reason="completed",
+                    carried_tool_gap=stated_tool_gap,
+                )
+
             content, stated_tool_gap = _extract_stated_tool_gap(response_content)
             if content.strip():
                 return _ToolLoopOutcome(
@@ -1728,10 +2110,15 @@ async def run_sub_agent(
         # not finish its task, and FRE-1389 AC-2's distinct terminal state holds
         # for the new paths as it did for the cap.
         succeeded = outcome.stop_reason == "completed" and outcome.report_kind == "synthesized"
+        # ADR-0150 D1: a schema-backed `synthesized` landing carries a
+        # rendering distinct from `full_output` (the validated JSON) — every
+        # other row leaves `outcome.summary` unset, meaning "use content for
+        # both", unchanged from before this ADR.
+        summary_text = outcome.summary if outcome.summary is not None else outcome.content
         result = SubAgentResult(
             task_id=task_id,
             spec_task=spec.task,
-            summary=outcome.content[:_SUMMARY_CAP_CHARS],
+            summary=summary_text[:_SUMMARY_CAP_CHARS],
             full_output=outcome.content,
             tools_used=state.tools_used,
             token_count=len(outcome.content.split()),
@@ -1752,6 +2139,9 @@ async def run_sub_agent(
             # worker did work and no model text survived to describe it.
             narrative_synthesized=outcome.report_kind == "ledger",
             finish_reason=outcome.finish_reason,
+            report=outcome.report,
+            report_schema=outcome.report_schema,
+            findings_dropped_invalid_source=outcome.findings_dropped_invalid_source,
         )
 
     except asyncio.TimeoutError:

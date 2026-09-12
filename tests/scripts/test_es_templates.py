@@ -403,6 +403,18 @@ def test_subagents_pins_finish_reason() -> None:
     assert props["rounds"]["properties"]["finish_reason"]["type"] == "keyword"
 
 
+def test_subagents_pins_report_schema() -> None:
+    """ADR-0150 D1 (FRE-1494): report_schema and the dropped-finding count are explicit.
+
+    Additive ES fields on this template are the ADR's own named Negative
+    Consequence — a reversible deploy class only when they are actually
+    pinned here, not left to fall through to dynamic mapping.
+    """
+    props = _props(_load("captains-subagents-index-template.json"))
+    assert props["report_schema"]["type"] == "keyword"
+    assert props["findings_dropped_invalid_source"]["type"] == "integer"
+
+
 # --------------------------------------------------------------------------- #
 # Self-improvement funnel (ADR-0105 D6, FRE-719).
 # --------------------------------------------------------------------------- #

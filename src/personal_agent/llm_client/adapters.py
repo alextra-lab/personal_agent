@@ -430,6 +430,11 @@ def adapt_chat_completions_response(response_data: dict[str, Any]) -> LLMRespons
             # to "we did not look" and a truncated reply was indistinguishable
             # from a complete one.
             finish_reason=choice.get("finish_reason"),
+            # ADR-0150 D1: surfaced when the backend's message carries one.
+            # llama.cpp compiles a grammar rather than declining, so this is
+            # reachable mainly on an OpenAI-compatible cloud gateway behind this
+            # same adapter, not on the local llama-server path.
+            refusal=message.get("refusal"),
             raw=response_data,
         )
     except (KeyError, TypeError, ValueError) as e:

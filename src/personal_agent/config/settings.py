@@ -258,14 +258,15 @@ class AppConfig(BaseSettings):
         ),
     )
     sub_agent_max_tool_iterations: int = Field(
-        default=5,
+        default=20,
         ge=0,
         description=(
-            "FRE-1389 AC-2: the sub-agent tool loop's own iteration cap. Deliberately "
+            "FRE-1389 AC-2, FRE-1496: the sub-agent tool loop's outer bound. "
+            "ADR-0150 D3 introduced sub_agent_rounds_by_thoroughness as the operative "
+            "per-level control; this field is the cap enforced at load. Deliberately "
             "separate from orchestrator_max_tool_iterations_by_task_type, which is keyed "
             "on the PARENT turn's TaskType — the wrong axis for a sub-agent's own bounded-"
-            "worker budget. Lower than the primary's cap because a sub-agent is a single "
-            "focused task, not an open-ended turn."
+            "worker budget."
         ),
     )
     sub_agent_rounds_by_thoroughness: dict[Thoroughness, int] = Field(

@@ -496,14 +496,14 @@
     "binding|sub_agent": {
       "definition": {
         "context_length": 131072,
-        "default_timeout": 90,
+        "default_timeout": 600,
         "dialect": null,
         "endpoint": "http://localhost:9099/v1",
         "id": "unsloth/qwen3.8-flash-next",
         "input_cost_per_token": null,
         "input_cost_per_token_eur": null,
         "max_concurrency": 3,
-        "max_tokens": 2048,
+        "max_tokens": 8192,
         "min_concurrency": 1,
         "modes": {
           "default": {

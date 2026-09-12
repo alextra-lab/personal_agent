@@ -165,6 +165,16 @@ catalog pairs collapse.** Three explicit deltas:
    but is not among this module's ``_MATRIX_ROLES``/``_BINDING_ROLES``, so it
    has no captured cell here to change.
 
+**Rebaselined a sixth time, deliberately, for FRE-1496 (owner decision 2026-09-12).**
+One explicit delta, hand-edited rather than regenerated:
+
+1. **``sub_agent``'s ``max_tokens`` 2048 -> 8192 and ``default_timeout`` 90 -> 600.**
+   The FRE-1487 study ran both as temporary overrides in ``config/model_roles.yaml``;
+   FRE-1496 commits them as the permanent baseline (``worker_report_v1`` bounds the
+   output; 90s was cutting calls that legitimately run 25-65s). **No resolved
+   deployment or key changed** — ``sub_agent`` still resolves onto
+   ``qwen3.8-flash-next``; only these two fields on that one cell moved.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

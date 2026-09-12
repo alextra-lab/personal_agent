@@ -80,6 +80,48 @@ class TestDecomposeFallback:
         assert len(plan.tasks) == 1
 
 
+class TestExpansionBudgetCap:
+    """FRE-1382 AC-2: the turn's load-shed budget binds the fallback planner too."""
+
+    def test_budget_below_strategy_cap_binds(self) -> None:
+        plan = generate_fallback_plan(
+            query="Compare Redis, Memcached, and Hazelcast for our session caching",
+            strategy="HYBRID",
+            max_tasks=1,
+        )
+        assert len(plan.tasks) == 1
+
+    def test_budget_above_strategy_cap_still_caps_at_strategy(self) -> None:
+        plan = generate_fallback_plan(
+            query="Compare Redis, Memcached, and Hazelcast for our session caching",
+            strategy="HYBRID",
+            max_tasks=10,
+        )
+        assert len(plan.tasks) == 3
+
+    def test_negative_budget_does_not_widen_the_cap(self) -> None:
+        """A negative budget must clamp to zero, not become a Python negative slice
+        index (``tasks[:-1]`` would otherwise keep 2 of 3 tasks).
+        """
+        plan = generate_fallback_plan(
+            query="Compare Redis, Memcached, and Hazelcast for our session caching",
+            strategy="HYBRID",
+            max_tasks=-1,
+        )
+        assert plan.tasks == []
+
+    def test_budget_binds_the_generic_no_entities_path_too(self) -> None:
+        """FRE-1382: the single-task generic branch used to ignore max_tasks
+        entirely — it must be bound by the same cap as the entity branch.
+        """
+        plan = generate_fallback_plan(
+            query="Research the best approach to scaling our API layer",
+            strategy="HYBRID",
+            max_tasks=0,
+        )
+        assert plan.tasks == []
+
+
 class TestNoCombineTask:
     """FRE-1493 AC-4 / ADR-0150 D4: the fallback planner holds no combine task either."""
 

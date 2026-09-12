@@ -299,6 +299,7 @@ class ExpansionController:
         user_id: UUID | None = None,
         authenticated: bool = False,
         turn_started_at: datetime | None = None,
+        expansion_budget: int | None = None,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -348,6 +349,12 @@ class ExpansionController:
                 rounds searching the wrong year. ``None`` (the default) leaves a
                 caller that has not been updated exactly as it is today, with the
                 worker logging that it was given no timestamp.
+            expansion_budget: The turn's own per-turn load-shed budget
+                (FRE-1382, ``brainstem.compute_expansion_budget`` via
+                ``GatewayOutput.governance.expansion_budget``) — tightens the
+                strategy's task-count cap below, never relaxes it. ``None``
+                (the default) leaves the strategy cap as the only bound, for a
+                caller that has not been updated to pass it.
 
         Returns:
             ExpansionResult with plan, sub-agent results, and synthesis context.
@@ -366,6 +373,7 @@ class ExpansionController:
             session_id=session_id,
             user_id=user_id,
             authenticated=authenticated,
+            expansion_budget=expansion_budget,
             eval_mode=eval_mode,
         )
         result.plan = plan
@@ -470,6 +478,7 @@ class ExpansionController:
         user_id: UUID | None = None,
         authenticated: bool = False,
         eval_mode: bool = False,
+        expansion_budget: int | None = None,
     ) -> ExpansionPlan:
         """Phase 1: Get a plan from the LLM or fallback planner.
 
@@ -490,6 +499,11 @@ class ExpansionController:
             eval_mode: EVAL provenance (FRE-523 / FRE-375). Carried for the same
                 reason: the planner's context otherwise disagreed with the
                 worker's about which turn it belongs to.
+            expansion_budget: The turn's own per-turn load-shed budget
+                (FRE-1382, ``brainstem.compute_expansion_budget``) — tightens
+                the strategy's ``_MAX_TASKS`` cap below, on both the LLM plan
+                and the fallback plan, never relaxes it. ``None`` (the
+                default) leaves the strategy cap as the only bound.
 
         Returns:
             An ExpansionPlan — either LLM-generated or fallback.
@@ -548,7 +562,9 @@ class ExpansionController:
             # FRE-501: capture planner-call cost so the executor can roll it into
             # the live turn meter. Paid/cloud calls populate cost_usd; 0.0 otherwise.
             result.planner_cost_usd = float(raw_response.get("cost_usd") or 0.0)
-            plan = _validate_plan_json(raw_response["content"], strategy)
+            plan = _validate_plan_json(
+                raw_response["content"], strategy, max_tasks=expansion_budget
+            )
 
             if plan is not None:
                 result.phase_results.append(
@@ -601,7 +617,10 @@ class ExpansionController:
 
         # --- Fallback planner ---
         fallback_plan = generate_fallback_plan(
-            query=query, strategy=strategy, sub_agent_tool_surface=tool_surface
+            query=query,
+            strategy=strategy,
+            sub_agent_tool_surface=tool_surface,
+            max_tasks=expansion_budget,
         )
         duration_ms = time.monotonic() * 1000 - start_ms
 
@@ -1155,12 +1174,18 @@ class ExpansionController:
 def _validate_plan_json(
     raw: str,
     strategy: str = "HYBRID",
+    max_tasks: int | None = None,
 ) -> ExpansionPlan | None:
     """Validate LLM output against the plan schema.
 
     Args:
         raw: Raw string from the LLM planner response.
         strategy: Expected strategy — used as fallback if not in JSON.
+        max_tasks: The turn's own per-turn expansion budget (FRE-1382) —
+            tightens the strategy cap below, never relaxes it. A negative
+            value is treated as zero, which fails validation the same way an
+            empty ``tasks`` list already does. ``None`` (the default) leaves
+            the strategy cap as the only bound.
 
     Returns:
         A validated ExpansionPlan, or None if the input fails validation.
@@ -1177,7 +1202,11 @@ def _validate_plan_json(
     if not isinstance(tasks_raw, list) or len(tasks_raw) == 0:
         return None
 
-    max_tasks = _MAX_TASKS.get(strategy, _MAX_TASKS["HYBRID"])
+    strategy_cap = _MAX_TASKS.get(strategy, _MAX_TASKS["HYBRID"])
+    # max(0, ...): a negative budget must never widen the cap via Python's
+    # negative-index slicing (tasks_raw[:-1] below would otherwise keep all
+    # but the last task instead of none).
+    max_tasks = strategy_cap if max_tasks is None else max(0, min(strategy_cap, max_tasks))
     tasks: list[PlanTask] = []
 
     # ADR-0150 D4: no reserved slot. A legacy `tools` / `expected_output` key is

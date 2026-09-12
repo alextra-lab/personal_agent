@@ -5289,6 +5289,11 @@ async def step_init(
                 session_id=ctx.session_id,
                 eval_mode=ctx.eval_mode,
                 turn_deadline_monotonic=_expansion_turn_deadline,
+                # FRE-1382: the brainstem's per-turn load-shed signal, so far a
+                # zero-check in decomposition.py only — the strategy's own
+                # _MAX_TASKS cap bound fan-out regardless of the computed
+                # budget. Tightens that cap, never relaxes it.
+                expansion_budget=gw.governance.expansion_budget,
                 # FRE-1467: the turn's identity, threaded to every sub-agent so
                 # its granted tools are identity-scoped exactly as the primary's
                 # are. Without this the sub-agent's TraceContext carries no

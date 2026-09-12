@@ -177,6 +177,42 @@ class TestAppConfig:
         assert config.governance_config_path.is_absolute()
 
 
+class TestSpendThresholdBelowCeiling:
+    """ADR-0142 D2 (FRE-1393) — the spend threshold must sit below the global ceiling."""
+
+    def test_defaults_pass_validator(self) -> None:
+        config = AppConfig()
+        assert config.orchestrator_spend_threshold == 6
+        assert config.orchestrator_spend_threshold < config.orchestrator_max_tool_iterations
+
+    def test_validator_rejects_threshold_at_ceiling(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS", "10")
+        monkeypatch.setenv("AGENT_ORCHESTRATOR_SPEND_THRESHOLD", "10")
+        with pytest.raises(ValidationError) as exc_info:
+            AppConfig()
+        assert "orchestrator_spend_threshold" in str(exc_info.value)
+
+    def test_validator_rejects_threshold_above_ceiling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS", "10")
+        monkeypatch.setenv("AGENT_ORCHESTRATOR_SPEND_THRESHOLD", "11")
+        with pytest.raises(ValidationError):
+            AppConfig()
+
+    def test_validator_accepts_threshold_below_ceiling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS", "10")
+        monkeypatch.setenv("AGENT_ORCHESTRATOR_SPEND_THRESHOLD", "9")
+        config = AppConfig()
+        assert config.orchestrator_spend_threshold == 9
+
+
 class TestCompressionGeometry:
     """Recovery plan 2026-05-05 Wave 0.2 — guard against pathological geometry."""
 

@@ -63,16 +63,16 @@ class TestActionIdRegistry:
             assert default_action_id(name) == opts[-1].action_id
 
     def test_constraint_literal_admits_attachment_cost_and_artifact_builder(self) -> None:
-        """The ConstraintName literal is widened (ADR-0122 §3 / FRE-881, FRE-1461, FRE-1484).
+        """The ConstraintName literal is widened (ADR-0122 §3 / FRE-881, FRE-1461, FRE-1484, FRE-1393).
 
         Runtime proof the pre-existing ``attachment_cost`` drift is closed (it was
         passed at the executor but absent from the closed literal), that the
         computed-options constraint ``artifact_builder`` is admitted, that
         FRE-1461's ``sub_agent_tool_approval`` — the first constraint raised from the
-        sub-agent path rather than the primary's own loop — is admitted too, and that
-        ADR-0149 D4 / FRE-1484's ``sub_agent_fanout_incomplete`` is admitted. The
-        removal of the executor's ``# type: ignore[arg-type]`` is proven separately
-        by ``mypy``.
+        sub-agent path rather than the primary's own loop — is admitted too, that
+        ADR-0149 D4 / FRE-1484's ``sub_agent_fanout_incomplete`` is admitted, and that
+        ADR-0142 D2/D3 / FRE-1393's ``spend_threshold`` is admitted. The removal of
+        the executor's ``# type: ignore[arg-type]`` is proven separately by ``mypy``.
 
         Asserted as an exact set, deliberately: a new constraint passed at a call
         site but never registered here is precisely the drift FRE-881 had to clean
@@ -90,6 +90,7 @@ class TestActionIdRegistry:
             "artifact_builder",
             "sub_agent_tool_approval",
             "sub_agent_fanout_incomplete",
+            "spend_threshold",
         }
 
     def test_every_literal_member_has_options_or_is_computed(self) -> None:

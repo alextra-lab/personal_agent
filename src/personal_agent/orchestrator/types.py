@@ -373,6 +373,11 @@ class ExecutionContext:
     # apart from one where the accounting never ran.
     credited_pause_seconds: float = 0.0
     pause_count: int = 0
+    # ADR-0142 D3 (FRE-1393): the spend_threshold pause fires at most once per turn —
+    # this is the gate. Set the instant the turn decides to raise it, before awaiting
+    # the pause, so the crossing is recorded as a one-time event regardless of how
+    # the pause itself resolves (continue, decline, timeout, or lifetime-cap preempt).
+    spend_pause_raised: bool = False
     # ADR-0076: accumulated LLM spend for this turn (USD), surfaced live via the
     # turn_status STATE_DELTA so the user sees cost as it accrues.
     turn_cost_usd: float = 0.0

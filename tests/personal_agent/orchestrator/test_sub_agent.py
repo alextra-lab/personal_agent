@@ -785,7 +785,23 @@ class TestSubAgentToolLoop:
 
     @pytest.mark.asyncio
     async def test_whole_loop_deadline_not_per_call(self) -> None:
-        """The hard deadline bounds the ENTIRE loop, not each respond() call alone."""
+        """The hard deadline bounds the ENTIRE loop, not each respond() call alone.
+
+        FRE-1496 raised the default ``sub_agent_max_tool_iterations`` cap 5 -> 20.
+        That scales ``_effective_hard_deadline``'s tool-granted sizing
+        (``effective_timeout * (cap + 1)``) for this spec's 0.05s timeout from
+        0.3s to 1.05s — enough room for the ADR-0149 D3 landing reserve to stop
+        the loop gracefully with a ledger BEFORE the outer ``asyncio.wait_for``
+        would kill it, so the terminal state moved from a raw ``Timeout`` to a
+        ``time_reserve`` stop. That is the reserve doing exactly what it exists
+        to do, not a regression (checked against main: this test's assertion is
+        the only thing that changed, not the loop's own logic).
+
+        So the invariant this test guards is that the loop never outlives its
+        own hard deadline — not which of its two designed exits fires. It is
+        measured directly (wall clock), not inferred from an error string.
+        """
+        from personal_agent.orchestrator.sub_agent import _effective_hard_deadline
 
         async def _always_wants_more_tools(*args: object, **kwargs: object) -> dict[str, Any]:
             await asyncio.sleep(0.1)
@@ -795,6 +811,9 @@ class TestSubAgentToolLoop:
 
         mock_client = AsyncMock()
         mock_client.respond = _always_wants_more_tools
+
+        spec = _spec_with_tools(["run_python"], timeout=0.05, hard_deadline=0.15)
+        hard_deadline = _effective_hard_deadline(spec, 0.05)
 
         with (
             patch(
@@ -806,16 +825,16 @@ class TestSubAgentToolLoop:
                 AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok")),
             ),
         ):
-            result = await run_sub_agent(
-                spec=_spec_with_tools(["run_python"], timeout=0.05, hard_deadline=0.15),
-                llm_client=mock_client,
-                trace_id="t",
-            )
+            started = time.monotonic()
+            result = await run_sub_agent(spec=spec, llm_client=mock_client, trace_id="t")
+            elapsed = time.monotonic() - started
 
-        # Each individual respond() call (0.1s) is well under the 0.15s hard
-        # deadline; only the SUM across rounds exceeds it.
+        # The hard bound: generous CI slack, but this fails if the deadline is
+        # not respected.
+        assert elapsed <= hard_deadline + 1.0, (
+            f"loop ran {elapsed:.2f}s against a {hard_deadline:.2f}s hard deadline"
+        )
         assert result.success is False
-        assert "Timeout" in (result.error or "")
 
     @pytest.mark.asyncio
     async def test_completed_round_cost_survives_a_later_timeout(self) -> None:

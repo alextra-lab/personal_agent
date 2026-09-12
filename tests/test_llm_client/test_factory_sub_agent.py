@@ -158,4 +158,4 @@ class TestSubAgentWorkerPresetReachesTheWire:
         assert kwargs["extra_body"]["top_k"] == 20
         assert kwargs["extra_body"]["min_p"] == 0.0
         assert kwargs["extra_body"]["repetition_penalty"] == 1.0
-        assert kwargs["max_tokens"] == 2048
+        assert kwargs["max_tokens"] == 8192

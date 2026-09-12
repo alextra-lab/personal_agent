@@ -1220,8 +1220,15 @@ def _validate_and_fix_conversation_roles(messages: list[dict[str, Any]]) -> list
     3. Merges true duplicates (no intervening tools), preserving any tool_calls
     4. Preserves tool messages
 
+    **Pure (FRE-1489).** This is request shaping: it returns a new list and never
+    mutates an input message. The merge branch builds a merged copy rather than writing
+    into the message it merges onto, because the returned list shares the caller's dicts
+    and the caller's list is the turn's own history. Mutating there made the merge
+    cumulative across a tool loop — one more copy of the merged message per iteration —
+    which breaks ADR-0081 D2's byte-identical replay and with it local KV reuse.
+
     Args:
-        messages: Original message list.
+        messages: Original message list. Not mutated.
 
     Returns:
         Fixed message list with proper alternation.
@@ -1281,15 +1288,29 @@ def _validate_and_fix_conversation_roles(messages: list[dict[str, Any]]) -> list
                 prior = fixed[prior_idx]
                 old_content = prior.get("content", "")
                 new_content = msg.get("content", "")
+                # FRE-1489: merge into a COPY. Writing through `prior` reached the
+                # caller's own message, because `fixed` holds the caller's dicts and
+                # `request_messages` IS `ctx.messages` on the default configuration
+                # (llm_append_no_think_to_tool_prompts=False; a heavy turn's new outer
+                # list copies no inner dict either). A HYBRID turn therefore re-merged
+                # its synthesis message — with the whole ADR-0081 volatile block inlined
+                # into it — into the user's own turn on every tool-loop iteration,
+                # appending another copy each time. That rewrites a message the previous
+                # call already sent, which is exactly the mid-sequence change the local
+                # backend cannot reuse a cache across (ADR-0081 D2), and it is the
+                # interaction D2 point 2 warned an adjacent user message would cause.
+                merged: dict[str, Any] = {**prior}
                 # Block-aware merge (ADR-0101 §2, FRE-664): string-interpolating a
                 # block list would corrupt it (embeds its Python repr). merge_content
                 # concatenates blocks in order instead when either side is a list.
-                prior["content"] = merge_content(old_content, new_content)
+                merged["content"] = merge_content(old_content, new_content)
                 # Preserve incoming tool_calls — concatenate when both sides have them.
                 incoming_tool_calls = msg.get("tool_calls") or []
                 if incoming_tool_calls:
                     existing_tool_calls = prior.get("tool_calls") or []
-                    prior["tool_calls"] = list(existing_tool_calls) + list(incoming_tool_calls)
+                    # A new list, never an append to the caller's own.
+                    merged["tool_calls"] = list(existing_tool_calls) + list(incoming_tool_calls)
+                fixed[prior_idx] = merged
                 log.warning(
                     "conversation_role_duplicate_merged",
                     role=role,

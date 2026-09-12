@@ -8,10 +8,11 @@ import asyncio
 import logging
 from contextlib import contextmanager
 from typing import Any, Generator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.config import settings as real_settings
 from personal_agent.orchestrator import Channel, Orchestrator
 
 pytestmark = pytest.mark.integration
@@ -50,6 +51,21 @@ def _routing_delegate(target: str = "STANDARD", reason: str = "Complex question"
     )
 
 
+class _SettingsOverride:
+    """Settings wrapper that overrides specific attrs while delegating to real settings."""
+
+    def __init__(self, overrides: dict[str, Any]) -> None:
+        self._overrides = overrides
+        self._real_settings = real_settings
+
+    def __getattr__(self, name: str) -> Any:
+        if name in ("_overrides", "_real_settings"):
+            return object.__getattribute__(self, name)
+        if name in self._overrides:
+            return self._overrides[name]
+        return getattr(self._real_settings, name)
+
+
 @contextmanager
 def _e2e_patches() -> Generator[Any, None, None]:
     """Patch external services so tests don't connect to Neo4j, monitoring, etc."""
@@ -57,21 +73,26 @@ def _e2e_patches() -> Generator[Any, None, None]:
     original_level = root_logger.level
     root_logger.setLevel(logging.DEBUG)
     try:
+        mock_settings = _SettingsOverride(
+            {
+                "request_monitoring_enabled": False,
+                "enable_memory_graph": False,
+                "context_window_max_tokens": 6000,
+                "conversation_context_strategy": "truncate",
+                "orchestrator_max_tool_iterations": 3,
+                "orchestrator_max_repeated_tool_calls": 1,
+                "mcp_gateway_enabled": False,
+                "llm_no_think_suffix": "/no_think",
+                "llm_append_no_think_to_tool_prompts": True,
+            }
+        )
+
         with (
-            patch("personal_agent.orchestrator.executor.settings") as mock_settings,
+            patch("personal_agent.orchestrator.executor.settings", mock_settings),
             patch("personal_agent.llm_client.factory.get_llm_client") as mock_llm_class,
             patch("personal_agent.captains_log.background.run_in_background", lambda coro: None),
             patch("personal_agent.captains_log.capture.write_capture"),
         ):
-            mock_settings.request_monitoring_enabled = False
-            mock_settings.enable_memory_graph = False
-            mock_settings.context_window_max_tokens = 6000
-            mock_settings.conversation_context_strategy = "truncate"
-            mock_settings.orchestrator_max_tool_iterations = 3
-            mock_settings.orchestrator_max_repeated_tool_calls = 1
-            mock_settings.mcp_gateway_enabled = False
-            mock_settings.llm_no_think_suffix = "/no_think"
-            mock_settings.llm_append_no_think_to_tool_prompts = True
             yield mock_llm_class
     finally:
         root_logger.setLevel(original_level)

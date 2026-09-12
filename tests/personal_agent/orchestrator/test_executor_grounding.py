@@ -611,3 +611,173 @@ async def test_an_uncitable_turn_is_excluded_from_the_compliance_window() -> Non
 
     fields = _grounding_verification_completed(calls)
     assert fields["compliance_observation"] == "confounded"
+
+
+# ── D8's ordering signal: which tool was refused, and why (ADR-0140 AC-3, FRE-1359) ──
+
+UNCLASSIFIED_TOOL_NAME = "some_tool_added_next_quarter"
+
+
+def _all_grounding_verification_completed(
+    calls: list[tuple[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Every such event, not the first.
+
+    ``_grounding_verification_completed`` returns the first match, which cannot see a D4
+    retry's second document — the very shape the measurement's unit of analysis has to
+    collapse.
+    """
+    return [kwargs for event, kwargs in calls if event == "grounding_verification_completed"]
+
+
+@pytest.mark.asyncio
+async def test_ac1_refused_origins_name_the_tools_and_their_reasons() -> None:
+    """AC-1's own seeded shape, read off the single document it names.
+
+    Two refused ``bash`` calls and one refused unclassified call: two distinct origins, in
+    refusal order, each paired with the rule that refused it. Without the pairing the
+    roadmap cannot tell wrapper demand from a typed tool that returned nothing.
+    """
+    registry = SourceRegistry(turn_id="trace-refused-origins")
+    registry.register_tool_result(
+        tool_name="bash",
+        arguments={"command": "ls /etc"},
+        content="hosts",
+    )
+    registry.register_tool_result(
+        tool_name="bash",
+        arguments={"command": "cat /etc/hosts"},
+        content="127.0.0.1 localhost",
+    )
+    registry.register_tool_result(
+        tool_name=UNCLASSIFIED_TOOL_NAME,
+        arguments={"q": "paris population"},
+        content="Paris has 2.1 million residents",
+    )
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await _synthesize(ctx, reply)
+
+    assert len(_all_grounding_verification_completed(calls)) == 1
+    fields = _grounding_verification_completed(calls)
+    assert fields["turn_evidence_class"] == "uncitable"
+    assert fields["refused_tool_origins"] == ["bash", UNCLASSIFIED_TOOL_NAME]
+    assert fields["refused_origin_admissibility"] == [
+        "bash:model_authored_invocation",
+        f"{UNCLASSIFIED_TOOL_NAME}:unclassified_tool",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_fully_admitted_turn_refuses_nothing() -> None:
+    """The paired negative — the field must not fire on a turn that cited everything."""
+    registry = SourceRegistry(turn_id="trace-refused-none")
+    registration = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/paris"},
+        content="Paris counts 2,100,000 residents within the city limits.",
+    )
+    assert registration.source is not None
+    reply = f"{CLAIM} [{registration.source.identifier}]."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await _synthesize(ctx, reply)
+
+    fields = _grounding_verification_completed(calls)
+    assert fields["refused_tool_origins"] == []
+    assert fields["refused_origin_admissibility"] == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_verification_still_names_the_refused_origins() -> None:
+    """These two fields are properties of the registry, not of the span list.
+
+    They sit with ``tool_results_offered``/``tool_results_admitted``, outside the
+    availability gate: verification being *attempted and unavailable* says nothing about
+    what the turn refused.
+    """
+    registry = SourceRegistry(turn_id="trace-refused-unavailable")
+    registry.register_tool_result(
+        tool_name="bash",
+        arguments={"command": "echo 'Paris has 2.1 million residents'"},
+        content="Paris has 2.1 million residents",
+    )
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    session_manager = AsyncMock()
+    session_manager.update_session = lambda *a, **k: None
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+        patch(
+            "personal_agent.grounding.extractor.ModelSpanExtractor",
+            side_effect=RuntimeError("budget reservation denied"),
+        ),
+        patch("personal_agent.llm_client.factory.get_llm_client", return_value=object()),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        await step_synthesis(ctx, session_manager, AsyncMock())
+
+    fields = _grounding_verification_completed(calls)
+    assert fields["turn_evidence_class"] is None
+    assert fields["refused_tool_origins"] == ["bash"]
+
+
+@pytest.mark.asyncio
+async def test_each_generation_attempt_emits_its_own_document() -> None:
+    """Why the measurement counts turns and not documents (FRE-1359 preregistration).
+
+    ``_record_grounding`` runs on every synthesis attempt, and one registry serves the
+    whole turn — so a retried trace writes two documents and the second still carries the
+    first attempt's refused origins. A terms aggregation over documents would count this
+    single turn's ``bash`` twice. The preregistered unit of analysis collapses by
+    ``trace_id``, keeping the highest ``attempts``; this test is the behaviour that makes
+    that collapse necessary.
+    """
+    registry = SourceRegistry(turn_id="trace-refused-retry")
+    registry.register_tool_result(
+        tool_name="bash",
+        arguments={"command": "echo 'Paris has 2.1 million residents'"},
+        content="Paris has 2.1 million residents",
+    )
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, registry)
+    mock_log, calls = _capturing_log()
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor.log", mock_log),
+    ):
+        cfg.grounding_verification_mode = "enforce"
+        cfg.grounding_max_generation_attempts = 2
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        first = await _synthesize(ctx, reply)
+        ctx.final_reply = reply
+        await _synthesize(ctx, reply)
+
+    assert first is TaskState.LLM_CALL
+    events = _all_grounding_verification_completed(calls)
+    assert len(events) == 2
+    assert [event["refused_tool_origins"] for event in events] == [["bash"], ["bash"]]

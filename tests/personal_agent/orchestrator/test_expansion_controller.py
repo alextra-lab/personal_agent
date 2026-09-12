@@ -120,6 +120,24 @@ class TestValidatePlanJson:
         assert plan is not None
         assert len(plan.tasks) == 5
 
+    def test_expansion_budget_below_strategy_cap_binds(self) -> None:
+        """FRE-1382 AC-2: budget below the strategy cap produces the smaller fan-out."""
+        plan = _validate_plan_json(_make_plan_json(10), "HYBRID", max_tasks=1)
+        assert plan is not None
+        assert len(plan.tasks) == 1
+
+    def test_expansion_budget_above_strategy_cap_still_caps_at_strategy(self) -> None:
+        """FRE-1382 AC-2: budget above the strategy cap produces the strategy cap."""
+        plan = _validate_plan_json(_make_plan_json(10), "HYBRID", max_tasks=10)
+        assert plan is not None
+        assert len(plan.tasks) == 3
+
+    def test_negative_expansion_budget_does_not_widen_the_cap(self) -> None:
+        """A negative budget must clamp to zero, not become a Python negative slice
+        index (``tasks_raw[:-1]`` would otherwise keep 9 of 10 tasks).
+        """
+        assert _validate_plan_json(_make_plan_json(10), "HYBRID", max_tasks=-1) is None
+
 
 class TestPlannerDiscoveryRetired:
     """FRE-884 / ADR-0150 D2 — retired plan fields are ignored, never obeyed.
@@ -441,6 +459,94 @@ class TestExpansionControllerExecute:
         assert len(result.sub_agent_results) == 3
         assert result.successful_count == 2
         assert result.failed_count == 1
+
+    @pytest.mark.asyncio
+    async def test_expansion_budget_bounds_llm_planned_dispatch(
+        self, controller: ExpansionController
+    ) -> None:
+        """FRE-1382 AC-1/AC-2: a turn's expansion_budget must bound sub_agent_count.
+
+        The planner LLM proposes 3 tasks (the strategy cap), but the turn's own
+        load-shed budget is 1 — the invariant is that dispatch never exceeds it.
+        """
+        mock_llm = AsyncMock()
+        # A Mapping response exercises the real planner path, not the fallback
+        # (see test_planner_cost_captured_via_execute) — a bare str return
+        # raises inside _run_planner's raw_response["content"] lookup, which
+        # its broad except swallows into a silent fallback, defeating the
+        # point of this test.
+        mock_llm.respond = AsyncMock(return_value={"content": _make_plan_json(3), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=mock_llm,
+                trace_id="test-trace-budget",
+                messages=[],
+                expansion_budget=1,
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is False  # the LLM-planned path was taken
+        assert len(result.plan.tasks) == 1
+        assert len(result.sub_agent_results) == 1
+
+    @pytest.mark.asyncio
+    async def test_expansion_budget_above_strategy_cap_leaves_strategy_cap_binding(
+        self, controller: ExpansionController
+    ) -> None:
+        """FRE-1382 AC-2: a budget above the strategy cap does not relax it."""
+        mock_llm = AsyncMock()
+        mock_llm.respond = AsyncMock(return_value={"content": _make_plan_json(10), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result(f"task_{i}") for i in range(3)]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=mock_llm,
+                trace_id="test-trace-budget-high",
+                messages=[],
+                expansion_budget=10,
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is False  # the LLM-planned path was taken
+        assert len(result.plan.tasks) == 3
+
+    @pytest.mark.asyncio
+    async def test_expansion_budget_bounds_fallback_dispatch(
+        self, controller: ExpansionController
+    ) -> None:
+        """FRE-1382 AC-2: the load-shed budget binds the fallback planner too."""
+        mock_llm = AsyncMock()
+        mock_llm.respond = AsyncMock(return_value="I'll just answer directly...")
+        mock_results = [_make_sub_agent_result("evaluate_redis")]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis and Memcached",
+                strategy="HYBRID",
+                llm_client=mock_llm,
+                trace_id="test-trace-fallback-budget",
+                messages=[],
+                expansion_budget=1,
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is True
+        assert len(result.plan.tasks) == 1
 
 
 class TestGracefulDegradation:

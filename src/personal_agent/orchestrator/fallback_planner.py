@@ -55,6 +55,7 @@ def generate_fallback_plan(
     query: str,
     strategy: str,
     sub_agent_tool_surface: Sequence[str] = (),
+    max_tasks: int | None = None,
 ) -> ExpansionPlan:
     """Generate a deterministic plan from prompt structure.
 
@@ -66,17 +67,29 @@ def generate_fallback_plan(
             is in it, else a ``general`` worker (ADR-0150 D2). Empty — the
             default, and what a failed governance lookup yields — fails closed to
             ``general``.
+        max_tasks: The turn's own per-turn expansion budget (FRE-1382) —
+            tightens the strategy cap, never relaxes it. A negative value is
+            treated as zero (an empty plan degrades the turn back to the
+            primary loop, never a widened cap from Python's negative-index
+            slicing). ``None`` (the default) leaves the strategy cap as the
+            only bound.
 
     Returns:
         ExpansionPlan with is_fallback=True.
     """
     worker_type = _fallback_worker_type(sub_agent_tool_surface)
     entities = _extract_entities(query)
+    strategy_cap = _MAX_HYBRID_TASKS if strategy == "HYBRID" else _MAX_DECOMPOSE_TASKS
+    effective_cap = strategy_cap if max_tasks is None else max(0, min(strategy_cap, max_tasks))
 
     if entities:
         tasks = _build_entity_tasks(entities, query, strategy, worker_type)
     else:
         tasks = _build_generic_tasks(query, worker_type)
+    # Applied uniformly to whichever branch ran, rather than threading the cap
+    # into each builder separately — a single choke point neither builder can
+    # bypass (FRE-1382: the generic single-task branch used to ignore it).
+    tasks = tasks[:effective_cap]
 
     plan = ExpansionPlan(
         strategy=strategy,

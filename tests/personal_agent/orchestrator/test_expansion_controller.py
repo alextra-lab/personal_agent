@@ -470,7 +470,12 @@ class TestExpansionControllerExecute:
         load-shed budget is 1 — the invariant is that dispatch never exceeds it.
         """
         mock_llm = AsyncMock()
-        mock_llm.respond = AsyncMock(return_value=_make_plan_json(3))
+        # A Mapping response exercises the real planner path, not the fallback
+        # (see test_planner_cost_captured_via_execute) — a bare str return
+        # raises inside _run_planner's raw_response["content"] lookup, which
+        # its broad except swallows into a silent fallback, defeating the
+        # point of this test.
+        mock_llm.respond = AsyncMock(return_value={"content": _make_plan_json(3), "cost_usd": 0.0})
         mock_results = [_make_sub_agent_result("task_0")]
 
         with patch(
@@ -487,6 +492,7 @@ class TestExpansionControllerExecute:
             )
 
         assert result.plan is not None
+        assert result.plan.is_fallback is False  # the LLM-planned path was taken
         assert len(result.plan.tasks) == 1
         assert len(result.sub_agent_results) == 1
 
@@ -496,7 +502,7 @@ class TestExpansionControllerExecute:
     ) -> None:
         """FRE-1382 AC-2: a budget above the strategy cap does not relax it."""
         mock_llm = AsyncMock()
-        mock_llm.respond = AsyncMock(return_value=_make_plan_json(10))
+        mock_llm.respond = AsyncMock(return_value={"content": _make_plan_json(10), "cost_usd": 0.0})
         mock_results = [_make_sub_agent_result(f"task_{i}") for i in range(3)]
 
         with patch(
@@ -513,6 +519,7 @@ class TestExpansionControllerExecute:
             )
 
         assert result.plan is not None
+        assert result.plan.is_fallback is False  # the LLM-planned path was taken
         assert len(result.plan.tasks) == 3
 
     @pytest.mark.asyncio

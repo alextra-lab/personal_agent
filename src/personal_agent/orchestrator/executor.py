@@ -2190,6 +2190,34 @@ async def _resolve_enforcement(
     return selection
 
 
+def _unsourced_assertion_disclosure(verification: TurnVerification) -> str | None:
+    """Return the reader-facing line for a delivered answer with unsourced assertions.
+
+    FRE-1325: ``observe`` recorded a 0-of-9 turn correctly and served it identically to a
+    fully-cited one — nothing consumed the verdict at the moment it mattered. This line is
+    that consumer. It is built from the turn's own verification, never generated, and it
+    surfaces rather than blocks: a reader can still ignore it.
+
+    It says "not backed by a source Seshat verified", never "wrong". Under ADR-0138 D2 a
+    tool result is not an admissible source (FRE-1328), so a correct answer reasoned from
+    ``bash`` output carries this line too — and the sentence is true of it.
+
+    Args:
+        verification: What the inline checks decided about the reply being delivered.
+
+    Returns:
+        The disclosure, or None when verification did not run (unmeasured is not
+        unsourced) or when every non-exempt span passed — including a turn with none.
+    """
+    if not verification.available or not verification.failures:
+        return None
+    return (
+        f"{len(verification.failures)} of {len(verification.spans)} factual statements in "
+        "this answer are not backed by a source Seshat verified this turn. Check them "
+        "before you rely on them."
+    )
+
+
 def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mode: str) -> None:
     """Attach and emit the output side of the evidence contract (AC-6).
 
@@ -7540,6 +7568,12 @@ async def step_synthesis(
         ctx.grounding_attempts += 1
         verification = await _verify_grounding(ctx, trace_ctx)
         _record_grounding(ctx, verification, mode)
+        # FRE-1325: only `observe` delivers a verified reply that still has failures.
+        # `enforce` delivers compliant or unverified turns only, and its terminal
+        # statement replaces the reply this verdict describes. Held on ctx, not
+        # appended here: execute_task_safe adds it after the capture is written.
+        if mode == "observe":
+            ctx.grounding_disclosure = _unsourced_assertion_disclosure(verification)
 
         if mode == "enforce":
             decision = decide(
@@ -7645,9 +7679,18 @@ async def execute_task_safe(
         # Note: MCP initialization moved to CLI startup for singleton pattern
         ctx = await execute_task(ctx, session_manager)
 
+        # FRE-1325: the unsourced-assertion note joins the outgoing reply here and nowhere
+        # earlier. execute_task has already written the capture from ctx.final_reply, so
+        # consolidation never reads this system-written line as something the model said.
+        # An errored turn gets none: its reply may be the classified error, not the answer
+        # the verdict describes.
+        reply = ctx.final_reply or "Task completed"
+        if ctx.grounding_disclosure is not None and ctx.error is None:
+            reply = f"{reply}\n\nNote: {ctx.grounding_disclosure}"
+
         # Build result
         result: OrchestratorResult = {
-            "reply": ctx.final_reply or "Task completed",
+            "reply": reply,
             "steps": ctx.steps,
             "trace_id": ctx.trace_id,
         }

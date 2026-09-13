@@ -25,8 +25,17 @@ from personal_agent.grounding.spans import (
     SpanExtraction,
     SpanLabel,
 )
+from personal_agent.grounding.verification import (
+    CheckOutcome,
+    SpanVerification,
+    TurnVerification,
+)
 from personal_agent.orchestrator.channels import Channel
-from personal_agent.orchestrator.executor import _strip_markers_from_turn, step_synthesis
+from personal_agent.orchestrator.executor import (
+    _strip_markers_from_turn,
+    execute_task_safe,
+    step_synthesis,
+)
 from personal_agent.orchestrator.types import ExecutionContext, TaskState
 
 CLAIM = "Paris has 2.1 million residents"
@@ -147,6 +156,8 @@ async def test_observe_mode_records_the_failure_and_still_delivers() -> None:
 
     assert state is TaskState.COMPLETED
     assert ctx.final_reply == f"{CLAIM}."
+    assert ctx.grounding_disclosure is not None
+    assert ctx.grounding_disclosure.startswith("1 of 1 factual statements")
     assert ctx.grounding_record is not None
     assert ctx.grounding_record.mode == "observe"
     assert ctx.grounding_record.no_source_count == 1
@@ -172,6 +183,162 @@ async def test_observe_mode_distinguishes_entitlement_failures_in_the_record() -
     assert ctx.grounding_record is not None
     assert ctx.grounding_record.no_source_count == 1
     assert ctx.grounding_record.source_not_entitled_count == 1
+
+
+# ── observe — the reader sees an unsourced answer (FRE-1325) ────────────────────────
+
+
+def _span(text: str, outcome: CheckOutcome) -> SpanVerification:
+    """One span verdict; offsets are irrelevant to the disclosure."""
+    return SpanVerification(text=text, start=0, end=len(text), identifier=None, outcome=outcome)
+
+
+async def _synthesize_with_verification(
+    ctx: ExecutionContext, verification: TurnVerification
+) -> TaskState:
+    """Run ``step_synthesis`` under ``observe`` with verification's verdict fixed."""
+    session_manager = AsyncMock()
+    session_manager.update_session = lambda *a, **k: None
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch(
+            "personal_agent.orchestrator.executor._verify_grounding",
+            new=AsyncMock(return_value=verification),
+        ),
+    ):
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        return await step_synthesis(ctx, session_manager, AsyncMock())
+
+
+async def _deliver(ctx: ExecutionContext) -> str:
+    """Run the public wrapper over an already-finished turn and return the outgoing reply.
+
+    ``execute_task`` is stubbed to hand back ``ctx`` as ``step_synthesis`` left it — the
+    capture inside it reads exactly that ``ctx.final_reply``.
+    """
+    with patch(
+        "personal_agent.orchestrator.executor.execute_task", new=AsyncMock(return_value=ctx)
+    ):
+        result = await execute_task_safe(ctx, MagicMock())
+    return result["reply"]
+
+
+@pytest.mark.asyncio
+async def test_observe_a_zero_of_nine_turn_carries_the_unsourced_note() -> None:
+    """AC-1: the shape of trace ``dba5b2cba1e0bece6c8b9396465a265c`` — 9 spans, 0 passed.
+
+    That turn was served identically to a fully-cited one. ``result["reply"]`` is what
+    ``service/app.py`` pushes to the client and persists, so a line on it is visible at
+    the point of reading — live, on reload, and in the CLI. The capture reads
+    ``ctx.final_reply`` inside ``execute_task``, which must stay free of the note so
+    consolidation never ingests it as model output.
+    """
+    quoted = [
+        "that's the 12.7K-token cold prefill",
+        "One truncated query would have saved ~9K tokens",
+        "That last spike is step 8's tool result",
+    ]
+    spans = [_span(text, CheckOutcome.UNCITED) for text in quoted]
+    spans += [_span(f"assertion {i}", CheckOutcome.UNCITED) for i in range(6)]
+    reply = "Here is the session analysis."
+    ctx = _ctx(reply, SourceRegistry(turn_id="dba5b2cba1e0bece6c8b9396465a265c"))
+
+    state = await _synthesize_with_verification(ctx, TurnVerification(spans=tuple(spans)))
+
+    assert state is TaskState.COMPLETED
+    assert ctx.final_reply == reply  # what the capture records
+    assert await _deliver(ctx) == (
+        f"{reply}\n\nNote: 9 of 9 factual statements in this answer are not backed by a "
+        "source Seshat verified this turn. Check them before you rely on them."
+    )
+    assert ctx.grounding_record is not None
+    assert ctx.grounding_record.passed_count == 0
+    assert ctx.grounding_record.first_generation_compliant is False
+
+
+@pytest.mark.asyncio
+async def test_observe_partial_compliance_counts_only_the_failures() -> None:
+    """N counts the spans that did not pass, M every non-exempt span."""
+    spans = (
+        _span("a", CheckOutcome.PASSED),
+        _span("b", CheckOutcome.UNCITED),
+        _span("c", CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT),
+    )
+    ctx = _ctx("Answer.", SourceRegistry(turn_id="trace-partial"))
+
+    await _synthesize_with_verification(ctx, TurnVerification(spans=spans))
+
+    assert "Note: 2 of 3 factual statements" in await _deliver(ctx)
+
+
+@pytest.mark.asyncio
+async def test_observe_a_fully_cited_turn_carries_no_note() -> None:
+    """AC-2, seeded negative, on the real citation path — not a stubbed verdict.
+
+    Compliance is 0% on every measured turn so far, so an indicator that fired regardless
+    would be indistinguishable from this one working. This turn verifies and must be
+    delivered byte-for-byte.
+    """
+    registry = SourceRegistry(turn_id="trace-observe-pass")
+    registration = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/paris"},
+        content="Paris counts 2,100,000 residents within the city limits.",
+    )
+    assert registration.source is not None
+    reply = f"{CLAIM} [{registration.source.identifier}]."
+    ctx = _ctx(reply, registry)
+
+    with patch("personal_agent.orchestrator.executor.settings") as cfg:
+        cfg.grounding_verification_mode = "observe"
+        cfg.environment = "test"
+        _entailment_off(cfg)
+        state = await _synthesize(ctx, reply)
+
+    assert state is TaskState.COMPLETED
+    assert ctx.grounding_record is not None
+    assert ctx.grounding_record.first_generation_compliant is True
+    assert ctx.grounding_disclosure is None
+    assert await _deliver(ctx) == f"{CLAIM}."
+
+
+@pytest.mark.asyncio
+async def test_observe_a_turn_with_no_assertions_carries_no_note() -> None:
+    """AC-2: a greeting has nothing to cite, so it has nothing to disclose."""
+    ctx = _ctx("Hello!", SourceRegistry(turn_id="trace-no-assertions"))
+
+    await _synthesize_with_verification(ctx, TurnVerification())
+
+    assert await _deliver(ctx) == "Hello!"
+
+
+@pytest.mark.asyncio
+async def test_observe_an_unverified_turn_carries_no_note() -> None:
+    """Unmeasured is not unsourced: a turn verification could not run on says nothing."""
+    ctx = _ctx("Answer.", SourceRegistry(turn_id="trace-observe-unavailable"))
+
+    await _synthesize_with_verification(
+        ctx, TurnVerification(unavailable_reason="span extraction failed: RuntimeError")
+    )
+
+    assert await _deliver(ctx) == "Answer."
+
+
+@pytest.mark.asyncio
+async def test_an_errored_turn_never_carries_the_note() -> None:
+    """The reply of an errored turn may be the classified error, not the verified answer."""
+    ctx = _ctx("Partial answer.", SourceRegistry(turn_id="trace-errored"))
+    await _synthesize_with_verification(
+        ctx, TurnVerification(spans=(_span("x", CheckOutcome.UNCITED),))
+    )
+    ctx.error = RuntimeError("late failure")
+
+    with patch("personal_agent.orchestrator.executor._emit_classified_error", new=AsyncMock()):
+        reply = await _deliver(ctx)
+
+    assert "Note:" not in reply
 
 
 @pytest.mark.asyncio
@@ -248,6 +415,9 @@ async def test_enforce_reaches_the_terminal_statement_at_the_bound() -> None:
     assert "could not find a source" in ctx.final_reply
     assert "web_search(paris population)" in ctx.final_reply
     assert CLAIM not in ctx.final_reply
+    # FRE-1325: the terminal statement already says no source was found; the
+    # verdict describes the discarded generation, not this text.
+    assert ctx.grounding_disclosure is None
 
 
 @pytest.mark.asyncio

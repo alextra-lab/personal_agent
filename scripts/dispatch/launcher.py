@@ -1324,10 +1324,6 @@ def seat_is_busy(topology: StreamTopology, runner: CommandRunner) -> bool | None
     register as ``build-41``), whereas one seat per worktree holds. Ambiguity is
     never guessed at — zero or multiple matches return ``None``.
 
-    Args:
-        topology: The stream's launch coordinates.
-        runner: The command runner seam.
-
     A seat held at an interactive prompt reports ``waiting`` (FRE-1504). That
     maps to ``None`` here on purpose: ``deliver_to_seat`` reads ``True`` as "the
     typed command was accepted", and a held prompt is the opposite of that.

@@ -156,7 +156,19 @@ For each `launched` record, on an `--execute` tick with a seat reader wired:
 6. **The question heuristic is noisy (medium) — partly accepted.** The regex needs a sentence-ending `?` (a URL query does not match). The residual noise is acceptable: the signal is informational, and a wedged seat reads `mid-turn`, never `awaiting-owner`. A missed question still emits `dispatch_stall` with `seat_turn=ended`.
 7. **Dry-run side effects (medium) — accepted.** The transcript read, the binding, and the new notifications run only on `--execute` ticks.
 
-## 6. Out of scope
+## 6. Self-review (feature-dev:code-reviewer) — fixed on-branch
+
+**An absent worker seat read as busy (critical).** The pane read before a
+re-poke had no `tmux has-session` check. A gone seat captures as an empty pane,
+and `session_is_idle("")` is `False`, so the watcher skipped the PR forever: no
+re-poke, no count, no escalation. Fix: the block checks `has-session` first. An
+absent seat with one or more pokes escalates to `cc-master` at once, with a
+message that says the seat has no tmux session. Test:
+`test_absent_worker_session_after_a_poke_escalates_at_once`.
+
+The security review reported no findings.
+
+## 7. Out of scope
 
 - The Haiku empty-response behaviour itself. This PR makes it visible and escalated. The model choice for a seat is a dispatch-label matter.
 - Killing or resetting a seat. Every new path detects and surfaces only (the FRE-922 posture).

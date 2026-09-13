@@ -2699,6 +2699,40 @@ def test_run_once_escalation_skips_while_worker_busy(monkeypatch) -> None:  # ty
     assert ledger == {}
 
 
+def _absent_seat_runner() -> _RecordingRunner:
+    """cc-master exists and is idle; the worker seat's tmux session is gone."""
+
+    class _Runner(_RecordingRunner):
+        def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+            argv_t = tuple(argv)
+            self.calls.append(argv_t)
+            if argv_t[:2] == ("tmux", "has-session"):
+                return _FakeRunResult(returncode=0 if "=cc-master" in argv_t else 1)
+            if argv_t[:2] == ("tmux", "capture-pane"):
+                if "=cc-master:0.0" in argv_t:
+                    return _FakeRunResult(stdout=_REAL_IDLE_PANE)
+                return _FakeRunResult(returncode=1)
+            return _FakeRunResult()
+
+    return _Runner()
+
+
+def test_absent_worker_session_after_a_poke_escalates_at_once(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Code review: a crashed seat reads as an empty pane, which is not 'busy' — escalate."""
+    _send_keys_mode(monkeypatch)
+    state = {"poke:412:abc1234def5678:1": 100.0}
+    runner = _absent_seat_runner()
+    ledger: dict = {}
+    logger = _CapturingLogger()
+    _red_tick(state, 1001.0, runner, logger, ledger=ledger)
+    to_master = _sent_text(runner, "=cc-master:0.0")
+    assert len(to_master) == 1
+    assert "no tmux session" in to_master[0] and "#412" in to_master[0]
+    assert _sent_text(runner, "=cc-2build:0.0") == []
+    assert ledger["escalate:412:abc1234def5678"].source == "worker-poke-ineffective"
+    assert not [f for e, f in logger.infos if f.get("reason") == "seat-not-idle-after-poke"]
+
+
 def test_repoke_to_busy_channel_seat_is_skipped(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """A channel delivery never reads the pane, so a re-poke must read it first."""
     monkeypatch.setitem(

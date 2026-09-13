@@ -570,6 +570,32 @@ def _poke_count(sent: Mapping[str, float], pr: int, head_sha: str) -> int:
     return sum(1 for key in sent if key.startswith(prefix))
 
 
+def _escalation_command(
+    pr: int, head_sha: str, pokes: int, worker_session: str | None, *, seat_absent: bool = False
+) -> str:
+    """Return the message master receives instead of another red-CI poke (FRE-1499).
+
+    Args:
+        pr: The PR number.
+        head_sha: The PR head SHA the pokes were sent at.
+        pokes: Red-CI pokes already delivered at that SHA.
+        worker_session: The owning worker seat.
+        seat_absent: The seat's tmux session no longer exists.
+
+    Returns:
+        The prose command for ``cc-master``.
+    """
+    if seat_absent:
+        what = "The seat now has no tmux session, so it cannot act."
+    else:
+        what = "Each time the seat went idle with no new commit and no ack."
+    return (
+        f"PR #{pr} is still red at {head_sha[:8]} after {pokes} red-CI pokes to "
+        f"{worker_session}. {what} The watcher stopped poking that seat (FRE-1499). "
+        f"Check the seat — its model and its last turn — and decide."
+    )
+
+
 def classify_pr(
     pr: PullRequest,
     *,
@@ -690,12 +716,7 @@ def decide(
             # No owning seat means no pane to confirm idle: unroutable, like a
             # worker trigger with no stream.
             session: str | None = MASTER_SESSION if worker_session is not None else None
-            command = (
-                f"PR #{pr.number} is still red at {pr.head_sha[:8]} after {prior_pokes} "
-                f"red-CI pokes to {worker_session}. Each time the seat went idle with no "
-                f"new commit and no ack. The watcher stopped poking that seat (FRE-1499). "
-                f"Check the seat — its model and its last turn — and decide."
-            )
+            command = _escalation_command(pr.number, pr.head_sha, prior_pokes, worker_session)
         elif candidate.kind == "master":
             session = MASTER_SESSION
             command = f"/master {pr.number}"
@@ -1499,16 +1520,51 @@ def run_once(
             continue
         if not execute:
             continue
-        if trigger.prior_pokes > 0 and trigger.worker_session is not None:
+        worker_session = trigger.worker_session
+        if trigger.prior_pokes > 0 and worker_session is not None:
             # FRE-1499: a poke was already delivered at this SHA. Read the
             # worker pane for EVERY transport — a channel delivery never reads
             # it. Busy means the seat is working on it: leave it alone and write
             # nothing. Idle, with the PR still red at the same SHA, proves the
             # last poke changed nothing.
-            worker_pane = runner(
-                ["tmux", "capture-pane", "-t", exact_pane(trigger.worker_session), "-p"]
+            seat_absent = (
+                runner(["tmux", "has-session", "-t", exact_session(worker_session)]).returncode != 0
             )
-            if not session_is_idle(worker_pane.stdout):
+            if seat_absent:
+                # A gone seat captures as an empty pane, which reads as busy and
+                # would hide the seat forever. It cannot be working and cannot be
+                # poked: escalate now, whatever the poke count.
+                logger.warning(
+                    "gating_poke_ineffective",
+                    trace_id=trace_id,
+                    pr=trigger.pr,
+                    head_sha=trigger.head_sha,
+                    session=trigger.worker_session,
+                    consecutive_pokes=trigger.prior_pokes,
+                    escalating=True,
+                    seat_absent=True,
+                )
+                trigger = dataclasses.replace(
+                    trigger,
+                    kind="master",
+                    reason=_POKE_ESCALATION_REASON,
+                    session=MASTER_SESSION,
+                    command=_escalation_command(
+                        trigger.pr,
+                        trigger.head_sha,
+                        trigger.prior_pokes,
+                        trigger.worker_session,
+                        seat_absent=True,
+                    ),
+                    dedup_key=f"escalate:{trigger.pr}:{trigger.head_sha}",
+                    ttl_s=master_ttl_s,
+                    mode="send_keys",
+                    channel_port=None,
+                    channel_payload=None,
+                )
+            elif not session_is_idle(
+                runner(["tmux", "capture-pane", "-t", exact_pane(worker_session), "-p"]).stdout
+            ):
                 logger.info(
                     "gating_skip",
                     trace_id=trace_id,
@@ -1517,15 +1573,18 @@ def run_once(
                     session=trigger.worker_session,
                 )
                 continue
-            logger.warning(
-                "gating_poke_ineffective",
-                trace_id=trace_id,
-                pr=trigger.pr,
-                head_sha=trigger.head_sha,
-                session=trigger.worker_session,
-                consecutive_pokes=trigger.prior_pokes,
-                escalating=trigger.reason == _POKE_ESCALATION_REASON,
-            )
+            else:
+                logger.warning(
+                    "gating_poke_ineffective",
+                    trace_id=trace_id,
+                    pr=trigger.pr,
+                    head_sha=trigger.head_sha,
+                    session=trigger.worker_session,
+                    consecutive_pokes=trigger.prior_pokes,
+                    escalating=trigger.reason == _POKE_ESCALATION_REASON,
+                )
+        if trigger.session is None:
+            continue  # re-narrows after the absent-seat replace above; never true here
         tick_ledger, record_outcome = trigger_ledger.record_pending(
             tick_ledger,
             event_id=trigger.dedup_key,

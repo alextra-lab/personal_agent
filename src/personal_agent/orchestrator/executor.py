@@ -7564,16 +7564,16 @@ async def step_synthesis(
     # retry path (back to TaskState.LLM_CALL) would otherwise issue exactly the
     # extra model call a Stop must never produce (AC-3).
     mode = settings.grounding_verification_mode
-    grounding_disclosure: str | None = None
     if mode != "off" and not ctx.turn_stopped_early:
         ctx.grounding_attempts += 1
         verification = await _verify_grounding(ctx, trace_ctx)
         _record_grounding(ctx, verification, mode)
         # FRE-1325: only `observe` delivers a verified reply that still has failures.
         # `enforce` delivers compliant or unverified turns only, and its terminal
-        # statement replaces the reply this verdict describes.
+        # statement replaces the reply this verdict describes. Held on ctx, not
+        # appended here: execute_task_safe adds it after the capture is written.
         if mode == "observe":
-            grounding_disclosure = _unsourced_assertion_disclosure(verification)
+            ctx.grounding_disclosure = _unsourced_assertion_disclosure(verification)
 
         if mode == "enforce":
             decision = decide(
@@ -7625,8 +7625,6 @@ async def step_synthesis(
     )
 
     all_disclosures = list(ctx.attachment_disclosures) + get_decision_disclosures()
-    if grounding_disclosure is not None:
-        all_disclosures.append(grounding_disclosure)
     if all_disclosures:
         disclosure_text = "\n\n".join(f"Note: {d}" for d in all_disclosures)
         ctx.final_reply = f"{ctx.final_reply}\n\n{disclosure_text}"
@@ -7681,9 +7679,18 @@ async def execute_task_safe(
         # Note: MCP initialization moved to CLI startup for singleton pattern
         ctx = await execute_task(ctx, session_manager)
 
+        # FRE-1325: the unsourced-assertion note joins the outgoing reply here and nowhere
+        # earlier. execute_task has already written the capture from ctx.final_reply, so
+        # consolidation never reads this system-written line as something the model said.
+        # An errored turn gets none: its reply may be the classified error, not the answer
+        # the verdict describes.
+        reply = ctx.final_reply or "Task completed"
+        if ctx.grounding_disclosure is not None and ctx.error is None:
+            reply = f"{reply}\n\nNote: {ctx.grounding_disclosure}"
+
         # Build result
         result: OrchestratorResult = {
-            "reply": ctx.final_reply or "Task completed",
+            "reply": reply,
             "steps": ctx.steps,
             "trace_id": ctx.trace_id,
         }

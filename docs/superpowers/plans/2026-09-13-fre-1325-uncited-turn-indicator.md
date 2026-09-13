@@ -13,13 +13,17 @@ gets one system-written line appended to the reply:
 
 Why this surface:
 
-- The reply is the point of reading. `service/app.py:439` takes `result["reply"]` (which is
-  `ctx.final_reply`, `executor.py:7650`) and pushes it as one `TEXT_DELTA` (`app.py:460`), then
-  persists the same string. So the line reaches the PWA live, on reload, and the CLI, with no
-  PWA change and no new event type.
-- `step_synthesis` already appends deterministic `Note:` disclosures after verification
-  (`executor.py:7593`). The new line goes through the same list. It is built from the turn's
+- The reply is the point of reading. `service/app.py:439` takes `result["reply"]` from
+  `execute_task_safe` and pushes it as one `TEXT_DELTA` (`app.py:460`), then persists the same
+  string. The HTTP path and the CLI read the same field. So the line reaches the PWA live, on
+  reload, and the CLI, with no PWA change and no new event type.
+- The line uses the existing `Note:` disclosure format (ADR-0101 §6). It is built from the turn's
   own verification record, never generated.
+- **Placement (revised after codex plan review):** `step_synthesis` stores the line on
+  `ctx.grounding_disclosure`. `execute_task_safe` appends it to `result["reply"]`. That happens
+  after `execute_task` writes the capture from `ctx.final_reply`, so `TaskCapture.assistant_response`
+  and memory consolidation never read the system-written line as model output. The capture
+  already carries the same fact structurally in `grounding`. An errored turn gets no line.
 
 What it does **not** cover (to be stated in the handoff):
 
@@ -29,7 +33,12 @@ What it does **not** cover (to be stated in the handoff):
   uncitable (FRE-1328). The wording says "not backed by a source Seshat verified", which is true
   in both cases. It does not say "wrong".
 - A turn that verification could not run on (`unavailable`) gets no line. That turn is
-  unmeasured, and this ticket is scoped to measured 0-of-N turns.
+  unmeasured. The line covers every measured turn with one or more failed spans, not only
+  0-of-N turns.
+- The persisted reply carries the line, so the next turn's model context contains it as
+  ordinary assistant text. Verification does not re-check history. The model can imitate the
+  line. This is accepted: the attachment disclosures behave the same way, and separating display
+  text from model context needs a persistence and PWA change outside this ticket.
 - A stopped turn (`turn_stopped_early`) and `mode == "off"` get no line. Verification does not
   run there.
 - `enforce` never gets the line: `decide` delivers only compliant or unavailable turns, and the
@@ -69,8 +78,10 @@ turns false on a retried turn) and is not a property of the text the reader sees
 2. **Implement** in `src/personal_agent/orchestrator/executor.py`:
    - a private pure helper `_unsourced_assertion_disclosure(verification: TurnVerification)
      -> str | None`;
-   - in `step_synthesis`, set `grounding_disclosure: str | None = None` before the grounding
-     block; set it in the block when `mode == "observe"`; add it to `all_disclosures`.
+   - `ExecutionContext.grounding_disclosure: str | None` in `orchestrator/types.py`;
+   - in `step_synthesis`, set it in the grounding block when `mode == "observe"`;
+   - in `execute_task_safe`, append `Note: <line>` to `result["reply"]` when it is set and
+     `ctx.error is None`.
 3. **Verify** the test file passes, then `make test`, `make mypy`, `make ruff-check`,
    `make ruff-format`, `pre-commit run --all-files`.
 4. **AC-3 check**: `git diff origin/main...HEAD --stat` lists no `grounding/verification.py`,

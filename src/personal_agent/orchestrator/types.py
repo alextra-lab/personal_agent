@@ -441,6 +441,11 @@ class ExecutionContext:
     # ADR-0138's output side of the ADR-0125 evidence contract, attached for the capture.
     grounding_record: "GroundingRecord | None" = None
 
+    # FRE-1325. The reader-facing line for a delivered reply with unsourced assertions, set
+    # by step_synthesis and appended to the outgoing reply only by execute_task_safe — after
+    # the capture is written — so memory consolidation never ingests it as model output.
+    grounding_disclosure: str | None = None
+
     # ADR-0138 D5 (FRE-1285). The enforcement level this turn runs under, chosen ONCE
     # before the first generation and then held. Not re-decided per tool-loop pass: the
     # level is a statement about how this turn was generated, and a turn that started

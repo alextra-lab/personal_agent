@@ -1680,6 +1680,26 @@ _WEDGE_DETAIL: dict[str, str] = {
 }
 
 
+def _prompt_key(summary: str | None) -> str | None:
+    """Return the identity of a held prompt: its last ❯ selector line (FRE-1504).
+
+    Args:
+        summary: A held-prompt summary, or ``None``.
+
+    Returns:
+        The last stripped line that starts with ❯ and carries text after it, or
+        ``None`` when the summary is absent or holds no such line.
+    """
+    if summary is None:
+        return None
+    selectors = [
+        line.strip()
+        for line in summary.splitlines()
+        if line.strip().startswith("❯") and line.strip() != "❯"
+    ]
+    return selectors[-1] if selectors else None
+
+
 def _note_wedge(
     stream: str,
     ticket: str,
@@ -1778,7 +1798,14 @@ def _note_wedge(
         # prompt CHAIN (the first was answered, the next one now blocks). Notify
         # at once so the ledger entry names the current prompt; the episode and
         # its count continue, so the seat never reads as recovered.
-        prompt_changed = prior is not None and prior.prompt_summary != prompt_summary
+        # Compared by selector line, not the whole summary (codex plan-review):
+        # surrounding pane text can drift on one static prompt, and a record
+        # with no stored prompt (a pre-FRE-1504 file) is a first observation.
+        prior_key = _prompt_key(prior.prompt_summary) if prior is not None else None
+        current_key = _prompt_key(prompt_summary)
+        prompt_changed = (
+            prior_key is not None and current_key is not None and prior_key != current_key
+        )
         should_notify = (
             last_notified == 0 or count - last_notified >= wedge_renotify_ticks or prompt_changed
         )

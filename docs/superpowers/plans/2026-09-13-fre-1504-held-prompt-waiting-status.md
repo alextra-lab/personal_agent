@@ -47,10 +47,20 @@ reads `seat_is_busy` → `None`, the modal pane is not idle, and the poll times 
 3. `orchestrator.py`
    - `WedgeState` gains `prompt_summary: str | None = None`. Persisted. `load_wedge_state`
      drops a record whose `prompt_summary` is not `str | None`. Old files still load.
-   - `_note_wedge` (AC-3): past the threshold, a `held-prompt` tick whose
-     `prompt_summary` differs from the persisted one notifies at once. The ledger entry
-     then names the prompt that blocks the seat now, not the one already answered. The
-     count continues. The episode does not reset, so the seat never reads as recovered.
+   - `_note_wedge` (AC-3): past the threshold, a `held-prompt` tick whose prompt differs
+     from the persisted one notifies at once. The ledger entry then names the prompt that
+     blocks the seat now, not the one already answered. The count continues. The episode
+     does not reset, so the seat never reads as recovered.
+   - The comparison uses `_prompt_key`: the last `❯` selector line of the summary. Text
+     around one static prompt can change between ticks, and a full-text comparison would
+     notify on every tick. A stored record with no prompt (a file written before this
+     change) counts as a first observation, not a change. (Codex plan-review, finding 4.)
+
+`held-prompt` means any persistent state in which the seat waits for input. That
+includes a question to the owner if it reaches the launch path. The detector only
+reports after `wedge_ticks`, and it never answers or ends a seat, so this is accepted.
+A tracked run does not reach this path: every non-`launch` decision resets wedge state
+before FRE-1499's `dispatch_awaiting_owner` logic runs. (Codex plan-review, finding 2.)
    - `_WEDGE_DETAIL["held-prompt"]` text: "reports busy or waiting".
 
 Out of scope: auto-answering prompts (ticket). Model aliases stay unpinned (owner, 19:02
@@ -74,6 +84,7 @@ UTC). FRE-1499's `seat_turn` false negative on the same panes is a separate clas
 |----|-------|
 | AC-1 live path | Live probe: real `run_once`, real `claude agents`, real `tmux capture-pane`, a real held model-switch modal. Ledger entry names stream, ticket, prompt. Master repeats on the deployed daemon. |
 | AC-2 root cause | This document, table above. |
-| AC-3 prompt chain | `test_prompt_chain_second_prompt_is_detected_after_the_first_is_answered` |
+| AC-3 prompt chain | `test_prompt_chain_second_prompt_is_detected_after_the_first_is_answered`, plus `test_drifting_text_around_one_static_prompt_does_not_renotify` and `test_pre_fre1504_wedge_record_does_not_renotify_off_its_missing_prompt` |
+| `waiting` never confirms a delivery | `test_deliver_to_seat_never_types_into_a_waiting_seat` |
 | AC-4 seeded negative | `test_advancing_spinner_writes_no_wedge_ledger_entry_across_ten_ticks` |
 | AC-5 composition regression | `test_live_model_switch_modal_reaches_the_notify_ledger` — runs `run_once`; fails on main |

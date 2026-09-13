@@ -1328,6 +1328,43 @@ def test_prompt_chain_second_prompt_is_detected_after_the_first_is_answered(
     assert len([e for e in notifier.events if e[0] == "dispatch_seat_wedged"]) == 2
 
 
+def test_drifting_text_around_one_static_prompt_does_not_renotify(tmp_path: Path) -> None:
+    """FRE-1504 (codex plan-review): the chain re-notify keys on the prompt, not the pane.
+
+    The ❯ selector stays the same while a line near it changes every tick. That
+    is one prompt, so the default hourly schedule governs: one ping in ten ticks.
+    """
+    path = tmp_path / "notify.json"
+    panes = [
+        f" Quick safety check: tick {i}\n\n ❯ No, exit\n   Yes, I trust this folder\n"
+        for i in range(1, 11)
+    ]
+    runner = _WedgeRunner(pane_sequence=panes, status="waiting")
+    tick, _wedge_state, notifier = _chain_ticker(runner, path)
+    for _ in range(10):
+        tick()
+
+    assert len([e for e in notifier.events if e[0] == "dispatch_seat_wedged"]) == 1
+
+
+def test_pre_fre1504_wedge_record_does_not_renotify_off_its_missing_prompt(
+    tmp_path: Path,
+) -> None:
+    """FRE-1504 (codex plan-review): a stored record with no prompt is a first observation.
+
+    A record written before ``prompt_summary`` existed must keep its existing
+    re-notify schedule after the upgrade, not ping on its first tick.
+    """
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_LIVE_MODEL_SWITCH_PANE, status="waiting")
+    tick, wedge_state, notifier = _chain_ticker(runner, path)
+    wedge_state["build1"] = WedgeState(count=5, last_notified_count=3, reason="held-prompt")
+    tick()
+
+    assert wedge_state["build1"].count == 6
+    assert not [e for e in notifier.events if e[0] == "dispatch_seat_wedged"]
+
+
 def test_advancing_spinner_writes_no_wedge_ledger_entry_across_ten_ticks(tmp_path: Path) -> None:
     """FRE-1504 AC-4: the seeded negative — a working seat is never reported.
 

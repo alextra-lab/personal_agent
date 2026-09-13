@@ -1134,6 +1134,20 @@ def test_waiting_status_is_a_held_prompt_but_never_busy() -> None:
     assert seat_wedge_reason(topology, _SeatRunner(pane="prompt", agents=[_agent("zzz")])) is None
 
 
+def test_deliver_to_seat_never_types_into_a_waiting_seat() -> None:
+    """FRE-1504 (codex plan-review): a seat held at a prompt blocks delivery.
+
+    RC ``waiting`` plus a held modal must return ``seat-busy`` before any key is
+    sent — typing ``/clear`` into a modal would answer or corrupt it.
+    """
+    plan = plan_launch("build1", "FRE-1504", "opus", context_keep=False, seat="live")
+    runner = _SeatRunner(pane="prompt", agents=[_agent("waiting")])
+    result = execute_plan(plan, runner, sleeper=_no_wait)
+
+    assert result.outcome == "seat-busy"
+    assert not any(call[:2] == ("tmux", "send-keys") for call in runner.calls)
+
+
 def test_malformed_ticket_identifier_is_rejected() -> None:
     """The ticket id is typed into a live acceptEdits seat — assert its shape.
 

@@ -2190,6 +2190,34 @@ async def _resolve_enforcement(
     return selection
 
 
+def _unsourced_assertion_disclosure(verification: TurnVerification) -> str | None:
+    """Return the reader-facing line for a delivered answer with unsourced assertions.
+
+    FRE-1325: ``observe`` recorded a 0-of-9 turn correctly and served it identically to a
+    fully-cited one — nothing consumed the verdict at the moment it mattered. This line is
+    that consumer. It is built from the turn's own verification, never generated, and it
+    surfaces rather than blocks: a reader can still ignore it.
+
+    It says "not backed by a source Seshat verified", never "wrong". Under ADR-0138 D2 a
+    tool result is not an admissible source (FRE-1328), so a correct answer reasoned from
+    ``bash`` output carries this line too — and the sentence is true of it.
+
+    Args:
+        verification: What the inline checks decided about the reply being delivered.
+
+    Returns:
+        The disclosure, or None when verification did not run (unmeasured is not
+        unsourced) or when every non-exempt span passed — including a turn with none.
+    """
+    if not verification.available or not verification.failures:
+        return None
+    return (
+        f"{len(verification.failures)} of {len(verification.spans)} factual statements in "
+        "this answer are not backed by a source Seshat verified this turn. Check them "
+        "before you rely on them."
+    )
+
+
 def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mode: str) -> None:
     """Attach and emit the output side of the evidence contract (AC-6).
 
@@ -7536,10 +7564,16 @@ async def step_synthesis(
     # retry path (back to TaskState.LLM_CALL) would otherwise issue exactly the
     # extra model call a Stop must never produce (AC-3).
     mode = settings.grounding_verification_mode
+    grounding_disclosure: str | None = None
     if mode != "off" and not ctx.turn_stopped_early:
         ctx.grounding_attempts += 1
         verification = await _verify_grounding(ctx, trace_ctx)
         _record_grounding(ctx, verification, mode)
+        # FRE-1325: only `observe` delivers a verified reply that still has failures.
+        # `enforce` delivers compliant or unverified turns only, and its terminal
+        # statement replaces the reply this verdict describes.
+        if mode == "observe":
+            grounding_disclosure = _unsourced_assertion_disclosure(verification)
 
         if mode == "enforce":
             decision = decide(
@@ -7591,6 +7625,8 @@ async def step_synthesis(
     )
 
     all_disclosures = list(ctx.attachment_disclosures) + get_decision_disclosures()
+    if grounding_disclosure is not None:
+        all_disclosures.append(grounding_disclosure)
     if all_disclosures:
         disclosure_text = "\n\n".join(f"Note: {d}" for d in all_disclosures)
         ctx.final_reply = f"{ctx.final_reply}\n\n{disclosure_text}"

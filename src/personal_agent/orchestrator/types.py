@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.orchestrator.channels import Channel
     from personal_agent.orchestrator.constraint_options import ConstraintDecision
-    from personal_agent.orchestrator.expansion_types import ExpansionPlan, PhaseResult
+    from personal_agent.orchestrator.expansion_types import ExpansionPlan, PhaseResult, SkipReason
     from personal_agent.orchestrator.sub_agent_types import SubAgentResult
 
 
@@ -503,6 +503,9 @@ class ExecutionContext:
     # fan-out — read by the turn-deadline fallback so it never reports "no
     # results gathered" while sub-agent work sits uncounted.
     expansion_skipped_tasks: list[str] = field(default_factory=list)
+    # FRE-1501: why ``expansion_skipped_tasks`` were not dispatched, or ``None``
+    # when nothing was skipped.
+    expansion_skip_reason: "SkipReason | None" = None
 
     # --- Phase B skill routing (FRE-skill-routing) ---
     # Tracks which skill bodies have been read_skill'd this conversation for dedup.

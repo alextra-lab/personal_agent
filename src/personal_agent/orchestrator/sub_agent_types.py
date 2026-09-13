@@ -26,9 +26,21 @@ from personal_agent.orchestrator.worker_types import Thoroughness, WorkerReport,
 #: budget fired. ``deadline`` — the outer ``wait_for`` fired, and by definition
 #: no time remained for a report. ``cancelled`` — the dispatcher cancelled the
 #: worker; this value only ever reaches a capture, never a result, because the
-#: cancellation is re-raised. ``error`` — anything else.
+#: cancellation is re-raised. ``tool_call_truncated`` — a round's tool call was cut
+#: at the token ceiling (``finish_reason == "length"``), so it was neither run nor
+#: kept in history (FRE-1501). ``origin_error`` — the model server answered 5xx or
+#: could not be reached after the client's own retries (FRE-1501). ``error`` —
+#: anything else.
 SubAgentStopReason = Literal[
-    "completed", "cap", "time_reserve", "timeout", "deadline", "cancelled", "error"
+    "completed",
+    "cap",
+    "time_reserve",
+    "timeout",
+    "deadline",
+    "cancelled",
+    "tool_call_truncated",
+    "origin_error",
+    "error",
 ]
 
 #: What kind of thing the worker's terminal content actually is (ADR-0149 D3).

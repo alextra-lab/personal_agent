@@ -74,3 +74,35 @@ def is_prod_postgres_url(url: str) -> bool:
     host = parsed.hostname or ""
     port = parsed.port
     return host in _LOCAL_HOSTS and port == _PROD_POSTGRES_PORT
+
+
+def is_eval_host(uri: str) -> bool:
+    """Return True when *uri*'s hostname ends in ``-eval``, or is loopback.
+
+    FRE-1372: the eval compose stack names every isolated substrate service
+    with an ``-eval`` suffix (``postgres-eval``, ``neo4j-eval``,
+    ``elasticsearch-eval``, ``redis-eval``) — this checks that naming
+    convention directly, unlike :func:`is_prod_neo4j_uri` and its siblings,
+    which check for the *production default* fingerprint (localhost on the
+    canonical port) and would not catch a URI pointing at production's
+    Docker-internal service name (e.g. ``bolt://neo4j:7687``).
+
+    Loopback (``localhost``/``127.0.0.1``) also counts as safe, mirroring
+    :func:`personal_agent.config._owner_host_allowlist.is_owner_controlled_host`'s
+    identical allowance and for the same reason: a real eval-gateway container
+    reaches its substrate over the compose network by service name, never its
+    own loopback, so a loopback host here is never a *working* connection to
+    production's graph — only ever a broken one (nothing eval-relevant listens
+    on the container's own loopback), or a test suite's ad hoc, unrelated-purpose
+    ``AppConfig`` construction against the FRE-375 test stack. Neither is the
+    live-contamination risk this check exists to catch — a resolvable
+    connection to production's *actual*, reachable Docker service name.
+
+    Args:
+        uri: A storage connection URI/URL.
+
+    Returns:
+        True when the URI's hostname ends in ``-eval``, or is loopback.
+    """
+    host = urlparse(uri).hostname or ""
+    return host.endswith("-eval") or host in _LOCAL_HOSTS

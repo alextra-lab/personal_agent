@@ -27,6 +27,7 @@ import pytest
 from scripts.eval import eval_isolation
 from scripts.eval.eval_isolation import ArmTurnResult, IsolatedArmRunner, wait_for_gateway_idle
 from scripts.eval.fre1337_intent_probe.substrate import EVAL_ARMS, WIPE_CYPHER
+from scripts.eval.fre1372_isolation_probe import _extraction_failure
 
 
 class _FakeSession:
@@ -361,6 +362,65 @@ async def test_wait_for_gateway_idle_returns_once_last_event_is_old_enough() -> 
     waited = await wait_for_gateway_idle(es, quiet_s=150.0, max_wait_s=5.0)
 
     assert waited < 1.0
+
+
+# ---------------------------------------------------------------------------
+# FRE-1372 (reopen) — the probe fails loudly when extraction never settled
+# ---------------------------------------------------------------------------
+
+
+def _result(*, session_id: str, extraction_settled: bool) -> ArmTurnResult:
+    return ArmTurnResult(
+        session_id=session_id,
+        trace_id=f"trace-{session_id}",
+        arm="control",
+        extraction_settled=extraction_settled,
+    )
+
+
+class TestExtractionFailure:
+    """`_extraction_failure` catches the vacuous-pass shape the 2026-09-07 bounce named:
+    an empty-graph run reporting AC-1 held because it had nothing to leak.
+    """
+
+    def test_none_when_both_turns_settled(self) -> None:
+        first = _result(session_id="s1", extraction_settled=True)
+        second = _result(session_id="s2", extraction_settled=True)
+
+        assert _extraction_failure(first=first, second=second) is None
+
+    def test_names_first_turn_when_only_it_is_unsettled(self) -> None:
+        first = _result(session_id="s1", extraction_settled=False)
+        second = _result(session_id="s2", extraction_settled=True)
+
+        message = _extraction_failure(first=first, second=second)
+
+        assert message is not None
+        assert "first turn" in message
+        assert "s1" in message
+
+    def test_names_second_turn_when_only_it_is_unsettled(self) -> None:
+        first = _result(session_id="s1", extraction_settled=True)
+        second = _result(session_id="s2", extraction_settled=False)
+
+        message = _extraction_failure(first=first, second=second)
+
+        assert message is not None
+        assert "second turn" in message
+        assert "s2" in message
+
+    def test_names_first_turn_when_both_are_unsettled(self) -> None:
+        """Both turns share `arm="control"` in the real probe — this proves the message
+        distinguishes them by call order, not by the (identical) `.arm` field.
+        """
+        first = _result(session_id="s1", extraction_settled=False)
+        second = _result(session_id="s2", extraction_settled=False)
+
+        message = _extraction_failure(first=first, second=second)
+
+        assert message is not None
+        assert "first turn" in message
+        assert "s1" in message
 
 
 @pytest.mark.asyncio

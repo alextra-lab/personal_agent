@@ -296,6 +296,46 @@ services:
       # harness's CP-05 path (dataset.py) exercises real DelegationPackage
       # composition, so enable it here.
       AGENT_DELEGATION_ENABLED: "true"
+      # FRE-1372 (reopen) / FRE-1498 / FRE-1464: production behaviour parity.
+      # Every other AGENT_* setting fell to settings.py's defaults — memory graph
+      # OFF, proactive memory OFF, every recall arm OFF, substrate profile `private`
+      # (no managed embedder) — because this file never referenced them, so nothing
+      # ever interpolated their real value from `.env`. That made every AC-1/AC-2
+      # eval a run against a system that never wrote to its own knowledge graph:
+      # FRE-1372's 2026-09-07 probe measured a real "no leak" against an eval Neo4j
+      # holding zero nodes, because entity extraction never ran to leak anything.
+      #
+      # These 22 keys interpolate from `/opt/seshat/.env` — pass `--env-file
+      # /opt/seshat/.env` to `docker compose` (see `make eval-infra-up`), since a
+      # worktree's own `.env` is a stale, partial dev copy. Behaviour-relevant only:
+      # never a production substrate address. `AGENT_SYSGRAPH_DATABASE_URL` (points
+      # at production Postgres), R2/artifact, CORS/WS/PWA, freshness, insights, and
+      # feedback polling are deliberately NOT passed. Every eval-substrate address
+      # above stays this file's own `-eval` value, guarded further by
+      # `AppConfig._validate_eval_deployment_isolation` (FRE-1372), which refuses to
+      # boot an eval-profile gateway resolving off an `-eval` host.
+      AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
+      AGENT_PROACTIVE_MEMORY_ENABLED: ${AGENT_PROACTIVE_MEMORY_ENABLED}
+      AGENT_MULTIPATH_RECALL_ENABLED: ${AGENT_MULTIPATH_RECALL_ENABLED}
+      AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED: ${AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED}
+      AGENT_LEXICAL_ARM_ENABLED: ${AGENT_LEXICAL_ARM_ENABLED}
+      AGENT_MULTIQUERY_ARM_ENABLED: ${AGENT_MULTIQUERY_ARM_ENABLED}
+      AGENT_RECALL_SIMILARITY_FLOOR: ${AGENT_RECALL_SIMILARITY_FLOOR}
+      AGENT_GROUNDING_VERIFICATION_MODE: ${AGENT_GROUNDING_VERIFICATION_MODE}
+      AGENT_LOCATION_ENABLED: ${AGENT_LOCATION_ENABLED}
+      AGENT_ENABLE_SECOND_BRAIN: ${AGENT_ENABLE_SECOND_BRAIN}
+      AGENT_SKILL_ROUTING_MODE: ${AGENT_SKILL_ROUTING_MODE}
+      AGENT_OWNER_NAME: ${AGENT_OWNER_NAME}
+      AGENT_CONVERSATION_MAX_HISTORY_MESSAGES: ${AGENT_CONVERSATION_MAX_HISTORY_MESSAGES}
+      AGENT_SUBSTRATE_PROFILE: ${AGENT_SUBSTRATE_PROFILE}
+      AGENT_MANAGED_EMBEDDING_ENDPOINT: ${AGENT_MANAGED_EMBEDDING_ENDPOINT}
+      AGENT_MANAGED_EMBEDDING_MODEL: ${AGENT_MANAGED_EMBEDDING_MODEL}
+      AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
+      AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
+      AGENT_VOYAGE_API_KEY: ${AGENT_VOYAGE_API_KEY}
+      AGENT_PERPLEXITY_API_KEY: ${AGENT_PERPLEXITY_API_KEY}
+      AGENT_LINEAR_API_KEY: ${AGENT_LINEAR_API_KEY}
+      AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
     ports:
       # Host 9002 → container 9001 (uvicorn port is hardcoded in Dockerfile.gateway)
       - "127.0.0.1:9002:9001"
@@ -387,6 +427,30 @@ services:
       # harness's CP-05 path (dataset.py) exercises real DelegationPackage
       # composition, so enable it here.
       AGENT_DELEGATION_ENABLED: "true"
+      # FRE-1372 (reopen) / FRE-1498 / FRE-1464: production behaviour parity — same
+      # 22 keys, same rationale, as `seshat-gateway-control` above.
+      AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
+      AGENT_PROACTIVE_MEMORY_ENABLED: ${AGENT_PROACTIVE_MEMORY_ENABLED}
+      AGENT_MULTIPATH_RECALL_ENABLED: ${AGENT_MULTIPATH_RECALL_ENABLED}
+      AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED: ${AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED}
+      AGENT_LEXICAL_ARM_ENABLED: ${AGENT_LEXICAL_ARM_ENABLED}
+      AGENT_MULTIQUERY_ARM_ENABLED: ${AGENT_MULTIQUERY_ARM_ENABLED}
+      AGENT_RECALL_SIMILARITY_FLOOR: ${AGENT_RECALL_SIMILARITY_FLOOR}
+      AGENT_GROUNDING_VERIFICATION_MODE: ${AGENT_GROUNDING_VERIFICATION_MODE}
+      AGENT_LOCATION_ENABLED: ${AGENT_LOCATION_ENABLED}
+      AGENT_ENABLE_SECOND_BRAIN: ${AGENT_ENABLE_SECOND_BRAIN}
+      AGENT_SKILL_ROUTING_MODE: ${AGENT_SKILL_ROUTING_MODE}
+      AGENT_OWNER_NAME: ${AGENT_OWNER_NAME}
+      AGENT_CONVERSATION_MAX_HISTORY_MESSAGES: ${AGENT_CONVERSATION_MAX_HISTORY_MESSAGES}
+      AGENT_SUBSTRATE_PROFILE: ${AGENT_SUBSTRATE_PROFILE}
+      AGENT_MANAGED_EMBEDDING_ENDPOINT: ${AGENT_MANAGED_EMBEDDING_ENDPOINT}
+      AGENT_MANAGED_EMBEDDING_MODEL: ${AGENT_MANAGED_EMBEDDING_MODEL}
+      AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
+      AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
+      AGENT_VOYAGE_API_KEY: ${AGENT_VOYAGE_API_KEY}
+      AGENT_PERPLEXITY_API_KEY: ${AGENT_PERPLEXITY_API_KEY}
+      AGENT_LINEAR_API_KEY: ${AGENT_LINEAR_API_KEY}
+      AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
     ports:
       # Host 9003 → container 9001
       - "127.0.0.1:9003:9001"

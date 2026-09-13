@@ -376,11 +376,19 @@ test-infra-ps:          ## Show test infra container status
 # The eval stack uses docker-compose.eval.yml on top of docker-compose.cloud.yml.
 # After FRE-375, eval services have their own isolated substrate.
 
+# FRE-1372 (reopen): --env-file is a global `docker compose` flag — it must come
+# BEFORE the subcommand (up/down), never after, or the CLI rejects it outright.
+# Pinned to /opt/seshat/.env (never a relative path) so interpolation always reads
+# the one real, current production file, regardless of which worktree's cwd
+# `make eval-infra-up` runs from — a worktree's own `.env` is a stale, partial dev
+# copy (verified missing several FRE-1372/FRE-1498 behaviour keys).
+EVAL_ENV_FILE := --env-file /opt/seshat/.env
+
 eval-infra-up:          ## Start eval infra (names eval services explicitly — FRE-1342, never the file union; always rebuilds — FRE-1341: a cached image can silently serve stale code)
-	@BUILD_FINGERPRINT=$$(uv run python -m scripts.eval.gateway_freshness --print-fingerprint) docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml up -d --build postgres-eval neo4j-eval elasticsearch-eval redis-eval seshat-gateway-control seshat-gateway-treatment
+	@BUILD_FINGERPRINT=$$(uv run python -m scripts.eval.gateway_freshness --print-fingerprint) docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml $(EVAL_ENV_FILE) up -d --build postgres-eval neo4j-eval elasticsearch-eval redis-eval seshat-gateway-control seshat-gateway-treatment
 
 eval-infra-down:        ## Stop eval infra
-	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml down seshat-gateway-control seshat-gateway-treatment postgres-eval neo4j-eval elasticsearch-eval redis-eval
+	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml $(EVAL_ENV_FILE) down seshat-gateway-control seshat-gateway-treatment postgres-eval neo4j-eval elasticsearch-eval redis-eval
 
 # ─── Study infrastructure (FRE-838, ADR-0114 D1) ─────────────────────────────
 # Isolated Neo4j+GDS sandbox for the decoupled associative-memory research

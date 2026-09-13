@@ -1,76 +1,86 @@
-# Last session — 2026-09-11 evening
+# Last session — 2026-09-12 into 2026-09-13
 
 ## Doing / discussing  (≤5 sentences)
-A strong day. The ADR-0150 chain started and its first ticket is merged, the study is settled
-rather than drifting, and four gates ran clean. **The study does not run again until ADR-0150's
-chain lands** — the owner decided this twice and it is now recorded on FRE-1487. The deploy hold
-is lifted and 31 held commits are live. Pick up at the gate: build1 is on FRE-1489, build2 on
-FRE-1493, and both are the work the owner called the most important this week.
+Seven gates, all merged and deployed, and the ADR-0150 chain is complete through T3. The thread
+worth picking up is **routing**: the owner's own agent misclassified a real user's tool request
+as conversational, which turned out to be a defect already diagnosed, decided and left unbuilt.
+**Dispatch is paused** at the owner's request — the kill switch explains itself. The explore seat
+is mid-study on FRE-1498 and the adr seat has been waiting on three owner questions since
+2026-09-12 06:49 UTC; neither is stuck.
 
 ## What was decided and why
 
-**The study is settled, not paused.** The owner said it plainly: *"It's pointless to run the
-study until the prompt adr has been completed."* They had already said *"run the study after the
-prompt adr's delivery"* hours earlier. Master kept re-opening it as a live decision and once
-offered the owner their own conclusion back as a recommendation. Do not re-raise it. Query 1
-stands as the baseline and already answered its question.
+**Three study limits became permanent baselines, two deliberately did not.** The owner argued for
+all five: *"We have found the natural limits of the model/harness. We have our max values. Now our
+task is to refine the harness, prompts, routing in order to optimize and lower the durations."*
+Master agreed on 1–3 and held 4–5, on the owner's own rule rather than caution: a limit rises when
+the behaviour at the limit is implemented. For the landing ceiling and the round cap that became
+true by construction this week — `worker_report_v1` bounds the report structurally, and
+thoroughness became the operative round control — so the blunt limit became headroom. The two
+turn-level timeouts had no finer control ship underneath them. The owner accepted and set the
+condition: revisit after FRE-1489 and FRE-1138. Recorded on FRE-1487 with trigger notes on both.
 
-**A gateway rebuild does NOT revert the study limits.** Part of the morning's hold rested on a
-false premise. Verified in the mechanism: `Dockerfile.gateway:70` is `COPY config/ config/` and
-the build context is `/opt/seshat` itself, so the dirty working tree ships into the image;
-`docker-compose.cloud.yml:307` is `env_file: /opt/seshat/.env`. Two rebuilds today, all five
-limits intact both times, checked inside the container. There is no restore dance to fear.
+**The ticket premise that did not survive measurement.** Master filed FRE-1489 as a head-placement
+defect with a 516-token hypothesis. Both were wrong. A plain tool loop was always a strict forward
+extension; the defect was a *duplication* — the role fixer merging through the caller's own dict,
+so every iteration appended another copy of the whole fence. The ticket's own instruction to settle
+the hypothesis before designing against it is what produced the right answer. Write that instruction
+into future investigation tickets.
 
-**An ADR's implementation table outranks a ticket's re-derived acceptance criteria.** FRE-1492's
-AC-2 demanded that `finish_reason = None` and `content_filter` both force a `ledger`. The build
-seat did not implement it and argued ADR-0150's AC-3 did not require it — that argument is wrong,
-AC-3 says exactly that. The conclusion survived on better evidence: the ADR's own table gives T1
-*"the `length` row"* and T3 *"every row of the validity table except the `length` row"*. Merged on
-that basis. **A hole stays open until FRE-1494: a `content_filter` finish with valid content still
-reports `synthesized`.**
+**A criterion's prescribed method can be weaker than what is delivered.** FRE-1393's AC-3 said to
+seed a preference row at the storage layer. The seat instead proved the loader is never called,
+because `allow_preference=False` short-circuits the read — so no stored row can be honoured *by
+construction*. Verified in source before accepting. Judge criteria on what they are protecting, not
+on their letter.
 
-**The tautological-test pattern cost three bounces on FRE-1485.** A test that builds its expected
-string as a literal and asserts the literal against itself, importing production code it never
-calls. It passes against any implementation. The fix that finally worked: extract the production
-string-builder into a pure helper, assert exact equality against it, and add a second test that
-drives the real `Orchestrator`. Watch for this shape at every gate.
+**An under-specified ticket cost a bounce, and master wrote it.** FRE-1496 item 4 said "update any
+test that pins the old values" and then named one. Four needed it. Compounding it: each build
+worktree holds its own `config/model_roles.yaml` at the committed value, so those tests passed
+locally for the seat and only failed in CI. Instruct a *search*, never name the one you happen to
+know.
 
-**Codex plan-review earned its cost twice today.** On FRE-1485 it caught wrong tool-iteration
-arithmetic and an invented pause action before any code was written. On FRE-1492 it caught that
-the `length` check had to run before FRE-1399's `round_texts` bookkeeping, or a cut reply gets
-repeated inside its own ledger.
+**Susan's case and what it exposed.** A real user asked the agent to run a tool it had built for
+her. Three of her four turns classified `conversational` and every one went `single` — the fallback
+did the routing, not the ladder. That is verbatim FRE-1377's finding and ADR-0142's thesis, and
+ADR-0142 has been **Accepted since 2026-09-05 with `conversational_always_single` still live**.
+FRE-1394 is the unbuilt implementation. Master's first recommendation on it was incomplete —
+recommended approving it without checking its three blockers. Check blockers before recommending.
 
 ## Worktrees — anything special
-build1 on `fre-1481-...` (merged, worktree-held) and build2 on `fre-1492-...` (merged,
-worktree-held) — harmless, the branches cannot be deleted while checked out. Four untracked
-`*.bak-*` files at root: two are the owner's/study's, two are master's `dispatch_state` backups
-from unwedging build2.
+build2 wedged twice on the Claude Code model-switch modal after `/clear` → `/model opus`; master
+cleared it both times. Yesterday it also spent three hours returning "(No response.)" to thirteen
+identical watcher pokes because a restart had resumed it into a *previous ticket's* session —
+that incident is FRE-1499. Four untracked `*.bak-*` files at root are the owner's and master's.
 
 ## Sequence position + drift
-**The working tree is intentionally dirty and this is not drift.** `config/model_roles.yaml`
-carries the study's `max_tokens: 8192` / `default_timeout: 600`, by owner direction. It must stay
-until the owner says otherwise, and — see above — it ships into every rebuild.
+**The intentional dirtiness is gone.** `config/model_roles.yaml` carried the study's uncommitted
+values since 2026-09-11; FRE-1496 committed identical values with better comments, so master
+discarded the working copy. LAST_SESSION's standing note that the dirty tree "is not drift" no
+longer applies — the tree is clean, and a modification there now *is* drift.
 
-`Awaiting Deploy` holds 16 tickets, most from previous days. That is this board's normal parking
-state for work whose live check needs a turn nobody has fired, not a queue master created.
+`Awaiting Deploy` holds 19 tickets. Most are deployed and parked on a live check nobody has fired,
+which is this board's normal state, not a queue master created.
 
 ## Answers for the fresh start
 
-- **First task?** Gate whatever is at the gate. Do not ask the owner about the study.
-- **What is live?** 31 commits, deployed 19:41 and again 19:50. FRE-1480, FRE-1481, FRE-1485 and
-  the `build_fingerprint` fix are all running. **FRE-1492 is merged and NOT deployed.**
-- **How do I check what is deployed?** `curl -s localhost:9001/health` now returns a real
-  `build_fingerprint`; compare it with
-  `uv run python -m scripts.eval.gateway_freshness --print-fingerprint`. It read `unknown` on
-  every cloud gateway until today — `docker-compose.cloud.yml` never passed the build arg that
-  `docker-compose.eval.yml` did.
-- **Should FRE-1492 deploy alone?** Master's recommendation, given to the owner and not yet
-  answered: wait for FRE-1493. T2 rewrites the same file, and a fan-out is only worth testing
-  against a worker that has a type, a thoroughness and a configured prompt.
-- **Why were FRE-1489 and FRE-1488 blocked, and are they still?** They need live local-model
-  turns, which would have contaminated the study. That reason is gone. FRE-1489 is now build1's
-  head.
-- **Two tickets are deployed but parked in `Awaiting Deploy` on purpose.** FRE-1481 needs a turn
-  with a genuinely failing recall path; FRE-1485 needs `cache_read_tokens` measured on a turn
-  driven past the cap. Both are recorded on the tickets with their runbooks.
-- **Is `main` green?** Yes. Gateway rebuilt twice, healthy both times, zero tracebacks.
+- **First task?** Nothing is at the gate — zero open PRs. Read the explore seat's FRE-1498 output
+  when it lands, and answer the adr seat.
+- **Why is dispatch off?** The owner asked during wind-down. `telemetry/dispatch.disabled` is a
+  *shared* switch — both daemons observe it, both units stay `active` and no-op. `rm` it to resume.
+  No systemctl needed.
+- **Is the adr seat stuck?** No. It asked the owner three questions on FRE-1328 and is correctly
+  idle. It holds 131.5k tokens of live deliberation. **Do not reset it.** Its questions: is the
+  obligation-satisfiability distinction real; do we still want `enforce` at all; does the
+  exempt-but-checked gap deserve its own ADR. Answer the second first — it collapses the others.
+- **What still needs a live turn?** FRE-1382's AC-1 needs the budget to actually *bind*, which
+  needs load: two concurrent turns put the second at `active_inference_count >= 1` and budget 1.
+  FRE-1494's EVAL re-run is also outstanding. Both need the owner's explicit OK.
+- **What is the open hole?** `sub_agent_count` can still exceed the per-turn budget via FRE-1389's
+  gap redispatch, so FRE-1382's AC-1 invariant cannot hold as literally written. Master recommends
+  a follow-up ticket; the owner has not answered.
+- **When FRE-1394 is gated, know this:** `conversational`'s cap is 6 and the spend threshold is 6,
+  so FRE-1393's pause is currently inert for 78% of traffic. FRE-1394 removes the ceiling *and*
+  activates that pause for that population in one change. Gate it as a combined step.
+- **Should FRE-1394 be dispatched?** Its three blockers are now terminal, but master deliberately
+  left it unlabelled: FRE-1498 exists to measure the unforced regime *before* the cutover, and
+  FRE-1394's own AC-5 wants the cost change reported against a pre-change window.

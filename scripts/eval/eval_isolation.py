@@ -96,8 +96,9 @@ _CLIENT_TIMEOUT_BUFFER_S = 100.0
 #: must also hold off the next fixture.
 _GATEWAY_ACTIVITY_EVENT_TYPES = (
     "model_call_started",
-    "tool_call_completed",
     "model_call_completed",
+    "tool_call_started",
+    "tool_call_completed",
 )
 
 #: How long the gateway must show no activity before it counts as idle.

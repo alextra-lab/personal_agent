@@ -333,6 +333,25 @@ async def test_wait_for_gateway_idle_returns_immediately_with_no_activity() -> N
 
 
 @pytest.mark.asyncio
+async def test_wait_for_gateway_idle_queries_tool_call_started_too() -> None:
+    """A still-running tool call (started but not yet completed) must count as activity —
+    querying only `tool_call_completed` would read a long tool call as idle and let the
+    next fixture's wipe/post start on top of it (FRE-1503's own overlap bug, reproduced
+    for tool calls specifically).
+    """
+    es = AsyncMock()
+    es.post = AsyncMock(return_value=_FakeESHitsResponse([]))
+
+    await wait_for_gateway_idle(es, quiet_s=150.0, max_wait_s=5.0)
+
+    queried_types = es.post.call_args.kwargs["json"]["query"]["terms"]["event_type"]
+    assert "tool_call_started" in queried_types
+    assert "tool_call_completed" in queried_types
+    assert "model_call_started" in queried_types
+    assert "model_call_completed" in queried_types
+
+
+@pytest.mark.asyncio
 async def test_wait_for_gateway_idle_returns_once_last_event_is_old_enough() -> None:
     """A last-activity timestamp older than `quiet_s` counts as idle right away."""
     es = AsyncMock()

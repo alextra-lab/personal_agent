@@ -2,6 +2,7 @@
 name: sync-env-example
 enabled: true
 event: file
+tool_matcher: Edit|Write|MultiEdit
 conditions:
   - field: file_path
     operator: ends_with

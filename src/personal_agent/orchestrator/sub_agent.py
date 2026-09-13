@@ -58,7 +58,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import structlog
@@ -1024,6 +1024,28 @@ def _build_ledger(
     return "\n".join(lines)
 
 
+def _to_plain_containers(value: Any) -> Any:
+    """Recursively replace ``Mapping`` and list/tuple containers with plain types.
+
+    ``dict(a_mapping_proxy)`` copies only the top level, so a ``MappingProxyType``
+    nested inside another one (:data:`~personal_agent.orchestrator.worker_types.WORKER_REPORT_JSON_SCHEMA`
+    under ``WORKER_REPORT_RESPONSE_FORMAT["json_schema"]["schema"]``) survives
+    unchanged and is not JSON-serializable (FRE-1500).
+
+    Args:
+        value: A value that may contain nested ``Mapping``, ``list``, or
+            ``tuple`` containers.
+
+    Returns:
+        An equivalent value built only from ``dict``, ``list``, and JSON scalars.
+    """
+    if isinstance(value, Mapping):
+        return {k: _to_plain_containers(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_plain_containers(v) for v in value]
+    return value
+
+
 def _landing_response_format() -> dict[str, Any]:
     """The ``response_format`` payload for a schema-backed landing call.
 
@@ -1036,7 +1058,7 @@ def _landing_response_format() -> dict[str, Any]:
     Returns:
         The ``worker_report_v1`` ``response_format`` dict.
     """
-    return dict(WORKER_REPORT_RESPONSE_FORMAT)
+    return cast(dict[str, Any], _to_plain_containers(WORKER_REPORT_RESPONSE_FORMAT))
 
 
 def _parse_and_validate_worker_report(content: str) -> WorkerReport | None:

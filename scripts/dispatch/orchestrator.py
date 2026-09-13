@@ -72,6 +72,7 @@ from scripts.dispatch.next_resolver import (
     is_occupied,
     resolve_next,
 )
+from scripts.dispatch.seat_turn import SeatTurn, read_seat_turn
 from scripts.reconcile_board import load_linear_key
 
 # Terminal merge states — the stream frees for the next dispatch only here.
@@ -431,6 +432,16 @@ class DispatchRecord:
             the retry budget cannot be silently reset by a restart. An attempt
             that never reached the seat (a transient outcome — busy seat, dirty
             worktree, failed create) is given back rather than counted.
+        awaiting_owner_notified: An in-progress stall whose seat ended its turn
+            with a question to the owner was surfaced as
+            ``dispatch_awaiting_owner`` (FRE-1499). A latch SEPARATE from
+            ``in_progress_stall_notified``, for the FRE-1245 reason: a seat
+            first seen mid-turn can later stop to ask the owner, and a shared
+            latch would swallow that second, different signal.
+        session_mismatch_notified: The seat's current conversation was found
+            not to be the one this ticket was dispatched into, and
+            ``dispatch_session_mismatch`` fired (FRE-1499). Cleared when the
+            seat is back in a conversation that names the ticket.
     """
 
     stream: str
@@ -442,6 +453,8 @@ class DispatchRecord:
     stall_notified: bool = False
     in_progress_stall_notified: bool = False
     attempts: int = 0
+    awaiting_owner_notified: bool = False
+    session_mismatch_notified: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -886,6 +899,7 @@ def run_once(
     head_stall_renotify_ticks: int = DEFAULT_HEAD_STALL_RENOTIFY_TICKS,
     persist_head_stall: Callable[[dict[str, HeadStallState]], None] = lambda _state: None,
     sleeper: Callable[[float], None] = time.sleep,
+    seat_turn_reader: Callable[[str], SeatTurn | None] | None = None,
 ) -> dict[str, DispatchRecord]:
     """Run one orchestration tick across ``streams``, mutating and returning state.
 
@@ -956,6 +970,13 @@ def run_once(
         sleeper: The sleep seam used by the launcher's bounded delivery polls.
             Injected so a tick is fully unit-testable without wall-clocking —
             the delivery path polls for up to ten seconds per command.
+        seat_turn_reader: Reads a stream's seat transcript (FRE-1499) — how its
+            current conversation ended its last turn, and which tickets that
+            conversation was given. Read once per tick per ``launched`` record,
+            on ``execute`` ticks only. It binds the record's ``session_id`` and
+            separates an in-progress stall awaiting the owner from a wedged
+            seat. ``None`` (the default) disables both, so a caller that does
+            not wire it never touches tmux or transcripts.
 
     Returns:
         The updated state dict.
@@ -997,6 +1018,31 @@ def run_once(
                     error=str(exc),
                 )
                 tracked_state = None
+        # FRE-1499: one transcript read per launched record per real tick. It
+        # confirms which conversation received the ticket, and it tells the
+        # stall case below whether an idle seat is waiting on the owner.
+        seat_turn: SeatTurn | None = None
+        if (
+            execute
+            and seat_turn_reader is not None
+            and record is not None
+            and record.phase == "launched"
+        ):
+            seat_turn = seat_turn_reader(stream)
+            if seat_turn is not None:
+                _bind_session(
+                    stream,
+                    state,
+                    seat_turn,
+                    now=now,
+                    stall_timeout_s=stall_timeout_s,
+                    trace_id=trace_id,
+                    notifier=notifier,
+                    persist=persist,
+                    logger=logger,
+                    notify_ledger_path=notify_ledger_path,
+                )
+                record = state.get(stream)
         decision = decide(
             stream,
             issues,
@@ -1041,6 +1087,7 @@ def run_once(
             head_stall_renotify_ticks=head_stall_renotify_ticks,
             persist_head_stall=persist_head_stall,
             sleeper=sleeper,
+            seat_turn=seat_turn,
         )
     return state
 
@@ -1072,6 +1119,7 @@ def _apply(
     head_stall_renotify_ticks: int,
     persist_head_stall: Callable[[dict[str, HeadStallState]], None],
     sleeper: Callable[[float], None] = time.sleep,
+    seat_turn: SeatTurn | None = None,
 ) -> None:
     """Apply one decision's side effects (launch / notify / record mutation)."""
     stream = decision.stream
@@ -1117,6 +1165,7 @@ def _apply(
     # touch).
     if decision.kind != "stall":
         _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_stall", stream)
+        _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_awaiting_owner", stream)
     # FRE-1405: the head-stall counter tracks ONLY the anomalous
     # ``skip``/``occupied-no-record`` condition — a healthy ``no-candidate``
     # or ``no-tier-label`` skip must still reset/resolve it (the corrected
@@ -1355,6 +1404,9 @@ def _apply(
                 _resolve_dispatch_notify(
                     notify_ledger_path, logger, "dispatch_delivery_exhausted", stream
                 )
+                _resolve_dispatch_notify(
+                    notify_ledger_path, logger, "dispatch_session_mismatch", stream
+                )
                 persist(state)
         case "stall":
             # FRE-1245: two distinct stall episodes can occur on the SAME
@@ -1366,6 +1418,37 @@ def _apply(
             # silence this ticket exists to end.
             record = state.get(stream)
             in_progress = decision.reason == "in-progress-past-timeout"
+            # FRE-1499: an in-progress seat that ended its turn with a question
+            # to the owner is not stalled — it is doing what its contract says.
+            # It gets its own signal and its own latch. ``seat_turn`` is only
+            # ever read on an ``execute`` tick, so a dry run takes the old path.
+            if (
+                in_progress
+                and record is not None
+                and seat_turn is not None
+                and seat_turn.state == "awaiting-owner"
+            ):
+                if not record.awaiting_owner_notified:
+                    notifier(
+                        "dispatch_awaiting_owner",
+                        trace_id=trace_id,
+                        stream=stream,
+                        ticket=decision.ticket,
+                        launched_at=record.launched_at,
+                        session_id=record.session_id,
+                        question=seat_turn.question,
+                    )
+                    logger.warning(
+                        "dispatch_awaiting_owner",
+                        trace_id=trace_id,
+                        stream=stream,
+                        ticket=decision.ticket,
+                        question=seat_turn.question,
+                    )
+                    _resolve_dispatch_notify(notify_ledger_path, logger, "dispatch_stall", stream)
+                    state[stream] = dataclasses.replace(record, awaiting_owner_notified=True)
+                    persist(state)
+                return
             already_notified = (
                 (record.in_progress_stall_notified if in_progress else record.stall_notified)
                 if record is not None
@@ -1379,7 +1462,13 @@ def _apply(
                     ticket=decision.ticket,
                     launched_at=record.launched_at,
                     reason=decision.reason,
+                    session_id=record.session_id,
+                    seat_turn=seat_turn.state if seat_turn is not None else None,
                 )
+                if in_progress:
+                    _resolve_dispatch_notify(
+                        notify_ledger_path, logger, "dispatch_awaiting_owner", stream
+                    )
                 logger.warning(
                     "dispatch_stall", trace_id=trace_id, stream=stream, ticket=decision.ticket
                 )
@@ -1465,6 +1554,88 @@ def _apply(
                 )
         case _:  # await — no state change.
             return
+
+
+def _bind_session(
+    stream: str,
+    state: dict[str, DispatchRecord],
+    turn: SeatTurn,
+    *,
+    now: float,
+    stall_timeout_s: float,
+    trace_id: str,
+    notifier: Notifier,
+    persist: Callable[[dict[str, DispatchRecord]], None],
+    logger: Logger,
+    notify_ledger_path: Path | None,
+) -> None:
+    """Confirm which conversation a launched ticket reached (FRE-1499).
+
+    The identity is the seat's transcript id, not the Remote Control bridge id:
+    the bridge id stays the same across ``/clear``, so it cannot tell one
+    ticket's conversation from the next. The FRE-1499 incident read it as
+    "resumed the wrong session" when the pokes had in fact reached the right
+    conversation.
+
+    - The seat's conversation names the ticket (its skill seed row), or is the
+      bound one → bind or rebind ``session_id`` and clear any mismatch latch.
+    - It does not → surface ``dispatch_session_mismatch`` once. An unbound
+      record waits ``stall_timeout_s`` first, because the seat may not have
+      processed the seed yet.
+
+    Detection and surfacing only — the seat is never touched.
+
+    Args:
+        stream: The launched record's stream.
+        state: Per-stream records, mutated in place.
+        turn: The seat's current transcript reading.
+        now: Wall-clock epoch seconds.
+        stall_timeout_s: Grace before an unbound record is surfaced.
+        trace_id: The tick's trace id.
+        notifier: The master-notification sink.
+        persist: Persists ``state`` after a mutation.
+        logger: Structured logger.
+        notify_ledger_path: Resolves the mismatch entry when the seat recovers.
+    """
+    record = state[stream]
+    if turn.session_id == record.session_id or record.ticket in turn.dispatched_tickets:
+        if record.session_id == turn.session_id and not record.session_mismatch_notified:
+            return
+        logger.info(
+            "dispatch_session_confirmed",
+            trace_id=trace_id,
+            stream=stream,
+            ticket=record.ticket,
+            session_id=turn.session_id,
+            previous_session_id=record.session_id,
+        )
+        if record.session_mismatch_notified:
+            _resolve_dispatch_notify(
+                notify_ledger_path, logger, "dispatch_session_mismatch", stream
+            )
+        state[stream] = dataclasses.replace(
+            record, session_id=turn.session_id, session_mismatch_notified=False
+        )
+        persist(state)
+        return
+    bound = record.session_id is not None
+    if not bound and now - record.launched_at <= stall_timeout_s:
+        return
+    fields: dict[str, object] = {
+        "trace_id": trace_id,
+        "stream": stream,
+        "ticket": record.ticket,
+        "bound": bound,
+        "expected_session_id": record.session_id,
+        "seat_session_id": turn.session_id,
+        "seat_tickets": sorted(turn.dispatched_tickets),
+    }
+    logger.warning("dispatch_session_mismatch", **fields)
+    if record.session_mismatch_notified:
+        return
+    notifier("dispatch_session_mismatch", **fields)
+    state[stream] = dataclasses.replace(record, session_mismatch_notified=True)
+    persist(state)
 
 
 def _reset_wedge(
@@ -2254,6 +2425,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             head_stall_ticks=args.head_stall_ticks,
             head_stall_renotify_ticks=args.head_stall_renotify_ticks,
             persist_head_stall=lambda st: save_head_stall_state(head_stall_state_path, st),
+            seat_turn_reader=lambda stream: read_seat_turn(topology_for(stream).tmux_session),
         )
 
     if args.loop:

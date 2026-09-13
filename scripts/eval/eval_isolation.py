@@ -42,18 +42,35 @@ before the first turn, so no run silently inherits whatever was left in ``neo4j-
 by an earlier script). Because ``reseed`` goes through the caller's own production
 write path, a fixture it creates carries the entitlement production would compute for
 it — AC-2's guarantee, met by reuse rather than by preservation.
+
+**Client timeout and cross-fixture overlap (FRE-1503).** A fan-out turn can legitimately
+run for most of ``settings.orchestrator_turn_lifetime_seconds`` — the gateway's own
+absolute wall-clock cap. The old hardcoded ``timeout=1200.0`` was below that cap: on
+2026-09-12/13 ten FRE-1498 fan-out turns outlived the client, ``httpx`` raised
+``ReadTimeout``, the gateway kept running each turn to completion, and the *next*
+fixture's ``run_turn`` started on top of it — two turns sharing the single local
+backend until it saturated. Two fixes, both here so every caller inherits them
+(the FRE-1372 principle: isolation is not something a caller opts into per script):
+the client timeout is read from ``settings.orchestrator_turn_lifetime_seconds`` plus
+:data:`_CLIENT_TIMEOUT_BUFFER_S` rather than hardcoded, and every ``run_turn`` call
+first waits for :func:`wait_for_gateway_idle` — no new turn starts while the eval
+gateway still shows recent model/tool activity from a prior one.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import structlog
 from scripts.eval.fre1337_intent_probe.behavioral import (
+    EVAL_ES_INDEX,
+    EVAL_ES_URL,
     EXTRACTION_SETTLE_TIMEOUT_S,
     SIGNAL_SETTLE_TIMEOUT_S,
     wait_for_event_settle,
@@ -65,7 +82,72 @@ from scripts.eval.fre1337_intent_probe.substrate import (
     wipe_eval_graph,
 )
 
+from personal_agent.config import settings
+
 log = structlog.get_logger(__name__)
+
+#: Added to ``settings.orchestrator_turn_lifetime_seconds`` for the ``/chat`` client
+#: timeout, so the client always outlives the gateway's own absolute cap instead of
+#: racing it (FRE-1503).
+_CLIENT_TIMEOUT_BUFFER_S = 100.0
+
+#: Event types that mark the eval gateway as doing model/tool work on *any* trace —
+#: deliberately not scoped to one trace_id, since a stray concurrent turn's activity
+#: must also hold off the next fixture.
+_GATEWAY_ACTIVITY_EVENT_TYPES = (
+    "model_call_started",
+    "tool_call_completed",
+    "model_call_completed",
+)
+
+#: How long the gateway must show no activity before it counts as idle.
+_GATEWAY_IDLE_QUIET_S = 150.0
+
+#: Hard cap on how long a single ``wait_for_gateway_idle`` call polls.
+_GATEWAY_IDLE_MAX_WAIT_S = 3700.0
+
+_GATEWAY_IDLE_POLL_INTERVAL_S = 15.0
+
+
+async def wait_for_gateway_idle(
+    es: httpx.AsyncClient,
+    *,
+    quiet_s: float = _GATEWAY_IDLE_QUIET_S,
+    max_wait_s: float = _GATEWAY_IDLE_MAX_WAIT_S,
+) -> float:
+    """Block until the eval gateway has had no model/tool activity for ``quiet_s``.
+
+    Args:
+        es: Async HTTP client pointed at ``elasticsearch-eval``.
+        quiet_s: Seconds of silence required before the gateway counts as idle.
+        max_wait_s: Hard polling timeout — a stuck gateway does not hang the caller
+            forever.
+
+    Returns:
+        Seconds actually waited.
+    """
+    deadline = asyncio.get_event_loop().time() + max_wait_s
+    t0 = asyncio.get_event_loop().time()
+    while asyncio.get_event_loop().time() < deadline:
+        resp = await es.post(
+            f"{EVAL_ES_URL}/{EVAL_ES_INDEX}/_search",
+            json={
+                "size": 1,
+                "query": {"terms": {"event_type": list(_GATEWAY_ACTIVITY_EVENT_TYPES)}},
+                "sort": [{"@timestamp": {"order": "desc"}}],
+                "_source": ["@timestamp"],
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        hits = resp.json()["hits"]["hits"]
+        if not hits:
+            return round(asyncio.get_event_loop().time() - t0, 1)
+        last = datetime.fromisoformat(hits[0]["_source"]["@timestamp"].replace("Z", "+00:00"))
+        if (datetime.now(UTC) - last).total_seconds() >= quiet_s:
+            return round(asyncio.get_event_loop().time() - t0, 1)
+        await asyncio.sleep(_GATEWAY_IDLE_POLL_INTERVAL_S)
+    return round(asyncio.get_event_loop().time() - t0, 1)
 
 
 @dataclass(frozen=True)
@@ -144,13 +226,17 @@ class IsolatedArmRunner:
         base_url = EVAL_ARMS[arm]
         assert_eval_chat_url(base_url)
 
+        await wait_for_gateway_idle(es)
         await wipe_eval_graph(self.driver, uri=EVAL_NEO4J_URI)
         if self.reseed is not None:
             await self.reseed()
         self._turn_count += 1
 
+        client_timeout = settings.orchestrator_turn_lifetime_seconds + _CLIENT_TIMEOUT_BUFFER_S
         resp = await http.post(
-            f"{base_url}/chat", params={"message": message, "channel": "EVAL"}, timeout=1200.0
+            f"{base_url}/chat",
+            params={"message": message, "channel": "EVAL"},
+            timeout=client_timeout,
         )
         resp.raise_for_status()
         data = resp.json()

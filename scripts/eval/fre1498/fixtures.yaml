@@ -1,0 +1,89 @@
+# FRE-1498 fixture set. Every message is run once per regime unless `regimes` narrows it.
+# `group` names the phrasing family (Arm C); `pair` names the contrast inside the family.
+# Deterministic classification is computed offline by the runner and stored with the row.
+fixtures:
+  # ── Susan's four real requests, 2026-09-08 session b5a1556b, verbatim ───────────
+  - label: susan_1_run_tool
+    group: susan
+    message: "Please run the nfl-prediction tool"
+  - label: susan_2_able_to_run
+    group: susan
+    message: "Are you able to run the tool and provide 5 top picks?"
+  - label: susan_3_thought_i_asked
+    group: susan
+    message: "I thought I ask you to create a weekly prediction tool to help me make my weekly picks."
+  - label: susan_4_build_and_run
+    group: susan
+    message: "Please go ahead and build + run that now"
+
+  # ── FRE-1337 fixtures reused (the seeded agreement cases and the research shapes) ──
+  - label: greeting
+    group: agreement
+    note: unambiguous conversational — the AC-4 seeded agreement case
+    message: "How is your day going?"
+  - label: tool_logs
+    group: agreement
+    note: unambiguous tool invocation
+    message: "Check the logs for errors in the last hour."
+  - label: gpsr_tuna
+    group: research_short
+    message: "Which tinned tuna should I buy in France"
+  - label: heatpump
+    group: research_short
+    message: "Which heat pump should I install in a 1930s stone house in Brittany"
+  - label: regulatory
+    group: research_short
+    message: "I need to understand how the EU AI Act's transparency duties differ from the GDPR's for a product we're shipping in France."
+
+  # ── FRE-1487's query, verbatim (the one that reaches HYBRID under every regime) ──
+  - label: mallorca
+    group: research_long
+    message: "I will visit Mallorca Sept 19th, 2026 and car return Saturday 26th, 2026. 2 people staying at the Myseahoue Flamingo - Mision de San Diego, 2 07600 Playa de Palma Espagne. Research any interesting events taking place that week - 2026. We will have a car. Propose towns and beaches to visit. We love history, archeology, museums, botanical gardens, beautiful views, relaxation, and great food. My husband does not eat shell fish."
+
+  # ── Arm C: phrasing pairs. Same need, different register. ─────────────────────
+  # c1 — an imperative naming a tool the user owns vs the same request as a question
+  - label: c1_tool_imperative
+    group: c1
+    pair: imperative
+    message: "Use the web_search tool to find out which tinned tuna I should buy in France"
+  # (the question half of c1 is gpsr_tuna above)
+
+  # c2 — steering verb vs no verb (the F19 incantation, on the F19 question)
+  - label: c2_verb
+    group: c2
+    pair: verb
+    message: "Research what's changed in the EU's revised General Product Safety Regulation"
+  - label: c2_noverb
+    group: c2
+    pair: noverb
+    message: "What's changed in the EU's revised General Product Safety Regulation"
+
+  # c3 — terse vs paragraph, same need (heat pump)
+  - label: c3_terse
+    group: c3
+    pair: terse
+    message: "Best heat pump, 1930s stone house, Brittany"
+  - label: c3_paragraph
+    group: c3
+    pair: paragraph
+    message: "We live in a 1930s stone house in Brittany, quite draughty, with old radiators and no insulation in the walls. We are thinking about replacing the oil boiler with a heat pump but we are not sure which kind would actually work in a house like this, or whether it makes sense at all given the climate here. What would you suggest we install?"
+
+  # c4 — names a deliverable vs names a process (Susan's domain)
+  - label: c4_deliverable
+    group: c4
+    pair: deliverable
+    message: "Give me five picks for this week's NFL games"
+  - label: c4_process
+    group: c4
+    pair: process
+    message: "Work out which five NFL games this week are the best bets and tell me why"
+
+  # c5 — steering verb vs no verb, on a bounded events question (Mallorca window)
+  - label: c5_verb
+    group: c5
+    pair: verb
+    message: "Investigate what events are happening in Palma de Mallorca between 19 and 26 September 2026"
+  - label: c5_noverb
+    group: c5
+    pair: noverb
+    message: "What events are happening in Palma de Mallorca between 19 and 26 September 2026"

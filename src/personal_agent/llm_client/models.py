@@ -247,9 +247,13 @@ def synthesis_retains_tools(dialect: Dialect | None) -> bool:
 #:   retained ``tools`` and ``tool_choice: "none"`` returned valid JSON, zero
 #:   tool calls, ``finish_reason: stop``.
 #: - ``OPENAI_GPT5`` — ``True`` from the documented strict-mode contract.
-#: - ``OVH_QWEN`` — ``True`` provisionally; the console lists ``json_schema``
-#:   among its output formats. T3 (FRE-1494) verifies this with one probe
-#:   before the value is trusted; see that ticket's close comment.
+#: - ``OVH_QWEN`` — ``True``, verified live 2026-09-13 (FRE-1500): a HYBRID
+#:   fan-out on the deployed gateway landed BOTH dispatched workers with
+#:   ``report_kind: synthesized`` / ``report_schema: worker_report_v1``.
+#:   FRE-1494's T3 probe reported this value as checked but exercised a
+#:   hand-built wrapper rather than :data:`WORKER_REPORT_RESPONSE_FORMAT`
+#:   itself, which is how FRE-1500's nested ``MappingProxyType`` shipped —
+#:   probe the payload production sends, not one that resembles it.
 #: - ``ANTHROPIC_ADAPTIVE`` / ``ANTHROPIC_BUDGET`` — ``False`` until probed.
 #:   Anthropic's structured outputs use ``output_config.format``, and whether
 #:   litellm translates ``response_format`` for that dialect is not known.

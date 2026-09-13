@@ -92,7 +92,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from typing import Literal, Protocol
 
-from scripts.dispatch.pane_state import held_prompt_summary, session_is_idle
+from scripts.dispatch.pane_state import held_prompt_summary, pane_tail_summary, session_is_idle
 from scripts.dispatch.tmux_target import exact_pane, exact_session
 
 # Model tiers the launcher will place on a command line. Validated so no
@@ -1328,9 +1328,32 @@ def seat_is_busy(topology: StreamTopology, runner: CommandRunner) -> bool | None
         topology: The stream's launch coordinates.
         runner: The command runner seam.
 
+    A seat held at an interactive prompt reports ``waiting`` (FRE-1504). That
+    maps to ``None`` here on purpose: ``deliver_to_seat`` reads ``True`` as "the
+    typed command was accepted", and a held prompt is the opposite of that.
+    ``seat_wedge_reason`` reads ``waiting`` directly instead.
+
+    Args:
+        topology: The stream's launch coordinates.
+        runner: The command runner seam.
+
     Returns:
         ``True``/``False`` when Remote Control reports the seat's status, or
         ``None`` when it cannot be determined (caller falls back to the scrape).
+    """
+    status = _seat_rc_status(topology, runner)
+    if status == "busy":
+        return True
+    if status == "idle":
+        return False
+    return None
+
+
+def _seat_rc_status(topology: StreamTopology, runner: CommandRunner) -> str | None:
+    """The seat's raw Remote Control status, lowercased, or ``None`` if unknowable.
+
+    ``None`` when the registry is unreadable or zero/multiple agents match the
+    stream's worktree (see ``seat_is_busy`` for the cwd-matching rationale).
     """
     agents = _rc_agents(runner)
     if agents is None:
@@ -1340,12 +1363,7 @@ def seat_is_busy(topology: StreamTopology, runner: CommandRunner) -> bool | None
     ]
     if len(matches) != 1:
         return None
-    status = str(matches[0].get("status", "")).strip().lower()
-    if status == "busy":
-        return True
-    if status == "idle":
-        return False
-    return None
+    return str(matches[0].get("status", "")).strip().lower()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1373,17 +1391,23 @@ def seat_wedge_reason(topology: StreamTopology, runner: CommandRunner) -> SeatWe
     """Classify a busy seat's suspected-wedge shape, from one pane capture (FRE-1457).
 
     Two mutually exclusive shapes, both requiring RC to confidently report the
-    seat ``busy`` (an unreadable, zero-match, multi-match, or unknown-status
-    registry never fires either — an intentional blind spot, matching
-    ``seat_wedge_signature``'s original reasoning: that path either dispatches
-    or is genuinely busy):
+    seat ``busy`` or ``waiting`` (an unreadable, zero-match, multi-match, or
+    other-status registry never fires either — an intentional blind spot,
+    matching ``seat_wedge_signature``'s original reasoning: that path either
+    dispatches or is genuinely busy):
 
-    - **pane-idle**: the pane sits at the idle input prompt
+    - **pane-idle** (RC ``busy``): the pane sits at the idle input prompt
       (``session_is_idle``) — see ``seat_wedge_signature``'s docstring.
-    - **held-prompt**: the pane is not idle, but shows the TUI's own
-      ❯-prefixed decision-prompt selector with no live progress spinner
-      (``pane_state.held_prompt_summary``) — a pending interactive
-      confirmation (e.g. a model-switch dialog) that nothing is answering.
+    - **held-prompt**, either of:
+
+      - RC ``waiting`` — Remote Control's own report that the seat waits on
+        interactive input (FRE-1504: observed live on a model-switch modal and
+        a permission prompt; a held seat never reports ``busy``). Always this
+        shape. The summary is ``held_prompt_summary``, or the pane's last
+        non-blank lines when the prompt has no numbered ❯ selector.
+      - RC ``busy``, the pane not idle, and the TUI's own ❯-prefixed
+        decision-prompt selector showing with no live progress spinner
+        (``pane_state.held_prompt_summary``) — FRE-1457's original reading.
 
     This is deliberately a **heuristic, not a classifier**, for both shapes: a
     single observation is ambiguous (a genuinely mid-turn seat's spinner can be
@@ -1400,9 +1424,14 @@ def seat_wedge_reason(topology: StreamTopology, runner: CommandRunner) -> SeatWe
         cannot be read cleanly, or the pane matches neither shape (most
         commonly: a genuinely busy seat with a live, advancing spinner).
     """
-    if seat_is_busy(topology, runner) is not True:
+    status = _seat_rc_status(topology, runner)
+    if status not in ("busy", "waiting"):
         return None
     pane_text = _capture_pane(topology.tmux_session, runner)
+    if status == "waiting":
+        return SeatWedgeSignal(
+            "held-prompt", held_prompt_summary(pane_text) or pane_tail_summary(pane_text)
+        )
     if session_is_idle(pane_text):
         return SeatWedgeSignal("pane-idle")
     summary = held_prompt_summary(pane_text)

@@ -482,11 +482,18 @@ class WedgeState:
             already-primed threshold (``_note_wedge``'s reason-boundary
             reset). Defaults to ``"pane-idle"`` so a wedge-state file written
             before this field existed still loads (FRE-1077's original shape).
+        prompt_summary: For ``"held-prompt"``, the prompt text last observed
+            (FRE-1504). Past the threshold, a tick whose prompt differs from
+            this one notifies at once, so the ledger entry names the prompt
+            that blocks the seat now — not one already answered in a prompt
+            chain. ``None`` for ``"pane-idle"`` and for files written before
+            this field existed.
     """
 
     count: int
     last_notified_count: int = 0
     reason: str = "pane-idle"
+    prompt_summary: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1665,10 +1672,10 @@ _WEDGE_DETAIL: dict[str, str] = {
         "orphaned background poller (CC #61568); dispatch is blocked"
     ),
     "held-prompt": (
-        "remote-control reports busy while the pane holds a live decision "
-        "prompt with no progress — the seat is blocked on an interactive "
-        "prompt (FRE-1457) that only a human or master can answer; dispatch "
-        "is blocked"
+        "remote-control reports the seat waiting (or busy with no progress) "
+        "while the pane holds a live prompt — the seat is blocked on an "
+        "interactive prompt (FRE-1457, FRE-1504) that only a human or master "
+        "can answer; dispatch is blocked"
     ),
 }
 
@@ -1767,7 +1774,14 @@ def _note_wedge(
             prompt_summary=prompt_summary,
             detail=_WEDGE_DETAIL[reason],
         )
-        should_notify = last_notified == 0 or count - last_notified >= wedge_renotify_ticks
+        # FRE-1504 AC-3: a changed prompt inside one held-prompt episode is a
+        # prompt CHAIN (the first was answered, the next one now blocks). Notify
+        # at once so the ledger entry names the current prompt; the episode and
+        # its count continue, so the seat never reads as recovered.
+        prompt_changed = prior is not None and prior.prompt_summary != prompt_summary
+        should_notify = (
+            last_notified == 0 or count - last_notified >= wedge_renotify_ticks or prompt_changed
+        )
         if should_notify:
             notifier(
                 "dispatch_seat_wedged",
@@ -1779,7 +1793,9 @@ def _note_wedge(
                 prompt_summary=prompt_summary,
                 outcome="seat-busy",
             )
-    wedge_state[stream] = WedgeState(count, count if should_notify else last_notified, reason)
+    wedge_state[stream] = WedgeState(
+        count, count if should_notify else last_notified, reason, prompt_summary
+    )
     persist_wedge(wedge_state)
 
 
@@ -2110,6 +2126,8 @@ def load_wedge_state(path: Path) -> dict[str, WedgeState]:
         ):
             continue
         if wedge.reason not in _WEDGE_REASONS:
+            continue
+        if wedge.prompt_summary is not None and not isinstance(wedge.prompt_summary, str):
             continue
         state[stream] = wedge
     return state

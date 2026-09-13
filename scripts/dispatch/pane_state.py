@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["held_prompt_summary", "session_is_idle"]
+__all__ = ["held_prompt_summary", "pane_tail_summary", "session_is_idle"]
 
 # Idle/busy heuristic over ``capture-pane -p`` (best-effort, fail-safe = busy).
 # Idle requires the literal input-prompt line — a bare ``❯`` caret alone on its
@@ -136,3 +136,21 @@ def held_prompt_summary(pane_text: str) -> str | None:
         return None
     summary = region[: match.end()].strip()
     return summary[-_PROMPT_SUMMARY_MAX_CHARS:]
+
+
+def pane_tail_summary(pane_text: str) -> str:
+    """Return the active region's non-blank lines as a short summary (FRE-1504).
+
+    The fallback summary for a seat that Remote Control reports ``waiting`` but
+    whose prompt carries no numbered ❯ selector (the folder-trust dialog renders
+    ``❯ No, exit``), so ``held_prompt_summary`` cannot name it.
+
+    Args:
+        pane_text: The ``tmux capture-pane -p`` output.
+
+    Returns:
+        The non-blank lines of the active region, capped at
+        ``_PROMPT_SUMMARY_MAX_CHARS`` characters from the end.
+    """
+    lines = [line for line in _active_region(pane_text).splitlines() if line.strip()]
+    return "\n".join(lines)[-_PROMPT_SUMMARY_MAX_CHARS:]

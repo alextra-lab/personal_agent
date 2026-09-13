@@ -798,9 +798,14 @@ class _WedgeRunner(_RecordingRunner):
     always takes priority when non-empty.
     """
 
-    def __init__(self, *, pane: str = "", pane_sequence: Sequence[str] = ()) -> None:
+    def __init__(
+        self, *, pane: str = "", pane_sequence: Sequence[str] = (), status: str = "busy"
+    ) -> None:
         super().__init__()
         self._pane = pane
+        # FRE-1504: the RC status is a parameter, not a constant. A seat held at a
+        # live prompt reports ``waiting`` in production; ``busy`` alone hid that.
+        self.status = status
         self._pane_sequence = list(pane_sequence)
         self._captures = 0
 
@@ -822,7 +827,7 @@ class _WedgeRunner(_RecordingRunner):
                 "name": "cc-1build",
                 "sessionId": "s",
                 "cwd": _BUILD_WORKTREE,
-                "status": "busy",
+                "status": self.status,
             }
             return _FakeRunResult(stdout=json.dumps([agent]))
         if "status" in args:  # git status --porcelain → clean
@@ -1168,6 +1173,192 @@ def test_held_prompt_renotify_schedule_bounded_over_ten_ticks(tmp_path: Path) ->
     assert len(ledger) == 1, "one entry regardless of how many ticks the condition persisted"
     (entry,) = ledger.values()
     assert entry.preconditions["reason"] == "held-prompt"
+
+
+# --- FRE-1504: the detector must read the status RC really reports ----------
+
+# Captured live 2026-09-13 from a throwaway ``claude --remote-control`` seat
+# (Claude Code 2.1.270) with one turn of history, after ``/model sonnet``. RC
+# reported ``status: "waiting"`` on every read for the whole hold — never the
+# ``busy`` that every FRE-1457 fixture seeded.
+_LIVE_MODEL_SWITCH_PANE = (
+    "❯ /model sonnet\n"
+    + "─" * 64
+    + " cc-1build ─\n"
+    + "\n"
+    + "─" * 80
+    + "\n"
+    + "  Switch model?\n"
+    + "  Your next response will be slower and use more tokens\n"
+    + "\n"
+    + "  This conversation is cached for the current model. Switching to Sonnet 5\n"
+    + "  means the full history gets re-read on your next message.\n"
+    + "\n"
+    + "  ❯ 1. Yes, switch to Sonnet 5\n"
+    + "    2. No, go back\n"
+    + "\n"
+    + "\n"
+)
+# Captured live 2026-09-13 from the cc-adrs seat, also RC ``status: "waiting"``.
+_LIVE_PERMISSION_PANE = (
+    "─" * 80
+    + "\n"
+    + " Bash command\n"
+    + "\n"
+    + "   docker exec cloud-sim-seshat-gateway sh -c 'ls'\n"
+    + "   Inspect a recent capture inside the gateway container\n"
+    + "\n"
+    + " Do you want to proceed?\n"
+    + " ❯ 1. Yes\n"
+    + "   2. No\n"
+    + "\n"
+    + " Esc to cancel · Tab to amend\n"
+)
+# Captured live 2026-09-13 from the same throwaway seat at launch: a held prompt
+# whose selector carries no number, so ``held_prompt_summary`` cannot match it.
+_LIVE_TRUST_DIALOG_PANE = (
+    " Quick safety check: Is this a project you created or one you trust?\n"
+    + "\n"
+    + " ❯ No, exit\n"
+    + "   Yes, I trust this folder\n"
+    + "\n"
+    + " Enter to confirm · Esc to cancel\n"
+)
+
+
+def _chain_ticker(runner: _WedgeRunner, path: Path):  # type: ignore[no-untyped-def]
+    """One persistent run_once tick closure — state carries across pane changes."""
+    state: dict[str, DispatchRecord] = {}
+    wedge_state: dict[str, WedgeState] = {}
+    logger = _CapturingLogger()
+    notifier, fake = _tracking_notifier(path, logger)
+
+    def tick() -> None:
+        run_once(
+            ["build1"],
+            state,
+            now=0.0,
+            stall_timeout_s=DEFAULT_STALL_TIMEOUT_S,
+            board_fetcher=lambda s: [_issue("FRE-1", "Approved", _OPUS)],
+            reconcile=lambda _t: None,
+            runner=runner,
+            notifier=notifier,
+            persist=lambda st: None,
+            logger=logger,
+            execute=True,
+            rc_alive=lambda: True,
+            wedge_state=wedge_state,
+            wedge_ticks=2,
+            notify_ledger_path=path,
+        )
+
+    return tick, wedge_state, fake
+
+
+def _open_wedge_entry(path: Path) -> trigger_ledger.LedgerEntry:
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    (entry,) = [
+        e for e in trigger_ledger.snapshot_unconsumed(ledger) if e.source == "dispatch_seat_wedged"
+    ]
+    return entry
+
+
+def test_live_model_switch_modal_reaches_the_notify_ledger(tmp_path: Path) -> None:
+    """FRE-1504 AC-5: the run_once composition surfaces RC's real held-prompt status.
+
+    Fails on the FRE-1457 code: ``seat_is_busy`` maps ``waiting`` to ``None``,
+    ``seat_wedge_reason`` returns at its first line, and the call site resets
+    an empty wedge state — 77 production ticks of exactly that.
+    """
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_LIVE_MODEL_SWITCH_PANE, status="waiting")
+    _state, wedge_state, _notifier, _logger = _run_wedge(
+        runner, ticks=3, wedge_ticks=2, notify_ledger_path=path
+    )
+
+    assert wedge_state["build1"].reason == "held-prompt"
+    entry = _open_wedge_entry(path)
+    assert entry.target_pane == "build1"
+    assert entry.ticket == "FRE-1"
+    assert "Yes, switch to Sonnet 5" in entry.preconditions["prompt_summary"]
+    assert _no_termination_argv(runner)
+
+
+def test_waiting_seat_with_an_unnumbered_prompt_is_still_surfaced(tmp_path: Path) -> None:
+    """FRE-1504: RC ``waiting`` is the evidence; the ❯-number regex is not required.
+
+    The folder-trust dialog's selector (``❯ No, exit``) carries no number. The
+    entry must still appear, with the pane's own last lines as its summary.
+    """
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_LIVE_TRUST_DIALOG_PANE, status="waiting")
+    _run_wedge(runner, ticks=3, wedge_ticks=2, notify_ledger_path=path)
+
+    assert "Yes, I trust this folder" in _open_wedge_entry(path).preconditions["prompt_summary"]
+
+
+def test_prompt_chain_second_prompt_is_detected_after_the_first_is_answered(
+    tmp_path: Path,
+) -> None:
+    """FRE-1504 AC-3: answering one prompt must not read as recovery when another waits.
+
+    Build1 carried a second prompt behind the model-switch modal. After the
+    first is answered, the next tick sees a different held prompt: the episode
+    continues (no reset) and the open ledger entry names the NEW prompt at
+    once — not the answered one until the hourly re-notify.
+    """
+    path = tmp_path / "notify.json"
+    runner = _WedgeRunner(pane=_LIVE_MODEL_SWITCH_PANE, status="waiting")
+    tick, wedge_state, notifier = _chain_ticker(runner, path)
+
+    for _ in range(3):
+        tick()
+    assert "Yes, switch to Sonnet 5" in _open_wedge_entry(path).preconditions["prompt_summary"]
+
+    runner._pane = _LIVE_PERMISSION_PANE  # first prompt answered; the second one shows
+    tick()
+    assert wedge_state["build1"].count == 4, "the episode continues — the seat never recovered"
+    entry = _open_wedge_entry(path)
+    assert "Do you want to proceed?" in entry.preconditions["prompt_summary"]
+    assert "Sonnet 5" not in entry.preconditions["prompt_summary"]
+    pings = [e for e in notifier.events if e[0] == "dispatch_seat_wedged"]
+    assert len(pings) == 2
+
+    tick()  # the same second prompt persists → no extra ping off an unchanged prompt
+    assert len([e for e in notifier.events if e[0] == "dispatch_seat_wedged"]) == 2
+
+
+def test_advancing_spinner_writes_no_wedge_ledger_entry_across_ten_ticks(tmp_path: Path) -> None:
+    """FRE-1504 AC-4: the seeded negative — a working seat is never reported.
+
+    RC ``busy`` with a live, advancing spinner, through the same composition
+    and the real notify ledger: no entry, no warning, no wedge state.
+    """
+    path = tmp_path / "notify.json"
+    spinners = [
+        f"● Building… ({i}m {i * 7}s · ↑ {4.0 + i * 0.3:.1f}k tokens)\n❯\n" for i in range(1, 11)
+    ]
+    runner = _WedgeRunner(pane_sequence=spinners, status="busy")
+    _state, wedge_state, notifier, logger = _run_wedge(
+        runner, ticks=10, wedge_ticks=2, notify_ledger_path=path
+    )
+
+    ledger = trigger_ledger.load_ledger(path, _NullLogger())
+    assert not [e for e in ledger.values() if e.source == "dispatch_seat_wedged"]
+    assert not any(w[0] == "dispatch_seat_wedged" for w in logger.warnings)
+    assert "build1" not in wedge_state
+
+
+def test_wedge_state_round_trips_the_prompt_summary(tmp_path: Path) -> None:
+    """FRE-1504: the prompt summary persists; a malformed one is dropped, not trusted."""
+    path = tmp_path / "wedge.json"
+    save_wedge_state(path, {"build1": WedgeState(3, 3, "held-prompt", "❯ 1. Yes")})
+    assert load_wedge_state(path)["build1"].prompt_summary == "❯ 1. Yes"
+
+    path.write_text(
+        json.dumps({"build1": {"count": 3, "reason": "held-prompt", "prompt_summary": 7}})
+    )
+    assert load_wedge_state(path) == {}
 
 
 def test_stale_wedge_count_is_reset_on_a_non_wedge_decision() -> None:

@@ -1111,6 +1111,29 @@ def test_response_prose_containing_prompt_words_is_never_a_held_prompt() -> None
     assert seat_wedge_reason(topology, runner) is None
 
 
+def test_waiting_status_is_a_held_prompt_but_never_busy() -> None:
+    """FRE-1504: a seat held at a live prompt reports RC ``waiting``, not ``busy``.
+
+    Observed live on a real model-switch modal and a real permission prompt.
+    ``seat_wedge_reason`` must classify it as held. ``seat_is_busy`` must still
+    answer ``None`` for it: ``deliver_to_seat`` reads True there as "the command
+    was accepted", and a modal is the opposite of that.
+    """
+    topology = topology_for("build1")
+    signal = seat_wedge_reason(topology, _SeatRunner(pane="prompt", agents=[_agent("waiting")]))
+    assert signal is not None
+    assert signal.reason == "held-prompt"
+    assert "1. Yes" in (signal.prompt_summary or "")
+    # RC waiting is sufficient even without a ❯-numbered selector in the pane.
+    signal = seat_wedge_reason(topology, _SeatRunner(pane="static", agents=[_agent("waiting")]))
+    assert signal is not None
+    assert signal.reason == "held-prompt"
+    assert signal.prompt_summary
+    assert seat_is_busy(topology, _SeatRunner(agents=[_agent("waiting")])) is None
+    # An unknown status still never fires.
+    assert seat_wedge_reason(topology, _SeatRunner(pane="prompt", agents=[_agent("zzz")])) is None
+
+
 def test_malformed_ticket_identifier_is_rejected() -> None:
     """The ticket id is typed into a live acceptEdits seat — assert its shape.
 

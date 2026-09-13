@@ -2332,3 +2332,124 @@ class TestSiblingLine:
 
         assert specs[0].sibling_tasks == ()
         assert "Other workers in this turn own: none." in _build_task_message(specs[0], "t", None)
+
+
+class TestOriginErrorStopsDispatch:
+    """FRE-1501 AC-2 — no sibling is sent into a model server that just failed.
+
+    On 2026-09-12 one worker's 500 was followed within 20 seconds by 503 for every
+    caller. The fan-out is serialized, so the next sibling started at once, into the 503.
+    """
+
+    @staticmethod
+    async def _dispatch(
+        stop_reasons: list[str], turn_deadline_monotonic: float | None = None
+    ) -> tuple[list[str], list[SubAgentResult], Any, ExpansionPlan]:
+        from dataclasses import replace
+
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(len(stop_reasons)))
+        assert plan is not None
+        expansion_result = ExpansionResult()
+        dispatched: list[str] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            index = len(dispatched)
+            dispatched.append(kwargs["spec"].task)
+            stop_reason = stop_reasons[index]
+            return replace(
+                _make_sub_agent_result(kwargs["spec"].task, success=stop_reason == "completed"),
+                stop_reason=stop_reason,
+            )
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_run,
+        ):
+            results = await ExpansionController()._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-origin",
+                messages=[],
+                result=expansion_result,
+                turn_deadline_monotonic=turn_deadline_monotonic,
+            )
+        return dispatched, results, expansion_result, plan
+
+    @pytest.mark.asyncio
+    async def test_an_origin_error_skips_every_queued_sibling(self) -> None:
+        dispatched, results, expansion_result, plan = await self._dispatch(
+            ["origin_error", "completed", "completed"]
+        )
+
+        assert dispatched == ["Goal for task 0"]
+        assert [r.stop_reason for r in results] == ["origin_error"]
+        assert expansion_result.skipped_tasks == ["task_1", "task_2"]
+        assert expansion_result.skip_reason == "origin_error"
+
+        context = ExpansionController()._build_synthesis_context(
+            plan=plan,
+            sub_results=results,
+            skipped_tasks=expansion_result.skipped_tasks,
+            skip_reason=expansion_result.skip_reason,
+        )
+        assert "model server failed" in context
+        assert "time budget" not in context
+
+    @pytest.mark.asyncio
+    async def test_an_origin_error_gets_no_gap_replacement(self) -> None:
+        """A stated tool gap on a felled worker must not send a replacement into the origin."""
+        from dataclasses import replace
+
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(1))
+        assert plan is not None
+        controller = ExpansionController()
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            return replace(
+                _make_sub_agent_result(
+                    kwargs["spec"].task, success=False, stated_tool_gap="web_fetch"
+                ),
+                stop_reason="origin_error",
+            )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_run,
+            ),
+            patch.object(controller, "_maybe_redispatch_on_gap", AsyncMock()) as redispatch,
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-origin-gap",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        redispatch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_worker_error_that_is_not_the_origin_still_dispatches_the_rest(
+        self,
+    ) -> None:
+        dispatched, _results, expansion_result, _plan = await self._dispatch(
+            ["error", "completed", "completed"]
+        )
+
+        assert len(dispatched) == 3
+        assert expansion_result.skipped_tasks == []
+        assert expansion_result.skip_reason is None
+
+    @pytest.mark.asyncio
+    async def test_a_turn_budget_skip_names_its_own_reason(self) -> None:
+        dispatched, _results, expansion_result, _plan = await self._dispatch(
+            ["completed", "completed"], turn_deadline_monotonic=time.monotonic() - 5.0
+        )
+
+        assert dispatched == []
+        assert expansion_result.skip_reason == "turn_budget"

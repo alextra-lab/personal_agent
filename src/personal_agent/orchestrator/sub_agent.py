@@ -71,7 +71,7 @@ from personal_agent.llm_client.models import (
     landing_accepts_json_schema,
     synthesis_retains_tools,
 )
-from personal_agent.llm_client.types import GenerationProgress, LLMTimeout
+from personal_agent.llm_client.types import GenerationProgress, LLMServerError, LLMTimeout
 from personal_agent.orchestrator.prompts import render_current_datetime_block
 from personal_agent.orchestrator.sub_agent_approval import (
     get_sub_agent_approval_broker,
@@ -193,6 +193,11 @@ _SYNTHESIS_INSTRUCTION = (
 )
 _SYNTHESIS_OPENING_CAP = "Your tool budget is spent."
 _SYNTHESIS_OPENING_RESERVE = "Your time budget is nearly spent."
+_SYNTHESIS_OPENING_TRUNCATED = "Your last tool call was cut off at the token limit and was not run."
+_SYNTHESIS_OPENINGS: dict[str, str] = {
+    "time_reserve": _SYNTHESIS_OPENING_RESERVE,
+    "tool_call_truncated": _SYNTHESIS_OPENING_TRUNCATED,
+}
 
 # Bound on the tool arguments the ledger reproduces, per call. The ledger exists so
 # the primary can re-run a query, so the arguments must survive; but they are
@@ -280,6 +285,12 @@ def _normalize_tool_calls(
     every round, and colliding ids across rounds would make history look
     corrupted.
 
+    Arguments that do not parse as JSON are written as ``"{}"`` (FRE-1501).
+    llama.cpp parses every history tool-call argument and answers 500 for the
+    whole request when one fails, so a malformed call must not reach the next
+    round. The model still learns of its mistake from the "retry" tool result,
+    and the ledger keeps the raw string.
+
     Args:
         raw_tool_calls: ``ToolCall``-shaped dicts (``id``, ``name``, ``arguments``).
         round_num: This loop round's 1-based iteration number.
@@ -293,11 +304,30 @@ def _normalize_tool_calls(
             if tc.get("id")
             else f"call_r{round_num}_{idx}",
             "type": "function",
-            "function": {"name": tc.get("name", ""), "arguments": tc.get("arguments", "{}")},
+            "function": {
+                "name": tc.get("name", ""),
+                "arguments": _history_safe_arguments(str(tc.get("arguments") or "{}")),
+            },
             "index": idx,
         }
         for idx, tc in enumerate(raw_tool_calls)
     ]
+
+
+def _history_safe_arguments(arguments: str) -> str:
+    """Return tool-call arguments that a history parser can read (FRE-1501).
+
+    Args:
+        arguments: The model's raw argument string.
+
+    Returns:
+        ``arguments`` unchanged when it parses as JSON, else ``"{}"``.
+    """
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError:
+        return "{}"
+    return arguments
 
 
 def _resolve_effective_timeout(spec: SubAgentSpec, llm_client: Any) -> float:
@@ -1274,17 +1304,23 @@ async def _write_landing_report(
             f"{getattr(llm_client, 'provider', None)!r} "
             f"(dialect {getattr(dialect, 'value', None)!r}): {exc}"
         )
+        # FRE-1501: a landing call felled by the model server reports it, like a
+        # round call does, so the dispatcher stops sending siblings into it. The
+        # ledger keeps the path that triggered the landing.
+        outcome_stop_reason: SubAgentStopReason = (
+            "origin_error" if isinstance(exc, LLMServerError) else stop_reason
+        )
         if partial.strip():
             return _ToolLoopOutcome(
                 content=f"{partial}\n\n{_build_ledger(state, stop_reason, why)}",
                 stated_tool_gap=carried_tool_gap,
-                stop_reason=stop_reason,
+                stop_reason=outcome_stop_reason,
                 report_kind="narration",
             )
         return _ToolLoopOutcome(
             content=_build_ledger(state, stop_reason, why),
             stated_tool_gap=carried_tool_gap,
-            stop_reason=stop_reason,
+            stop_reason=outcome_stop_reason,
             report_kind="ledger",
         )
 
@@ -1520,9 +1556,7 @@ async def _forced_synthesis(
             report_kind="ledger",
         )
 
-    opening = (
-        _SYNTHESIS_OPENING_RESERVE if stop_reason == "time_reserve" else _SYNTHESIS_OPENING_CAP
-    )
+    opening = _SYNTHESIS_OPENINGS.get(stop_reason, _SYNTHESIS_OPENING_CAP)
     state.messages.append(
         {
             "role": "user",
@@ -1744,6 +1778,35 @@ async def _run_tool_loop(
                 stop_reason="completed",
                 report_kind="ledger",
                 finish_reason=round_finish_reason,
+            )
+
+        if raw_tool_calls and round_finish_reason == "length":
+            # FRE-1501: the model generated to its ceiling inside a tool call, so
+            # the arguments are cut. The call is not run, and it never enters
+            # `state.messages`: llama.cpp parses every history tool-call argument
+            # as JSON and answers 500 when one does not parse, litellm retries
+            # that same request, and on 2026-09-12 the origin then answered 503
+            # to every caller for a minute. The landing call below sends only the
+            # clean history of the rounds before this one.
+            logger.warning(
+                "sub_agent_tool_call_truncated",
+                tool_names=[str(call.get("name", "")) for call in raw_tool_calls],
+                argument_chars=[len(str(call.get("arguments") or "")) for call in raw_tool_calls],
+                tool_iterations=state.tool_iterations,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return await _forced_synthesis(
+                state,
+                spec,
+                llm_client,
+                tool_defs,
+                trace_ctx,
+                trace_id,
+                session_id,
+                effective_timeout,
+                deadline_monotonic,
+                stop_reason="tool_call_truncated",
             )
 
         response_content = _parse_llm_response(raw_response)
@@ -2227,13 +2290,17 @@ async def run_sub_agent(
 
     except Exception as exc:
         duration_ms = int(time.monotonic() * 1000) - start_ms
+        # FRE-1501: the model server answered 5xx after the client's own retries.
+        # Named apart from `error` so the dispatcher stops sending siblings into
+        # it. Only the local path's mapper raises this. A connection error is
+        # left as `error`: a tunnel interruption does not show the origin is down.
         result = _killed_result(
             task_id,
             spec,
             duration_ms,
             state,
             error=str(exc),
-            stop_reason="error",
+            stop_reason="origin_error" if isinstance(exc, LLMServerError) else "error",
             why=f"the worker raised before it could report: {exc}",
         )
 

@@ -11,8 +11,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Literal
 
 from personal_agent.orchestrator.worker_types import Thoroughness, WorkerType
+
+#: Why queued plan tasks were never dispatched. One fan-out has at most one reason:
+#: both skips hold for every task after the first one skipped.
+#:
+#: ``turn_budget`` — the turn's remaining budget was exhausted (FRE-1397).
+#: ``origin_error`` — an earlier worker's model server answered 5xx, so no sibling
+#: was sent into it (FRE-1501).
+SkipReason = Literal["turn_budget", "origin_error"]
+
+#: The clause that completes "The following sub-tasks were not run — ...".
+SKIP_REASON_TEXT: dict[SkipReason, str] = {
+    "turn_budget": "the turn's time budget was exhausted before dispatch reached them",
+    "origin_error": "the model server failed on an earlier sub-task, so they were not sent to it",
+}
 
 
 class SubAgentMode(Enum):

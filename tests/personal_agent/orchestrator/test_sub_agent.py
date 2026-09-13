@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import time
 from dataclasses import replace
 from typing import Any
@@ -12,7 +14,7 @@ from uuid import UUID
 import pytest
 import structlog.testing
 
-from personal_agent.llm_client.types import GenerationProgress
+from personal_agent.llm_client.types import GenerationProgress, LLMConnectionError, LLMServerError
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 from personal_agent.orchestrator.worker_types import WORKER_TYPES, Thoroughness, WorkerType
@@ -2697,3 +2699,192 @@ class TestSynthesisWireForm:
         synthesis = client.recorded_calls[-1]
         assert synthesis["tool_choice"] == "none"
         assert result.report_kind == "synthesized"
+
+
+def _recording_client(responses: list[Any]) -> tuple[AsyncMock, list[list[dict[str, Any]]]]:
+    """A client that answers ``responses`` in order and snapshots each call's messages.
+
+    The loop appends to one message list across rounds, so ``call_args`` would show
+    every call holding the final history. A deep copy per call keeps what was sent.
+    """
+    sent: list[list[dict[str, Any]]] = []
+    queued = iter(responses)
+
+    async def _respond(**kwargs: Any) -> Any:
+        sent.append(copy.deepcopy(kwargs["messages"]))
+        return next(queued)
+
+    client = AsyncMock()
+    client.respond = AsyncMock(side_effect=_respond)
+    client.dialect_for_role = MagicMock(return_value=None)
+    return client, sent
+
+
+def _history_tool_arguments(messages: list[dict[str, Any]]) -> list[str]:
+    """Every assistant tool-call argument string in one request's history."""
+    return [
+        tool_call["function"]["arguments"]
+        for message in messages
+        for tool_call in message.get("tool_calls") or []
+    ]
+
+
+class TestToolCallTruncated:
+    """FRE-1501 AC-1 — a tool call cut at the token ceiling ends the loop at once.
+
+    llama.cpp parses every tool-call argument in the request history as JSON
+    (``common/chat.cpp``, ``common_chat_msgs_parse_oaicompat``) and answers 500 when
+    one does not parse. litellm then retries that same request. The cut call must
+    therefore never reach a later request.
+    """
+
+    CUT_ARGUMENTS = '{"query": "zorptal licensing rules in the brevik region, includ'
+
+    @pytest.mark.asyncio
+    async def test_a_cut_tool_call_stops_with_its_own_reason_and_never_reaches_history(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 3)
+        client, sent = _recording_client(
+            [
+                _llm_response_with_finish_reason(
+                    "",
+                    "tool_calls",
+                    tool_calls=[
+                        {"id": "c0", "name": "web_search", "arguments": '{"query": "zorptal"}'}
+                    ],
+                ),
+                _llm_response_with_finish_reason(
+                    "",
+                    "length",
+                    tool_calls=[
+                        {"id": "c1", "name": "web_search", "arguments": self.CUT_ARGUMENTS}
+                    ],
+                ),
+                _llm_response_with_finish_reason(
+                    "ZORPTAL needs a licence (source: brevik.example)", "stop"
+                ),
+            ]
+        )
+        dispatch = AsyncMock(return_value=_dispatch_result("c", "web_search", "ok"))
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=client, trace_id="t"
+            )
+
+        assert result.stop_reason == "tool_call_truncated"
+        assert result.success is False
+        # Round 1's call ran. The cut call in round 2 did not.
+        assert dispatch.await_count == 1
+        # One landing call follows the cut round, and nothing else.
+        assert len(sent) == 3
+        for messages in sent:
+            assert self.CUT_ARGUMENTS not in json.dumps(messages)
+            for arguments in _history_tool_arguments(messages):
+                json.loads(arguments)
+        assert "ZORPTAL needs a licence" in result.summary
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_arguments_reach_history_as_an_empty_object(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fold-in: the same 500 follows invalid JSON that was not cut at the ceiling."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 3)
+        broken = '{"query": "zorptal}'
+        client, sent = _recording_client(
+            [
+                _llm_response_with_finish_reason(
+                    "",
+                    "tool_calls",
+                    tool_calls=[{"id": "c0", "name": "web_search", "arguments": broken}],
+                ),
+                _llm_response_with_finish_reason("nothing found", "stop"),
+            ]
+        )
+        dispatch = AsyncMock(return_value=_dispatch_result("c", "web_search", "ok"))
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch),
+        ):
+            await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=client, trace_id="t"
+            )
+
+        dispatch.assert_not_awaited()
+        assert _history_tool_arguments(sent[1]) == ["{}"]
+        retry_hints = [m for m in sent[1] if m.get("role") == "tool"]
+        assert len(retry_hints) == 1
+        assert json.loads(retry_hints[0]["content"])["status"] == "retry"
+
+
+class TestOriginErrorStopReason:
+    """FRE-1501 AC-2 — a worker felled by the model server says so in its stop reason."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raised", "expected"),
+        [
+            (LLMServerError, "origin_error"),
+            # A tunnel interruption does not show the origin is down.
+            (LLMConnectionError, "error"),
+            (RuntimeError, "error"),
+        ],
+    )
+    async def test_stop_reason_follows_the_exception(
+        self, raised: type[Exception], expected: str
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(side_effect=raised("Backend server unreachable"))
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.stop_reason == expected
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_a_landing_call_felled_by_the_origin_says_so(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The landing call catches every exception, so it must name the origin itself."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 3)
+        round_call = _llm_response_with_finish_reason(
+            "", "tool_calls", tool_calls=[{"id": "c", "name": "web_search", "arguments": "{}"}]
+        )
+        client, _ = _recording_client([round_call] * 3)
+        client.respond.side_effect = [round_call] * 3 + [LLMServerError("503 unreachable")]
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "web_search", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=client, trace_id="t"
+            )
+
+        assert result.stop_reason == "origin_error"
+        assert result.report_kind == "ledger"
+        # The ledger still names the path that triggered the landing.
+        assert "Worker stopped: cap" in result.summary

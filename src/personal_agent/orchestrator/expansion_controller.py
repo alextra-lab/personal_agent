@@ -37,10 +37,12 @@ from personal_agent.governance.sub_agent_tools import (
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.observability.topology import report_degradation
 from personal_agent.orchestrator.expansion_types import (
+    SKIP_REASON_TEXT,
     ExpansionPhase,
     ExpansionPlan,
     PhaseResult,
     PlanTask,
+    SkipReason,
     SubAgentInterval,
 )
 from personal_agent.orchestrator.fallback_planner import generate_fallback_plan
@@ -175,10 +177,13 @@ class ExpansionResult:
             own structure.
         skipped_tasks: Plan task names never dispatched because the turn's
             remaining budget (FRE-1397) was already exhausted when their turn
-            came up in the serialized loop. Distinct from a failed
+            came up in the serialized loop, or because an earlier worker's
+            model server failed (FRE-1501). Distinct from a failed
             ``SubAgentResult`` — these never ran at all, so they are reported
             here rather than fabricated into ``sub_agent_results`` (AC-3
             mirrors why FRE-1380 deleted ``_not_admitted_result``).
+        skip_reason: Why ``skipped_tasks`` were not dispatched, or ``None`` when
+            nothing was skipped (FRE-1501).
     """
 
     plan: ExpansionPlan | None = None
@@ -190,6 +195,7 @@ class ExpansionResult:
     planner_cost_usd: float = 0.0
     dispatch_intervals: list[SubAgentInterval] = field(default_factory=list)
     skipped_tasks: list[str] = field(default_factory=list)
+    skip_reason: SkipReason | None = None
 
     @property
     def cost_usd(self) -> float:
@@ -453,6 +459,7 @@ class ExpansionController:
             plan=plan,
             sub_results=sub_results,
             skipped_tasks=result.skipped_tasks,
+            skip_reason=result.skip_reason,
         )
 
         if strategy.upper() == "HYBRID":
@@ -778,12 +785,28 @@ class ExpansionController:
         intervals: list[SubAgentInterval] = []
         sub_results: list[SubAgentResult] = []
 
+        # FRE-1501: set once any worker's model server answers 5xx after the
+        # client's retries. On 2026-09-12 one worker's 500 was followed within
+        # 20 seconds by 503 for every caller, and the next sibling started into it.
+        # No timed wait: the health probe cannot see a dead backend (FRE-1474).
+        origin_failed = False
+
         async with phase_span(
             session_id=session_id,
             phase=Phase.EXPANSION,
             detail=f"{len(specs)} sub-agents",
         ) as _parent_id:
             for task, spec in zip(plan.tasks, specs, strict=True):
+                if origin_failed:
+                    logger.warning(
+                        "sub_agent_dispatch_skipped_origin_error",
+                        task_name=task.name,
+                        trace_id=trace_id,
+                    )
+                    result.skipped_tasks.append(task.name)
+                    result.skip_reason = "origin_error"
+                    continue
+
                 # FRE-1397: recomputed fresh for every task rather than divided
                 # up-front across the plan — most sub-agents finish well under
                 # their own ceiling, so a live "whatever's left" check wastes
@@ -798,6 +821,7 @@ class ExpansionController:
                             trace_id=trace_id,
                         )
                         result.skipped_tasks.append(task.name)
+                        result.skip_reason = "turn_budget"
                         continue
                     worker_max_deadline = remaining
 
@@ -831,6 +855,12 @@ class ExpansionController:
                     continue
                 sub_results.append(sub_result)
 
+                if sub_result.stop_reason == "origin_error":
+                    # Checked before the gap replacement below, which would
+                    # otherwise send a replacement worker into the same origin.
+                    origin_failed = True
+                    continue
+
                 # FRE-1389 AC-5: single-shot replacement dispatch when this
                 # result stated a tool gap — the controller (not the
                 # sub-agent) decides whether to grant more, acting in-loop so
@@ -852,6 +882,7 @@ class ExpansionController:
                 )
                 if replacement is not None:
                     sub_results.append(replacement)
+                    origin_failed = replacement.stop_reason == "origin_error"
 
         result.dispatch_intervals = intervals
         logger.info(
@@ -1078,6 +1109,7 @@ class ExpansionController:
         plan: ExpansionPlan,
         sub_results: list[SubAgentResult],
         skipped_tasks: list[str] | None = None,
+        skip_reason: SkipReason | None = None,
     ) -> str:
         """Build the synthesis context string from sub-agent results.
 
@@ -1085,9 +1117,12 @@ class ExpansionController:
             plan: The expansion plan used for this run.
             sub_results: Results from all dispatched sub-agents.
             skipped_tasks: Plan task names never dispatched because the turn's
-                budget ran out first (FRE-1397) — distinct from a failure:
-                these produced no result at all, so they get their own note
-                rather than being silently absent.
+                budget ran out first (FRE-1397) or the model server failed
+                (FRE-1501) — distinct from a failure: these produced no result
+                at all, so they get their own note rather than being silently
+                absent.
+            skip_reason: Why ``skipped_tasks`` were not dispatched. ``None``
+                reads as the turn budget, the only reason before FRE-1501.
 
         Returns:
             Formatted synthesis context string for the parent agent.
@@ -1148,8 +1183,8 @@ class ExpansionController:
 
         if skipped_tasks:
             parts.append(
-                f"\n**Note:** The following sub-tasks were not run — the turn's time "
-                f"budget was exhausted before dispatch reached them: {', '.join(skipped_tasks)}. "
+                f"\n**Note:** The following sub-tasks were not run — "
+                f"{SKIP_REASON_TEXT[skip_reason or 'turn_budget']}: {', '.join(skipped_tasks)}. "
                 "Synthesize from available results and note this gap.\n"
             )
 

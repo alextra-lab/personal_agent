@@ -76,6 +76,7 @@ from personal_agent.orchestrator.context_window import (
     apply_context_window,
     estimate_messages_tokens,
 )
+from personal_agent.orchestrator.expansion_types import SKIP_REASON_TEXT, SkipReason
 from personal_agent.orchestrator.loop_gate import (
     GateDecision,
     GateResult,
@@ -2995,7 +2996,8 @@ def _fallback_reply_from_sub_agent_results(
         status = "done" if r.success else f"failed ({r.error})"
         lines.append(f"- {r.spec_task} [{status}]: {r.summary}")
     if ctx.expansion_skipped_tasks:
-        lines.append("- Not run (time budget exhausted): " + ", ".join(ctx.expansion_skipped_tasks))
+        reason = SKIP_REASON_TEXT[ctx.expansion_skip_reason or "turn_budget"]
+        lines.append(f"- Not run ({reason}): " + ", ".join(ctx.expansion_skipped_tasks))
     return "\n".join(lines)
 
 
@@ -4897,13 +4899,17 @@ def _fanout_trailer_text(
 
 
 def _compose_fanout_stop_and_show(
-    sub_agent_results: "list[SubAgentResult]", skipped_tasks: list[str]
+    sub_agent_results: "list[SubAgentResult]",
+    skipped_tasks: list[str],
+    skip_reason: SkipReason | None = None,
 ) -> str:
     """Deterministic ``stop_and_show`` response — no model call (ADR-0149 D4).
 
     Args:
         sub_agent_results: Dispatched workers' results.
         skipped_tasks: Plan task names never dispatched.
+        skip_reason: Why they were not dispatched (FRE-1501). ``None`` reads as
+            the turn budget, the only reason before FRE-1501.
 
     Returns:
         Every dispatched task's name, terminal facts and report in full, then
@@ -4918,7 +4924,7 @@ def _compose_fanout_stop_and_show(
         )
     if skipped_tasks:
         parts.append(
-            "\n### Not dispatched — the turn's time budget was exhausted first\n"
+            f"\n### Not dispatched — {SKIP_REASON_TEXT[skip_reason or 'turn_budget']}\n"
             f"{', '.join(skipped_tasks)}\n"
         )
     return "".join(parts)
@@ -5339,6 +5345,7 @@ async def step_init(
             ctx.sub_agent_results = expansion_result.sub_agent_results
             ctx.expansion_phase_results = expansion_result.phase_results
             ctx.expansion_skipped_tasks = expansion_result.skipped_tasks
+            ctx.expansion_skip_reason = expansion_result.skip_reason
 
             if expansion_result.plan is not None and expansion_result.plan.is_fallback:
                 # FRE-1413 AC-4: a keyword-split fallback plan must reach the
@@ -5462,7 +5469,9 @@ async def step_init(
                 )
                 if fanout_decision == "stop_and_show":
                     ctx.final_reply = _compose_fanout_stop_and_show(
-                        expansion_result.sub_agent_results, expansion_result.skipped_tasks
+                        expansion_result.sub_agent_results,
+                        expansion_result.skipped_tasks,
+                        expansion_result.skip_reason,
                     )
                     # step_llm_call always appends the assistant's reply to
                     # ctx.messages before setting final_reply; this deterministic

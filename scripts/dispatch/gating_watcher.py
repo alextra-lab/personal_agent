@@ -156,6 +156,16 @@ _STREAM_FROM_LABEL: dict[str, str] = {
 DEFAULT_MASTER_TTL_S: float = 21600.0  # 6 h
 DEFAULT_WORKER_TTL_S: float = 900.0  # 15 min
 
+# Red-CI pokes at one head SHA before the watcher stops poking and escalates to
+# master instead (FRE-1499). A due re-poke is itself the proof that the last one
+# did nothing: the seat is idle again, the PR is still red at the SAME SHA (no
+# new commit), and no ack marker exists. On 2026-09-12 build2 answered 42 such
+# pokes with an empty turn and nothing noticed. Two ineffective pokes (30 min)
+# are enough to tell "the seat did nothing" apart from "the fix is slow" — a
+# seat that is working reads busy and is never counted.
+DEFAULT_WORKER_POKE_ESCALATION: int = 2
+_POKE_ESCALATION_REASON = "worker-poke-ineffective"
+
 # A worker trigger with no owning stream (FRE-1271) re-derives the identical
 # unroutable verdict every tick otherwise -- one log per (pr, head_sha), self-
 # healing on the same 6h horizon as the master TTL (this is pure log-noise
@@ -302,6 +312,11 @@ class Trigger:
             ``mode == "channel"``.
         channel_payload: The structured PR-state payload for a channel-mode
             delivery, only set when ``mode == "channel"``.
+        worker_session: The owning worker seat — the target of a worker
+            trigger, or the seat an ineffective-poke escalation is about
+            (FRE-1499). ``None`` for a master-ready trigger.
+        prior_pokes: Red-CI pokes already delivered at this head SHA
+            (FRE-1499). Above zero, the worker pane is read before acting.
     """
 
     kind: TriggerKind
@@ -315,6 +330,8 @@ class Trigger:
     mode: Literal["channel", "send_keys"] = "send_keys"
     channel_port: int | None = None
     channel_payload: Mapping[str, object] | None = None
+    worker_session: str | None = None
+    prior_pokes: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -538,6 +555,47 @@ def _suppressed(sent: Mapping[str, float], key: str, now: float, ttl_s: float) -
     return last is not None and (now - last) < ttl_s
 
 
+def _poke_key(pr: int, head_sha: str, n: int) -> str:
+    """Return the dedup-store key recording the ``n``-th red-CI poke at a head SHA (FRE-1499).
+
+    Field 1 is the PR number, so ``prune_state`` drops these entries when the PR
+    closes, exactly like the ``<kind>:<pr>:<sha>`` keys.
+    """
+    return f"poke:{pr}:{head_sha}:{n}"
+
+
+def _poke_count(sent: Mapping[str, float], pr: int, head_sha: str) -> int:
+    """Return how many red-CI pokes were delivered at this PR head SHA (FRE-1499)."""
+    prefix = f"poke:{pr}:{head_sha}:"
+    return sum(1 for key in sent if key.startswith(prefix))
+
+
+def _escalation_command(
+    pr: int, head_sha: str, pokes: int, worker_session: str | None, *, seat_absent: bool = False
+) -> str:
+    """Return the message master receives instead of another red-CI poke (FRE-1499).
+
+    Args:
+        pr: The PR number.
+        head_sha: The PR head SHA the pokes were sent at.
+        pokes: Red-CI pokes already delivered at that SHA.
+        worker_session: The owning worker seat.
+        seat_absent: The seat's tmux session no longer exists.
+
+    Returns:
+        The prose command for ``cc-master``.
+    """
+    if seat_absent:
+        what = "The seat now has no tmux session, so it cannot act."
+    else:
+        what = "Each time the seat went idle with no new commit and no ack."
+    return (
+        f"PR #{pr} is still red at {head_sha[:8]} after {pokes} red-CI pokes to "
+        f"{worker_session}. {what} The watcher stopped poking that seat (FRE-1499). "
+        f"Check the seat — its model and its last turn — and decide."
+    )
+
+
 def classify_pr(
     pr: PullRequest,
     *,
@@ -545,6 +603,7 @@ def classify_pr(
     sent: Mapping[str, float],
     master_ttl_s: float,
     worker_ttl_s: float,
+    poke_escalation: int = DEFAULT_WORKER_POKE_ESCALATION,
 ) -> Candidate | None:
     """Classify a PR into a (dedup-suppressed) trigger candidate, or ``None``.
 
@@ -559,6 +618,9 @@ def classify_pr(
         sent: The dedup store (key → last-sent epoch).
         master_ttl_s: Master suppression TTL.
         worker_ttl_s: Worker suppression TTL.
+        poke_escalation: Pokes at one head SHA after which a due red-CI poke
+            becomes an escalation to master instead (FRE-1499). Clamped to at
+            least 1.
 
     Returns:
         The ``Candidate`` to actuate, or ``None`` (no trigger, or suppressed).
@@ -584,6 +646,13 @@ def classify_pr(
         key = f"worker:{pr.number}:{pr.head_sha}"
         if _suppressed(sent, key, now, worker_ttl_s):
             return None
+        # FRE-1499: past the poke budget at this SHA, stop poking and tell
+        # master. While the escalation is inside its TTL, the seat is left alone.
+        escalation_key = f"escalate:{pr.number}:{pr.head_sha}"
+        if _suppressed(sent, escalation_key, now, master_ttl_s):
+            return None
+        if _poke_count(sent, pr.number, pr.head_sha) >= max(1, poke_escalation):
+            return Candidate("master", _POKE_ESCALATION_REASON, escalation_key, master_ttl_s)
         return Candidate("worker", "worker-ci-red", key, worker_ttl_s)
 
     if pr.ci == "success" and pr.mergeable != "CONFLICTING":
@@ -603,11 +672,13 @@ def decide(
     sent: Mapping[str, float],
     master_ttl_s: float,
     worker_ttl_s: float,
+    poke_escalation: int = DEFAULT_WORKER_POKE_ESCALATION,
 ) -> list[Trigger]:
     """Decide the routed triggers for a board snapshot (pure given the resolver).
 
-    ``session_resolver`` is consulted **only** for worker triggers (a Linear
-    lookup in production), so master-ready PRs cost no resolution.
+    ``session_resolver`` is consulted **only** for worker triggers and for
+    ineffective-poke escalations (a Linear lookup in production), so
+    master-ready PRs cost no resolution.
 
     Args:
         prs: The open-PR snapshots.
@@ -617,6 +688,7 @@ def decide(
         sent: The dedup store.
         master_ttl_s: Master suppression TTL.
         worker_ttl_s: Worker suppression TTL.
+        poke_escalation: See ``classify_pr``.
 
     Returns:
         The triggers to actuate this tick (session may be ``None`` → unroutable).
@@ -624,18 +696,34 @@ def decide(
     triggers: list[Trigger] = []
     for pr in prs:
         candidate = classify_pr(
-            pr, now=now, sent=sent, master_ttl_s=master_ttl_s, worker_ttl_s=worker_ttl_s
+            pr,
+            now=now,
+            sent=sent,
+            master_ttl_s=master_ttl_s,
+            worker_ttl_s=worker_ttl_s,
+            poke_escalation=poke_escalation,
         )
         if candidate is None:
             continue
         mode: Literal["channel", "send_keys"] = "send_keys"
         channel_port: int | None = None
         channel_payload: Mapping[str, object] | None = None
-        if candidate.kind == "master":
-            session: str | None = MASTER_SESSION
+        worker_session: str | None = None
+        prior_pokes = 0
+        if candidate.reason == _POKE_ESCALATION_REASON:
+            worker_session = session_resolver(parse_ticket_from_branch(pr.head_ref))
+            prior_pokes = _poke_count(sent, pr.number, pr.head_sha)
+            # No owning seat means no pane to confirm idle: unroutable, like a
+            # worker trigger with no stream.
+            session: str | None = MASTER_SESSION if worker_session is not None else None
+            command = _escalation_command(pr.number, pr.head_sha, prior_pokes, worker_session)
+        elif candidate.kind == "master":
+            session = MASTER_SESSION
             command = f"/master {pr.number}"
         else:
             session = session_resolver(parse_ticket_from_branch(pr.head_ref))
+            worker_session = session
+            prior_pokes = _poke_count(sent, pr.number, pr.head_sha)
             command = f"PR #{pr.number} failed CI checks - correct them"
             # Per-seat mode is owned by the gateway topology (FRE-872,
             # ADR-0116) -- resolved from the tmux session name so this stays
@@ -659,6 +747,8 @@ def decide(
                 mode=mode,
                 channel_port=channel_port,
                 channel_payload=channel_payload,
+                worker_session=worker_session,
+                prior_pokes=prior_pokes,
             )
         )
     return triggers
@@ -1293,6 +1383,7 @@ def run_once(
     queued_escalated: set[str] | None = None,
     queued_escalation_s: float = DEFAULT_QUEUED_ESCALATION_S,
     unroutable_ttl_s: float = DEFAULT_UNROUTABLE_LOG_TTL_S,
+    worker_poke_escalation: int = DEFAULT_WORKER_POKE_ESCALATION,
 ) -> dict[str, float]:
     """Run one watcher tick, mutating and returning the dedup store.
 
@@ -1338,6 +1429,8 @@ def run_once(
             reason=unroutable`` log line, keyed per ``(pr, head_sha)``
             (FRE-1271) — a worker trigger with no owning stream would otherwise
             re-log the identical verdict every tick for as long as it recurs.
+        worker_poke_escalation: Red-CI pokes at one head SHA after which the
+            watcher escalates to master instead of poking again (FRE-1499).
 
     Returns:
         The updated dedup store.
@@ -1399,6 +1492,7 @@ def run_once(
         sent=state,
         master_ttl_s=master_ttl_s,
         worker_ttl_s=worker_ttl_s,
+        poke_escalation=worker_poke_escalation,
     )
     for trigger in triggers:
         if trigger.session is None:
@@ -1426,6 +1520,71 @@ def run_once(
             continue
         if not execute:
             continue
+        worker_session = trigger.worker_session
+        if trigger.prior_pokes > 0 and worker_session is not None:
+            # FRE-1499: a poke was already delivered at this SHA. Read the
+            # worker pane for EVERY transport — a channel delivery never reads
+            # it. Busy means the seat is working on it: leave it alone and write
+            # nothing. Idle, with the PR still red at the same SHA, proves the
+            # last poke changed nothing.
+            seat_absent = (
+                runner(["tmux", "has-session", "-t", exact_session(worker_session)]).returncode != 0
+            )
+            if seat_absent:
+                # A gone seat captures as an empty pane, which reads as busy and
+                # would hide the seat forever. It cannot be working and cannot be
+                # poked: escalate now, whatever the poke count.
+                logger.warning(
+                    "gating_poke_ineffective",
+                    trace_id=trace_id,
+                    pr=trigger.pr,
+                    head_sha=trigger.head_sha,
+                    session=trigger.worker_session,
+                    consecutive_pokes=trigger.prior_pokes,
+                    escalating=True,
+                    seat_absent=True,
+                )
+                trigger = dataclasses.replace(
+                    trigger,
+                    kind="master",
+                    reason=_POKE_ESCALATION_REASON,
+                    session=MASTER_SESSION,
+                    command=_escalation_command(
+                        trigger.pr,
+                        trigger.head_sha,
+                        trigger.prior_pokes,
+                        trigger.worker_session,
+                        seat_absent=True,
+                    ),
+                    dedup_key=f"escalate:{trigger.pr}:{trigger.head_sha}",
+                    ttl_s=master_ttl_s,
+                    mode="send_keys",
+                    channel_port=None,
+                    channel_payload=None,
+                )
+            elif not session_is_idle(
+                runner(["tmux", "capture-pane", "-t", exact_pane(worker_session), "-p"]).stdout
+            ):
+                logger.info(
+                    "gating_skip",
+                    trace_id=trace_id,
+                    reason="seat-not-idle-after-poke",
+                    pr=trigger.pr,
+                    session=trigger.worker_session,
+                )
+                continue
+            else:
+                logger.warning(
+                    "gating_poke_ineffective",
+                    trace_id=trace_id,
+                    pr=trigger.pr,
+                    head_sha=trigger.head_sha,
+                    session=trigger.worker_session,
+                    consecutive_pokes=trigger.prior_pokes,
+                    escalating=trigger.reason == _POKE_ESCALATION_REASON,
+                )
+        if trigger.session is None:
+            continue  # re-narrows after the absent-seat replace above; never true here
         tick_ledger, record_outcome = trigger_ledger.record_pending(
             tick_ledger,
             event_id=trigger.dedup_key,
@@ -1526,6 +1685,9 @@ def run_once(
             tick_ledger = trigger_ledger.mark_sent(tick_ledger, trigger.dedup_key, now)
             ledger_persist(tick_ledger)
             state[trigger.dedup_key] = now
+            if trigger.kind == "worker":
+                # Same persist as the dedup key, so the count adds no crash window.
+                state[_poke_key(trigger.pr, trigger.head_sha, trigger.prior_pokes + 1)] = now
             persist(state)
             tick_ledger = trigger_ledger.mark_consumed(tick_ledger, trigger.dedup_key, now)
             ledger_persist(tick_ledger)
@@ -1738,6 +1900,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_QUEUED_ESCALATION_S,
         help="Seconds after which a still-unconfirmed gating trigger is surfaced (FRE-939).",
     )
+    parser.add_argument(
+        "--worker-poke-escalation",
+        type=int,
+        default=DEFAULT_WORKER_POKE_ESCALATION,
+        help="Red-CI pokes at one head SHA before escalating to master instead (FRE-1499).",
+    )
     args = parser.parse_args(argv)
 
     api_key = load_linear_key()
@@ -1795,6 +1963,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             channel_secret=channel_secret,
             queued_escalated=queued_escalated,
             queued_escalation_s=args.queued_escalation_timeout,
+            worker_poke_escalation=args.worker_poke_escalation,
         )
         if not board_fetched:
             return  # kill-switch halted the tick before the board was read

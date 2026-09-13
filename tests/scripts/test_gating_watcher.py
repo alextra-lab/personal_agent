@@ -2572,3 +2572,246 @@ def test_queued_entries_for_different_prs_are_not_superseded() -> None:
     )
     assert ledger["master:412:shaA"].consumed_at is None
     assert ledger["master:500:shaC"].consumed_at is None
+
+
+# --- FRE-1499: poke effectiveness + escalation ----------------------------------
+#
+# The incident: build2 received ``PR #1144 failed CI checks - correct them`` 42
+# times at one head SHA and answered every one with an empty turn. The watcher
+# recorded each as delivered and sent the next, identical, 15 minutes later.
+
+_WORKER_KEY = "worker:412:abc1234def5678"
+
+
+def _send_keys_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="send_keys"),
+    )
+
+
+def _busy_seat_runner() -> _RecordingRunner:
+    return _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+        }
+    )
+
+
+def _red_tick(
+    state: dict[str, float],
+    now: float,
+    runner: _RecordingRunner,
+    logger: object,
+    *,
+    pr: PullRequest | None = None,
+    ledger: dict | None = None,
+) -> dict[str, float]:
+    return run_once(
+        state,
+        now=now,
+        board_fetcher=lambda: [pr or _pr(ci="failure")],
+        session_resolver=_resolve_build2,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=logger,  # type: ignore[arg-type]
+        execute=True,
+        ledger=ledger if ledger is not None else {},
+        ledger_persist=ledger.update if ledger is not None else (lambda _l: None),
+    )
+
+
+def _sent_text(runner: _RecordingRunner, pane: str) -> list[str]:
+    return [
+        c[5] for c in runner.calls if c[:4] == ("tmux", "send-keys", "-t", pane) and c[4] == "-l"
+    ]
+
+
+def _assert_ac1_repoke_is_recorded_ineffective() -> None:
+    state: dict[str, float] = {}
+    _red_tick(state, 100.0, _idle_runner(), _NullLogger())
+    logger = _CapturingLogger()
+    runner = _idle_runner()
+    _red_tick(state, 100.0 + 901.0, runner, logger)
+    ineffective = [f for e, f in logger.warnings if e == "gating_poke_ineffective"]
+    assert len(ineffective) == 1, logger.warnings
+    assert ineffective[0]["pr"] == 412
+    assert ineffective[0]["consecutive_pokes"] == 1
+    assert ineffective[0]["session"] == "cc-2build"
+
+
+def test_run_once_repoke_at_same_sha_is_recorded_ineffective(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """AC-1: a poke followed by an idle seat and no new commit is recorded as ineffective."""
+    _send_keys_mode(monkeypatch)
+    _assert_ac1_repoke_is_recorded_ineffective()
+
+
+def test_first_poke_is_not_judged_ineffective(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    logger = _CapturingLogger()
+    runner = _idle_runner()
+    state = _red_tick({}, 100.0, runner, logger)
+    assert _sent_text(runner, "=cc-2build:0.0") == ["PR #412 failed CI checks - correct them"]
+    assert not [e for e, _ in logger.warnings if e == "gating_poke_ineffective"]
+    assert state["poke:412:abc1234def5678:1"] == 100.0
+
+
+def test_run_once_escalates_to_master_after_ineffective_pokes(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """AC-2: the third due poke becomes a distinct message to master, not a third poke."""
+    _send_keys_mode(monkeypatch)
+    state: dict[str, float] = {}
+    first = _idle_runner()
+    _red_tick(state, 100.0, first, _NullLogger())
+    _red_tick(state, 1001.0, _idle_runner(), _NullLogger())
+    logger = _CapturingLogger()
+    third = _idle_runner()
+    ledger: dict = {}
+    _red_tick(state, 1902.0, third, logger, ledger=ledger)
+
+    poke = _sent_text(first, "=cc-2build:0.0")
+    assert poke == ["PR #412 failed CI checks - correct them"]
+    assert _sent_text(third, "=cc-2build:0.0") == []  # no third identical poke
+    to_master = _sent_text(third, "=cc-master:0.0")
+    assert len(to_master) == 1
+    assert to_master[0] != poke[0]
+    assert "#412" in to_master[0] and "cc-2build" in to_master[0]
+    assert ledger["escalate:412:abc1234def5678"].source == "worker-poke-ineffective"
+    assert ("gating_poke_ineffective", 2) in [
+        (e, f["consecutive_pokes"]) for e, f in logger.warnings
+    ]
+
+    # Inside the master TTL: neither the escalation nor a poke repeats.
+    fourth = _idle_runner()
+    _red_tick(state, 2803.0, fourth, _NullLogger(), ledger=ledger)
+    assert not any(c[:2] == ("tmux", "send-keys") for c in fourth.calls)
+
+
+def test_run_once_escalation_skips_while_worker_busy(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A seat that turned busy after its last poke is working — no escalation, no ledger write."""
+    _send_keys_mode(monkeypatch)
+    state = {"poke:412:abc1234def5678:1": 100.0, "poke:412:abc1234def5678:2": 1001.0}
+    runner = _busy_seat_runner()
+    ledger: dict = {}
+    _red_tick(state, 1902.0, runner, _NullLogger(), ledger=ledger)
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+    assert ledger == {}
+
+
+def _absent_seat_runner() -> _RecordingRunner:
+    """cc-master exists and is idle; the worker seat's tmux session is gone."""
+
+    class _Runner(_RecordingRunner):
+        def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+            argv_t = tuple(argv)
+            self.calls.append(argv_t)
+            if argv_t[:2] == ("tmux", "has-session"):
+                return _FakeRunResult(returncode=0 if "=cc-master" in argv_t else 1)
+            if argv_t[:2] == ("tmux", "capture-pane"):
+                if "=cc-master:0.0" in argv_t:
+                    return _FakeRunResult(stdout=_REAL_IDLE_PANE)
+                return _FakeRunResult(returncode=1)
+            return _FakeRunResult()
+
+    return _Runner()
+
+
+def test_absent_worker_session_after_a_poke_escalates_at_once(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Code review: a crashed seat reads as an empty pane, which is not 'busy' — escalate."""
+    _send_keys_mode(monkeypatch)
+    state = {"poke:412:abc1234def5678:1": 100.0}
+    runner = _absent_seat_runner()
+    ledger: dict = {}
+    logger = _CapturingLogger()
+    _red_tick(state, 1001.0, runner, logger, ledger=ledger)
+    to_master = _sent_text(runner, "=cc-master:0.0")
+    assert len(to_master) == 1
+    assert "no tmux session" in to_master[0] and "#412" in to_master[0]
+    assert _sent_text(runner, "=cc-2build:0.0") == []
+    assert ledger["escalate:412:abc1234def5678"].source == "worker-poke-ineffective"
+    assert not [f for e, f in logger.infos if f.get("reason") == "seat-not-idle-after-poke"]
+
+
+def test_repoke_to_busy_channel_seat_is_skipped(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A channel delivery never reads the pane, so a re-poke must read it first."""
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    poster = _FakeChannelPoster(outcome="delivered")
+    state = {"poke:412:abc1234def5678:1": 100.0}
+    run_once(
+        state,
+        now=1001.0,
+        board_fetcher=lambda: [_channel_worker_pr()],
+        session_resolver=_resolve_build2,
+        runner=_busy_seat_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger={},
+        channel_poster=poster,
+        channel_secret="s3cret",
+    )
+    assert poster.calls == []
+
+
+def test_channel_pokes_are_counted(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    state: dict[str, float] = {}
+    run_once(
+        state,
+        now=100.0,
+        board_fetcher=lambda: [_channel_worker_pr()],
+        session_resolver=_resolve_build2,
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger={},
+        channel_poster=_FakeChannelPoster(outcome="delivered"),
+        channel_secret="s3cret",
+    )
+    assert state["poke:412:abc1234def5678:1"] == 100.0
+
+
+def test_new_head_sha_restarts_poke_count(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    state = {"poke:412:oldsha:1": 100.0, "poke:412:oldsha:2": 1001.0}
+    runner = _idle_runner()
+    _red_tick(state, 1902.0, runner, _NullLogger(), pr=_pr(ci="failure", head_sha="newsha"))
+    assert _sent_text(runner, "=cc-2build:0.0") == ["PR #412 failed CI checks - correct them"]
+    assert _sent_text(runner, "=cc-master:0.0") == []
+
+
+def test_classify_pr_turns_due_poke_into_escalation_past_threshold() -> None:
+    sent = {"poke:412:abc1234def5678:1": 0.0, "poke:412:abc1234def5678:2": 901.0}
+    candidate = classify_pr(
+        _pr(ci="failure"), now=1802.0, sent=sent, master_ttl_s=21600.0, worker_ttl_s=900.0
+    )
+    assert candidate == Candidate(
+        "master", "worker-poke-ineffective", "escalate:412:abc1234def5678", 21600.0
+    )
+
+
+def test_prune_state_keeps_poke_entries_for_open_prs_only() -> None:
+    sent = {"poke:412:sha:1": 100.0, "poke:500:sha:1": 100.0, "escalate:412:sha": 100.0}
+    kept = prune_state(sent, now=200.0, max_ttl_s=21600.0, open_prs=[412])
+    assert kept == {"poke:412:sha:1": 100.0, "escalate:412:sha": 100.0}
+
+
+def test_seeded_negative_without_effectiveness_check_ac1_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """AC-5: remove the poke count and the AC-1 proof must fail."""
+    import pytest
+    import scripts.dispatch.gating_watcher as watcher
+
+    _send_keys_mode(monkeypatch)
+    monkeypatch.setattr(watcher, "_poke_count", lambda _sent, _pr, _sha: 0)
+    with pytest.raises(AssertionError):
+        _assert_ac1_repoke_is_recorded_ineffective()

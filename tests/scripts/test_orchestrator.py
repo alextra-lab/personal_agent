@@ -524,6 +524,7 @@ def _run(
     reconcile=None,
     notify_ledger_path=None,
     head_stall_state=None,
+    seat_turn_reader=None,
 ):
     # Default reconcile reads the tracked ticket's state from the board — a
     # stand-in for "the direct Linear lookup agrees with the board". Tests that
@@ -550,6 +551,7 @@ def _run(
         notify_ledger_path=notify_ledger_path,
         head_stall_state=head_stall_state,
         sleeper=_no_wait,
+        seat_turn_reader=seat_turn_reader,
     )
     return result, persisted
 
@@ -2891,3 +2893,221 @@ def test_no_stall_no_ledger_entries_over_full_cycle(tmp_path: Path) -> None:
         )
     ledger = trigger_ledger.load_ledger(path, _NullLogger())
     assert ledger == {}
+
+
+# --- FRE-1499: seat-turn classification + session binding -------------------
+#
+# Real shapes from the 2026-09-12 incident: the adr seat ended its FRE-1328
+# turn with three questions to the owner and went correctly idle; both it and a
+# genuinely broken seat emitted the same ``in-progress-past-timeout`` stall.
+
+from scripts.dispatch.seat_turn import SeatTurn  # noqa: E402
+
+
+def _turn(
+    state: str,
+    *,
+    session_id: str = "conv-1",
+    question: str | None = None,
+    tickets: frozenset[str] = frozenset({"FRE-786"}),
+) -> SeatTurn:
+    return SeatTurn(session_id, state, question, tickets)  # type: ignore[arg-type]
+
+
+_IN_PROGRESS_BOARD = [_issue("FRE-786", "In Progress", _OPUS)]
+
+
+def _no_pr_runner() -> _RecordingRunner:
+    return _RecordingRunner({"pr": _FakeRunResult(stdout="[]")})
+
+
+def _in_progress_stall_tick(reader, *, record=None, notifier=None, now=100.0, execute=True):  # type: ignore[no-untyped-def]
+    notifier = notifier or _Notifier()
+    state, _ = _run(
+        {"build1": record or _launched_record(session_id="conv-1")},
+        _no_pr_runner(),
+        _IN_PROGRESS_BOARD,
+        now=now,
+        notifier=notifier,
+        stall=60,
+        in_progress_stall=60,
+        execute=execute,
+        seat_turn_reader=reader,
+    )
+    return state, notifier
+
+
+_ADR_QUESTION = "3. **Is the exempt-but-checked finding worth an ADR on its own?**"
+
+
+def _assert_ac3_awaiting_owner_is_distinct(awaiting_reader) -> None:  # type: ignore[no-untyped-def]
+    _, awaiting = _in_progress_stall_tick(awaiting_reader)
+    _, wedged = _in_progress_stall_tick(lambda _s: _turn("mid-turn"))
+    assert [event for event, _ in wedged.events] == ["dispatch_stall"]
+    assert wedged.events[0][1]["reason"] == "in-progress-past-timeout"
+    assert [event for event, _ in awaiting.events] == ["dispatch_awaiting_owner"]
+    assert awaiting.events[0][1]["question"] == _ADR_QUESTION
+
+
+def test_run_once_in_progress_stall_awaiting_owner_is_a_distinct_signal() -> None:
+    """AC-3: a seat that ended its turn with questions is not reported as stalled."""
+    _assert_ac3_awaiting_owner_is_distinct(
+        lambda _s: _turn("awaiting-owner", question=_ADR_QUESTION)
+    )
+
+
+def test_seeded_negative_without_idle_classifier_ac3_fails() -> None:
+    """AC-5: remove the classifier (the reader sees nothing) and the AC-3 proof must fail."""
+    with pytest.raises(AssertionError):
+        _assert_ac3_awaiting_owner_is_distinct(lambda _s: None)
+
+
+def test_in_progress_stall_carries_seat_turn_and_session() -> None:
+    _, notifier = _in_progress_stall_tick(lambda _s: _turn("empty-response"))
+    event, fields = notifier.events[0]
+    assert event == "dispatch_stall"
+    assert fields["seat_turn"] == "empty-response"
+    assert fields["session_id"] == "conv-1"
+
+
+def test_awaiting_owner_and_stall_have_separate_latches() -> None:
+    """Codex #4: a seat first seen mid-turn that later asks the owner still surfaces the ask."""
+    state, first = _in_progress_stall_tick(lambda _s: _turn("mid-turn"))
+    assert [event for event, _ in first.events] == ["dispatch_stall"]
+    state, second = _in_progress_stall_tick(
+        lambda _s: _turn("awaiting-owner", question="Which one?"),
+        record=state["build1"],
+        now=200.0,
+    )
+    assert [event for event, _ in second.events] == ["dispatch_awaiting_owner"]
+    assert state["build1"].awaiting_owner_notified is True
+    _, third = _in_progress_stall_tick(
+        lambda _s: _turn("awaiting-owner", question="Which one?"),
+        record=state["build1"],
+        now=300.0,
+    )
+    assert third.events == []
+
+
+def test_dry_run_never_reads_the_seat() -> None:
+    """Codex #7: a dry-run tick must not read transcripts or bind sessions."""
+    calls: list[str] = []
+
+    def reader(stream: str) -> SeatTurn:
+        calls.append(stream)
+        return _turn("awaiting-owner", question="Which one?")
+
+    state, notifier = _in_progress_stall_tick(
+        reader, record=_launched_record(session_id=None), execute=False
+    )
+    assert calls == []
+    assert state["build1"].session_id is None
+    assert "dispatch_awaiting_owner" not in [event for event, _ in notifier.events]
+
+
+def test_run_once_binds_session_to_dispatched_transcript() -> None:
+    """AC-4: the record names the conversation that received the dispatched ticket."""
+    state, notifier = _in_progress_stall_tick(
+        lambda _s: _turn("mid-turn", session_id="conv-9"),
+        record=_launched_record(session_id=None),
+        now=10.0,
+    )
+    assert state["build1"].session_id == "conv-9"
+    assert notifier.events == []
+
+
+def test_run_once_surfaces_session_mismatch_once() -> None:
+    """AC-4: a seat now in a conversation that was never given the ticket is surfaced."""
+    reader = lambda _s: _turn("ended", session_id="conv-2", tickets=frozenset({"FRE-1"}))  # noqa: E731
+    state, first = _in_progress_stall_tick(reader, now=10.0)
+    assert [event for event, _ in first.events] == ["dispatch_session_mismatch"]
+    fields = first.events[0][1]
+    assert fields["bound"] is True
+    assert fields["expected_session_id"] == "conv-1"
+    assert fields["seat_session_id"] == "conv-2"
+    assert state["build1"].session_mismatch_notified is True
+    _, second = _in_progress_stall_tick(reader, record=state["build1"], now=20.0)
+    assert second.events == []
+
+    # The seat is back in the dispatched conversation: the latch clears.
+    state, _ = _in_progress_stall_tick(
+        lambda _s: _turn("mid-turn", session_id="conv-1"), record=state["build1"], now=30.0
+    )
+    assert state["build1"].session_mismatch_notified is False
+
+
+def test_run_once_rebinds_on_reseed_of_same_ticket() -> None:
+    state, notifier = _in_progress_stall_tick(
+        lambda _s: _turn("mid-turn", session_id="conv-2"), now=10.0
+    )
+    assert state["build1"].session_id == "conv-2"
+    assert notifier.events == []
+
+
+def test_run_once_surfaces_session_never_bound_past_stall_timeout() -> None:
+    """Codex #5: a launch whose seat never shows the ticket is surfaced, not left unbound."""
+    reader = lambda _s: _turn("ended", session_id="conv-3", tickets=frozenset({"FRE-1"}))  # noqa: E731
+    notifier = _Notifier()
+    _run(
+        {"build1": _launched_record(session_id=None)},
+        _no_pr_runner(),
+        _IN_PROGRESS_BOARD,
+        now=100.0,
+        stall=60,
+        notifier=notifier,
+        seat_turn_reader=reader,
+    )
+    assert [event for event, _ in notifier.events] == ["dispatch_session_mismatch"]
+    assert notifier.events[0][1]["bound"] is False
+    assert notifier.events[0][1]["seat_session_id"] == "conv-3"
+
+
+def test_unbound_session_inside_stall_timeout_is_quiet() -> None:
+    reader = lambda _s: _turn("mid-turn", session_id="conv-3", tickets=frozenset())  # noqa: E731
+    _, notifier = _in_progress_stall_tick(
+        reader, record=_launched_record(session_id=None), now=10.0
+    )
+    assert notifier.events == []
+
+
+def test_state_file_without_new_fields_still_loads(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    path = tmp_path / "dispatch_state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "adr": {
+                    "stream": "adr",
+                    "ticket": "FRE-1328",
+                    "phase": "launched",
+                    "launched_at": 1.0,
+                    "session_id": None,
+                    "run_confirmed": False,
+                    "stall_notified": False,
+                    "in_progress_stall_notified": True,
+                    "attempts": 0,
+                }
+            }
+        )
+    )
+    record = load_state(path)["adr"]
+    assert record.awaiting_owner_notified is False
+    assert record.session_mismatch_notified is False
+
+
+def test_main_wires_the_seat_turn_reader(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    import scripts.dispatch.orchestrator as orch
+
+    monkeypatch.setattr(orch, "load_linear_key", lambda: "key")
+    monkeypatch.setattr(orch, "fetch_board", lambda stream, key: [])
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    seen: list[object] = []
+    original_run_once = orch.run_once
+
+    def _spy_run_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs.get("seat_turn_reader"))
+        return original_run_once(*args, **kwargs)
+
+    monkeypatch.setattr(orch, "run_once", _spy_run_once)
+    rc = main(["--once", "--state-file", str(tmp_path / "s.json"), "--streams", "build1"])
+    assert rc == 0
+    assert seen and callable(seen[0])

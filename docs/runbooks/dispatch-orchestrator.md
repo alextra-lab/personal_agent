@@ -137,7 +137,32 @@ systemctl status seshat-dispatch-orchestrator
   session (`claude.ai/code` / the mobile app, or locally `tmux attach -t
   cc-<stream>`), answer any waiting prompt, or investigate a crash. The
   orchestrator never advances on silence — it advances only on the durable
-  open-PR + `In Review` evidence.
+  open-PR + `In Review` evidence. Since FRE-1499 an in-progress stall carries
+  `seat_turn` — how the seat's current conversation ended its last turn, read
+  from its transcript: `mid-turn` (a tool call or prompt with no reply —
+  look for a crash or a hang), `empty-response` (the seat answers with empty
+  turns — check its model), `ended` (it stopped with prose and no question), or
+  `unknown`. It also carries the bound `session_id`.
+- **`dispatch_awaiting_owner`** (FRE-1499) → the ticket is past its in-progress
+  grace, and the seat ended its last turn with a question to the owner (or an
+  unanswered `AskUserQuestion`). The seat is **not** stalled — it is doing what
+  its contract says. The entry carries the question line. Relay it to the owner.
+  Do **not** reset the seat: that destroys the deliberation the owner has not
+  answered yet. Its latch is separate from the stall latch, so a seat first
+  seen mid-turn that later stops to ask still surfaces the ask.
+- **`dispatch_session_mismatch`** (FRE-1499) → the seat's current conversation
+  is not the one this ticket was dispatched into. The orchestrator binds each
+  launched record's `session_id` to the seat's **transcript id** (the newest
+  `*.jsonl` for the worktree), from the conversation whose `/build <ticket>` or
+  `/adr <ticket>` seed row names the ticket. It does not use the Remote Control
+  bridge id (`session_…`): that id stays the same across `/clear`, so it cannot
+  tell one ticket's conversation from the next. `bound=true` means the seat left
+  the bound conversation for one that never received the ticket (a manual
+  `/clear`, a restart). `bound=false` means no conversation on the seat named
+  the ticket within the pre-pickup grace (`--stall-timeout`). The entry carries
+  `seat_session_id` and `seat_tickets`. Attach to the seat and check what it is
+  working on. A re-seed of the same ticket in a new conversation is not a
+  mismatch — it rebinds silently (`dispatch_session_confirmed` in the log).
 - **`dispatch_seat_wedged`** (FRE-922/FRE-1077) → this **seat** shows the
   suspected-wedge signature: Remote Control reports `busy` while the pane is
   idle — typically an orphaned `run_in_background` poller (CC #61568) holding
@@ -241,6 +266,27 @@ never merges, deploys, closes tickets, or writes the owner console).
   the PR branch (`fre-<id>`) → the ticket's `stream:*` label →
   `cc-build`/`cc-build2`/`cc-adrs`. The ack markers prime-worker already posts
   are the dedup key.
+
+**Red-CI poke effectiveness and escalation (FRE-1499).** A red-CI poke that
+changes nothing is now detected. The watcher records every delivered poke as a
+dedup-store entry `poke:<pr>:<sha>:<n>`, for both transports. When the next
+poke at the **same head SHA** is due, the watcher reads the worker pane first
+(also for a channel seat, whose delivery never reads it):
+- **Busy** → the seat is working. Nothing is sent or written (`gating_skip
+  reason=seat-not-idle-after-poke`).
+- **Idle** → the last poke did nothing: no new commit, no ack, seat idle again.
+  The watcher logs `gating_poke_ineffective` with `consecutive_pokes`.
+After `--worker-poke-escalation` pokes at one SHA (default **2**), the due poke
+is replaced by a distinct message to `cc-master` (ledger source
+`worker-poke-ineffective`, dedup key `escalate:<pr>:<sha>`, master TTL 6 h). It
+names the PR, the SHA, the poke count and the seat, and says the watcher stopped
+poking that seat. No further poke goes to the seat at that SHA while the
+escalation is inside its TTL. A new commit changes the SHA and restarts the
+count. This closes the 2026-09-12 incident shape: build2 answered 42 identical
+pokes on PR #1144 with `(No response.)`, and nothing noticed for nine hours.
+When master gets this message, attach to the seat and read its last turns
+(`scripts.dispatch.seat_turn` classifies them). An `empty-response` seat is
+usually on the wrong model.
 
 **Master ← context pressure (FRE-848).** After the PR-trigger loop, the watcher
 reads master's own live context% in-process (imports `resolve_jsonl`/
@@ -380,6 +426,7 @@ duplicating what every call site already logged, reaching no one. It is now
 `_trigger_ledger_notifier`, which surfaces the same 7 events (`dispatch_blocked`,
 `dispatch_stall`, `dispatch_delivery_exhausted`, `dispatch_seat_wedged`,
 `dispatch_seat_delivery_failing`, `dispatch_held_too_long`, and the new `dispatch_head_stalled`)
+— plus, since FRE-1499, `dispatch_awaiting_owner` and `dispatch_session_mismatch` —
 as entries in **`telemetry/dispatch_notify_ledger.json`**, reusing `trigger_ledger.py`'s data
 model and CLI but through a **separate file** from `trigger_ledger.json` above — a second
 continuous writer to that file would race `gating_watcher.py` (no locking exists anywhere in
@@ -394,7 +441,9 @@ step 5b). Two differences from the trigger ledger above:
 - **Entries are consumed automatically, by the orchestrator, the tick the underlying condition
   ends** — not by the owner. A `dispatch_stall` entry closes when the decision engine stops
   saying `"stall"` for that stream (confirmed run, terminal clear, or the ticket's own grace
-  period); a `dispatch_seat_wedged`/`dispatch_head_stalled` entry closes when its counter resets;
+  period), and a `dispatch_awaiting_owner` entry closes the same way; a
+  `dispatch_session_mismatch` entry closes when the seat is back in a conversation that names the
+  ticket, or when the record clears; a `dispatch_seat_wedged`/`dispatch_head_stalled` entry closes when its counter resets;
   `dispatch_blocked`/`dispatch_seat_delivery_failing`/`dispatch_held_too_long` close on the next
   qualifying tick. So anything still listed under `--unconsumed` is a condition that is **true
   right now**, not history — there is nothing to acknowledge or manually clear.

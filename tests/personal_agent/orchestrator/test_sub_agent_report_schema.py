@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from personal_agent.llm_client.models import Dialect
-from personal_agent.orchestrator.sub_agent import run_sub_agent
+from personal_agent.orchestrator.sub_agent import _landing_response_format, run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentSpec
 from personal_agent.orchestrator.worker_types import WorkerType
 
@@ -439,3 +439,21 @@ class TestAC4FalseDialectReportsAsText:
 
         warnings = [e for e in logs if e.get("event") == "structured_landing_unsupported_declared"]
         assert len(warnings) == 1
+
+
+class TestFRE1500ResponseFormatIsJSONSerializable:
+    """FRE-1500 — a nested MappingProxyType survived a shallow ``dict()`` copy.
+
+    AC-1: ``json.dumps(_landing_response_format())`` succeeds.
+    AC-3: the seeded negative — a shallow copy of the same structure still
+    raises the mappingproxy ``TypeError``, so this test would have caught it.
+    """
+
+    def test_landing_response_format_is_json_serializable(self) -> None:
+        json.dumps(_landing_response_format())
+
+    def test_shallow_dict_copy_of_the_underlying_mapping_still_fails(self) -> None:
+        from personal_agent.orchestrator.worker_types import WORKER_REPORT_RESPONSE_FORMAT
+
+        with pytest.raises(TypeError, match="mappingproxy"):
+            json.dumps(dict(WORKER_REPORT_RESPONSE_FORMAT))

@@ -801,3 +801,25 @@ touch that branch.
 **What this changes for FRE-1487.** Nothing in its artifact. Until FRE-1484 lands, the study's
 turns run with no pause and no trailer; the amended default produces that same synthesised
 answer plus the trailer. The deploy coupling master flagged on FRE-1487 that morning is removed.
+
+### 2026-09-13 — Accepted (two stop reasons added by FRE-1501)
+**Changed By:** master, on merging FRE-1501 (`5342e698`, PR #1158)
+**Reason:** **This ADR stays Accepted, and no decision changes.** FRE-1501 adds two terminal
+paths to D3. Both follow D3's rule: every terminal path declares a stop reason and attempts a
+landing. They are recorded here because D3's terminal-path table does not list them, and a
+reader who uses the table as the full set of stop reasons would miss them.
+
+| Stop reason | When it fires | What the worker does |
+|---|---|---|
+| `tool_call_truncated` | A round returns tool calls with `finish_reason == "length"`: the model generated to its token ceiling inside a tool-call argument. | The cut calls are not run and do not enter history. The forced synthesis lands the report, opening with "Your last tool call was cut off at the token limit and was not run." `success` is `False`, per D3. |
+| `origin_error` | A round call or a landing call raises `LLMServerError`: the model server answered 5xx after the client's own retries. A connection error stays `error`. | The worker returns its ledger or narration. The dispatcher sends no gap replacement and skips every queued sibling, with skip reason `origin_error`. |
+
+**Why the second one reaches the dispatcher.** On 2026-09-12, one worker's cut tool call made
+llama.cpp answer 500 (`common/chat.cpp`, `common_chat_msgs_parse_oaicompat`), and the origin then
+answered 503 to every caller for about a minute. D4's skipped-task path previously had one
+reason, the turn budget. It now has two. The skip reason is rendered in the synthesis note, the
+deadline fallback and `stop_and_show`.
+
+**Unchanged:** the rule that `success` is `True` only for `completed` with a non-empty report,
+D4's pause predicate (`report_kind` in `{ledger, narration}` or a skipped task), D6's cache form
+and AC-8's three values.

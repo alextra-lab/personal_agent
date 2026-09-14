@@ -486,7 +486,8 @@ services:
       # child therefore runs as `nobody` with an allowlisted environment: it cannot read any
       # root process's environ, and it cannot write root-owned paths such as
       # /app/agent_workspace (the `write` tool still can). The gateway must run as root to drop
-      # privileges; if it does not, eval bash refuses. Proof:
+      # privileges; if it does not, eval bash refuses. The drop runs through /usr/bin/setpriv,
+      # because uvloop rejects the spawn identity kwargs (FRE-1518). Proof, on uvloop:
       # scripts/eval/probe_bash_credential_isolation.py.
       AGENT_APPROVAL_UI_ENABLED: "false"
       AGENT_CLOUD_WEEKLY_BUDGET_USD: "50.0"

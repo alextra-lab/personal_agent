@@ -27,9 +27,12 @@ Security model
   read a credential: a non-root process cannot open ``/proc/<pid>/environ`` of any
   root process (the gateway, PID 1, health checks, sibling children), and the
   kernel clears capabilities on the uid change. If the gateway is not root it
-  cannot drop privileges, so eval bash refuses and spawns nothing.
+  cannot drop privileges, so eval bash refuses and spawns nothing. The identity
+  change runs through ``setpriv`` because the served event loop (uvloop) rejects the
+  ``user``/``group``/``extra_groups`` spawn kwargs (FRE-1518).
 
-FRE-261 Step 4 · FRE-283 (real shell contract) · FRE-1505 (eval credential isolation).
+FRE-261 Step 4 · FRE-283 (real shell contract) · FRE-1505 (eval credential isolation) ·
+FRE-1518 (isolation on the served event loop).
 """
 
 from __future__ import annotations
@@ -85,6 +88,19 @@ EVAL_CHILD_ENV_NAMES: frozenset[str] = frozenset(
     {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "VIRTUAL_ENV"}
 )
 _EVAL_CHILD_HOME = "/tmp"
+# setpriv (util-linux) changes identity and then execs bash, so the spawned PID is bash.
+# All capability sets are cleared, and no_new_privs stops a setuid binary regaining root.
+EVAL_CHILD_SETPRIV_ARGV: tuple[str, ...] = (
+    "/usr/bin/setpriv",
+    f"--reuid={EVAL_CHILD_UID}",
+    f"--regid={EVAL_CHILD_GID}",
+    "--clear-groups",
+    "--inh-caps=-all",
+    "--ambient-caps=-all",
+    "--bounding-set=-all",
+    "--no-new-privs",
+    "--",
+)
 
 # ---------------------------------------------------------------------------
 # ToolDefinition
@@ -479,9 +495,9 @@ async def bash_executor(
             "command": command,
         }
     child_env = eval_child_env() if eval_isolation else None
-    child_uid = EVAL_CHILD_UID if eval_isolation else None
-    child_gid = EVAL_CHILD_GID if eval_isolation else None
-    child_groups: list[int] | None = [] if eval_isolation else None
+    # setpriv, not the user/group/extra_groups kwargs: uvloop (the served loop)
+    # rejects those kwargs even when they are None (FRE-1518).
+    child_prefix = EVAL_CHILD_SETPRIV_ARGV if eval_isolation else ()
 
     log.info(
         "bash_started",
@@ -501,15 +517,13 @@ async def bash_executor(
     _flags = ("-o", "pipefail", "-c")
     try:
         proc = await asyncio.create_subprocess_exec(
+            *child_prefix,
             _shell,
             *_flags,
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=child_env,
-            user=child_uid,
-            group=child_gid,
-            extra_groups=child_groups,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(

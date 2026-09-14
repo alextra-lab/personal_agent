@@ -12,6 +12,13 @@
 #                    deployments record the served id, cloud ones the litellm id
 #                    (llm_client/litellm_client.py, `_telemetry_model`). The runner requires
 #                    it on every primary call of every turn
+#   fan_mode, fan_daemon_socket, thermal_snapshot
+#                    owner decision 2026-09-14: the MTPLX arms run with --fan-mode smart when
+#                    the thermalforge daemon is installed, otherwise on Apple auto. For arms 2
+#                    and 3 these change per session, so they read TBD here and the operator
+#                    passes each session's values from slm_server's ready message, relayed by
+#                    master: --session-fact fan_mode=... --session-fact fan_daemon_socket=...
+#                    --session-fact thermal_snapshot=... The runner marks them UNVERIFIED
 #
 # Sources, 2026-09-14:
 #   catalog  config/models.yaml on main (arms 1 and 4) and catalog PR #1173 at 728a5c69
@@ -34,6 +41,9 @@ arms:
     context_length: 262144 in the catalog; context_window_max_tokens 48000 binds first (catalog note)
     reasoning: "default mode: temperature 1.0, reasoning_effort medium; worker mode: reasoning_effort none (UNVERIFIED, relay of the catalog)"
     launch_flags: not applicable (managed endpoint)
+    fan_mode: n/a (cloud)
+    fan_daemon_socket: n/a (cloud)
+    thermal_snapshot: n/a (cloud)
   mtplx_27b:
     order_label: arm 2
     deployment_key: qwen3.8-27b-mtplx
@@ -46,6 +56,9 @@ arms:
     context_length: 131072
     reasoning: "primary and planner think, workers enable_thinking false (UNVERIFIED)"
     launch_flags: "mtplx 2.11.2, --depth 3, --reasoning-effort medium, --preserve-thinking off, --context-window 131072, serial scheduler, 1 slot (UNVERIFIED)"
+    fan_mode: TBD
+    fan_daemon_socket: TBD
+    thermal_snapshot: TBD
   mtplx_flash_next:
     order_label: arm 3
     deployment_key: qwen3.8-flash-next-mtplx
@@ -58,6 +71,9 @@ arms:
     context_length: 131072
     reasoning: "primary and planner think, workers enable_thinking false (UNVERIFIED)"
     launch_flags: "mtplx 2.11.2, --depth 3, --reasoning-effort medium, --preserve-thinking off, --context-window 131072, serial scheduler, 1 slot (UNVERIFIED)"
+    fan_mode: TBD
+    fan_daemon_socket: TBD
+    thermal_snapshot: TBD
   llamacpp_flash_next:
     order_label: arm 4
     deployment_key: qwen3.8-flash-next
@@ -70,3 +86,6 @@ arms:
     context_length: 131072
     reasoning: "primary and planner think, workers enable_thinking false; the router injects chat_template_kwargs {enable_thinking: true, preserve_thinking: false, reasoning_effort: medium} when a request carries none (UNVERIFIED)"
     launch_flags: "3 slots, --kv-unified, MTP draft depth 1 per ADR-0152 Appendix A1 (UNVERIFIED)"
+    fan_mode: apple_auto (UNVERIFIED)
+    fan_daemon_socket: not applicable (UNVERIFIED)
+    thermal_snapshot: not recorded for this arm (master asked for arms 2 and 3 only)

@@ -10,6 +10,7 @@ import pytest
 from scripts.eval.fre1517 import classify
 from scripts.eval.fre1517.session_runner import (
     TRAILER_MARKER,
+    apply_session_facts,
     completed_before,
     load_arm,
     resume_state,
@@ -25,10 +26,26 @@ def test_completed_before_compares_timestamps_and_keeps_absence_undecided() -> N
     assert completed_before(None, "2026-09-20T10:00:05Z") is None
 
 
-def test_every_arm_is_recorded() -> None:
-    """Master 2026-09-14: unconfirmed values are UNVERIFIED, so no arm may still read TBD."""
+PER_SESSION_FIELDS = {"fan_mode", "fan_daemon_socket", "thermal_snapshot"}
+
+
+def test_every_arm_is_recorded_except_per_session_fields() -> None:
+    """Unconfirmed static values are UNVERIFIED; only relayed per-session fields read TBD."""
     for name in ("ovh_27b", "mtplx_27b", "mtplx_flash_next", "llamacpp_flash_next"):
-        assert tbd_fields(load_arm(name)) == []
+        assert set(tbd_fields(load_arm(name))) <= PER_SESSION_FIELDS, name
+    assert tbd_fields(load_arm("ovh_27b")) == []
+
+
+def test_session_facts_fill_the_mtplx_fields_and_mark_them_relayed() -> None:
+    """Owner decision 2026-09-14: fan mode and thermal state are filled per session."""
+    arm = apply_session_facts(
+        load_arm("mtplx_27b"),
+        ["fan_mode=smart", "fan_daemon_socket=present", "thermal_snapshot=cpu 61C"],
+    )
+    assert tbd_fields(arm) == []
+    assert arm["fan_mode"] == "smart (UNVERIFIED, relayed)"
+    with pytest.raises(ValueError, match="existing field"):
+        apply_session_facts(load_arm("mtplx_27b"), ["no_such_field=x"])
 
 
 def test_outcome_delivered_when_every_condition_holds() -> None:

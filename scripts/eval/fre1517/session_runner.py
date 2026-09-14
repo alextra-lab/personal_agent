@@ -111,6 +111,28 @@ def load_arm(name: str) -> dict[str, Any]:
     return {"arm": name, **arms[name]}
 
 
+def apply_session_facts(arm: dict[str, Any], facts: list[str]) -> dict[str, Any]:
+    """Fill per-session manifest fields from the operator's relayed values.
+
+    Args:
+        arm: One arm manifest entry.
+        facts: ``key=value`` strings, from slm_server's ready message as relayed by master.
+
+    Returns:
+        A copy of the entry with each value set and marked UNVERIFIED, because it is relayed.
+
+    Raises:
+        ValueError: If a fact is not ``key=value`` or names a field the manifest lacks.
+    """
+    filled = dict(arm)
+    for fact in facts:
+        key, sep, value = fact.partition("=")
+        if not sep or key not in arm:
+            raise ValueError(f"session fact {fact!r} must be key=value for an existing field")
+        filled[key] = f"{value} (UNVERIFIED, relayed)"
+    return filled
+
+
 def tbd_fields(arm: dict[str, Any]) -> list[str]:
     """Name the manifest fields that are still unrecorded.
 
@@ -381,7 +403,11 @@ async def run(args: argparse.Namespace) -> int:
         0 when the session completes, 2 on a refused start, 3 on a failed turn, 4 at the
         deadline, 5 on an arm mismatch.
     """
-    arm = load_arm(args.arm)
+    try:
+        arm = apply_session_facts(load_arm(args.arm), args.session_fact)
+    except ValueError as exc:
+        sys.stderr.write(f"refused: {exc}\n")
+        return 2
     script = load_script(args.script)
     out_dir = HERE / "out" / args.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -543,6 +569,12 @@ def main() -> int:
     p.add_argument("--run-id", required=True)
     p.add_argument("--min-budget-usd", type=float, default=5.0)
     p.add_argument("--deadline", default="", help="ISO-8601 UTC; start no new turn at or after it")
+    p.add_argument(
+        "--session-fact",
+        action="append",
+        default=[],
+        help="key=value for a per-session manifest field (fan_mode, fan_daemon_socket, thermal_snapshot)",
+    )
     p.add_argument(
         "--build-root",
         default=str(repo_root()),

@@ -158,6 +158,15 @@ and the notes (Phase 4).
   (llama.cpp) last. A8's per-script rotation is dropped, because its reason, the shared cloud
   budget, is moot (USD 0.08 of 50 spent before arm 1). The arm order is therefore confounded
   with time and with the Mac's thermal history.
+- **ESPN refuses browser-like User-Agents from this server.** Master measured it from the eval
+  gateway on 2026-09-14: Python `urllib` with its default User-Agent gets HTTP 200 (225,941
+  bytes), and `User-Agent: Mozilla/5.0` gets HTTP 403. A helper that fails this way failed on
+  the request the model wrote. That is model behaviour, and it is scored.
+- **`write` and `bash` run as different users in the eval gateway.** `write` creates root-owned
+  644 files in root-owned `/app/agent_workspace`. `bash` runs as `nobody` (FRE-1518), so it can
+  read and run those files but cannot edit them in place. The model can rewrite a file with
+  `write` or work in `/tmp`. Production `bash` runs as root, so this difference exists only in
+  the eval gateway, and it is the same on every arm.
 - **NFL week 11 of 2026 falls in late November.** Injury reports for it do not exist on the run
   days. A reply that invents them is scored **Fabricated** where a back-reference or a grounding
   item covers it.

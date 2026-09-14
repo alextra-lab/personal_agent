@@ -29,6 +29,15 @@ def test_ttft_probe_prompt_starts_with_its_nonce_and_scales_with_size() -> None:
     assert abs(len(large) - 32000 * CHARS_PER_TOKEN) < 100
 
 
+def test_archive_label_is_path_safe() -> None:
+    """The label becomes a directory inside the eval container, so no separator may pass."""
+    from scripts.eval.fre1517.session_runner import archive_label
+
+    label = archive_label("run/../x", "mtplx_27b", "s2 tool", 1)
+    assert "/" not in label and " " not in label
+    assert label.startswith("run_.._x.mtplx_27b.s2_tool.r1.")
+
+
 def test_completed_before_compares_timestamps_and_keeps_absence_undecided() -> None:
     """Master 2026-09-14: record whether the previous turn had consolidated when this one began."""
     assert completed_before("2026-09-20T10:00:00Z", "2026-09-20T10:00:05Z") is True

@@ -70,6 +70,11 @@ from scripts.eval.fre1337_intent_probe.behavioral import (
     fetch_latest_event,
     wait_for_event_settle,
 )
+from scripts.eval.fre1337_intent_probe.substrate import (
+    EVAL_NEO4J_URI,
+    fetch_originating_session_ids,
+    wipe_eval_graph,
+)
 from scripts.eval.fre1498.runner import (
     EVAL_CHAT,
     _es,
@@ -349,6 +354,73 @@ async def _settle_session(
     )
 
 
+TREATMENT_CONTAINER = "cloud-sim-seshat-gateway-treatment"
+#: The files consolidation scans (captains_log/capture.py, _get_captures_dir). The directory lives
+#: on the seshat_captures_eval volume, which survives make eval-infra-down.
+CAPTURES_DIR = "/app/telemetry/captains_log/captures"
+#: Outside the scan path. Files are kept, not deleted: AC-4 reads user_message from captures.
+ARCHIVE_DIR = "/app/telemetry/captains_log/archive-fre1517"
+
+
+def archive_label(run_id: str, arm: str, script: str, replicate: int) -> str:
+    """A path-safe directory name for the captures archived before one session.
+
+    Args:
+        run_id: The run id.
+        arm: The arm key.
+        script: The script name.
+        replicate: The replicate number.
+
+    Returns:
+        ``<run_id>.<arm>.<script>.r<replicate>.<UTC time>``, with every character outside
+        ``[A-Za-z0-9._-]`` replaced by ``_``.
+    """
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    raw = f"{run_id}.{arm}.{script}.r{replicate}.{stamp}"
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in raw)
+
+
+def _archive_capture_files(label: str) -> int:
+    """Move every capture file out of consolidation's scan path, in the eval gateway only."""
+    script = (
+        f'dest="{ARCHIVE_DIR}/{label}"; n=0; '
+        f'for f in {CAPTURES_DIR}/*/*.json; do [ -e "$f" ] || continue; '
+        'd="$dest/$(basename "$(dirname "$f")")"; mkdir -p "$d" && mv "$f" "$d/" && n=$((n+1)); '
+        "done; echo $n"
+    )
+    out = subprocess.run(
+        ["docker", "exec", TREATMENT_CONTAINER, "sh", "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return int(out.strip().splitlines()[-1])
+
+
+async def _isolation_gate(driver: Any, label: str) -> dict[str, Any]:
+    """Archive earlier captures, wipe the eval graph, and require it to be empty (AC-3).
+
+    A graph wipe alone does not isolate a session: consolidation replays every capture file
+    whose ``:Turn`` node is missing (second_brain/consolidator.py), so after a wipe it wrote
+    older sessions back into the graph on 2026-09-14. Moving the files first removes that route.
+
+    Raises:
+        RuntimeError: If any node with an ``originating_session_id`` remains after the wipe.
+    """
+    archived = await asyncio.to_thread(_archive_capture_files, label)
+    await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
+    nodes = await fetch_originating_session_ids(driver, uri=EVAL_NEO4J_URI)
+    gate = {
+        "at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "archive": f"{ARCHIVE_DIR}/{label}",
+        "archived_files": archived,
+        "nodes_after_wipe": len(nodes),
+    }
+    if nodes:
+        raise RuntimeError(f"isolation gate: {len(nodes)} nodes remain after the wipe: {gate}")
+    return gate
+
+
 async def _sample_in_flight(es_async: httpx.AsyncClient, peak: dict[str, int]) -> None:
     """Record the most local model calls seen in flight at once during a turn.
 
@@ -445,6 +517,14 @@ async def run(args: argparse.Namespace) -> int:
             fingerprint = (
                 (await http.get(f"{EVAL_CHAT}/health", timeout=10)).json().get("build_fingerprint")
             )
+            if session_id is None:
+                label = archive_label(args.run_id, args.arm, args.script, args.replicate)
+                try:
+                    preflight["isolation_gate"] = await _isolation_gate(driver, label)
+                except (RuntimeError, subprocess.CalledProcessError) as exc:
+                    sys.stderr.write(f"refused: {exc}\n")
+                    return 6
+                sys.stdout.write(f"isolation gate: {preflight['isolation_gate']}\n")
             for turn in turns:
                 if args.deadline and datetime.now(UTC) >= datetime.fromisoformat(args.deadline):
                     sys.stderr.write(f"deadline reached before turn {turn['n']}\n")

@@ -12,13 +12,11 @@
 #                    deployments record the served id, cloud ones the litellm id
 #                    (llm_client/litellm_client.py, `_telemetry_model`). The runner requires
 #                    it on every primary call of every turn
-#   fan_mode, fan_daemon_socket, thermal_snapshot
-#                    owner decision 2026-09-14: the MTPLX arms run with --fan-mode smart when
-#                    the thermalforge daemon is installed, otherwise on Apple auto. For arms 2
-#                    and 3 these change per session, so they read TBD here and the operator
-#                    passes each session's values from slm_server's ready message, relayed by
-#                    master: --session-fact fan_mode=... --session-fact fan_daemon_socket=...
-#                    --session-fact thermal_snapshot=... The runner marks them UNVERIFIED
+#   fan_mode         owner decision 2026-09-14 17:45 UTC, relayed: fans stay on Apple auto for
+#                    the whole study
+#   thermal_snapshot changes per MTPLX session, so it reads TBD on arms 2 and 3. The operator
+#                    passes each session's value from slm_server's ready message, relayed by
+#                    master: --session-fact thermal_snapshot=... The runner marks it UNVERIFIED
 #
 # Sources, 2026-09-14:
 #   catalog  config/models.yaml on main (arms 1 and 4) and catalog PR #1173 at 728a5c69
@@ -42,7 +40,6 @@ arms:
     reasoning: "default mode: temperature 1.0, reasoning_effort medium; worker mode: reasoning_effort none (UNVERIFIED, relay of the catalog)"
     launch_flags: not applicable (managed endpoint)
     fan_mode: n/a (cloud)
-    fan_daemon_socket: n/a (cloud)
     thermal_snapshot: n/a (cloud)
   mtplx_27b:
     order_label: arm 2
@@ -56,8 +53,7 @@ arms:
     context_length: 131072
     reasoning: "primary and planner think, workers enable_thinking false (UNVERIFIED)"
     launch_flags: "mtplx 2.11.2, --depth 3, --reasoning-effort medium, --preserve-thinking off, --context-window 131072, serial scheduler, 1 slot (UNVERIFIED)"
-    fan_mode: TBD
-    fan_daemon_socket: TBD
+    fan_mode: apple_auto (UNVERIFIED)
     thermal_snapshot: TBD
   mtplx_flash_next:
     order_label: arm 3
@@ -71,8 +67,7 @@ arms:
     context_length: 131072
     reasoning: "primary and planner think, workers enable_thinking false (UNVERIFIED)"
     launch_flags: "mtplx 2.11.2, --depth 3, --reasoning-effort medium, --preserve-thinking off, --context-window 131072, serial scheduler, 1 slot (UNVERIFIED)"
-    fan_mode: TBD
-    fan_daemon_socket: TBD
+    fan_mode: apple_auto (UNVERIFIED)
     thermal_snapshot: TBD
   llamacpp_flash_next:
     order_label: arm 4
@@ -87,5 +82,4 @@ arms:
     reasoning: "primary and planner think, workers enable_thinking false; the router injects chat_template_kwargs {enable_thinking: true, preserve_thinking: false, reasoning_effort: medium} when a request carries none (UNVERIFIED)"
     launch_flags: "3 slots, --kv-unified, MTP draft depth 1 per ADR-0152 Appendix A1 (UNVERIFIED)"
     fan_mode: apple_auto (UNVERIFIED)
-    fan_daemon_socket: not applicable (UNVERIFIED)
     thermal_snapshot: not recorded for this arm (master asked for arms 2 and 3 only)

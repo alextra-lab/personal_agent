@@ -573,7 +573,7 @@ def main() -> int:
         "--session-fact",
         action="append",
         default=[],
-        help="key=value for a per-session manifest field (fan_mode, fan_daemon_socket, thermal_snapshot)",
+        help="key=value for a per-session manifest field, e.g. thermal_snapshot=... on an MTPLX arm",
     )
     p.add_argument(
         "--build-root",

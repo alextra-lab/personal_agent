@@ -26,7 +26,7 @@ def test_completed_before_compares_timestamps_and_keeps_absence_undecided() -> N
     assert completed_before(None, "2026-09-20T10:00:05Z") is None
 
 
-PER_SESSION_FIELDS = {"fan_mode", "fan_daemon_socket", "thermal_snapshot"}
+PER_SESSION_FIELDS = {"thermal_snapshot"}
 
 
 def test_every_arm_is_recorded_except_per_session_fields() -> None:
@@ -37,13 +37,11 @@ def test_every_arm_is_recorded_except_per_session_fields() -> None:
 
 
 def test_session_facts_fill_the_mtplx_fields_and_mark_them_relayed() -> None:
-    """Owner decision 2026-09-14: fan mode and thermal state are filled per session."""
-    arm = apply_session_facts(
-        load_arm("mtplx_27b"),
-        ["fan_mode=smart", "fan_daemon_socket=present", "thermal_snapshot=cpu 61C"],
-    )
+    """Owner decision 2026-09-14 17:45 UTC: fans stay on Apple auto; thermal state is per session."""
+    assert load_arm("mtplx_27b")["fan_mode"] == "apple_auto (UNVERIFIED)"
+    arm = apply_session_facts(load_arm("mtplx_27b"), ["thermal_snapshot=cpu 61C"])
     assert tbd_fields(arm) == []
-    assert arm["fan_mode"] == "smart (UNVERIFIED, relayed)"
+    assert arm["thermal_snapshot"] == "cpu 61C (UNVERIFIED, relayed)"
     with pytest.raises(ValueError, match="existing field"):
         apply_session_facts(load_arm("mtplx_27b"), ["no_such_field=x"])
 

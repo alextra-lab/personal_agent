@@ -109,8 +109,9 @@ The shape is read from the turn record when verification runs:
   instead, and sub-agent reports live in `ctx.sub_agent_results`, outside `ctx.tool_results`. Both
   paths leave `tool_results_offered` at 0. Shape C must therefore read every tool-call path and
   the expansion record.
-- A HYBRID turn with no admitted source is shape A. Worker findings are uncitable under ADR-0138 D2,
-  and ADR-0149 records that by design.
+- A turn where one or more workers ran, HYBRID or DECOMPOSE, with no admitted source, is shape A.
+  Worker findings are uncitable under ADR-0138 D2, and ADR-0149 records that by design. A turn whose
+  planned workers were all skipped, with no tool call, is shape C: nothing ran.
 - A turn where an arbitrary-code tool and a typed tool both ran is shape B. The typed source is
   citable, and the retry in D3 has something to cite.
 - Memory recalled into the context is not a tool result. A shape C turn can hold memory sources.
@@ -313,9 +314,18 @@ searched", which on shape B is exactly the set of sources the answer used.
 - `_unsourced_assertion_disclosure` gains the shape and the unsettled count, and runs in `enforce`
   as well as `observe`.
 - The ES event already carries `tool_results_offered`, `tool_results_admitted`, `outcomes` and
-  `attempts`, and `_record_grounding` runs on every attempt. No new field is required for the
-  criteria below. `blocking_outcomes` on `grounding_enforcement_decision` must list settled
-  outcomes only.
+  `attempts`, and `_record_grounding` runs on every attempt. `blocking_outcomes` on
+  `grounding_enforcement_decision` must list settled outcomes only.
+- **Shape C is not observable from existing instrumentation.** `tools_used` in the capture holds
+  only dispatched calls, and `hybrid_expansion_start` fires for HYBRID only, before any worker is
+  skipped. So `grounding_verification_completed` gains three fields:
+  - `turn_shape` — `a`, `b` or `c`;
+  - `tool_calls_emitted` — `ctx.tool_iteration_count`, which increments before the malformed,
+    missing-name, loop and dispatch gates;
+  - `sub_agents_ran` — the length of `ctx.sub_agent_results`, for HYBRID and DECOMPOSE alike. A
+    skipped worker is in `ctx.expansion_skipped_tasks` instead and does not count.
+
+  The seeded negatives in AC-5 are what make these fields falsifiable.
 - Acceptance runs in `enforce` go on the eval stack, never on production. The eval gateway must run
   with the production grounding settings passed through.
 
@@ -329,6 +339,10 @@ Production runs `observe`. AC-1 to AC-4, AC-6 and AC-7 are checked on an eval-st
 over a held-out set of one or more turns of each shape, and 20 or more shape B turns. AC-5 is
 checked on that run and on production `observe` turns after deploy. Every bar that is not stated
 here is fixed in the ticket that builds the check, before results are seen.
+
+**Coverage rule.** Capture writing is best effort, and a failure is swallowed. AC-5 and AC-7 join
+each delivered `trace_id` to its record. A delivered turn with no capture or no verification event
+fails the criterion. It never passes because there was nothing to compare.
 
 - **AC-1 — An unsettled statement never triggers a retry and never counts in the note.**
   **Check:** every `grounding_enforcement_decision` event with a retry decision has
@@ -365,12 +379,18 @@ here is fixed in the ticket that builds the check, before results are seen.
 - **AC-5 — The declaration matches the record of the delivered generation.**
   **Check:** for each delivered turn, compare the reply as returned by `/chat` with the last
   `grounding_verification_completed` event for its `trace_id`. The note's failure count equals the
-  count of settled outcomes. The shape sentence matches D1: shape B from the event's
-  `tool_results_admitted`, and shape C only where the turn's capture has empty `tools_used` and no
-  `hybrid_expansion_start` event exists for the `trace_id`. The unsettled count appears exactly when
-  that count is above zero. Seeded negatives: a fully passed turn carries no note, and a turn whose
-  only tool call was malformed declares shape A, not shape C. *Fails if* one delivered turn
-  disagrees with its record on any of the four checks, or either seeded negative fails.
+  count of settled outcomes. The shape sentence matches the event's `turn_shape`, and `turn_shape`
+  matches D1 applied to the event's `tool_results_admitted`, `tool_calls_emitted` and
+  `sub_agents_ran`. The unsettled count appears exactly when a note is shown and the unsettled count
+  is above zero. Seeded negatives:
+  - a fully passed turn carries no note;
+  - a turn whose only tool call has malformed arguments declares shape A;
+  - a DECOMPOSE turn whose workers ran, with no primary tool call, declares shape A;
+  - a HYBRID turn whose planned workers were all skipped, with no primary tool call, declares
+    shape C.
+
+  *Fails if* one delivered turn disagrees with its record on any of these checks, or any seeded
+  negative fails.
 
 - **AC-7 — The declaration never enters the capture.**
   **Check:** for every delivered turn that carries a note in AC-5, the capture's
@@ -433,3 +453,15 @@ was accepted:
   checks that no event has three attempts.
 - The capture exclusion had no check. AC-7 adds it.
 - The production mode claim was unverified. It is now verified from the gateway container.
+
+**Codex review round 2**, scoped to the round-1 delta, confirmed the fixes: `tool_choice="none"`
+reaches every configured primary dialect, shape C is computable from `ctx.tool_iteration_count` and
+the expansion state, the attempt counters are cumulative per turn, and `confounded` is emitted on
+every retried turn. It found two blocking defects, both in AC-5:
+- The shape C observable was wrong. `tools_used` omits undispatched calls, and
+  `hybrid_expansion_start` misses DECOMPOSE and fires before workers are skipped. The event now gains
+  `turn_shape`, `tool_calls_emitted` and `sub_agents_ran`, and AC-5 adds three seeded negatives.
+- AC-5 required an unsettled count on turns that D2 gives no note. AC-5 now requires it only when a
+  note is shown.
+
+It also found that captures are best effort. The coverage rule now makes a missing record a failure.

@@ -63,7 +63,7 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -153,6 +153,113 @@ async def wait_for_gateway_idle(
     return round(asyncio.get_event_loop().time() - t0, 1)
 
 
+#: FRE-1517 (master, 2026-09-14): between turns of one session, the next turn waits only until
+#: no local model call is in flight, then this fixed gap. The owner's next turn never waits for
+#: global quiet, so a turn that starts before the previous turn's extraction settles is the
+#: production condition, not a defect.
+_IN_SESSION_GAP_S = 10.0
+
+#: A started local call older than this does not count as in flight. It bounds the wait when a
+#: completed event is lost — Elasticsearch counts are provisional (FRE-1051).
+_IN_FLIGHT_LOOKBACK_S = 3600.0
+
+#: Hard cap on one in-session wait.
+_IN_SESSION_MAX_WAIT_S = 1800.0
+
+_IN_SESSION_POLL_INTERVAL_S = 5.0
+
+#: ``max_result_window`` default; a filled page would under-report what is in flight.
+_IN_FLIGHT_PAGE = 10000
+
+
+async def local_model_calls_in_flight(
+    es: httpx.AsyncClient, *, lookback_s: float = _IN_FLIGHT_LOOKBACK_S
+) -> list[str]:
+    """Span ids of ``slm_local`` model calls that started and have not ended.
+
+    A call ends with ``model_call_completed`` or ``model_call_error`` on the same ``span_id``
+    (``llm_client/telemetry.py`` and ``litellm_client.py`` both stamp ``provider`` and
+    ``span_id`` on all three events).
+
+    Args:
+        es: Async HTTP client pointed at ``elasticsearch-eval``.
+        lookback_s: Only calls started within this many seconds are considered.
+
+    Returns:
+        The span ids still open, in no particular order.
+
+    Raises:
+        RuntimeError: If the page is full, because the list would then be incomplete.
+    """
+    since = (datetime.now(UTC) - timedelta(seconds=lookback_s)).isoformat()
+    resp = await es.post(
+        f"{EVAL_ES_URL}/{EVAL_ES_INDEX}/_search",
+        json={
+            "size": _IN_FLIGHT_PAGE,
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"provider": "slm_local"}},
+                        {
+                            "terms": {
+                                "event_type": [
+                                    "model_call_started",
+                                    "model_call_completed",
+                                    "model_call_error",
+                                ]
+                            }
+                        },
+                        {"range": {"@timestamp": {"gte": since}}},
+                    ]
+                }
+            },
+            "_source": ["event_type", "span_id"],
+        },
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    hits = resp.json()["hits"]["hits"]
+    if len(hits) >= _IN_FLIGHT_PAGE:
+        raise RuntimeError("in-flight query filled its page; the open-call list is incomplete")
+    started: set[str] = set()
+    ended: set[str] = set()
+    for hit in hits:
+        source = hit["_source"]
+        span_id = source.get("span_id")
+        if not span_id:
+            continue
+        if source.get("event_type") == "model_call_started":
+            started.add(span_id)
+        else:
+            ended.add(span_id)
+    return sorted(started - ended)
+
+
+async def wait_for_local_model_calls(
+    es: httpx.AsyncClient,
+    *,
+    gap_s: float = _IN_SESSION_GAP_S,
+    max_wait_s: float = _IN_SESSION_MAX_WAIT_S,
+) -> float:
+    """Block until no ``slm_local`` model call is in flight, then wait a fixed gap.
+
+    Args:
+        es: Async HTTP client pointed at ``elasticsearch-eval``.
+        gap_s: Fixed seconds to wait once nothing is in flight.
+        max_wait_s: Hard polling timeout before the gap.
+
+    Returns:
+        Seconds actually waited, gap included.
+    """
+    loop = asyncio.get_event_loop()
+    t0 = loop.time()
+    deadline = t0 + max_wait_s
+    while loop.time() < deadline and await local_model_calls_in_flight(es):
+        await asyncio.sleep(_IN_SESSION_POLL_INTERVAL_S)
+    await asyncio.sleep(gap_s)
+    return round(loop.time() - t0, 1)
+
+
 @dataclass(frozen=True)
 class ArmTurnResult:
     """One ``IsolatedArmRunner.run_turn()`` call's outcome.
@@ -175,13 +282,14 @@ class ArmTurnResult:
             gap. ``False`` means a full timeout elapsed somewhere in the chain with
             nothing landing — a true negative, not an early guess — and costs the
             full wait every time, deliberately: safety over speed for a gate in
-            front of a graph wipe.
+            front of a graph wipe. ``None`` means the caller passed ``wait_settle=False``
+            and nothing was waited for (FRE-1517).
     """
 
     session_id: str
     trace_id: str
     arm: str
-    extraction_settled: bool
+    extraction_settled: bool | None
 
 
 @dataclass
@@ -215,6 +323,7 @@ class IsolatedArmRunner:
         arm: str = "control",
         session_id: str | None = None,
         model: str | None = None,
+        wait_settle: bool = True,
     ) -> ArmTurnResult:
         """Wipe, reseed, then drive one turn — isolated from every earlier session.
 
@@ -230,6 +339,11 @@ class IsolatedArmRunner:
                 its history slice to recall.
             model: Optional ``primary`` deployment key for ``/chat``, which stores it on the
                 session (ADR-0121 §4).
+            wait_settle: Wait for the turn's extraction and consolidation before returning.
+                A caller that continues the session passes ``False`` and settles every
+                turn itself before the next wipe. A new session waits for full gateway
+                quiet first. A continuing turn waits only until no local model call is in
+                flight, plus a fixed gap (FRE-1517, master 2026-09-14).
 
         Returns:
             The turn's identifiers and whether its consolidation write pipeline settled.
@@ -244,11 +358,13 @@ class IsolatedArmRunner:
         base_url = EVAL_ARMS[arm]
         assert_eval_chat_url(base_url)
 
-        await wait_for_gateway_idle(es)
         if session_id is None:
+            await wait_for_gateway_idle(es)
             await wipe_eval_graph(self.driver, uri=EVAL_NEO4J_URI)
             if self.reseed is not None:
                 await self.reseed()
+        else:
+            await wait_for_local_model_calls(es)
         self._turn_count += 1
 
         params = {"message": message, "channel": "EVAL"}
@@ -265,6 +381,10 @@ class IsolatedArmRunner:
         await wait_for_event_settle(
             es, trace_id, "model_call_completed", timeout_s=SIGNAL_SETTLE_TIMEOUT_S
         )
+        if not wait_settle:
+            return ArmTurnResult(
+                session_id=session_id, trace_id=trace_id, arm=arm, extraction_settled=None
+            )
         extraction_settled = await wait_for_event_settle(
             es,
             trace_id,

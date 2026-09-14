@@ -8,6 +8,12 @@ What each amendment on FRE-1517 changes here:
 
 - **A1** — ``IsolatedArmRunner.run_turn`` wipes ``neo4j-eval`` only on a session's first turn.
   Later turns pass ``session_id``, so the memory the session's own turns wrote stays readable.
+- **Waiting (master, 2026-09-14)** — a session's first turn waits for full gateway quiet
+  (150 s), so no session or arm inherits background work. A later turn waits only until no
+  ``slm_local`` model call is in flight, plus 10 s. It does not wait for the previous turn's
+  extraction or consolidation: that is the production condition. Each row records whether the
+  previous turn's consolidation had completed before this turn's first event. The runner
+  settles every turn of the session at the end, before the next session's wipe.
 - **A3** — every row carries the pre-registered per-turn outcome (:func:`turn_outcome`).
   ``--replicate`` names the draw, and each replicate is a fresh session.
 - **A4** — before the session, a local arm's ``/v1/models`` must list the arm's served id
@@ -19,6 +25,9 @@ What each amendment on FRE-1517 changes here:
 - **A6 / A10** — each row keeps the raw inputs: per-worker ``finish_reason`` and
   ``stop_reason`` from the sub-agent captures, the primary's ``tool_call_invalid_arguments``
   events, and the ``api_costs`` rows for the trace (model, purpose, latency, tokens).
+
+``http_wall_s`` includes the runner's wait before the turn. Read turn wall clock from
+``route_trace.latency_total_ms``.
 
 The generation check (FRE-1474) runs once before the session, not before each turn. A probe
 completion between turns can take the slot that holds the session's cached prefix, and cache
@@ -49,8 +58,15 @@ from typing import Any
 import httpx
 import yaml
 from scripts.eval.eval_isolation import IsolatedArmRunner, create_eval_driver
+from scripts.eval.fre1337_intent_probe.behavioral import (
+    CONSOLIDATION_SETTLE_TIMEOUT_S,
+    EXTRACTION_SETTLE_TIMEOUT_S,
+    fetch_latest_event,
+    wait_for_event_settle,
+)
 from scripts.eval.fre1498.runner import (
     EVAL_CHAT,
+    _es,
     _events,
     _psql_json,
     generation_check,
@@ -167,6 +183,23 @@ def turn_outcome(
     return {"delivered": not reasons, "reasons": reasons, "attribution": attribution}
 
 
+def completed_before(consolidation_at: str | None, turn_first_event_at: str | None) -> bool | None:
+    """Whether a consolidation completed before a turn's first event.
+
+    Args:
+        consolidation_at: ``@timestamp`` of the previous turn's ``consolidation_completed``.
+        turn_first_event_at: ``@timestamp`` of this turn's earliest event.
+
+    Returns:
+        ``True`` or ``False``, or ``None`` when either event was not observed — Elasticsearch
+        counts are provisional (FRE-1051), so a missing event does not decide the answer.
+    """
+    if not consolidation_at or not turn_first_event_at:
+        return None
+    parse = lambda ts: datetime.fromisoformat(ts.replace("Z", "+00:00"))  # noqa: E731
+    return parse(consolidation_at) <= parse(turn_first_event_at)
+
+
 def _served_ids(models_endpoint: str) -> list[str]:
     resp = httpx.get(models_endpoint, timeout=30.0)
     resp.raise_for_status()
@@ -206,6 +239,79 @@ def _trace_reads(es: httpx.Client, trace_id: str) -> dict[str, Any]:
         "primary_invalid_tool_arguments": len(invalid_args),
         "api_costs": costs,
     }
+
+
+async def _previous_consolidation(
+    es: httpx.Client, es_async: httpx.AsyncClient, previous_trace_id: str, trace_id: str
+) -> dict[str, Any]:
+    extraction = await fetch_latest_event(
+        es_async, previous_trace_id, "entity_extraction_completed", field="capture_trace_id"
+    )
+    consolidation = (
+        await fetch_latest_event(es_async, str(extraction["trace_id"]), "consolidation_completed")
+        if extraction
+        else None
+    )
+    first = _es(
+        es,
+        {
+            "size": 1,
+            "query": {"term": {"trace_id": trace_id}},
+            "sort": [{"@timestamp": {"order": "asc"}}],
+            "_source": ["@timestamp"],
+        },
+    )
+    consolidation_at = consolidation.get("@timestamp") if consolidation else None
+    first_at = first[0].get("@timestamp") if first else None
+    return {
+        "previous_trace_id": previous_trace_id,
+        "consolidation_completed_at": consolidation_at,
+        "turn_first_event_at": first_at,
+        "completed_before_turn": completed_before(consolidation_at, first_at),
+    }
+
+
+async def _settle_trace(es_async: httpx.AsyncClient, trace_id: str) -> dict[str, bool]:
+    extraction = await wait_for_event_settle(
+        es_async,
+        trace_id,
+        "entity_extraction_completed",
+        timeout_s=EXTRACTION_SETTLE_TIMEOUT_S,
+        require_nonzero=True,
+        field="capture_trace_id",
+    )
+    consolidation = False
+    if extraction:
+        event = await fetch_latest_event(
+            es_async, trace_id, "entity_extraction_completed", field="capture_trace_id"
+        )
+        if event:
+            consolidation = await wait_for_event_settle(
+                es_async,
+                str(event["trace_id"]),
+                "consolidation_completed",
+                timeout_s=CONSOLIDATION_SETTLE_TIMEOUT_S,
+                require_nonzero=True,
+            )
+    return {"extraction": extraction, "consolidation": consolidation}
+
+
+async def _settle_session(
+    es_async: httpx.AsyncClient, rows_path: Path, trace_ids: list[str]
+) -> None:
+    """Wait for every turn's consolidation, so the next session's wipe cannot race it."""
+    if not trace_ids:
+        return
+    results = await asyncio.gather(*(_settle_trace(es_async, t) for t in trace_ids))
+    settle = {
+        "at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "traces": dict(zip(trace_ids, results, strict=True)),
+    }
+    rows_path.with_suffix(".settle.json").write_text(json.dumps(settle, indent=2))
+    unsettled = [t for t, r in settle["traces"].items() if not r["consolidation"]]
+    sys.stdout.write(
+        f"session settle: {len(trace_ids) - len(unsettled)}/{len(trace_ids)} consolidated\n"
+    )
 
 
 def _preflight(arm: dict[str, Any], min_budget_usd: float) -> dict[str, Any]:
@@ -267,11 +373,13 @@ async def run(args: argparse.Namespace) -> int:
         sys.stdout.write("session already complete\n")
         return 0
 
+    trace_ids = [r["trace_id"] for r in rows if r.get("trace_id")]
     driver = create_eval_driver()
     runner = IsolatedArmRunner(driver=driver)
     es = httpx.Client()
+    es_async = httpx.AsyncClient()
     try:
-        async with httpx.AsyncClient() as http, httpx.AsyncClient() as es_async:
+        async with httpx.AsyncClient() as http:
             await assert_gateway_fresh(http, EVAL_CHAT, repo_root())
             fingerprint = (
                 (await http.get(f"{EVAL_CHAT}/health", timeout=10)).json().get("build_fingerprint")
@@ -305,6 +413,7 @@ async def run(args: argparse.Namespace) -> int:
                         arm=GATEWAY_ARM,
                         session_id=session_id,
                         model=arm["deployment_key"] if session_id is None else None,
+                        wait_settle=False,
                     )
                 except httpx.HTTPError as exc:
                     row = {**base_row, "session_id": session_id, "http_error": repr(exc)[:300]}
@@ -319,6 +428,12 @@ async def run(args: argparse.Namespace) -> int:
                         f"gateway returned session {result.session_id}, expected {session_id}"
                     )
                 session_id = result.session_id
+                previous = (
+                    await _previous_consolidation(es, es_async, trace_ids[-1], result.trace_id)
+                    if trace_ids
+                    else None
+                )
+                trace_ids.append(result.trace_id)
                 route = wait_route_trace(str(uuid.UUID(result.trace_id)))
                 primary_cap, sub_caps = wait_captures(es, result.trace_id)
                 signals = read_back(es, result.trace_id)
@@ -334,8 +449,8 @@ async def run(args: argparse.Namespace) -> int:
                     **base_row,
                     "session_id": session_id,
                     "trace_id": result.trace_id,
-                    "extraction_settled": result.extraction_settled,
                     "http_wall_s": http_wall,
+                    "previous_turn_consolidation": previous,
                     "outcome": outcome,
                     "route_trace": route,
                     "route_matches_script": bool(route)
@@ -365,7 +480,11 @@ async def run(args: argparse.Namespace) -> int:
                     )
                     return 5
     finally:
+        # Every exit path settles the session's turns, so the next session's wipe cannot race
+        # a consolidation still writing to neo4j-eval.
+        await _settle_session(es_async, rows_path, trace_ids)
         es.close()
+        await es_async.aclose()
         await driver.close()
     return 0
 

@@ -10,11 +10,25 @@ import pytest
 from scripts.eval.fre1517 import classify
 from scripts.eval.fre1517.session_runner import (
     TRAILER_MARKER,
+    completed_before,
     load_arm,
     resume_state,
     tbd_fields,
     turn_outcome,
 )
+
+
+def test_completed_before_compares_timestamps_and_keeps_absence_undecided() -> None:
+    """Master 2026-09-14: record whether the previous turn had consolidated when this one began."""
+    assert completed_before("2026-09-20T10:00:00Z", "2026-09-20T10:00:05Z") is True
+    assert completed_before("2026-09-20T10:00:09+00:00", "2026-09-20T10:00:05Z") is False
+    assert completed_before(None, "2026-09-20T10:00:05Z") is None
+
+
+def test_every_arm_is_recorded() -> None:
+    """Master 2026-09-14: unconfirmed values are UNVERIFIED, so no arm may still read TBD."""
+    for name in ("ovh_27b", "mtplx_27b", "mtplx_flash_next", "llamacpp_flash_next"):
+        assert tbd_fields(load_arm(name)) == []
 
 
 def test_outcome_delivered_when_every_condition_holds() -> None:

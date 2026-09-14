@@ -1,10 +1,10 @@
 # FRE-1517 arm manifest — one entry per deployment as configured (amendments A4 and A7).
 #
 # The session runner copies the whole entry into every JSONL row, and it refuses to run an
-# arm while any field of that arm still reads TBD.
+# arm while any field of that arm still reads TBD. A value marked UNVERIFIED is accepted and
+# shown in the report as unconfirmed.
 #
 #   deployment_key   the catalog key sent as `model` on a session's first turn
-#                    (master adds the MTPLX keys in the single Phase 0 rebuild)
 #   served_model_id  the id the engine serves. For a local arm the runner reads
 #                    `models_endpoint` before each session and requires this id in it,
 #                    because manual MTPLX answers any model name (master, 2026-09-14)
@@ -12,46 +12,52 @@
 #                    deployments record the served id, cloud ones the litellm id
 #                    (llm_client/litellm_client.py, `_telemetry_model`). The runner requires
 #                    it on every primary call of every turn
-#   pack, quant, context_length, reasoning, launch_flags
-#                    recorded from the slm_server session and the catalog, verbatim (A7).
-#                    "27B" is two deployments, so each is named as configured
+#
+# Sources, 2026-09-14:
+#   catalog  config/models.yaml on main (arms 1 and 4) and catalog PR #1173 at 728a5c69
+#            (arms 2 and 3: key, id, context_length, quantization) — read by explore
+#   relay    master's message relaying slm_server's Q9 answer — not read by explore at its
+#            source, so every value from it alone is marked UNVERIFIED
+#
+# Reasoning on every local arm (relay): the primary and the planner think (default mode;
+# Seshat sends no chat_template_kwargs). Workers send enable_thinking false.
 arms:
   ovh_27b:
     order_label: arm 1
     deployment_key: qwen3.8-27b-ovh
-    engine: OVH AI Endpoints (managed)
+    engine: OVH AI Endpoints (managed), provider ovhcloud
     served_model_id: Qwen3.8-27B
     telemetry_model: ovhcloud/Qwen3.8-27B
     models_endpoint: null
-    pack: not published by the provider
-    quant: not published by the provider
-    context_length: 262144
-    reasoning: TBD
+    pack: not applicable (managed endpoint)
+    quant: UNKNOWN — serving precision is not in the catalog
+    context_length: 262144 in the catalog; context_window_max_tokens 48000 binds first (catalog note)
+    reasoning: "default mode: temperature 1.0, reasoning_effort medium; worker mode: reasoning_effort none (UNVERIFIED, relay of the catalog)"
     launch_flags: not applicable (managed endpoint)
   mtplx_27b:
     order_label: arm 2
-    deployment_key: TBD
+    deployment_key: qwen3.8-27b-mtplx
     engine: MTPLX
     served_model_id: mtplx-qwen38-27b-optimized-speed
     telemetry_model: mtplx-qwen38-27b-optimized-speed
     models_endpoint: http://localhost:8600/v1/models
-    pack: TBD
-    quant: TBD
-    context_length: TBD
-    reasoning: TBD
-    launch_flags: TBD
+    pack: Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed
+    quant: "MTPLX-Optimized-Speed-4bit-g32 (catalog); affine g32 with 74 overrides, 20.70 GB (UNVERIFIED)"
+    context_length: 131072
+    reasoning: "primary and planner think, workers enable_thinking false (UNVERIFIED)"
+    launch_flags: "mtplx 2.11.2, --depth 3, --reasoning-effort medium, --preserve-thinking off, --context-window 131072, serial scheduler, 1 slot (UNVERIFIED)"
   mtplx_flash_next:
     order_label: arm 3
-    deployment_key: TBD
+    deployment_key: qwen3.8-flash-next-mtplx
     engine: MTPLX
     served_model_id: mtplx-qwen38-flash-next-optimized-speed
     telemetry_model: mtplx-qwen38-flash-next-optimized-speed
     models_endpoint: http://localhost:8600/v1/models
-    pack: TBD
-    quant: TBD
-    context_length: TBD
-    reasoning: TBD
-    launch_flags: TBD
+    pack: Youssofal/Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+    quant: "MTPLX-Optimized-Speed-4bit-g32 (catalog); affine g32 with 626 overrides, 115.1 GB (UNVERIFIED)"
+    context_length: 131072
+    reasoning: "primary and planner think, workers enable_thinking false (UNVERIFIED)"
+    launch_flags: "mtplx 2.11.2, --depth 3, --reasoning-effort medium, --preserve-thinking off, --context-window 131072, serial scheduler, 1 slot (UNVERIFIED)"
   llamacpp_flash_next:
     order_label: arm 4
     deployment_key: qwen3.8-flash-next
@@ -59,8 +65,8 @@ arms:
     served_model_id: unsloth/qwen3.8-flash-next
     telemetry_model: unsloth/qwen3.8-flash-next
     models_endpoint: http://localhost:8600/v1/models
-    pack: TBD
+    pack: UNVERIFIED — the catalog names only the quantization
     quant: UD-IQ4_XS
     context_length: 131072
-    reasoning: TBD
-    launch_flags: TBD
+    reasoning: "primary and planner think, workers enable_thinking false; the router injects chat_template_kwargs {enable_thinking: true, preserve_thinking: false, reasoning_effort: medium} when a request carries none (UNVERIFIED)"
+    launch_flags: "3 slots, --kv-unified, MTP draft depth 1 per ADR-0152 Appendix A1 (UNVERIFIED)"

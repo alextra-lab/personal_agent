@@ -176,7 +176,9 @@ async def test_run_turn_wipes_per_session_not_per_turn(
     """
     driver = _FakeDriver()
     _patch_settle_always_true(monkeypatch, [])
-    _patch_gateway_idle_always_zero(monkeypatch)
+    gateway_idle = _patch_gateway_idle_always_zero(monkeypatch)
+    local_wait = AsyncMock(return_value=10.0)
+    monkeypatch.setattr(eval_isolation, "wait_for_local_model_calls", local_wait)
     reseed = AsyncMock()
     http = AsyncMock()
     http.post = AsyncMock(
@@ -197,6 +199,9 @@ async def test_run_turn_wipes_per_session_not_per_turn(
     await runner.run_turn(http, es, "a new session", arm="control")
     assert driver.fake_session.queries == [WIPE_CYPHER, WIPE_CYPHER]
     assert reseed.await_count == 2
+    # A new session waits for full gateway quiet; a continuing turn waits only for local calls.
+    assert gateway_idle.await_count == 2
+    assert local_wait.await_count == 1
 
     first_params, second_params, third_params = (
         call.kwargs["params"] for call in http.post.call_args_list
@@ -206,6 +211,56 @@ async def test_run_turn_wipes_per_session_not_per_turn(
     assert second_params["session_id"] == "s1"
     assert "model" not in second_params
     assert "session_id" not in third_params
+
+
+@pytest.mark.asyncio
+async def test_run_turn_without_settle_returns_none_and_waits_for_no_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1517: a caller that settles the session itself gets no extraction wait per turn."""
+    calls: list[tuple[str, bool, str]] = []
+    _patch_settle_always_true(monkeypatch, calls)
+    _patch_gateway_idle_always_zero(monkeypatch)
+    http = AsyncMock()
+    http.post = AsyncMock(side_effect=[_FakeResponse("s1", "trace-s1")])
+
+    runner = IsolatedArmRunner(driver=_FakeDriver())
+    result = await runner.run_turn(http, AsyncMock(), "hello", arm="control", wait_settle=False)
+
+    assert result.extraction_settled is None
+    assert [event_type for event_type, _, _ in calls] == ["model_call_completed"]
+
+
+@pytest.mark.asyncio
+async def test_local_model_calls_in_flight_pairs_started_with_ended_by_span() -> None:
+    """A call ends with completed or error on its span; only slm_local calls are asked for."""
+    hits = [
+        {"_source": {"event_type": "model_call_started", "span_id": "a"}},
+        {"_source": {"event_type": "model_call_completed", "span_id": "a"}},
+        {"_source": {"event_type": "model_call_started", "span_id": "b"}},
+        {"_source": {"event_type": "model_call_started", "span_id": "c"}},
+        {"_source": {"event_type": "model_call_error", "span_id": "c"}},
+    ]
+    es = AsyncMock()
+    es.post = AsyncMock(return_value=_FakeESHitsResponse(hits))
+
+    assert await eval_isolation.local_model_calls_in_flight(es) == ["b"]
+    filters = es.post.call_args.kwargs["json"]["query"]["bool"]["filter"]
+    assert {"term": {"provider": "slm_local"}} in filters
+
+
+@pytest.mark.asyncio
+async def test_local_model_calls_in_flight_refuses_a_full_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A filled page would silently under-report what is in flight."""
+    monkeypatch.setattr(eval_isolation, "_IN_FLIGHT_PAGE", 2)
+    hits = [{"_source": {"event_type": "model_call_started", "span_id": s}} for s in "ab"]
+    es = AsyncMock()
+    es.post = AsyncMock(return_value=_FakeESHitsResponse(hits))
+
+    with pytest.raises(RuntimeError, match="filled its page"):
+        await eval_isolation.local_model_calls_in_flight(es)
 
 
 @pytest.mark.asyncio

@@ -474,6 +474,14 @@ services:
       AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
       AGENT_PREFER_PRIMITIVES: "true"
       # Required: without this, bash commands block indefinitely for PWA approval
+      #
+      # FRE-1505: with no human gate, a model-chosen bash call could read this container's
+      # credentials (printenv, /proc/1/environ). On AGENT_DEPLOYMENT_PROFILE=eval the bash
+      # child therefore runs as `nobody` with an allowlisted environment: it cannot read any
+      # root process's environ, and it cannot write root-owned paths such as
+      # /app/agent_workspace (the `write` tool still can). The gateway must run as root to drop
+      # privileges; if it does not, eval bash refuses. Proof:
+      # scripts/eval/probe_bash_credential_isolation.py.
       AGENT_APPROVAL_UI_ENABLED: "false"
       AGENT_CLOUD_WEEKLY_BUDGET_USD: "50.0"
       # FRE-1376: production defaults delegation off (no adapter wired). The eval

@@ -213,8 +213,16 @@ async def _gql(query: str, variables: dict[str, Any] | None = None) -> dict[str,
         The ``data`` field from the GraphQL response.
 
     Raises:
-        ToolExecutionError: On missing API key, HTTP error, or GraphQL error.
+        ToolExecutionError: On an eval deployment, missing API key, HTTP error, or
+            GraphQL error.
     """
+    # FRE-1505: an eval gateway must never reach the real Linear workspace. Every Linear
+    # tool routes through here, so refusing before the client is built covers all of them.
+    if settings.deployment_profile == "eval":
+        raise ToolExecutionError(
+            "Linear API calls are disabled on an eval deployment "
+            "(deployment_profile=eval); no request was sent."
+        )
     api_key = settings.linear_api_key
     if not api_key:
         raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")

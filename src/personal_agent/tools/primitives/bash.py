@@ -21,19 +21,27 @@ Security model
 * Timeout is clamped to [1, 120] seconds.
 * Output is capped at 50 KiB (combined stdout + stderr); overflow is written to
   a scratch file and the path is returned.
+* On an eval deployment (``deployment_profile == "eval"``) the child runs as the
+  unprivileged ``nobody`` account with an allowlisted environment (FRE-1505). The
+  eval-treatment gateway runs bash with no human approval, so the child must not
+  read a credential: a non-root process cannot open ``/proc/<pid>/environ`` of any
+  root process (the gateway, PID 1, health checks, sibling children), and the
+  kernel clears capabilities on the uid change. If the gateway is not root it
+  cannot drop privileges, so eval bash refuses and spawns nothing.
 
-FRE-261 Step 4 · FRE-283 (real shell contract).
+FRE-261 Step 4 · FRE-283 (real shell contract) · FRE-1505 (eval credential isolation).
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shlex
 from pathlib import Path
 from typing import Any
 
-from personal_agent.config import load_governance_config
+from personal_agent.config import load_governance_config, settings
 from personal_agent.config.governance_loader import GovernanceConfigError
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -66,6 +74,17 @@ _FALLBACK_DENY: list[str] = [
     r"\bnc\s+-l\b",
     r":\(\)\s*\{\s*:\|:&\s*\};:",
 ]
+
+# FRE-1505: identity and environment of the bash child on an eval deployment.
+# 65534 is ``nobody``/``nogroup`` in the Debian-based gateway image.
+EVAL_CHILD_UID = 65534
+EVAL_CHILD_GID = 65534
+# An allowlist, not a denylist: AGENT_DATABASE_URL carries a password under a name no
+# suffix pattern matches. HOME and TMPDIR are set to /tmp, which ``nobody`` can write.
+EVAL_CHILD_ENV_NAMES: frozenset[str] = frozenset(
+    {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "VIRTUAL_ENV"}
+)
+_EVAL_CHILD_HOME = "/tmp"
 
 # ---------------------------------------------------------------------------
 # ToolDefinition
@@ -326,6 +345,19 @@ def _check_segment_allowlist(command: str, allowlist: list[str]) -> str | None:
     return None
 
 
+def eval_child_env() -> dict[str, str]:
+    """Build the bash child's environment for an eval deployment.
+
+    Returns:
+        Only the allowlisted variables from this process's environment, plus
+        ``HOME`` and ``TMPDIR`` set to a directory the unprivileged child can write.
+    """
+    env = {name: value for name, value in os.environ.items() if name in EVAL_CHILD_ENV_NAMES}
+    env["HOME"] = _EVAL_CHILD_HOME
+    env["TMPDIR"] = _EVAL_CHILD_HOME
+    return env
+
+
 def _truncate_to_bytes(s: str, max_bytes: int) -> str:
     """Truncate a string to at most max_bytes when UTF-8 encoded.
 
@@ -392,7 +424,8 @@ async def bash_executor(
           reinterpreted as success, else None.
 
         On guard failures, returns a dict with ``success=False`` and an
-        ``error`` key set to one of: ``hard_denied``, ``empty_command``, ``timeout``.
+        ``error`` key set to one of: ``hard_denied``, ``empty_command``, ``timeout``,
+        ``credential_isolation_unavailable`` (eval deployment, gateway not root).
     """
     trace_id = ctx.trace_id
 
@@ -426,11 +459,36 @@ async def bash_executor(
     # ------------------------------------------------------------------
     timeout_seconds = min(max(int(timeout_seconds), 1), _MAX_TIMEOUT)
 
+    # ------------------------------------------------------------------
+    # 3a. Eval credential isolation (FRE-1505) — fail closed.
+    # ------------------------------------------------------------------
+    eval_isolation = settings.deployment_profile == "eval"
+    if eval_isolation and os.geteuid() != 0:
+        log.error(
+            "bash_credential_isolation_unavailable",
+            trace_id=trace_id,
+            euid=os.geteuid(),
+        )
+        return {
+            "success": False,
+            "error": "credential_isolation_unavailable",
+            "detail": (
+                "bash on an eval deployment must drop to an unprivileged account, "
+                "which needs a root gateway; no command was run."
+            ),
+            "command": command,
+        }
+    child_env = eval_child_env() if eval_isolation else None
+    child_uid = EVAL_CHILD_UID if eval_isolation else None
+    child_gid = EVAL_CHILD_GID if eval_isolation else None
+    child_groups: list[int] | None = [] if eval_isolation else None
+
     log.info(
         "bash_started",
         trace_id=trace_id,
         command=command,
         timeout_seconds=timeout_seconds,
+        credential_isolation=eval_isolation,
     )
 
     # ------------------------------------------------------------------
@@ -448,6 +506,10 @@ async def bash_executor(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=child_env,
+            user=child_uid,
+            group=child_gid,
+            extra_groups=child_groups,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(

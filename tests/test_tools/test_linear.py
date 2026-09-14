@@ -590,6 +590,53 @@ async def test_eval_mode_false_allows_creation() -> None:
     assert result["dry_run"] is False
 
 
+# ── Eval deployment-profile isolation (FRE-1505) ───────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("executor", "kwargs"),
+    [
+        (create_linear_issue_executor, {"title": "T", "description": "D"}),
+        (create_linear_issue_executor, {"title": "T", "description": "D", "dry_run": True}),
+        (lm.create_linear_project_executor, {"name": "P"}),
+        (find_linear_issues_executor, {"query": "q"}),
+        (lm.list_linear_projects_executor, {}),
+    ],
+)
+async def test_eval_profile_sends_no_request_to_linear(executor, kwargs) -> None:
+    """AC-2: with deployment_profile=eval no Linear tool builds an HTTP client.
+
+    The API key is set, so the refusal comes from the profile guard and not from the
+    missing-key check. ctx.eval_mode is False, so the per-request guard is not what stops it.
+    """
+    _clear_caches()
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = "lin_api_test"
+        ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = "lbl-pa"
+        ms.deployment_profile = "eval"
+        with patch("personal_agent.tools.linear.create_guarded_http_client") as mock_client:
+            with pytest.raises(ToolExecutionError, match="eval deployment"):
+                await executor(**kwargs, ctx=_CTX)
+    mock_client.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", ["cloud", "local"])
+async def test_non_eval_profile_still_sends_linear_request(profile: str) -> None:
+    """AC-4: the production profiles still reach the Linear API."""
+    _clear_caches()
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = "lin_api_test"
+        ms.deployment_profile = profile
+        with patch("personal_agent.tools.linear.create_guarded_http_client") as mock_client:
+            mock_client.return_value = _mock_http_client([_issue_search_response([])])
+            result = await find_linear_issues_executor(query="q", ctx=_CTX)
+    mock_client.assert_called_once()
+    assert result["count"] == 0
+
+
 # ── Dedup check tests ──────────────────────────────────────────────────────
 
 

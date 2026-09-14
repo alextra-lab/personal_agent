@@ -41,6 +41,12 @@ class SlmHealthSnapshot(BaseModel):
         model_id: Active model identifier string. ``None`` when not exposed.
         probe_latency_ms: Round-trip latency of the probe HTTP call itself, in
             milliseconds. ``None`` when the probe did not complete.
+        generation_ok: Whether the FRE-1474 generation-capability check
+            succeeded — a minimal completion against the currently-served
+            model. ``None`` when the check was not requested (the default;
+            only the scheduled probe tick opts in).
+        generation_probe_latency_ms: Round-trip latency of the generation
+            check (served-model lookup + completion), when performed.
         probed_at: UTC timestamp when the probe was initiated.
         trace_id: Probe's own :class:`~personal_agent.telemetry.trace.SystemTraceContext`
             trace ID — the probe is itself joinable.
@@ -60,6 +66,8 @@ class SlmHealthSnapshot(BaseModel):
     latency_ema_ms: float | None = None
     model_id: str | None = None
     probe_latency_ms: float | None = None
+    generation_ok: bool | None = None
+    generation_probe_latency_ms: float | None = None
     probed_at: datetime
     trace_id: str
     error: str | None = None
@@ -84,6 +92,10 @@ class SlmHealthSnapshot(BaseModel):
                 return f"SLM unreachable ({self.error})"
             return "SLM unreachable"
         # degraded
+        if self.generation_ok is False:
+            if self.error:
+                return f"SLM cannot generate ({self.error})"
+            return "SLM cannot generate"
         if self.model_loaded is False:
             return "model not loaded on SLM"
         if self.gpu_util_pct is not None and self.gpu_util_pct >= 95.0:

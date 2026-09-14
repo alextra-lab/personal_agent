@@ -5,6 +5,14 @@ structure: accepts the brainstem scheduler's already-open ES client, probes the
 SLM health endpoint (with CF Access headers from settings), updates the process
 cache, and optionally writes the snapshot to Elasticsearch. Any failure is
 logged and swallowed — the scheduler must not crash because a probe tick failed.
+
+This is the **only** caller that opts the probe into the FRE-1474 generation
+check (passing ``base_url``): the scheduled tick's existing cadence
+(``slm_health_probe_interval_seconds``, 300s by default) absorbs the extra
+cost, rather than adding a new schedule. The per-request provider-availability
+check (:func:`personal_agent.llm_client.provider_health.is_provider_available`)
+calls :func:`~.probe.probe_slm_health` directly, without ``base_url`` — its
+frequency and behaviour are unaffected.
 """
 
 from __future__ import annotations
@@ -67,6 +75,13 @@ async def run_scheduled_slm_health_probe(
         # No Cloudflare Access headers are built here (ADR-0132 D1): the health URL
         # resolves to the internal Caddy egress block on deployments behind
         # Cloudflare, and Caddy injects the service token.
+        generation_base_url: str | None = None
+        if settings.slm_health_generation_check_enabled:
+            # resolved_slm_base_url is an origin that may or may not already
+            # carry /v1 (mirrors resolved_slm_health_url's own normalization).
+            origin = settings.resolved_slm_base_url.rstrip("/").removesuffix("/v1")
+            generation_base_url = f"{origin}/v1"
+
         try:
             snapshot = await probe_slm_health(
                 url=settings.resolved_slm_health_url,
@@ -74,6 +89,7 @@ async def run_scheduled_slm_health_probe(
                 trace_id=ctx.trace_id,
                 gpu_util_degraded_pct=settings.slm_gpu_util_degraded_pct,
                 queue_depth_degraded=settings.slm_queue_depth_degraded,
+                base_url=generation_base_url,
             )
         except Exception as exc:  # noqa: BLE001  # pragma: nocover
             log.warning(

@@ -1,90 +1,77 @@
-# Last session — 2026-09-13
+# Last session — 2026-09-13 18:40 to 2026-09-14 05:40 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The session ended at a **planned VPS reboot** (kernel 6.12.95 → 6.12.107, `reboot-required` set since
-2026-08-31, uptime 9 weeks). `cc-master` is itself a tmux seat, so this file is the only thing that
-crosses the boundary. Four tickets moved: FRE-1500 and FRE-1499 are Done and live-verified; FRE-1503
-and FRE-1325 are merged with **FRE-1325's gateway rebuild deliberately not run**. The owner is at the
-keyboard, the local SLM stays offline, and work runs on OVH by their direction.
-
-## The first thing to do after the reboot
-
-**FRE-1325 is merged and NOT deployed.** `ENV=cloud make rebuild SERVICE=seshat-gateway`, then verify
-the disclosure line on a live turn before moving it to Done. The deploy was held because a rebuild
-minutes before a reboot is wasted, **and** because the owner was given a veto on the feature and had
-not answered. Ask before deploying if they still have not.
-
-Everything else recovers itself: all thirteen `cloud-sim-*` containers are `unless-stopped`, and
-docker, both dispatch daemons and `seshat-soak.timer` are `enabled`.
-
-**The seats do not.** `cc-sessions` recreates them, and each lands on a blocking *"Resume from
-summary"* prompt. Nothing will flag that — see FRE-1504 below. Answer all five by hand.
+The session started at the planned VPS reboot and ended with the owner's `/doctor` cleanup. At the
+reset, adr is in codex round 3 on FRE-1328's ADR, build1 is committing FRE-1372, and build2 is idle
+because FRE-1495 is blocked by FRE-1372. Two tickets arrived overnight from a build seat and need the
+owner: FRE-1505 (the eval-treatment gateway can misuse real credentials through unsandboxed bash) and
+FRE-1506 (IsolatedArmRunner still leaks a Turn node after consolidation settles). No PR is at the gate.
 
 ## What was decided and why
 
-**`enforce` is not the destination — the turn ships and states what it could not ground.** Owner's
-decision, relayed onto FRE-1328. Master's supporting analysis matters more than the decision: master
-tested it against FRE-1327 and found **declaration does not detect fabrication**. That turn's four bash
-calls were refused as inadmissible, so it would truthfully declare "I worked from commands the contract
-cannot cite" — and the figures were still invented. An honest uncitable report and a fabricated one
-produce the identical line. So **ADR-0140 Option 6 / FRE-1361 stays open**, against the previous adr
-session's untested guess that it might become unnecessary. `enforce` narrows to the population where
-retrieval can help (nothing offered, nothing used) rather than dying.
+**FRE-1328: enforce moves from shape C to shape B (owner, 2026-09-14 ~05:00).** adr measured 91
+turns: C (no tool ran) is mostly general knowledge, and 16 of its 30 turns were eval traffic. B (typed
+tools ran, then no citation or no match) is the largest group at 38. The owner accepted two limits
+that master verified in code: retry only on uncited, not-contained or not-entailed spans, because
+`decide()` today blocks on every failure, machine-undecided spans included. After the retry, ship
+with the declaration and never `TERMINAL_NO_SOURCE`. Unsettled spans (`_MACHINE_UNDECIDED`) must not
+count in FRE-1325's note either. **D5 heavy is withdrawn:** forcing retrieval before generation cannot
+skip shape C, and unmeasured means heavy on every turn. No live change: production runs `observe`,
+and `_select_enforcement` returns early outside `enforce` (executor.py:2045). Master does not know
+whether the owner picked the seat's option 1 as written or with master's two added notes. Check the
+ADR PR against both.
 
-**FRE-1325 shipped the surface, and it fires on ~92% of turns.** Master measured rather than trusting
-the ticket: on the twelve most recent grounding records the note would fire on **eleven**, one reading
-`41 of 41`. AC-2 ("a fully-compliant turn shows nothing") passes on its letter while the indicator is
-effectively a badge, because fully-compliant turns barely exist. **That figure is FRE-1328's ADR
-input** — the two-shape discrimination (structural refusal vs nothing-offered) is that ADR's to decide,
-and the build seat was right not to reach for it.
+**Eval contamination control (owner, 2026-09-13 20:09): the isolated eval stack, with production
+behaviour settings passed through.** FRE-1372 was reopened instead of filing a duplicate. Its comment
+forbids passing any production substrate address, because IsolatedArmRunner issues an unscoped
+DETACH DELETE. The live AC-1 run uses the local model, and the seat must ask master before any role
+reaches a paid provider. FRE-1495 is blocked by FRE-1372, and FRE-1487 re-runs after FRE-1495.
 
-**No OVH re-run of the FRE-1498 arm.** Master proposed it claiming it would close the study's
-answer-quality gap. Wrong: that harness has **no rubric and no scoring** — "quality" appears once in
-the whole document, inside a quoted prompt. Scored quality lives on FRE-1495. Owner: *"No need to waste
-time or resources."*
+**No separate FRE-1498 re-run.** FRE-1495 reuses that harness and scores answer quality and landing.
 
-**FRE-1487 was NOT closed, against master's own recommendation.** Master advised closing it to free
-FRE-1495, the owner approved, and master then read the thread and found the premise false — the series
-never re-ran (AC-2 partial, AC-3 not scored, AC-5 failed on `channel=CHAT`). The real fault was a
-**circular dependency**: FRE-1495 was blocked-by FRE-1487 while FRE-1487's own comment waits on the
-chain ending in FRE-1495. Broken by removing FRE-1495's relation — it needs that study's *query set and
-criterion*, which exist as text, not its results.
+**Model aliases stay unpinned (owner).** Memory and FRE-1504 record it, and it is not up for a fix.
 
-**FRE-1495 is local-dialect and parked.** Master over-read "rescoping to ovh is ok" as moving the whole
-study to OVH; the owner corrected it. The question is whether **llama.cpp's grammar** costs answer
-quality, and OVH is a different constrained-decoding implementation, so it cannot answer it. Reverted.
-`qwen3.8-flash-next` is not under review and stays the bound local primary.
+**FRE-1504 and FRE-1501 closed Done with named follow-throughs, not held open.** FRE-1504's live check
+passed at 20:30: the alert fired on the third tick. FRE-1501's runtime proof waits for the first local
+fan-out, which FRE-1495's arms will produce. If "Failed to parse tool call arguments as JSON" recurs,
+it goes to Verify Failed.
 
-**Four master errors worth not repeating.** Claimed FRE-1487 "delivered" without reading its thread ·
-claimed `telemetry/` was gitignored when only subpaths are · filed FRE-1499's Fault B on an inference
-the transcripts refuted · said the FRE-1498 harness existed only in `/tmp` when the explore seat had
-already copied it to `~/fre1498-harness` in the owner's home at 09:07. The owner caught three of the four.
+**The red `PreToolUse:Read` messages were hookify, not a Claude Code change** (see memory).
+
+**`/doctor` cleanup (owner-approved).** These plugins are off in `~/.claude/settings.json`:
+ralph-loop, the code-review plugin (the built-in `code-review` stays), typescript-lsp and pyright-lsp.
+context7 and linear-issue-create are off in `/opt/seshat/.claude/settings.local.json` only. This PR
+trims both CLAUDE.md files and moves Model Routing, the merge gotcha, plan naming and the pre-merge
+checklist into `.claude/skills/lifecycle-rules.md`. Look for them there now.
+
+**Master errors worth not repeating.**
+1. Repeated this file's "FRE-1487 AC-5 waits on the owner" without reading the ticket. It was an
+   undecided three-option choice.
+2. Quoted the VPS as having ~10 GiB of RAM. It has 22 GiB, with ~16 GiB free. Memory is corrected.
+3. Said "my watch did not stop at the first alert". It stopped at 20:30. The 20-minute hold on build1's
+   modal came from master reading the notification late while gating #1158.
+4. The first launch watch used a regex lookahead that the local grep (ugrep) rejects, so it never
+   matched. Test a watch pattern before arming it.
 
 ## Worktrees — anything special
-All four are on merged or stale branches and idle. The four untracked `*.bak-*` files at root are the
-owner's — do not remove them.
+- `build` is on FRE-1372's branch, cut before `2ab84c2d`. It still has the old hookify rule, so red
+  Read messages continue there until the branch includes that commit.
+- At ~21:00 build1 stopped at a `Read(.claude/worktrees/build/.env)` permission prompt. Master
+  recommended "No, key names only" and did not answer it. The seat later moved on. The outcome is not
+  verified.
+- The untracked `*.bak*` files at the root and in `telemetry/` are the owner's. Master removed only its
+  own dispatch-state backup.
 
 ## Sequence position + drift
-Dispatch is paused by kill switch for the reboot only. `rm telemetry/dispatch.disabled` to resume.
-Both build streams are idle with **nothing queued**: FRE-1495 and FRE-1501 are parked on the offline
-local backend, each with the reason recorded on the ticket so neither reads as an oversight.
-
-The raw 400 result rows behind the FRE-1498 document are still **outside git**, at
-`~/fre1498-harness/out/` in the owner's home (survives the reboot — disk, not tmpfs). The explore seat asked for
-them under `telemetry/evaluation/fre1498/` on the FRE-1337 precedent. The regime patches and compose
-overrides are likewise uncommitted. Surfaced on FRE-1503, not filed.
+Dispatch is running. build1: FRE-1372, then build2: FRE-1495, then the FRE-1487 re-run. adr: FRE-1328,
+then FRE-1502. Two alerts were open at the reset. `dispatch_stall:build1`: FRE-1372 still reads
+Approved in Linear while its seat commits, so check whether the seat moved it. `dispatch_awaiting_owner:adr`:
+probably stale, because the owner answered and the seat is in codex round 3.
 
 ## Answers for the fresh start
-
-- **What is at the gate?** Nothing. Zero open PRs at the reboot.
-- **What is the live risk?** FRE-1504 (Needs Approval, Urgent): FRE-1457's held-prompt wedge detector
-  is **silent in production**. 77 seat-busy ticks, 0 wedge events, empty wedge state — the same
-  measurement as FRE-1457's own, which is Done. Every component passes in isolation; the composition
-  does not. It cost 3 hours today on both build streams at once, and it is why the post-reboot resume
-  prompts must be answered by hand rather than waited on.
-- **Is the adr seat stuck?** No. FRE-1328 holds the stream; the owner's decision is on the ticket and
-  the ADR can be written now on choice-axis evidence. FRE-1502 (planner decides expansion) is Approved
-  behind it, and its stated gate on a quality comparison **will never be satisfied** — that is recorded
-  on FRE-1502 so the seat does not wait for it.
-- **What needs the owner?** FRE-1504's approval · whether FRE-1325 deploys at all · FRE-1487's AC-5
-  (the eval channel does not gate KG writes) before that study re-fires.
+- **What is at the gate?** Nothing. The next PRs are FRE-1372 (build1) and FRE-1328's ADR (adr).
+- **What must be read before gating FRE-1372?** FRE-1505 and FRE-1506. Both touch the eval stack that
+  FRE-1372 changes, and FRE-1505 is a credentials exposure that needs the owner.
+- **What live checks are owed?** FRE-1501's runtime proof, at the first local fan-out.
+- **What needs the owner?** Approval of FRE-1505 and FRE-1506. FRE-1338 (Approved, Urgent, no stream
+  label) was updated overnight, so read its thread before labelling it.

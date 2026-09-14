@@ -250,6 +250,21 @@ class TurnVerification(BaseModel):
         """
         return tuple(span for span in self.spans if span.outcome in _MACHINE_UNDECIDED)
 
+    @property
+    def settled_failures(self) -> tuple[SpanVerification, ...]:
+        """Failures a gate decided (ADR-0151 D2).
+
+        Every span that did not pass, less :attr:`unverifiable`. A limit of the verifier is
+        not evidence about the statement, so only these count as "not backed by a source".
+        :attr:`failures` and :attr:`compliant` are unchanged: the compliance metric still
+        reads an unsettled span as non-compliant.
+        """
+        return tuple(
+            span
+            for span in self.spans
+            if not span.passed and span.outcome not in _MACHINE_UNDECIDED
+        )
+
 
 class TurnEvidenceClass(StrEnum):
     """The denominator ``passed_count: 0`` was missing (ADR-0139 D1).
@@ -293,6 +308,52 @@ def classify_turn_evidence(
     if tool_results_offered > 0 and tool_results_admitted == 0:
         return TurnEvidenceClass.UNCITABLE
     return TurnEvidenceClass.CITABLE
+
+
+class TurnShape(StrEnum):
+    """Why a turn's statements are, or are not, backed by a source (ADR-0151 D1)."""
+
+    A = "a"
+    """Tool calls were made or workers ran, and the registry admitted none of their output."""
+    B = "b"
+    """The registry holds one or more tool sources from this turn."""
+    C = "c"
+    """No tool call and no sub-agent worker this turn."""
+
+
+def classify_turn_shape(
+    verification: TurnVerification,
+    *,
+    tool_results_admitted: int,
+    tool_rounds: int,
+    sub_agents_dispatched: int,
+) -> TurnShape | None:
+    """Classify one turn's shape after generation (ADR-0151 D1).
+
+    Kept beside :func:`classify_turn_evidence` so the two classifications change together.
+    The registry counts alone cannot define shape C: a malformed tool call never reaches
+    ``register_tool_result``, and a worker's report never enters the primary registry, so
+    both leave ``tool_results_offered`` at 0. ``tool_rounds`` and ``sub_agents_dispatched``
+    cover those paths.
+
+    Args:
+        verification: What the inline checks decided.
+        tool_results_admitted: This turn's :attr:`SourceRegistry.tool_results_admitted`.
+        tool_rounds: ``ctx.tool_iteration_count`` — tool-execution rounds, incremented
+            before the malformed, missing-name and loop gates.
+        sub_agents_dispatched: Workers handed to ``run_sub_agent``, returned or raised.
+
+    Returns:
+        The shape, or None when verification did not run or the turn has no non-exempt
+        statement.
+    """
+    if not verification.available or not verification.spans:
+        return None
+    if tool_results_admitted >= 1:
+        return TurnShape.B
+    if tool_rounds == 0 and sub_agents_dispatched == 0:
+        return TurnShape.C
+    return TurnShape.A
 
 
 def check_reachability(source: RegisteredSource) -> Reachability:

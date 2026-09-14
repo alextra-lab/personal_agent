@@ -8,13 +8,17 @@ marker leak that exists in every mode.
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
+import personal_agent.orchestrator.executor as ex
 from personal_agent.captains_log.background import wait_for_background_tasks
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.governance.models import Mode
@@ -251,7 +255,8 @@ async def test_observe_a_zero_of_nine_turn_carries_the_unsourced_note() -> None:
     assert ctx.final_reply == reply  # what the capture records
     assert await _deliver(ctx) == (
         f"{reply}\n\nNote: 9 of 9 factual statements in this answer are not backed by a "
-        "source Seshat verified this turn. Check them before you rely on them."
+        "source Seshat verified this turn. No tool and no sub-agent ran this turn. "
+        "Check them before you rely on them."
     )
     assert ctx.grounding_record is not None
     assert ctx.grounding_record.passed_count == 0
@@ -259,8 +264,8 @@ async def test_observe_a_zero_of_nine_turn_carries_the_unsourced_note() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observe_partial_compliance_counts_only_the_failures() -> None:
-    """N counts the spans that did not pass, M every non-exempt span."""
+async def test_observe_partial_compliance_counts_only_the_settled_failures() -> None:
+    """N counts settled failures, M every non-exempt span (ADR-0151 D2)."""
     spans = (
         _span("a", CheckOutcome.PASSED),
         _span("b", CheckOutcome.UNCITED),
@@ -270,7 +275,9 @@ async def test_observe_partial_compliance_counts_only_the_failures() -> None:
 
     await _synthesize_with_verification(ctx, TurnVerification(spans=spans))
 
-    assert "Note: 2 of 3 factual statements" in await _deliver(ctx)
+    reply = await _deliver(ctx)
+    assert "Note: 1 of 3 factual statements" in reply
+    assert "Seshat could not check 1 other statement." in reply
 
 
 @pytest.mark.asyncio
@@ -324,6 +331,54 @@ async def test_observe_an_unverified_turn_carries_no_note() -> None:
     )
 
     assert await _deliver(ctx) == "Answer."
+
+
+# ── ADR-0151 D2: settled and unsettled statements (FRE-1507 AC-1, AC-3) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_ac1_a_turn_whose_only_failures_are_unsettled_carries_no_note() -> None:
+    """A limit of the verifier is not evidence about the statement."""
+    spans = tuple(_span(f"s{i}", CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT) for i in range(3))
+    ctx = _ctx("Answer.", SourceRegistry(turn_id="trace-unsettled-only"))
+
+    await _synthesize_with_verification(ctx, TurnVerification(spans=spans))
+
+    assert ctx.grounding_disclosure is None
+    assert await _deliver(ctx) == "Answer."
+
+
+@pytest.mark.asyncio
+async def test_ac1_the_note_counts_settled_failures_and_states_unsettled_apart() -> None:
+    """2 settled and 3 unsettled: the note says 2 of 5, and 3 that Seshat could not check."""
+    spans = (
+        _span("s1", CheckOutcome.UNCITED),
+        _span("s2", CheckOutcome.NOT_CONTAINED),
+        _span("u1", CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT),
+        _span("u2", CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT),
+        _span("u3", CheckOutcome.ENTAILMENT_UNAVAILABLE),
+    )
+    ctx = _ctx("Answer.", SourceRegistry(turn_id="trace-settled-unsettled"))
+
+    await _synthesize_with_verification(ctx, TurnVerification(spans=spans))
+
+    reply = await _deliver(ctx)
+    assert "Note: 2 of 5 factual statements in this answer are not backed by a source" in reply
+    assert "Seshat could not check 3 other statements." in reply
+    assert reply.endswith("Check them before you rely on them.")
+
+
+@pytest.mark.asyncio
+async def test_ac3_a_turn_with_no_shape_records_null_and_carries_no_note() -> None:
+    """No non-exempt statement: ``turn_shape`` is null and nothing is appended."""
+    ctx = _ctx("Hello!", SourceRegistry(turn_id="trace-no-shape"))
+    mock_log, calls = _capturing_log()
+
+    with patch("personal_agent.orchestrator.executor.log", mock_log):
+        await _synthesize_with_verification(ctx, TurnVerification())
+
+    assert _grounding_verification_completed(calls)["turn_shape"] is None
+    assert await _deliver(ctx) == "Hello!"
 
 
 @pytest.mark.asyncio
@@ -951,3 +1006,207 @@ async def test_each_generation_attempt_emits_its_own_document() -> None:
     events = _all_grounding_verification_completed(calls)
     assert len(events) == 2
     assert [event["refused_tool_origins"] for event in events] == [["bash"], ["bash"]]
+
+
+# ── ADR-0151 D1: the turn shape on the paths registry counts miss (FRE-1507 AC-2) ─────
+#
+# Each seed runs the real step that produces its counts, then synthesis with one uncited
+# statement, and reads both the event and the delivered note. A classifier that reads only
+# the registry counts gets `tool_results_offered == 0` on the first two seeds, which each
+# test asserts, so it cannot tell them from the no-tool seed that must read C.
+
+SHAPE_A = "Tools or sub-agents ran this turn, and Seshat cannot cite their output."
+SHAPE_B = "The sources this turn retrieved do not back these statements."
+SHAPE_C = "No tool and no sub-agent ran this turn."
+_ONE_UNCITED = TurnVerification(spans=(_span("claim", CheckOutcome.UNCITED),))
+
+
+async def _declare(ctx: ExecutionContext) -> tuple[dict[str, Any], str]:
+    """Synthesize over one uncited statement; return the event and the delivered reply."""
+    ctx.final_reply = "Answer."
+    ctx.messages.append({"role": "assistant", "content": "Answer."})
+    mock_log, calls = _capturing_log()
+    with patch("personal_agent.orchestrator.executor.log", mock_log):
+        await _synthesize_with_verification(ctx, _ONE_UNCITED)
+    return _grounding_verification_completed(calls), await _deliver(ctx)
+
+
+@pytest.fixture
+def _tool_step_seams(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The seams ``test_tool_result_citation.py`` stubs to run ``step_tool_execution``."""
+    monkeypatch.setattr(ex, "_get_tool_execution_layer", lambda: object())
+    monkeypatch.setattr(ex, "_is_turn_cancelled", lambda _sid: False)
+    monkeypatch.setattr(ex, "_report_turn_progress", AsyncMock())
+
+
+def _assistant_tool_call(name: str, arguments: str) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "tc-1", "function": {"name": name, "arguments": arguments}}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_tool_step_seams")
+async def test_ac2_a_malformed_tool_call_turn_is_shape_a(monkeypatch: pytest.MonkeyPatch) -> None:
+    dispatch = AsyncMock()
+    monkeypatch.setattr(ex, "dispatch_tool_call", dispatch)
+    registry = SourceRegistry(turn_id="trace-shape-malformed")
+    ctx = _ctx("Answer.", registry)
+    ctx.messages = [ctx.messages[0], _assistant_tool_call("web_search", "{not json")]
+
+    await ex.step_tool_execution(ctx, MagicMock(), AsyncMock())
+    fields, reply = await _declare(ctx)
+
+    dispatch.assert_not_called()
+    assert fields["tool_results_offered"] == 0
+    assert fields["tool_rounds"] == 1
+    assert fields["turn_shape"] == "a"
+    assert SHAPE_A in reply
+
+
+@pytest.mark.asyncio
+async def test_ac2_a_decompose_turn_whose_workers_all_raise_is_shape_a(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from personal_agent.orchestrator.expansion_controller import (
+        ExpansionController,
+        ExpansionResult,
+        _validate_plan_json,
+    )
+    from personal_agent.request_gateway.types import DecompositionResult, DecompositionStrategy
+    from personal_agent.telemetry.trace import TraceContext
+    from tests.personal_agent.orchestrator.test_fanout_incomplete_pause import (
+        _ctx as _fanout_ctx,
+    )
+    from tests.personal_agent.orchestrator.test_fanout_incomplete_pause import (
+        _patch_expansion,
+        _session_manager,
+    )
+
+    plan_json = json.dumps(
+        {
+            "strategy": "DECOMPOSE",
+            "tasks": [
+                {"name": f"part_{i}", "goal": f"Goal {i}", "constraints": [], "type": "general"}
+                for i in range(2)
+            ],
+        }
+    )
+    plan = _validate_plan_json(plan_json, "DECOMPOSE")
+    assert plan is not None
+    expansion_result = ExpansionResult(plan=plan)
+    with patch(
+        "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+        side_effect=RuntimeError("worker raised"),
+    ):
+        expansion_result.sub_agent_results = await ExpansionController()._run_dispatch(
+            plan=plan,
+            llm_client=AsyncMock(),
+            trace_id="t1",
+            messages=[],
+            result=expansion_result,
+        )
+    _patch_expansion(monkeypatch, expansion_result)
+    ctx = _fanout_ctx()
+    assert ctx.gateway_output is not None
+    ctx.gateway_output = replace(
+        ctx.gateway_output,
+        decomposition=DecompositionResult(
+            strategy=DecompositionStrategy.DECOMPOSE, reason="test", constraints={}
+        ),
+    )
+
+    await ex.step_init(ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1"))
+    ctx.source_registry = SourceRegistry(turn_id="t1")
+    fields, reply = await _declare(ctx)
+
+    assert ctx.sub_agent_results == []
+    assert fields["tool_results_offered"] == 0
+    assert fields["tool_rounds"] == 0
+    assert fields["sub_agents_dispatched"] == 2
+    assert fields["turn_shape"] == "a"
+    assert SHAPE_A in reply
+
+
+@pytest.mark.asyncio
+async def test_ac2_an_image_attachment_turn_with_no_tool_call_is_shape_c() -> None:
+    ctx = _ctx("Answer.", SourceRegistry(turn_id="trace-shape-image"))
+    ctx.messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What does this label say?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+            ],
+        }
+    ]
+
+    fields, reply = await _declare(ctx)
+
+    assert fields["tool_rounds"] == 0
+    assert fields["sub_agents_dispatched"] == 0
+    assert fields["turn_shape"] == "c"
+    assert SHAPE_C in reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_tool_step_seams")
+async def test_ac2_a_turn_with_one_admitted_web_search_source_is_shape_b(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.personal_agent.orchestrator.test_tool_result_citation import _dispatch_returning
+
+    content = json.dumps({"results": [{"content": "Paris counts 2,100,000 residents."}]})
+    monkeypatch.setattr(ex, "dispatch_tool_call", _dispatch_returning(content=content))
+    ctx = _ctx("Answer.", SourceRegistry(turn_id="trace-shape-web-search"))
+    ctx.messages = [ctx.messages[0], _assistant_tool_call("web_search", "{}")]
+
+    await ex.step_tool_execution(ctx, MagicMock(), AsyncMock())
+    fields, reply = await _declare(ctx)
+
+    assert fields["tool_results_admitted"] == 1
+    assert fields["turn_shape"] == "b"
+    assert SHAPE_B in reply
+
+
+# ── ADR-0151 D4: the declaration stays out of the capture (FRE-1507 AC-4) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_ac4_the_declaration_never_enters_the_capture() -> None:
+    """The real capture path: ``execute_task`` writes it before the note is appended."""
+    ctx = _ctx("Answer.", SourceRegistry(turn_id="trace-capture-declared"))
+    ctx.user_id = uuid4()
+    ctx.state = TaskState.SYNTHESIS
+    written: list[Any] = []
+    session_manager = AsyncMock()
+    session_manager.update_session = lambda *a, **k: None
+
+    # The real settings object, three fields pinned: past the capture, execute_task reads
+    # numeric limits that a MagicMock cannot compare.
+    with (
+        patch.object(ex.settings, "grounding_verification_mode", "observe"),
+        patch.object(ex.settings, "grounding_entailment_sample_rate", 0.0),
+        patch.object(ex.settings, "request_monitoring_enabled", False),
+        patch(
+            "personal_agent.orchestrator.executor._verify_grounding",
+            new=AsyncMock(return_value=_ONE_UNCITED),
+        ),
+        patch("personal_agent.captains_log.capture.write_capture", side_effect=written.append),
+        patch(
+            "personal_agent.events.bus.get_event_bus",
+            return_value=MagicMock(publish=AsyncMock()),
+        ),
+        patch(
+            "personal_agent.orchestrator.executor._trigger_captains_log_reflection",
+            new_callable=AsyncMock,
+        ),
+    ):
+        result = await execute_task_safe(ctx, session_manager)
+
+    assert ctx.error is None, repr(ctx.error)
+    assert len(written) == 1
+    assert "Check them before you rely on them" not in (written[0].assistant_response or "")
+    assert result["reply"].endswith("Check them before you rely on them.")

@@ -53,10 +53,12 @@ from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.verification import (
     CheckOutcome,
     TurnEvidenceClass,
+    TurnShape,
     TurnVerification,
     apply_entailment,
     build_grounding_record,
     classify_turn_evidence,
+    classify_turn_shape,
     unavailable,
     verify_turn,
 )
@@ -2191,7 +2193,17 @@ async def _resolve_enforcement(
     return selection
 
 
-def _unsourced_assertion_disclosure(verification: TurnVerification) -> str | None:
+_TURN_SHAPE_SENTENCE: dict[TurnShape, str] = {
+    TurnShape.A: "Tools or sub-agents ran this turn, and Seshat cannot cite their output.",
+    TurnShape.B: "The sources this turn retrieved do not back these statements.",
+    TurnShape.C: "No tool and no sub-agent ran this turn.",
+}
+"""ADR-0151 D4: why the statements are unsourced, one sentence per shape."""
+
+
+def _unsourced_assertion_disclosure(
+    verification: TurnVerification, shape: TurnShape | None
+) -> str | None:
     """Return the reader-facing line for a delivered answer with unsourced assertions.
 
     FRE-1325: ``observe`` recorded a 0-of-9 turn correctly and served it identically to a
@@ -2203,23 +2215,37 @@ def _unsourced_assertion_disclosure(verification: TurnVerification) -> str | Non
     tool result is not an admissible source (FRE-1328), so a correct answer reasoned from
     ``bash`` output carries this line too — and the sentence is true of it.
 
+    ADR-0151 (FRE-1507) narrows the count to **settled** failures (D2) and adds the turn's
+    shape (D1), so the reader learns why the statements are unsourced. Statements the
+    verifier could not settle are stated apart, and never alone trigger the line.
+
     Args:
         verification: What the inline checks decided about the reply being delivered.
+        shape: This turn's shape, as ``grounding_verification_completed`` records it.
 
     Returns:
-        The disclosure, or None when verification did not run (unmeasured is not
-        unsourced) or when every non-exempt span passed — including a turn with none.
+        The disclosure, or None when the turn has no shape (verification did not run, or no
+        non-exempt span) or no settled failure.
     """
-    if not verification.available or not verification.failures:
+    settled = verification.settled_failures
+    if shape is None or not settled:
         return None
-    return (
-        f"{len(verification.failures)} of {len(verification.spans)} factual statements in "
-        "this answer are not backed by a source Seshat verified this turn. Check them "
-        "before you rely on them."
-    )
+    parts = [
+        f"{len(settled)} of {len(verification.spans)} factual statements in this answer are "
+        "not backed by a source Seshat verified this turn.",
+        _TURN_SHAPE_SENTENCE[shape],
+    ]
+    unsettled = len(verification.unverifiable)
+    if unsettled:
+        noun = "statement" if unsettled == 1 else "statements"
+        parts.append(f"Seshat could not check {unsettled} other {noun}.")
+    parts.append("Check them before you rely on them.")
+    return " ".join(parts)
 
 
-def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mode: str) -> None:
+def _record_grounding(
+    ctx: ExecutionContext, verification: TurnVerification, mode: str
+) -> TurnShape | None:
     """Attach and emit the output side of the evidence contract (AC-6).
 
     The two failure families are counted apart on the record and on the log line, because
@@ -2230,6 +2256,10 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         ctx: Execution context.
         verification: What the checks decided.
         mode: The verification mode this turn ran under.
+
+    Returns:
+        The turn shape this line recorded (ADR-0151 D1), so the note is built from the
+        same value the event carries.
     """
     # ADR-0138 D5 (FRE-1285) widens this field, exactly as compliance.py's docstring
     # anticipated. It meant "this generation followed a D4 retry"; it now also covers
@@ -2297,6 +2327,17 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         observed_span_outcomes = {}
         invocation_checked_span_outcomes = {}
 
+    # ADR-0151 D1 (FRE-1507). The two counts are ungated, like the registry counts: they
+    # describe what the turn did, not the span list. The shape is None when verification
+    # did not run or the turn has no non-exempt span.
+    tool_rounds = ctx.tool_iteration_count
+    turn_shape = classify_turn_shape(
+        verification,
+        tool_results_admitted=tool_results_admitted,
+        tool_rounds=tool_rounds,
+        sub_agents_dispatched=ctx.sub_agents_dispatched,
+    )
+
     observation = _record_compliance_observation(ctx, record, turn_evidence_class)
     log.info(
         "grounding_verification_completed",
@@ -2334,7 +2375,12 @@ def _record_grounding(ctx: ExecutionContext, verification: TurnVerification, mod
         observed_span_outcomes=observed_span_outcomes,
         invocation_checked_span_outcomes=invocation_checked_span_outcomes,
         near_miss_markers=near_miss_markers,
+        # ADR-0151 D1 (FRE-1507): shape C is not observable from existing instrumentation.
+        turn_shape=turn_shape.value if turn_shape else None,
+        tool_rounds=tool_rounds,
+        sub_agents_dispatched=ctx.sub_agents_dispatched,
     )
+    return turn_shape
 
 
 def _record_compliance_observation(
@@ -5343,6 +5389,7 @@ async def step_init(
 
             ctx.expansion_plan = expansion_result.plan
             ctx.sub_agent_results = expansion_result.sub_agent_results
+            ctx.sub_agents_dispatched = expansion_result.dispatched_count
             ctx.expansion_phase_results = expansion_result.phase_results
             ctx.expansion_skipped_tasks = expansion_result.skipped_tasks
             ctx.expansion_skip_reason = expansion_result.skip_reason
@@ -7576,13 +7623,10 @@ async def step_synthesis(
     if mode != "off" and not ctx.turn_stopped_early:
         ctx.grounding_attempts += 1
         verification = await _verify_grounding(ctx, trace_ctx)
-        _record_grounding(ctx, verification, mode)
-        # FRE-1325: only `observe` delivers a verified reply that still has failures.
-        # `enforce` delivers compliant or unverified turns only, and its terminal
-        # statement replaces the reply this verdict describes. Held on ctx, not
-        # appended here: execute_task_safe adds it after the capture is written.
-        if mode == "observe":
-            ctx.grounding_disclosure = _unsourced_assertion_disclosure(verification)
+        turn_shape = _record_grounding(ctx, verification, mode)
+        # FRE-1325, ADR-0151 D4 (FRE-1507): computed in `observe` and `enforce`. Held on
+        # ctx, not appended here: execute_task_safe adds it after the capture is written.
+        ctx.grounding_disclosure = _unsourced_assertion_disclosure(verification, turn_shape)
 
         if mode == "enforce":
             decision = decide(
@@ -7600,6 +7644,8 @@ async def step_synthesis(
                 blocking_outcomes=[o.value for o in decision.blocking_outcomes],
             )
             if decision.decision is TurnDecision.RETRY_WITH_FORCED_RETRIEVAL:
+                # The next attempt verifies a new generation and recomputes the note.
+                ctx.grounding_disclosure = None
                 ctx.messages.append(
                     {"role": "user", "content": build_retry_directive(verification)}
                 )
@@ -7612,6 +7658,9 @@ async def step_synthesis(
                 # consists entirely of system-record spans (D1) and cannot recurse into
                 # another verification failure. That is what guarantees the loop ends.
                 ctx.final_reply = build_no_source_statement(verification, ctx.retrieval_attempts)
+                # The refusal replaces the generation this verdict describes (FRE-1325).
+                # ADR-0151 D4 withdraws the refusal in FRE-1509.
+                ctx.grounding_disclosure = None
 
         # ADR-0138 D3(d)'s sampled offline arm (FRE-1286). Reached only on the delivery
         # branch — the retry above already returned to LLM_CALL — so a turn that retried

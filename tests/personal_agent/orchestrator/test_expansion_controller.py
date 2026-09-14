@@ -877,6 +877,76 @@ class TestSerializedDispatch:
         ]
 
     @pytest.mark.asyncio
+    async def test_dispatched_count_includes_workers_that_raised(
+        self, controller: ExpansionController
+    ) -> None:
+        """ADR-0151 D1 (FRE-1507): a worker that raised was still dispatched.
+
+        The returned list drops it, so a turn whose workers all raised would otherwise
+        read as "no sub-agent ran".
+        """
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        expansion_result = ExpansionResult()
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=RuntimeError("boom"),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-all-raise",
+                messages=[],
+                result=expansion_result,
+            )
+
+        assert results == []
+        assert expansion_result.dispatched_count == 3
+
+    @pytest.mark.asyncio
+    async def test_a_failed_span_entry_is_not_a_dispatch(
+        self, controller: ExpansionController
+    ) -> None:
+        """A worker span that fails on entry never hands the worker to ``run_sub_agent``.
+
+        Its interval is still recorded, which is why the count is not the interval count.
+        """
+        from contextlib import asynccontextmanager
+
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.transport.events import Phase
+
+        @asynccontextmanager
+        async def _span(**kwargs: Any) -> Any:
+            if kwargs.get("phase") is Phase.SUB_AGENT:
+                raise RuntimeError("span entry failed")
+            yield "parent"
+
+        plan = _validate_plan_json(_make_plan_json(2))
+        assert plan is not None
+        expansion_result = ExpansionResult()
+        run_stub = AsyncMock()
+
+        with (
+            patch("personal_agent.transport.agui.transport.phase_span", _span),
+            patch("personal_agent.orchestrator.expansion_controller.run_sub_agent", run_stub),
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=AsyncMock(),
+                trace_id="test-trace-span-entry",
+                messages=[],
+                result=expansion_result,
+            )
+
+        run_stub.assert_not_called()
+        assert len(expansion_result.dispatch_intervals) == 2
+        assert expansion_result.dispatched_count == 0
+
+    @pytest.mark.asyncio
     async def test_max_observed_concurrency_is_one(self, controller: ExpansionController) -> None:
         """AC-1, belt-and-braces — never more than one sub-agent in flight."""
         from personal_agent.orchestrator.expansion_controller import ExpansionResult
@@ -1358,6 +1428,7 @@ async def _dispatch_hermetic(
     known: tuple[str, ...] = (),
     mode: Mode = Mode.NORMAL,
     config_error: Exception | None = None,
+    result: Any = None,
 ) -> list[SubAgentResult]:
     """Drive ``_run_dispatch`` with hermetic governance, registry and worker."""
     from personal_agent.orchestrator.expansion_controller import ExpansionResult
@@ -1390,7 +1461,7 @@ async def _dispatch_hermetic(
             llm_client=AsyncMock(),
             trace_id="t-hermetic",
             messages=[],
-            result=ExpansionResult(),
+            result=result if result is not None else ExpansionResult(),
         )
 
 
@@ -1535,11 +1606,21 @@ class TestSubAgentGapRedispatch:
                 return _make_sub_agent_result("find_facts", stated_tool_gap="web_search")
             return _make_sub_agent_result(spec.task)
 
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        expansion_result = ExpansionResult()
         results = await _dispatch_hermetic(
-            controller, plan, _run, granted=("web_search", "run_python"), known=("web_search",)
+            controller,
+            plan,
+            _run,
+            granted=("web_search", "run_python"),
+            known=("web_search",),
+            result=expansion_result,
         )
 
         assert len(calls) == 3  # Goal A, its one replacement, Goal B
+        # ADR-0151 D1 (FRE-1507): the replacement is a dispatched worker too.
+        assert expansion_result.dispatched_count == 3
         original, replacement = calls[0], calls[1]
         assert replacement.worker_type == WorkerType.RESEARCHER
         assert replacement.tools == ["web_search"]

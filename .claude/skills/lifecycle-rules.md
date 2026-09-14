@@ -103,3 +103,55 @@ covers both directions.
 - `make mypy` shows >5 errors you did not introduce (likely main-green; separate ticket).
 - Deploy succeeds but the live endpoint returns the wrong response — file a follow-up, not Done.
 - Same error recurs after 3 fix attempts — escalate per MODEL_ROUTING_POLICY.
+
+---
+
+*The four sections below moved here from `.claude/CLAUDE.md` on 2026-09-14 (doctor): they are session mechanics for build, master and adr, so they load on skill use rather than in every session.*
+
+## Model Routing Policy
+
+Full policy: `$HOME/.claude/MODEL_ROUTING_POLICY.md` (global) · `.claude/MODEL_ROUTING_POLICY.md` (project copy)
+
+| Tier | Model | Role |
+|------|-------|------|
+| 1 | Opus | Architect — specs, plans, ADRs, complex debugging |
+| 2 | Sonnet | Implementer — feature work from plans, first-pass debugging (3 attempts max) |
+| 3 | Haiku | Executor — Linear issues, git ops, linting, boilerplate |
+
+**Plan is ready for Sonnet when ALL five are true**: complete code (not pseudocode) · exact file paths · exact test commands with expected output · atomic steps (2-5 min) · no deferred design decisions.
+
+**Escalation**: 3 failed Sonnet attempts OR same error twice / self-revert / circular reasoning → escalate to Opus with full error context.
+
+**Subagent dispatch**: `model` param — `"opus"` / `"sonnet"` / `"haiku"`.
+
+**Linear labeling**: every issue gets exactly one label: `Tier-1:Opus`, `Tier-2:Sonnet`, or `Tier-3:Haiku`.
+
+## Worktree → Main Merge (Gotcha)
+
+Cannot `git checkout main` from a worktree — main is checked out in the primary repo. Always merge from the primary:
+
+```bash
+cd <path-to-primary-repo-clone> && git merge <branch> --no-edit && git push origin main
+```
+
+## Implementation Plan Naming Convention
+
+**One canonical location:** `docs/superpowers/plans/YYYY-MM-DD-fre-XXX-<slug>.md`
+
+**Never write to** `/plans/` (Claude Code scratch dir, gitignored) or `docs/plans/` (project-level docs only).
+
+## Pre-Merge Checklist
+
+- [ ] Issue is `Approved` in Linear
+- [ ] Type hints on all public APIs
+- [ ] Google-style docstrings on public classes/functions
+- [ ] No `print()`, `os.getenv()`, bare `except:`
+- [ ] `trace_id` in all structlog calls
+- [ ] `make test` passes
+- [ ] `make mypy` passes
+- [ ] `make ruff-check` + `make ruff-format` clean
+- [ ] Files placed per file organization rules (`.claude/CLAUDE.md` §2)
+- [ ] ADRs/specs linked in commit message and PR
+- [ ] One pytest process at a time (convention — the enforcing hook was removed 2026-07-18)
+- [ ] New tools use Tier 1/2; Tier 3 (MCP) requires ADR justification
+- [ ] **PWA changes**: `cd seshat-pwa && npm run lint` exits 0 (mirrors backend `ruff-check`; FRE-395)

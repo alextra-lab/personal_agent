@@ -54,24 +54,6 @@ Captain's Log) without explicit opt-in. This binds `tests/` **and** `scripts/eva
 
 Mechanics, test-stack commands, the escape hatch and the pre-commit guard: `tests/CLAUDE.md`.
 
-### Code quality
-
-```bash
-make mypy          # uv run mypy src/
-make ruff-check    # uv run ruff check src/
-make ruff-format   # uv run ruff format src/
-```
-
-### Pre-commit
-
-```bash
-pre-commit install       # install once after cloning
-pre-commit run --all-files
-```
-
-Hooks are defined in `.pre-commit-config.yaml` (all `repo: local`, each `entry:` naming its script under
-`scripts/`). Read that file for the current set rather than trusting a list here.
-
 ---
 
 ## Architecture
@@ -104,35 +86,6 @@ Expansion paths:
 - **DELEGATE** — structured `DelegationPackage` handed to external agent
 - **DECOMPOSE** — task split into sequential sub-tasks
 
-### Module map
-
-| Module | Role |
-|--------|------|
-| `request_gateway/` | 7-stage pre-LLM pipeline; `pipeline.py` is the entry point |
-| `orchestrator/` | State machine executor, session manager, context window, sub-agents |
-| `memory/` | `MemoryProtocol` interface + Neo4j-backed `MemoryService`; episodic→semantic promotion |
-| `llm_client/` | `LocalLLMClient` + `LiteLLMClient` with concurrency control and cost tracking |
-| `brainstem/` | Homeostasis: mode manager, sensors, expansion budget signals, consolidation scheduler |
-| `tools/` | Native Python tool executors + `ToolRegistry`; each tool: `ToolDefinition` + executor + governance entry |
-| `mcp/` | MCP gateway adapter; tool discovery runs once at startup (~10-15s), calls are fast |
-| `events/` | Redis Streams event bus (`EventBus` protocol); `NoOpBus` fallback when Redis unavailable |
-| `service/` | FastAPI app on :9000; PostgreSQL-backed session/message persistence via SQLAlchemy |
-| `config/` | `AppConfig(BaseSettings)` with `AGENT_` env prefix; access via `from personal_agent.config import settings` |
-| `governance/` | Mode-aware policy evaluation; tools declared in `config/governance/tools.yaml` |
-| `telemetry/` | structlog + Elasticsearch handler; all logs include `trace_id` |
-| `captains_log/` | Self-improvement data capture; reflection via DSPy `ChainOfThought` |
-| `insights/` | Cross-session delegation pattern analysis |
-| `second_brain/` | Entity extraction, quality monitoring, consolidation (called by brainstem) |
-| `transport/` | AG-UI protocol endpoint for streaming events to UI |
-| `delegation/` | Protocol adapters for structured delegation handoffs |
-| `sysgraph/` | Isolated System-graph store (proposals/stats/tickets/outcomes) in its own Postgres schema, physically separate from the Neo4j user KG (ADR-0105) |
-| `observability/` | Joinability probe and infrastructure monitors (ADR-0074) |
-| `ui/` | `service_cli.py` — the `uv run agent` entrypoint; connects to :9000 |
-| `gateway/` | Seshat API Gateway — FastAPI router factory over storage only (Neo4j, Postgres, ES); mounted onto the main service app in local mode (`settings.gateway_mount_local`) |
-| `storage/` | R2-backed artifact store (ADR-0069); async S3-protocol wrapper for Cloudflare R2; owns key layout and artifact lifecycle |
-| `cost_gate/` | Atomic Postgres budget reservation gate (ADR-0065); transactional reserve/commit/refund lifecycle replacing advisory checks in `LiteLLMClient` |
-| `grounding/` | Citation contract (ADR-0138) — per-turn source registry with stable identifiers, D2 admissibility, and the per-span citation format; plus span extraction, which decides *what* needs a citation (D1 default-deny). Output side of grounding; `captains_log/turn_evidence.py` (ADR-0125) is the input side |
-
 ### Tool integration tiers (ADR-0028)
 
 MCP is **not** the default. Tier 1 (native Python in `tools/`) → Tier 2 (existing CLI + SKILL.md) →
@@ -154,14 +107,6 @@ Key settings:
 `MemoryType` enum: `WORKING` · `EPISODIC` · `SEMANTIC` · `PROCEDURAL` · `PROFILE` · `DERIVED`
 
 Promotion pipeline: episodic interactions → entity extraction (qwen3-8b) → semantic facts in Neo4j.
-
-### Key conventions
-
-Full coding standards in `.claude/CLAUDE.md` § Coding Standards. Quick summary:
-
-- **Never** `os.getenv()` / `print()` / bare `except:` — see `.claude/CLAUDE.md` for details
-- Async for all I/O; pass `TraceContext` through call chains
-- Test markers: `integration` (requires live LLM), `requires_llm_server`, `evaluation` (100+ calls) — unit tests carry no marker
 
 ### Current status — see the authoritative sources
 

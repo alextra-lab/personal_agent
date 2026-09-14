@@ -175,6 +175,14 @@ One explicit delta, hand-edited rather than regenerated:
    deployment or key changed** — ``sub_agent`` still resolves onto
    ``qwen3.8-flash-next``; only these two fields on that one cell moved.
 
+**Rebaselined a seventh time, deliberately, for FRE-1517 (owner decision 2026-09-14).**
+One explicit delta, hand-edited rather than regenerated:
+
+1. **Two model semaphores added:** ``qwen3.8-27b-mtplx`` and
+   ``qwen3.8-flash-next-mtplx``, each ``limit`` 1 (the owner's one-MTPLX-slot
+   decision). They are study deployments that a session selects through ``/chat``'s
+   ``model`` parameter. **No role binding, resolved definition or price changed.**
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

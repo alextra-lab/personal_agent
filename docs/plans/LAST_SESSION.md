@@ -49,10 +49,10 @@ with stream labels, not the kill switch, and hold even GPU-safe paid work until 
 
 ## Sequence position + drift
 - build1: FRE-1508 (PR on hold until the replay posts), then FRE-1506 (High).
-- build2: FRE-1507 (launched 14:49), then FRE-1509. FRE-1510 and FRE-1495 are blocked by FRE-1506.
+- build2: FRE-1507 merged (PR #1168) and deployed; FRE-1509 is next. FRE-1510 and FRE-1495 are blocked by FRE-1506.
 - adr: FRE-1502.
-- The production gateway was last rebuilt for FRE-1501 (`5342e698`). The code from #1161 and #1165 is
-  on main but inert in production, and it ships with the next routine rebuild.
+- The production gateway was rebuilt at 15:21 UTC for FRE-1507 (`664f503e`), carrying #1161 and #1165
+  too. Source parity and /health verified.
 
 ## Answers for the fresh start
 - **What returns to the gate first?** PR #1166, when build1 posts the replay. Gate it against the
@@ -66,3 +66,5 @@ with stream labels, not the kill switch, and hold even GPU-safe paid work until 
   `stop_reason` `tool_call_truncated`. If the 500 recurs, FRE-1501 goes to Verify Failed.
 - **What else waits on master?** FRE-1338 is Approved and Urgent with no stream label, and its thread
   was updated on 2026-09-14. Read the thread before labelling it.
+- **What does the owner owe?** FRE-1507's AC-5: one live tool turn and one no-tool turn, each checked
+  against `grounding_verification_completed` (runbook on FRE-1507). Until then it stays Awaiting Deploy.

@@ -256,6 +256,88 @@ models:
     tool_calling_strategy: "native"
     endpoint: "https://slm.example.com/v1"
 
+  # ── MTPLX study deployments (FRE-1517) ──────────────────────────
+  # Owner-commissioned primary-model study, 2026-09-14. slm_server serves these
+  # packs by MANUAL swap: its stack stops and `mtplx serve` answers on the same
+  # tunnel endpoint as llama.cpp. So at most one of these and
+  # qwen3.8-flash-next is reachable at a time, and MTPLX answers ANY model name
+  # with its one loaded pack. A caller must check /v1/models before trusting
+  # which pack answered.
+  #
+  # Owner decisions 2026-09-14 16:45 UTC: effort medium (MTPLX launch flag
+  # --reasoning-effort medium; this dialect sends no reasoning_effort), one
+  # slot (the default serial scheduler, hence max_concurrency 1).
+  #
+  # The dialect is the provider's llamacpp_qwen. slm_server reports MTPLX 2.11.2
+  # honours top_k and accepts-and-ignores cache_prompt, min_p and
+  # repetition_penalty; min_p 0.0 and repeat_penalty 1.0 are neutral values, so
+  # the ignored keys change nothing. Packs, sizes and depths: FRE-1517 comments.
+  qwen3.8-27b-mtplx:
+    provider: slm_local
+    id: "mtplx-qwen38-27b-optimized-speed"
+    context_length: 131072       # served --context-window 131072 (native 262144), slm_server /health
+    quantization: "MTPLX-Optimized-Speed-4bit-g32"  # Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed
+    min_concurrency: 1
+    max_concurrency: 1
+    default_timeout: 600
+    default_mode: default
+    modes:
+      # Qwen3.8-27B card values, read 2026-09-06 (see qwen3.8-27b-ovh below).
+      default:
+        enable_thinking: true
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repeat_penalty: 1.0
+      worker:
+        enable_thinking: false
+        temperature: 0.7
+        top_p: 0.8
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repeat_penalty: 1.0
+    supports_function_calling: true
+    supports_vision: false        # not verified on the MTPLX pack; the study sends no images
+    supports_pdf_document: false
+    tool_calling_strategy: "native"
+    endpoint: "https://slm.example.com/v1"
+
+  qwen3.8-flash-next-mtplx:
+    provider: slm_local
+    id: "mtplx-qwen38-flash-next-optimized-speed"
+    context_length: 131072       # served --context-window 131072 (native 262144), slm_server /health
+    quantization: "MTPLX-Optimized-Speed-4bit-g32"  # Youssofal/Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+    min_concurrency: 1
+    max_concurrency: 1
+    default_timeout: 600
+    default_mode: default
+    modes:
+      # Identical to qwen3.8-flash-next's modes, so the arm differs only by engine and pack.
+      default:
+        enable_thinking: true
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repeat_penalty: 1.0
+      worker:
+        enable_thinking: false
+        temperature: 0.7
+        top_p: 0.8
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repeat_penalty: 1.0
+    supports_function_calling: true
+    supports_vision: false        # not verified on the MTPLX pack; the study sends no images
+    supports_pdf_document: false
+    tool_calling_strategy: "native"
+    endpoint: "https://slm.example.com/v1"
+
   # ── Managed Qwen (OVH AI Endpoints) ─────────────────────────────
   qwen3.8-27b-ovh:
     # Owner-directed 2026-08-05, moved to the 3.8 generation 2026-09-06 at the

@@ -3352,11 +3352,16 @@ class AppConfig(BaseSettings):
         enforcement / SLM endpoint resolution tests that have nothing to do with
         substrate isolation).
 
-        `sysgraph_database_url` is deliberately not checked here (unlike the two
-        sibling validators above): eval never sets `AGENT_SYSGRAPH_DATABASE_URL`, so
-        it resolves to the field default (`...@localhost:5432/...`), which is
-        unreachable from inside the eval gateway container rather than `-eval` or
-        prod — out of scope for this guard by construction, not an oversight.
+        `sysgraph_database_url` IS checked here too, added after master's gate review
+        of this same reopen (2026-09-14): eval never sets `AGENT_SYSGRAPH_DATABASE_URL`
+        today, so it resolves to the field default (`...@localhost:5432/...`) —
+        loopback, which `is_eval_host` already accepts, so this check is inert right
+        now. It exists for the day this PR's own pattern repeats: a future parity
+        pass adding `AGENT_SYSGRAPH_DATABASE_URL: ${AGENT_SYSGRAPH_DATABASE_URL}` to
+        `docker-compose.eval.yml` would otherwise sail through both this validator
+        (which didn't check the field) and `_validate_owner_storage_allowlist`
+        (already disabled for `substrate_profile != "private"`) with zero guard
+        rejecting a leaked production sysgraph Postgres URL (ADR-0105).
 
         Raises:
             ValueError: When a store resolves to a non-`-eval`, non-loopback host.
@@ -3373,6 +3378,8 @@ class AppConfig(BaseSettings):
             offenders.append(f"database_url={self.database_url!r}")
         if not is_eval_host(self.database_admin_url):
             offenders.append(f"database_admin_url={self.database_admin_url!r}")
+        if not is_eval_host(self.sysgraph_database_url):
+            offenders.append(f"sysgraph_database_url={self.sysgraph_database_url!r}")
 
         if not offenders:
             return self

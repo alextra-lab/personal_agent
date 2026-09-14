@@ -235,9 +235,25 @@ services:
       # service names (postgres, neo4j, elasticsearch), so the private profile rejected
       # every eval store and the gateway refused to boot. The eval services are the same
       # owner-controlled containers on the same host, so declaring them is what ADR-0112
-      # intends — NOT a reason to set AGENT_SUBSTRATE_PROFILE=managed, which would disable
-      # the check wholesale. The stale cached image predated this guard, which is why this
-      # only surfaced once the image was rebuilt (FRE-1341).
+      # intends. The stale cached image predated this guard, which is why this only
+      # surfaced once the image was rebuilt (FRE-1341).
+      #
+      # FRE-1372 (reopen): this allowlist's own validator (_validate_owner_storage_allowlist,
+      # settings.py) no longer runs on either eval gateway — AGENT_SUBSTRATE_PROFILE below
+      # interpolates production's real managed_embedder, and that check fires only for
+      # substrate_profile=="private". Master gate review, verified by codex plan-review
+      # 2026-09-14: this is still safe. managed_embedder changes nothing about which
+      # Postgres/Neo4j/Elasticsearch a request resolves to (config/substrate.yaml maps all
+      # three to the exact same setting: fields for every profile) — it only moves the
+      # embedder backend to the managed endpoint below. And `_validate_eval_deployment_isolation`
+      # (FRE-1372, this same reopen) is stricter than this allowlist for the threat that
+      # matters: this allowlist declares BOTH production's names and their -eval twins (so a
+      # leaked production hostname like bolt://neo4j:7687 passes it silently), while the new
+      # validator requires an exact -eval suffix (or loopback) and rejects a leaked production
+      # name outright. It now also checks sysgraph_database_url, closing the one field the old
+      # allowlist covered that it originally didn't. This allowlist entry stays — ADR-0112 AC-1
+      # governs the `private` profile generally, this eval stack included, should the profile
+      # ever change back — but it is not what protects these two gateways today.
       AGENT_OWNER_STORAGE_ALLOWLIST: '["postgres","neo4j","elasticsearch","postgres-eval","neo4j-eval","elasticsearch-eval"]'
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
@@ -386,9 +402,25 @@ services:
       # service names (postgres, neo4j, elasticsearch), so the private profile rejected
       # every eval store and the gateway refused to boot. The eval services are the same
       # owner-controlled containers on the same host, so declaring them is what ADR-0112
-      # intends — NOT a reason to set AGENT_SUBSTRATE_PROFILE=managed, which would disable
-      # the check wholesale. The stale cached image predated this guard, which is why this
-      # only surfaced once the image was rebuilt (FRE-1341).
+      # intends. The stale cached image predated this guard, which is why this only
+      # surfaced once the image was rebuilt (FRE-1341).
+      #
+      # FRE-1372 (reopen): this allowlist's own validator (_validate_owner_storage_allowlist,
+      # settings.py) no longer runs on either eval gateway — AGENT_SUBSTRATE_PROFILE below
+      # interpolates production's real managed_embedder, and that check fires only for
+      # substrate_profile=="private". Master gate review, verified by codex plan-review
+      # 2026-09-14: this is still safe. managed_embedder changes nothing about which
+      # Postgres/Neo4j/Elasticsearch a request resolves to (config/substrate.yaml maps all
+      # three to the exact same setting: fields for every profile) — it only moves the
+      # embedder backend to the managed endpoint below. And `_validate_eval_deployment_isolation`
+      # (FRE-1372, this same reopen) is stricter than this allowlist for the threat that
+      # matters: this allowlist declares BOTH production's names and their -eval twins (so a
+      # leaked production hostname like bolt://neo4j:7687 passes it silently), while the new
+      # validator requires an exact -eval suffix (or loopback) and rejects a leaked production
+      # name outright. It now also checks sysgraph_database_url, closing the one field the old
+      # allowlist covered that it originally didn't. This allowlist entry stays — ADR-0112 AC-1
+      # governs the `private` profile generally, this eval stack included, should the profile
+      # ever change back — but it is not what protects these two gateways today.
       AGENT_OWNER_STORAGE_ALLOWLIST: '["postgres","neo4j","elasticsearch","postgres-eval","neo4j-eval","elasticsearch-eval"]'
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080

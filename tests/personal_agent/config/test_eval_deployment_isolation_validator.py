@@ -18,13 +18,14 @@ _EVAL_SAFE_URLS: dict[str, object] = {
     "elasticsearch_url": "http://elasticsearch-eval:9200",
     "database_url": "postgresql+asyncpg://seshat_app:pw@postgres-eval:5432/personal_agent",
     "database_admin_url": "postgresql+asyncpg://agent:pw@postgres-eval:5432/personal_agent",
+    "sysgraph_database_url": "postgresql+asyncpg://sysgraph_role:pw@postgres-eval:5432/personal_agent",
 }
 
 
 def make_config(**overrides: object) -> AppConfig:
     """Build an AppConfig bypassing env-file loading.
 
-    Starts from *_EVAL_SAFE_URLS* (deployment_profile="eval", all four fields on
+    Starts from *_EVAL_SAFE_URLS* (deployment_profile="eval", all five fields on
     `-eval` hosts) plus *overrides*.
 
     Args:
@@ -66,6 +67,18 @@ class TestValidatorRaises:
         with pytest.raises(ValidationError, match="FRE-1372"):
             make_config(
                 database_admin_url="postgresql+asyncpg://agent:pw@postgres:5432/personal_agent"  # fre-375-allow: tests the -eval guard itself
+            )
+
+    def test_raises_when_eval_profile_with_prod_sysgraph_url(self) -> None:
+        """ValidationError raised when eval profile + sysgraph URL on production's hostname.
+
+        Master gate review 2026-09-14: this field must be checked too, or a future
+        parity pass adding AGENT_SYSGRAPH_DATABASE_URL to docker-compose.eval.yml
+        would leak a production sysgraph Postgres URL (ADR-0105) past every guard.
+        """
+        with pytest.raises(ValidationError, match="FRE-1372"):
+            make_config(
+                sysgraph_database_url="postgresql+asyncpg://sysgraph_role:pw@postgres:5432/personal_agent"  # fre-375-allow: tests the -eval guard itself
             )
 
     def test_error_message_names_offending_field(self) -> None:

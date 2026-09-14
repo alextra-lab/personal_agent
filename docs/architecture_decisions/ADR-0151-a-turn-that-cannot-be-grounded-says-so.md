@@ -1,6 +1,6 @@
 # ADR-0151: A Turn That Cannot Be Grounded Says So — Enforcement Narrowed to the Turns a Retry Can Repair
 
-**Status:** Proposed
+**Status:** Accepted — 2026-09-14 (owner)
 **Date:** 2026-09-14
 **Deciders:** Owner (the direction "states it could not ground", 2026-09-13; enforcement on shape B, the two retry limits, the unsettled-statement rule and the withdrawal of pre-generation forcing, 2026-09-14), `adr` seat at Opus 5 (author, the 91-turn measurement), master (the FRE-1325 note rate and the two-shape proposal this ADR revises)
 **Tags:** grounding, citations, enforcement, verification, disclosure
@@ -327,7 +327,7 @@ searched", which on shape B is exactly the set of sources the answer used.
     is zero;
   - `sub_agents_dispatched` — the count of workers handed to `run_sub_agent`, for HYBRID and
     DECOMPOSE alike, whether they returned or raised. `ctx.sub_agent_results` is not this count: a
-    worker that raises is dropped from it (`orchestrator/expansion_controller.py:823-833`), and only
+    worker that raises is dropped from it (`_run_dispatch` in `orchestrator/expansion_controller.py`), and only
     its interval is kept. A skipped worker is in `ctx.expansion_skipped_tasks` and does not count.
 
   The seeded negatives in AC-5 are what make these fields falsifiable.
@@ -508,3 +508,13 @@ Three non-blocking findings were also applied: `tool_calls_emitted` counted roun
 **Review disposition.** Three rounds ran. Round 1 changed the design, round 2 corrected one criterion,
 and round 3 corrected field definitions and added two criteria. The round-3 fixes are not reviewed
 again. A reviewer at the gate reads them in the round-3 delta.
+
+### 2026-09-14 — Accepted
+**Changed By:** master, on the owner's acceptance of 2026-09-14 05:56 UTC
+**Reason:** The owner accepted this ADR as written, D2 included. D2's settled set (`unresolved`,
+`source_not_entitled`, `unreachable`, `contradicted_by_source`) was the one open question at merge.
+Master read the four outcomes in `grounding/verification.py` and recommended accepting it: a
+cite-only retry can repair each one, by citing a registered source or by leaving the statement out.
+ADR-0138's status header now reads "amended" instead of "proposed". The worker-raise citation now
+names `_run_dispatch` instead of line numbers, because FRE-1501 moved those lines after this ADR was
+written.

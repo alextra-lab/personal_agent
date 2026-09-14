@@ -10,7 +10,7 @@ directions**: ADR-0098 Amendment A §A6 **narrows** it (entitlement follows the 
 and ADR-0139 D2/D3/D7 **widened** it — that widening is **withdrawn** as of 2026-09-02 under
 ADR-0140; see the amendment note below for which half of this section still stands.
 Both are recorded in the D2 amendment note below rather than left to be reconciled by a reader
-(FRE-1349, FRE-1347). · **D4 and D5 amendments proposed 2026-09-14 in ADR-0151 (Proposed)**:
+(FRE-1349, FRE-1347). · **D4 and D5 amended 2026-09-14 by ADR-0151 (Accepted)**:
 `enforce` retries only turns with an admitted tool source, never refuses, and nothing forces
 retrieval before generation (FRE-1328).
 **Date:** 2026-08-23

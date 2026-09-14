@@ -184,6 +184,11 @@ class ExpansionResult:
             mirrors why FRE-1380 deleted ``_not_admitted_result``).
         skip_reason: Why ``skipped_tasks`` were not dispatched, or ``None`` when
             nothing was skipped (FRE-1501).
+        dispatched_count: Workers handed to ``run_sub_agent``, returned or raised,
+            replacements included (ADR-0151 D1). Incremented on this result
+            immediately before each call. Not ``len(sub_agent_results)``, which
+            drops a worker that raised, and not ``len(dispatch_intervals)``, which
+            also records a failed span entry and is assigned only after the loop.
     """
 
     plan: ExpansionPlan | None = None
@@ -196,6 +201,7 @@ class ExpansionResult:
     dispatch_intervals: list[SubAgentInterval] = field(default_factory=list)
     skipped_tasks: list[str] = field(default_factory=list)
     skip_reason: SkipReason | None = None
+    dispatched_count: int = 0
 
     @property
     def cost_usd(self) -> float:
@@ -834,6 +840,7 @@ class ExpansionController:
                         detail=spec.task[:80],
                         parent_id=_parent_id,
                     ):
+                        result.dispatched_count += 1
                         sub_result = await run_sub_agent(
                             spec=spec,
                             llm_client=llm_client,
@@ -876,6 +883,7 @@ class ExpansionController:
                     eval_mode=eval_mode,
                     parent_span_id=_parent_id,
                     intervals=intervals,
+                    result=result,
                     turn_deadline_monotonic=turn_deadline_monotonic,
                     user_id=user_id,
                     authenticated=authenticated,
@@ -941,6 +949,7 @@ class ExpansionController:
         eval_mode: bool,
         parent_span_id: Any,
         intervals: list[SubAgentInterval],
+        result: ExpansionResult,
         turn_deadline_monotonic: float | None = None,
         user_id: UUID | None = None,
         authenticated: bool = False,
@@ -974,6 +983,8 @@ class ExpansionController:
                 replacement's own SUB_AGENT span nests under the same parent.
             intervals: Mutable interval list; the replacement's own wall-clock
                 window is appended here for dispatch-observability parity.
+            result: The dispatch's ExpansionResult; its ``dispatched_count`` counts
+                the replacement when it is handed to ``run_sub_agent`` (ADR-0151 D1).
             turn_deadline_monotonic: The turn's absolute deadline (FRE-1397),
                 threaded from ``_run_dispatch`` — this is still one more
                 serialized ``run_sub_agent`` call inside the same dispatch
@@ -1080,6 +1091,7 @@ class ExpansionController:
                 detail=replacement_spec.task[:80],
                 parent_id=parent_span_id,
             ):
+                result.dispatched_count += 1
                 replacement_result = await run_sub_agent(
                     spec=replacement_spec,
                     llm_client=llm_client,

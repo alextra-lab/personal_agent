@@ -496,6 +496,10 @@ class ExecutionContext:
     expansion_strategy: str | None = None
     expansion_constraints: dict[str, Any] | None = None
     sub_agent_results: list["SubAgentResult"] | None = None
+    # ADR-0151 D1 (FRE-1507): workers handed to run_sub_agent this turn, returned or
+    # raised. Not len(sub_agent_results): a worker that raised is dropped from that list,
+    # and a turn whose workers all raised would read as "no sub-agent ran".
+    sub_agents_dispatched: int = 0
     expansion_plan: "ExpansionPlan | None" = None
     expansion_phase_results: list["PhaseResult"] = field(default_factory=list)
     # FRE-1397: plan task names never dispatched because the turn's remaining

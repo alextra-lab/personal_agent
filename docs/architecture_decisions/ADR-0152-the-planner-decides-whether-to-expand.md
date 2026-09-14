@@ -62,7 +62,7 @@ Appendix A.
 
 **Result, per configuration** (agreement over the scored draws that parsed; planner seconds per call):
 
-| Engine | Model / quant | Effort | Agreement (95% range) | Declines correct | p50 / p90 |
+| Engine | Model / quant | Effort, temperature | Agreement (95% range) | Declines correct | p50 / p90 |
 |---|---|---|---|---|---|
 | llama.cpp | Qwen3.8-Flash-Next IQ4_XS | medium | 52/54 = 96% (87–99%) | 17/18 | 20.3 / 38.0 s |
 | llama.cpp | Qwen3.8-Flash-Next IQ4_XS | medium, temperature 0.6 | 48/54 = 89% (78–95%) | 17/18 | 21.2 / 31.4 s |
@@ -75,6 +75,8 @@ Appendix A.
 | MTPLX 2.11.2 | Qwen3.8-27B Bare-Speed | low | 51/54 = 94% (85–98%) | 15/18 | 22.5 / 40.6 s |
 | MTPLX 2.11.2 | Qwen3.8-27B Optimized-Speed | low | 53/54 = 98% (90–100%) | 17/18 | 23.2 / 34.9 s |
 | MTPLX 2.11.2 | Qwen3.8-27B Optimized-Speed | medium | 51/54 = 94% (85–98%) | 15/18 | 30.0 / 41.5 s |
+
+A row without a temperature ran at the model's catalog temperature (Appendix A1).
 
 Five things this settles:
 
@@ -238,9 +240,11 @@ primary role (FRE-1390), in that role's selected mode.
   failed at 65%.
 - **Temperature.** The planner may request its own sampling temperature, separate from the primary's
   (owner, 2026-09-14). A value is adopted only when it passes the D6 probe on the binding and is
-  clearly better than the primary's temperature. The one value tested, 0.6 on llama.cpp Flash-Next,
-  scored 89% against 96% at 1.0, so the planner keeps the primary's temperature. No configuration field
-  is added until a value passes. The primary's own temperature does not change without its own test.
+  clearly better than the primary's temperature: at least 6 more correct draws of 54, at a p90 no
+  worse. The one value tested, 0.6 on llama.cpp Flash-Next, scored 89% against 96% at 1.0, so the
+  planner keeps the primary's temperature. No configuration field is added until a value passes. The
+  change that adopts a value also adds a durable `planner_temperature` field to D4 and groups AC-7 by
+  it. The primary's own temperature does not change without its own test.
 
 ### D6 — A planner configuration is qualified on a committed probe
 
@@ -250,8 +254,8 @@ change ships. The committed probe
 today (`scripts/eval/fre1498/planner_probe.py`) is the FRE-1498 version: two fixed backends, four
 variants, `max_tokens` 4,096, no streaming and no scorer. It cannot reproduce Appendix A.
 
-A configuration (engine, model, quant, effort) qualifies as planner when the probe, 19 fixtures × 3
-trials, gives:
+A configuration (engine, model, quant, effort, temperature) qualifies as planner when the probe, 19
+fixtures × 3 trials, gives:
 
 | Criterion | Threshold |
 |---|---|
@@ -598,4 +602,4 @@ medium at 1.0 on every fixture except `c4_deliverable` 3, `c1_tool_imperative` 1
   reduced draws on the owner's instruction, and it fixed none of the Q6 errors.
 - **Raw rows.** One JSON line per draw, kept in the `adr` worktree's git-ignored
   `telemetry/archive/fre1502-planner-probe/`, with the probe and scorer used. They are not committed,
-  because they are run output. The committed probe of D6 reproduces the method.
+  because they are run output. The probe that D6 requires will reproduce the method once committed.

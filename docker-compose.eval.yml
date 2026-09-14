@@ -305,7 +305,7 @@ services:
       # FRE-1372's 2026-09-07 probe measured a real "no leak" against an eval Neo4j
       # holding zero nodes, because entity extraction never ran to leak anything.
       #
-      # These 22 keys interpolate from `/opt/seshat/.env` — pass `--env-file
+      # These 19 keys interpolate from `/opt/seshat/.env` — pass `--env-file
       # /opt/seshat/.env` to `docker compose` (see `make eval-infra-up`), since a
       # worktree's own `.env` is a stale, partial dev copy. Behaviour-relevant only:
       # never a production substrate address. `AGENT_SYSGRAPH_DATABASE_URL` (points
@@ -314,6 +314,17 @@ services:
       # above stays this file's own `-eval` value, guarded further by
       # `AppConfig._validate_eval_deployment_isolation` (FRE-1372), which refuses to
       # boot an eval-profile gateway resolving off an `-eval` host.
+      #
+      # Also deliberately NOT passed, security-review finding on this same reopen:
+      # `AGENT_LINEAR_API_KEY`, `AGENT_PERPLEXITY_API_KEY`, `AGENT_VOYAGE_API_KEY`.
+      # None is load-bearing for AC-1/AC-2 (entity extraction + recall need only the
+      # managed-embedder settings below, not these three tool credentials), and
+      # `seshat-gateway-treatment` runs primitive tools with `curl` auto-approved and
+      # no human approval gate — a live path for an eval turn to exfiltrate a
+      # write-capable Linear PAT, or write directly into the real FrenchForest Linear
+      # workspace via the always-registered Linear tool (confirmed: neither tool call
+      # has an eval/dry-run branch). Follow-up ticket filed for whether/how to extend
+      # parity to these three once that tool-execution path is hardened.
       AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
       AGENT_PROACTIVE_MEMORY_ENABLED: ${AGENT_PROACTIVE_MEMORY_ENABLED}
       AGENT_MULTIPATH_RECALL_ENABLED: ${AGENT_MULTIPATH_RECALL_ENABLED}
@@ -332,9 +343,6 @@ services:
       AGENT_MANAGED_EMBEDDING_MODEL: ${AGENT_MANAGED_EMBEDDING_MODEL}
       AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
       AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
-      AGENT_VOYAGE_API_KEY: ${AGENT_VOYAGE_API_KEY}
-      AGENT_PERPLEXITY_API_KEY: ${AGENT_PERPLEXITY_API_KEY}
-      AGENT_LINEAR_API_KEY: ${AGENT_LINEAR_API_KEY}
       AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
     ports:
       # Host 9002 → container 9001 (uvicorn port is hardcoded in Dockerfile.gateway)
@@ -428,7 +436,8 @@ services:
       # composition, so enable it here.
       AGENT_DELEGATION_ENABLED: "true"
       # FRE-1372 (reopen) / FRE-1498 / FRE-1464: production behaviour parity — same
-      # 22 keys, same rationale, as `seshat-gateway-control` above.
+      # 19 keys, same rationale (including the 3 deliberately-omitted credentials),
+      # as `seshat-gateway-control` above.
       AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
       AGENT_PROACTIVE_MEMORY_ENABLED: ${AGENT_PROACTIVE_MEMORY_ENABLED}
       AGENT_MULTIPATH_RECALL_ENABLED: ${AGENT_MULTIPATH_RECALL_ENABLED}
@@ -447,9 +456,6 @@ services:
       AGENT_MANAGED_EMBEDDING_MODEL: ${AGENT_MANAGED_EMBEDDING_MODEL}
       AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
       AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
-      AGENT_VOYAGE_API_KEY: ${AGENT_VOYAGE_API_KEY}
-      AGENT_PERPLEXITY_API_KEY: ${AGENT_PERPLEXITY_API_KEY}
-      AGENT_LINEAR_API_KEY: ${AGENT_LINEAR_API_KEY}
       AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
     ports:
       # Host 9003 → container 9001

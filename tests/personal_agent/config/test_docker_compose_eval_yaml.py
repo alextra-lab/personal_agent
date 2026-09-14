@@ -19,6 +19,12 @@ _COMPOSE_PATH = Path(__file__).parents[3] / "docker-compose.eval.yml"
 #: (AGENT_DATABASE_URL, AGENT_NEO4J_URI, ...) are deliberately excluded — those are
 #: supposed to differ from production and are covered by
 #: AppConfig._validate_eval_deployment_isolation instead.
+#:
+#: AGENT_LINEAR_API_KEY, AGENT_PERPLEXITY_API_KEY and AGENT_VOYAGE_API_KEY are
+#: deliberately NOT in this set (security review on this same reopen): none is
+#: load-bearing for AC-1/AC-2, and seshat-gateway-treatment's unsandboxed,
+#: curl-auto-approved bash tool with no approval gate makes routing them a live
+#: credential-exfiltration / production-Linear-write path.
 _BEHAVIOUR_KEYS = frozenset(
     {
         "AGENT_ENABLE_MEMORY_GRAPH",
@@ -39,10 +45,18 @@ _BEHAVIOUR_KEYS = frozenset(
         "AGENT_MANAGED_EMBEDDING_MODEL",
         "AGENT_MANAGED_EMBEDDING_TOKEN",
         "AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL",
-        "AGENT_VOYAGE_API_KEY",
-        "AGENT_PERPLEXITY_API_KEY",
-        "AGENT_LINEAR_API_KEY",
         "AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS",
+    }
+)
+
+#: The three tool credentials must NEVER appear on either eval gateway — this is
+#: the negative-space guarantee the security review asked for: not just "this
+#: version omits them" but "a future edit re-adding one is caught".
+_EXCLUDED_CREDENTIAL_KEYS = frozenset(
+    {
+        "AGENT_LINEAR_API_KEY",
+        "AGENT_PERPLEXITY_API_KEY",
+        "AGENT_VOYAGE_API_KEY",
     }
 )
 
@@ -92,3 +106,23 @@ class TestBehaviourSettingsParity:
                     f"{service_name}.{key} is {env[key]!r}, expected interpolation "
                     f"from `.env` via ${{{key}}}"
                 )
+
+
+class TestCredentialKeysExcluded:
+    """Neither eval gateway routes the three tool credentials the security review
+    flagged: none is load-bearing for AC-1/AC-2, and seshat-gateway-treatment's
+    unsandboxed, curl-auto-approved bash tool with no approval gate makes routing
+    them a live credential-exfiltration / production-Linear-write path.
+    """
+
+    def test_control_never_declares_the_excluded_credential_keys(self) -> None:
+        """seshat-gateway-control never gains AGENT_LINEAR/PERPLEXITY/VOYAGE_API_KEY."""
+        keys = _load_service_env_keys("seshat-gateway-control")
+        present = _EXCLUDED_CREDENTIAL_KEYS & keys
+        assert not present, f"seshat-gateway-control must not declare: {sorted(present)}"
+
+    def test_treatment_never_declares_the_excluded_credential_keys(self) -> None:
+        """seshat-gateway-treatment never gains AGENT_LINEAR/PERPLEXITY/VOYAGE_API_KEY."""
+        keys = _load_service_env_keys("seshat-gateway-treatment")
+        present = _EXCLUDED_CREDENTIAL_KEYS & keys
+        assert not present, f"seshat-gateway-treatment must not declare: {sorted(present)}"

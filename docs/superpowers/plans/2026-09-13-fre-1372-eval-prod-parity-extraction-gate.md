@@ -118,6 +118,23 @@ says: "If production's role bindings would send any role to a paid provider ... 
 ask master before firing." `entity_extraction` does. Surfacing this to the owner before
 `make eval-infra-up` / firing the probe.
 
+## Post-implementation: security review narrowed Fix 1
+
+Security review (feature-dev:code-reviewer + security-review, both scoped to this diff)
+found that the full 22-key list routes `AGENT_LINEAR_API_KEY`, `AGENT_PERPLEXITY_API_KEY`,
+and `AGENT_VOYAGE_API_KEY` — real production credentials — into
+`seshat-gateway-treatment`, which runs an unsandboxed bash tool with `curl`
+auto-approved and no human approval gate (`AGENT_APPROVAL_UI_ENABLED=false`, pre-existing,
+not this diff). Confirmed concretely: the Linear tools (`create_linear_issue`,
+`create_linear_project`) are registered unconditionally on every gateway with no
+eval/dry-run branch, so a real key there lets an eval turn write into the actual
+FrenchForest Linear workspace or exfiltrate the PAT via `curl`. None of the three is
+load-bearing for AC-1/AC-2 (entity extraction + recall need only the memory-graph/
+recall/embedder settings). Owner decision: narrow Fix 1 to the 19 keys that ARE
+load-bearing, drop the three credential keys from both eval gateways, and file a
+follow-up ticket for whether/how to extend parity to them once the eval-treatment
+tool-execution path is hardened.
+
 ## Quality gates
 
 `make test` · `make mypy` · `make ruff-check` + `make ruff-format` · `pre-commit run --all-files`.

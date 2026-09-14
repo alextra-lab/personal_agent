@@ -200,6 +200,7 @@ llama.cpp Flash-Next lowered `thorough` from 13% to 7% over 95 draws per variant
 |---|---|---|
 | `planner_decision` | `declined`, `expanded`, `failed`, or null | null when the planner did not run |
 | `planner_deployment` | the resolved deployment key of the planner call | the planner ran |
+| `planner_effort` | the effective reasoning effort sent, or null when the template reads none | the planner ran |
 | `planner_duration_ms` | the planner call's wall clock | the planner ran |
 | `expansion_budget` | `governance.expansion_budget` for the turn | always |
 | `synthesis_appended` | true when a synthesis message was added | always |
@@ -237,7 +238,8 @@ primary role (FRE-1390), in that role's selected mode.
 ### D6 — A planner configuration is qualified on a committed probe
 
 The planner probe used for Appendix A, with its streaming client, fixture and variant filters, effort
-control, router mode and threshold scorer, is committed under `scripts/eval/`. The committed probe
+control, router mode and threshold scorer, must be committed under `scripts/eval/` before the routing
+change ships. The committed probe
 today (`scripts/eval/fre1498/planner_probe.py`) is the FRE-1498 version: two fixed backends, four
 variants, `max_tokens` 4,096, no streaming and no scorer. It cannot reproduce Appendix A.
 
@@ -446,10 +448,14 @@ the routing change.
 - **AC-4 — On real traffic, the planner agrees with the owner.** · **Check:** a random sample of 40
   `planner_asked` turns from the window, at least 15 declined and at least 15 expanded. Each turn's
   message is read from its Captain's Log task capture (`user_message`, joined on `trace_id`), so no
-  route-trace preview is needed. The owner labels each "should expand" or "should not", blind to the
-  planner's decision. · *Fails if* agreement is below 85%, or more than 2 of the turns the owner labels
-  "should not" were expanded. The threshold sits 5 points below the probe's, because real traffic
-  differs from the 19 fixtures and the owner's labels carry their own disagreement.
+  route-trace preview is needed. A task capture is written only for a completed turn, so the check
+  first counts coverage: the share of `planner_asked` turns in the window that have a joinable capture.
+  The window extends until each stratum has at least 15 joinable turns. The owner labels each sampled
+  turn "should expand" or "should not", blind to the planner's decision. · *Fails if* capture coverage
+  is below 95% of `planner_asked` turns, either stratum still has fewer than 15 joinable turns 30 days
+  after the routing change deploys, agreement is below 85%, or more than 2 of the turns the owner labels
+  "should not" were expanded. The agreement threshold sits 5 points below the probe's, because real
+  traffic differs from the 19 fixtures and the owner's labels carry their own disagreement.
 
 - **AC-5 — The bound holds.** · **Check:** over the window, `sub_agent_count` against the row's
   `expansion_budget`, and each worker capture's `tool_iterations` against its `round_budget`, with its
@@ -460,12 +466,12 @@ the routing change.
 - **AC-6 — The deployments the owner can select are probed.** · **Check:** the committed probe, run
   from the repo, on the local primary binding and on the OVH primary deployment at the effort production
   sends. The scorer output is posted on FRE-1502 against the D6 thresholds. · *Fails if* the probe cannot
-  run from the repo against either deployment, or the local binding misses a D6 threshold. An OVH miss
-  does not fail this criterion. D6 hands it to the owner, and the owner's decision is recorded on
-  FRE-1502 before it closes.
+  run from the repo against either deployment, the local binding misses a D6 threshold, or a selectable
+  deployment misses a threshold and FRE-1502 has no recorded owner decision on it (a gate on D1, or
+  removal from selection). The miss itself does not fail this criterion.
 
 - **AC-7 — The delay is the one measured.** · **Check:** over the window, `planner_duration_ms` per
-  `planner_deployment`, at p50 and p90. · *Fails if* the local binding's planner p90 exceeds 120 s, or its
+  `planner_deployment` and `planner_effort`, at p50 and p90. · *Fails if* the local binding's planner p90 exceeds 120 s, or its
   p50 exceeds the D6 probe value for that configuration by more than 50%.
 
 - **AC-8 — The prompt shows the enforced budgets.** · **Check:** a test builds the planner system prompt

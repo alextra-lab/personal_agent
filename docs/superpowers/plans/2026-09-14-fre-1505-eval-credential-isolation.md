@@ -2,7 +2,7 @@
 
 Ticket: FRE-1505 (Urgent, Approved 2026-09-14). Related: FRE-1372, FRE-375.
 
-## Problem (verified in code and in the running image)
+## Problem (verified on `main` before this branch, and in the running image)
 
 - `seshat-gateway-treatment` runs `AGENT_PRIMITIVE_TOOLS_ENABLED=true` and
   `AGENT_APPROVAL_UI_ENABLED=false`. `cat`, `env` and `curl` are on the NORMAL auto-approve list.
@@ -10,84 +10,83 @@ Ticket: FRE-1505 (Urgent, Approved 2026-09-14). Related: FRE-1372, FRE-375.
 - The gateway image runs as root. PID 1 is `uv run uvicorn …` and holds the full environment.
   The Python app is a child process (PID 27 in the live cloud container).
 - `/proc/<pid>/environ` access is a ptrace check. A same-uid reader passes unless the target is
-  non-dumpable and the reader lacks `CAP_SYS_PTRACE`. The container does not hold
-  `CAP_SYS_PTRACE` (`CapEff 00000000a80425fb`, bit 19 clear).
+  non-dumpable and the reader lacks `CAP_SYS_PTRACE`. A different-uid reader without
+  `CAP_SYS_PTRACE` fails.
 - `create_linear_issue` checks `ctx.eval_mode` (a per-request flag). `create_linear_project`,
-  `find_linear_issues` and `list_linear_projects` have no eval guard. Nothing keys on
-  `deployment_profile`.
+  `find_linear_issues` and `list_linear_projects` have no eval guard.
 
-Experiment (gateway image, root, PID 1 python, seeded `AGENT_FAKE_API_KEY`):
-before `prctl(PR_SET_DUMPABLE, 0)` a bash child finds the seeded value in `/proc/1/environ`.
-After it, the read fails with `Permission denied`. `/proc/1/mem` also fails.
-
-## Mechanism
+## Mechanism (revision 2, after codex plan review)
 
 All changes are keyed on `settings.deployment_profile == "eval"`. Production (`cloud`, `local`)
 behaviour does not change.
 
-1. **Child environment allowlist.** In eval, `bash_executor` passes `env=` built from an
-   allowlist of non-secret names: `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TERM`,
-   `TMPDIR`, `VIRTUAL_ENV`. An allowlist, not a denylist, because `AGENT_DATABASE_URL` carries a
-   password under a name no suffix pattern matches.
-2. **Non-dumpable gateway process.** In eval, when primitive tools register, the process calls
-   `prctl(PR_SET_DUMPABLE, 0)` through `ctypes`. A bash child then cannot read the gateway's
-   `/proc/<pid>/environ` or `/proc/<pid>/mem`.
-3. **Python as PID 1 in eval.** `uv` as PID 1 holds the environment and we cannot make it
-   non-dumpable. `docker-compose.eval.yml` sets `command:` on the eval base to run
-   `/app/.venv/bin/uvicorn` directly, and sets the treatment `PATH` to the same value `uv run`
-   produces (`/app/.venv/bin:` prefix), so bash children see the same binaries.
-4. **Fail-closed startup probe.** In eval, after step 2, registration runs the real child path
-   once: `cat /proc/[0-9]*/environ; printenv`. If any value of an environment variable named
-   `*_KEY`, `*_TOKEN`, `*_SECRET` or `*_PASSWORD` (value length ≥ 8) appears in the output, the
-   `bash` tool is not registered and an error is logged. This catches a reverted `command:`,
-   an added `CAP_SYS_PTRACE`, or a failed `prctl`.
-5. **Linear eval guard.** `_gql` raises `ToolExecutionError` before any HTTP client is built when
-   `deployment_profile == "eval"`. All four Linear tools route through `_gql`, so none sends a
-   request to `api.linear.app` from eval.
+1. **Bash child as `nobody`.** On eval, `bash_executor` spawns the child with `user=65534`,
+   `group=65534`, `extra_groups=[]`. A non-root process cannot read `/proc/<pid>/environ` or
+   `/proc/<pid>/mem` of any root process: the gateway, PID 1 (`uv`), Docker health checks, and
+   gateway-spawned children. The kernel clears the child's capabilities on the uid change, so
+   an added `CAP_SYS_PTRACE` on the container does not reach it.
+2. **Allowlisted child environment.** On eval the child gets only `PATH`, `LANG`, `LC_ALL`,
+   `LC_CTYPE`, `TZ`, `TERM`, `VIRTUAL_ENV`, plus `HOME=/tmp` and `TMPDIR=/tmp`. An allowlist,
+   because `AGENT_DATABASE_URL` carries a password under a name no suffix pattern matches.
+3. **Fail closed.** On eval, if the gateway is not root it cannot drop privileges. Bash returns
+   `credential_isolation_unavailable` and spawns nothing.
+4. **Linear eval guard.** `_gql` raises `ToolExecutionError` before any HTTP client is built when
+   `deployment_profile == "eval"`. All four Linear tools route through `_gql`.
 
-### Rejected alternatives
+### Revision 1 (rejected by codex review)
 
-- **Drop the bash child to an unprivileged uid.** Blocks `/proc` for every root process,
-  including short-lived siblings. Rejected: the eval arm then cannot write
-  `/app/agent_workspace`, which breaks parity with production bash (root) for the arm under
-  measurement.
-- **Delete secrets from `os.environ` after settings load.** Does not change the kernel's initial
-  environ block (`/proc/self/environ`), and any later `AppConfig()` re-read loses values.
-- **Eval-scoped credentials.** Needs owner-side key provisioning. It does not close AC-1 for the
-  Anthropic and OpenAI keys the eval stack needs.
+Revision 1 used `PR_SET_DUMPABLE=0` on the gateway, an env allowlist, and uvicorn as PID 1,
+with a startup leak probe. Codex findings that rejected it:
+
+- Critical: gateway-spawned children (`mmdc`, git, delegation) inherit the full environment and
+  are dumpable again after `execve`. A root bash child can read them while they run.
+- Critical: the Docker health check runs every 10 s with the full environment. It is a
+  recurring, dumpable target that a root bash loop can catch.
+- High: the startup probe ran async work from sync registration, used a suffix-name detector,
+  and degraded (dropped bash) instead of failing.
+
+The uid drop closes all three, because none of those processes is readable by `nobody`.
+
+### Codex findings not adopted, with reason
+
+- **Profile key fails open when `AGENT_DEPLOYMENT_PROFILE` is missing** (finding 8). Both eval
+  services declare `AGENT_DEPLOYMENT_PROFILE: eval` as a compose literal, never interpolated.
+  `AppConfig._validate_eval_deployment_isolation` already relies on the same literal. A new
+  `linear_tools_enabled` flag defaulting to false changes production configuration (AC-4) for a
+  misconfiguration that the eval stack cannot produce.
+- **Linear no-network test is a unit seam** (finding 10). `_gql` is the only network path in
+  `linear.py`, and the test patches its only client factory for all four tools. A sentinel
+  endpoint adds a container test for the same boundary.
+
+### Parity cost (stated)
+
+On eval, bash runs as `nobody`. It can read `/app` and write `/tmp`. It cannot write root-owned
+paths such as `/app/agent_workspace`. The `write` primitive still runs in-process as root, so
+file writes through `write` are unchanged.
 
 ### Residual risk (stated, not closed)
 
-- A gateway-spawned child that inherits the full environment (`mmdc` from `artifact_tools`, git
-  from `captains_log`, the Claude Code delegation adapter) is dumpable while it runs. A
-  concurrent bash call can read it during that window. The startup probe does not see it.
-- The `read` primitive runs in-process and can read `/proc/self/environ` if governance allows it.
-  `tools.yaml` forbids `/proc/**` for `read` and `write`, and `read` resolves the path first.
+- The `read` primitive runs in-process as root and can read `/proc/self/environ` if governance
+  allows it. `tools.yaml` forbids `/proc/**` for `read` and `write`, and `read` resolves the path
+  before the check.
+- `nobody` can still reach the network (`curl`). It holds no credential to send.
 
 ## Steps
 
-1. Write failing tests → verify: each fails for the expected reason.
-   - `tests/test_tools/test_eval_credential_isolation.py`
-     - AC-1: a subprocess (`python -c`) with seeded `AGENT_SEEDED_API_KEY`, `SEEDED_TOKEN`,
-       `SEEDED_SECRET`, `SEEDED_PASSWORD` and profile `eval` calls the harden helper, then
-       `bash_executor("printenv; cat /proc/$PPID/environ")`. Assert no seeded value in stdout.
-       (`$PPID` is the gateway-equivalent process. In CI it is not PID 1.)
-     - AC-3: same subprocess, `bash_executor("echo ok")` → `stdout == "ok\n"`, `success`.
-     - AC-4: profile `cloud` → child `printenv` still shows the seeded value; process stays
-       dumpable; `bash` registers.
-     - Probe: a seeded leak (dumpable not set, parent env readable) → `bash` not registered.
-   - `tests/test_tools/test_linear.py`
-     - AC-2: profile `eval`, key set → `create_linear_issue` and `create_linear_project` raise
-       and the HTTP client factory is never called.
-     - AC-4: profile `cloud` → the existing success tests still pass (unchanged).
-   - `tests/personal_agent/config/test_docker_compose_eval_yaml.py`: eval base `command` starts
-     with `/app/.venv/bin/uvicorn`; treatment `PATH` starts with `/app/.venv/bin:`.
-2. Add `src/personal_agent/tools/primitives/credential_isolation.py`: `eval_child_env()`,
-   `make_process_non_dumpable()`, `credential_leak_probe()`.
-3. Wire `bash_executor` (`env=`), `register_mvp_tools` (harden + probe in eval), `_gql` (guard).
-4. Edit `docker-compose.eval.yml`.
-5. Container probe (evidence, not committed): build `seshat-gateway:fre1505` (never `:latest`),
-   run with seeded fake keys as PID 1, call `bash_executor("printenv; cat /proc/1/environ")`.
+1. Failing tests → verify each fails for the expected reason.
+   - `tests/test_tools/test_linear.py`: AC-2 eval-profile tests (all four tools, no client built)
+     and AC-4 cloud/local tests (request sent).
+   - `tests/test_tools/test_eval_credential_isolation.py`: real-subprocess AC-4 (cloud bash still
+     sees seeded values — also the instrument check), real-subprocess fail-closed refusal on a
+     non-root eval gateway, mocked-spawn wiring for eval and production.
+2. `src/personal_agent/tools/linear.py`: `_gql` guard.
+3. `src/personal_agent/tools/primitives/bash.py`: uid drop, env allowlist, fail closed.
+4. `scripts/eval/probe_bash_credential_isolation.py`: root outcome probe for AC-1 and AC-3. It
+   starts a full-environment sibling, confirms a root scan finds credentials (instrument), then
+   scans `/proc/[0-9]*/environ` and `/proc/[0-9]*/task/*/environ` through `bash_executor` for
+   25 s (crosses health-check ticks). Prints names only.
+5. Build `seshat-gateway:fre1505` (never `:latest`) and run the probe as root with seeded fake
+   keys. Record the output in the handoff.
 6. Gates: `make test`, `make mypy`, `make ruff-check`, `make ruff-format`,
    `pre-commit run --all-files`.
 
@@ -95,12 +94,13 @@ behaviour does not change.
 
 | AC | Proof |
 |----|-------|
-| AC-1 | unit test (unprivileged, `$PPID`) + container probe (root, `/proc/1`) |
-| AC-2 | `test_linear.py` eval-profile tests: no client built |
-| AC-3 | unit test `echo ok` under eval hardening |
-| AC-4 | no production change: every change is keyed on `deployment_profile == "eval"`; cloud-profile tests show bash env pass-through and Linear requests unchanged |
+| AC-1 | probe in the gateway image as root: `eval_scan_leaked == []`, child uid 65534, instrument finds credentials; covers `/proc/1/environ`, all processes, and threads |
+| AC-2 | `test_eval_profile_sends_no_request_to_linear` (5 cases) |
+| AC-3 | probe: `echo_ok == true` as `nobody` |
+| AC-4 | no production change: every change is keyed on `deployment_profile == "eval"`; `test_cloud_bash_behaviour_is_unchanged`, `test_production_spawn_keeps_identity_and_environment`, `test_non_eval_profile_still_sends_linear_request` |
 
 ## Post-deploy
 
-Rebuild of the eval image only (`make eval-infra-up` path). The production gateway code path does
-not change behaviour, but the image is shared, so a gateway rebuild ships inert code to production.
+The eval stack must be rebuilt (`make eval-infra-up`) before it runs again. Then run the probe
+against `cloud-sim-seshat-gateway-treatment` with `docker exec -i`. The production gateway image
+also contains the code, but no production path changes behaviour.

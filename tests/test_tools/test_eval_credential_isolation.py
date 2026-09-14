@@ -1,14 +1,16 @@
-"""Outcome tests: a bash call on an eval gateway cannot read a credential (FRE-1505).
+"""A bash call on an eval gateway cannot read a credential (FRE-1505).
 
-Each test boots a real subprocess that stands in for the gateway process. The subprocess
-holds seeded fake credentials in its environment, registers the MVP tools through the
-production path (``register_mvp_tools``), and runs the registered ``bash`` executor.
+Two kinds of test live here.
 
-``/proc/$PPID/environ`` from the bash child is the gateway-equivalent of the container's
-``/proc/1/environ``: the bash child's parent is the process that holds the credentials.
+The subprocess tests boot a real process that stands in for the gateway. It holds seeded
+fake credentials, registers the MVP tools through the production path
+(``register_mvp_tools``), and runs the registered ``bash`` executor. They prove AC-4
+(production unchanged) and the fail-closed refusal when the gateway is not root.
 
-The cloud-profile test is the seeded negative for the instrument. The same commands must
-reveal the seeded values there, or the eval assertions prove nothing.
+The eval isolation itself (drop to ``nobody``) needs a root parent. CI and the dev VPS run
+tests unprivileged, so the root outcome (AC-1, AC-3) is proven in the gateway image by
+``scripts/eval/probe_bash_credential_isolation.py``. Here the spawn arguments are checked
+with a mocked subprocess, and that test says so.
 """
 
 from __future__ import annotations
@@ -17,8 +19,17 @@ import json
 import os
 import subprocess
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.primitives.bash import (
+    EVAL_CHILD_ENV_NAMES,
+    EVAL_CHILD_GID,
+    EVAL_CHILD_UID,
+    bash_executor,
+)
 
 _SEEDED = {
     # The two keys the eval stack really holds (the profile refuses to boot without them).
@@ -52,6 +63,8 @@ print("RESULT:" + json.dumps(out))
 """
     % _LEAK_COMMAND
 )
+
+_CTX = TraceContext.new_trace()
 
 
 def _run_gateway_standin(profile: str) -> dict[str, object]:
@@ -89,40 +102,88 @@ def _output(result: dict[str, object], key: str) -> str:
     return f"{call.get('stdout', '')}{call.get('stderr', '')}"
 
 
-@pytest.fixture(scope="module")
-def eval_result() -> dict[str, object]:
-    """The stand-in result under the eval deployment profile."""
-    return _run_gateway_standin("eval")
+def test_cloud_bash_behaviour_is_unchanged() -> None:
+    """AC-4 and instrument check: production bash still inherits the environment.
 
-
-@pytest.fixture(scope="module")
-def cloud_result() -> dict[str, object]:
-    """The stand-in result under the production (cloud) deployment profile."""
-    return _run_gateway_standin("cloud")
-
-
-def test_eval_bash_cannot_read_any_seeded_credential(eval_result: dict[str, object]) -> None:
-    """AC-1: printenv and the parent's environ show no credential value on eval."""
-    assert eval_result["bash_registered"] is True
-    output = _output(eval_result, "leak")
-    leaked = [name for name, value in _SEEDED.items() if value in output]
-    assert leaked == [], f"credential values readable from bash on eval: {leaked}"
-
-
-def test_eval_bash_still_runs_plain_commands(eval_result: dict[str, object]) -> None:
-    """AC-3: ``echo ok`` still returns ``ok`` under the eval hardening."""
-    ok = eval_result["ok"]
+    If this fails, the leak command cannot see credentials at all, and every eval
+    assertion about its output would pass vacuously.
+    """
+    result = _run_gateway_standin("cloud")
+    assert result["bash_registered"] is True
+    output = _output(result, "leak")
+    assert all(value in output for value in _SEEDED.values())
+    ok = result["ok"]
     assert isinstance(ok, dict)
-    assert ok["success"] is True
     assert ok["stdout"] == "ok\n"
 
 
-def test_cloud_bash_behaviour_is_unchanged(cloud_result: dict[str, object]) -> None:
-    """AC-4 and instrument check: production bash still inherits the environment.
+@pytest.mark.skipif(os.geteuid() == 0, reason="the refusal path needs a non-root gateway")
+def test_eval_bash_without_root_refuses_and_runs_nothing() -> None:
+    """Fail closed: a non-root eval gateway cannot drop privileges, so bash refuses."""
+    result = _run_gateway_standin("eval")
+    assert result["bash_registered"] is True
+    for key in ("leak", "ok"):
+        call = result[key]
+        assert isinstance(call, dict)
+        assert call["success"] is False
+        assert call["error"] == "credential_isolation_unavailable"
+    serialized = json.dumps(result)
+    assert not [name for name, value in _SEEDED.items() if value in serialized]
 
-    If this fails, the leak command cannot see credentials at all, and the eval test
-    above would pass vacuously.
+
+def _mock_proc() -> MagicMock:
+    """Build a mock asyncio.Process that exits 0 with no output."""
+    proc = MagicMock()
+    proc.returncode = 0
+    proc.communicate = AsyncMock(return_value=(b"", b""))
+    return proc
+
+
+@pytest.mark.asyncio
+async def test_eval_spawn_drops_to_nobody_with_allowlisted_env() -> None:
+    """Wiring (mocked spawn): on eval as root the child gets nobody and no credential.
+
+    The kernel outcome for these arguments is proven in the gateway image by
+    scripts/eval/probe_bash_credential_isolation.py.
     """
-    assert cloud_result["bash_registered"] is True
-    output = _output(cloud_result, "leak")
-    assert all(value in output for value in _SEEDED.values())
+    with (
+        patch.dict(os.environ, _SEEDED),
+        patch("personal_agent.tools.primitives.bash.settings") as ms,
+        patch("personal_agent.tools.primitives.bash.os.geteuid", return_value=0),
+        patch(
+            "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=_mock_proc()),
+        ) as mock_exec,
+    ):
+        ms.deployment_profile = "eval"
+        result = await bash_executor("echo ok", ctx=_CTX)
+
+    assert result["success"] is True
+    kwargs = mock_exec.call_args.kwargs
+    assert kwargs["user"] == EVAL_CHILD_UID == 65534
+    assert kwargs["group"] == EVAL_CHILD_GID == 65534
+    assert kwargs["extra_groups"] == []
+    env = kwargs["env"]
+    assert set(env) <= EVAL_CHILD_ENV_NAMES | {"HOME", "TMPDIR"}
+    assert not [value for value in _SEEDED.values() if value in env.values()]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile", ["cloud", "local"])
+async def test_production_spawn_keeps_identity_and_environment(profile: str) -> None:
+    """AC-4 (mocked spawn): production bash inherits the gateway's user and environment."""
+    with (
+        patch("personal_agent.tools.primitives.bash.settings") as ms,
+        patch(
+            "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=_mock_proc()),
+        ) as mock_exec,
+    ):
+        ms.deployment_profile = profile
+        await bash_executor("echo ok", ctx=_CTX)
+
+    kwargs = mock_exec.call_args.kwargs
+    assert kwargs["env"] is None
+    assert kwargs["user"] is None
+    assert kwargs["group"] is None
+    assert kwargs["extra_groups"] is None

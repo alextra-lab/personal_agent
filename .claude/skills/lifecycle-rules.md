@@ -106,7 +106,7 @@ covers both directions.
 
 ---
 
-*The four sections below moved here from `.claude/CLAUDE.md` on 2026-09-14 (doctor): they are session mechanics for build, master and adr, so they load on skill use rather than in every session.*
+*The three sections below moved here from `.claude/CLAUDE.md` on 2026-09-14 (doctor): they are session mechanics for build, master and adr, so they load on skill use rather than in every session.*
 
 ## Model Routing Policy
 
@@ -125,14 +125,6 @@ Full policy: `$HOME/.claude/MODEL_ROUTING_POLICY.md` (global) · `.claude/MODEL_
 **Subagent dispatch**: `model` param — `"opus"` / `"sonnet"` / `"haiku"`.
 
 **Linear labeling**: every issue gets exactly one label: `Tier-1:Opus`, `Tier-2:Sonnet`, or `Tier-3:Haiku`.
-
-## Worktree → Main Merge (Gotcha)
-
-Cannot `git checkout main` from a worktree — main is checked out in the primary repo. Always merge from the primary:
-
-```bash
-cd <path-to-primary-repo-clone> && git merge <branch> --no-edit && git push origin main
-```
 
 ## Implementation Plan Naming Convention
 

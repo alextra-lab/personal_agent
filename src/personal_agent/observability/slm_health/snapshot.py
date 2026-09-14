@@ -44,9 +44,19 @@ class SlmHealthSnapshot(BaseModel):
         generation_ok: Whether the FRE-1474 generation-capability check
             succeeded — a minimal completion against the currently-served
             model. ``None`` when the check was not requested (the default;
-            only the scheduled probe tick opts in).
+            only the scheduled probe tick opts in), or when it was requested
+            but skipped (see ``generation_skip_reason``) — a skip is not a
+            verdict either way, so it never degrades ``status``.
+        generation_skip_reason: Why the generation check was skipped this
+            tick — a busy local backend (a healthy backend serving a real
+            request must not read ``degraded``), or the catalog's primary
+            deployment not currently served (e.g. a manual model swap).
+            ``None`` when the check ran to completion (success or failure —
+            see ``error``) or was not requested at all.
         generation_probe_latency_ms: Round-trip latency of the generation
-            check (served-model lookup + completion), when performed.
+            check (served-model lookup + completion), when it actually ran.
+            ``None`` when skipped or not requested — a skip measures nothing
+            worth reporting under this field's name.
         probed_at: UTC timestamp when the probe was initiated.
         trace_id: Probe's own :class:`~personal_agent.telemetry.trace.SystemTraceContext`
             trace ID — the probe is itself joinable.
@@ -67,6 +77,7 @@ class SlmHealthSnapshot(BaseModel):
     model_id: str | None = None
     probe_latency_ms: float | None = None
     generation_ok: bool | None = None
+    generation_skip_reason: str | None = None
     generation_probe_latency_ms: float | None = None
     probed_at: datetime
     trace_id: str

@@ -46,6 +46,7 @@
         "model_id":        { "type": "keyword" },
         "probe_latency_ms":{ "type": "float" },
         "generation_ok":   { "type": "boolean" },
+        "generation_skip_reason": { "type": "text" },
         "generation_probe_latency_ms": { "type": "float" },
         "probed_at":       { "type": "date" },
         "trace_id":        { "type": "keyword" },
@@ -55,7 +56,7 @@
     }
   },
   "_meta": {
-    "description": "SLM health probe snapshots (ADR-0083 / FRE-399). One doc per probe, monthly index agent-monitors-slm-health-YYYY-MM (FRE-543 cutover to monthly; FRE-1036 normalized the separator from YYYY.MM to YYYY-MM). Mapping covers the full 16-field SlmHealthSnapshot model (FRE-534/A2, widened by FRE-1474's generation_ok/generation_probe_latency_ms): the live data only ever populated a handful of fields because the rest arrive null and never triggered a dynamic mapping. trace_id is keyword (was text under ES-default) so exact-term joins to slm-requests/agent-logs work — the join-key fix that the joinability story depends on.",
+    "description": "SLM health probe snapshots (ADR-0083 / FRE-399). One doc per probe, monthly index agent-monitors-slm-health-YYYY-MM (FRE-543 cutover to monthly; FRE-1036 normalized the separator from YYYY.MM to YYYY-MM). Mapping covers the full 17-field SlmHealthSnapshot model (FRE-534/A2, widened by FRE-1474's generation_ok/generation_skip_reason/generation_probe_latency_ms): the live data only ever populated a handful of fields because the rest arrive null and never triggered a dynamic mapping. trace_id is keyword (was text under ES-default) so exact-term joins to slm-requests/agent-logs work — the join-key fix that the joinability story depends on.",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

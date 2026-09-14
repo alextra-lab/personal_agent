@@ -214,6 +214,17 @@ class TestRunScheduledSlmHealthProbe:
         assert mock_probe.await_args.kwargs["base_url"] is None
 
 
+def test_generation_check_enabled_defaults_to_false() -> None:
+    """FRE-1474 master gate (2026-09-14): must default off — a deploy must not
+    add load to the owner's Mac while FRE-1517's model-testing study is running.
+    Asserted on the field default (not an instantiated AppConfig) so a live
+    .env does not perturb the check.
+    """
+    from personal_agent.config.settings import AppConfig
+
+    assert AppConfig.model_fields["slm_health_generation_check_enabled"].default is False
+
+
 class TestRunScheduledSlmHealthProbeRootSpan:
     """AC-1/AC-2 (ADR-0129 D3, FRE-1069): the probe opens exactly one root span, and
     every log record it emits carries that span's identity and ``kind``.

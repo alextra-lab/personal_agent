@@ -190,6 +190,11 @@ class TestProbeSlmHealthGeneration:
         served_ids: frozenset[str] = frozenset({"test-model"}),
         completion_resp: MagicMock | Exception | None = None,
         base_url: str = "https://slm.example.com/v1",
+        primary_resolution: tuple[tuple[str, str] | None, str | None] = (
+            ("slm_local", "test-model"),
+            None,
+        ),
+        active_count: int = 0,
     ) -> "SlmHealthSnapshot":
         from personal_agent.observability.slm_health.probe import probe_slm_health
 
@@ -206,6 +211,14 @@ class TestProbeSlmHealthGeneration:
                 "personal_agent.llm_client.provider_health.fetch_served_model_ids",
                 new=fetch_mock,
             ),
+            patch(
+                "personal_agent.observability.slm_health.probe._resolve_primary_local_deployment",
+                return_value=primary_resolution,
+            ),
+            patch(
+                "personal_agent.observability.slm_health.probe._provider_active_count",
+                return_value=active_count,
+            ),
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
@@ -215,11 +228,13 @@ class TestProbeSlmHealthGeneration:
                 mock_client.post = AsyncMock(side_effect=completion_resp)
             else:
                 mock_client.post = AsyncMock(return_value=completion_resp)
-            return await probe_slm_health(
+            snap = await probe_slm_health(
                 url="https://slm.example.com/health",
                 trace_id="test-trace-gen",
                 base_url=base_url,
             )
+            self._last_post_mock = mock_client.post
+            return snap
 
     @pytest.mark.asyncio
     async def test_ac1_backend_unreachable_while_health_answers_degrades(self) -> None:
@@ -244,14 +259,78 @@ class TestProbeSlmHealthGeneration:
         assert snap.generation_ok is False
 
     @pytest.mark.asyncio
-    async def test_no_served_model_degrades(self) -> None:
-        """No id reported as served → generation check fails closed."""
+    async def test_no_served_model_skips_not_degrades(self) -> None:
+        """FRE-1474 master gate: nothing served is ambiguous, not a failure — skip."""
         snap = await self._call_with_generation(
             _make_response(status_code=200),
             served_ids=frozenset(),
         )
-        assert snap.status != "up"
-        assert snap.generation_ok is False
+        assert snap.status == "up"
+        assert snap.generation_ok is None
+        assert snap.generation_skip_reason is not None
+        assert "no model reported as served" in snap.generation_skip_reason
+
+    @pytest.mark.asyncio
+    async def test_primary_not_served_skips_not_degrades(self) -> None:
+        """FRE-1474 master gate: a swapped-in pack (primary absent from the
+        served set) must not read degraded — e.g. a manual swap for a
+        model-testing study.
+        """
+        snap = await self._call_with_generation(
+            _make_response(status_code=200),
+            served_ids=frozenset({"some-other-pack"}),
+        )
+        assert snap.status == "up"
+        assert snap.generation_ok is None
+        assert snap.generation_skip_reason is not None
+        assert "not currently served" in snap.generation_skip_reason
+
+    @pytest.mark.asyncio
+    async def test_busy_backend_skips_not_degrades_and_makes_no_completion_call(
+        self,
+    ) -> None:
+        """FRE-1474 master gate: a healthy backend busy with a real request
+        must not read degraded — the check skips before the network call.
+        """
+        snap = await self._call_with_generation(
+            _make_response(status_code=200),
+            active_count=2,
+        )
+        assert snap.status == "up"
+        assert snap.generation_ok is None
+        assert snap.generation_skip_reason is not None
+        assert "busy" in snap.generation_skip_reason
+        assert "active=2" in snap.generation_skip_reason
+        self._last_post_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skip_does_not_set_latency_or_error(self) -> None:
+        """A skip measures nothing and is not a probe error (snapshot.error
+        stays None on a skip — only a definitive failure sets it).
+        """
+        snap = await self._call_with_generation(
+            _make_response(status_code=200),
+            active_count=1,
+        )
+        assert snap.generation_probe_latency_ms is None
+        assert snap.error is None
+
+    @pytest.mark.asyncio
+    async def test_probes_primary_model_not_an_arbitrary_served_id(self) -> None:
+        """FRE-1474 master gate: with multiple served models (e.g. a reranker
+        beside the chat model), the probe targets the catalog's primary
+        deployment specifically, not an arbitrary served id.
+        """
+        snap = await self._call_with_generation(
+            _make_response(status_code=200),
+            served_ids=frozenset({"chat-model", "rerank-model"}),
+            primary_resolution=(("slm_local", "chat-model"), None),
+        )
+        assert snap.status == "up"
+        assert snap.generation_ok is True
+        self._last_post_mock.assert_awaited_once()
+        posted_json = self._last_post_mock.await_args.kwargs["json"]
+        assert posted_json["model"] == "chat-model"
 
     @pytest.mark.asyncio
     async def test_successful_generation_stays_up(self) -> None:

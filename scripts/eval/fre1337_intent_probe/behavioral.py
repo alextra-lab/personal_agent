@@ -54,6 +54,17 @@ SIGNAL_SETTLE_TIMEOUT_S = 120.0
 #: waited out in full before the next fixture's wipe, never skipped.
 EXTRACTION_SETTLE_TIMEOUT_S = 90.0
 
+#: How long the consolidation batch's own graph writes (Turn/Entity MERGE, embeddings,
+#: session nodes, promotion) may lag `entity_extraction_completed` — FRE-1372 (reopen),
+#: live-verified 2026-09-14: `entity_extraction_completed` marks only the LLM call
+#: returning, not the graph write. A measured run showed a 57s gap between
+#: `entity_extraction_completed` and the resulting `entity_created` — waiting on
+#: extraction alone let `IsolatedArmRunner` wipe before that write landed, so it
+#: appeared in the *next* arm's freshly-wiped graph: a real, live-measured cross-arm
+#: leak, the exact defect this ticket chain exists to prevent, just via a write path
+#: (consolidation's own graph write) FRE-1372's original design never waited on.
+CONSOLIDATION_SETTLE_TIMEOUT_S = 90.0
+
 _POLL_INTERVAL_S = 3.0
 
 _REQUIRED_FIELDS = (
@@ -124,13 +135,15 @@ async def _es_search(client: httpx.AsyncClient, body: dict[str, Any]) -> dict[st
     return result
 
 
-async def _count_event(client: httpx.AsyncClient, trace_id: str, event_type: str) -> int:
+async def _count_event(
+    client: httpx.AsyncClient, trace_id: str, event_type: str, *, field: str = "trace_id"
+) -> int:
     body = {
         "size": 0,
         "query": {
             "bool": {
                 "must": [
-                    {"term": {"trace_id": trace_id}},
+                    {"term": {field: trace_id}},
                     {"term": {"event_type": event_type}},
                 ]
             }
@@ -140,6 +153,43 @@ async def _count_event(client: httpx.AsyncClient, trace_id: str, event_type: str
     return int(result["hits"]["total"]["value"])
 
 
+async def fetch_latest_event(
+    client: httpx.AsyncClient, trace_id: str, event_type: str, *, field: str = "trace_id"
+) -> dict[str, Any] | None:
+    """Return the most recent ``event_type`` document matching ``field == trace_id``.
+
+    Used to read a field off an already-settled event — e.g. to learn a
+    consolidation batch's own ``trace_id`` from an ``entity_extraction_completed``
+    document matched by ``capture_trace_id``, so a caller can then wait on that
+    batch's own ``consolidation_completed`` (FRE-1372).
+
+    Args:
+        client: Async HTTP client pointed at `elasticsearch-eval`.
+        trace_id: Value to match ``field`` against.
+        event_type: Event type to fetch.
+        field: ES document field to match ``trace_id`` against.
+
+    Returns:
+        The latest matching document's ``_source``, or ``None`` if none exist.
+    """
+    body = {
+        "size": 1,
+        "sort": [{"@timestamp": {"order": "desc"}}],
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {field: trace_id}},
+                    {"term": {"event_type": event_type}},
+                ]
+            }
+        },
+    }
+    result = await _es_search(client, body)
+    hits = result["hits"]["hits"]
+    source: dict[str, Any] | None = hits[0]["_source"] if hits else None
+    return source
+
+
 async def wait_for_event_settle(
     client: httpx.AsyncClient,
     trace_id: str,
@@ -147,6 +197,7 @@ async def wait_for_event_settle(
     *,
     timeout_s: float,
     require_nonzero: bool = True,
+    field: str = "trace_id",
 ) -> bool:
     """Poll ES until ``event_type`` for ``trace_id`` stops growing (fre481's pattern).
 
@@ -159,6 +210,18 @@ async def wait_for_event_settle(
             polling until the timeout (the event just hasn't landed yet). If False, a
             stable 0 is a valid settled state (used when the event may legitimately
             never fire).
+        field: ES document field to match ``trace_id`` against. Defaults to
+            ``trace_id`` itself — correct for ``model_call_completed``/
+            ``tool_call_completed``, whose own ``trace_id`` field is the request's.
+            **Not** correct for ``entity_extraction_completed`` when consolidation
+            batches several pending captures into one sweep (FRE-1372, live-verified
+            2026-09-14): that event's ``trace_id`` is the *batch* sweep's own newly
+            minted id, shared across every capture in the batch, while
+            ``capture_trace_id`` is the one field that still equals the original
+            request's trace_id. A caller waiting on `entity_extraction_completed`
+            must pass ``field="capture_trace_id"`` or it polls a field that can
+            never match, and the wait always times out even when extraction
+            genuinely completed.
 
     Returns:
         True if the count was seen and stable (or accepted at 0) before the timeout;
@@ -167,7 +230,7 @@ async def wait_for_event_settle(
     deadline = asyncio.get_event_loop().time() + timeout_s
     seen = -1
     while asyncio.get_event_loop().time() < deadline:
-        count = await _count_event(client, trace_id, event_type)
+        count = await _count_event(client, trace_id, event_type, field=field)
         if count == seen and (count > 0 or not require_nonzero):
             return True
         seen = count

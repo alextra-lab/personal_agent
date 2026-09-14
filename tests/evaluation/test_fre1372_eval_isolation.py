@@ -76,10 +76,19 @@ class _FakeESHitsResponse:
         return self._body
 
 
+_FAKE_BATCH_TRACE_ID = "batch-trace-1"
+
+
 def _patch_settle_always_true(
-    monkeypatch: pytest.MonkeyPatch, calls: list[tuple[str, bool]]
+    monkeypatch: pytest.MonkeyPatch, calls: list[tuple[str, bool, str]]
 ) -> None:
-    """Record `(event_type, require_nonzero)` per call; never actually polls ES."""
+    """Record `(event_type, require_nonzero, field)` per call; never actually polls ES.
+
+    Also patches `fetch_latest_event` to hand back a fake batch `trace_id` for
+    `entity_extraction_completed` — `run_turn()` now chains a `consolidation_completed`
+    wait off that value (FRE-1372), so a test exercising the full settle chain needs
+    both faked together.
+    """
 
     async def _fake_settle(
         client: Any,
@@ -88,12 +97,21 @@ def _patch_settle_always_true(
         *,
         timeout_s: float,
         require_nonzero: bool = True,
+        field: str = "trace_id",
     ) -> bool:
-        calls.append((event_type, require_nonzero))
+        calls.append((event_type, require_nonzero, field))
         return True
+
+    async def _fake_fetch_latest_event(
+        client: Any, trace_id: str, event_type: str, *, field: str = "trace_id"
+    ) -> dict[str, Any]:
+        return {"trace_id": _FAKE_BATCH_TRACE_ID}
 
     monkeypatch.setattr(
         eval_isolation, "wait_for_event_settle", AsyncMock(side_effect=_fake_settle)
+    )
+    monkeypatch.setattr(
+        eval_isolation, "fetch_latest_event", AsyncMock(side_effect=_fake_fetch_latest_event)
     )
 
 
@@ -199,7 +217,7 @@ async def test_run_turn_waits_extraction_settle_with_require_nonzero_true(
     reproducing FRE-1338's leak instead of preventing it.
     """
     driver = _FakeDriver()
-    settle_calls: list[tuple[str, bool]] = []
+    settle_calls: list[tuple[str, bool, str]] = []
     _patch_settle_always_true(monkeypatch, settle_calls)
     _patch_gateway_idle_always_zero(monkeypatch)
     http = AsyncMock()
@@ -210,9 +228,145 @@ async def test_run_turn_waits_extraction_settle_with_require_nonzero_true(
     await runner.run_turn(http, es, "hello", arm="control")
 
     assert settle_calls == [
-        ("model_call_completed", True),
-        ("entity_extraction_completed", True),
+        ("model_call_completed", True, "trace_id"),
+        ("entity_extraction_completed", True, "capture_trace_id"),
+        ("consolidation_completed", True, "trace_id"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# FRE-1372 (reopen) — the consolidation-batch write must also settle, not just
+# entity_extraction_completed (the LLM call returning, not the graph write)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_turn_settled_false_when_consolidation_never_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Extraction settling is not enough: a measured run showed entity_extraction_completed
+    landing ~57s before the resulting graph write (consolidation_completed) — if that
+    write never settles, the turn is not yet safe to wipe past.
+    """
+    driver = _FakeDriver()
+    _patch_gateway_idle_always_zero(monkeypatch)
+
+    async def _fake_settle(
+        client: Any,
+        trace_id: str,
+        event_type: str,
+        *,
+        timeout_s: float,
+        require_nonzero: bool = True,
+        field: str = "trace_id",
+    ) -> bool:
+        return event_type != "consolidation_completed"
+
+    async def _fake_fetch_latest_event(
+        client: Any, trace_id: str, event_type: str, *, field: str = "trace_id"
+    ) -> dict[str, Any]:
+        return {"trace_id": "batch-trace-1"}
+
+    monkeypatch.setattr(
+        eval_isolation, "wait_for_event_settle", AsyncMock(side_effect=_fake_settle)
+    )
+    monkeypatch.setattr(
+        eval_isolation, "fetch_latest_event", AsyncMock(side_effect=_fake_fetch_latest_event)
+    )
+    http = AsyncMock()
+    http.post = AsyncMock(side_effect=[_FakeResponse("s1", "trace-s1")])
+    es = AsyncMock()
+
+    runner = IsolatedArmRunner(driver=driver)
+    result = await runner.run_turn(http, es, "hello", arm="control")
+
+    assert result.extraction_settled is False
+
+
+@pytest.mark.asyncio
+async def test_run_turn_never_waits_on_consolidation_when_extraction_never_settles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No entity_extraction_completed landed at all (e.g. a bare greeting) -> there is
+    no batch to chase; `fetch_latest_event`/the consolidation wait must never fire.
+    """
+    driver = _FakeDriver()
+    _patch_gateway_idle_always_zero(monkeypatch)
+
+    async def _fake_settle(
+        client: Any,
+        trace_id: str,
+        event_type: str,
+        *,
+        timeout_s: float,
+        require_nonzero: bool = True,
+        field: str = "trace_id",
+    ) -> bool:
+        return event_type != "entity_extraction_completed"
+
+    fetch_mock = AsyncMock()
+    monkeypatch.setattr(
+        eval_isolation, "wait_for_event_settle", AsyncMock(side_effect=_fake_settle)
+    )
+    monkeypatch.setattr(eval_isolation, "fetch_latest_event", fetch_mock)
+    http = AsyncMock()
+    http.post = AsyncMock(side_effect=[_FakeResponse("s1", "trace-s1")])
+    es = AsyncMock()
+
+    runner = IsolatedArmRunner(driver=driver)
+    result = await runner.run_turn(http, es, "hello", arm="control")
+
+    assert result.extraction_settled is False
+    fetch_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_turn_settled_false_when_no_batch_event_is_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`fetch_latest_event` returning None (ES read raced its own indexing) must not
+    crash `run_turn` — it must fall back to "not settled", never guess a batch id.
+    """
+    driver = _FakeDriver()
+    _patch_gateway_idle_always_zero(monkeypatch)
+    _patch_settle_always_true(monkeypatch, [])
+
+    async def _fake_fetch_latest_event_none(
+        client: Any, trace_id: str, event_type: str, *, field: str = "trace_id"
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        eval_isolation, "fetch_latest_event", AsyncMock(side_effect=_fake_fetch_latest_event_none)
+    )
+    http = AsyncMock()
+    http.post = AsyncMock(side_effect=[_FakeResponse("s1", "trace-s1")])
+    es = AsyncMock()
+
+    runner = IsolatedArmRunner(driver=driver)
+    result = await runner.run_turn(http, es, "hello", arm="control")
+
+    assert result.extraction_settled is False
+
+
+@pytest.mark.asyncio
+async def test_run_turn_settled_true_when_both_extraction_and_consolidation_land(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full chain settling — extraction, then its batch's own consolidation
+    write — is what makes a turn genuinely safe to wipe past.
+    """
+    driver = _FakeDriver()
+    _patch_gateway_idle_always_zero(monkeypatch)
+    _patch_settle_always_true(monkeypatch, [])
+    http = AsyncMock()
+    http.post = AsyncMock(side_effect=[_FakeResponse("s1", "trace-s1")])
+    es = AsyncMock()
+
+    runner = IsolatedArmRunner(driver=driver)
+    result = await runner.run_turn(http, es, "hello", arm="control")
+
+    assert result.extraction_settled is True
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,7 @@ _COMPOSE_PATH = Path(__file__).parents[3] / "docker-compose.eval.yml"
 #: credential-exfiltration / production-Linear-write path.
 _BEHAVIOUR_KEYS = frozenset(
     {
+        "AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED",
         "AGENT_ENABLE_MEMORY_GRAPH",
         "AGENT_PROACTIVE_MEMORY_ENABLED",
         "AGENT_MULTIPATH_RECALL_ENABLED",

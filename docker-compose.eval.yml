@@ -305,7 +305,7 @@ services:
       # FRE-1372's 2026-09-07 probe measured a real "no leak" against an eval Neo4j
       # holding zero nodes, because entity extraction never ran to leak anything.
       #
-      # These 19 keys interpolate from `/opt/seshat/.env` — pass `--env-file
+      # These 20 keys interpolate from `/opt/seshat/.env` — pass `--env-file
       # /opt/seshat/.env` to `docker compose` (see `make eval-infra-up`), since a
       # worktree's own `.env` is a stale, partial dev copy. Behaviour-relevant only:
       # never a production substrate address. `AGENT_SYSGRAPH_DATABASE_URL` (points
@@ -325,6 +325,19 @@ services:
       # workspace via the always-registered Linear tool (confirmed: neither tool call
       # has an eval/dry-run branch). Follow-up ticket filed for whether/how to extend
       # parity to these three once that tool-execution path is hardened.
+      #
+      # AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED — missing from the owner's own
+      # starting-point file too, found live: without it, `_should_consolidate()`
+      # (brainstem/scheduler.py) defaults to the local-inference gating branch
+      # (`second_brain_resource_gating_enabled` defaults True) and requires 300s of
+      # host idle time since the last request before it will EVER trigger
+      # consolidation — silently, at `log.debug` (below eval's INFO level), with no
+      # entity_extraction_started log line at all. A live two-turn AC-1/AC-2 probe
+      # never reaches 300s of idle between turns, so extraction never even attempts
+      # to fire — reproducing this ticket's own failure class one level deeper than
+      # Fix 1 already covers. Production's `.env` sets this False because its
+      # primary role is remote/tunnelled MLX, not host-local — exactly eval's shape.
+      AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: ${AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED}
       AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
       AGENT_PROACTIVE_MEMORY_ENABLED: ${AGENT_PROACTIVE_MEMORY_ENABLED}
       AGENT_MULTIPATH_RECALL_ENABLED: ${AGENT_MULTIPATH_RECALL_ENABLED}
@@ -436,8 +449,9 @@ services:
       # composition, so enable it here.
       AGENT_DELEGATION_ENABLED: "true"
       # FRE-1372 (reopen) / FRE-1498 / FRE-1464: production behaviour parity — same
-      # 19 keys, same rationale (including the 3 deliberately-omitted credentials),
-      # as `seshat-gateway-control` above.
+      # 20 keys, same rationale (including the 3 deliberately-omitted credentials and
+      # the live-discovered resource-gating fix), as `seshat-gateway-control` above.
+      AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: ${AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED}
       AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
       AGENT_PROACTIVE_MEMORY_ENABLED: ${AGENT_PROACTIVE_MEMORY_ENABLED}
       AGENT_MULTIPATH_RECALL_ENABLED: ${AGENT_MULTIPATH_RECALL_ENABLED}

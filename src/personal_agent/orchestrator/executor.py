@@ -51,7 +51,6 @@ from personal_agent.grounding.enforcement_selection import (
 )
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.verification import (
-    CheckOutcome,
     TurnEvidenceClass,
     TurnVerification,
     apply_entailment,
@@ -1762,9 +1761,7 @@ async def _apply_inline_entailment(
         which is why the judge is built lazily rather than per call.
     """
     registry = ctx.source_registry
-    if registry is None or not any(
-        span.outcome is CheckOutcome.ENTAILMENT_REQUIRED for span in verification.spans
-    ):
+    if registry is None or not verification.awaits_judge:
         # A None registry cannot reach here — ``_verify_grounding`` returns ``unavailable``
         # before verifying — so this narrows rather than handles. Written as a guard rather
         # than an ``assert`` or a type: ignore because the escalated spans would otherwise
@@ -1779,9 +1776,13 @@ async def _apply_inline_entailment(
         max_checks=settings.grounding_entailment_max_inline_checks,
         budget_ms=settings.grounding_entailment_latency_budget_ms,
         checks_already_used=ctx.grounding_entailment_checks,
+        max_partial_miss_checks=settings.grounding_entailment_max_partial_miss_checks,
+        partial_miss_checks_already_used=ctx.grounding_partial_miss_checks,
         trace_ctx=trace_ctx,
     )
-    ctx.grounding_entailment_checks += settled.entailment_checks
+    # Two counters, so neither class can spend the other's cap across D4 attempts (FRE-1508).
+    ctx.grounding_entailment_checks += settled.entailment_checks - settled.partial_miss_checks
+    ctx.grounding_partial_miss_checks += settled.partial_miss_checks
     return settled
 
 

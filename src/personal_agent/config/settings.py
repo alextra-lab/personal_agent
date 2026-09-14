@@ -2259,7 +2259,8 @@ class AppConfig(BaseSettings):
     #
     # These bind both arms of the entailment check. Nothing here runs while
     # `grounding_verification_mode` is "off" — the inline arm only reaches spans D3(c)
-    # escalated, and the offline arm only reaches spans D3 verified.
+    # escalated or matched in part (FRE-1508), and the offline arm only reaches spans D3
+    # verified.
     grounding_entailment_max_inline_checks: int = Field(
         default=8,
         ge=1,
@@ -2269,6 +2270,20 @@ class AppConfig(BaseSettings):
             "attempts. Cumulative rather than per-pass because a per-pass bound bounds "
             "nothing when D4 may run the pass again: 8 per pass is 8 x attempts. Spans "
             "past the bound fail closed as entailment_unavailable rather than passing."
+        ),
+    )
+    grounding_entailment_max_partial_miss_checks: int = Field(
+        default=8,
+        ge=0,
+        le=32,
+        description=(
+            "Bound on inline judge calls per turn for entity-free partial misses — spans "
+            "containment matched only in part (FRE-1508). CUMULATIVE across D4 generation "
+            "attempts, and separate from grounding_entailment_max_inline_checks, so this "
+            "class can never spend a check the escalated class needs. The judge may only "
+            "reject these spans: a supporting verdict leaves them unverifiable, because "
+            "D3(c) passes a span only when the source holds every content word. 0 turns "
+            "the check off."
         ),
     )
     grounding_entailment_latency_budget_ms: int = Field(

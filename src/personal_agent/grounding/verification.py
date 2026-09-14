@@ -50,7 +50,11 @@ from pydantic import BaseModel, ConfigDict
 
 from personal_agent.captains_log.turn_evidence import GroundedSpanRecord, GroundingRecord
 from personal_agent.grounding.citations import CitationParse, strip_citation_markers
-from personal_agent.grounding.containment import ContainmentOutcome, check_containment
+from personal_agent.grounding.containment import (
+    ContainmentOutcome,
+    ContainmentResult,
+    check_containment,
+)
 from personal_agent.grounding.entailment import (
     EntailmentJudge,
     EntailmentJudgement,
@@ -185,6 +189,21 @@ class SpanVerification(BaseModel):
         """Whether this span may be delivered as it stands."""
         return self.outcome is CheckOutcome.PASSED
 
+    @property
+    def partial_miss(self) -> bool:
+        """Whether the inline judge may reject this span (FRE-1508).
+
+        True for an entity-free span containment matched only in part: the source holds
+        some of its predicate words and not the rest. A span with no content words at all
+        has nothing missing and is excluded — a judge cannot settle a span that asserts
+        nothing.
+        """
+        return (
+            self.outcome is CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT
+            and self.entity_free_predicate
+            and bool(self.missing)
+        )
+
 
 class TurnVerification(BaseModel):
     """What verification decided about one turn's output.
@@ -197,7 +216,10 @@ class TurnVerification(BaseModel):
         unavailable_reason: Set when verification could not run at all — an extractor
             failure, a denied budget reservation. Distinct from every span outcome,
             because it is a fact about Seshat's own machinery rather than about the claim.
-        entailment_checks: Judge calls D3(d) made on this pass (FRE-1286).
+        entailment_checks: Judge calls D3(d) made on this pass (FRE-1286), partial-miss
+            checks included — the recorded cost of the pass.
+        partial_miss_checks: The subset of ``entailment_checks`` spent on partial misses
+            (FRE-1508), so each class's cumulative cap is counted apart.
         entailment_latency_ms: Wall-clock the inline entailment pass cost, or None when it
             did not run. The common turn escalates nothing and pays nothing.
         entailment_budget_exceeded: Whether that wall-clock exceeded the configured
@@ -212,6 +234,7 @@ class TurnVerification(BaseModel):
     degraded_extraction: bool = False
     unavailable_reason: str | None = None
     entailment_checks: int = 0
+    partial_miss_checks: int = 0
     entailment_latency_ms: float | None = None
     entailment_budget_exceeded: bool = False
 
@@ -219,6 +242,14 @@ class TurnVerification(BaseModel):
     def available(self) -> bool:
         """Whether verification ran at all."""
         return self.unavailable_reason is None
+
+    @property
+    def awaits_judge(self) -> bool:
+        """Whether any span is one the inline entailment pass may judge."""
+        return any(
+            span.outcome is CheckOutcome.ENTAILMENT_REQUIRED or span.partial_miss
+            for span in self.spans
+        )
 
     @property
     def failures(self) -> tuple[SpanVerification, ...]:
@@ -336,6 +367,32 @@ def _identifier_for(span: Span, parse: CitationParse) -> str | None:
     return None
 
 
+def _unverifiable_detail(identifier: str, containment: ContainmentResult) -> str:
+    """Name what containment could not settle, in terms true of this span.
+
+    Args:
+        identifier: The cited identifier.
+        containment: The unverifiable containment result.
+
+    Returns:
+        The detail line. Before FRE-1508 every unverifiable span said it "states the
+        claim's entities and figures", which is false for an entity-free span and
+        meaningless for one with no content words.
+    """
+    if not containment.required:
+        return "the span has no content words, so containment cannot check it (D3(c))"
+    missing = ", ".join(containment.missing)
+    if containment.entity_free_predicate:
+        return (
+            f"{identifier} states some of the claim's predicate words but not {missing}; "
+            "the difference may be paraphrase (D3(c))"
+        )
+    return (
+        f"{identifier} states the claim's entities and figures but not {missing}; "
+        "the difference may be paraphrase (D3(c))"
+    )
+
+
 def _verify_span(span: Span, parse: CitationParse, registry: SourceRegistry) -> SpanVerification:
     """Run every gate against one non-exempt span.
 
@@ -409,10 +466,7 @@ def _verify_span(span: Span, parse: CitationParse, registry: SourceRegistry) -> 
         CheckOutcome.NOT_CONTAINED: (
             f"{identifier} does not contain {', '.join(containment.missing)} (D3(c))"
         ),
-        CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT: (
-            f"{identifier} states the claim's entities and figures but not "
-            f"{', '.join(containment.missing)}; the difference may be paraphrase (D3(c))"
-        ),
+        CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT: _unverifiable_detail(identifier, containment),
         CheckOutcome.ENTAILMENT_REQUIRED: (
             "the span names no entity and states no figure, so containment cannot settle "
             "it and D3(d) must (FRE-1286)"
@@ -487,6 +541,34 @@ def _entailed_span(span: SpanVerification, judgement: EntailmentJudgement) -> Sp
     )
 
 
+def _partial_miss_span(span: SpanVerification, judgement: EntailmentJudgement) -> SpanVerification:
+    """Return one entity-free partial miss after the judge answered (FRE-1508).
+
+    Args:
+        span: A span with :attr:`SpanVerification.partial_miss` set.
+        judgement: What the judge decided.
+
+    Returns:
+        A rejection resolved as :func:`_entailed_span` resolves it. Any other answer leaves
+        the outcome unverifiable: D3(c) passes a span only when the source holds every
+        content word, so a supporting verdict is recorded in the detail and passes nothing.
+    """
+    match judgement.verdict:
+        case EntailmentVerdict.NOT_SUPPORTED | EntailmentVerdict.CONTRADICTED:
+            return _entailed_span(span, judgement)
+        case EntailmentVerdict.SUPPORTED:
+            return span.model_copy(
+                update={
+                    "detail": (
+                        f"{span.detail}; the entailment judge found support, but only "
+                        "containment can pass a span (FRE-1508)"
+                    )
+                }
+            )
+        case EntailmentVerdict.UNDECIDED:
+            return span
+
+
 async def apply_entailment(
     verification: TurnVerification,
     registry: SourceRegistry,
@@ -495,16 +577,26 @@ async def apply_entailment(
     max_checks: int,
     budget_ms: int,
     checks_already_used: int = 0,
+    max_partial_miss_checks: int = 0,
+    partial_miss_checks_already_used: int = 0,
     trace_ctx: TraceContext | None = None,
 ) -> TurnVerification:
-    """Settle D3(d)'s escalated class inline (ADR-0138 D3(d), FRE-1286).
+    """Settle D3(d)'s escalated class inline, and let the judge reject partial misses.
 
-    Only spans carrying :attr:`CheckOutcome.ENTAILMENT_REQUIRED` are judged — the ones
+    Spans carrying :attr:`CheckOutcome.ENTAILMENT_REQUIRED` are judged — the ones
     containment reported it cannot decide, because they name no entity and state no
     figure. Every other span is returned untouched, so a turn escalating nothing costs no
     model call at all.
 
-    **Latency is bounded by construction, not by the measurement.** All escalated spans go
+    **Partial misses are judged too, and only a rejection counts (FRE-1508).** An
+    entity-free span containment matched only in part
+    (:attr:`SpanVerification.partial_miss`) was left unverifiable with nothing to settle
+    it. The judge may now reject it. It may not pass it: D3(c) passes a span only when the
+    source holds every content word, and a source sharing one generic word with the claim
+    would otherwise pass on the judge's word alone. The class has its own cap, so it can
+    never spend a check the escalated class needs — in this pass or on a later D4 attempt.
+
+    **Latency is bounded by construction, not by the measurement.** All judged spans go
     out in one :func:`asyncio.gather`, so the added cost is one round-trip rather than one
     per assertion — the scaling that got ADR-0138's Option 5 rejected. The per-call timeout
     lives on the judge; this function only records what the pass cost.
@@ -513,32 +605,42 @@ async def apply_entailment(
         verification: What the deterministic gates decided.
         registry: This turn's registry, for resolving each span's source.
         judge: The entailment judge.
-        max_checks: Bound on judge calls, **cumulative across D4 attempts**. A per-pass
-            bound bounds nothing when D4 may run the pass again.
+        max_checks: Bound on judge calls for escalated spans, **cumulative across D4
+            attempts**. A per-pass bound bounds nothing when D4 may run the pass again.
         budget_ms: The latency budget the elapsed time is recorded against.
-        checks_already_used: Judge calls earlier attempts on this turn already spent.
+        checks_already_used: Escalated-span judge calls earlier attempts already spent.
+        max_partial_miss_checks: Bound on judge calls for partial misses, cumulative across
+            D4 attempts and separate from ``max_checks``. 0, the default, judges none.
+        partial_miss_checks_already_used: Partial-miss judge calls earlier attempts spent.
         trace_ctx: The turn's trace context, threaded into every judge call.
 
     Returns:
-        The verification with each escalated span resolved. A span past the cap, and a
-        span whose judge could not answer, becomes ``ENTAILMENT_UNAVAILABLE`` — which
-        still blocks under D4, deliberately: before this ticket the same class blocked as
-        ``ENTAILMENT_REQUIRED``, so fail-closed is the behaviour being preserved.
+        The verification with each judged span resolved. An escalated span past its cap,
+        and one whose judge could not answer, becomes ``ENTAILMENT_UNAVAILABLE`` — which
+        still blocks under D4, deliberately: before FRE-1286 the same class blocked as
+        ``ENTAILMENT_REQUIRED``, so fail-closed is the behaviour being preserved. A partial
+        miss the judge rejects becomes ``NOT_ENTAILED`` or ``CONTRADICTED_BY_SOURCE``; every
+        other answer, and a partial miss past its cap, leaves it unverifiable.
     """
     pending = [
         index
         for index, span in enumerate(verification.spans)
         if span.outcome is CheckOutcome.ENTAILMENT_REQUIRED
     ]
-    if not pending:
+    partial = [index for index, span in enumerate(verification.spans) if span.partial_miss]
+    partial_allowance = max(0, max_partial_miss_checks - partial_miss_checks_already_used)
+    partial_judged = partial[:partial_allowance]
+    if not pending and not partial_judged:
         return verification
 
     allowance = max(0, max_checks - checks_already_used)
     judged, over_cap = pending[:allowance], pending[allowance:]
+    order = [*judged, *partial_judged]
+    escalated = frozenset(judged)
 
     started = time.perf_counter()
     results: list[EntailmentJudgement | BaseException] = []
-    if judged:
+    if order:
         results = list(
             await asyncio.gather(
                 *(
@@ -547,7 +649,7 @@ async def apply_entailment(
                         _source_content(registry, verification.spans[index]),
                         trace_ctx=trace_ctx,
                     )
-                    for index in judged
+                    for index in order
                 ),
                 return_exceptions=True,
             )
@@ -555,7 +657,7 @@ async def apply_entailment(
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     spans = list(verification.spans)
-    for index, result in zip(judged, results, strict=True):
+    for index, result in zip(order, results, strict=True):
         if isinstance(result, BaseException):
             # The judge is documented never to raise, so this is a defect in it rather
             # than a provider failure. It still must not cost the user the turn.
@@ -568,7 +670,10 @@ async def apply_entailment(
                 verdict=EntailmentVerdict.UNDECIDED,
                 reason=f"the entailment judge raised {type(result).__name__}",
             )
-        spans[index] = _entailed_span(spans[index], result)
+        if index in escalated:
+            spans[index] = _entailed_span(spans[index], result)
+        else:
+            spans[index] = _partial_miss_span(spans[index], result)
 
     for index in over_cap:
         spans[index] = spans[index].model_copy(
@@ -584,7 +689,8 @@ async def apply_entailment(
     return verification.model_copy(
         update={
             "spans": tuple(spans),
-            "entailment_checks": len(judged),
+            "entailment_checks": len(order),
+            "partial_miss_checks": len(partial_judged),
             "entailment_latency_ms": elapsed_ms,
             "entailment_budget_exceeded": elapsed_ms > budget_ms,
         }

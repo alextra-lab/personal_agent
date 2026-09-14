@@ -222,6 +222,151 @@ def test_a_raising_judge_does_not_lose_the_turn() -> None:
     assert [span.outcome for span in result.spans] == [CheckOutcome.ENTAILMENT_UNAVAILABLE]
 
 
+# ── FRE-1508 — the judge may reject an entity-free partial miss, never pass it ──────
+
+PARTIAL_PAGE = "Testing found this fish is high in methylmercury, above the advisory level."
+ONE_WORD_PAGE = "The water table here is high above sea level."
+
+
+def _source(registry: SourceRegistry, url: str, content: str) -> str:
+    """Register a fetched page and return its identifier."""
+    registration = registry.register_tool_result(
+        tool_name="fetch_url", arguments={"url": url}, content=content
+    )
+    assert registration.source is not None
+    return registration.source.identifier
+
+
+def _verified(registry: SourceRegistry, segments: list[tuple[str, str]]) -> TurnVerification:
+    """Verify an output built from ``(claim, identifier)`` segments, one span per claim."""
+    output = ""
+    spans = []
+    for claim, identifier in segments:
+        spans.append(
+            Span(
+                start=len(output),
+                end=len(output) + len(claim),
+                text=claim,
+                label=SpanLabel.CLAIM_NON_EXEMPT,
+                reason=NonExemptReason.CLASSIFIED,
+            )
+        )
+        output += f"{claim} [{identifier}]. "
+    return verify_turn(
+        SpanExtraction(output=output, spans=tuple(spans)), parse_citations(output), registry
+    )
+
+
+def _partial_judged(
+    verdict: EntailmentVerdict,
+    *,
+    content: str = PARTIAL_PAGE,
+    max_partial: int = 8,
+    partial_used: int = 0,
+) -> tuple[TurnVerification, _StubJudge]:
+    """Verify one entity-free partial miss and run the inline pass over it."""
+    registry = SourceRegistry(turn_id=TURN)
+    ident = _source(registry, "https://example.com/partial", content)
+    verification = _verified(registry, [(MERCURY_CLAIM, ident)])
+    assert verification.spans[0].partial_miss is True
+    judge = _StubJudge(verdict, reason="scripted")
+    result = asyncio.run(
+        apply_entailment(
+            verification,
+            registry,
+            judge,
+            max_checks=8,
+            budget_ms=4000,
+            max_partial_miss_checks=max_partial,
+            partial_miss_checks_already_used=partial_used,
+        )
+    )
+    return result, judge
+
+
+def test_a_partial_miss_the_judge_rejects_is_settled() -> None:
+    """The fall FRE-1508 exists for: a rejection is a settled failure, not a verifier limit."""
+    for verdict, expected in (
+        (EntailmentVerdict.NOT_SUPPORTED, CheckOutcome.NOT_ENTAILED),
+        (EntailmentVerdict.CONTRADICTED, CheckOutcome.CONTRADICTED_BY_SOURCE),
+    ):
+        result, judge = _partial_judged(verdict)
+
+        assert judge.claims == [MERCURY_CLAIM]
+        assert [span.outcome for span in result.spans] == [expected]
+        assert result.unverifiable == ()
+        assert (result.entailment_checks, result.partial_miss_checks) == (1, 1)
+        assert "scripted" in result.spans[0].detail
+
+
+def test_a_supporting_verdict_cannot_pass_a_partial_miss() -> None:
+    """D3(c) stands: a source sharing one generic word must not pass on the judge's word.
+
+    The page shares only ``high`` with the claim. Codex plan review showed that letting a
+    supporting verdict through would make this span deliverable.
+    """
+    result, judge = _partial_judged(EntailmentVerdict.SUPPORTED, content=ONE_WORD_PAGE)
+
+    assert judge.claims == [MERCURY_CLAIM]
+    assert [span.outcome for span in result.spans] == [CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT]
+    assert result.compliant is False
+    assert "judge found support" in result.spans[0].detail
+
+
+def test_an_undecided_verdict_leaves_a_partial_miss_as_it_was() -> None:
+    """A judge that could not answer settles nothing, in either direction."""
+    result, _ = _partial_judged(EntailmentVerdict.UNDECIDED)
+
+    assert [span.outcome for span in result.spans] == [CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT]
+    assert len(result.unverifiable) == 1
+
+
+def test_partial_misses_have_their_own_cap_and_never_displace_the_escalated_class() -> None:
+    """AC-3: eight escalated spans keep all eight checks, whichever class comes first."""
+    registry = SourceRegistry(turn_id=TURN)
+    full = _source(registry, "https://example.com/fish", MERCURY_PAGE)
+    partial = _source(registry, "https://example.com/partial", PARTIAL_PAGE)
+    escalated = [(MERCURY_CLAIM, full)] * 8
+    partials = [(MERCURY_CLAIM, partial)] * 3
+
+    for segments in (escalated + partials, partials + escalated):
+        judge = _StubJudge(EntailmentVerdict.NOT_SUPPORTED)
+        result = asyncio.run(
+            apply_entailment(
+                _verified(registry, segments),
+                registry,
+                judge,
+                max_checks=8,
+                budget_ms=4000,
+                max_partial_miss_checks=2,
+            )
+        )
+
+        full_outcomes = [span.outcome for span in result.spans if span.identifier == full]
+        partial_outcomes = [span.outcome for span in result.spans if span.identifier == partial]
+        assert full_outcomes == [CheckOutcome.NOT_ENTAILED] * 8
+        assert partial_outcomes.count(CheckOutcome.NOT_ENTAILED) == 2
+        assert partial_outcomes.count(CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT) == 1
+        assert (result.entailment_checks, result.partial_miss_checks) == (10, 2)
+
+
+def test_the_partial_miss_cap_is_cumulative_across_attempts() -> None:
+    """A D4 retry must not buy the partial-miss class a fresh allowance."""
+    result, judge = _partial_judged(EntailmentVerdict.NOT_SUPPORTED, max_partial=2, partial_used=2)
+
+    assert judge.claims == []
+    assert [span.outcome for span in result.spans] == [CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT]
+    assert result.partial_miss_checks == 0
+
+
+def test_a_partial_miss_costs_nothing_when_its_cap_is_zero() -> None:
+    """The default for every caller that does not opt in."""
+    result, judge = _partial_judged(EntailmentVerdict.NOT_SUPPORTED, max_partial=0)
+
+    assert judge.claims == []
+    assert result.entailment_latency_ms is None
+
+
 # ── AC-5 — the latency bound ────────────────────────────────────────────────────────
 
 

@@ -689,11 +689,13 @@ __all__ = [
     "Reachability",
     "SpanVerification",
     "TurnEvidenceClass",
+    "TurnShape",
     "TurnVerification",
     "apply_entailment",
     "build_grounding_record",
     "check_reachability",
     "classify_turn_evidence",
+    "classify_turn_shape",
     "unavailable",
     "verify_turn",
 ]

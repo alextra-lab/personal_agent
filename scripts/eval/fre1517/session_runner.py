@@ -409,12 +409,12 @@ async def _isolation_gate(driver: Any, label: str) -> dict[str, Any]:
     Raises:
         RuntimeError: If any node with an ``originating_session_id`` remains after the wipe.
     """
-    # A consolidation pass that loaded capture files before the move still writes them after it
-    # (2026-09-14 19:58: a pass started 40 s before the archive replayed four older sessions).
-    # Wait for full gateway quiet first, so any such pass has finished before the wipe.
+    # Order matters (2026-09-14 19:58: a pass loaded the files 40 s before the archive and replayed
+    # four older sessions after the wipe). Archive first, so no new pass can load them. Then wait
+    # for full gateway quiet, so a pass already in memory finishes. Then wipe, then check.
+    archived = await asyncio.to_thread(_archive_capture_files, label)
     async with httpx.AsyncClient() as es:
         await wait_for_gateway_idle(es)
-    archived = await asyncio.to_thread(_archive_capture_files, label)
     await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
     nodes = await fetch_originating_session_ids(driver, uri=EVAL_NEO4J_URI)
     gate = {

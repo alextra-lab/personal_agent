@@ -64,6 +64,7 @@ from scripts.eval.eval_isolation import (
     IsolatedArmRunner,
     create_eval_driver,
     local_model_calls_in_flight,
+    wait_for_gateway_idle,
 )
 from scripts.eval.fre1337_intent_probe.behavioral import (
     CONSOLIDATION_SETTLE_TIMEOUT_S,
@@ -408,6 +409,11 @@ async def _isolation_gate(driver: Any, label: str) -> dict[str, Any]:
     Raises:
         RuntimeError: If any node with an ``originating_session_id`` remains after the wipe.
     """
+    # A consolidation pass that loaded capture files before the move still writes them after it
+    # (2026-09-14 19:58: a pass started 40 s before the archive replayed four older sessions).
+    # Wait for full gateway quiet first, so any such pass has finished before the wipe.
+    async with httpx.AsyncClient() as es:
+        await wait_for_gateway_idle(es)
     archived = await asyncio.to_thread(_archive_capture_files, label)
     await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
     nodes = await fetch_originating_session_ids(driver, uri=EVAL_NEO4J_URI)

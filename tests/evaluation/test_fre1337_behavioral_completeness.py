@@ -128,3 +128,54 @@ async def test_settle_polls_the_correct_trace_and_event(monkeypatch: pytest.Monk
         args = call.args
         assert args[1] == "trace-xyz"
         assert args[2] == "model_call_completed"
+
+
+@pytest.mark.asyncio
+async def test_settle_defaults_to_matching_on_trace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No `field` given -> `_count_event` matches on `trace_id`, the pre-existing
+    default correct for `model_call_completed`/`tool_call_completed`.
+    """
+    mock_count = _patch_polling(monkeypatch, [3, 3])
+    await wait_for_event_settle(AsyncMock(), "trace-xyz", "model_call_completed", timeout_s=5.0)
+    for call in mock_count.call_args_list:
+        assert call.kwargs["field"] == "trace_id"
+
+
+@pytest.mark.asyncio
+async def test_settle_field_override_is_passed_through_to_count_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1372: `entity_extraction_completed`'s own `trace_id` is a batch sweep id
+    when consolidation batches several pending captures — only `capture_trace_id`
+    still equals the original request's trace_id. A caller passing `field=` must
+    reach `_count_event`, or the wait polls a field that can never match.
+    """
+    mock_count = _patch_polling(monkeypatch, [1, 1])
+    await wait_for_event_settle(
+        AsyncMock(),
+        "trace-xyz",
+        "entity_extraction_completed",
+        timeout_s=5.0,
+        field="capture_trace_id",
+    )
+    for call in mock_count.call_args_list:
+        assert call.kwargs["field"] == "capture_trace_id"
+
+
+@pytest.mark.asyncio
+async def test_count_event_query_uses_the_given_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_count_event`'s ES query term key is the `field` argument, not hardcoded."""
+    captured_body: dict[str, object] = {}
+
+    async def _fake_es_search(client: object, body: dict[str, object]) -> dict[str, object]:
+        captured_body.update(body)
+        return {"hits": {"total": {"value": 0}}}
+
+    monkeypatch.setattr(behavioral, "_es_search", _fake_es_search)
+
+    await behavioral._count_event(
+        AsyncMock(), "cap-123", "entity_extraction_completed", field="capture_trace_id"
+    )
+
+    must_clauses = captured_body["query"]["bool"]["must"]  # type: ignore[index]
+    assert {"term": {"capture_trace_id": "cap-123"}} in must_clauses

@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from personal_agent.config._owner_host_allowlist import is_owner_controlled_host
 from personal_agent.config._substrate_fingerprint import (
+    is_eval_host,
     is_prod_elasticsearch_url,
     is_prod_neo4j_uri,
     is_prod_postgres_url,
@@ -3321,6 +3322,73 @@ class AppConfig(BaseSettings):
             "AGENT_DATABASE_ADMIN_URL=<test-db-url>, "
             "AGENT_SYSGRAPH_DATABASE_URL=<test-db-url>, "
             "or set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass (use with care)."
+        )
+
+    @model_validator(mode="after")
+    def _validate_eval_deployment_isolation(self) -> "AppConfig":
+        """Refuse to boot an eval-profile gateway that resolves off the `-eval` substrate.
+
+        FRE-1372 (reopen): the eval gateways gained production-parity behaviour
+        settings, interpolated from the real `.env` via `docker-compose.eval.yml`.
+        Nothing in that change should ever let an eval gateway's storage resolve to
+        production's Postgres/Neo4j/Elasticsearch — `IsolatedArmRunner` issues an
+        unscoped `DETACH DELETE` against whatever Neo4j it is pointed at, so a leaked
+        production URI there is a production data wipe, not just a stale read.
+
+        `_validate_owner_storage_allowlist` cannot serve this purpose: its allowlist
+        (`AGENT_OWNER_STORAGE_ALLOWLIST` in `docker-compose.eval.yml`) deliberately
+        names both production's compose service names and their `-eval` twins as
+        owner-controlled, so a leaked production hostname on an eval gateway passes
+        it silently. This checks the `-eval` naming convention directly instead.
+
+        Fires whenever `deployment_profile == "eval"` — a compose-literal in both
+        `docker-compose.eval.yml` services, never interpolated, so it cannot drift.
+        `is_eval_host` also accepts loopback (see its own docstring): a real eval
+        gateway container reaches its substrate over the compose network by service
+        name, never its own loopback, so loopback here is never a *working*
+        connection to production's graph — only ever a broken one, or the test
+        suite's own ad hoc, unrelated-purpose `AppConfig` constructions against the
+        FRE-375 test stack (`bolt://localhost:7688`, etc., for required-secret
+        enforcement / SLM endpoint resolution tests that have nothing to do with
+        substrate isolation).
+
+        `sysgraph_database_url` IS checked here too, added after master's gate review
+        of this same reopen (2026-09-14): eval never sets `AGENT_SYSGRAPH_DATABASE_URL`
+        today, so it resolves to the field default (`...@localhost:5432/...`) —
+        loopback, which `is_eval_host` already accepts, so this check is inert right
+        now. It exists for the day this PR's own pattern repeats: a future parity
+        pass adding `AGENT_SYSGRAPH_DATABASE_URL: ${AGENT_SYSGRAPH_DATABASE_URL}` to
+        `docker-compose.eval.yml` would otherwise sail through both this validator
+        (which didn't check the field) and `_validate_owner_storage_allowlist`
+        (already disabled for `substrate_profile != "private"`) with zero guard
+        rejecting a leaked production sysgraph Postgres URL (ADR-0105).
+
+        Raises:
+            ValueError: When a store resolves to a non-`-eval`, non-loopback host.
+        """
+        if self.deployment_profile != "eval":
+            return self
+
+        offenders: list[str] = []
+        if not is_eval_host(self.neo4j_uri):
+            offenders.append(f"neo4j_uri={self.neo4j_uri!r}")
+        if not is_eval_host(self.elasticsearch_url):
+            offenders.append(f"elasticsearch_url={self.elasticsearch_url!r}")
+        if not is_eval_host(self.database_url):
+            offenders.append(f"database_url={self.database_url!r}")
+        if not is_eval_host(self.database_admin_url):
+            offenders.append(f"database_admin_url={self.database_admin_url!r}")
+        if not is_eval_host(self.sysgraph_database_url):
+            offenders.append(f"sysgraph_database_url={self.sysgraph_database_url!r}")
+
+        if not offenders:
+            return self
+
+        raise ValueError(
+            f"deployment_profile='eval' but the following stores do not resolve to "
+            f"an `-eval` host (FRE-1372): {', '.join(offenders)}. Point every eval "
+            "gateway substrate URL at its `-eval` compose service "
+            "(postgres-eval/neo4j-eval/elasticsearch-eval), never production's."
         )
 
     @model_validator(mode="after")

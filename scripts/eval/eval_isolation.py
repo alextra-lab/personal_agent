@@ -69,10 +69,12 @@ from typing import Any
 import httpx
 import structlog
 from scripts.eval.fre1337_intent_probe.behavioral import (
+    CONSOLIDATION_SETTLE_TIMEOUT_S,
     EVAL_ES_INDEX,
     EVAL_ES_URL,
     EXTRACTION_SETTLE_TIMEOUT_S,
     SIGNAL_SETTLE_TIMEOUT_S,
+    fetch_latest_event,
     wait_for_event_settle,
 )
 from scripts.eval.fre1337_intent_probe.substrate import (
@@ -159,16 +161,21 @@ class ArmTurnResult:
         session_id: The turn's session id.
         trace_id: The turn's trace id.
         arm: Which eval gateway served it (an ``EVAL_ARMS`` key).
-        extraction_settled: Whether ``entity_extraction_completed`` stabilized at a
-            nonzero count before timeout. Waited out with ``require_nonzero=True``
-            (unlike ``behavioral.py``'s own reporting-only use of this same settle
-            wait): an early "stable at zero" exit here would let the *next* call's
-            wipe race a turn's extraction that simply hadn't started yet within the
-            first couple of polls, reproducing FRE-1338's leak instead of preventing
-            it. ``False`` means the full timeout elapsed with nothing landing — a
-            true negative, not an early guess — and costs the full
-            ``EXTRACTION_SETTLE_TIMEOUT_S`` wait every time, deliberately: safety
-            over speed for a gate in front of a graph wipe.
+        extraction_settled: Whether the turn's *entire* consolidation write pipeline
+            settled before the next call's wipe — ``entity_extraction_completed``
+            AND, once that lands, its batch's own ``consolidation_completed`` (the
+            event marking the actual graph write: Turn/Entity MERGE, embeddings,
+            session nodes, promotion). Waited out with ``require_nonzero=True``
+            throughout: an early "stable at zero" exit here would let the *next*
+            call's wipe race a write that simply hadn't landed yet, reproducing
+            FRE-1338's leak instead of preventing it. FRE-1372 (live-verified
+            2026-09-14): waiting on extraction alone was not enough —
+            ``entity_extraction_completed`` marks the LLM call returning, not the
+            graph write, and a measured run showed a real cross-arm leak from that
+            gap. ``False`` means a full timeout elapsed somewhere in the chain with
+            nothing landing — a true negative, not an early guess — and costs the
+            full wait every time, deliberately: safety over speed for a gate in
+            front of a graph wipe.
     """
 
     session_id: str
@@ -215,7 +222,7 @@ class IsolatedArmRunner:
             arm: Which eval gateway to drive (an ``EVAL_ARMS`` key).
 
         Returns:
-            The turn's identifiers and whether its entity extraction settled.
+            The turn's identifiers and whether its consolidation write pipeline settled.
 
         Raises:
             KeyError: If ``arm`` is not a key in ``EVAL_ARMS`` — checked before the
@@ -252,19 +259,47 @@ class IsolatedArmRunner:
             "entity_extraction_completed",
             timeout_s=EXTRACTION_SETTLE_TIMEOUT_S,
             require_nonzero=True,
+            # FRE-1372, live-verified 2026-09-14: when consolidation batches several
+            # pending captures into one sweep, entity_extraction_completed's own
+            # trace_id is the batch's newly minted id, not this request's — only
+            # capture_trace_id still equals it. See wait_for_event_settle's docstring.
+            field="capture_trace_id",
         )
+        # FRE-1372, live-verified 2026-09-14: entity_extraction_completed marks only
+        # the LLM call returning, not the graph write. A measured run showed a 57s
+        # gap to the resulting entity_created — waiting on extraction alone let a
+        # later wipe fire before that write landed, so it appeared in the *next*
+        # arm's freshly-wiped graph: a real cross-arm leak. The batch's own
+        # consolidation_completed (Turn/Entity MERGE, embeddings, session nodes,
+        # promotion — the actual graph write) is the true "safe to wipe" signal.
+        consolidation_settled = False
+        if extraction_settled:
+            extraction_event = await fetch_latest_event(
+                es, trace_id, "entity_extraction_completed", field="capture_trace_id"
+            )
+            batch_trace_id = str(extraction_event["trace_id"]) if extraction_event else ""
+            if batch_trace_id:
+                consolidation_settled = await wait_for_event_settle(
+                    es,
+                    batch_trace_id,
+                    "consolidation_completed",
+                    timeout_s=CONSOLIDATION_SETTLE_TIMEOUT_S,
+                    require_nonzero=True,
+                )
+        settled = extraction_settled and consolidation_settled
         log.info(
             "fre1372_arm_turn",
             arm=arm,
             turn=self._turn_count,
             session_id=session_id,
             extraction_settled=extraction_settled,
+            consolidation_settled=consolidation_settled,
         )
         return ArmTurnResult(
             session_id=session_id,
             trace_id=trace_id,
             arm=arm,
-            extraction_settled=extraction_settled,
+            extraction_settled=settled,
         )
 
 

@@ -235,9 +235,25 @@ services:
       # service names (postgres, neo4j, elasticsearch), so the private profile rejected
       # every eval store and the gateway refused to boot. The eval services are the same
       # owner-controlled containers on the same host, so declaring them is what ADR-0112
-      # intends — NOT a reason to set AGENT_SUBSTRATE_PROFILE=managed, which would disable
-      # the check wholesale. The stale cached image predated this guard, which is why this
-      # only surfaced once the image was rebuilt (FRE-1341).
+      # intends. The stale cached image predated this guard, which is why this only
+      # surfaced once the image was rebuilt (FRE-1341).
+      #
+      # FRE-1372 (reopen): this allowlist's own validator (_validate_owner_storage_allowlist,
+      # settings.py) no longer runs on either eval gateway — AGENT_SUBSTRATE_PROFILE below
+      # interpolates production's real managed_embedder, and that check fires only for
+      # substrate_profile=="private". Master gate review, verified by codex plan-review
+      # 2026-09-14: this is still safe. managed_embedder changes nothing about which
+      # Postgres/Neo4j/Elasticsearch a request resolves to (config/substrate.yaml maps all
+      # three to the exact same setting: fields for every profile) — it only moves the
+      # embedder backend to the managed endpoint below. And `_validate_eval_deployment_isolation`
+      # (FRE-1372, this same reopen) is stricter than this allowlist for the threat that
+      # matters: this allowlist declares BOTH production's names and their -eval twins (so a
+      # leaked production hostname like bolt://neo4j:7687 passes it silently), while the new
+      # validator requires an exact -eval suffix (or loopback) and rejects a leaked production
+      # name outright. It now also checks sysgraph_database_url, closing the one field the old
+      # allowlist covered that it originally didn't. This allowlist entry stays — ADR-0112 AC-1
+      # governs the `private` profile generally, this eval stack included, should the profile
+      # ever change back — but it is not what protects these two gateways today.
       AGENT_OWNER_STORAGE_ALLOWLIST: '["postgres","neo4j","elasticsearch","postgres-eval","neo4j-eval","elasticsearch-eval"]'
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
@@ -296,6 +312,67 @@ services:
       # harness's CP-05 path (dataset.py) exercises real DelegationPackage
       # composition, so enable it here.
       AGENT_DELEGATION_ENABLED: "true"
+      # FRE-1372 (reopen) / FRE-1498 / FRE-1464: production behaviour parity.
+      # Every other AGENT_* setting fell to settings.py's defaults — memory graph
+      # OFF, proactive memory OFF, every recall arm OFF, substrate profile `private`
+      # (no managed embedder) — because this file never referenced them, so nothing
+      # ever interpolated their real value from `.env`. That made every AC-1/AC-2
+      # eval a run against a system that never wrote to its own knowledge graph:
+      # FRE-1372's 2026-09-07 probe measured a real "no leak" against an eval Neo4j
+      # holding zero nodes, because entity extraction never ran to leak anything.
+      #
+      # These 20 keys interpolate from `/opt/seshat/.env` — pass `--env-file
+      # /opt/seshat/.env` to `docker compose` (see `make eval-infra-up`), since a
+      # worktree's own `.env` is a stale, partial dev copy. Behaviour-relevant only:
+      # never a production substrate address. `AGENT_SYSGRAPH_DATABASE_URL` (points
+      # at production Postgres), R2/artifact, CORS/WS/PWA, freshness, insights, and
+      # feedback polling are deliberately NOT passed. Every eval-substrate address
+      # above stays this file's own `-eval` value, guarded further by
+      # `AppConfig._validate_eval_deployment_isolation` (FRE-1372), which refuses to
+      # boot an eval-profile gateway resolving off an `-eval` host.
+      #
+      # Also deliberately NOT passed, security-review finding on this same reopen:
+      # `AGENT_LINEAR_API_KEY`, `AGENT_PERPLEXITY_API_KEY`, `AGENT_VOYAGE_API_KEY`.
+      # None is load-bearing for AC-1/AC-2 (entity extraction + recall need only the
+      # managed-embedder settings below, not these three tool credentials), and
+      # `seshat-gateway-treatment` runs primitive tools with `curl` auto-approved and
+      # no human approval gate — a live path for an eval turn to exfiltrate a
+      # write-capable Linear PAT, or write directly into the real FrenchForest Linear
+      # workspace via the always-registered Linear tool (confirmed: neither tool call
+      # has an eval/dry-run branch). Follow-up ticket filed for whether/how to extend
+      # parity to these three once that tool-execution path is hardened.
+      #
+      # AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED — missing from the owner's own
+      # starting-point file too, found live: without it, `_should_consolidate()`
+      # (brainstem/scheduler.py) defaults to the local-inference gating branch
+      # (`second_brain_resource_gating_enabled` defaults True) and requires 300s of
+      # host idle time since the last request before it will EVER trigger
+      # consolidation — silently, at `log.debug` (below eval's INFO level), with no
+      # entity_extraction_started log line at all. A live two-turn AC-1/AC-2 probe
+      # never reaches 300s of idle between turns, so extraction never even attempts
+      # to fire — reproducing this ticket's own failure class one level deeper than
+      # Fix 1 already covers. Production's `.env` sets this False because its
+      # primary role is remote/tunnelled MLX, not host-local — exactly eval's shape.
+      AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: ${AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED}
+      AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
+      AGENT_PROACTIVE_MEMORY_ENABLED: ${AGENT_PROACTIVE_MEMORY_ENABLED}
+      AGENT_MULTIPATH_RECALL_ENABLED: ${AGENT_MULTIPATH_RECALL_ENABLED}
+      AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED: ${AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED}
+      AGENT_LEXICAL_ARM_ENABLED: ${AGENT_LEXICAL_ARM_ENABLED}
+      AGENT_MULTIQUERY_ARM_ENABLED: ${AGENT_MULTIQUERY_ARM_ENABLED}
+      AGENT_RECALL_SIMILARITY_FLOOR: ${AGENT_RECALL_SIMILARITY_FLOOR}
+      AGENT_GROUNDING_VERIFICATION_MODE: ${AGENT_GROUNDING_VERIFICATION_MODE}
+      AGENT_LOCATION_ENABLED: ${AGENT_LOCATION_ENABLED}
+      AGENT_ENABLE_SECOND_BRAIN: ${AGENT_ENABLE_SECOND_BRAIN}
+      AGENT_SKILL_ROUTING_MODE: ${AGENT_SKILL_ROUTING_MODE}
+      AGENT_OWNER_NAME: ${AGENT_OWNER_NAME}
+      AGENT_CONVERSATION_MAX_HISTORY_MESSAGES: ${AGENT_CONVERSATION_MAX_HISTORY_MESSAGES}
+      AGENT_SUBSTRATE_PROFILE: ${AGENT_SUBSTRATE_PROFILE}
+      AGENT_MANAGED_EMBEDDING_ENDPOINT: ${AGENT_MANAGED_EMBEDDING_ENDPOINT}
+      AGENT_MANAGED_EMBEDDING_MODEL: ${AGENT_MANAGED_EMBEDDING_MODEL}
+      AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
+      AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
+      AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
     ports:
       # Host 9002 → container 9001 (uvicorn port is hardcoded in Dockerfile.gateway)
       - "127.0.0.1:9002:9001"
@@ -325,9 +402,25 @@ services:
       # service names (postgres, neo4j, elasticsearch), so the private profile rejected
       # every eval store and the gateway refused to boot. The eval services are the same
       # owner-controlled containers on the same host, so declaring them is what ADR-0112
-      # intends — NOT a reason to set AGENT_SUBSTRATE_PROFILE=managed, which would disable
-      # the check wholesale. The stale cached image predated this guard, which is why this
-      # only surfaced once the image was rebuilt (FRE-1341).
+      # intends. The stale cached image predated this guard, which is why this only
+      # surfaced once the image was rebuilt (FRE-1341).
+      #
+      # FRE-1372 (reopen): this allowlist's own validator (_validate_owner_storage_allowlist,
+      # settings.py) no longer runs on either eval gateway — AGENT_SUBSTRATE_PROFILE below
+      # interpolates production's real managed_embedder, and that check fires only for
+      # substrate_profile=="private". Master gate review, verified by codex plan-review
+      # 2026-09-14: this is still safe. managed_embedder changes nothing about which
+      # Postgres/Neo4j/Elasticsearch a request resolves to (config/substrate.yaml maps all
+      # three to the exact same setting: fields for every profile) — it only moves the
+      # embedder backend to the managed endpoint below. And `_validate_eval_deployment_isolation`
+      # (FRE-1372, this same reopen) is stricter than this allowlist for the threat that
+      # matters: this allowlist declares BOTH production's names and their -eval twins (so a
+      # leaked production hostname like bolt://neo4j:7687 passes it silently), while the new
+      # validator requires an exact -eval suffix (or loopback) and rejects a leaked production
+      # name outright. It now also checks sysgraph_database_url, closing the one field the old
+      # allowlist covered that it originally didn't. This allowlist entry stays — ADR-0112 AC-1
+      # governs the `private` profile generally, this eval stack included, should the profile
+      # ever change back — but it is not what protects these two gateways today.
       AGENT_OWNER_STORAGE_ALLOWLIST: '["postgres","neo4j","elasticsearch","postgres-eval","neo4j-eval","elasticsearch-eval"]'
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
@@ -387,6 +480,29 @@ services:
       # harness's CP-05 path (dataset.py) exercises real DelegationPackage
       # composition, so enable it here.
       AGENT_DELEGATION_ENABLED: "true"
+      # FRE-1372 (reopen) / FRE-1498 / FRE-1464: production behaviour parity — same
+      # 20 keys, same rationale (including the 3 deliberately-omitted credentials and
+      # the live-discovered resource-gating fix), as `seshat-gateway-control` above.
+      AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: ${AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED}
+      AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
+      AGENT_PROACTIVE_MEMORY_ENABLED: ${AGENT_PROACTIVE_MEMORY_ENABLED}
+      AGENT_MULTIPATH_RECALL_ENABLED: ${AGENT_MULTIPATH_RECALL_ENABLED}
+      AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED: ${AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED}
+      AGENT_LEXICAL_ARM_ENABLED: ${AGENT_LEXICAL_ARM_ENABLED}
+      AGENT_MULTIQUERY_ARM_ENABLED: ${AGENT_MULTIQUERY_ARM_ENABLED}
+      AGENT_RECALL_SIMILARITY_FLOOR: ${AGENT_RECALL_SIMILARITY_FLOOR}
+      AGENT_GROUNDING_VERIFICATION_MODE: ${AGENT_GROUNDING_VERIFICATION_MODE}
+      AGENT_LOCATION_ENABLED: ${AGENT_LOCATION_ENABLED}
+      AGENT_ENABLE_SECOND_BRAIN: ${AGENT_ENABLE_SECOND_BRAIN}
+      AGENT_SKILL_ROUTING_MODE: ${AGENT_SKILL_ROUTING_MODE}
+      AGENT_OWNER_NAME: ${AGENT_OWNER_NAME}
+      AGENT_CONVERSATION_MAX_HISTORY_MESSAGES: ${AGENT_CONVERSATION_MAX_HISTORY_MESSAGES}
+      AGENT_SUBSTRATE_PROFILE: ${AGENT_SUBSTRATE_PROFILE}
+      AGENT_MANAGED_EMBEDDING_ENDPOINT: ${AGENT_MANAGED_EMBEDDING_ENDPOINT}
+      AGENT_MANAGED_EMBEDDING_MODEL: ${AGENT_MANAGED_EMBEDDING_MODEL}
+      AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
+      AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
+      AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
     ports:
       # Host 9003 → container 9001
       - "127.0.0.1:9003:9001"

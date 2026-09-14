@@ -122,7 +122,8 @@ def _patch_expansion(monkeypatch: pytest.MonkeyPatch, exp_result: ExpansionResul
 class TestFanoutPauseTasks:
     """Pure pause predicate (ADR-0149 D4, amended 2026-09-11) — no pause/decision
     machinery involved. Guards a landing that FAILED, not merely a task that
-    is incomplete."""
+    is incomplete.
+    """
 
     def test_complete_fanout_is_empty(self) -> None:
         results = [_sub_result("a"), _sub_result("b")]
@@ -130,7 +131,8 @@ class TestFanoutPauseTasks:
 
     def test_capped_synthesized_report_is_not_a_pause_task(self) -> None:
         """Fixture A — stopped at the cap with a good synthesized report: it
-        landed, even though its task is incomplete. Must NOT pause."""
+        landed, even though its task is incomplete. Must NOT pause.
+        """
         results = [_sub_result("a", success=False, stop_reason="cap", report_kind="synthesized")]
         assert ex._fanout_pause_tasks(results, []) == []
 
@@ -152,7 +154,8 @@ class TestFanoutPauseTasks:
 
 class TestFanoutTrailerTasks:
     """Pure trailer predicate — broader than the pause's: any incomplete task,
-    landing failed or not."""
+    landing failed or not.
+    """
 
     def test_complete_fanout_is_empty(self) -> None:
         results = [_sub_result("a"), _sub_result("b")]
@@ -207,14 +210,16 @@ class TestComposeStopAndShow:
 class TestStepInitPausesOnFailedLanding:
     """AC-7 (amended 2026-09-11) — a fan-out with a failed landing (a ledger
     or a narration, or a skipped task) cannot reach synthesis unpaused; a
-    fan-out without one is never paused, even when a task is incomplete."""
+    fan-out without one is never paused, even when a task is incomplete.
+    """
 
     @pytest.mark.asyncio
     async def test_fixture_a_cap_synthesized_does_not_pause(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Landed — a good synthesized report — even though the task is
-        incomplete. Must not pause; the trailer still applies."""
+        incomplete. Must not pause; the trailer still applies.
+        """
         exp_result = ExpansionResult(
             plan=MagicMock(is_fallback=False),
             sub_agent_results=[
@@ -425,7 +430,8 @@ class TestStopAndShowMakesNoModelCall:
 class TestAnswerFromPartialCarriesTrailer:
     """AC-3 — the trailer is present and names the tasks, whether from an
     interactive answer_from_partial decision after a pause (a ledger fixture)
-    or with no pause at all (fixture A)."""
+    or with no pause at all (fixture A).
+    """
 
     @pytest.mark.asyncio
     async def test_trailer_set_on_answer_from_partial_after_a_pause(
@@ -477,7 +483,8 @@ class TestEvalModeNeverWaits:
     timeout, and its default is answer_from_partial with the trailer — not
     stop_and_show, which now needs an explicitly stored preference. All
     require a pause-eligible (ledger) fixture; fixture A never reaches the
-    eval_mode branch at all since it never pauses."""
+    eval_mode branch at all since it never pauses.
+    """
 
     @staticmethod
     def _ledger_exp_result() -> ExpansionResult:
@@ -811,14 +818,23 @@ class TestTrailerExitMatrix:
     async def test_grounding_retry_leaves_the_carrier_set_for_the_next_pass(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """RETRY_WITH_FORCED_RETRIEVAL returns to LLM_CALL before the trailer
+        """RETRY_CITE_ONLY returns to LLM_CALL before the trailer
         block runs — the carrier must survive so the eventual completing pass
-        still applies it, not be cleared or applied prematurely."""
+        still applies it, not be cleared or applied prematurely.
+        """
         from unittest.mock import patch
 
         reply = f"{self._CLAIM}."
         trailer = "\n\n— Research note: 1 of 2 sub-tasks did not complete (b: cap)."
         ctx = self._grounded_ctx(reply, trailer)
+        # An admitted typed source makes the turn shape B, the only shape that
+        # retries (ADR-0151 D3).
+        assert ctx.source_registry is not None
+        ctx.source_registry.register_tool_result(
+            tool_name="fetch_url",
+            arguments={"url": "https://example.com/lyon"},
+            content="Lyon is a city in France.",
+        )
 
         with patch("personal_agent.orchestrator.executor.settings") as cfg:
             cfg.grounding_verification_mode = "enforce"
@@ -835,18 +851,18 @@ class TestTrailerExitMatrix:
         assert ctx.fanout_trailer == trailer
 
     @pytest.mark.asyncio
-    async def test_grounding_terminal_replacement_syncs_history_to_final_reply(
+    async def test_grounding_delivery_at_the_bound_syncs_history_to_final_reply(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """TERMINAL_NO_SOURCE replaces final_reply — history must sync to that
-        replacement plus the trailer, not the stale pre-replacement content."""
+        """At the bound the turn delivers its last generation (ADR-0151 D4) —
+        history must equal that reply plus the trailer.
+        """
         from unittest.mock import patch
 
         reply = f"{self._CLAIM}."
         trailer = "\n\n— Research note: 1 of 2 sub-tasks did not complete (b: cap)."
         ctx = self._grounded_ctx(reply, trailer)
-        ctx.grounding_attempts = 1  # a retry already happened — this attempt is terminal
-        ctx.retrieval_attempts = ["web_search(paris population)"]
+        ctx.grounding_attempts = 1  # a retry already happened — this attempt delivers
 
         with patch("personal_agent.orchestrator.executor.settings") as cfg:
             cfg.grounding_verification_mode = "enforce"
@@ -860,12 +876,10 @@ class TestTrailerExitMatrix:
 
         assert state == TaskState.COMPLETED
         assert ctx.final_reply is not None
-        assert self._CLAIM not in ctx.final_reply
-        assert ctx.final_reply.endswith(trailer)
+        assert ctx.final_reply == f"{reply}{trailer}"
         # History must equal the wire form exactly — not the stale claim-bearing
         # text with the trailer merely appended on top of it.
         assert ctx.messages[-1]["content"] == ctx.final_reply
-        assert self._CLAIM not in ctx.messages[-1]["content"]
         assert ctx.fanout_trailer is None
 
     @pytest.mark.asyncio
@@ -873,7 +887,8 @@ class TestTrailerExitMatrix:
         """A deadline/lifetime-cap/cancel salvage never appends an assistant
         message (trailer or not) — the wire reply still gets the trailer;
         persisted history is left alone rather than corrupting an unrelated
-        (e.g. tool-role) last message."""
+        (e.g. tool-role) last message.
+        """
         ctx = ExecutionContext(
             session_id="sess-1484-deadline",
             trace_id="trace-1484-deadline",

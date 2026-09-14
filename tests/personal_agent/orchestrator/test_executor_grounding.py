@@ -2,8 +2,9 @@
 
 ``step_synthesis`` is where the reply is final and the registry complete, so it is where
 the inline checks run and where D4 decides. These tests drive that seam directly: the
-observe/enforce split, the retry's return to ``LLM_CALL``, the terminal statement, and the
-marker leak that exists in every mode.
+observe/enforce split, the cite-only retry's return to ``LLM_CALL`` (ADR-0151 D3), the
+delivery of the last generation with its declaration (D4), and the marker leak that exists
+in every mode.
 """
 
 from __future__ import annotations
@@ -61,6 +62,18 @@ def _ctx(reply: str, registry: SourceRegistry) -> ExecutionContext:
         {"role": "assistant", "content": reply},
     ]
     return ctx
+
+
+def _shape_b_registry(turn_id: str) -> SourceRegistry:
+    """A registry holding one admitted typed tool source: the turn is shape B."""
+    registry = SourceRegistry(turn_id=turn_id)
+    registration = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/lyon"},
+        content="Lyon is a city in France.",
+    )
+    assert registration.source is not None
+    return registry
 
 
 def _extraction_of(reply: str) -> SpanExtraction:
@@ -198,9 +211,9 @@ def _span(text: str, outcome: CheckOutcome) -> SpanVerification:
 
 
 async def _synthesize_with_verification(
-    ctx: ExecutionContext, verification: TurnVerification
+    ctx: ExecutionContext, verification: TurnVerification, *, mode: str = "observe"
 ) -> TaskState:
-    """Run ``step_synthesis`` under ``observe`` with verification's verdict fixed."""
+    """Run ``step_synthesis`` with verification's verdict fixed."""
     session_manager = AsyncMock()
     session_manager.update_session = lambda *a, **k: None
     with (
@@ -210,7 +223,8 @@ async def _synthesize_with_verification(
             new=AsyncMock(return_value=verification),
         ),
     ):
-        cfg.grounding_verification_mode = "observe"
+        cfg.grounding_verification_mode = mode
+        cfg.grounding_max_generation_attempts = 2
         cfg.environment = "test"
         _entailment_off(cfg)
         return await step_synthesis(ctx, session_manager, AsyncMock())
@@ -420,59 +434,130 @@ async def test_off_mode_runs_nothing_but_still_strips_markers() -> None:
     assert ctx.final_reply == f"{CLAIM}."
 
 
-# ── enforce — block, retry, refuse ──────────────────────────────────────────────────
+# ── enforce — one cite-only retry on shape B, then deliver (ADR-0151 D3, D4) ─────────
+
+_SHAPE_B_NOTE = (
+    "Note: 1 of 1 factual statements in this answer are not backed by a source Seshat "
+    "verified this turn. The sources this turn retrieved do not back these statements. "
+    "Check them before you rely on them."
+)
 
 
-@pytest.mark.asyncio
-async def test_enforce_blocks_and_returns_to_llm_call_with_retrieval_forced() -> None:
-    """D4's first move: block, and go back for another generation that can retrieve.
-
-    The reserved tool iterations are the difference between forcing retrieval and merely
-    asking for it — a turn that spent its budget would otherwise be told to retrieve with
-    nothing left to retrieve with.
-    """
-    registry = SourceRegistry(turn_id="trace-enforce")
-    reply = f"{CLAIM}."
-    ctx = _ctx(reply, registry)
-
+async def _enforce(ctx: ExecutionContext, reply: str) -> TaskState:
+    """Run ``step_synthesis`` in ``enforce`` over ``reply``, with the extractor stubbed."""
     with patch("personal_agent.orchestrator.executor.settings") as cfg:
         cfg.grounding_verification_mode = "enforce"
         cfg.grounding_max_generation_attempts = 2
         cfg.environment = "test"
         _entailment_off(cfg)
-        state = await _synthesize(ctx, reply)
+        return await _synthesize(ctx, reply)
+
+
+@pytest.mark.asyncio
+async def test_enforce_retries_a_shape_b_turn_once_without_a_grant() -> None:
+    """D3: the retry goes back for a generation that cites. It is granted no tool round."""
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, _shape_b_registry("trace-enforce"))
+
+    state = await _enforce(ctx, reply)
 
     assert state is TaskState.LLM_CALL
     assert ctx.final_reply is None
     assert ctx.grounding_retry_pending is True
-    assert ctx.grounding_retrieval_grant == 2
-    assert "Retrieve a source before answering" in ctx.messages[-1]["content"]
+    assert ctx.grounding_retrieval_grant == 0
+    directive = ctx.messages[-1]["content"]
+    assert "cite" in directive.lower()
+    assert "retriev" not in directive.lower()
 
 
 @pytest.mark.asyncio
-async def test_enforce_reaches_the_terminal_statement_at_the_bound() -> None:
-    """AC-5 — the loop ends, and it ends by saying so rather than by going quiet."""
-    registry = SourceRegistry(turn_id="trace-terminal")
+@pytest.mark.parametrize(
+    ("shape", "tool_rounds", "sentence"),
+    [
+        ("a", 1, "Tools or sub-agents ran this turn, and Seshat cannot cite their output."),
+        ("c", 0, "No tool and no sub-agent ran this turn."),
+    ],
+)
+async def test_ac2_enforce_never_retries_shape_a_or_c(
+    shape: str, tool_rounds: int, sentence: str
+) -> None:
+    """AC-2: a settled failure on shape A or C delivers on attempt 1, with its declaration."""
     reply = f"{CLAIM}."
-    ctx = _ctx(reply, registry)
-    ctx.grounding_attempts = 1  # a retry already happened
-    ctx.retrieval_attempts = ["web_search(paris population)"]
+    ctx = _ctx(reply, SourceRegistry(turn_id=f"trace-enforce-{shape}"))
+    ctx.tool_iteration_count = tool_rounds
 
-    with patch("personal_agent.orchestrator.executor.settings") as cfg:
-        cfg.grounding_verification_mode = "enforce"
-        cfg.grounding_max_generation_attempts = 2
-        cfg.environment = "test"
-        _entailment_off(cfg)
-        state = await _synthesize(ctx, reply)
+    state = await _enforce(ctx, reply)
 
     assert state is TaskState.COMPLETED
-    assert ctx.final_reply is not None
-    assert "could not find a source" in ctx.final_reply
-    assert "web_search(paris population)" in ctx.final_reply
-    assert CLAIM not in ctx.final_reply
-    # FRE-1325: the terminal statement already says no source was found; the
-    # verdict describes the discarded generation, not this text.
-    assert ctx.grounding_disclosure is None
+    assert ctx.grounding_attempts == 1
+    assert ctx.grounding_retry_pending is False
+    assert ctx.final_reply == reply
+    assert ctx.grounding_disclosure is not None
+    assert sentence in ctx.grounding_disclosure
+
+
+@pytest.mark.asyncio
+async def test_ac1_enforce_an_unsettled_only_shape_b_turn_delivers_without_note() -> None:
+    """AC-1 on the turn path: no retry, empty ``blocking_outcomes``, and no note."""
+    spans = tuple(_span(f"u{i}", CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT) for i in range(2))
+    ctx = _ctx("Answer.", _shape_b_registry("trace-enforce-unsettled"))
+    mock_log, calls = _capturing_log()
+
+    with patch("personal_agent.orchestrator.executor.log", mock_log):
+        state = await _synthesize_with_verification(
+            ctx, TurnVerification(spans=spans), mode="enforce"
+        )
+
+    assert state is TaskState.COMPLETED
+    decisions = [kw for event, kw in calls if event == "grounding_enforcement_decision"]
+    assert [(d["decision"], d["attempt"], d["blocking_outcomes"]) for d in decisions] == [
+        ("deliver", 1, [])
+    ]
+    assert await _deliver(ctx) == "Answer."
+
+
+@pytest.mark.asyncio
+async def test_ac4_a_shape_b_turn_failing_both_attempts_delivers_its_second_generation() -> None:
+    """AC-4: no refusal. The second generation ships with the declaration."""
+    first = f"{CLAIM}."
+    second = f"By the latest count, {CLAIM}."
+    ctx = _ctx(first, _shape_b_registry("trace-enforce-twice"))
+    mock_log, calls = _capturing_log()
+
+    with patch("personal_agent.orchestrator.executor.log", mock_log):
+        assert await _enforce(ctx, first) is TaskState.LLM_CALL
+        ctx.final_reply = second
+        ctx.messages.append({"role": "assistant", "content": second})
+        state = await _enforce(ctx, second)
+
+    assert state is TaskState.COMPLETED
+    assert [kw["decision"] for event, kw in calls if event == "grounding_enforcement_decision"] == [
+        "retry_cite_only",
+        "deliver",
+    ]
+    delivered = await _deliver(ctx)
+    assert delivered == f"{second}\n\n{_SHAPE_B_NOTE}"
+    assert "I could not find a source for" not in delivered
+
+
+@pytest.mark.asyncio
+async def test_ac5_a_retried_turn_is_forced_and_confounded() -> None:
+    """AC-5: the retried generation is never counted as first-generation compliant."""
+    reply = f"{CLAIM}."
+    ctx = _ctx(reply, _shape_b_registry("trace-enforce-confounded"))
+    mock_log, calls = _capturing_log()
+
+    with patch("personal_agent.orchestrator.executor.log", mock_log):
+        await _enforce(ctx, reply)
+        ctx.final_reply = reply
+        await _enforce(ctx, reply)
+
+    second = _all_grounding_verification_completed(calls)[-1]
+    assert second["attempts"] == 2
+    assert second["first_generation_compliant"] is False
+    assert second["compliance_observation"] == "confounded"
+    assert ctx.grounding_record is not None
+    assert ctx.grounding_record.retrieval_forced is True
 
 
 @pytest.mark.asyncio
@@ -623,7 +708,7 @@ async def test_a_blocked_turn_is_not_sampled_on_the_generation_that_failed() -> 
     Sampling a generation D4 threw away would measure text the user never saw, and would
     bill a judge call for it. A turn that retries is sampled once, against its final reply.
     """
-    registry = SourceRegistry(turn_id="trace-not-sampled")
+    registry = _shape_b_registry("trace-not-sampled")
     reply = f"{CLAIM}."
     ctx = _ctx(reply, registry)
     scored: list[object] = []
@@ -980,7 +1065,8 @@ async def test_each_generation_attempt_emits_its_own_document() -> None:
     ``trace_id``, keeping the highest ``attempts``; this test is the behaviour that makes
     that collapse necessary.
     """
-    registry = SourceRegistry(turn_id="trace-refused-retry")
+    # An admitted typed source makes the turn shape B, so it retries (ADR-0151 D3).
+    registry = _shape_b_registry("trace-refused-retry")
     registry.register_tool_result(
         tool_name="bash",
         arguments={"command": "echo 'Paris has 2.1 million residents'"},

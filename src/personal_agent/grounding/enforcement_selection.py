@@ -1,9 +1,14 @@
 """D5's enforcement selection — light or heavy, keyed on the measured rate (FRE-1285).
 
+**Inert since ADR-0151 D5 (FRE-1509).** Pre-generation forcing is withdrawn in every mode,
+so the selected level changes no request and never marks a turn as forced. The selector,
+its standing state and its probation draw are retained unchanged; the rest of this
+docstring describes the design as FRE-1285 built it.
+
 :mod:`personal_agent.grounding.compliance` computes a reading and decides nothing. This is
 the other half: what follows from the reading. The contract itself does **not** vary — no
 uncited world-fact assertion, identical at 27B and at the frontier — and neither does
-verification, which runs inline and blocking on every turn at every level. What varies is
+verification, which runs inline and blocking on every turn at every level. What varied was
 whether retrieval is forced *before* generation.
 
 **Selection reads the rate and nothing else.** Not a model name, not a provider, not a
@@ -50,7 +55,11 @@ _RNG = random.Random()
 
 
 class EnforcementLevel(StrEnum):
-    """Whether retrieval is forced before generation."""
+    """The selected enforcement level.
+
+    It meant whether retrieval is forced before generation. ADR-0151 D5 withdrew that
+    forcing, so the level no longer changes a turn.
+    """
 
     LIGHT = "light"
     HEAVY = "heavy"
@@ -155,18 +164,6 @@ class EnforcementSelection(BaseModel):
     reason: SelectionReason
     probation: bool = False
     changed: bool = False
-
-    @property
-    def retrieval_forced(self) -> bool:
-        """Whether this turn's generation had sources forced on it beforehand.
-
-        The field FRE-1284's metric excludes on, answered from the level that was
-        **applied** rather than the one standing. A probation turn is heavy-standing and
-        light-applied; reporting it forced would discard the very observation probation
-        exists to produce, and the bootstrap would deadlock with the machinery all
-        apparently working.
-        """
-        return self.applied is EnforcementLevel.HEAVY
 
 
 def initial_state() -> EnforcementState:
@@ -298,36 +295,12 @@ def configured_band() -> EnforcementBand:
     )
 
 
-def build_forced_retrieval_directive() -> str:
-    """Return heavy's pre-generation directive.
-
-    The companion to the ``tool_choice`` gate rather than a substitute for it: the gate
-    makes retrieval *happen*, and this says what to retrieve for. Unlike D4's retry
-    directive this one precedes generation, so there is no blocked claim to name — and it
-    must not invent one, since a directive that stated the claim would be handing the
-    model its own unsourced assertion back as a premise.
-
-    Returns:
-        The directive, for the turn's message list.
-    """
-    return (
-        "Before you answer: retrieve first. Use the retrieval tools available to you to "
-        "find sources for whatever this turn requires, then write your answer from what "
-        "you retrieved, citing each assertion with the identifier of the source that "
-        "supports it.\n\n"
-        "Your own background knowledge is not a source. If retrieval turns up nothing "
-        "that supports a claim, leave the claim out and say what you searched — that is "
-        "a correct answer here, not a failed one."
-    )
-
-
 __all__ = [
     "EnforcementBand",
     "EnforcementLevel",
     "EnforcementSelection",
     "EnforcementState",
     "SelectionReason",
-    "build_forced_retrieval_directive",
     "configured_band",
     "initial_state",
     "select_enforcement",

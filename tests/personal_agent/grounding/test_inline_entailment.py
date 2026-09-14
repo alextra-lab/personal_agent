@@ -23,6 +23,7 @@ from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.spans import NonExemptReason, Span, SpanExtraction, SpanLabel
 from personal_agent.grounding.verification import (
     CheckOutcome,
+    TurnShape,
     TurnVerification,
     apply_entailment,
     build_grounding_record,
@@ -128,7 +129,10 @@ def test_a_genuinely_supporting_source_passes() -> None:
 
     assert [span.outcome for span in result.spans] == [CheckOutcome.PASSED]
     assert result.compliant is True
-    assert decide(result, attempt=1, max_attempts=2).decision is TurnDecision.DELIVER
+    assert (
+        decide(result, shape=TurnShape.B, attempt=1, max_attempts=2).decision
+        is TurnDecision.DELIVER
+    )
 
 
 # ── AC-1 — the class containment cannot reach ───────────────────────────────────────
@@ -147,8 +151,8 @@ def test_a_non_supporting_source_is_rejected_and_blocks() -> None:
     assert result.compliant is False
     assert "only mentions mercury" in result.spans[0].detail
     assert (
-        decide(result, attempt=1, max_attempts=2).decision
-        is TurnDecision.RETRY_WITH_FORCED_RETRIEVAL
+        decide(result, shape=TurnShape.B, attempt=1, max_attempts=2).decision
+        is TurnDecision.RETRY_CITE_ONLY
     )
 
 

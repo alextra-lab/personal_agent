@@ -411,26 +411,21 @@ class ExecutionContext:
 
     # ADR-0138 D4 (FRE-1282). Generation attempts this turn has made under the grounding
     # contract, counting from 1 at the first verification. Its own counter, deliberately
-    # separate from tool_iteration_count: a forced-retrieval retry is a *generation*
-    # attempt, and folding it into the tool-loop bound would let a turn that used its tool
-    # budget legitimately lose its one chance to fix an unsourced claim.
+    # separate from tool_iteration_count: a grounding retry is a *generation* attempt, and
+    # folding it into the tool-loop bound would let a turn that used its tool budget
+    # legitimately lose its one chance to fix an unsourced claim.
     grounding_attempts: int = 0
 
-    # Set when D4 orders a retry; step_llm_call reads it to guarantee the retry can
-    # actually retrieve — tools offered, retrieval demanded — rather than merely being
-    # asked to. Cleared as it is consumed.
+    # Set when D4 orders the cite-only retry (ADR-0151 D3). step_llm_call reads it to pin
+    # tool_choice="none" on the retry request and to drop any tool call in its response.
+    # Cleared as it is consumed.
     grounding_retry_pending: bool = False
 
-    # Extra tool iterations reserved for D4's forced-retrieval retries, added to the
-    # ceiling in _resolve_max_iterations on the same footing as ADR-0076's user-granted
-    # bonus. Without it the retry is forced in name only: a turn that spent its tool
-    # budget legitimately would be told to retrieve with nothing left to retrieve with.
+    # Extra tool iterations added to the ceiling in _resolve_max_iterations on the same
+    # footing as ADR-0076's user-granted bonus (FRE-1282). Since ADR-0151 D3 and D5
+    # (FRE-1509) nothing adds to it: the retry cannot call a tool and pre-generation
+    # forcing is withdrawn, so it stays 0.
     grounding_retrieval_grant: int = 0
-
-    # What this turn retrieved or tried to, in order, as human-readable descriptors.
-    # D4's terminal statement names what was searched, and that is a claim about the turn
-    # record (a system-record span under D1), not about the world.
-    retrieval_attempts: list[str] = field(default_factory=list)
 
     # ADR-0138 D3(d) (FRE-1286). Inline entailment judge calls this turn has spent,
     # accumulated ACROSS D4 attempts. The cap is cumulative for the same reason

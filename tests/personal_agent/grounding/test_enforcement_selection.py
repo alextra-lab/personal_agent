@@ -28,7 +28,6 @@ from personal_agent.grounding.enforcement_selection import (
     EnforcementLevel,
     EnforcementState,
     SelectionReason,
-    build_forced_retrieval_directive,
     configured_band,
     initial_state,
     select_enforcement,
@@ -287,16 +286,15 @@ def test_probation_turn_is_an_unconfounded_observation() -> None:
     """AC-4b: the probation turn enters the denominator.
 
     This is the property that makes probation break the bootstrap deadlock rather than
-    merely appear to. ``retrieval_forced`` is what FRE-1284's metric excludes on, so a
-    probation turn that reported itself forced would be discarded and the model could
-    never accrue the observations promotion requires.
+    merely appear to: a probation draw applies light to a heavy-standing model. Since
+    ADR-0151 D5 no level forces retrieval, so the level alone no longer confounds a turn.
     """
     heavy = EnforcementState(level=EnforcementLevel.HEAVY, demoted_at=NOW)
     probation = _select(0.10, heavy, rng=_always_probation())
-    assert not probation.retrieval_forced
+    assert probation.applied is EnforcementLevel.LIGHT
 
     ordinary = _select(0.10, heavy, rng=_never_probation())
-    assert ordinary.retrieval_forced
+    assert ordinary.applied is EnforcementLevel.HEAVY
 
 
 def test_probation_fraction_over_many_turns() -> None:
@@ -373,8 +371,10 @@ def _simulate(
             unexplained_light += 1
         if stop_on_light and standing.level is EnforcementLevel.LIGHT:
             break
-        if selection.retrieval_forced:
-            continue  # confounded — never written, so it cannot inflate the rate
+        # The selector's original premise, kept to test its own dynamics: a heavy-applied
+        # turn was confounded and never written. ADR-0151 D5 made heavy inert.
+        if selection.applied is EnforcementLevel.HEAVY:
+            continue
         observations.append(
             ComplianceObservation(model_key="m", observed_at=moment, compliant=compliant)
         )
@@ -558,14 +558,3 @@ def test_the_band_is_expressible_at_the_committed_sample_floor() -> None:
     # floats (0.95 - 0.90 is 0.049999...), so the division form fails by one ulp on
     # parameters that are exactly right.
     assert settings.grounding_compliance_min_samples * width >= 1 - 1e-9
-
-
-def test_forced_retrieval_directive_does_not_hand_back_a_claim() -> None:
-    """The directive says retrieve first, and asserts nothing about the world.
-
-    It precedes generation, so unlike D4's retry directive it has no blocked claim to
-    name — and it must not invent one.
-    """
-    directive = build_forced_retrieval_directive()
-    assert "retriev" in directive.lower()
-    assert directive.strip()

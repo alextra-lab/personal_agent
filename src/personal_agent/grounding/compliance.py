@@ -140,9 +140,10 @@ def is_unconfounded_observation(record: GroundingRecord, *, citable: bool) -> bo
       to count. Callers log the skip so a per-model exclusion rate stays observable — an
       exclusion nobody can see is an exclusion nobody can audit.
     - **At least one non-exempt span.** D5's denominator, literally.
-    - **Retrieval was not forced.** The round-2 finding. Today the field means "this
-      generation followed a D4 retry"; FRE-1285 widens the same field to heavy
-      enforcement's pre-generation forcing. Both are confounded and both are excluded.
+    - **Retrieval was not forced.** The round-2 finding. The field means "this generation
+      followed a grounding retry". FRE-1285 widened it to heavy enforcement's
+      pre-generation forcing, and ADR-0151 D5 (FRE-1509) withdrew that forcing, so the
+      field again reads the attempt count only.
     - **The turn was citable.** An ``uncitable`` turn — every tool result this turn
       offered was refused — is the system offering nothing to cite from, not the model
       declining to cite. Counting it as a compliance failure is the same confound as

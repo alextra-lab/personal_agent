@@ -1,14 +1,14 @@
 """D5 enforcement selection wired into the turn path (ADR-0138 D5, FRE-1285).
 
 The pure state machine lives in ``tests/personal_agent/grounding/test_enforcement_selection``.
-These tests drive the seams that turn a decision into a turn: whether heavy actually gates
-retrieval before generation, whether a probation turn reaches the compliance denominator,
-whether verification is the same at both levels, and whether every failure lands on heavy.
+These tests drive the seams where a selection meets a turn: whether verification is the
+same at every level, whether every failure lands on heavy, and how a transition is
+persisted.
 
-Three of these exist because a plan review pointed out that the first draft's criteria
-could all pass while the real behaviour was broken — a directive the model may ignore is
-not a gate, and a probation turn that reports itself pre-forced is discarded by the very
-metric it was routed light to feed.
+ADR-0151 D5 (FRE-1509) withdrew pre-generation forcing. The selector is retained but inert:
+a heavy selection attaches no directive, no ``tool_choice`` pin and no iteration grant, and
+``retrieval_forced`` reads the attempt count only. The request-level proof is in
+``test_executor_cite_only_retry.py``.
 """
 
 from __future__ import annotations
@@ -32,19 +32,15 @@ from personal_agent.grounding.verification import (
     SpanVerification,
     TurnVerification,
 )
-from personal_agent.llm_client.models import ToolCallingStrategy
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import (
-    _append_heavy_directive,
     _record_grounding,
-    _resolve_heavy_gate,
     _select_enforcement,
 )
 from personal_agent.orchestrator.types import ExecutionContext
 
 MODEL = "gemma-3-27b-it-qat"
 NOW = datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)
-TOOLS = [{"type": "function", "function": {"name": "search_web"}}]
 
 
 def _ctx(**kwargs: object) -> ExecutionContext:
@@ -75,141 +71,7 @@ def _selection(
     )
 
 
-# ── AC-6b — heavy actually gates retrieval before generation ─────────────────
-
-
-def test_heavy_pins_tool_choice_required() -> None:
-    """The gate, stated as the thing that makes heavy more than advice (AC-6b)."""
-    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
-    pin = _resolve_heavy_gate(
-        ctx,
-        tools=TOOLS,
-        tool_strategy=ToolCallingStrategy.NATIVE,
-        is_synthesizing=False,
-        model_key=MODEL,
-    )
-    assert pin == "required"
-
-
-def test_light_leaves_tool_choice_alone() -> None:
-    """Light means the model generates first and cites as it goes (AC-6b)."""
-    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.LIGHT))
-    assert (
-        _resolve_heavy_gate(
-            ctx,
-            tools=TOOLS,
-            tool_strategy=ToolCallingStrategy.NATIVE,
-            is_synthesizing=False,
-            model_key=MODEL,
-        )
-        is None
-    )
-
-
-def test_probation_turn_carries_no_gate() -> None:
-    """AC-4b: probation withholds the forcing, which is the entire point of it.
-
-    A probation turn that still gated retrieval would be a heavy turn wearing a light
-    label — measurable in name, confounded in fact.
-    """
-    ctx = _ctx(
-        grounding_enforcement=_selection(
-            EnforcementLevel.LIGHT, standing=EnforcementLevel.HEAVY, probation=True
-        )
-    )
-    assert (
-        _resolve_heavy_gate(
-            ctx,
-            tools=TOOLS,
-            tool_strategy=ToolCallingStrategy.NATIVE,
-            is_synthesizing=False,
-            model_key=MODEL,
-        )
-        is None
-    )
-
-
-def test_the_gate_applies_only_to_the_first_generation() -> None:
-    """Re-pinning every pass would forbid the turn from ever answering."""
-    mid_loop = _ctx(
-        grounding_enforcement=_selection(EnforcementLevel.HEAVY), tool_iteration_count=1
-    )
-    assert (
-        _resolve_heavy_gate(
-            mid_loop,
-            tools=TOOLS,
-            tool_strategy=ToolCallingStrategy.NATIVE,
-            is_synthesizing=False,
-            model_key=MODEL,
-        )
-        is None
-    )
-
-    after_d4_retry = _ctx(
-        grounding_enforcement=_selection(EnforcementLevel.HEAVY), grounding_attempts=1
-    )
-    assert (
-        _resolve_heavy_gate(
-            after_d4_retry,
-            tools=TOOLS,
-            tool_strategy=ToolCallingStrategy.NATIVE,
-            is_synthesizing=False,
-            model_key=MODEL,
-        )
-        is None
-    )
-
-
-@pytest.mark.parametrize(
-    ("tools", "strategy", "synthesizing"),
-    [
-        (None, ToolCallingStrategy.NATIVE, False),
-        (TOOLS, ToolCallingStrategy.PROMPT_INJECTED, False),
-        (TOOLS, ToolCallingStrategy.NATIVE, True),
-    ],
-)
-def test_gate_unavailable_degrades_loudly(tools, strategy, synthesizing) -> None:
-    """AC-6b: an unreachable gate is a WARNING, never a silent downgrade.
-
-    These are exactly the conditions under which ``tool_choice`` never reaches a backend.
-    Heavy then falls back to directive-only — which is the design a plan review rejected,
-    so a deployment sitting in it must be visible from the logs.
-    """
-    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
-    with patch("personal_agent.orchestrator.executor.log") as logger:
-        pin = _resolve_heavy_gate(
-            ctx,
-            tools=tools,
-            tool_strategy=strategy,
-            is_synthesizing=synthesizing,
-            model_key=MODEL,
-        )
-
-    assert pin is None
-    logger.warning.assert_called_once()
-    assert logger.warning.call_args.args[0] == "grounding_heavy_gate_unavailable"
-
-
-def test_the_gate_never_overrides_forced_synthesis() -> None:
-    """Forced synthesis pins ``tool_choice="none"``; the gate must not fight it.
-
-    A synthesis pass told it must call a tool cannot synthesize, and the turn would never
-    produce an answer at all.
-    """
-    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
-    assert (
-        _resolve_heavy_gate(
-            ctx,
-            tools=TOOLS,
-            tool_strategy=ToolCallingStrategy.NATIVE,
-            is_synthesizing=True,
-            model_key=MODEL,
-        )
-        is None
-    )
-
-
-# ── AC-4b / AC-5 — what the metric is told about the turn ────────────────────
+# ── ADR-0151 D5 — what the metric is told about the turn ─────────────────────
 
 
 def _verification(*, compliant: bool) -> TurnVerification:
@@ -233,45 +95,34 @@ def _record_with(selection: EnforcementSelection | None, *, attempts: int = 1) -
     return ctx.grounding_record
 
 
-def test_a_heavy_turn_is_recorded_as_pre_forced() -> None:
-    """AC-5's root cause, closed at the seam.
+@pytest.mark.parametrize(
+    "selection",
+    [
+        None,
+        _selection(EnforcementLevel.LIGHT),
+        _selection(EnforcementLevel.HEAVY),
+        _selection(EnforcementLevel.LIGHT, standing=EnforcementLevel.HEAVY, probation=True),
+    ],
+)
+def test_a_first_attempt_is_never_recorded_as_forced(
+    selection: EnforcementSelection | None,
+) -> None:
+    """ADR-0151 D5: the selection level never sets ``retrieval_forced``.
 
-    Heavy supplies sources before generation, so scoring the turn measures the
-    enforcement rather than the model. A heavy turn counted as unforced is how a model
-    that only complies when spoon-fed earns promotion and then oscillates forever.
+    A heavy turn recorded as forced would be excluded from the compliance metric although
+    nothing forced it, and the metric would starve.
     """
-    record = _record_with(_selection(EnforcementLevel.HEAVY))
-    assert record.retrieval_forced is True
+    assert _record_with(selection).retrieval_forced is False
 
 
-def test_a_probation_turn_is_an_unconfounded_observation() -> None:
-    """AC-4b: probation reaches the denominator, or the bootstrap deadlocks silently.
-
-    ``retrieval_forced`` reads the APPLIED level, never the standing one. A probation
-    turn reporting itself forced would be discarded by the very metric it was routed
-    light to feed, and the model could never accrue what promotion requires — with every
-    piece of machinery apparently working.
-    """
-    record = _record_with(
-        _selection(EnforcementLevel.LIGHT, standing=EnforcementLevel.HEAVY, probation=True)
-    )
-    assert record.retrieval_forced is False
-
-
-def test_a_light_turn_is_recorded_as_unforced() -> None:
-    """The measurable case: light turns are the population the rate is computed over."""
-    assert _record_with(_selection(EnforcementLevel.LIGHT)).retrieval_forced is False
-
-
-def test_a_d4_retry_is_still_pre_forced_under_light() -> None:
-    """The field's original meaning survives the widening (FRE-1282)."""
-    record = _record_with(_selection(EnforcementLevel.LIGHT), attempts=2)
-    assert record.retrieval_forced is True
-
-
-def test_no_selection_leaves_the_field_at_its_pre_1285_meaning() -> None:
-    """`observe` mode never selects, and must go on producing observations."""
-    assert _record_with(None).retrieval_forced is False
+@pytest.mark.parametrize(
+    "selection", [None, _selection(EnforcementLevel.LIGHT), _selection(EnforcementLevel.HEAVY)]
+)
+def test_a_retried_attempt_is_recorded_as_forced_at_every_level(
+    selection: EnforcementSelection | None,
+) -> None:
+    """``retrieval_forced`` is true exactly when ``attempts >= 2``."""
+    assert _record_with(selection, attempts=2).retrieval_forced is True
 
 
 # ── AC-6 — verification is identical at both levels ──────────────────────────
@@ -288,11 +139,11 @@ def test_no_selection_leaves_the_field_at_its_pre_1285_meaning() -> None:
 def test_the_same_bad_citation_is_blocked_at_every_level(
     selection: EnforcementSelection,
 ) -> None:
-    """AC-6: the contract does not vary; only pre-generation forcing does.
+    """AC-6: the contract does not vary with the level.
 
     Seeded identically at each level and asserted on the outcome that matters — the span
-    fails, so the turn is not compliant and D4 blocks it. A level that admitted it would
-    be a second, weaker contract.
+    fails, so the turn is not compliant. A level that admitted it would be a second,
+    weaker contract.
     """
     ctx = _ctx(grounding_enforcement=selection, grounding_attempts=1)
     with patch("personal_agent.orchestrator.executor._record_compliance_observation") as observer:
@@ -310,12 +161,8 @@ def test_the_same_bad_citation_is_blocked_at_every_level(
 
 
 @pytest.mark.asyncio
-async def test_observe_mode_never_selects_or_forces() -> None:
-    """Forcing retrieval in a mode that promises not to change behaviour is a lie.
-
-    `observe` is also where every turn is unconfounded, which is the bootstrap the mode
-    exists to provide.
-    """
+async def test_observe_mode_never_selects() -> None:
+    """`observe` promises not to change behaviour, and never runs the selector."""
     ctx = _ctx()
     with patch("personal_agent.orchestrator.executor.settings") as cfg:
         cfg.grounding_verification_mode = "observe"
@@ -341,19 +188,12 @@ async def test_selection_happens_once_per_turn() -> None:
     resolver.assert_not_called()
 
 
+@pytest.mark.parametrize("level", [EnforcementLevel.HEAVY, EnforcementLevel.LIGHT])
 @pytest.mark.asyncio
-async def test_heavy_reserves_the_iteration_grant_but_never_touches_history() -> None:
-    """Selection reserves the grant; it must NOT append the directive to ``ctx.messages``.
-
-    ``ctx.messages`` is persisted at end of turn and reloaded on the next one, and heavy
-    applies to every turn rather than to a limit being approached — so a directive
-    attached here accumulates one stale pseudo-user message per turn, forever. The
-    directive is a per-request concern and lives in ``_append_heavy_directive``.
-
-    The grant does belong here: it is per-turn state, and this runs once per turn.
-    """
+async def test_a_selection_changes_nothing_on_the_turn(level: EnforcementLevel) -> None:
+    """ADR-0151 D5: no directive in history and no iteration grant, at either level."""
     ctx = _ctx()
-    resolver = AsyncMock(return_value=_selection(EnforcementLevel.HEAVY))
+    resolver = AsyncMock(return_value=_selection(level))
     with (
         patch("personal_agent.orchestrator.executor.settings") as cfg,
         patch("personal_agent.orchestrator.executor._resolve_enforcement", resolver),
@@ -362,113 +202,16 @@ async def test_heavy_reserves_the_iteration_grant_but_never_touches_history() ->
         await _select_enforcement(ctx)
 
     assert ctx.grounding_enforcement is not None
-    assert ctx.grounding_enforcement.applied is EnforcementLevel.HEAVY
-    assert ctx.messages == [], "the directive must never enter persisted history"
-    assert ctx.grounding_retrieval_grant > 0
-
-
-@pytest.mark.asyncio
-async def test_light_attaches_nothing() -> None:
-    """Light leaves the turn alone: the model generates first and cites as it goes."""
-    ctx = _ctx()
-    resolver = AsyncMock(return_value=_selection(EnforcementLevel.LIGHT))
-    with (
-        patch("personal_agent.orchestrator.executor.settings") as cfg,
-        patch("personal_agent.orchestrator.executor._resolve_enforcement", resolver),
-    ):
-        cfg.grounding_verification_mode = "enforce"
-        await _select_enforcement(ctx)
-
+    assert ctx.grounding_enforcement.applied is level
     assert ctx.messages == []
     assert ctx.grounding_retrieval_grant == 0
-
-
-# ── The directive is per request, never persisted ────────────────────────────
-
-
-def test_heavy_directive_is_appended_to_the_request_only() -> None:
-    """It rides the request and leaves ``ctx.messages`` untouched.
-
-    The list identity check is the assertion that matters: a returned list that IS
-    ``ctx.messages`` would be persisted at end of turn, which is the accumulation defect.
-    """
-    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
-    ctx.messages = [{"role": "user", "content": "How many people live in Paris?"}]
-    original = list(ctx.messages)
-
-    sent = _append_heavy_directive(ctx.messages, ctx)
-
-    assert ctx.messages == original, "ctx.messages was mutated"
-    assert sent is not ctx.messages
-    assert len(sent) == 2
-    assert sent[0] == original[0]
-    assert "retriev" in sent[1]["content"].lower()
-
-
-def test_repeated_requests_do_not_accumulate_directives() -> None:
-    """The defect this function exists to prevent, asserted as growth that does not happen.
-
-    Ten passes over the same context must still send exactly one directive, and the
-    persisted history must still hold exactly the user's turn.
-    """
-    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
-    ctx.messages = [{"role": "user", "content": "How many people live in Paris?"}]
-
-    for _ in range(10):
-        sent = _append_heavy_directive(ctx.messages, ctx)
-        assert len(sent) == 2
-
-    assert len(ctx.messages) == 1
-
-
-@pytest.mark.parametrize(
-    "selection",
-    [None, _selection(EnforcementLevel.LIGHT)],
-)
-def test_a_non_heavy_turn_sends_its_messages_unchanged(selection) -> None:
-    """Light and unselected turns get the list back untouched."""
-    ctx = _ctx(grounding_enforcement=selection)
-    ctx.messages = [{"role": "user", "content": "hello"}]
-
-    assert _append_heavy_directive(ctx.messages, ctx) is ctx.messages
-
-
-def test_a_probation_turn_sends_no_directive() -> None:
-    """Probation withholds the forcing, and the directive is part of the forcing."""
-    ctx = _ctx(
-        grounding_enforcement=_selection(
-            EnforcementLevel.LIGHT, standing=EnforcementLevel.HEAVY, probation=True
-        )
-    )
-    ctx.messages = [{"role": "user", "content": "hello"}]
-
-    assert _append_heavy_directive(ctx.messages, ctx) is ctx.messages
-
-
-def test_the_directive_follows_the_user_turn_it_must_not_displace() -> None:
-    """Ordering, stated as the ADR-0081 invariant it protects.
-
-    The volatile block and the ``/no_think`` suffix both target the LAST user message and
-    both run before this. The directive must therefore land after the user's query, so
-    that query is still the message they attach to — the inversion FRE-1137 fixed a
-    sibling of on attachment turns.
-    """
-    ctx = _ctx(grounding_enforcement=_selection(EnforcementLevel.HEAVY))
-    inlined_query = {"role": "user", "content": "Paris?\n\n<recalled memory block>"}
-    ctx.messages = [{"role": "assistant", "content": "earlier"}, inlined_query]
-
-    sent = _append_heavy_directive(ctx.messages, ctx)
-
-    assert sent[-2] == inlined_query
-    assert sent[-1]["role"] == "user"
-    assert "retriev" in sent[-1]["content"].lower()
 
 
 @pytest.mark.asyncio
 async def test_a_store_failure_falls_back_to_heavy() -> None:
     """Unmeasured means heavy, and a broken instrument is no better than no instrument.
 
-    Asserted on the whole fail-safe, not just the level: the turn still runs, it runs
+    Asserted on the whole fail-safe, not just the level: the turn still runs, it selects
     heavy, and the failure is logged at ERROR so a wave of these reads as the malfunction
     it is rather than as models quietly becoming strict.
     """
@@ -484,7 +227,6 @@ async def test_a_store_failure_falls_back_to_heavy() -> None:
 
     assert ctx.grounding_enforcement is not None
     assert ctx.grounding_enforcement.applied is EnforcementLevel.HEAVY
-    assert ctx.grounding_enforcement.retrieval_forced
     logger.exception.assert_called_once()
     assert logger.exception.call_args.args[0] == "grounding_enforcement_selection_failed"
 
@@ -628,7 +370,7 @@ async def test_a_rejected_write_is_logged_rather_than_swallowed() -> None:
         selection = await _run_resolve(upsert=upsert)
 
     # The selection still governs THIS turn — the loser of the race is the write, not the
-    # enforcement decision, and this turn is still correctly heavy.
+    # enforcement decision.
     assert selection.applied is EnforcementLevel.HEAVY
     logger.warning.assert_called_once()
     assert logger.warning.call_args.args[0] == "grounding_enforcement_transition_not_persisted"

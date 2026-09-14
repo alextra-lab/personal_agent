@@ -39,8 +39,10 @@ A runner crash with no failed row can be resumed: run the same command again.
 
 Run from the repo root, one session per invocation:
 
-    set -a; source /opt/seshat/.env; set +a
-    PYTHONPATH=. uv run python scripts/eval/fre1517/session_runner.py --arm mtplx_27b --script s1_trip --replicate 1 --run-id <id>
+    # Export only the eval Neo4j password. Sourcing all of /opt/seshat/.env breaks AppConfig
+    # parsing (cors_allowed_origins), and the runner needs nothing else from it.
+    export NEO4J_PASSWORD=...
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. uv run python scripts/eval/fre1517/session_runner.py --build-root /opt/seshat --arm mtplx_27b --script s1_trip --replicate 1 --run-id <id>
 """
 
 from __future__ import annotations
@@ -411,7 +413,9 @@ async def run(args: argparse.Namespace) -> int:
     es_async = httpx.AsyncClient()
     try:
         async with httpx.AsyncClient() as http:
-            await assert_gateway_fresh(http, EVAL_CHAT, repo_root())
+            # The eval stack is built from the primary checkout, never from a worktree (a worktree
+            # build recreated production searxng on 2026-09-14). Compare against that build root.
+            await assert_gateway_fresh(http, EVAL_CHAT, Path(args.build_root))
             fingerprint = (
                 (await http.get(f"{EVAL_CHAT}/health", timeout=10)).json().get("build_fingerprint")
             )
@@ -539,6 +543,11 @@ def main() -> int:
     p.add_argument("--run-id", required=True)
     p.add_argument("--min-budget-usd", type=float, default=5.0)
     p.add_argument("--deadline", default="", help="ISO-8601 UTC; start no new turn at or after it")
+    p.add_argument(
+        "--build-root",
+        default=str(repo_root()),
+        help="checkout the eval gateway was built from, for the freshness check (e.g. /opt/seshat)",
+    )
     p.add_argument(
         "--stop-after",
         type=int,

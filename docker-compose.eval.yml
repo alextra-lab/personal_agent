@@ -321,7 +321,7 @@ services:
       # FRE-1372's 2026-09-07 probe measured a real "no leak" against an eval Neo4j
       # holding zero nodes, because entity extraction never ran to leak anything.
       #
-      # These 20 keys interpolate from `/opt/seshat/.env` — pass `--env-file
+      # These 22 keys interpolate from `/opt/seshat/.env` — pass `--env-file
       # /opt/seshat/.env` to `docker compose` (see `make eval-infra-up`), since a
       # worktree's own `.env` is a stale, partial dev copy. Behaviour-relevant only:
       # never a production substrate address. `AGENT_SYSGRAPH_DATABASE_URL` (points
@@ -373,6 +373,12 @@ services:
       AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
       AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
       AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
+      # FRE-1517 (2026-09-14): the turn and task limits. Without them eval falls to the
+      # settings.py defaults (900 s task, 1800 s lifetime) while production runs 3600/3600,
+      # so a worker reserved its landing at round 0 (remaining_s 888, mean_round_s 600)
+      # and every HYBRID turn measured the limit instead of the model.
+      AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS: ${AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS}
+      AGENT_ORCHESTRATOR_TURN_LIFETIME_SECONDS: ${AGENT_ORCHESTRATOR_TURN_LIFETIME_SECONDS}
     ports:
       # Host 9002 → container 9001 (uvicorn port is hardcoded in Dockerfile.gateway)
       - "127.0.0.1:9002:9001"
@@ -489,7 +495,7 @@ services:
       # composition, so enable it here.
       AGENT_DELEGATION_ENABLED: "true"
       # FRE-1372 (reopen) / FRE-1498 / FRE-1464: production behaviour parity — same
-      # 20 keys, same rationale (including the 3 deliberately-omitted credentials and
+      # 22 keys, same rationale (including the 3 deliberately-omitted credentials and
       # the live-discovered resource-gating fix), as `seshat-gateway-control` above.
       AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: ${AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED}
       AGENT_ENABLE_MEMORY_GRAPH: ${AGENT_ENABLE_MEMORY_GRAPH}
@@ -511,6 +517,12 @@ services:
       AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
       AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
       AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
+      # FRE-1517 (2026-09-14): the turn and task limits. Without them eval falls to the
+      # settings.py defaults (900 s task, 1800 s lifetime) while production runs 3600/3600,
+      # so a worker reserved its landing at round 0 (remaining_s 888, mean_round_s 600)
+      # and every HYBRID turn measured the limit instead of the model.
+      AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS: ${AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS}
+      AGENT_ORCHESTRATOR_TURN_LIFETIME_SECONDS: ${AGENT_ORCHESTRATOR_TURN_LIFETIME_SECONDS}
     ports:
       # Host 9003 → container 9001
       - "127.0.0.1:9003:9001"

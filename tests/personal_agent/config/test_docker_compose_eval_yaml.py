@@ -47,6 +47,10 @@ _BEHAVIOUR_KEYS = frozenset(
         "AGENT_MANAGED_EMBEDDING_TOKEN",
         "AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL",
         "AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS",
+        # FRE-1517: the orchestrator limits. Missing, eval ran 900/1800 against
+        # production's 3600/3600 and no eval worker could research.
+        "AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS",
+        "AGENT_ORCHESTRATOR_TURN_LIFETIME_SECONDS",
     }
 )
 

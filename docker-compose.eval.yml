@@ -143,7 +143,9 @@ services:
       # only worked on the retry. Production's neo4j allows 15s but starts from a warm
       # volume; a fresh eval volume pays full initialisation.
       start_period: 90s
-    mem_limit: 768m
+    # FRE-1517 (2026-09-14): 768m OOM-killed neo4j-eval (exit 137, oom=true) under study load.
+    # The container holds a 512m heap plus a 128m page cache plus JVM and native overhead.
+    mem_limit: 1536m
     cpus: 0.5
     networks:
       - cloud-sim

@@ -3,7 +3,7 @@
 ## Doing / discussing  (≤5 sentences)
 The owner held both build streams from 07:05 to 14:46 UTC while the adr seat ran model tests on the
 local SLM, and released them at 14:46. At the reset, build1 is running the FRE-1508 AC-2/AC-3 replay
-for PR #1166, build2 is due FRE-1507 from dispatch, and adr holds FRE-1502. FRE-1505 passed its live eval check at 14:51 and is Done.
+for PR #1166, build2 launched FRE-1507 at 14:49, and adr holds FRE-1502. FRE-1505 passed its live eval check at 14:51 and is Done.
 No PR is mid-merge.
 
 ## What was decided and why
@@ -49,7 +49,7 @@ with stream labels, not the kill switch, and hold even GPU-safe paid work until 
 
 ## Sequence position + drift
 - build1: FRE-1508 (PR on hold until the replay posts), then FRE-1506 (High).
-- build2: FRE-1507, then FRE-1509. FRE-1510 and FRE-1495 are blocked by FRE-1506.
+- build2: FRE-1507 (launched 14:49), then FRE-1509. FRE-1510 and FRE-1495 are blocked by FRE-1506.
 - adr: FRE-1502.
 - The production gateway was last rebuilt for FRE-1501 (`5342e698`). The code from #1161 and #1165 is
   on main but inert in production, and it ships with the next routine rebuild.
@@ -61,3 +61,8 @@ with stream labels, not the kill switch, and hold even GPU-safe paid work until 
   After merge it needs a `seshat-gateway` rebuild, which adds up to 8 `claude_sonnet` calls per turn.
 - **Is the eval stack safe to run?** Yes, for credentials. FRE-1505's live probe passed at 14:51: eval bash runs as `nobody` and leaks nothing. The Turn-node leak (FRE-1506) is a separate contamination problem, so multi-arm evals still wait on FRE-1506.
 - **What closes FRE-1372?** FRE-1506's live probe passing AC-1 and AC-2 together.
+- **What live checks are still owed?** FRE-1501's runtime proof, at the first local fan-out with
+  researchers: no "Failed to parse tool call arguments as JSON" 500, and any cut worker shows
+  `stop_reason` `tool_call_truncated`. If the 500 recurs, FRE-1501 goes to Verify Failed.
+- **What else waits on master?** FRE-1338 is Approved and Urgent with no stream label, and its thread
+  was updated on 2026-09-14. Read the thread before labelling it.

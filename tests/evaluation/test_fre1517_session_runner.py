@@ -19,6 +19,16 @@ from scripts.eval.fre1517.session_runner import (
 )
 
 
+def test_ttft_probe_prompt_starts_with_its_nonce_and_scales_with_size() -> None:
+    """A9: the cold prompt's first bytes are unique; its size tracks the target."""
+    from scripts.eval.fre1517.ttft_probe import CHARS_PER_TOKEN, build_prompt
+
+    small, large = build_prompt(8000, "aa11"), build_prompt(32000, "bb22")
+    assert small.startswith("Probe aa11.")
+    assert large.startswith("Probe bb22.")
+    assert abs(len(large) - 32000 * CHARS_PER_TOKEN) < 100
+
+
 def test_completed_before_compares_timestamps_and_keeps_absence_undecided() -> None:
     """Master 2026-09-14: record whether the previous turn had consolidated when this one began."""
     assert completed_before("2026-09-20T10:00:00Z", "2026-09-20T10:00:05Z") is True

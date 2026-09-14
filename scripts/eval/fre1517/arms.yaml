@@ -18,6 +18,13 @@
 #                    passes each session's value from slm_server's ready message, relayed by
 #                    master: --session-fact thermal_snapshot=... The runner marks it UNVERIFIED
 #
+# Arm order — owner direction 2026-09-14 17:48 UTC, relayed by master: the Mac does not return
+# to llama.cpp between windows, so the arms run in engine blocks, arm 1 (OVH), arm 2 (27B MTPLX),
+# arm 3 (Flash-Next MTPLX), then arm 4 (llama.cpp) last. This drops A8's per-script rotation. Its
+# reason, the shared cloud budget, is moot: USD 0.08 of 50 spent before arm 1. Consequence, stated
+# in the report's limitations: the arm order is confounded with time and with the Mac's thermal
+# history.
+#
 # Sources, 2026-09-14:
 #   catalog  config/models.yaml on main (arms 1 and 4) and catalog PR #1173 at 728a5c69
 #            (arms 2 and 3: key, id, context_length, quantization) — read by explore

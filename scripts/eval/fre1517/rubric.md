@@ -153,6 +153,11 @@ and the notes (Phase 4).
 
 - **Web drift.** Web content changes during the roughly two days that the four arms span, so
   research turns on different arms read different pages.
+- **The arm order is fixed, not rotated.** By the owner's direction of 2026-09-14 17:48 UTC, the
+  arms run in engine blocks: arm 1 (OVH), arm 2 (27B MTPLX), arm 3 (Flash-Next MTPLX), arm 4
+  (llama.cpp) last. A8's per-script rotation is dropped, because its reason, the shared cloud
+  budget, is moot (USD 0.08 of 50 spent before arm 1). The arm order is therefore confounded
+  with time and with the Mac's thermal history.
 - **NFL week 11 of 2026 falls in late November.** Injury reports for it do not exist on the run
   days. A reply that invents them is scored **Fabricated** where a back-reference or a grounding
   item covers it.

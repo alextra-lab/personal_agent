@@ -78,8 +78,10 @@ async def run(run_ids: list[str]) -> int:
         nodes = await fetch_originating_session_ids(driver, uri=EVAL_NEO4J_URI)
     finally:
         await driver.close()
-    leaked = {sid: find_cross_session_sources(nodes, sid) for _, sid in ordered[:-1]}
-    leaked = {sid: records for sid, records in leaked.items() if records}
+    # Any session other than the latest is a leak, including sessions from runs not named here.
+    # A check against recorded sessions only missed three older sessions' 45 nodes on 2026-09-14.
+    foreign = {n.get("originating_session_id") for n in nodes} - {latest}
+    leaked = {sid: find_cross_session_sources(nodes, sid) for sid in sorted(foreign, key=str)}
     report = {
         "at": datetime.now(UTC).isoformat(timespec="seconds"),
         "scope": {"store": EVAL_NEO4J_URI, "run_ids": run_ids, "sessions_oldest_first": ordered},

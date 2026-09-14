@@ -96,19 +96,26 @@ not this proxy.
 ### D1 — Three turn shapes, classified from the source registry after generation
 
 A turn has a shape only when verification is available and it has one or more non-exempt statements.
-The shape is read from the registry counts that `_record_grounding` already emits:
+The shape is read from the turn record when verification runs:
 
 | Shape | Rule | Meaning |
 |---|---|---|
-| **A** | `tool_results_offered ≥ 1` and `tool_results_admitted = 0` | Tools ran, and the registry admitted none of their results. |
 | **B** | `tool_results_admitted ≥ 1` | The registry holds one or more tool sources from this turn. |
-| **C** | `tool_results_offered = 0` | No tool result reached the registry. |
+| **C** | The model emitted no tool call, dispatched or not, **and** no sub-agent ran | Nothing was done to gather evidence this turn. |
+| **A** | Every other turn | Tool calls were made or sub-agents ran, and the registry admitted none of their output. |
 
-- Shape A is `TurnEvidenceClass.UNCITABLE` (ADR-0139 D1). Shapes B and C split
-  `TurnEvidenceClass.CITABLE` on `tool_results_offered`.
+- The registry counts alone cannot define shape C. `tool_results_offered` counts only results that
+  reach `register_tool_result`. A malformed call goes to `_record_undispatched_invocation`
+  instead, and sub-agent reports live in `ctx.sub_agent_results`, outside `ctx.tool_results`. Both
+  paths leave `tool_results_offered` at 0. Shape C must therefore read every tool-call path and
+  the expansion record.
+- A HYBRID turn with no admitted source is shape A. Worker findings are uncitable under ADR-0138 D2,
+  and ADR-0149 records that by design.
 - A turn where an arbitrary-code tool and a typed tool both ran is shape B. The typed source is
   citable, and the retry in D3 has something to cite.
 - Memory recalled into the context is not a tool result. A shape C turn can hold memory sources.
+  Vision attachments are message blocks, not tool results, so a vision turn with no tool call is
+  shape C.
 
 ### D2 — Settled and unsettled statements
 
@@ -129,8 +136,12 @@ Two rules follow:
 1. **An unsettled statement never triggers a retry.** A limit of the verifier is not evidence about
    the model's statement.
 2. **An unsettled statement never counts as "not backed by a source" in the note.** The note counts
-   settled failures only. When unsettled statements exist, the note states their count separately as
-   statements that Seshat could not check.
+   settled failures only. A turn whose only failures are unsettled carries no note. When a note is
+   shown and unsettled statements also exist, the note states their count separately as statements
+   that Seshat could not check.
+
+`entailment_required` is transient: inline verification replaces it with a judge verdict or
+`entailment_unavailable` before a verification is delivered. It is listed for completeness.
 
 The fix to the verifier is a separate ticket. **The compliance metric does not change.** A turn with
 an unsettled statement is still not compliant under FRE-1284. The FRE-1325 scope fence on
@@ -145,9 +156,13 @@ This amends ADR-0138 D4.
 - The retry directive tells the model to cite each statement from the sources already registered
   this turn, and to leave out a statement that no registered source supports. It does not tell the
   model to retrieve.
-- The retry adds no retrieval grant: `GROUNDING_RETRY_TOOL_GRANT` is not added. The tool list stays in
-  the request unchanged, because removing it discards the prompt cache (ADR-0149 D6).
-- There is at most one retry, whatever `grounding_max_generation_attempts` says.
+- The retry adds no retrieval grant: `GROUNDING_RETRY_TOOL_GRANT` is not added.
+- **The retry request pins `tool_choice="none"`.** Without the pin, every non-synthesis call
+  receives the normal tool set with `tool_choice` unrestricted, and the model can retrieve new
+  sources on the retry. The tool list stays in the request, because removing it discards the prompt
+  cache (ADR-0149 D6).
+- There is at most one retry. `grounding_max_generation_attempts` narrows to the range 1 to 2:
+  1 means no retry, and 2 means one retry. A configured value above 2 fails settings validation.
 - **Shapes A and C never retry.** Retrieval cannot supply a command's output, and forcing retrieval on
   a general-knowledge answer is the intervention the owner rejected.
 - A turn that needed the retry is **not** first-generation compliant. The current code already holds
@@ -165,9 +180,9 @@ This amends ADR-0138 D4.
   capture is written, as FRE-1325 does, so it never enters `TaskCapture.assistant_response`.
 - Each sentence is a system-record statement about this turn. It contains:
   - the count of settled failures and the count of non-exempt statements;
-  - one sentence for the shape: shape A — tools ran, and Seshat cannot cite their output; shape B —
-    the statements are not backed by the sources this turn retrieved; shape C — no search, fetch or
-    command ran this turn;
+  - one sentence for the shape: shape A — tools or sub-agents ran, and Seshat cannot cite their
+    output; shape B — the statements are not backed by the sources this turn retrieved; shape C — no
+    tool and no sub-agent ran this turn;
   - the count of unsettled statements, when that count is above zero;
   - the instruction to check the statements before relying on them.
 - The exact wording is the implementation ticket's decision, within these contents.
@@ -181,8 +196,16 @@ This amends ADR-0138 D5.
   Whether to delete them is the implementation ticket's decision.
 - The enforcement selector (FRE-1285) selects nothing that changes a request. Whether to keep its
   standing and probation state is the implementation ticket's decision.
-- **No live behaviour changes from this section.** Production runs `observe`, and
-  `_select_enforcement` returns early outside `enforce` (`orchestrator/executor.py:2044`).
+- **`retrieval_forced` reads the attempt count only.** Today it is true when `attempts > 1` **or**
+  the applied selection level is heavy (`orchestrator/executor.py:2247-2251`,
+  `grounding/enforcement_selection.py`). A retained selector would keep marking heavy turns as
+  forced, and `compliance.py` would exclude them from the FRE-1284 metric although nothing forced
+  them. So the selection level must never set `retrieval_forced`. After this change,
+  `retrieval_forced` is true exactly when `attempts ≥ 2`.
+- **No live behaviour changes from this section.** Production runs `observe`
+  (`AGENT_GROUNDING_VERIFICATION_MODE=observe` in the gateway container, verified 2026-09-14; the
+  committed default is `off`). `_select_enforcement` returns early outside `enforce`
+  (`orchestrator/executor.py:2044`), so no production turn is heavy today.
 - The rest of ADR-0138 D5 stands. The contract and the verification do not vary by model.
 
 ### D6 — What this ADR does not do
@@ -302,7 +325,7 @@ searched", which on shape B is exactly the set of sources the answer used.
 
 **How will we know this decision delivered, not only merged?**
 
-Production runs `observe`. AC-1 to AC-4 and AC-6 are checked on an eval-stack run in `enforce`
+Production runs `observe`. AC-1 to AC-4, AC-6 and AC-7 are checked on an eval-stack run in `enforce`
 over a held-out set of one or more turns of each shape, and 20 or more shape B turns. AC-5 is
 checked on that run and on production `observe` turns after deploy. Every bar that is not stated
 here is fixed in the ticket that builds the check, before results are seen.
@@ -314,12 +337,17 @@ here is fixed in the ticket that builds the check, before results are seen.
   no note. *Fails if* any retry event lists an unsettled outcome, or the seeded turn retries or
   carries a note.
 
-- **AC-2 — Shapes A and C never retry, and nothing forces retrieval before generation.**
-  **Check:** join `grounding_verification_completed` by `trace_id`. Every turn with
-  `tool_results_admitted = 0` has `attempts = 1`. Every turn with `attempts = 1` has
-  `retrieval_forced = false` on its capture grounding record. That field is true today when heavy
-  forcing applied. *Fails if* any shape A or C turn has `attempts ≥ 2`, or any first-attempt turn
-  reads `retrieval_forced = true`.
+- **AC-2 — Shapes A and C never retry, the retry retrieves nothing, and nothing forces retrieval.**
+  **Check:** group `grounding_verification_completed` events by `trace_id`.
+  - Every turn whose last event has `tool_results_admitted = 0` has `attempts = 1`.
+  - No event has `attempts ≥ 3`.
+  - On every capture grounding record, `retrieval_forced` equals `attempts ≥ 2`. That field is
+    true today on a first attempt when heavy forcing applied.
+  - For every retried turn, the attempt 2 event has the same `tool_results_offered` as the attempt 1
+    event. The counts are cumulative per turn, so a retry that called a tool raises the count.
+
+  *Fails if* any shape A or C turn has `attempts ≥ 2`, any event has `attempts ≥ 3`, any record has
+  `retrieval_forced` different from `attempts ≥ 2`, or any retry raises `tool_results_offered`.
 
 - **AC-3 — No turn is refused.**
   **Check:** count `grounding_enforcement_decision` events with `decision = terminal_no_source`
@@ -329,16 +357,25 @@ here is fixed in the ticket that builds the check, before results are seen.
 
 - **AC-4 — A retried turn is not first-generation compliant.**
   **Check:** every `grounding_verification_completed` event with `attempts ≥ 2` reads
-  `first_generation_compliant = false`, and its compliance observation reads not compliant.
-  *Fails if* any retried turn is recorded as compliant.
+  `first_generation_compliant = false` and `compliance_observation = "confounded"`. `compliance.py`
+  rejects a record with `retrieval_forced = true`, so a retried turn writes no observation to the
+  metric. *Fails if* any retried turn reads `first_generation_compliant = true` or
+  `compliance_observation = "recorded"`.
 
 - **AC-5 — The declaration matches the record of the delivered generation.**
   **Check:** for each delivered turn, compare the reply as returned by `/chat` with the last
   `grounding_verification_completed` event for its `trace_id`. The note's failure count equals the
-  count of settled outcomes. The shape sentence matches D1 applied to the event's registry counts.
-  The unsettled count appears exactly when that count is above zero. Seeded negative: a fully passed
-  turn carries no note. *Fails if* one delivered turn disagrees with its event on any of the four
-  checks, or the fully passed turn carries a note.
+  count of settled outcomes. The shape sentence matches D1: shape B from the event's
+  `tool_results_admitted`, and shape C only where the turn's capture has empty `tools_used` and no
+  `hybrid_expansion_start` event exists for the `trace_id`. The unsettled count appears exactly when
+  that count is above zero. Seeded negatives: a fully passed turn carries no note, and a turn whose
+  only tool call was malformed declares shape A, not shape C. *Fails if* one delivered turn
+  disagrees with its record on any of the four checks, or either seeded negative fails.
+
+- **AC-7 — The declaration never enters the capture.**
+  **Check:** for every delivered turn that carries a note in AC-5, the capture's
+  `assistant_response` does not contain the note's closing instruction "Check them before you rely
+  on them". *Fails if* any capture contains it.
 
 - **AC-6 — The shape B retry repairs statements, not only removes them.**
   **Check:** over 20 or more retried shape B turns, compare the first-attempt and second-attempt
@@ -380,3 +417,19 @@ here is fixed in the ticket that builds the check, before results are seen.
 **Reason:** The 91-turn measurement revised the discriminator relayed on 2026-09-13. The owner moved
 enforcement to shape B, set the two retry limits, set the unsettled-statement rule, and withdrew
 pre-generation forcing.
+
+**Codex review round 1** found nine blocking defects. Each was checked against the code before it
+was accepted:
+- The retry was not cite-only, because the tool set stays unrestricted. D3 now pins
+  `tool_choice="none"`, and AC-2 checks that the retry raises no tool count.
+- Shape C by registry count misclassified malformed tool calls and HYBRID turns. D1 now defines shape
+  C on every tool-call path and the expansion record. AC-5 has a seeded malformed-call negative.
+- AC-1 contradicted D2 on unsettled-only turns. D2 now states that such a turn carries no note.
+- AC-4 was impossible, because a retried turn records `confounded`, not a non-compliant observation.
+  AC-4 now checks `confounded`.
+- A retained selector would still mark heavy turns as forced and starve the metric. D5 now makes
+  `retrieval_forced` read the attempt count only, and AC-2 checks it on every record.
+- "One retry whatever the setting says" was unresolved. D3 narrows the setting to 1 to 2, and AC-2
+  checks that no event has three attempts.
+- The capture exclusion had no check. AC-7 adds it.
+- The production mode claim was unverified. It is now verified from the gateway container.

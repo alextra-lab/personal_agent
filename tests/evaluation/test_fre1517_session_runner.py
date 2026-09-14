@@ -60,6 +60,26 @@ def test_outcome_fails_on_trailer_error_and_empty_reply() -> None:
     assert trailer["reasons"] == ["fanout_trailer"]
 
 
+def test_outcome_fails_only_on_errors_of_arm_bound_roles() -> None:
+    """The owner's approval: an extraction or entailment error is reported, not a failed turn."""
+    background = turn_outcome(
+        reply="ok",
+        errors_by_role={"entity_extraction": 2, "entailment": 1},
+        primary_models=["mtplx-a"],
+        telemetry_model="mtplx-a",
+    )
+    assert background["delivered"] is True
+
+    for role in ("primary", "planner", "sub_agent"):
+        bound = turn_outcome(
+            reply="ok",
+            errors_by_role={role: 1},
+            primary_models=["mtplx-a"],
+            telemetry_model="mtplx-a",
+        )
+        assert bound["reasons"] == ["model_call_error"], role
+
+
 def test_outcome_mismatch_is_positive_and_absence_is_unverified() -> None:
     """A4: another model on a primary call is a mismatch; no primary event at all is not."""
     mismatch = turn_outcome(

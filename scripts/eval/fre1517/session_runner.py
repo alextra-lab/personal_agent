@@ -57,7 +57,11 @@ from typing import Any
 
 import httpx
 import yaml
-from scripts.eval.eval_isolation import IsolatedArmRunner, create_eval_driver
+from scripts.eval.eval_isolation import (
+    IsolatedArmRunner,
+    create_eval_driver,
+    local_model_calls_in_flight,
+)
 from scripts.eval.fre1337_intent_probe.behavioral import (
     CONSOLIDATION_SETTLE_TIMEOUT_S,
     EXTRACTION_SETTLE_TIMEOUT_S,
@@ -81,6 +85,12 @@ GATEWAY_ARM = "treatment"
 WEEKLY_BUDGET_USD = 50.0  # docker-compose.eval.yml AGENT_CLOUD_WEEKLY_BUDGET_USD
 #: The fan-out failure trailer's fixed opening (orchestrator/executor.py, _fanout_trailer_text).
 TRAILER_MARKER = "— Research note:"
+#: The owner's approval, 2026-09-14: only errors on the roles the arm serves fail a turn. Errors
+#: on every other role (entailment, extraction, captains_log, summaries) are reported per role.
+#: The planner call logs role "primary" (orchestrator/expansion_controller.py, role=ModelRole.PRIMARY),
+#: so "planner" is kept only as the approval names it; the primary entry already covers it.
+ARM_BOUND_ROLES = frozenset({"primary", "planner", "sub_agent"})
+IN_FLIGHT_SAMPLE_S = 5.0
 
 
 def load_arm(name: str) -> dict[str, Any]:
@@ -156,7 +166,8 @@ def turn_outcome(
 
     Args:
         reply: The reply ``/chat`` delivered. Empty when the call returned none.
-        errors_by_role: ``model_call_error`` counts on the trace, per role.
+        errors_by_role: ``model_call_error`` counts on the trace, per role. Only the roles in
+            :data:`ARM_BOUND_ROLES` fail the turn.
         primary_models: The ``model`` of every ``primary`` ``model_call_completed`` on the trace.
         telemetry_model: The arm's expected ``model`` value.
 
@@ -169,7 +180,7 @@ def turn_outcome(
     reasons = []
     if not reply.strip():
         reasons.append("empty_reply")
-    if sum(errors_by_role.values()):
+    if sum(count for role, count in errors_by_role.items() if role in ARM_BOUND_ROLES):
         reasons.append("model_call_error")
     if TRAILER_MARKER in reply:
         reasons.append("fanout_trailer")
@@ -314,6 +325,22 @@ async def _settle_session(
     )
 
 
+async def _sample_in_flight(es_async: httpx.AsyncClient, peak: dict[str, int]) -> None:
+    """Record the most local model calls seen in flight at once during a turn.
+
+    The owner's decision of 2026-09-14 asks for the peak per arm. The sample runs every
+    :data:`IN_FLIGHT_SAMPLE_S` seconds, so the value is a lower bound: a burst shorter than the
+    interval can pass unseen. A failed sample is counted, and it does not stop the turn.
+    """
+    while True:
+        try:
+            in_flight = await local_model_calls_in_flight(es_async)
+            peak["in_flight"] = max(peak["in_flight"], len(in_flight))
+        except (httpx.HTTPError, RuntimeError):
+            peak["sample_errors"] += 1
+        await asyncio.sleep(IN_FLIGHT_SAMPLE_S)
+
+
 def _preflight(arm: dict[str, Any], min_budget_usd: float) -> dict[str, Any]:
     missing = tbd_fields(arm)
     if missing:
@@ -368,7 +395,11 @@ async def run(args: argparse.Namespace) -> int:
     except (RuntimeError, httpx.HTTPError) as exc:
         sys.stderr.write(f"refused: {exc}\n")
         return 2
-    turns = [t for t in script["turns"] if t["n"] >= next_turn]
+    turns = [
+        t
+        for t in script["turns"]
+        if t["n"] >= next_turn and (not args.stop_after or t["n"] <= args.stop_after)
+    ]
     if not turns:
         sys.stdout.write("session already complete\n")
         return 0
@@ -405,6 +436,8 @@ async def run(args: argparse.Namespace) -> int:
                     "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
                 }
                 t0 = time.monotonic()
+                peak = {"in_flight": 0, "sample_errors": 0}
+                sampler = asyncio.create_task(_sample_in_flight(es_async, peak))
                 try:
                     result = await runner.run_turn(
                         http,
@@ -418,10 +451,13 @@ async def run(args: argparse.Namespace) -> int:
                 except httpx.HTTPError as exc:
                     row = {**base_row, "session_id": session_id, "http_error": repr(exc)[:300]}
                     row["http_wall_s"] = round(time.monotonic() - t0, 1)
+                    row["peak_local_in_flight"] = dict(peak)
                     with rows_path.open("a") as f:
                         f.write(json.dumps(row, default=str) + "\n")
                     sys.stderr.write(f"turn {turn['n']} failed: {exc!r}\n")
                     return 3
+                finally:
+                    sampler.cancel()
                 http_wall = round(time.monotonic() - t0, 1)
                 if session_id is not None and result.session_id != session_id:
                     raise RuntimeError(
@@ -465,6 +501,7 @@ async def run(args: argparse.Namespace) -> int:
                     if primary_cap
                     else None,
                     "sub_agent_captures": sub_caps,
+                    "peak_local_in_flight": dict(peak),
                     "reply": reply,
                 }
                 with rows_path.open("a") as f:
@@ -502,6 +539,12 @@ def main() -> int:
     p.add_argument("--run-id", required=True)
     p.add_argument("--min-budget-usd", type=float, default=5.0)
     p.add_argument("--deadline", default="", help="ISO-8601 UTC; start no new turn at or after it")
+    p.add_argument(
+        "--stop-after",
+        type=int,
+        default=0,
+        help="last turn to run; the Phase 1 s2 smoke check uses 5 with --replicate 0. 0 runs all",
+    )
     return asyncio.run(run(p.parse_args()))
 
 

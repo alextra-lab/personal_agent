@@ -1,8 +1,15 @@
-# FRE-1517 scoring rubric — draft for the owner's approval
+# FRE-1517 scoring rubric
 
-Status: **draft, not approved.** It is pre-registered under AC-1 once the owner approves it on
-FRE-1517. A change to this file or to a script after the first Phase 2 row discards every run
-made before the change.
+Status: **approved by the owner on 2026-09-14 17:17 UTC** at commit `f10f3da5`, with three
+changes that this version applies (FRE-1517, the owner's approval comment, relayed by master):
+
+1. Part 1 condition 2 counts only the roles bound to the arm.
+2. Phase 1 on each arm includes script s2 up to turn 5, as a smoke check.
+3. The owner blind-scores replicate 1 only.
+
+The veto thresholds V1 and V2 are approved as proposed. This file is pre-registered under
+AC-1. A change to this file or to a script after the first Phase 2 row discards every run made
+before the change.
 
 The rubric has two parts. The first part is automatic and needs no judgement. The second part is
 the owner's blind score. Following amendment A3, the owner's score is a **veto on
@@ -15,7 +22,9 @@ instruction-holding and fabrication, not a ranking** of the arms.
 A turn is **delivered** when all four conditions are true:
 
 1. The `/chat` call returned HTTP 200 with a non-empty `response`.
-2. The turn's trace carries zero `model_call_error` events, for every role.
+2. The turn's trace carries zero `model_call_error` events on the roles bound to the arm:
+   `primary`, `planner` and `sub_agent`. Errors on every other role (for example entailment,
+   extraction, captains_log and summaries) are reported per role, and they do not fail the turn.
 3. The delivered reply does not contain the fan-out failure trailer `— Research note:`
    (`orchestrator/executor.py`, `_fanout_trailer_text`).
 4. Every `primary` model call on the trace names the arm's `telemetry_model` (A4). A turn that
@@ -37,13 +46,33 @@ separately (A6).
   `model_call_error`, a malformed tool call, or a runaway generation during a turn.
 - Every lost session stays in the report with its cause.
 
+### Phase 1 smoke check for script s2
+
+On each arm, Phase 1 runs script s2 from turn 1 up to turn 5 ("Run it for week 11 and show me
+the output") in a separate session, with `--stop-after 5`. The record states three things:
+
+- whether the model wrote the helper;
+- whether the helper ran;
+- whether it fetched data from the network.
+
+`run_python` has no network by default (`tools/primitives/sandbox.py`), and eval `bash` runs as
+`nobody` (FRE-1505). If turn 5 cannot succeed on any arm for **setup** reasons, script s2
+changes before Phase 2, and the changed script goes back to the owner for approval. A failure
+for **model** reasons is a finding, and the script does not change. This smoke session is not
+scored and is not a replicate.
+
 ---
 
 ## Part 2 — the owner's blind score
 
+### Which sessions the owner scores — pre-registered
+
+The owner blind-scores **replicate 1** of each script on each arm: 3 scripts × 4 arms = **12
+sheets**. Replicate 2 is not blind-scored. Both replicates carry the automatic Part 1 outcome.
+
 ### What the owner sees
 
-One scoring sheet per session. Each sheet shows the 20 user messages and the 20 delivered
+One scoring sheet per scored session. Each sheet shows the 20 user messages and the 20 delivered
 replies of that session, in order. The arm, the replicate, the timings and the model ids are
 removed. Each sheet carries only a random four-letter code.
 
@@ -108,24 +137,31 @@ window, with venue and a cited source?") to research turns that do not ask about
 
 The owner may overrule any single score. The owner writes the reason in the sheet's note column.
 
-### The veto rule — thresholds proposed for the owner to set
+### The veto rule — approved
 
-An arm is **vetoed** as a primary candidate if either condition is true across its six sessions
-(3 scripts × 2 replicates):
+An arm is **vetoed** as a primary candidate if either condition is true across its three scored
+sessions (replicate 1 of each script):
 
-- **V1 — fabrication.** At least one **Fabricated** back-reference in two or more sessions.
+- **V1 — fabrication.** At least one **Fabricated** back-reference in two or more scored sessions.
 - **V2 — instruction-holding.** More than 20% of its scorable H items (Held plus Broken) are
   **Broken**.
 
-These numbers are proposals. The owner confirms or replaces them when approving this rubric, and
-after approval they do not change. Among the arms that no veto removes, the owner decides on the
-automatic outcome, the telemetry and the notes (Phase 4).
+Among the arms that no veto removes, the owner decides on the automatic outcome, the telemetry
+and the notes (Phase 4).
+
+### Known limits — the report states them
+
+- **Web drift.** Web content changes during the roughly two days that the four arms span, so
+  research turns on different arms read different pages.
+- **NFL week 11 of 2026 falls in late November.** Injury reports for it do not exist on the run
+  days. A reply that invents them is scored **Fabricated** where a back-reference or a grounding
+  item covers it.
 
 ---
 
 ## Blinding procedure (AC-6)
 
-1. After the last Phase 2 session, a script exports one sheet per session. Every sheet gets a
+1. After the last Phase 2 session, a script exports one sheet per scored session. Every sheet gets a
    random four-letter code, and the sheets are put in random order.
 2. The mapping from code to arm and replicate goes into one file. Its SHA-256 is posted on
    FRE-1517 before the owner scores anything. The file itself is not posted.

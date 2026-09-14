@@ -2241,18 +2241,18 @@ class AppConfig(BaseSettings):
         description=(
             "off: nothing runs. observe: the full pass runs and every outcome is "
             "recorded, but nothing blocks — what FRE-1284's compliance metric needs to "
-            "bootstrap. enforce: D4 blocks, retries and refuses, as ADR-0138 D3 requires."
+            "bootstrap. enforce: a shape B turn with a settled failure gets one cite-only "
+            "retry, and every turn delivers its last generation (ADR-0151 D3, D4)."
         ),
     )
     grounding_max_generation_attempts: int = Field(
         default=2,
         ge=1,
-        le=4,
+        le=2,
         description=(
-            "ADR-0138 D4's bound on generation attempts per turn, including the first. "
-            "2 means one forced-retrieval retry. Capped at 4: each attempt is a full "
-            "primary call plus a span-extraction call, and a turn the user is waiting on "
-            "cannot absorb more than that."
+            "ADR-0151 D3's bound on generation attempts per turn, including the first. "
+            "1 means no retry. 2 means one cite-only retry on a shape B turn. A value "
+            "above 2 is refused: ADR-0151 allows at most one retry."
         ),
     )
     # ── D3(d) entailment (ADR-0138, FRE-1286) ────────────────────────────────

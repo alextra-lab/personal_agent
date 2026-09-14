@@ -39,7 +39,6 @@ from personal_agent.grounding.citations import (
 )
 from personal_agent.grounding.enforcement import (
     TurnDecision,
-    build_no_source_statement,
     build_retry_directive,
     decide,
 )
@@ -70,7 +69,6 @@ from personal_agent.llm_client.message_content import (
 )
 from personal_agent.llm_client.models import (
     Placement,
-    ToolCallingStrategy,
     synthesis_retains_tools,
 )
 from personal_agent.observability.topology import observe_topology
@@ -166,15 +164,6 @@ def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:
         return ToolLoopPolicy()
 
 
-GROUNDING_RETRY_TOOL_GRANT = 2
-"""Tool iterations reserved for each ADR-0138 D4 forced-retrieval retry (FRE-1282).
-
-Two: one to search, one to fetch what the search found — the shortest path from "you have
-no source" to "here is one". More would let a retry spend the turn's remaining wall clock
-on a claim the model was never going to source; fewer would not reach a page.
-"""
-
-
 def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     """Return the effective max-tool-iterations ceiling for this request.
 
@@ -185,12 +174,9 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     constraint pause (ADR-0076) is added on top, since the user explicitly
     opted to proceed past the original limit.
 
-    ADR-0138 D4's forced-retrieval retry gets its own grant on the same footing
-    (``grounding_retrieval_grant``, FRE-1282). Without it the retry is "forced" in name
-    only: a turn that spent its tool budget legitimately would be told to retrieve and
-    then have no iteration left to retrieve with, so the bound would be reached without
-    retrieval ever having been possible — a refusal caused by our accounting rather than
-    by the absence of a source.
+    ``grounding_retrieval_grant`` (FRE-1282) is added on the same footing. Since ADR-0151
+    D3 and D5 (FRE-1509) nothing adds to it: the grounding retry cites and cannot call a
+    tool, and pre-generation forcing is withdrawn, so it stays 0.
     """
     global_max = settings.orchestrator_max_tool_iterations
     base = global_max
@@ -1631,11 +1617,6 @@ def _register_tool_source(
     if registry is None:
         return None
 
-    # ADR-0138 D4 (FRE-1282): what this turn searched, recorded whether or not the result
-    # proved admissible. The terminal no-source statement names it, and a search that
-    # returned nothing citable is exactly the kind the user needs to hear about.
-    _describe_retrieval(ctx, tool_name, arguments)
-
     try:
         registration = registry.register_tool_result(
             tool_name=tool_name,
@@ -1691,44 +1672,6 @@ def _with_citation_marker(content: str, identifier: str) -> str:
         parsed["_citation"] = marker
         return json.dumps(parsed)
     return f"{content}\n\n{marker}" if content else marker
-
-
-_MAX_DESCRIBED_RETRIEVAL_CHARS = 120
-"""Bound on one recorded retrieval descriptor.
-
-The terminal statement is read by a person, and a model-authored query can be arbitrarily
-long. Bounded rather than dropped: naming a truncated search still names the search.
-"""
-
-
-def _describe_retrieval(
-    ctx: ExecutionContext, tool_name: str, arguments: Mapping[str, object]
-) -> None:
-    """Record one retrieval attempt for D4's terminal statement (FRE-1282).
-
-    The descriptor names the tool and its most salient argument. That the model *chose*
-    that argument is exactly why D2 refuses it as evidence — but a statement about what
-    this turn searched is a claim about the turn record, not about the world, so D1's
-    system-record exemption covers it and it is safe to say.
-
-    Args:
-        ctx: Execution context.
-        tool_name: The tool that ran.
-        arguments: The model's arguments to it.
-    """
-    salient = next(
-        (
-            str(arguments[key])
-            for key in ("query", "url", "path", "question", "search")
-            if isinstance(arguments.get(key), str) and str(arguments[key]).strip()
-        ),
-        "",
-    )
-    descriptor = f"{tool_name}({salient})" if salient else tool_name
-    if len(descriptor) > _MAX_DESCRIBED_RETRIEVAL_CHARS:
-        descriptor = f"{descriptor[: _MAX_DESCRIBED_RETRIEVAL_CHARS - 1]}…"
-    if descriptor not in ctx.retrieval_attempts:
-        ctx.retrieval_attempts.append(descriptor)
 
 
 def _entailment_judge() -> "ModelEntailmentJudge":
@@ -1891,142 +1834,17 @@ async def _verify_grounding(ctx: ExecutionContext, trace_ctx: TraceContext) -> T
         return unavailable(f"verification failed: {type(exc).__name__}")
 
 
-def _append_heavy_directive(
-    request_messages: list[dict[str, Any]], ctx: ExecutionContext
-) -> list[dict[str, Any]]:
-    """Append heavy enforcement's retrieval directive to one request (ADR-0138 D5).
-
-    **Returns a new list and never touches ``ctx.messages``**, which is the whole point
-    of the function existing rather than the append happening at selection time. Two
-    defects follow from putting it in ``ctx.messages``, and the first is unbounded:
-
-    - ``ctx.messages`` is persisted at end of turn and reloaded on the next one, while
-      heavy applies to *every* turn rather than to a limit being approached. Turn N would
-      therefore carry N-1 stale pseudo-user directives — growth linear in session length,
-      unlike every other injector in this module (D4's retry, the tool-budget warning,
-      forced synthesis), each of which fires only on a condition.
-    - Selection runs at the top of ``step_llm_call``, well before
-      ``_inline_volatile_with_outcome``, which targets the **last user message**. A
-      directive sitting there would capture ADR-0081's volatile tail — recalled memory,
-      skill bodies, salient highlights — inverting the rule that the volatile block rides
-      the current user turn, closest to the query. ``_append_no_think_to_last_user_message``
-      retargets identically. FRE-1137 fixed a sibling of exactly this on attachment turns.
-
-    Called after both of those have run, so the volatile block and the ``/no_think``
-    suffix land on the user's real query and the directive follows them.
-
-    Args:
-        request_messages: This request's message list.
-        ctx: Execution context, for the selected enforcement level.
-
-    Returns:
-        The list to send. The input list unchanged when this turn is not heavy.
-    """
-    enforcement = ctx.grounding_enforcement
-    if enforcement is None or enforcement.applied is not EnforcementLevel.HEAVY:
-        return request_messages
-
-    from personal_agent.grounding.enforcement_selection import (  # noqa: PLC0415
-        build_forced_retrieval_directive,
-    )
-
-    return [*request_messages, {"role": "user", "content": build_forced_retrieval_directive()}]
-
-
-def _resolve_heavy_gate(
-    ctx: ExecutionContext,
-    *,
-    tools: list[dict[str, Any]] | None,
-    tool_strategy: "ToolCallingStrategy",
-    is_synthesizing: bool,
-    model_key: str,
-) -> str | None:
-    """Return heavy enforcement's ``tool_choice`` pin, or None (ADR-0138 D5, FRE-1285).
-
-    **This is what makes heavy more than advice.** Without a gate the executor receives a
-    generation *before* it executes any tool, so a model that ignored the directive would
-    compose its assertion with an empty source registry. Pinning ``"required"`` makes the
-    first thing the model may emit a tool call rather than prose.
-
-    **What it does not do, stated because the ADR's phrasing invites the stronger read.**
-    D5 describes heavy as leaving the model unable to "compose an assertion without a
-    source set already in hand". This mechanism does not deliver that, and the claim
-    should not be made for it: ``"required"`` forces *a* tool call, not a *retrieval* one,
-    and nothing here puts anything into the ``SourceRegistry``. A model can satisfy the
-    pin with ``run_python``, which the registry classifies as inadmissible by
-    construction. What heavy actually buys is that the turn cannot go straight from the
-    prompt to prose — it must take a tool step first, and the directive says what that
-    step is for. Correctness still rests where it always did, on D3's inline checks and
-    D4's block-and-retry, which are identical at both levels; and the metric direction is
-    safe, since a heavy turn is excluded from measurement whether or not the tool it
-    called retrieved anything.
-
-    Applied only to the turn's **first** generation. Once the loop is running the model
-    has already been through the gate, and re-pinning every pass would forbid the turn
-    from ever answering.
-
-    The availability conditions are exactly those under which ``tool_choice`` reaches a
-    backend at all — ``client.py`` nulls it when the strategy is not NATIVE. When they
-    fail, heavy degrades to directive-only and **says so at WARNING**: a deployment where
-    the gate never reaches the model is a silent downgrade to the design this replaced,
-    and the log line is what makes it visible.
-
-    Args:
-        ctx: Execution context, for the selected level and the pass counters.
-        tools: The resolved tool list for this call.
-        tool_strategy: The model's tool-calling strategy.
-        is_synthesizing: Whether this call is the forced-synthesis pass, which pins its
-            own ``tool_choice`` and must not be overridden.
-        model_key: The deployment key serving this generation, for telemetry.
-
-    Returns:
-        ``"required"`` when the gate applies, otherwise ``None`` — leaving whatever
-        ``tool_choice`` the caller had already resolved untouched.
-    """
-    enforcement = ctx.grounding_enforcement
-    if enforcement is None or enforcement.applied is not EnforcementLevel.HEAVY:
-        return None
-    if ctx.tool_iteration_count != 0 or ctx.grounding_attempts:
-        return None
-
-    if tools and tool_strategy == ToolCallingStrategy.NATIVE and not is_synthesizing:
-        log.info(
-            "grounding_heavy_gate_applied",
-            trace_id=ctx.trace_id,
-            session_id=ctx.session_id,
-            model_key=model_key,
-            probation=enforcement.probation,
-        )
-        return "required"
-
-    log.warning(
-        "grounding_heavy_gate_unavailable",
-        trace_id=ctx.trace_id,
-        session_id=ctx.session_id,
-        model_key=model_key,
-        tool_strategy=tool_strategy.value,
-        has_tools=bool(tools),
-        is_synthesizing=is_synthesizing,
-        reason=(
-            "heavy enforcement degraded to directive-only: tool_choice cannot reach "
-            "this model, so retrieval is requested but not gated"
-        ),
-    )
-    return None
-
-
 async def _select_enforcement(ctx: ExecutionContext) -> None:
     """Choose this turn's enforcement level, before generation (ADR-0138 D5, FRE-1285).
 
     Runs once per turn and then holds: ``ctx.grounding_enforcement`` is both the result
     and the guard. Placed immediately after the answering deployment key is stamped
-    because that is the first moment the model is known and the last moment before the
-    turn generates — D5's forcing is *pre*-generation or it is nothing.
+    because that is the first moment the model is known.
 
-    **Heavy is applied here in two parts.** The ``tool_choice`` gate lives at the request
-    site (it needs the resolved tool list); this attaches the directive that says what to
-    retrieve for, and the iteration grant that means a turn which already spent its tool
-    budget still has an iteration to retrieve with — FRE-1282's reasoning, unchanged.
+    **The selection changes no request** (ADR-0151 D5, FRE-1509). Pre-generation forcing
+    is withdrawn: no directive, no ``tool_choice`` pin, no iteration grant, and the level
+    never sets ``retrieval_forced``. The selector, its standing state and its log line are
+    retained, inert, so the state survives for any later decision about it.
 
     **Everything fails to heavy.** A missing key, an unreadable window, a misconfigured
     band: all resolve to heavy and log. Unmeasured means heavy is D5's bootstrap, and a
@@ -2096,19 +1914,6 @@ async def _select_enforcement(ctx: ExecutionContext) -> None:
         if selection.standing.demoted_at
         else None,
     )
-
-    if selection.applied is not EnforcementLevel.HEAVY:
-        return
-
-    # The directive itself is NOT attached here — it is appended per request, at the
-    # call site, by _append_heavy_directive. See that function for why it must never
-    # touch ctx.messages.
-    #
-    # The grant is the same two iterations D4's retry reserves, for the same reason: one
-    # to search, one to fetch what the search found. A turn told to retrieve with nothing
-    # left to retrieve with is forced in name only. It belongs here rather than at the
-    # call site because it is per-turn state, and this function runs once per turn.
-    ctx.grounding_retrieval_grant += GROUNDING_RETRY_TOOL_GRANT
 
 
 async def _resolve_enforcement(
@@ -2261,25 +2066,15 @@ def _record_grounding(
         The turn shape this line recorded (ADR-0151 D1), so the note is built from the
         same value the event carries.
     """
-    # ADR-0138 D5 (FRE-1285) widens this field, exactly as compliance.py's docstring
-    # anticipated. It meant "this generation followed a D4 retry"; it now also covers
-    # heavy enforcement's pre-generation forcing. Both are confounded for the same
-    # reason — sources were supplied rather than sought — and a heavy turn scored as
-    # unforced is how a model that only complies when spoon-fed earns promotion, fails
-    # under light, is demoted, recovers under heavy, and oscillates forever.
-    #
-    # A PROBATION turn reports FALSE and is measured: it ran the light path, which is
-    # the whole point of probation. `retrieval_forced` reads the APPLIED level, never
-    # the standing one.
-    _enforcement = ctx.grounding_enforcement
+    # ADR-0151 D5 (FRE-1509): `retrieval_forced` reads the attempt count only. Nothing
+    # forces retrieval before generation any more, so the enforcement selection level
+    # never sets it. A retried generation is still confounded, and compliance.py
+    # excludes it from the metric.
     record = build_grounding_record(
         verification,
         mode=mode,
         attempts=max(1, ctx.grounding_attempts),
-        retrieval_forced=(
-            ctx.grounding_attempts > 1
-            or (_enforcement is not None and _enforcement.retrieval_forced)
-        ),
+        retrieval_forced=ctx.grounding_attempts >= 2,
     )
     ctx.grounding_record = record
 
@@ -6331,19 +6126,19 @@ async def step_llm_call(
         tools: list[dict[str, Any]] | None = None
         _prompt_injected_tool_text: str | None = None  # filled for PROMPT_INJECTED only
 
-        # ADR-0138 D4 (FRE-1282): a forced-retrieval retry must be able to retrieve.
-        # This clears any synthesis-forcing left over from the blocked generation — a
-        # retry told "do NOT call any more tools" is forced in name only — and its
-        # iteration grant was reserved when the retry was ordered.
-        if ctx.grounding_retry_pending:
+        # ADR-0151 D3 (FRE-1509): the grounding retry cites, it does not retrieve. The
+        # request below takes the forced-synthesis tool path: the tool list stays (the
+        # prompt cache, ADR-0149 D6) and tool_choice is pinned to "none". Any leftover
+        # limit-forcing is cleared so its "tool call limit" prompt is not added too.
+        cite_only_retry = ctx.grounding_retry_pending
+        if cite_only_retry:
             ctx.grounding_retry_pending = False
             ctx.force_synthesis_from_limit = False
             log.info(
-                "grounding_forced_retrieval_retry",
+                "grounding_cite_only_retry",
                 trace_id=ctx.trace_id,
                 session_id=ctx.session_id,
                 attempt=ctx.grounding_attempts,
-                tool_iterations_remaining=_resolve_max_iterations(ctx) - ctx.tool_iteration_count,
             )
 
         # Forced synthesis: iteration limit fired — disable tools and inject a synthesis prompt
@@ -6369,7 +6164,11 @@ async def step_llm_call(
             )
 
         # Budget warning: when 2 calls from the per-TaskType limit, ask the LLM to wrap up
-        elif not is_synthesizing and ctx.tool_iteration_count >= _resolve_max_iterations(ctx) - 2:
+        elif (
+            not is_synthesizing
+            and not cite_only_retry
+            and ctx.tool_iteration_count >= _resolve_max_iterations(ctx) - 2
+        ):
             _effective_max = _resolve_max_iterations(ctx)
             _budget_remaining = _effective_max - ctx.tool_iteration_count
             budget_message = _tool_budget_message(_budget_remaining)
@@ -6449,17 +6248,13 @@ async def step_llm_call(
                     tool_count=len(tools),
                 )
 
-        # ADR-0138 D5 (FRE-1285): heavy enforcement's actual gate. Never overrides the
-        # forced-synthesis pin above — _resolve_heavy_gate declines while synthesizing.
-        _heavy_pin = _resolve_heavy_gate(
-            ctx,
-            tools=tools,
-            tool_strategy=tool_strategy,
-            is_synthesizing=is_synthesizing,
-            model_key=effective_model_key,
-        )
-        if _heavy_pin is not None:
-            tool_choice = _heavy_pin
+        # ADR-0151 D3 (FRE-1509): the cite-only retry keeps this turn's tool list, and the
+        # prompt-injected tool text, unchanged, so the prompt cache holds (ADR-0149 D6).
+        # It pins tool_choice="none" where a tool list reaches the request. A strategy
+        # that cannot carry the pin is covered after the response: tool calls on a
+        # cite-only retry are dropped, never executed.
+        if cite_only_retry and tools:
+            tool_choice = "none"
 
         # ADR-0081 D1: Volatility-gradient layout — build memory_section locally
         # without injecting it yet; it will be appended last as the VOLATILE tail.
@@ -6581,11 +6376,6 @@ async def step_llm_call(
 
         if tools:
             request_messages = _append_no_think_to_last_user_message(request_messages)
-
-        # ADR-0138 D5 (FRE-1285): heavy's retrieval directive, per request and never
-        # persisted. Placed after the volatile inline and the /no_think suffix above so
-        # both still land on the user's real query rather than on the directive.
-        request_messages = _append_heavy_directive(request_messages, ctx)
 
         # Validate and fix conversation role alternation for strict models (e.g., Mistral).
         request_messages = _validate_and_fix_conversation_roles(request_messages)
@@ -6863,6 +6653,20 @@ async def step_llm_call(
         # Extract response content and tool calls
         response_content = response["content"] or ""
         response_tool_calls = response["tool_calls"] or []
+
+        # ADR-0151 D3 (FRE-1509): the cite-only retry never executes a tool. The request
+        # pins tool_choice="none", but a non-native strategy cannot carry the pin and a
+        # backend may ignore it. Dropping the calls here keeps the retry to one generation
+        # that can cite only what the turn already registered.
+        if cite_only_retry and response_tool_calls:
+            log.warning(
+                "grounding_cite_only_retry_tool_calls_dropped",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                tool_call_count=len(response_tool_calls),
+                tool_strategy=tool_strategy.value,
+            )
+            response_tool_calls = []
 
         # Track response_id for stateful /v1/responses API
         if response.get("response_id"):
@@ -7631,6 +7435,7 @@ async def step_synthesis(
         if mode == "enforce":
             decision = decide(
                 verification,
+                shape=turn_shape,
                 attempt=ctx.grounding_attempts,
                 max_attempts=settings.grounding_max_generation_attempts,
             )
@@ -7643,24 +7448,19 @@ async def step_synthesis(
                 max_attempts=decision.max_attempts,
                 blocking_outcomes=[o.value for o in decision.blocking_outcomes],
             )
-            if decision.decision is TurnDecision.RETRY_WITH_FORCED_RETRIEVAL:
-                # The next attempt verifies a new generation and recomputes the note.
+            if decision.decision is TurnDecision.RETRY_CITE_ONLY:
+                # ADR-0151 D3: one cite-only retry. No tool round is granted, and
+                # step_llm_call pins tool_choice="none" on the retry request. The next
+                # attempt verifies a new generation and recomputes the note.
                 ctx.grounding_disclosure = None
                 ctx.messages.append(
                     {"role": "user", "content": build_retry_directive(verification)}
                 )
                 ctx.grounding_retry_pending = True
-                ctx.grounding_retrieval_grant += GROUNDING_RETRY_TOOL_GRANT
                 ctx.final_reply = None
                 return TaskState.LLM_CALL
-            if decision.decision is TurnDecision.TERMINAL_NO_SOURCE:
-                # D4's terminal state: built from the turn record, never generated, so it
-                # consists entirely of system-record spans (D1) and cannot recurse into
-                # another verification failure. That is what guarantees the loop ends.
-                ctx.final_reply = build_no_source_statement(verification, ctx.retrieval_attempts)
-                # The refusal replaces the generation this verdict describes (FRE-1325).
-                # ADR-0151 D4 withdraws the refusal in FRE-1509.
-                ctx.grounding_disclosure = None
+            # ADR-0151 D4: no refusal. The turn delivers this generation, and the note
+            # computed above declares what it could not ground.
 
         # ADR-0138 D3(d)'s sampled offline arm (FRE-1286). Reached only on the delivery
         # branch — the retry above already returned to LLM_CALL — so a turn that retried
@@ -7700,11 +7500,10 @@ async def step_synthesis(
         ctx.final_reply = f"{ctx.final_reply}{trailer}"
         if ctx.messages and ctx.messages[-1].get("role") == "assistant":
             # Sync FROM the now-finalized final_reply rather than appending onto
-            # messages[-1]'s own content: grounding enforcement above can have
-            # already replaced final_reply (TERMINAL_NO_SOURCE) without touching
-            # the assistant message, and appending the trailer onto that stale
-            # content would leave history and the wire reply disagreeing on more
-            # than just the trailer.
+            # messages[-1]'s own content: final_reply is the source of truth for
+            # the wire reply (marker stripping and disclosures above write it), so
+            # history takes that text plus the trailer rather than a copy that may
+            # disagree on more than just the trailer.
             ctx.messages[-1]["content"] = ctx.final_reply
         # Else: no assistant message exists on this turn to carry it (a
         # deadline/lifetime-cap/cancel salvage never appends one) — the wire

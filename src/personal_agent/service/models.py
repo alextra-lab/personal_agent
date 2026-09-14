@@ -559,10 +559,11 @@ class GroundingComplianceObservationModel(Base):
 
     One row per **unconfounded** turn (ADR-0138 D5 / FRE-1284): verification ran, the turn
     contained at least one non-exempt span, and retrieval was not forced before generation.
-    Pre-forced turns are absent by construction rather than filtered on read — heavy
-    enforcement supplies sources before generation, so scoring those turns measures the
-    enforcement rather than the model, and a stored pre-forced row is a row that could
-    later be counted by mistake.
+    Pre-forced turns are absent by construction rather than filtered on read — a turn that
+    followed a grounding retry was generated with its failures pointed out, so scoring it
+    measures the enforcement rather than the model, and a stored pre-forced row is a row
+    that could later be counted by mistake. Since ADR-0151 D5 only a retry marks a turn as
+    forced; heavy enforcement no longer supplies sources before generation.
 
     See migrations/0029_grounding_compliance_observations.sql for the full rationale.
     """

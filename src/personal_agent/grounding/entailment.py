@@ -8,7 +8,9 @@ arbitrary:
 - **Inline**, for spans with no entity and no figure. Containment over a bare predicate
   cannot be meaningful — "a page mentioning ``mercury`` does not thereby support *'this
   fish is high in mercury'*" — so for that class D3(d) "runs **inline for these spans**
-  rather than offline", at a cost the ADR accepts explicitly.
+  rather than offline", at a cost the ADR accepts explicitly. The inline arm also judges an
+  entity-free span containment matched only in part, and for that span only a rejection
+  counts (FRE-1508).
 - **Sampled and offline**, for everything else
   (:mod:`personal_agent.grounding.entailment_sampling`). Per-claim inline entailment on
   every span was considered and rejected for v1 (ADR-0138 Option 5): cost and latency scale

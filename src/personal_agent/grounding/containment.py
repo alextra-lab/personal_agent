@@ -35,7 +35,8 @@ escalates that class to inline entailment (D3(d), FRE-1286). This module reports
 escalation as a *result*, :attr:`ContainmentOutcome.ENTAILMENT_REQUIRED`; deciding what to
 do with it is :mod:`personal_agent.grounding.verification`'s job. The escalation is reached
 only *after* containment passes, so AC-3's mercury case fails here rather than being
-deferred.
+deferred. A *partial* miss on the same class stays :attr:`ContainmentOutcome.UNVERIFIABLE`
+here. Verification lets the inline judge reject such a span, never pass it (FRE-1508).
 
 **Why a miss splits two ways — and why not by counting.** ADR-0138 D3 requires
 "unverifiable-by-containment" — the paraphrase, translation and unregistered-alias cases —

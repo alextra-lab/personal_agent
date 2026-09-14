@@ -393,6 +393,86 @@ def test_unverifiable_and_true_no_source_are_distinct_in_the_record() -> None:
     assert set(result.unverifiable).isdisjoint(result.true_no_source)
 
 
+# ── FRE-1508 — an entity-free partial miss is marked for the judge, nothing else moves ─
+
+FISH_CLAIM = "this fish is high in mercury"
+
+
+def test_an_entity_free_partial_miss_stays_unverifiable_and_is_marked_for_the_judge() -> None:
+    """Containment's verdict stands. The span is only marked, so the judge may reject it.
+
+    ``mercury`` is missing and ``fish`` and ``high`` are present. D3(c) passes a span only
+    when the source holds every content word, so the outcome stays unverifiable (owner
+    decision, FRE-1508). The detail must not claim the span stated entities and figures.
+    """
+    registry = SourceRegistry(turn_id=TURN)
+    ident = _fetched(
+        registry,
+        "https://example.com/fish",
+        "Testing found this fish is high in methylmercury, above the advisory level.",
+    )
+    output = f"{FISH_CLAIM} [{ident}]."
+
+    result = verify_turn(_non_exempt(output, FISH_CLAIM), parse_citations(output), registry)
+
+    assert [span.outcome for span in result.spans] == [CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT]
+    assert result.spans[0].partial_miss is True
+    assert result.spans[0].missing == ("mercury",)
+    assert "predicate words" in result.spans[0].detail
+    assert "entities and figures" not in result.spans[0].detail
+    assert result.awaits_judge is True
+
+
+def test_an_entity_free_total_miss_stays_not_contained() -> None:
+    """The escalation must not become a way past containment for an unrelated source."""
+    registry = SourceRegistry(turn_id=TURN)
+    ident = _fetched(
+        registry,
+        "https://example.com/tuna",
+        "Bonito del norte is line-caught in the Bay of Biscay each summer.",
+    )
+    output = f"{FISH_CLAIM} [{ident}]."
+
+    result = verify_turn(_non_exempt(output, FISH_CLAIM), parse_citations(output), registry)
+
+    assert [span.outcome for span in result.spans] == [CheckOutcome.NOT_CONTAINED]
+
+
+def test_an_entity_bearing_partial_miss_stays_unverifiable() -> None:
+    """ADR-0138 Option 5: inline entailment for the entity-bearing class needs an ADR."""
+    registry = SourceRegistry(turn_id=TURN)
+    ident = _fetched(
+        registry,
+        "https://example.com/paris",
+        "Paris counts 2,100,000 residents within the city limits.",
+    )
+    claim = "Paris has 2.1 million inhabitants"
+    output = f"{claim} [{ident}]."
+
+    result = verify_turn(_non_exempt(output, claim), parse_citations(output), registry)
+
+    assert [span.outcome for span in result.spans] == [CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT]
+    assert "entities and figures" in result.spans[0].detail
+
+
+def test_a_span_with_no_content_words_stays_unverifiable_with_its_own_detail() -> None:
+    """A span with no content words stays unverifiable and says why.
+
+    A judge cannot settle a span that asserts nothing, and the detail must not claim the
+    span stated entities and figures.
+    """
+    registry = SourceRegistry(turn_id=TURN)
+    ident = _fetched(registry, "https://example.com/any", "Anything at all, and so on.")
+    text = "and so on"
+    output = f"{text} [{ident}]."
+
+    result = verify_turn(_non_exempt(output, text), parse_citations(output), registry)
+
+    assert [span.outcome for span in result.spans] == [CheckOutcome.UNVERIFIABLE_BY_CONTAINMENT]
+    assert "entities and figures" not in result.spans[0].detail
+    assert "no content words" in result.spans[0].detail
+
+
 def test_the_system_citing_itself_counts_as_having_no_source() -> None:
     """``SOURCE_NOT_ENTITLED`` is a no-source outcome, not a containment limit.
 

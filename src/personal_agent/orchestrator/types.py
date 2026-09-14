@@ -432,6 +432,9 @@ class ExecutionContext:
     # grounding_attempts is its own counter: a per-pass bound bounds nothing when the pass
     # may run again, so a turn that retries would pay the cap once per generation.
     grounding_entailment_checks: int = 0
+    # FRE-1508: the partial-miss class's own cumulative count, so neither class can spend
+    # the other's cap across D4 attempts.
+    grounding_partial_miss_checks: int = 0
 
     # ADR-0138's output side of the ADR-0125 evidence contract, attached for the capture.
     grounding_record: "GroundingRecord | None" = None

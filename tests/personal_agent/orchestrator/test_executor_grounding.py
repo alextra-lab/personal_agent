@@ -23,6 +23,8 @@ import personal_agent.orchestrator.executor as ex
 from personal_agent.captains_log.background import wait_for_background_tasks
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.governance.models import Mode
+from personal_agent.grounding.citations import parse_citations
+from personal_agent.grounding.entailment import EntailmentJudgement, EntailmentVerdict
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.grounding.spans import (
     NonExemptReason,
@@ -34,9 +36,11 @@ from personal_agent.grounding.verification import (
     CheckOutcome,
     SpanVerification,
     TurnVerification,
+    verify_turn,
 )
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import (
+    _apply_inline_entailment,
     _strip_markers_from_turn,
     execute_task_safe,
     step_synthesis,
@@ -123,6 +127,64 @@ def _entailment_off(cfg: object) -> None:
     cfg.grounding_entailment_max_inline_checks = 8  # type: ignore[attr-defined]
     cfg.grounding_entailment_latency_budget_ms = 4000  # type: ignore[attr-defined]
     cfg.grounding_entailment_max_excerpt_chars = 6000  # type: ignore[attr-defined]
+    cfg.grounding_entailment_max_partial_miss_checks = 8  # type: ignore[attr-defined]
+
+
+# ── Inline entailment counters — two classes, two cumulative caps (FRE-1508) ────────
+
+
+@pytest.mark.asyncio
+async def test_the_two_inline_entailment_counters_grow_apart() -> None:
+    """A partial-miss check must never spend the escalated class's cumulative cap.
+
+    Both caps are cumulative across D4 attempts, and both live on the context. Adding the
+    partial-miss check to the escalated counter would let one class starve the other on a
+    retry, which is the displacement codex plan review found.
+    """
+    claim = "this fish is high in mercury"
+    registry = SourceRegistry(turn_id="trace-counters")
+    full = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/fish"},
+        content="Testing found this fish is high in mercury.",
+    )
+    partial = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/partial"},
+        content="Testing found this fish is high in methylmercury.",
+    )
+    assert full.source is not None and partial.source is not None
+    reply = f"{claim} [{full.source.identifier}]. {claim} [{partial.source.identifier}]."
+    second = reply.index(claim, len(claim))
+    extraction = SpanExtraction(
+        output=reply,
+        spans=tuple(
+            Span(
+                start=start,
+                end=start + len(claim),
+                text=claim,
+                label=SpanLabel.CLAIM_NON_EXEMPT,
+                reason=NonExemptReason.CLASSIFIED,
+            )
+            for start in (0, second)
+        ),
+    )
+    ctx = _ctx(reply, registry)
+    verification = verify_turn(extraction, parse_citations(reply), registry)
+    judge = MagicMock()
+    judge.judge = AsyncMock(
+        return_value=EntailmentJudgement(verdict=EntailmentVerdict.NOT_SUPPORTED)
+    )
+
+    with (
+        patch("personal_agent.orchestrator.executor.settings") as cfg,
+        patch("personal_agent.orchestrator.executor._entailment_judge", return_value=judge),
+    ):
+        _entailment_off(cfg)
+        settled = await _apply_inline_entailment(ctx, verification, MagicMock())
+
+    assert [span.outcome for span in settled.spans] == [CheckOutcome.NOT_ENTAILED] * 2
+    assert (ctx.grounding_entailment_checks, ctx.grounding_partial_miss_checks) == (1, 1)
 
 
 # ── Marker stripping — every mode, both surfaces ────────────────────────────────────

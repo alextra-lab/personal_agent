@@ -89,14 +89,14 @@ def _psql_json(sql: str) -> list[dict[str, Any]]:
     return json.loads(out or "[]")
 
 
-def generation_check() -> dict[str, Any]:
+def generation_check(model: str = SERVED_MODEL, base_url: str = CADDY_SLM) -> dict[str, Any]:
     """FRE-1474: the SLM health probe lies; prove generation with a trivial completion."""
     t0 = time.monotonic()
     try:
         r = httpx.post(
-            f"{CADDY_SLM}/v1/chat/completions",
+            f"{base_url}/v1/chat/completions",
             json={
-                "model": SERVED_MODEL,
+                "model": model,
                 "messages": [{"role": "user", "content": "Reply with the single word OK."}],
                 "max_tokens": 8,
                 "chat_template_kwargs": {"enable_thinking": False},

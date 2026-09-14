@@ -1,0 +1,66 @@
+# FRE-1517 arm manifest — one entry per deployment as configured (amendments A4 and A7).
+#
+# The session runner copies the whole entry into every JSONL row, and it refuses to run an
+# arm while any field of that arm still reads TBD.
+#
+#   deployment_key   the catalog key sent as `model` on a session's first turn
+#                    (master adds the MTPLX keys in the single Phase 0 rebuild)
+#   served_model_id  the id the engine serves. For a local arm the runner reads
+#                    `models_endpoint` before each session and requires this id in it,
+#                    because manual MTPLX answers any model name (master, 2026-09-14)
+#   telemetry_model  the `model` value model_call_completed carries for this arm. Local
+#                    deployments record the served id, cloud ones the litellm id
+#                    (llm_client/litellm_client.py, `_telemetry_model`). The runner requires
+#                    it on every primary call of every turn
+#   pack, quant, context_length, reasoning, launch_flags
+#                    recorded from the slm_server session and the catalog, verbatim (A7).
+#                    "27B" is two deployments, so each is named as configured
+arms:
+  ovh_27b:
+    order_label: arm 1
+    deployment_key: qwen3.8-27b-ovh
+    engine: OVH AI Endpoints (managed)
+    served_model_id: Qwen3.8-27B
+    telemetry_model: ovhcloud/Qwen3.8-27B
+    models_endpoint: null
+    pack: not published by the provider
+    quant: not published by the provider
+    context_length: 262144
+    reasoning: TBD
+    launch_flags: not applicable (managed endpoint)
+  mtplx_27b:
+    order_label: arm 2
+    deployment_key: TBD
+    engine: MTPLX
+    served_model_id: mtplx-qwen38-27b-optimized-speed
+    telemetry_model: mtplx-qwen38-27b-optimized-speed
+    models_endpoint: http://localhost:8600/v1/models
+    pack: TBD
+    quant: TBD
+    context_length: TBD
+    reasoning: TBD
+    launch_flags: TBD
+  mtplx_flash_next:
+    order_label: arm 3
+    deployment_key: TBD
+    engine: MTPLX
+    served_model_id: mtplx-qwen38-flash-next-optimized-speed
+    telemetry_model: mtplx-qwen38-flash-next-optimized-speed
+    models_endpoint: http://localhost:8600/v1/models
+    pack: TBD
+    quant: TBD
+    context_length: TBD
+    reasoning: TBD
+    launch_flags: TBD
+  llamacpp_flash_next:
+    order_label: arm 4
+    deployment_key: qwen3.8-flash-next
+    engine: llama.cpp (llama-server)
+    served_model_id: unsloth/qwen3.8-flash-next
+    telemetry_model: unsloth/qwen3.8-flash-next
+    models_endpoint: http://localhost:8600/v1/models
+    pack: TBD
+    quant: UD-IQ4_XS
+    context_length: 131072
+    reasoning: TBD
+    launch_flags: TBD

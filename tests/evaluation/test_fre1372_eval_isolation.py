@@ -166,6 +166,49 @@ async def test_run_turn_wipes_on_every_call_not_only_the_first(
 
 
 @pytest.mark.asyncio
+async def test_run_turn_wipes_per_session_not_per_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1517 A1: a continuing turn neither wipes nor reseeds, and a new session still does.
+
+    A wipe per turn would erase the memory a long session's own earlier turns wrote, so a
+    back-reference past the history slice would test nothing.
+    """
+    driver = _FakeDriver()
+    _patch_settle_always_true(monkeypatch, [])
+    _patch_gateway_idle_always_zero(monkeypatch)
+    reseed = AsyncMock()
+    http = AsyncMock()
+    http.post = AsyncMock(
+        side_effect=[
+            _FakeResponse("s1", "trace-1"),
+            _FakeResponse("s1", "trace-2"),
+            _FakeResponse("s2", "trace-3"),
+        ]
+    )
+    es = AsyncMock()
+
+    runner = IsolatedArmRunner(driver=driver, reseed=reseed)
+    first = await runner.run_turn(http, es, "hello", arm="control", model="deployment-a")
+    await runner.run_turn(http, es, "and then?", arm="control", session_id=first.session_id)
+    assert driver.fake_session.queries == [WIPE_CYPHER]
+    assert reseed.await_count == 1
+
+    await runner.run_turn(http, es, "a new session", arm="control")
+    assert driver.fake_session.queries == [WIPE_CYPHER, WIPE_CYPHER]
+    assert reseed.await_count == 2
+
+    first_params, second_params, third_params = (
+        call.kwargs["params"] for call in http.post.call_args_list
+    )
+    assert "session_id" not in first_params
+    assert first_params["model"] == "deployment-a"
+    assert second_params["session_id"] == "s1"
+    assert "model" not in second_params
+    assert "session_id" not in third_params
+
+
+@pytest.mark.asyncio
 async def test_run_turn_invokes_reseed_after_wipe_before_posting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

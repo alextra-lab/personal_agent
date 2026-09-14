@@ -188,8 +188,9 @@ class ArmTurnResult:
 class IsolatedArmRunner:
     """Drives eval-gateway turns with automatic, structural cross-arm isolation.
 
-    Every ``run_turn()`` call — including the first — wipes ``neo4j-eval`` before
-    driving its turn, then replays ``reseed`` if one was given. A caller supplies no
+    Every ``run_turn()`` call that starts a session — including the first — wipes
+    ``neo4j-eval`` before driving its turn, then replays ``reseed`` if one was given. A call
+    that continues a session (``session_id`` given) does neither (FRE-1517 A1). A caller supplies no
     wipe/restore logic of its own; see the module docstring for why a full wipe is
     the only delete shape used, and why "reseed" replaces "preserve".
 
@@ -212,14 +213,23 @@ class IsolatedArmRunner:
         message: str,
         *,
         arm: str = "control",
+        session_id: str | None = None,
+        model: str | None = None,
     ) -> ArmTurnResult:
-        """Wipe, reseed, then drive one turn — isolated from every earlier turn.
+        """Wipe, reseed, then drive one turn — isolated from every earlier session.
 
         Args:
             http: Async client for POSTing to the eval gateway.
             es: Async client for polling ``elasticsearch-eval``'s settle events.
             message: The turn's user message.
             arm: Which eval gateway to drive (an ``EVAL_ARMS`` key).
+            session_id: Continue this session instead of starting one (FRE-1517 A1). Only a
+                new session (``None``) wipes and reseeds: the session is the isolation unit,
+                because the memory its own earlier turns wrote is part of what a continuing
+                turn measures. A wipe per turn would leave a long session nothing beyond
+                its history slice to recall.
+            model: Optional ``primary`` deployment key for ``/chat``, which stores it on the
+                session (ADR-0121 §4).
 
         Returns:
             The turn's identifiers and whether its consolidation write pipeline settled.
@@ -235,17 +245,19 @@ class IsolatedArmRunner:
         assert_eval_chat_url(base_url)
 
         await wait_for_gateway_idle(es)
-        await wipe_eval_graph(self.driver, uri=EVAL_NEO4J_URI)
-        if self.reseed is not None:
-            await self.reseed()
+        if session_id is None:
+            await wipe_eval_graph(self.driver, uri=EVAL_NEO4J_URI)
+            if self.reseed is not None:
+                await self.reseed()
         self._turn_count += 1
 
+        params = {"message": message, "channel": "EVAL"}
+        if session_id is not None:
+            params["session_id"] = session_id
+        if model:
+            params["model"] = model
         client_timeout = settings.orchestrator_turn_lifetime_seconds + _CLIENT_TIMEOUT_BUFFER_S
-        resp = await http.post(
-            f"{base_url}/chat",
-            params={"message": message, "channel": "EVAL"},
-            timeout=client_timeout,
-        )
+        resp = await http.post(f"{base_url}/chat", params=params, timeout=client_timeout)
         resp.raise_for_status()
         data = resp.json()
         session_id, trace_id = str(data["session_id"]), str(data["trace_id"])

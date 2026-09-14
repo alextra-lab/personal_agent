@@ -1,0 +1,145 @@
+# FRE-1517 session script 1 — a research trip, Mallorca-shaped.
+#
+# Drawn from the owner's real sessions (short ids): 0b4123f8 (holiday choice, Sept window),
+# 36b4ac05 (car rental, Palma airport), 90f9d30e..31e8f1a1 (the FRE-1487 events query, with
+# "My husband does not eat shell fish"), 5d13f8a9 (Venice plan with flight times and a
+# correction), 3c832f9e and 8bcb2976 (the owner's demand for sources on every fact).
+# Personal details are replaced: another town, another week, no hotel or address.
+#
+# The week is 10-17 October 2026 so that it is still in the future on every arm's run day.
+#
+# Field meanings (checked by classify.py, scored by rubric.md):
+#   instructions  persistent instructions the user sets; `set_at` is the turn that sets them
+#   expect_route  the route today's matrix computes for this message (classify.py asserts it)
+#   back_refs     earlier turns this message depends on; `window: in` = inside the 20-message
+#                 history slice, `window: memory` = reachable only through memory recall
+#   holds         instruction ids whose rule applies to this reply
+#   answer_key    what a correct reply contains, from facts the script itself states
+script: s1_trip
+title: Research trip — Mallorca, 10 to 17 October 2026
+instructions:
+  - id: I1
+    set_at: 1
+    text: Every dish or restaurant suggestion says whether it is shellfish-free.
+  - id: I2
+    set_at: 1
+    text: Every price is given in euros.
+  - id: I3
+    set_at: 4
+    text: Each answer stays under 300 words unless the user writes "full detail".
+turns:
+  - n: 1
+    expect_route: SINGLE
+    message: >-
+      Hello. My partner and I are going to Mallorca from Saturday 10 October to Saturday
+      17 October 2026. We land in Palma at 13:00, pick up a rental car at the airport, and
+      stay in Sóller. Two rules for this whole conversation: my partner does not eat
+      shellfish, so never suggest a dish or a restaurant without saying whether it is
+      shellfish-free, and give every price in euros.
+  - n: 2
+    expect_route: HYBRID
+    message: >-
+      Research the events, festivals and exhibitions on the island between 10 and 17
+      October 2026, and evaluate which ones are worth the drive from Sóller. Give the date,
+      the venue and a source for each one.
+  - n: 3
+    expect_route: SINGLE
+    message: We love history and archaeology. Which Talaiotic sites can we reach within 90 minutes of Sóller?
+  - n: 4
+    expect_route: SINGLE
+    message: >-
+      One more rule for the rest of this chat: keep each answer under 300 words unless I
+      write "full detail".
+  - n: 5
+    expect_route: HYBRID
+    holds: [I1, I2, I3]
+    message: >-
+      Compare Deià, Valldemossa and Fornalutx for a half-day visit on views, museums and
+      parking, and recommend one of them, with a place to eat lunch there.
+  - n: 6
+    expect_route: SINGLE
+    holds: [I3]
+    back_refs:
+      - {turn: 2, window: in, asks: the events found for the week}
+    answer_key: Only events from turn 2's reply that fall on Tuesday 13 October 2026; none invented.
+    message: Which of the events you found fall on the Tuesday?
+  - n: 7
+    expect_route: SINGLE
+    holds: [I3]
+    message: Is the mountain road through the Serra de Tramuntana safe to drive in October if it rains?
+  - n: 8
+    expect_route: HYBRID
+    holds: [I1, I2, I3]
+    back_refs:
+      - {turn: 3, window: in, asks: the archaeological sites already discussed}
+    message: >-
+      Plan a day for Wednesday 14 October. In the morning we want a botanical garden, then
+      lunch somewhere with a view, and in the afternoon one of the archaeological sites you
+      mentioned. We drive from Sóller and back. Include the drive times between each stop
+      and the entry prices.
+  - n: 9
+    expect_route: SINGLE
+    holds: [I1, I2, I3]
+    message: What local dessert should we try, and where?
+  - n: 10
+    expect_route: SINGLE
+    message: full detail — explain the history of the Talaiotic culture and how it ended.
+  - n: 11
+    expect_route: SINGLE
+    holds: [I3]
+    message: Back to short answers please. What is the weather usually like in the middle of October?
+  - n: 12
+    expect_route: SINGLE
+    holds: [I2, I3]
+    message: Is it worth buying a museum pass, or is it cheaper to pay at each place?
+  - n: 13
+    expect_route: HYBRID
+    holds: [I1, I2, I3]
+    message: >-
+      Research restaurants in the old town of Palma for our last evening, Friday 16 October.
+      We want Mallorcan food, not tourist menus. Evaluate three options on price and reviews.
+  - n: 14
+    expect_route: SINGLE
+    holds: [I3]
+    message: Can we park near the cathedral in Palma on a Friday evening?
+  - n: 15
+    expect_route: SINGLE
+    holds: [I3]
+    back_refs:
+      - {turn: 8, window: in, asks: the Wednesday plan}
+    answer_key: Names the garden and the site from turn 8's plan, unchanged, and moves only what the user asks.
+    message: On Wednesday, can we swap the morning and the afternoon stops? Does that change the drive times?
+  - n: 16
+    expect_route: SINGLE
+    holds: [I1, I3]
+    message: Where can we buy good ensaïmada to take home, and does it travel well?
+  - n: 17
+    expect_route: SINGLE
+    holds: [I3]
+    message: What should we know about driving and parking in small villages on the island?
+  - n: 18
+    expect_route: SINGLE
+    holds: [I3]
+    back_refs:
+      - {turn: 2, window: memory, asks: the event judged worth the drive}
+    answer_key: An event that appeared in turn 2's reply, with the same date and venue; an honest "I do not have it" if it cannot be recalled; never a new event presented as the earlier one.
+    message: Near the start you told me which event was worth the drive. Which one was it, and what were its date and venue?
+  - n: 19
+    expect_route: SINGLE
+    holds: [I3]
+    back_refs:
+      - {turn: 1, window: memory, asks: the town where they stay and the landing time}
+    answer_key: Sóller, and landing in Palma at 13:00.
+    message: Remind me — which town are we staying in, and what time do we land?
+  - n: 20
+    expect_route: HYBRID
+    holds: [I1, I2]
+    back_refs:
+      - {turn: 1, window: memory, asks: arrival time, dates and the rental car}
+      - {turn: 5, window: memory, asks: the recommended village}
+      - {turn: 13, window: in, asks: the restaurant options for Friday}
+    answer_key: Saturday 10 arrival 13:00 to Saturday 17 departure; uses the turn 5 village, the turn 8 Wednesday and a turn 13 restaurant; every meal marked shellfish-free or not; prices in euros.
+    message: >-
+      Now plan and outline our whole week, day by day, from landing on Saturday to returning
+      the car, using the places we agreed on in this conversation. Mark each lunch and dinner
+      as shellfish-free or not.

@@ -367,6 +367,149 @@ class TestProbeSlmHealthGeneration:
         assert snap.generation_probe_latency_ms is None
 
 
+class TestResolvePrimaryLocalDeployment:
+    """FRE-1474 master gate: exercise the helper against a real ModelConfig,
+    not a mocked shape — a bounced-three-times PR should encode API-shape
+    assumptions as tests, not leave them to manual review.
+    """
+
+    def _config(self, *, roles: dict) -> "ModelConfig":
+        from personal_agent.llm_client.models import (
+            ModelConfig,
+            ModelDefinition,
+            ModeSpec,
+            Placement,
+            ProviderDefinition,
+        )
+
+        trivial_modes = {"default": ModeSpec()}
+        models = {
+            "local-chat": ModelDefinition(
+                id="local-chat-model",
+                context_length=8192,
+                max_concurrency=1,
+                default_timeout=30,
+                provider="slm_local",
+                dialect="llamacpp_qwen",
+                modes=trivial_modes,
+                default_mode="default",
+            ),
+            "cloud-chat": ModelDefinition(
+                id="cloud-chat-model",
+                context_length=8192,
+                max_concurrency=1,
+                default_timeout=30,
+                provider="anthropic",
+                dialect="anthropic_adaptive",
+                modes=trivial_modes,
+                default_mode="default",
+            ),
+        }
+        return ModelConfig(
+            providers={
+                "slm_local": ProviderDefinition(placement=Placement.LOCAL, max_concurrency=2),
+                "anthropic": ProviderDefinition(placement=Placement.CLOUD, max_concurrency=50),
+            },
+            models=models,
+            roles=roles,
+        )
+
+    def test_resolves_local_primary(self) -> None:
+        from personal_agent.llm_client.models import RoleBinding
+        from personal_agent.observability.slm_health.probe import (
+            _resolve_primary_local_deployment,
+        )
+
+        config = self._config(roles={"primary": RoleBinding(deployment="local-chat")})
+        with patch("personal_agent.config.model_loader.load_model_config", return_value=config):
+            resolved, reason = _resolve_primary_local_deployment()
+
+        assert resolved == ("slm_local", "local-chat-model")
+        assert reason is None
+
+    def test_cloud_primary_is_not_resolved(self) -> None:
+        from personal_agent.llm_client.models import RoleBinding
+        from personal_agent.observability.slm_health.probe import (
+            _resolve_primary_local_deployment,
+        )
+
+        config = self._config(roles={"primary": RoleBinding(deployment="cloud-chat")})
+        with patch("personal_agent.config.model_loader.load_model_config", return_value=config):
+            resolved, reason = _resolve_primary_local_deployment()
+
+        assert resolved is None
+        assert reason is not None
+        assert "LOCAL" in reason
+
+    def test_no_primary_role_binding(self) -> None:
+        from personal_agent.observability.slm_health.probe import (
+            _resolve_primary_local_deployment,
+        )
+
+        config = self._config(roles={})
+        with patch("personal_agent.config.model_loader.load_model_config", return_value=config):
+            resolved, reason = _resolve_primary_local_deployment()
+
+        assert resolved is None
+        assert reason is not None
+        assert "primary" in reason
+
+    def test_catalog_load_failure(self) -> None:
+        from personal_agent.observability.slm_health.probe import (
+            _resolve_primary_local_deployment,
+        )
+
+        with patch(
+            "personal_agent.config.model_loader.load_model_config",
+            side_effect=RuntimeError("catalog unreachable"),
+        ):
+            resolved, reason = _resolve_primary_local_deployment()
+
+        assert resolved is None
+        assert reason is not None
+        assert "catalog unreachable" in reason
+
+
+class TestProviderActiveCount:
+    """FRE-1474 master gate: exercise the helper against a real
+    InferenceConcurrencyController, not a mocked shape.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reflects_a_real_in_flight_slot(self) -> None:
+        from personal_agent.llm_client.concurrency import (
+            InferenceConcurrencyController,
+            set_inference_concurrency_controller,
+        )
+        from personal_agent.observability.slm_health.probe import _provider_active_count
+
+        controller = InferenceConcurrencyController()
+        controller.register_provider("slm_local", max_concurrency=2)
+        controller.register_model(role="test-primary", max_concurrency=2, provider="slm_local")
+
+        set_inference_concurrency_controller(controller)
+        try:
+            assert _provider_active_count("slm_local") == 0
+            async with controller.request_slot("test-primary"):
+                assert _provider_active_count("slm_local") == 1
+            assert _provider_active_count("slm_local") == 0
+        finally:
+            set_inference_concurrency_controller(None)
+
+    def test_unregistered_provider_reads_zero(self) -> None:
+        from personal_agent.llm_client.concurrency import (
+            InferenceConcurrencyController,
+            set_inference_concurrency_controller,
+        )
+        from personal_agent.observability.slm_health.probe import _provider_active_count
+
+        set_inference_concurrency_controller(InferenceConcurrencyController())
+        try:
+            assert _provider_active_count("never-registered") == 0
+        finally:
+            set_inference_concurrency_controller(None)
+
+
 class TestSlmHealthSnapshotDegradeReason:
     """SlmHealthSnapshot.degrade_reason() returns the right message."""
 

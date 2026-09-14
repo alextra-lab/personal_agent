@@ -184,6 +184,62 @@ async def test_a_normal_pass_leaves_tool_choice_unpinned(monkeypatch: pytest.Mon
     assert second["tools"] == [_TOOL_DEF]
 
 
+_BUDGET_WARNING = "Tool budget"
+
+
+def _near_the_ceiling(ctx: ExecutionContext) -> None:
+    """Two rounds from the ceiling: where the tool-budget countdown fires on a normal pass."""
+    from personal_agent.orchestrator.executor import _resolve_max_iterations
+
+    ctx.tool_iteration_count = _resolve_max_iterations(ctx) - 2
+
+
+def _budget_warnings(ctx: ExecutionContext) -> list[dict[str, Any]]:
+    return [
+        m
+        for m in ctx.messages
+        if m.get("role") == "user" and _BUDGET_WARNING in str(m.get("content"))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ac3_a_retry_near_the_ceiling_gets_no_budget_countdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A countdown inviting "another round" contradicts a reply that cannot call a tool."""
+    from personal_agent.config import settings
+
+    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+    ctx = _ctx()
+    await _call(ctx, _client(_tool_call_response()))
+    _add_tool_result(ctx)
+    _prepare_retry(ctx)
+    _near_the_ceiling(ctx)
+
+    retry = await _call(ctx, _client(_answer_response()))
+
+    assert retry["tool_choice"] == "none"
+    assert _budget_warnings(ctx) == []
+
+
+@pytest.mark.asyncio
+async def test_a_normal_pass_near_the_ceiling_gets_the_budget_countdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The seeded negative: the same count outside a retry does inject the countdown."""
+    from personal_agent.config import settings
+
+    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+    ctx = _ctx()
+    await _call(ctx, _client(_tool_call_response()))
+    _add_tool_result(ctx)
+    _near_the_ceiling(ctx)
+
+    await _call(ctx, _client(_answer_response()))
+
+    assert len(_budget_warnings(ctx)) == 1
+
+
 def _tool_call_with_text_response() -> dict[str, Any]:
     """A model that ignores the pin: prose plus a tool call."""
     return {**_tool_call_response(), "content": "Paris has 2.1 million residents."}

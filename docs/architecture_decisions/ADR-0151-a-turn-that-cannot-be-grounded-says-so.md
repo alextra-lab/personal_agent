@@ -101,7 +101,7 @@ The shape is read from the turn record when verification runs:
 | Shape | Rule | Meaning |
 |---|---|---|
 | **B** | `tool_results_admitted ≥ 1` | The registry holds one or more tool sources from this turn. |
-| **C** | The model emitted no tool call, dispatched or not, **and** no sub-agent ran | Nothing was done to gather evidence this turn. |
+| **C** | The model emitted no tool call, dispatched or not, **and** no sub-agent worker was dispatched | Nothing was done to gather evidence this turn. |
 | **A** | Every other turn | Tool calls were made or sub-agents ran, and the registry admitted none of their output. |
 
 - The registry counts alone cannot define shape C. `tool_results_offered` counts only results that
@@ -109,9 +109,11 @@ The shape is read from the turn record when verification runs:
   instead, and sub-agent reports live in `ctx.sub_agent_results`, outside `ctx.tool_results`. Both
   paths leave `tool_results_offered` at 0. Shape C must therefore read every tool-call path and
   the expansion record.
-- A turn where one or more workers ran, HYBRID or DECOMPOSE, with no admitted source, is shape A.
-  Worker findings are uncitable under ADR-0138 D2, and ADR-0149 records that by design. A turn whose
-  planned workers were all skipped, with no tool call, is shape C: nothing ran.
+- A turn where one or more workers were dispatched, HYBRID or DECOMPOSE, with no admitted source, is
+  shape A. A dispatched worker counts whether it returned or raised. Worker findings are uncitable
+  under ADR-0138 D2, and ADR-0149 records that by design.
+- A turn with no shape — verification unavailable, or no non-exempt statement — carries no note and
+  records `turn_shape` as null.
 - A turn where an arbitrary-code tool and a typed tool both ran is shape B. The typed source is
   citable, and the retry in D3 has something to cite.
 - Memory recalled into the context is not a tool result. A shape C turn can hold memory sources.
@@ -169,7 +171,7 @@ This amends ADR-0138 D4.
 - A turn that needed the retry is **not** first-generation compliant. The current code already holds
   this. This ADR makes it an invariant.
 
-### D4 — Every delivered turn carries the declaration, and the refusal is withdrawn
+### D4 — Every delivered turn with settled failures carries the declaration, and the refusal is withdrawn
 
 This amends ADR-0138 D4.
 
@@ -319,11 +321,14 @@ searched", which on shape B is exactly the set of sources the answer used.
 - **Shape C is not observable from existing instrumentation.** `tools_used` in the capture holds
   only dispatched calls, and `hybrid_expansion_start` fires for HYBRID only, before any worker is
   skipped. So `grounding_verification_completed` gains three fields:
-  - `turn_shape` — `a`, `b` or `c`;
-  - `tool_calls_emitted` — `ctx.tool_iteration_count`, which increments before the malformed,
-    missing-name, loop and dispatch gates;
-  - `sub_agents_ran` — the length of `ctx.sub_agent_results`, for HYBRID and DECOMPOSE alike. A
-    skipped worker is in `ctx.expansion_skipped_tasks` instead and does not count.
+  - `turn_shape` — `a`, `b` or `c`, or null for a turn with no shape;
+  - `tool_rounds` — `ctx.tool_iteration_count`. It counts tool-execution rounds, not calls, and it
+    increments before the malformed, missing-name, loop and dispatch gates. D1 reads only whether it
+    is zero;
+  - `sub_agents_dispatched` — the count of workers handed to `run_sub_agent`, for HYBRID and
+    DECOMPOSE alike, whether they returned or raised. `ctx.sub_agent_results` is not this count: a
+    worker that raises is dropped from it (`orchestrator/expansion_controller.py:823-833`), and only
+    its interval is kept. A skipped worker is in `ctx.expansion_skipped_tasks` and does not count.
 
   The seeded negatives in AC-5 are what make these fields falsifiable.
 - Acceptance runs in `enforce` go on the eval stack, never on production. The eval gateway must run
@@ -335,14 +340,17 @@ searched", which on shape B is exactly the set of sources the answer used.
 
 **How will we know this decision delivered, not only merged?**
 
-Production runs `observe`. AC-1 to AC-4, AC-6 and AC-7 are checked on an eval-stack run in `enforce`
+Production runs `observe`. AC-9 is a settings check. AC-8 compares an `observe` run with an
+`enforce` run. AC-1 to AC-4, AC-6 and AC-7 are checked on an eval-stack run in `enforce`
 over a held-out set of one or more turns of each shape, and 20 or more shape B turns. AC-5 is
 checked on that run and on production `observe` turns after deploy. Every bar that is not stated
 here is fixed in the ticket that builds the check, before results are seen.
 
 **Coverage rule.** Capture writing is best effort, and a failure is swallowed. AC-5 and AC-7 join
-each delivered `trace_id` to its record. A delivered turn with no capture or no verification event
-fails the criterion. It never passes because there was nothing to compare.
+each delivered `trace_id` to its record. A delivered turn with no capture fails the criterion. A
+delivered turn that ran verification and has no `grounding_verification_completed` event also
+fails. It never passes because there was nothing to compare. A turn stopped early runs no
+verification by design (FRE-1375), and it is outside AC-5.
 
 - **AC-1 — An unsettled statement never triggers a retry and never counts in the note.**
   **Check:** every `grounding_enforcement_decision` event with a retry decision has
@@ -379,15 +387,16 @@ fails the criterion. It never passes because there was nothing to compare.
 - **AC-5 — The declaration matches the record of the delivered generation.**
   **Check:** for each delivered turn, compare the reply as returned by `/chat` with the last
   `grounding_verification_completed` event for its `trace_id`. The note's failure count equals the
-  count of settled outcomes. The shape sentence matches the event's `turn_shape`, and `turn_shape`
-  matches D1 applied to the event's `tool_results_admitted`, `tool_calls_emitted` and
-  `sub_agents_ran`. The unsettled count appears exactly when a note is shown and the unsettled count
-  is above zero. Seeded negatives:
+  count of settled outcomes, and its statement count equals `non_exempt_spans`. The shape sentence
+  matches the event's `turn_shape`, and `turn_shape` matches D1 applied to the event's
+  `tool_results_admitted`, `tool_rounds` and `sub_agents_dispatched`. The unsettled count appears
+  exactly when a note is shown and the unsettled count is above zero. The note contains the
+  instruction to check the statements. A turn with `turn_shape` null carries no note. Seeded
+  negatives:
   - a fully passed turn carries no note;
   - a turn whose only tool call has malformed arguments declares shape A;
-  - a DECOMPOSE turn whose workers ran, with no primary tool call, declares shape A;
-  - a HYBRID turn whose planned workers were all skipped, with no primary tool call, declares
-    shape C.
+  - a DECOMPOSE turn whose dispatched workers all raise, with no primary tool call, declares shape A;
+  - a turn with an image attachment and no tool call declares shape C.
 
   *Fails if* one delivered turn disagrees with its record on any of these checks, or any seeded
   negative fails.
@@ -396,6 +405,21 @@ fails the criterion. It never passes because there was nothing to compare.
   **Check:** for every delivered turn that carries a note in AC-5, the capture's
   `assistant_response` does not contain the note's closing instruction "Check them before you rely
   on them". *Fails if* any capture contains it.
+
+- **AC-8 — Nothing forces a tool call before generation.**
+  **Check:** heavy enforcement pins `tool_choice="required"` (`orchestrator/executor.py`, the heavy
+  pin function), so a heavy first generation always emits a tool call. Run the same held-out subset
+  of 10 or more general-knowledge probes once in `observe` and once in `enforce`. Compare the share
+  of probes with `tool_rounds = 0` on the first attempt. Over the `enforce` run, also count the
+  `grounding_heavy_gate_unavailable` warnings, which fire only when the heavy gate tries to apply.
+  A `grounding_enforcement_selected` event with `applied = heavy` is not a failure by itself,
+  because a retained but inert selector still logs it. *Fails if* the `enforce` share is lower than
+  the `observe` share by more than the bar recorded in the ticket, if the `enforce` share is zero,
+  or if one or more `grounding_heavy_gate_unavailable` warnings appear.
+
+- **AC-9 — The retry cap is a validated setting, not a convention.**
+  **Check:** start the settings model with `grounding_max_generation_attempts=3`. *Fails if* the
+  settings model accepts the value.
 
 - **AC-6 — The shape B retry repairs statements, not only removes them.**
   **Check:** over 20 or more retried shape B turns, compare the first-attempt and second-attempt
@@ -465,3 +489,22 @@ every retried turn. It found two blocking defects, both in AC-5:
   note is shown.
 
 It also found that captures are best effort. The coverage rule now makes a missing record a failure.
+
+**Codex review round 3**, the last round the `/adr` contract allows, reviewed the round-2 delta and
+the whole document. It found five blocking defects. Findings 1 and 2 were checked in the code:
+- `len(ctx.sub_agent_results)` drops a worker that raised, so a turn whose workers all raised read as
+  shape C. The field is now `sub_agents_dispatched`, counted from the dispatch loop.
+- The seeded negative "all HYBRID workers skipped" could not reach verification: workers are
+  skipped only after the turn deadline, and such a turn stops early. The seed is replaced by a
+  worker-raised turn and an image-attachment turn.
+- A turn with no shape had no valid `turn_shape`. It is now null, with no note.
+- AC-5 did not check the statement count or the instruction. It does now.
+- D5 had no outcome-level check. AC-8 compares tool-free first generations on general-knowledge
+  probes between `observe` and `enforce`.
+
+Three non-blocking findings were also applied: `tool_calls_emitted` counted rounds and is renamed
+`tool_rounds`, the settings cap gains AC-9, and the D4 heading now matches its body.
+
+**Review disposition.** Three rounds ran. Round 1 changed the design, round 2 corrected one criterion,
+and round 3 corrected field definitions and added two criteria. The round-3 fixes are not reviewed
+again. A reviewer at the gate reads them in the round-3 delta.

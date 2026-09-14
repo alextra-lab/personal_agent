@@ -22,6 +22,10 @@
           "active": 0,
           "limit": 3
         },
+        "qwen3.8-27b-mtplx": {
+          "active": 0,
+          "limit": 1
+        },
         "qwen3.8-27b-ovh": {
           "active": 0,
           "limit": 25
@@ -29,6 +33,10 @@
         "qwen3.8-flash-next": {
           "active": 0,
           "limit": 3
+        },
+        "qwen3.8-flash-next-mtplx": {
+          "active": 0,
+          "limit": 1
         },
         "reranker": {
           "active": 0,

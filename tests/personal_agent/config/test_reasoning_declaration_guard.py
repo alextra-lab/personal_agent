@@ -293,7 +293,8 @@ class TestOpenSelectionWalksEverySelectableEntry:
         """AC-1 — every entry the primary picker can offer is in the walked set.
 
         ADR-0145 D1 (FRE-1445) deleted the two local `-instruct` twins, dropping
-        the reachable set from eight entries to six.
+        the reachable set from eight entries to six. FRE-1517 added the two MTPLX
+        study deployments, raising it to eight.
         """
         catalog = _load_yaml(_REPO_ROOT / "config" / "models.yaml")
         bindings = load_matrix(_REPO_ROOT).get("bindings")
@@ -302,6 +303,8 @@ class TestOpenSelectionWalksEverySelectableEntry:
         assert reachable == {
             "qwen3.6-35b-thinking",
             "qwen3.8-flash-next",
+            "qwen3.8-27b-mtplx",
+            "qwen3.8-flash-next-mtplx",
             "qwen3.8-27b-ovh",
             "claude_sonnet",
             "claude_haiku",

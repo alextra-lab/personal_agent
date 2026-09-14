@@ -75,8 +75,9 @@ async def probe_slm_health(
         base_url: The SLM's ``/v1`` API base (FRE-1474). When given, a
             generation-capability check runs after a successful ``/health``
             response. ``None`` (the default) skips it entirely.
-        generation_timeout_s: Per-request timeout for the served-model lookup
-            and the completion call.
+        generation_timeout_s: Timeout for the completion call (the
+            served-model lookup carries its own fixed 3s timeout — see
+            :func:`_probe_generation`).
 
     Returns:
         A :class:`~.snapshot.SlmHealthSnapshot` — always, even on failure.
@@ -222,8 +223,10 @@ async def _probe_generation(
 
     Args:
         base_url: The SLM's ``/v1`` API base.
-        timeout_s: Per-request timeout for both the served-model lookup and
-            the completion call.
+        timeout_s: Timeout for the completion call. The served-model lookup
+            has no timeout parameter of its own — it is fixed at
+            :data:`personal_agent.llm_client.provider_health._SERVED_MODELS_TIMEOUT_S`
+            (3s) regardless of what is passed here.
         trace_id: Probe's trace ID for log correlation.
 
     Returns:

@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-09-14
-**Deciders:** Owner (the direction in FRE-1502; "write the ADR on the choice-axis evidence", 2026-09-13; the planner-probe matrix, its quant and effort rules, and the dispositions of the open questions, 2026-09-14), `adr` seat at Opus 5 (author, the 2026-09-14 planner-probe matrix), `explore` seat (the FRE-1498 study), `slm_server` session (model serving, tuning and the server-side logs of the probe)
+**Deciders:** Owner (the direction in FRE-1502; "write the ADR on the choice-axis evidence", 2026-09-13; the planner-probe matrix, its quant and effort rules, the dispositions of the open questions, and a planner temperature adopted only on test, 2026-09-14), `adr` seat at Opus 5 (author, the 2026-09-14 planner-probe matrix), `explore` seat (the FRE-1498 study), `slm_server` session (model serving, tuning and the server-side logs of the probe)
 **Tags:** routing, expansion, planner, decomposition, sub-agents, latency
 
 **Amends:** ADR-0036 D1 and D5 ("the LLM generates plan content only; it does not decide whether to expand") for the four task types in D1. **Supersedes:** the routing half of ADR-0142 D1 (`CONVERSATIONAL` through the complexity matrix). **Consumes:** FRE-1382 (the per-turn fan-out cap), ADR-0150 D3 (round budgets per thoroughness level).
@@ -65,6 +65,7 @@ Appendix A.
 | Engine | Model / quant | Effort | Agreement (95% range) | Declines correct | p50 / p90 |
 |---|---|---|---|---|---|
 | llama.cpp | Qwen3.8-Flash-Next IQ4_XS | medium | 52/54 = 96% (87–99%) | 17/18 | 20.3 / 38.0 s |
+| llama.cpp | Qwen3.8-Flash-Next IQ4_XS | medium, temperature 0.6 | 48/54 = 89% (78–95%) | 17/18 | 21.2 / 31.4 s |
 | llama.cpp | Qwen3.8-Flash-Next IQ4_XS | low | 49/54 = 91% (80–96%) | 16/18 | 19.1 / 29.2 s |
 | llama.cpp | Qwen3.8-27B Q4_K_XL | low | 54/54 = 100% (93–100%) | 18/18 | 49.0 / 87.6 s |
 | llama.cpp | Qwen3.6-35B-A3B Q6_K_XL | none | 45/53 parsed = 85% (73–92%), 1 parse failure | 13/18 | 34.5 / 96.9 s |
@@ -82,7 +83,8 @@ Five things this settles:
    fixture for every model is "I thought I asked you to create a weekly prediction tool…".
 2. **Higher reasoning effort never improved the decision.** On MTPLX, `medium` was slower than `low`
    on both models, with no better agreement. On llama.cpp Flash-Next, `low` was slightly worse than
-   `medium`, inside the noise.
+   `medium`, inside the noise. A lower planner temperature did not help either: at 0.6 instead of the
+   card's 1.0, Flash-Next declined five research-question draws that it expands at 1.0, and fell to 89%.
 3. **A dedicated router in front of the planner does not work with the model tested.** Arch-Router
    answers in 0.2 s and declines 39 of 57 draws, including most research questions.
 4. **The 35B-A3B is a worse planner, not a faster one.** It reasons without a limit (p50 1,926
@@ -234,6 +236,11 @@ primary role (FRE-1390), in that role's selected mode.
 - **A separate planner model.** On the owner's machine, one model of Flash-Next's size fits at a
   time, so a separate local planner would replace the primary. A cheap router in front of the planner
   failed at 65%.
+- **Temperature.** The planner may request its own sampling temperature, separate from the primary's
+  (owner, 2026-09-14). A value is adopted only when it passes the D6 probe on the binding and is
+  clearly better than the primary's temperature. The one value tested, 0.6 on llama.cpp Flash-Next,
+  scored 89% against 96% at 1.0, so the planner keeps the primary's temperature. No configuration field
+  is added until a value passes. The primary's own temperature does not change without its own test.
 
 ### D6 — A planner configuration is qualified on a committed probe
 
@@ -558,6 +565,10 @@ the routing change.
 
 The 35B Q6 `heatpump` cell counts 2 draws because one plan failed to parse. The FN MTPLX medium
 `c5_noverb` cell counts 2 draws because one stream was cut (A4).
+
+**Temperature arm** (FN llama.cpp medium, temperature 0.6), not in the table: identical to FN llama.cpp
+medium at 1.0 on every fixture except `c4_deliverable` 3, `c1_tool_imperative` 1, `c5_verb` 1,
+`c2_noverb` 0 and `c5_noverb` 1 declined draws.
 
 ### A3. Speed and tokens
 

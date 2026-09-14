@@ -159,10 +159,26 @@ async def test_eval_spawn_drops_to_nobody_with_allowlisted_env() -> None:
         result = await bash_executor("echo ok", ctx=_CTX)
 
     assert result["success"] is True
+    assert EVAL_CHILD_UID == EVAL_CHILD_GID == 65534
+    assert mock_exec.call_args.args == (
+        "/usr/bin/setpriv",
+        "--reuid=65534",
+        "--regid=65534",
+        "--clear-groups",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--bounding-set=-all",
+        "--no-new-privs",
+        "--",
+        "/bin/bash",
+        "-o",
+        "pipefail",
+        "-c",
+        "echo ok",
+    )
     kwargs = mock_exec.call_args.kwargs
-    assert kwargs["user"] == EVAL_CHILD_UID == 65534
-    assert kwargs["group"] == EVAL_CHILD_GID == 65534
-    assert kwargs["extra_groups"] == []
+    # uvloop rejects these kwargs (FRE-1518); the identity change is setpriv's job.
+    assert not {"user", "group", "extra_groups", "preexec_fn"} & set(kwargs)
     env = kwargs["env"]
     assert set(env) <= EVAL_CHILD_ENV_NAMES | {"HOME", "TMPDIR"}
     assert not [value for value in _SEEDED.values() if value in env.values()]
@@ -182,8 +198,48 @@ async def test_production_spawn_keeps_identity_and_environment(profile: str) -> 
         ms.deployment_profile = profile
         await bash_executor("echo ok", ctx=_CTX)
 
+    assert mock_exec.call_args.args == ("/bin/bash", "-o", "pipefail", "-c", "echo ok")
     kwargs = mock_exec.call_args.kwargs
     assert kwargs["env"] is None
-    assert kwargs["user"] is None
-    assert kwargs["group"] is None
-    assert kwargs["extra_groups"] is None
+    assert not {"user", "group", "extra_groups", "preexec_fn"} & set(kwargs)
+
+
+@pytest.mark.parametrize("profile", ["cloud", "local"])
+def test_production_bash_runs_on_served_event_loop(profile: str) -> None:
+    """FRE-1518: production bash runs on uvloop, the loop uvicorn serves the gateway on.
+
+    uvloop rejects ``user``/``group``/``extra_groups`` even when they are None, so the
+    FRE-1505 spawn broke bash on every profile, not only on eval.
+    """
+    uvloop = pytest.importorskip("uvloop")
+    with patch("personal_agent.tools.primitives.bash.settings") as ms:
+        ms.deployment_profile = profile
+        result = uvloop.run(bash_executor("echo ok", ctx=_CTX))
+
+    assert result["success"] is True
+    assert result["stdout"] == "ok\n"
+
+
+def test_eval_spawn_accepted_by_served_event_loop() -> None:
+    """FRE-1518: the eval spawn runs on uvloop, the loop uvicorn serves the gateway on.
+
+    uvloop raises ``ValueError`` for the ``user``/``group``/``extra_groups`` kwargs, and
+    that error escaped ``bash_executor``. Here the spawn is real. As a non-root test
+    process, setpriv cannot change uid, so the command fails, but bash_executor returns.
+    """
+    uvloop = pytest.importorskip("uvloop")
+    with (
+        patch("personal_agent.tools.primitives.bash.settings") as ms,
+        patch("personal_agent.tools.primitives.bash.os.geteuid", return_value=0),
+    ):
+        ms.deployment_profile = "eval"
+        result = uvloop.run(bash_executor("id -u", ctx=_CTX))
+
+    assert isinstance(result, dict)
+    if os.geteuid() == 0:
+        assert result["stdout"] == f"{EVAL_CHILD_UID}\n"
+    else:
+        # setpriv itself ran and refused before exec, so bash never ran as the test user.
+        assert result["exit_code"] != 0
+        assert result["stdout"] == ""
+        assert "setpriv:" in result["stderr"]

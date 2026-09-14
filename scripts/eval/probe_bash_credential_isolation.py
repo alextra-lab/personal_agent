@@ -7,6 +7,7 @@ rather than copied into the image.
 Against a locally built image, with seeded fake credentials only::
 
     docker run --rm -i -e AGENT_DEPLOYMENT_PROFILE=eval \
+      -e AGENT_SLM_BASE_URL=http://127.0.0.1:9/v1 \
       -e AGENT_ANTHROPIC_API_KEY=fake-anthropic-key-0123456789 \
       -e AGENT_OPENAI_API_KEY=fake-openai-key-0123456789 \
       --entrypoint /app/.venv/bin/python seshat-gateway:<tag> - \
@@ -32,8 +33,12 @@ A credential value is any value of this process's environment that is not on the
 allowlist and is at least ``MIN_VALUE_LENGTH`` characters long. This includes URLs and
 DSNs, not only ``*_KEY`` names.
 
-Exit 0 only when the instrument finds a credential, the eval scan finds none, and
-``echo ok`` returns ``ok``.
+The steps run under ``uvloop``, the event loop uvicorn serves the gateway on (FRE-1518).
+An earlier version used ``asyncio.run``. It passed while every served eval bash call
+failed, because uvloop rejects spawn kwargs that the stdlib loop accepts.
+
+Exit 0 only when the probe ran on uvloop, the instrument finds a credential, the eval
+scan finds none, and ``echo ok`` returns ``ok``.
 """
 
 from __future__ import annotations
@@ -44,6 +49,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+import uvloop
 
 from personal_agent.config import settings
 from personal_agent.telemetry import TraceContext
@@ -110,6 +117,7 @@ async def _probe() -> dict[str, object]:
         None,
     )
     return {
+        "event_loop": type(asyncio.get_running_loop()).__module__.split(".")[0],
         "deployment_profile": settings.deployment_profile,
         "gateway_euid": os.geteuid(),
         "credential_names_checked": sorted(credentials),
@@ -123,9 +131,10 @@ async def _probe() -> dict[str, object]:
 
 def main() -> int:
     """Run the probe, print the JSON report, and return the process exit code."""
-    report = asyncio.run(_probe())
+    report = uvloop.run(_probe())
     passed = (
-        report["deployment_profile"] == "eval"
+        report["event_loop"] == "uvloop"
+        and report["deployment_profile"] == "eval"
         and bool(report["instrument_leaked"])
         and report["eval_scan_error"] is None
         and report["eval_scan_child_uid"] == "65534"

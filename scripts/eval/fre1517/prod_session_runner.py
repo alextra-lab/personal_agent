@@ -263,6 +263,16 @@ def _trace_reads(es: httpx.Client, trace_id: str) -> dict[str, Any]:
         "tools_completed": [t.get("tool_name") for t in tools_done],
         "tools_failed": [(t.get("tool_name"), str(t.get("error"))[:200]) for t in tools_failed],
         "primary_invalid_tool_arguments": len(_events(es, trace_id, "tool_call_invalid_arguments")),
+        # FRE-1521: the planner's own record (brief mode, history seen, constraints per task) and
+        # the task text each worker received, for brief carry-through and invented-place review.
+        "planner_completed": _events(es, trace_id, "planner_completed"),
+        "sub_agent_starts": [
+            {
+                k: s.get(k)
+                for k in ("task_id", "worker_type", "thoroughness", "round_budget", "task")
+            }
+            for s in _events(es, trace_id, "sub_agent_start")
+        ],
         "sub_agent_captures": [h["_source"] for h in subs],
         "route_trace": (
             _psql_json(
@@ -396,6 +406,22 @@ def run(args: argparse.Namespace) -> int:
             session_id, trace_id = str(data["session_id"]), str(data["trace_id"])
             time.sleep(15)  # let the trace's events reach Elasticsearch
             reads = _trace_reads(es, trace_id)
+            brief = None
+            if args.expect_brief_mode:
+                # FRE-1521 Phase B: every planner call must run in the expected brief mode and
+                # see conversation history. Turn 2 is a HYBRID turn in s1_trip, so it must plan.
+                plans = _events(es, trace_id, "planner_completed")
+                brief = {
+                    "planner_events": len(plans),
+                    "brief_mode": [p.get("brief_mode") for p in plans],
+                    "history_chars": [p.get("history_chars") for p in plans],
+                    "task_constraints_count": [p.get("task_constraints_count") for p in plans],
+                }
+                brief["holds"] = bool(plans) and all(
+                    p.get("brief_mode") == args.expect_brief_mode
+                    and (p.get("history_chars") or 0) > 0
+                    for p in plans
+                )
             ac4 = None
             if args.expect_expansion_disabled:
                 # FRE-1520 AC-4: with expansion switched off, every turn routes SINGLE with
@@ -458,6 +484,11 @@ def run(args: argparse.Namespace) -> int:
                         f"STOP: session cost USD {spent:.4f} > {args.max_session_usd}\n"
                     )
                     return 8
+            if brief is not None:
+                print(f"  BRIEF t{turn['n']:02d}: {brief}", flush=True)
+                if turn["n"] == 2 and not brief["holds"]:
+                    sys.stderr.write(f"STOP: planner brief check fails on turn 2: {brief}\n")
+                    return 10
             if ac4 is not None:
                 row_ac4 = f"  AC-4 t{turn['n']:02d}: {ac4}"
                 print(row_ac4, flush=True)
@@ -486,6 +517,11 @@ def main() -> int:
     )
     p.add_argument("--session-fact", action="append", default=[])
     p.add_argument("--stop-after", type=int, default=0)
+    p.add_argument(
+        "--expect-brief-mode",
+        default="",
+        help="FRE-1521 Phase B: require planner_completed brief_mode and history_chars>0; stop (exit 10) if turn 2 fails",
+    )
     p.add_argument(
         "--expect-expansion-disabled",
         action="store_true",

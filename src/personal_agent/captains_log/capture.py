@@ -25,6 +25,7 @@ from personal_agent.captains_log.turn_evidence import (
     RecallAdmissionRecord,
 )
 from personal_agent.config import get_settings as _get_settings
+from personal_agent.config.settings import Thoroughness
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -147,6 +148,10 @@ class SubAgentCapture(BaseModel):
     mode: str
     model_role: str
     max_tokens: int | None = None
+    # FRE-1521 AC-4: the task's thoroughness level (ADR-0150 D3), previously
+    # None on every capture — recorded here at the sub-agent's own audit
+    # record so a study comparing thoroughness levels can read it directly.
+    thoroughness: Thoroughness = "quick"
 
     # Task surface — granted vs actually exercised
     tools_granted: list[str] = Field(default_factory=list)

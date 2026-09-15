@@ -60,6 +60,7 @@
         "status": { "type": "keyword" },
         "mode": { "type": "keyword" },
         "model_role": { "type": "keyword" },
+        "thoroughness": { "type": "keyword" },
         "title": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } },
         "rationale": { "type": "text" },
         "user_message": { "type": "text" },

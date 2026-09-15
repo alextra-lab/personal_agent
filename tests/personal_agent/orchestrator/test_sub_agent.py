@@ -1386,6 +1386,24 @@ class TestSubAgentCaptureEmitted:
         assert cap.success is True
 
     @pytest.mark.asyncio
+    async def test_capture_carries_thoroughness(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FRE-1521 AC-4: the task's thoroughness reaches the audit record (was None)."""
+        import personal_agent.orchestrator.sub_agent as sa
+
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="x" * 100)
+
+        await run_sub_agent(
+            spec=replace(_spec(), thoroughness="thorough"), llm_client=mock_client, trace_id="t"
+        )
+
+        assert len(captured) == 1
+        assert captured[0].thoroughness == "thorough"
+
+    @pytest.mark.asyncio
     async def test_capture_written_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import personal_agent.orchestrator.sub_agent as sa
 

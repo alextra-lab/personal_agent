@@ -525,6 +525,7 @@ def _emit_sub_agent_capture(
         mode=spec.mode.value,
         model_role=spec.model_role.value,
         max_tokens=spec.max_tokens,
+        thoroughness=spec.thoroughness,
         tools_granted=list(spec.tools),
         tools_denied=list(result.denied_tools),
         tools_used=result.tools_used,

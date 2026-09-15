@@ -34,6 +34,7 @@ from personal_agent.governance.sub_agent_tools import (
     SubAgentToolGrant,
     evaluate_sub_agent_tool_grant,
 )
+from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.observability.topology import report_degradation
 from personal_agent.orchestrator.expansion_types import (
@@ -68,6 +69,25 @@ _MAX_TASKS = {"HYBRID": 3, "DECOMPOSE": 5}
 # already capped at the source; this bounds the union across every task).
 _MAX_GAP_NAMES_PER_TASK = 10
 
+# FRE-1521: appended to the planner system prompt's Rules list only when
+# planner_brief_mode="briefing" — `current` must stay byte-for-byte identical
+# to today (AC-1). Wording set by master's ticket comment (Phase B, from the
+# explore seat's Phase A V0/V1/V2 probe): rules 1-4. Rule 5 (drop the
+# per-level round annotation when every level renders the same number) is not
+# prose for the planner to read — it is a formatting change to the `levels`
+# string itself, applied below.
+_PLANNER_BRIEFING_RULES: tuple[str, ...] = (
+    "Before writing tasks, identify the user's standing rules and the facts from "
+    "the conversation that apply to this request. Put into each task's constraints "
+    "every rule and fact that task depends on. The worker sees only its own task.",
+    "Give every task an end point: how many items to return, and what counts as "
+    "done. Never ask for all or every.",
+    "Give each worker one narrow task. Do not merge separate steps (for example "
+    "route timing and site checks) into one task.",
+    "Do not name example places, businesses or sources in a task unless they "
+    "appear in the conversation. Workers must find them.",
+)
+
 
 def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
     """The sub-agent tool names currently grantable in the active mode (FRE-1389).
@@ -97,7 +117,9 @@ def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
     return list(governance_config.granted_sub_agent_tool_names())
 
 
-def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
+def _build_planner_system_prompt(
+    available_sub_agent_tools: list[str], brief_mode: str = "current"
+) -> str:
     """Build the planner system prompt with the live sub-agent tool surface.
 
     Dynamic rather than hardcoded (FRE-1389 AC-1): the eligible set is read
@@ -110,6 +132,12 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         available_sub_agent_tools: Tool names currently grantable to a
             sub-agent in the active mode (from
             :func:`_current_sub_agent_tool_surface`).
+        brief_mode: ``settings.planner_brief_mode`` (FRE-1521). ``"current"``
+            (the default) reproduces today's prompt byte-for-byte — every
+            existing caller's behaviour is unchanged. ``"briefing"`` appends
+            ``_PLANNER_BRIEFING_RULES`` to the Rules list and collapses the
+            per-level round annotation when every level renders the same
+            number (rule 5, a formatting change rather than prose).
 
     Returns:
         The complete planner system prompt.
@@ -128,13 +156,17 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
     # ADR-0149 D2 / ADR-0150 D3: the planner is told what each level buys, rendered
     # live from the setting — a hardcoded number here drifts from the value that
     # binds, and nothing detects it (the reason FRE-1389 AC-1 gave for the tools).
-    levels = ", ".join(
-        f"{level} ({get_settings().sub_agent_rounds_for(level)} tool round(s))"
-        for level in THOROUGHNESS_LEVELS
-    )
+    rounds_by_level = {
+        level: get_settings().sub_agent_rounds_for(level) for level in THOROUGHNESS_LEVELS
+    }
+    if brief_mode == "briefing" and len(set(rounds_by_level.values())) == 1:
+        (uniform_rounds,) = set(rounds_by_level.values())
+        levels = f"{', '.join(THOROUGHNESS_LEVELS)} ({uniform_rounds} tool round(s) each)"
+    else:
+        levels = ", ".join(f"{level} ({n} tool round(s))" for level, n in rounds_by_level.items())
     type_names = "|".join(t.value for t in WORKER_TYPES)
     level_names = "|".join(THOROUGHNESS_LEVELS)
-    return (
+    prompt = (
         "You are a task decomposition planner. Given a user query and a strategy, "
         "produce a JSON plan that breaks the query into independent sub-tasks.\n\n"
         "Output ONLY valid JSON matching this schema:\n"
@@ -156,6 +188,66 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "task over one broad one.\n"
         "- Do NOT answer the question — only produce the plan"
     )
+    if brief_mode == "briefing":
+        briefing_rules = "\n".join(f"- {rule}" for rule in _PLANNER_BRIEFING_RULES)
+        prompt = f"{prompt}\n{briefing_rules}"
+    return prompt
+
+
+def _render_planner_history(messages: list[dict[str, Any]], max_chars: int) -> str:
+    """Render conversation history as plain role-labelled text (FRE-1521).
+
+    For the planner's ``briefing`` user message — never tool-call JSON, so the
+    planner reasons over prose the same way it reasons over the query. Whole
+    messages are dropped from the oldest end once the budget is exceeded,
+    never a mid-message truncation (which could cut a rule in half).
+
+    Args:
+        messages: Conversation messages, oldest first.
+        max_chars: Character budget. A negative value is treated as zero.
+
+    Returns:
+        Newline-joined ``"role: content"`` lines, oldest kept line first. Empty
+        string for no messages or an empty (or too small for even the newest
+        line) budget — the budget is never exceeded, not even by one message.
+    """
+    max_chars = max(0, max_chars)
+    lines = [f"{m.get('role', 'user')}: {get_text_content(m.get('content', ''))}" for m in messages]
+    kept: list[str] = []
+    line_chars = 0
+    for line in reversed(lines):
+        # len(kept) is the separator count "\n".join(kept) will need once this
+        # line is added (one fewer than the resulting line count) — not
+        # len(kept) + 1, which overcounts by one and can drop a line that
+        # actually fits.
+        if line_chars + len(line) + len(kept) > max_chars:
+            break
+        kept.append(line)
+        line_chars += len(line)
+    kept.reverse()
+    return "\n".join(kept)
+
+
+def _render_worker_task(task: PlanTask) -> str:
+    """Render a plan task's goal and constraints into the worker's task text (FRE-1521 AC-3).
+
+    ``PlanTask.constraints`` reaches the worker ONLY through this text —
+    ``SubAgentSpec.background`` is also set at the dispatch call site with the
+    same constraints, but no prompt builder reads it
+    (``_build_task_message``/``_build_sub_agent_system_prompt`` use
+    ``spec.task``/``spec.worker_type``, never ``spec.background``), so a
+    planner-written constraint never reached the worker before this.
+
+    Args:
+        task: The plan task to render.
+
+    Returns:
+        ``task.goal`` alone when there are no constraints, else the goal
+        followed by a "Constraints:" line.
+    """
+    if not task.constraints:
+        return task.goal
+    return f"{task.goal}\nConstraints: {'; '.join(task.constraints)}"
 
 
 @dataclass
@@ -387,6 +479,12 @@ class ExpansionController:
             authenticated=authenticated,
             expansion_budget=expansion_budget,
             eval_mode=eval_mode,
+            # FRE-1521: the same conversation window `_run_dispatch` already
+            # slices for sub-agents (messages[-4:]) — here in full, for the
+            # planner's briefing user message.
+            messages=messages,
+            brief_mode=settings.planner_brief_mode,
+            history_max_chars=settings.planner_history_max_chars,
         )
         result.plan = plan
 
@@ -492,6 +590,9 @@ class ExpansionController:
         authenticated: bool = False,
         eval_mode: bool = False,
         expansion_budget: int | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        brief_mode: str = "current",
+        history_max_chars: int = 60000,
     ) -> ExpansionPlan:
         """Phase 1: Get a plan from the LLM or fallback planner.
 
@@ -517,6 +618,19 @@ class ExpansionController:
                 the strategy's ``_MAX_TASKS`` cap below, on both the LLM plan
                 and the fallback plan, never relaxes it. ``None`` (the
                 default) leaves the strategy cap as the only bound.
+            messages: The turn's conversation window (FRE-1521), the same one
+                ``_run_dispatch`` slices for sub-agents. Read only when
+                ``brief_mode == "briefing"``; ``"current"`` never touches it,
+                so a caller that has not been updated (``None``) is exactly
+                as safe as one that has.
+            brief_mode: ``settings.planner_brief_mode`` (FRE-1521). ``"current"``
+                (the default) reproduces today's planner call byte-for-byte
+                (AC-1). ``"briefing"`` adds the rendered conversation history
+                to the user message and the briefing rules to the system
+                prompt.
+            history_max_chars: ``settings.planner_history_max_chars``
+                (FRE-1521) — the character budget for the rendered history
+                when ``brief_mode == "briefing"``. Unused otherwise.
 
         Returns:
             An ExpansionPlan — either LLM-generated or fallback.
@@ -529,15 +643,34 @@ class ExpansionController:
         # fallback), and shared with the fallback planner so both plan against the
         # same grant surface. Empty until read, which fails closed to `general`.
         tool_surface: list[str] = []
+        # FRE-1521 AC-4: 0 outside `briefing`, matching `_render_planner_history`'s
+        # own empty-input result rather than a sentinel — `planner_completed`
+        # always carries a real character count.
+        history_chars = 0
         try:
             tool_surface = _current_sub_agent_tool_surface(trace_id)
-            planner_system_prompt = _build_planner_system_prompt(tool_surface)
+            planner_system_prompt = _build_planner_system_prompt(tool_surface, brief_mode)
+            user_content = f"Strategy: {strategy}\nQuery: {query}\n\nProduce the JSON plan."
+            if brief_mode == "briefing":
+                history_source = messages or []
+                # FRE-1521: the production caller's `messages` is the turn's
+                # full window and already ends with the current query
+                # (executor.py derives `query` from `ctx.messages[-1]`) — left
+                # in, that last entry would render into the history block AND
+                # the "Query:" line, wasting budget on a duplicate and
+                # crowding out an older standing rule for no reason.
+                if (
+                    history_source
+                    and get_text_content(history_source[-1].get("content", "")) == query
+                ):
+                    history_source = history_source[:-1]
+                history_text = _render_planner_history(history_source, history_max_chars)
+                history_chars = len(history_text)
+                if history_text:
+                    user_content = f"Conversation so far:\n{history_text}\n\n{user_content}"
             planner_messages = [
                 {"role": "system", "content": planner_system_prompt},
-                {
-                    "role": "user",
-                    "content": (f"Strategy: {strategy}\nQuery: {query}\n\nProduce the JSON plan."),
-                },
+                {"role": "user", "content": user_content},
             ]
 
             from personal_agent.telemetry.trace import TraceContext
@@ -594,6 +727,12 @@ class ExpansionController:
                     task_thoroughness=[task.thoroughness for task in plan.tasks],
                     parse_success=True,
                     fallback_used=False,
+                    # FRE-1521 AC-4: which brief mode produced this plan, how much
+                    # history it saw, and how many constraints per task it wrote —
+                    # the evidence a study comparing brief modes reads.
+                    brief_mode=brief_mode,
+                    history_chars=history_chars,
+                    task_constraints_count=[len(task.constraints) for task in plan.tasks],
                     trace_id=trace_id,
                 )
                 return plan
@@ -749,7 +888,10 @@ class ExpansionController:
 
         specs = [
             SubAgentSpec(
-                task=task.goal,
+                # FRE-1521 AC-3: constraints rendered into the task text itself —
+                # see _render_worker_task's docstring for why `background` below
+                # cannot carry them to the worker.
+                task=_render_worker_task(task),
                 context=messages[-4:] if messages else [],
                 # FRE-1379: no max_tokens override here — SubAgentSpec's own
                 # default (None) defers to the deployment's catalog-declared
@@ -1077,7 +1219,12 @@ class ExpansionController:
         # its grant change (dataclasses.replace carries the rest over).
         replacement_spec = replace(
             spec,
-            task=f"{task.goal} (retry: {target_type.value} worker)",
+            # FRE-1521 AC-3: the retry note goes on the goal, before
+            # _render_worker_task appends "Constraints: ..." — appending it
+            # after the rendered text would read as part of the constraints.
+            task=_render_worker_task(
+                replace(task, goal=f"{task.goal} (retry: {target_type.value} worker)")
+            ),
             worker_type=target_type,
             tools=list(new_grant.granted),
             denied_tools=new_grant.denied,

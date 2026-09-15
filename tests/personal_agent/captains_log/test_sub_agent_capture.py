@@ -94,6 +94,18 @@ def test_tool_loop_fields_record_activity() -> None:
     assert cap.stated_tool_gap == "web_search"
 
 
+def test_thoroughness_defaults_to_quick() -> None:
+    """FRE-1521 AC-4: a capture with no thoroughness keeps today's shape (default quick)."""
+    cap = _capture()
+    assert cap.thoroughness == "quick"
+
+
+def test_thoroughness_records_the_tasks_level() -> None:
+    """FRE-1521 AC-4: the task's thoroughness level is visible on the audit record itself."""
+    cap = _capture(thoroughness="thorough")
+    assert cap.thoroughness == "thorough"
+
+
 def test_frozen() -> None:
     """The record is immutable (ConfigDict frozen=True)."""
     cap = _capture()

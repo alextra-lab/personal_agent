@@ -43,14 +43,20 @@ from personal_agent.transport.agui.transport import phase_span as _  # noqa: F40
 
 
 def _make_plan_json(tasks: int = 3) -> str:
-    """Create valid plan JSON for testing."""
+    """Create valid plan JSON for testing.
+
+    No ``constraints`` (FRE-1521): most callers assert ``spec.task`` equals the
+    bare goal text — a populated constraint here would append a "Constraints:"
+    line (see ``_render_worker_task``) and break every one of them. The one
+    class that needs constraints (``TestPlannerCompletedTelemetryFRE1521``,
+    for the per-task constraints-count log field) builds its own plan JSON.
+    """
     plan = {
         "strategy": "HYBRID",
         "tasks": [
             {
                 "name": f"task_{i}",
                 "goal": f"Goal for task {i}",
-                "constraints": [f"constraint_{i}"],
                 "type": "general",
             }
             for i in range(tasks)
@@ -1632,6 +1638,44 @@ class TestSubAgentGapRedispatch:
         assert len(results) == 3
 
     @pytest.mark.asyncio
+    async def test_redispatch_preserves_the_original_constraints(
+        self, controller: ExpansionController
+    ) -> None:
+        """FRE-1521 AC-3: a replacement dispatch must not silently drop constraints."""
+        plan = ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[
+                PlanTask(
+                    name="find_facts",
+                    goal="Goal A",
+                    type=WorkerType.GENERAL,
+                    thoroughness="thorough",
+                    constraints=["prices in euros"],
+                )
+            ],
+        )
+        calls: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            calls.append(spec)
+            if len(calls) == 1:
+                return _make_sub_agent_result("find_facts", stated_tool_gap="web_search")
+            return _make_sub_agent_result(spec.task)
+
+        await _dispatch_hermetic(
+            controller,
+            plan,
+            _run,
+            granted=("web_search", "run_python"),
+            known=("web_search",),
+        )
+
+        assert len(calls) == 2
+        assert "prices in euros" in calls[0].task
+        assert "prices in euros" in calls[1].task
+
+    @pytest.mark.asyncio
     async def test_refused_attempt_triggers_the_same_replacement(
         self, controller: ExpansionController
     ) -> None:
@@ -2534,3 +2578,507 @@ class TestOriginErrorStopsDispatch:
 
         assert dispatched == []
         assert expansion_result.skip_reason == "turn_budget"
+
+
+class TestPlannerBriefModeCurrentUnchanged:
+    """FRE-1521 AC-1 — planner_brief_mode="current" (the default) reproduces
+    today's planner call byte-for-byte: no history, no briefing rules.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.mark.asyncio
+    async def test_default_brief_mode_leaves_planner_messages_unchanged(
+        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import get_settings
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        monkeypatch.setattr(get_settings(), "planner_brief_mode", "current")
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        history = [
+            {"role": "user", "content": "Standing rule: prices in euros."},
+            {"role": "assistant", "content": "Noted."},
+        ]
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller._current_sub_agent_tool_surface",
+                return_value=["run_python"],
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=mock_results,
+            ),
+        ):
+            await controller.execute(
+                query="Plan lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-brief-current",
+                messages=history,
+            )
+
+        planner_messages = client.respond.call_args.kwargs["messages"]
+        assert planner_messages[0]["content"] == _build_planner_system_prompt(["run_python"])
+        assert (
+            planner_messages[1]["content"]
+            == "Strategy: HYBRID\nQuery: Plan lunch\n\nProduce the JSON plan."
+        )
+        assert "prices in euros" not in planner_messages[1]["content"]
+
+
+class TestRenderPlannerHistory:
+    """FRE-1521 — ``_render_planner_history`` unit-level budget contract.
+
+    A codex-review catch: charging every kept line ``len(line) + 1`` (for a
+    joining newline) overcounts by one — ``"\\n".join`` needs only
+    ``len(kept) - 1`` separators — which could drop a line that actually fit.
+    """
+
+    def test_two_lines_exactly_at_budget_are_both_kept(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _render_planner_history,
+        )
+
+        messages = [
+            {"role": "user", "content": "x"},
+            {"role": "user", "content": "y"},
+        ]
+        # "user: x\nuser: y" is exactly 15 chars — the old off-by-one charged
+        # 16 (8 + 8) and would have dropped the oldest line.
+        result = _render_planner_history(messages, 15)
+        assert result == "user: x\nuser: y"
+
+    def test_budget_too_small_for_even_the_newest_line_returns_empty(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _render_planner_history,
+        )
+
+        result = _render_planner_history([{"role": "user", "content": "a long message"}], 1)
+        assert result == ""
+
+    def test_zero_budget_with_messages_returns_empty(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _render_planner_history,
+        )
+
+        result = _render_planner_history([{"role": "user", "content": "hi"}], 0)
+        assert result == ""
+
+
+class TestPlannerBriefingMode:
+    """FRE-1521 AC-2 — planner_brief_mode="briefing" carries the conversation
+    into the planner's user message, before the Strategy/Query text, trimmed
+    from the oldest end to planner_history_max_chars.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.mark.asyncio
+    async def test_briefing_user_message_carries_history_before_query(
+        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        history = [
+            {"role": "user", "content": "Standing rule: prices in euros."},
+            {"role": "assistant", "content": "Understood, euros it is."},
+        ]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Plan today's lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-briefing",
+                messages=history,
+            )
+
+        user_content = client.respond.call_args.kwargs["messages"][1]["content"]
+        assert "prices in euros" in user_content
+        rule_pos = user_content.index("prices in euros")
+        query_pos = user_content.index("Query: Plan today's lunch")
+        assert rule_pos < query_pos
+
+    @pytest.mark.asyncio
+    async def test_briefing_trims_oldest_first_and_always_keeps_query(
+        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
+        monkeypatch.setattr(get_settings(), "planner_history_max_chars", 40)
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        history = [
+            {"role": "user", "content": "OLDEST_MARKER a very old standing rule"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "NEWEST_MARKER the latest turn"},
+        ]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Plan today's lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-briefing-trim",
+                messages=history,
+            )
+
+        user_content = client.respond.call_args.kwargs["messages"][1]["content"]
+        assert "OLDEST_MARKER" not in user_content
+        assert "NEWEST_MARKER" in user_content
+        assert "Query: Plan today's lunch" in user_content
+
+    @pytest.mark.asyncio
+    async def test_briefing_with_no_history_omits_the_conversation_block(
+        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No messages: the user text stays exactly Strategy/Query, no empty block."""
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Plan lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-briefing-empty",
+                messages=[],
+            )
+
+        user_content = client.respond.call_args.kwargs["messages"][1]["content"]
+        assert user_content == "Strategy: HYBRID\nQuery: Plan lunch\n\nProduce the JSON plan."
+
+    @pytest.mark.asyncio
+    async def test_briefing_drops_the_current_turn_duplicated_in_messages(
+        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A codex-review catch: the production caller passes `messages` as the
+        turn's full window, which already ends with the current query
+        (executor.py derives `query` from `ctx.messages[-1]`). Left in, that
+        last entry would render into the history block AND the "Query:" line —
+        wasting budget on a duplicate and evicting an older standing rule for
+        no reason. None of the other briefing tests exercise this shape (their
+        `messages` fixtures never repeat the query), so this is dedicated.
+        """
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        messages = [
+            {"role": "user", "content": "Standing rule: prices in euros."},
+            {"role": "assistant", "content": "Understood."},
+            {"role": "user", "content": "Plan today's lunch"},
+        ]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Plan today's lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-briefing-dedup",
+                messages=messages,
+            )
+
+        user_content = client.respond.call_args.kwargs["messages"][1]["content"]
+        assert user_content.count("Plan today's lunch") == 1
+        assert "prices in euros" in user_content
+
+    @pytest.mark.asyncio
+    async def test_briefing_history_never_exceeds_the_char_budget(
+        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A codex-review catch: an off-by-one in the join-separator count let
+        the rendered history exceed max_chars by one character at an exact
+        boundary. Uses a budget too small even for the newest line alone, so
+        the strict contract (never exceed, not even by one message) is
+        unambiguous either way.
+        """
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
+        monkeypatch.setattr(get_settings(), "planner_history_max_chars", 5)
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        history = [{"role": "user", "content": "a much longer standing rule than the budget"}]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Plan lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-briefing-strict-budget",
+                messages=history,
+            )
+
+        user_content = client.respond.call_args.kwargs["messages"][1]["content"]
+        assert user_content == "Strategy: HYBRID\nQuery: Plan lunch\n\nProduce the JSON plan."
+
+
+class TestPlannerBriefingSystemPromptRules:
+    """FRE-1521 AC-2 (master's ticket comment, 2026-09-15 07:24 UTC, Phase B
+    wording): rules 1-4 appear in the briefing system prompt and do not
+    appear in the "current" prompt.
+    """
+
+    def test_briefing_rules_appear_only_in_briefing_prompt(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _PLANNER_BRIEFING_RULES,
+            _build_planner_system_prompt,
+        )
+
+        current_prompt = _build_planner_system_prompt(["run_python"])
+        briefing_prompt = _build_planner_system_prompt(["run_python"], "briefing")
+
+        assert len(_PLANNER_BRIEFING_RULES) == 4
+        for rule in _PLANNER_BRIEFING_RULES:
+            assert rule not in current_prompt
+            assert rule in briefing_prompt
+
+    def test_briefing_collapses_uniform_round_annotation(self) -> None:
+        """Rule 5: drop the per-level round annotation when every level is equal.
+
+        Test settings default sub_agent_rounds_by_thoroughness to empty, so
+        every level reads the shared cap — the collapsed form applies only
+        under briefing (`current` must render byte-identically, AC-1).
+        """
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+        )
+
+        current_prompt = _build_planner_system_prompt([])
+        briefing_prompt = _build_planner_system_prompt([], "briefing")
+
+        assert "tool round(s) each" not in current_prompt
+        assert "tool round(s) each" in briefing_prompt
+
+
+class TestWorkerReceivesConstraints:
+    """FRE-1521 AC-3 — a plan task's constraints must reach the worker's task
+    text. Before this fix, SubAgentSpec.background carried the constraints,
+    but no prompt builder in sub_agent.py reads that field.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.mark.asyncio
+    async def test_constraint_reaches_worker_task_text(
+        self, controller: ExpansionController
+    ) -> None:
+        plan_json = json.dumps(
+            {
+                "strategy": "HYBRID",
+                "tasks": [
+                    {
+                        "name": "lunch_task",
+                        "goal": "Find lunch options",
+                        "constraints": ["prices in euros"],
+                        "type": "general",
+                    }
+                ],
+            }
+        )
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": plan_json, "cost_usd": 0.0})
+
+        captured_specs: list[Any] = []
+
+        async def _fake_run_sub_agent(spec: Any, **kwargs: Any) -> SubAgentResult:
+            captured_specs.append(spec)
+            return _make_sub_agent_result("lunch_task")
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_fake_run_sub_agent,
+        ):
+            await controller.execute(
+                query="Plan lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-constraints",
+                messages=[],
+            )
+
+        assert len(captured_specs) == 1
+        assert "prices in euros" in captured_specs[0].task
+
+    @pytest.mark.asyncio
+    async def test_no_constraints_leaves_task_text_as_the_bare_goal(
+        self, controller: ExpansionController
+    ) -> None:
+        plan_json = json.dumps(
+            {
+                "strategy": "HYBRID",
+                "tasks": [{"name": "task_0", "goal": "Find lunch options", "type": "general"}],
+            }
+        )
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": plan_json, "cost_usd": 0.0})
+
+        captured_specs: list[Any] = []
+
+        async def _fake_run_sub_agent(spec: Any, **kwargs: Any) -> SubAgentResult:
+            captured_specs.append(spec)
+            return _make_sub_agent_result("task_0")
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=_fake_run_sub_agent,
+        ):
+            await controller.execute(
+                query="Plan lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-no-constraints",
+                messages=[],
+            )
+
+        assert captured_specs[0].task == "Find lunch options"
+
+
+class TestPlannerCompletedTelemetryFRE1521:
+    """FRE-1521 AC-4 — planner_completed records brief_mode, history_chars,
+    and the plan's per-task constraints count.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.mark.asyncio
+    async def test_planner_completed_logs_brief_mode_history_chars_and_constraints(
+        self,
+        controller: ExpansionController,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
+        caplog.set_level("INFO", logger="personal_agent.orchestrator.expansion_controller")
+
+        plan_json = json.dumps(
+            {
+                "strategy": "HYBRID",
+                "tasks": [
+                    {
+                        "name": "task_0",
+                        "goal": "Goal for task 0",
+                        "constraints": ["prices in euros"],
+                        "type": "general",
+                    }
+                ],
+            }
+        )
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": plan_json, "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Plan lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-telemetry",
+                messages=[{"role": "user", "content": "Standing rule: euros"}],
+            )
+
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "planner_completed"
+        ]
+        assert len(events) == 1
+        assert events[0]["brief_mode"] == "briefing"
+        assert events[0]["history_chars"] > 0
+        assert events[0]["task_constraints_count"] == [1]
+
+    @pytest.mark.asyncio
+    async def test_planner_completed_logs_zero_history_chars_under_current(
+        self,
+        controller: ExpansionController,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "planner_brief_mode", "current")
+        caplog.set_level("INFO", logger="personal_agent.orchestrator.expansion_controller")
+
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+        mock_results = [_make_sub_agent_result("task_0")]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Plan lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-telemetry-current",
+                messages=[{"role": "user", "content": "Standing rule: euros"}],
+            )
+
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "planner_completed"
+        ]
+        assert len(events) == 1
+        assert events[0]["brief_mode"] == "current"
+        assert events[0]["history_chars"] == 0

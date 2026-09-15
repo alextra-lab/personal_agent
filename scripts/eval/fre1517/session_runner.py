@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import subprocess
 import sys
 import time
@@ -222,7 +223,43 @@ def turn_outcome(
     else:
         attribution = "mismatch"
         reasons.append("arm_mismatch")
-    return {"delivered": not reasons, "reasons": reasons, "attribution": attribution}
+    return {
+        "delivered": not reasons,
+        "reasons": reasons,
+        "attribution": attribution,
+        "truncated": reply_truncated(reply),
+    }
+
+
+#: The grounding note's fixed opening, appended after the answer (the user sees it).
+GROUNDING_NOTE_PREFIX = "Note: "
+_CLOSING_MARKS = (".", "!", "?", ":", ")", "]", '"', "”", "’", "*", "_", "`")
+
+
+def reply_truncated(reply: str) -> bool:
+    """Whether the answer stops mid-sentence, before any grounding note or fan-out trailer.
+
+    Master, 2026-09-15: prod-flash-po turn 3 counted as delivered, yet its answer stopped at
+    "…so the "date" I" when the prompt filled the context window. ``model_call_completed``
+    records no ``finish_reason``, so this reads the text. A last line that is a list item, a
+    table row, a heading or a quote is not judged. The flag sits beside the pre-registered
+    ``delivered`` (rubric.md Part 1), which it does not change.
+
+    Args:
+        reply: The reply ``/chat`` delivered.
+
+    Returns:
+        True when the last prose line of the answer has no closing punctuation.
+    """
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", reply) if p.strip()]
+    while paragraphs and paragraphs[-1].startswith((GROUNDING_NOTE_PREFIX, TRAILER_MARKER)):
+        paragraphs.pop()
+    if not paragraphs:
+        return False
+    last = paragraphs[-1].splitlines()[-1].strip()
+    if last.startswith(("|", "-", "*", "#", ">")) or re.match(r"\d+[.)]\s", last):
+        return False
+    return not last.endswith(_CLOSING_MARKS)
 
 
 def completed_before(consolidation_at: str | None, turn_first_event_at: str | None) -> bool | None:

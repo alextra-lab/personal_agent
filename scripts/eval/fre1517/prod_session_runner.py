@@ -396,6 +396,24 @@ def run(args: argparse.Namespace) -> int:
             session_id, trace_id = str(data["session_id"]), str(data["trace_id"])
             time.sleep(15)  # let the trace's events reach Elasticsearch
             reads = _trace_reads(es, trace_id)
+            ac4 = None
+            if args.expect_expansion_disabled:
+                # FRE-1520 AC-4: with expansion switched off, every turn routes SINGLE with
+                # reason expansion_disabled and dispatches no worker.
+                if not reads["route_trace"]:
+                    time.sleep(20)
+                    reads = _trace_reads(es, trace_id)
+                rt4 = reads["route_trace"] or {}
+                ac4 = {
+                    "decomposition_strategy": rt4.get("decomposition_strategy"),
+                    "decomposition_reason": rt4.get("decomposition_reason"),
+                    "sub_agent_captures": len(reads["sub_agent_captures"]),
+                }
+                ac4["holds"] = (
+                    str(ac4["decomposition_strategy"]).lower() == "single"
+                    and ac4["decomposition_reason"] == "expansion_disabled"
+                    and ac4["sub_agent_captures"] == 0
+                )
             reply = data.get("response") or ""
             outcome = turn_outcome(
                 reply=reply,
@@ -440,6 +458,12 @@ def run(args: argparse.Namespace) -> int:
                         f"STOP: session cost USD {spent:.4f} > {args.max_session_usd}\n"
                     )
                     return 8
+            if ac4 is not None:
+                row_ac4 = f"  AC-4 t{turn['n']:02d}: {ac4}"
+                print(row_ac4, flush=True)
+                if not ac4["holds"] and turn["n"] == 1:
+                    sys.stderr.write(f"STOP: FRE-1520 AC-4 fails on turn 1: {ac4}\n")
+                    return 9
             if row.get("graph_growth"):
                 sys.stderr.write(f"STOP: production graph grew: {row['graph_growth']}\n")
                 return 7
@@ -462,6 +486,11 @@ def main() -> int:
     )
     p.add_argument("--session-fact", action="append", default=[])
     p.add_argument("--stop-after", type=int, default=0)
+    p.add_argument(
+        "--expect-expansion-disabled",
+        action="store_true",
+        help="FRE-1520 AC-4: record route and workers per turn; stop (exit 9) if turn 1 fails",
+    )
     p.add_argument(
         "--max-session-usd",
         type=float,

@@ -1,0 +1,121 @@
+# FRE-1517 session script 2 — build and run a tool, NFL-predictor-shaped.
+#
+# Drawn from the owner's real sessions (short ids): 5ec0c1ae (build a repeatable NFL
+# prediction system, run on Tuesday for Thursday 13:00, top 3 then top 5), 0f7564a2 and
+# b5b951fc (continue and fix the tool, rerun), b5a1556b (the four FRE-1498 fixture requests),
+# ff81e287 (update the script to use the harness search, rerun, compare the picks).
+#
+# The week is week 11 of the 2026 NFL season so that it is still unplayed on every arm's
+# run day. Injury data for it may not exist yet on an early run day; the rubric scores
+# whether the reply says so, not whether the data exists.
+#
+# Field meanings: see s1_trip.yaml.
+script: s2_tool
+title: Build and run a tool — weekly NFL picks
+instructions:
+  - id: I4
+    set_at: 1
+    text: All code is Python, in one single file.
+  - id: I5
+    set_at: 1
+    text: Every pick shows a confidence level from 1 to 5.
+turns:
+  - n: 1
+    expect_route: SINGLE
+    message: >-
+      I want a helper for my weekly NFL picks. Two rules for this whole conversation: keep
+      all the code in Python in one single file, and every pick you give me must show a
+      confidence level from 1 to 5.
+  - n: 2
+    expect_route: HYBRID
+    message: >-
+      Research which public data sources give NFL schedules, injury reports and team
+      statistics for free, and evaluate how reliable each one is.
+  - n: 3
+    expect_route: SINGLE
+    back_refs:
+      - {turn: 2, window: in, asks: the data sources found}
+    answer_key: A subset of the sources named in turn 2's reply; no new source presented as one of them.
+    message: Which of those can be used without an API key?
+  - n: 4
+    expect_route: SINGLE
+    holds: [I4]
+    message: >-
+      Build a first version of the helper: it takes a week number, gets the schedule for
+      that week of the 2026 season, and prints each game.
+  - n: 5
+    expect_route: SINGLE
+    message: Run it for week 11 and show me the output.
+  - n: 6
+    expect_route: SINGLE
+    holds: [I4]
+    message: Now add injuries — for each game, list the key players reported out or doubtful.
+  - n: 7
+    expect_route: HYBRID
+    holds: [I5]
+    message: >-
+      Analyze and compare the two teams in each week 11 game on offense, defense and home
+      field, and pick a winner for each game.
+  - n: 8
+    expect_route: SINGLE
+    holds: [I4]
+    message: Put that analysis into the helper so it runs every week without me asking.
+  - n: 9
+    expect_route: SINGLE
+    message: What happens if the injury source is down when the helper runs?
+  - n: 10
+    expect_route: SINGLE
+    holds: [I4, I5]
+    message: Change the output to a table sorted by confidence, highest first.
+  - n: 11
+    expect_route: SINGLE
+    holds: [I5]
+    back_refs:
+      - {turn: 7, window: in, asks: the pick for the first game}
+    answer_key: The same winner turn 7's reply gave for the first listed game, and its stated reason.
+    message: Why did you pick that winner in the first game of the list?
+  - n: 12
+    expect_route: HYBRID
+    message: >-
+      Evaluate the weak points of the helper, and research how professional NFL models
+      weight rest days and travel distance.
+  - n: 13
+    expect_route: SINGLE
+    holds: [I4]
+    message: Add rest days and travel distance to the model in the helper.
+  - n: 14
+    expect_route: SINGLE
+    holds: [I4, I5]
+    message: Run the full tool for week 11 again and give me the top 5 picks.
+  - n: 15
+    expect_route: SINGLE
+    holds: [I5]
+    back_refs:
+      - {turn: 7, window: in, asks: the first set of picks}
+    answer_key: Differences named against turn 7's picks match both replies; no invented earlier pick.
+    message: Did any picks change from the first time you picked winners? Which ones, and why?
+  - n: 16
+    expect_route: HYBRID
+    message: >-
+      Plan how I run this every Tuesday so that the picks are ready by Thursday at 13:00,
+      and outline what I must still check by hand.
+  - n: 17
+    expect_route: SINGLE
+    holds: [I4]
+    message: Show me the complete file.
+  - n: 18
+    expect_route: SINGLE
+    back_refs:
+      - {turn: 2, window: memory, asks: the free data sources compared at the start}
+    answer_key: Sources that appeared in turn 2's reply, and the one the file in turn 17 uses; an honest gap if they cannot be recalled.
+    message: Which free data sources did you look at right at the start, and which one does the helper use now?
+  - n: 19
+    expect_route: SINGLE
+    back_refs:
+      - {turn: 1, window: memory, asks: the confidence scale and the code rules}
+    answer_key: Confidence from 1 to 5; Python in one single file.
+    message: Remind me what two rules I gave you at the very beginning.
+  - n: 20
+    expect_route: SINGLE
+    holds: [I5]
+    message: Give me the final top 5 picks for week 11, with the confidence and one sentence each on why.

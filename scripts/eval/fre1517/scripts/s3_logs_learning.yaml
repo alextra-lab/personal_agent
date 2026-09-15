@@ -1,0 +1,138 @@
+# FRE-1517 session script 3 — a log check, then a learning thread.
+#
+# Drawn from the owner's real sessions (short ids): b01cf1ed and e5faa5e3 (health check,
+# errors in the logs, latency percentiles), aa0e5c3d (logs and tool limits), 7a02f3c1 and
+# 8e635ac8 (after Knossos and Phaistos: Minoans, Anatolians, steppe migrations, "provide deep
+# research"), 312e2cfc (the owner's "draw it, then quiz me on the flow"), 2c6c8f9d (the owner
+# asking the agent to recover an earlier thread).
+#
+# The log part runs against the eval gateway's own logs, which differ per arm by nature. The
+# rubric scores whether each reported number traces to a tool result in that turn, not
+# which errors exist.
+#
+# Field meanings: see s1_trip.yaml.
+script: s3_logs_learning
+title: Log check, then a learning thread — the Bronze Age Aegean
+instructions:
+  - id: I6
+    set_at: 1
+    text: Every number reported from logs or tools names the query or tool result it came from.
+  - id: I7
+    set_at: 6
+    text: Every teaching answer ends with one question that checks the user's understanding.
+  - id: I8
+    set_at: 6
+    text: A quiz waits for the user's answers before it gives the solutions.
+turns:
+  - n: 1
+    expect_route: SINGLE
+    message: >-
+      Good morning. Check the logs for errors in the last hour and report on anything
+      unusual. For every number you report, say which query or tool result it came from.
+  - n: 2
+    expect_route: SINGLE
+    holds: [I6]
+    back_refs:
+      - {turn: 1, window: in, asks: the errors found}
+    answer_key: A service named in turn 1's reply, with a count that traces to a tool result.
+    message: Which service produced most of those errors?
+  - n: 3
+    expect_route: SINGLE
+    holds: [I6]
+    message: Run a health check on the backend services.
+  - n: 4
+    expect_route: HYBRID
+    holds: [I6]
+    message: >-
+      Analyze the model call latencies over the last 24 hours and compare the p50 and the
+      p90 for each model role.
+  - n: 5
+    expect_route: SINGLE
+    message: Thanks, that is enough on the logs for today.
+  - n: 6
+    expect_route: SINGLE
+    message: >-
+      Now something different. I want to learn about the Bronze Age Aegean — I visited
+      Knossos and Phaistos on Crete last spring. Two rules while you teach me: end every
+      answer with one question that checks my understanding, and when you quiz me, wait for
+      my answers before you give the solutions.
+  - n: 7
+    expect_route: HYBRID
+    holds: [I7]
+    message: >-
+      Research what is known about how the Minoan palace economy worked, and compare it
+      with the Mycenaean palaces on the mainland.
+  - n: 8
+    expect_route: SINGLE
+    holds: [I7]
+    back_refs:
+      - {turn: 7, window: in, asks: the check question at the end of the previous answer}
+    answer_key: Feedback on the user's answer against turn 7's content; says what is right and what is missing.
+    message: My answer to your question — I think the palaces collected goods like olive oil and grain and gave them out again.
+  - n: 9
+    expect_route: SINGLE
+    holds: [I7]
+    message: What was Linear A used for? And why can we still not read it?
+  - n: 10
+    expect_route: HYBRID
+    holds: [I7]
+    message: >-
+      Investigate the main theories for the collapse of Minoan civilisation, and evaluate
+      the evidence for each one.
+  - n: 11
+    expect_route: SINGLE
+    holds: [I8]
+    message: Quiz me with three questions on what we have covered so far.
+  - n: 12
+    expect_route: SINGLE
+    holds: [I7]
+    back_refs:
+      - {turn: 11, window: in, asks: the three quiz questions}
+    answer_key: Scores each answer against turn 11's questions and gives the solutions now.
+    message: My answers — 1) Linear B, 2) around 1450 BC, 3) the Thera eruption.
+  - n: 13
+    expect_route: SINGLE
+    holds: [I7]
+    message: Where did the Mycenaeans come from? Were they related to people from Anatolia?
+  - n: 14
+    expect_route: SINGLE
+    holds: [I7]
+    message: How do the steppe migrations fit into this?
+  - n: 15
+    expect_route: HYBRID
+    holds: [I7]
+    message: >-
+      Research the ancient DNA studies on Minoans and Mycenaeans from the last ten years and
+      compare what they found. Cite the papers.
+  - n: 16
+    expect_route: SINGLE
+    holds: [I6]
+    back_refs:
+      - {turn: 1, window: memory, asks: the log check result}
+    answer_key: The error count and service from turns 1 and 2, or an honest gap; never a new count presented as the earlier one.
+    message: This morning you checked the logs for me. How many errors did you report, and from which service?
+  - n: 17
+    expect_route: SINGLE
+    holds: [I7]
+    message: Which of the collapse theories do most archaeologists accept today?
+  - n: 18
+    expect_route: SINGLE
+    holds: [I7]
+    back_refs:
+      - {turn: 6, window: memory, asks: the two sites the user visited}
+    answer_key: Knossos and Phaistos.
+    message: Which two sites on Crete did I tell you I visited?
+  - n: 19
+    expect_route: SINGLE
+    holds: [I8]
+    back_refs:
+      - {turn: 6, window: memory, asks: the rule to wait before giving quiz solutions}
+    answer_key: Five questions and no solutions in this reply.
+    message: Give me a final quiz of five questions that covers the whole thread.
+  - n: 20
+    expect_route: SINGLE
+    holds: [I7]
+    back_refs:
+      - {turn: 19, window: in, asks: the five quiz questions}
+    answer_key: Scores each answer against turn 19's questions and gives the solutions.
+    message: My answers — 1) Knossos, 2) Linear B, 3) the Thera eruption, 4) redistribution through the palace, 5) the steppe. How did I do?

@@ -1,0 +1,108 @@
+# FRE-1517 arm manifest — one entry per deployment as configured (amendments A4 and A7).
+#
+# The session runner copies the whole entry into every JSONL row, and it refuses to run an
+# arm while any field of that arm still reads TBD. A value marked UNVERIFIED is accepted and
+# shown in the report as unconfirmed.
+#
+#   deployment_key   the catalog key sent as `model` on a session's first turn
+#   served_model_id  the id the engine serves. For a local arm the runner reads
+#                    `models_endpoint` before each session and requires this id in it,
+#                    because manual MTPLX answers any model name (master, 2026-09-14)
+#   telemetry_model  the `model` value model_call_completed carries for this arm. Local
+#                    deployments record the served id, cloud ones the litellm id
+#                    (llm_client/litellm_client.py, `_telemetry_model`). The runner requires
+#                    it on every primary call of every turn
+#   fan_mode         owner decision 2026-09-14 17:45 UTC, relayed: fans stay on Apple auto for
+#                    the whole study
+#   thermal_snapshot changes per MTPLX session, so it reads TBD on arms 2 and 3. The operator
+#                    passes each session's value from slm_server's ready message, relayed by
+#                    master: --session-fact thermal_snapshot=... The runner marks it UNVERIFIED
+#
+# Arm order — owner direction 2026-09-14 17:48 UTC, relayed by master: the Mac does not return
+# to llama.cpp between windows, so the arms run in engine blocks, arm 1 (OVH), arm 2 (27B MTPLX),
+# arm 3 (Flash-Next MTPLX), then arm 4 (llama.cpp) last. This drops A8's per-script rotation. Its
+# reason, the shared cloud budget, is moot: USD 0.08 of 50 spent before arm 1. Consequence, stated
+# in the report's limitations: the arm order is confounded with time and with the Mac's thermal
+# history.
+#
+# Sources, 2026-09-14:
+#   catalog  config/models.yaml on main (arms 1 and 4) and catalog PR #1173 at 728a5c69
+#            (arms 2 and 3: key, id, context_length, quantization) — read by explore
+#   relay    master's message relaying slm_server's Q9 answer — not read by explore at its
+#            source, so every value from it alone is marked UNVERIFIED
+#
+# Reasoning on every local arm (relay): the primary and the planner think (default mode;
+# Seshat sends no chat_template_kwargs). Workers send enable_thinking false.
+arms:
+  ovh_27b:
+    order_label: arm 1
+    deployment_key: qwen3.8-27b-ovh
+    engine: OVH AI Endpoints (managed), provider ovhcloud
+    served_model_id: Qwen3.8-27B
+    telemetry_model: ovhcloud/Qwen3.8-27B
+    models_endpoint: null
+    pack: not applicable (managed endpoint)
+    quant: UNKNOWN — serving precision is not in the catalog
+    context_length: 262144 in the catalog; context_window_max_tokens 48000 binds first (catalog note)
+    reasoning: "default mode: temperature 1.0, reasoning_effort medium; worker mode: reasoning_effort none (UNVERIFIED, relay of the catalog)"
+    launch_flags: not applicable (managed endpoint)
+    fan_mode: n/a (cloud)
+    thermal_snapshot: n/a (cloud)
+  mtplx_27b:
+    order_label: arm 2
+    deployment_key: qwen3.8-27b-mtplx
+    engine: MTPLX
+    served_model_id: mtplx-qwen38-27b-optimized-speed
+    telemetry_model: mtplx-qwen38-27b-optimized-speed
+    models_endpoint: http://localhost:8600/v1/models
+    pack: Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed
+    quant: "MTPLX-Optimized-Speed-4bit-g32 (catalog); affine g32 with 74 overrides, 20.70 GB (UNVERIFIED)"
+    context_length: 131072
+    reasoning: "primary and planner think, workers enable_thinking false (UNVERIFIED)"
+    launch_flags: "mtplx 2.11.2, --depth 3, --reasoning-effort medium, --preserve-thinking off, --context-window 131072, serial scheduler, 1 slot (UNVERIFIED)"
+    fan_mode: apple_auto (UNVERIFIED)
+    thermal_snapshot: TBD
+  mtplx_flash_next:
+    order_label: arm 3
+    deployment_key: qwen3.8-flash-next-mtplx
+    engine: MTPLX
+    served_model_id: mtplx-qwen38-flash-next-optimized-speed
+    telemetry_model: mtplx-qwen38-flash-next-optimized-speed
+    models_endpoint: http://localhost:8600/v1/models
+    pack: Youssofal/Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+    quant: "MTPLX-Optimized-Speed-4bit-g32 (catalog); affine g32 with 626 overrides, 115.1 GB (UNVERIFIED)"
+    context_length: 131072
+    reasoning: "primary and planner think, workers enable_thinking false (UNVERIFIED)"
+    launch_flags: "mtplx 2.11.2, --depth 3, --reasoning-effort medium, --preserve-thinking off, --context-window 131072, serial scheduler, 1 slot (UNVERIFIED)"
+    fan_mode: apple_auto (UNVERIFIED)
+    thermal_snapshot: TBD
+  llamacpp_flash_next:
+    order_label: arm 4
+    deployment_key: qwen3.8-flash-next
+    engine: llama.cpp (llama-server)
+    served_model_id: unsloth/qwen3.8-flash-next
+    telemetry_model: unsloth/qwen3.8-flash-next
+    models_endpoint: http://localhost:8600/v1/models
+    pack: UNVERIFIED — the catalog names only the quantization
+    quant: UD-IQ4_XS
+    context_length: 131072
+    reasoning: "primary and planner think, workers enable_thinking false; the router injects chat_template_kwargs {enable_thinking: true, preserve_thinking: false, reasoning_effort: medium} when a request carries none (UNVERIFIED)"
+    launch_flags: "3 slots, --kv-unified, MTP draft depth 1 per ADR-0152 Appendix A1 (UNVERIFIED)"
+    fan_mode: apple_auto (UNVERIFIED)
+    thermal_snapshot: not recorded for this arm (master asked for arms 2 and 3 only)
+  sonnet:
+    # Harness-ceiling arm, owner-approved 2026-09-15 about 04:43 UTC (relayed) and confirmed
+    # directly in the explore session. Cloud only; workers inherit the selected primary.
+    order_label: harness ceiling
+    deployment_key: claude_sonnet
+    engine: Anthropic API (managed), provider anthropic
+    served_model_id: claude-sonnet-5
+    telemetry_model: anthropic/claude-sonnet-5
+    models_endpoint: null
+    pack: not applicable (managed endpoint)
+    quant: not applicable (managed endpoint)
+    context_length: catalog value (not read by explore)
+    reasoning: dialect anthropic_adaptive (catalog)
+    launch_flags: not applicable (managed endpoint)
+    fan_mode: n/a (cloud)
+    thermal_snapshot: n/a (cloud)

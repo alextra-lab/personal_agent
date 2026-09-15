@@ -223,6 +223,84 @@ class TestDelegationGate:
         assert result.reason == "expansion_denied"
 
 
+class TestExpansionEnabledGate:
+    """FRE-1520: expansion_enabled=False forces SINGLE/expansion_disabled.
+
+    A separate, non-mode switch for the FRE-1517 A/B study — resource-pressure
+    forcings (expansion_denied, zero_budget) must still win when they apply
+    (AC-3), and DELEGATE must stay unreachable even when delegation is wired.
+    """
+
+    def test_off_forces_single_for_hybrid_routing_intent(self) -> None:
+        """AC-1: an intent the matrix would route HYBRID instead returns SINGLE."""
+        result = assess_decomposition(
+            intent=_intent(TaskType.ANALYSIS, Complexity.MODERATE),
+            governance=_governance(),
+            expansion_enabled=False,
+        )
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "expansion_disabled"
+
+    def test_off_forces_single_for_decompose_routing_intent(self) -> None:
+        result = assess_decomposition(
+            intent=_intent(TaskType.ANALYSIS, Complexity.COMPLEX),
+            governance=_governance(),
+            expansion_enabled=False,
+        )
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "expansion_disabled"
+
+    def test_off_overrides_reason_for_already_single_routing_intent(self) -> None:
+        """The gate replaces the matrix reason even when the strategy was SINGLE anyway."""
+        result = assess_decomposition(
+            intent=_intent(TaskType.CONVERSATIONAL, Complexity.SIMPLE),
+            governance=_governance(),
+            expansion_enabled=False,
+        )
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "expansion_disabled"
+
+    def test_off_suppresses_delegate_even_when_delegation_enabled(self) -> None:
+        """DELEGATE must stay unreachable when expansion is disabled."""
+        result = assess_decomposition(
+            intent=_intent(TaskType.DELEGATION, Complexity.SIMPLE),
+            governance=_governance(),
+            delegation_enabled=True,
+            expansion_enabled=False,
+        )
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "expansion_disabled"
+
+    def test_on_by_default_leaves_hybrid_routing_unchanged(self) -> None:
+        """AC-2: the default (expansion_enabled=True) does not change routing."""
+        result = assess_decomposition(
+            intent=_intent(TaskType.ANALYSIS, Complexity.MODERATE),
+            governance=_governance(),
+        )
+        assert result.strategy == DecompositionStrategy.HYBRID
+        assert result.reason == "analysis_moderate_hybrid"
+
+    def test_expansion_denied_still_wins_over_expansion_disabled(self) -> None:
+        """AC-3: governance.expansion_permitted=False keeps its own reason."""
+        result = assess_decomposition(
+            intent=_intent(TaskType.ANALYSIS, Complexity.MODERATE),
+            governance=_governance(expansion_permitted=False),
+            expansion_enabled=False,
+        )
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "expansion_denied"
+
+    def test_zero_budget_still_wins_over_expansion_disabled(self) -> None:
+        """AC-3: governance.expansion_budget<=0 keeps its own reason."""
+        result = assess_decomposition(
+            intent=_intent(TaskType.ANALYSIS, Complexity.MODERATE),
+            governance=_governance(expansion_budget=0),
+            expansion_enabled=False,
+        )
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "zero_budget"
+
+
 class TestSelfImproveAlwaysSingle:
     """SELF_IMPROVE → SINGLE at every complexity level."""
 

@@ -324,6 +324,79 @@ class TestRunGatewayPipeline:
         assert all(e["strategy"] == "delegate" for e in events)
 
     @pytest.mark.asyncio
+    async def test_expansion_disabled_forces_single(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FRE-1520 AC-1: settings.expansion_enabled=False forces SINGLE end-to-end.
+
+        The message below classifies as ANALYSIS/MODERATE (verified against the real
+        classifier), which the matrix would otherwise route HYBRID.
+        """
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "expansion_enabled", False)
+        message = (
+            "Analyze the trade-offs between microservices and monolithic architecture. "
+            "What are the scalability implications? What are the hidden maintenance costs?"
+        )
+        result = await run_gateway_pipeline(
+            user_message=message,
+            session_id="s",
+            session_messages=[],
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+        )
+        assert result.intent.task_type == TaskType.ANALYSIS
+        assert result.intent.complexity.value == "moderate"
+        assert result.decomposition.strategy == DecompositionStrategy.SINGLE
+        assert result.decomposition.reason == "expansion_disabled"
+
+    @pytest.mark.asyncio
+    async def test_expansion_enabled_default_leaves_hybrid_routing_unchanged(self) -> None:
+        """FRE-1520 AC-2: the default (expansion_enabled=True) does not change routing."""
+        message = (
+            "Analyze the trade-offs between microservices and monolithic architecture. "
+            "What are the scalability implications? What are the hidden maintenance costs?"
+        )
+        result = await run_gateway_pipeline(
+            user_message=message,
+            session_id="s",
+            session_messages=[],
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+        )
+        assert result.decomposition.strategy == DecompositionStrategy.HYBRID
+        assert result.decomposition.reason == "analysis_moderate_hybrid"
+
+    @pytest.mark.asyncio
+    async def test_expansion_disabled_reason_telemetry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1520: the gateway_output event records the expansion_disabled reason."""
+        import structlog.testing
+
+        from personal_agent.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "expansion_enabled", False)
+        message = (
+            "Analyze the trade-offs between microservices and monolithic architecture. "
+            "What are the scalability implications? What are the hidden maintenance costs?"
+        )
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_gateway_pipeline(
+                user_message=message,
+                session_id="s",
+                session_messages=[],
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        events = [e for e in cap_logs if e.get("event") == "decomposition_assessed"]
+        assert len(events) >= 1
+        assert all(e["reason"] == "expansion_disabled" for e in events)
+        assert all(e["strategy"] == "single" for e in events)
+
+    @pytest.mark.asyncio
     async def test_budget_trim_when_context_exceeds_limit(self) -> None:
         """apply_budget() trims context when messages exceed max_tokens."""
         long_content = " ".join(["word"] * 200)

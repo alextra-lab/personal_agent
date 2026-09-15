@@ -27,6 +27,7 @@ def assess_decomposition(
     intent: IntentResult,
     governance: GovernanceContext,
     delegation_enabled: bool = False,
+    expansion_enabled: bool = True,
 ) -> DecompositionResult:
     """Assess how to handle this request: single, hybrid, decompose, or delegate.
 
@@ -44,6 +45,14 @@ def assess_decomposition(
             falls back to a complexity-based strategy instead of DELEGATE —
             DELEGATE would otherwise compose a DelegationPackage nothing can
             receive (FRE-1376).
+        expansion_enabled: Whether worker expansion is allowed at all
+            (``settings.expansion_enabled``). A study switch (FRE-1520), not a
+            governance mode — brainstem modes that disable expansion also
+            change other behaviour, which would confound an A/B measurement.
+            When False, every request forces SINGLE with reason
+            ``expansion_disabled``, checked after the resource-pressure
+            forcings so ``expansion_denied`` and ``zero_budget`` keep their
+            own reasons.
 
     Returns:
         DecompositionResult with strategy and human-readable reason.
@@ -61,6 +70,13 @@ def assess_decomposition(
         return DecompositionResult(
             strategy=DecompositionStrategy.SINGLE,
             reason="zero_budget",
+        )
+
+    if not expansion_enabled:
+        logger.debug("decomposition_forced_single", reason="expansion_disabled")
+        return DecompositionResult(
+            strategy=DecompositionStrategy.SINGLE,
+            reason="expansion_disabled",
         )
 
     strategy, reason = _apply_matrix(

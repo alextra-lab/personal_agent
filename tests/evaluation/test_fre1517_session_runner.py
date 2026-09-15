@@ -13,6 +13,7 @@ from scripts.eval.fre1517.session_runner import (
     apply_session_facts,
     completed_before,
     load_arm,
+    reply_truncated,
     resume_state,
     tbd_fields,
     turn_outcome,
@@ -72,7 +73,42 @@ def test_outcome_delivered_when_every_condition_holds() -> None:
         primary_models=["mtplx-a", "mtplx-a"],
         telemetry_model="mtplx-a",
     )
-    assert outcome == {"delivered": True, "reasons": [], "attribution": "match"}
+    assert outcome == {
+        "delivered": True,
+        "reasons": [],
+        "attribution": "match",
+        "truncated": False,
+    }
+
+
+def test_truncated_reply_is_flagged_beside_delivered() -> None:
+    """Master 2026-09-15: a cut answer stayed "delivered"; the flag reports it without re-scoring."""
+    cut = turn_outcome(
+        reply='Most sites have year-round hours — so the "date" I\n\nNote: 2 of 2 factual statements…',
+        errors_by_role={},
+        primary_models=["mtplx-a"],
+        telemetry_model="mtplx-a",
+    )
+    assert cut["truncated"] is True
+    assert cut["delivered"] is True
+
+    assert (
+        reply_truncated("A full answer.\n\nNote: 1 of 1 factual statements are not backed.")
+        is False
+    )
+    assert (
+        reply_truncated(f"A full answer.\n\n{TRAILER_MARKER} 1 of 2 sub-tasks did not complete")
+        is False
+    )
+    assert reply_truncated("| Deià | ~10 min |\n| Fornalutx | ~6 min |") is False
+    assert reply_truncated("Options:\n- Artà\n- Alcúdia") is False
+    assert reply_truncated("Where would you like to start?") is False
+    assert reply_truncated("Book **QuitaPenas**") is False
+    assert (
+        reply_truncated("_The model timed out — the request was large. Retry or shorten it._")
+        is False
+    )
+    assert reply_truncated("The drive from Sóller takes about") is True
 
 
 def test_outcome_fails_on_trailer_error_and_empty_reply() -> None:

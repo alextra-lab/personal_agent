@@ -561,9 +561,11 @@ def _trim_for_landing(
             reading :func:`_resolve_deployment_context_length` documents.
 
     Returns:
-        A tuple of (possibly-copied message list, tool results dropped, characters
-        dropped). The input list is returned unchanged (same object) when nothing
-        needed dropping.
+        A tuple of (message list, tool results dropped, characters dropped). The
+        SAME input list object is returned only for the two no-op cases
+        (``context_length`` is ``None``, or there are no tool messages at all);
+        every other case — including "already fits, nothing was actually stubbed"
+        — returns a shallow copy, since a copy is made before the fit is checked.
     """
     if context_length is None:
         return messages, 0, 0

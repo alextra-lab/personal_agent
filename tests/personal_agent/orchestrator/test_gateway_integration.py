@@ -638,3 +638,75 @@ class TestEnforcedExpansionClientRole:
         assert dispatch_client is returned_clients[0]
         assert planner_client is returned_clients[1]
         assert dispatch_client is not planner_client
+
+
+class TestExpansionDisabledSkipsPlannerAndDispatch:
+    """FRE-1520 AC-1's stronger claim: SINGLE/expansion_disabled builds no planner
+    or dispatch client and never constructs ExpansionController — not just that the
+    gateway output says SINGLE. Mirrors
+    TestRoleClientIsolation.test_enforced_expansion_builds_sub_agent_role_client,
+    inverted: for HYBRID/DECOMPOSE that test proves exactly 2 get_llm_client calls;
+    here, an intent the matrix would have routed HYBRID must produce zero.
+    """
+
+    @pytest.mark.asyncio
+    async def test_expansion_disabled_single_never_touches_expansion_machinery(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import personal_agent.orchestrator.executor as ex
+        from personal_agent.orchestrator.channels import Channel
+        from personal_agent.orchestrator.types import ExecutionContext, TaskState
+        from personal_agent.telemetry.trace import TraceContext
+
+        # ANALYSIS/MODERATE is a HYBRID-routing intent (see
+        # TestAnalysisMatrix.test_analysis_moderate_is_hybrid in
+        # tests/personal_agent/request_gateway/test_decomposition.py); the gateway
+        # output below is what run_gateway_pipeline produces once expansion_enabled
+        # is False for that same intent.
+        gw = GatewayOutput(
+            intent=IntentResult(
+                task_type=TaskType.ANALYSIS,
+                complexity=Complexity.MODERATE,
+                confidence=0.8,
+                signals=["analysis_pattern"],
+            ),
+            governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
+            decomposition=DecompositionResult(
+                strategy=DecompositionStrategy.SINGLE,
+                reason="expansion_disabled",
+            ),
+            context=AssembledContext(
+                messages=[{"role": "user", "content": "analyze the trade-offs"}],
+                memory_context=None,
+                tool_definitions=None,
+            ),
+            session_id="s1",
+            trace_id="t1",
+        )
+        ctx = ExecutionContext(
+            session_id="s1",
+            trace_id="t1",
+            user_message="analyze the trade-offs",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=gw,
+        )
+
+        controller_ctor_spy = MagicMock()
+        monkeypatch.setattr(
+            "personal_agent.orchestrator.expansion_controller.ExpansionController",
+            controller_ctor_spy,
+        )
+        get_llm_client_spy = MagicMock()
+        monkeypatch.setattr("personal_agent.llm_client.factory.get_llm_client", get_llm_client_spy)
+
+        session_manager = MagicMock()
+        session_manager.get_session = MagicMock(return_value=None)
+        trace_ctx = TraceContext(trace_id="t1", session_id="s1")
+
+        state = await ex.step_init(ctx, session_manager, trace_ctx)
+
+        assert state == TaskState.LLM_CALL
+        controller_ctor_spy.assert_not_called()
+        get_llm_client_spy.assert_not_called()
+        assert ctx.expansion_strategy is None

@@ -115,6 +115,7 @@ async def run_gateway_pipeline(
         intent=intent,
         governance=governance,
         delegation_enabled=settings.delegation_enabled,
+        expansion_enabled=settings.expansion_enabled,
     )
 
     logger.info(

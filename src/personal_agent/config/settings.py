@@ -573,6 +573,17 @@ class AppConfig(BaseSettings):
         le=10,
         description="Maximum request expansion budget (max decomposition depth)",
     )
+    expansion_enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether worker expansion (HYBRID/DECOMPOSE/DELEGATE) is allowed at all. "
+            "False forces every turn to SINGLE with decomposition reason "
+            "'expansion_disabled', before the decision matrix runs — a primary-only "
+            "A/B study switch (FRE-1520/FRE-1517), not a governance mode (a mode change "
+            "would confound the study by altering other behaviour too). Requires a "
+            "process restart to take effect (settings are a cached singleton)."
+        ),
+    )
     delegation_enabled: bool = Field(
         default=False,
         description=(

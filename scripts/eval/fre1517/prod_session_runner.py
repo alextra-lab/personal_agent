@@ -266,6 +266,9 @@ def _trace_reads(es: httpx.Client, trace_id: str) -> dict[str, Any]:
         # FRE-1521: the planner's own record (brief mode, history seen, constraints per task) and
         # the task text each worker received, for brief carry-through and invented-place review.
         "planner_completed": _events(es, trace_id, "planner_completed"),
+        # FRE-1522 AC-5: the worker context reserve and the bounded landing.
+        "sub_agent_landing_reserved": _events(es, trace_id, "sub_agent_landing_reserved"),
+        "sub_agent_landing_trimmed": _events(es, trace_id, "sub_agent_landing_trimmed"),
         "sub_agent_starts": [
             {
                 k: s.get(k)

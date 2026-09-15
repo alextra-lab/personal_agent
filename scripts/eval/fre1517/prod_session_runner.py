@@ -27,6 +27,7 @@ Run from the repo root, one session per invocation, only with the owner's approv
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import subprocess
@@ -155,6 +156,22 @@ def grown(counts: dict[str, int], baseline: dict[str, int]) -> dict[str, int]:
     return {k: counts[k] - baseline[k] for k in baseline if counts[k] > baseline[k]}
 
 
+@functools.cache
+def _gateway_started_at() -> str:
+    """The production gateway container's start time.
+
+    A model call that started before the current container started cannot still be in flight.
+    On 2026-09-15 a gateway recreate at 02:46 left a 02:45:32 worker call without an end event,
+    and the pre-turn wait held on it.
+    """
+    return subprocess.run(
+        ["docker", "inspect", "cloud-sim-seshat-gateway", "--format", "{{.State.StartedAt}}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
 def _local_in_flight(es: httpx.Client) -> int:
     body = {
         "size": 2000,
@@ -172,6 +189,7 @@ def _local_in_flight(es: httpx.Client) -> int:
                         }
                     },
                     {"range": {"@timestamp": {"gte": "now-1h"}}},
+                    {"range": {"@timestamp": {"gte": _gateway_started_at()}}},
                 ]
             }
         },
@@ -325,7 +343,12 @@ def run(args: argparse.Namespace) -> int:
 
     with httpx.Client() as http, httpx.Client() as es:
         for turn in turns:
-            waited = _wait_local_quiet(es)
+            # A cloud arm calls no local engine, so it never waits behind local calls.
+            if arm["models_endpoint"]:
+                waited = _wait_local_quiet(es)
+            else:
+                time.sleep(IN_SESSION_GAP_S)
+                waited = IN_SESSION_GAP_S
             params = {"message": turn["message"], "channel": "EVAL"}
             if session_id is None:
                 params["model"] = arm["deployment_key"]
@@ -406,6 +429,17 @@ def run(args: argparse.Namespace) -> int:
                     f"arm mismatch on turn {turn['n']}: {reads['model_ids_by_role']}\n"
                 )
                 return 5
+            if args.max_session_usd > 0:
+                spent = _psql_json(
+                    "SELECT coalesce(sum(cost_usd), 0)::float AS usd FROM api_costs "
+                    f"WHERE session_id='{session_id}'"
+                )[0]["usd"]
+                print(f"  session cost after t{turn['n']:02d}: USD {spent:.4f}", flush=True)
+                if spent > args.max_session_usd:
+                    sys.stderr.write(
+                        f"STOP: session cost USD {spent:.4f} > {args.max_session_usd}\n"
+                    )
+                    return 8
             if row.get("graph_growth"):
                 sys.stderr.write(f"STOP: production graph grew: {row['graph_growth']}\n")
                 return 7
@@ -428,6 +462,12 @@ def main() -> int:
     )
     p.add_argument("--session-fact", action="append", default=[])
     p.add_argument("--stop-after", type=int, default=0)
+    p.add_argument(
+        "--max-session-usd",
+        type=float,
+        default=0.0,
+        help="stop (exit 8) when api_costs for the session pass this; 0 disables",
+    )
     return run(p.parse_args())
 
 

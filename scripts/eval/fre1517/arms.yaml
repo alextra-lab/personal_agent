@@ -90,3 +90,19 @@ arms:
     launch_flags: "3 slots, --kv-unified, MTP draft depth 1 per ADR-0152 Appendix A1 (UNVERIFIED)"
     fan_mode: apple_auto (UNVERIFIED)
     thermal_snapshot: not recorded for this arm (master asked for arms 2 and 3 only)
+  sonnet:
+    # Harness-ceiling arm, owner-approved 2026-09-15 about 04:43 UTC (relayed) and confirmed
+    # directly in the explore session. Cloud only; workers inherit the selected primary.
+    order_label: harness ceiling
+    deployment_key: claude_sonnet
+    engine: Anthropic API (managed), provider anthropic
+    served_model_id: claude-sonnet-5
+    telemetry_model: anthropic/claude-sonnet-5
+    models_endpoint: null
+    pack: not applicable (managed endpoint)
+    quant: not applicable (managed endpoint)
+    context_length: catalog value (not read by explore)
+    reasoning: dialect anthropic_adaptive (catalog)
+    launch_flags: not applicable (managed endpoint)
+    fan_mode: n/a (cloud)
+    thermal_snapshot: n/a (cloud)

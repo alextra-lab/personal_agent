@@ -323,7 +323,7 @@ def test_insights_template_exists_and_fixes_join_key_and_costs() -> None:
 
 
 def test_slm_health_template_covers_full_model() -> None:
-    """slm-health template covers the full 14-field snapshot model."""
+    """slm-health template covers the full 17-field snapshot model."""
     tpl = _load("monitors-slm-health-index-template.json")
     assert "agent-monitors-slm-health-*" in tpl["index_patterns"]
     props = _props(tpl)
@@ -338,6 +338,9 @@ def test_slm_health_template_covers_full_model() -> None:
         "latency_ema_ms": "float",
         "model_id": "keyword",
         "probe_latency_ms": "float",
+        "generation_ok": "boolean",  # FRE-1474
+        "generation_skip_reason": "text",  # FRE-1474
+        "generation_probe_latency_ms": "float",  # FRE-1474
         "probed_at": "date",
         "trace_id": "keyword",  # join-key fix (was text)
         "error": "text",

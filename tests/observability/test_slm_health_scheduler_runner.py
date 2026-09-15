@@ -143,6 +143,87 @@ class TestRunScheduledSlmHealthProbe:
 
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_passes_generation_base_url_when_enabled(self) -> None:
+        """FRE-1474: the scheduled tick opts the probe into the generation check."""
+        cfg = MagicMock()
+        cfg.slm_health_probe_enabled = True
+        cfg.slm_health_generation_check_enabled = True
+        cfg.resolved_slm_health_url = "https://slm.example.com/health"
+        cfg.resolved_slm_base_url = "https://slm.example.com"
+        cfg.slm_gpu_util_degraded_pct = 95.0
+        cfg.slm_queue_depth_degraded = 4
+        snap = _make_snapshot("up")
+        mock_probe = AsyncMock(return_value=snap)
+
+        with (
+            patch(
+                "personal_agent.observability.slm_health.scheduler_runner.get_settings",
+                return_value=cfg,
+            ),
+            patch(
+                "personal_agent.observability.slm_health.scheduler_runner.probe_slm_health",
+                new=mock_probe,
+            ),
+            patch(
+                "personal_agent.observability.slm_health.scheduler_runner.write_result",
+                new=AsyncMock(),
+            ),
+        ):
+            from personal_agent.observability.slm_health.scheduler_runner import (
+                run_scheduled_slm_health_probe,
+            )
+
+            await run_scheduled_slm_health_probe(es_client=None)
+
+        assert mock_probe.await_args.kwargs["base_url"] == "https://slm.example.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_no_generation_base_url_when_disabled(self) -> None:
+        """The generation-check master switch off → base_url stays None."""
+        cfg = MagicMock()
+        cfg.slm_health_probe_enabled = True
+        cfg.slm_health_generation_check_enabled = False
+        cfg.resolved_slm_health_url = "https://slm.example.com/health"
+        cfg.resolved_slm_base_url = "https://slm.example.com"
+        cfg.slm_gpu_util_degraded_pct = 95.0
+        cfg.slm_queue_depth_degraded = 4
+        snap = _make_snapshot("up")
+        mock_probe = AsyncMock(return_value=snap)
+
+        with (
+            patch(
+                "personal_agent.observability.slm_health.scheduler_runner.get_settings",
+                return_value=cfg,
+            ),
+            patch(
+                "personal_agent.observability.slm_health.scheduler_runner.probe_slm_health",
+                new=mock_probe,
+            ),
+            patch(
+                "personal_agent.observability.slm_health.scheduler_runner.write_result",
+                new=AsyncMock(),
+            ),
+        ):
+            from personal_agent.observability.slm_health.scheduler_runner import (
+                run_scheduled_slm_health_probe,
+            )
+
+            await run_scheduled_slm_health_probe(es_client=None)
+
+        assert mock_probe.await_args.kwargs["base_url"] is None
+
+
+def test_generation_check_enabled_defaults_to_false() -> None:
+    """FRE-1474 master gate (2026-09-14): must default off — a deploy must not
+    add load to the owner's Mac while FRE-1517's model-testing study is running.
+    Asserted on the field default (not an instantiated AppConfig) so a live
+    .env does not perturb the check.
+    """
+    from personal_agent.config.settings import AppConfig
+
+    assert AppConfig.model_fields["slm_health_generation_check_enabled"].default is False
+
 
 class TestRunScheduledSlmHealthProbeRootSpan:
     """AC-1/AC-2 (ADR-0129 D3, FRE-1069): the probe opens exactly one root span, and

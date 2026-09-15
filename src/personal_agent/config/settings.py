@@ -1853,6 +1853,17 @@ class AppConfig(BaseSettings):
         ge=1,
         description="Pending request queue depth at or above which the SLM is considered degraded",
     )
+    slm_health_generation_check_enabled: bool = Field(
+        default=False,
+        description=(
+            "Fold a minimal generation-capability check into the scheduled SLM-health "
+            "probe tick (FRE-1474) — confirms the backend can actually generate, not "
+            "just that /health answers 200. Defaults off (master gate 2026-09-14): it "
+            "would add load to the owner's Mac during an active model-testing study "
+            "(FRE-1517) — enabled explicitly once that study clears its verification "
+            "window. Off falls back to liveness-only."
+        ),
+    )
 
     # Cache-erosion monitor (ADR-0078 / FRE-1189)
     cache_erosion_probe_enabled: bool = Field(

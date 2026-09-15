@@ -71,7 +71,13 @@ from personal_agent.llm_client.models import (
     landing_accepts_json_schema,
     synthesis_retains_tools,
 )
-from personal_agent.llm_client.types import GenerationProgress, LLMServerError, LLMTimeout
+from personal_agent.llm_client.types import (
+    GenerationProgress,
+    LLMServerError,
+    LLMTimeout,
+    is_context_window_error,
+)
+from personal_agent.orchestrator.context_window import estimate_messages_tokens
 from personal_agent.orchestrator.prompts import render_current_datetime_block
 from personal_agent.orchestrator.sub_agent_approval import (
     get_sub_agent_approval_broker,
@@ -193,9 +199,11 @@ _SYNTHESIS_INSTRUCTION = (
 )
 _SYNTHESIS_OPENING_CAP = "Your tool budget is spent."
 _SYNTHESIS_OPENING_RESERVE = "Your time budget is nearly spent."
+_SYNTHESIS_OPENING_CONTEXT_RESERVE = "Your context window is nearly full."
 _SYNTHESIS_OPENING_TRUNCATED = "Your last tool call was cut off at the token limit and was not run."
 _SYNTHESIS_OPENINGS: dict[str, str] = {
     "time_reserve": _SYNTHESIS_OPENING_RESERVE,
+    "context_reserve": _SYNTHESIS_OPENING_CONTEXT_RESERVE,
     "tool_call_truncated": _SYNTHESIS_OPENING_TRUNCATED,
 }
 
@@ -417,6 +425,170 @@ def _effective_hard_deadline(spec: SubAgentSpec, effective_timeout: float) -> fl
         single_call_deadline,
         effective_timeout * (settings.sub_agent_max_tool_iterations + 1),
     )
+
+
+def _resolve_deployment_context_length(llm_client: Any) -> int | None:
+    """This deployment's catalog context window, or ``None`` when undeclared (FRE-1522).
+
+    ``llm_client`` is typed ``Any`` throughout this module (see
+    :func:`_resolve_synthesis_dialect`): it is not always a real client — the
+    PARALLEL_INFERENCE path and every test double pass something else, and a bare
+    ``AsyncMock()`` answers ``model_def`` with an auto-generated child mock rather
+    than raising or returning ``None``. The ``isinstance`` check is what actually
+    guards against that: a client built without a catalog definition (a direct
+    construction outside the factory) or a mock with no ``model_def`` set both
+    resolve here to ``None``, which both the context reserve and the landing trim
+    read as "inactive" rather than inventing a number.
+
+    Args:
+        llm_client: The client this sub-agent dispatches through.
+
+    Returns:
+        The resolved deployment's ``context_length``, or ``None``.
+    """
+    model_def = getattr(llm_client, "model_def", None)
+    context_length = getattr(model_def, "context_length", None)
+    return context_length if isinstance(context_length, int) else None
+
+
+def _landing_max_tokens(llm_client: Any) -> int:
+    """The token ceiling for a landing call (FRE-1522, ADR-0149/0150's own incident).
+
+    ``min(role_max_tokens, settings.sub_agent_landing_max_tokens)`` — the role's own
+    declared ceiling (the ``sub_agent`` binding's ``max_tokens: 8192``,
+    ``config/model_roles.yaml``, merged onto ``llm_client.model_def`` by
+    ``resolve_role_target``) capped further by the landing-specific setting. Deliberately
+    reads the ROLE's ceiling, not ``spec.max_tokens`` — the round calls keep using
+    ``spec.max_tokens`` unchanged; only the landing, which ADR-0150 D1 treats as
+    schema-bounded regardless of what the rounds were sized for, is tightened here.
+
+    Args:
+        llm_client: The client this sub-agent dispatches through.
+
+    Returns:
+        The landing call's ``max_tokens``. ``settings.sub_agent_landing_max_tokens``
+        alone when the client declares no role ceiling (direct construction, or a
+        test double with no ``model_def`` set).
+    """
+    model_def = getattr(llm_client, "model_def", None)
+    role_max_tokens = getattr(model_def, "max_tokens", None)
+    if isinstance(role_max_tokens, int):
+        return min(role_max_tokens, settings.sub_agent_landing_max_tokens)
+    return settings.sub_agent_landing_max_tokens
+
+
+def _extract_prompt_tokens(response: Any) -> int | None:
+    """Pull the real, provider-reported ``usage.prompt_tokens`` from an LLM response.
+
+    Mirrors ``executor.py``'s identical ``last_prompt_tokens`` reading
+    (``response.get("usage", {}).get("prompt_tokens", 0)``, guarded truthy so a
+    response that omits usage never clobbers a good prior reading with 0) — this is
+    the sub-agent tool loop's own copy of that pattern, feeding the context reserve's
+    estimate (:func:`_estimate_next_prompt_tokens`) instead of a status-bar meter.
+
+    Args:
+        response: The value returned by ``llm_client.respond``.
+
+    Returns:
+        The reported prompt token count, or ``None`` when the response is not a
+        mapping, carries no usage, or the value is not a positive int.
+    """
+    if not isinstance(response, Mapping):
+        return None
+    usage = response.get("usage")
+    if not isinstance(usage, Mapping):
+        return None
+    prompt_tokens = usage.get("prompt_tokens")
+    if isinstance(prompt_tokens, int) and prompt_tokens > 0:
+        return prompt_tokens
+    return None
+
+
+def _estimate_next_prompt_tokens(state: "_ToolLoopState") -> int:
+    """Estimate the prompt size the NEXT round call would send (FRE-1522).
+
+    The last round's real, provider-reported ``usage.prompt_tokens`` plus a token
+    estimate of the messages appended since (the countdown, the prior round's
+    assistant/tool messages) — real measurement for the bulk of the prompt, estimate
+    only for the delta. Falls back to estimating the whole message list when no
+    round has completed yet (or the client's response never carried usage).
+
+    Args:
+        state: The loop accumulator.
+
+    Returns:
+        The estimated prompt token count for the next round.
+    """
+    if state.last_round_prompt_tokens is not None:
+        return state.last_round_prompt_tokens + estimate_messages_tokens(
+            state.messages[state.last_round_message_count :]
+        )
+    return estimate_messages_tokens(state.messages)
+
+
+def _trim_for_landing(
+    messages: list[dict[str, Any]],
+    max_tokens: int,
+    context_length: int | None,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Stub oldest tool-result contents until the landing prompt fits (FRE-1522).
+
+    Best-effort, not a guarantee: it stops once every droppable tool result is
+    stubbed, even if the estimate still exceeds ``context_length`` (the protected
+    messages alone are too large, or there are no tool results to drop at all). A
+    landing call that still overflows after this is caught by the round-call/landing
+    exception handling instead
+    (:func:`~personal_agent.llm_client.types.is_context_window_error`,
+    ``_write_landing_report``'s own ``except Exception``) — this function's job is
+    only to make the common case (absorbed tool output dominates the prompt) fit.
+
+    Never touches the system prompt or the task message — both are structurally safe
+    without an index: only ``role == "tool"`` messages are ever stubbed, and the
+    system/task messages are never that role (``run_sub_agent`` builds them as
+    ``system``/``user``). Never touches the newest tool result either, so the model
+    always sees at least the most recent thing it just did.
+
+    The estimate covers only the message list, like every other estimate in this
+    codebase (``context_window.py``'s own budget trim has the same scope) — it does
+    not add the retained ``tools`` array's own token cost when the landing call keeps
+    it, which is a known, bounded approximation, not a hard guarantee either.
+
+    Args:
+        messages: The full message list a landing call would otherwise send.
+        max_tokens: The landing call's own ``max_tokens`` (reserved as output room).
+        context_length: The deployment's catalog context window, or ``None`` when
+            undeclared — the trim is a no-op in that case, the same "inactive"
+            reading :func:`_resolve_deployment_context_length` documents.
+
+    Returns:
+        A tuple of (possibly-copied message list, tool results dropped, characters
+        dropped). The input list is returned unchanged (same object) when nothing
+        needed dropping.
+    """
+    if context_length is None:
+        return messages, 0, 0
+    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    if not tool_indices:
+        return messages, 0, 0
+    droppable = tool_indices[:-1]  # every tool result except the newest
+    trimmed = list(messages)
+    dropped_results = 0
+    dropped_chars = 0
+    for i in droppable:
+        if estimate_messages_tokens(trimmed) + max_tokens <= context_length:
+            break
+        original = trimmed[i]
+        content = str(original.get("content") or "")
+        tool_name = str(original.get("name") or "tool")
+        trimmed[i] = {
+            **original,
+            "content": (
+                f"[stubbed: {tool_name} result, {len(content):,} chars, dropped to fit the landing]"
+            ),
+        }
+        dropped_results += 1
+        dropped_chars += len(content)
+    return trimmed, dropped_results, dropped_chars
 
 
 def _extract_stated_tool_gap(content: str) -> tuple[str, str | None]:
@@ -883,6 +1055,15 @@ class _ToolLoopState:
     # ADR-0149 D3: the ledger's raw material, and the reserve's clock.
     tool_calls: list[_ToolCallRecord] = field(default_factory=list)
     round_wall_s: list[float] = field(default_factory=list)
+    # FRE-1522: the context reserve's own clock, mirroring round_wall_s's role for
+    # the time reserve. `last_round_prompt_tokens` is the real, provider-reported
+    # usage.prompt_tokens of the most recently completed round; `last_round_message_count`
+    # is len(state.messages) at that same moment (before that round's own assistant/tool/
+    # countdown messages were appended), so `_estimate_next_prompt_tokens` can add a token
+    # estimate of just the messages appended since, rather than re-estimating the whole
+    # history on every round.
+    last_round_prompt_tokens: int | None = None
+    last_round_message_count: int = 0
 
     def mean_round_s(self, fallback: float) -> float:
         """Mean wall-clock of the rounds completed so far in this worker.
@@ -1268,6 +1449,29 @@ async def _write_landing_report(
                 session_id=session_id,
             )
 
+    # FRE-1522: bounded, and fitted to the deployment's window. The round calls keep
+    # using spec.max_tokens unchanged — only the landing is tightened, per ADR-0150
+    # D1's framing of it as schema-bounded regardless of what the rounds were sized
+    # for. `state.messages` itself is never mutated: `landing_messages` is a local
+    # trimmed copy used for this one call only, so `_build_ledger` (which reads
+    # state.tool_calls, not state.messages) and the capture's `rounds` stay unaffected.
+    landing_max_tokens = _landing_max_tokens(llm_client)
+    landing_context_length = _resolve_deployment_context_length(llm_client)
+    landing_messages, dropped_results, dropped_chars = _trim_for_landing(
+        state.messages, landing_max_tokens, landing_context_length
+    )
+    if dropped_results:
+        logger.info(
+            "sub_agent_landing_trimmed",
+            dropped_results=dropped_results,
+            dropped_chars=dropped_chars,
+            landing_max_tokens=landing_max_tokens,
+            context_length=landing_context_length,
+            stop_reason=stop_reason,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
     # Its own sink: a cut landing call's streamed partial IS the report
     # (ADR-0149 D3 move 5), and the round sink holds the previous round's text.
     synthesis_progress = GenerationProgress()
@@ -1286,8 +1490,8 @@ async def _write_landing_report(
     try:
         raw_response = await llm_client.respond(
             role=spec.model_role,
-            messages=state.messages,
-            max_tokens=spec.max_tokens,
+            messages=landing_messages,
+            max_tokens=landing_max_tokens,
             trace_ctx=trace_ctx,
             timeout_s=min(effective_timeout, remaining_s),
             progress_sink=synthesis_progress,
@@ -1678,20 +1882,67 @@ async def _run_tool_loop(
                 stop_reason="cap",
             )
 
-        # ADR-0149 D3 move 4: reserve the landing. Gated on `tool_defs` — a
-        # grant-less worker makes exactly one call, and its hard deadline is sized
-        # for one call (`_effective_hard_deadline`), so the reserve would fire on
-        # every such worker and replace its only real call with a synthesis call
-        # holding nothing to synthesise from.
+        # ADR-0149 D3 move 4 / FRE-1522: reserve the landing, time AND context. Both
+        # gated on `tool_defs` — a grant-less worker makes exactly one call, and its
+        # hard deadline is sized for one call (`_effective_hard_deadline`), so either
+        # reserve would fire on every such worker and replace its only real call with
+        # a synthesis call holding nothing to synthesise from (the context reserve in
+        # particular is a "land what's already absorbed" mechanism — a worker with
+        # zero rounds behind it has nothing to land). A grant-less worker whose
+        # `spec.context` alone is already too large for its one call is a different,
+        # narrower gap this ticket does not close: that call still reaches the
+        # reactive `is_context_window_error` catch below if the provider actually
+        # rejects it, just not this proactive estimate.
+        context_length: int | None = None
+        estimated_prompt_tokens: int | None = None
         if tool_defs:
+            context_length = _resolve_deployment_context_length(llm_client)
+            if context_length is None:
+                logger.debug(
+                    "sub_agent_context_reserve_inactive",
+                    tool_iterations=state.tool_iterations,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
+            else:
+                estimated_prompt_tokens = _estimate_next_prompt_tokens(state)
+                if (
+                    estimated_prompt_tokens
+                    > context_length - settings.sub_agent_context_reserve_tokens
+                ):
+                    logger.info(
+                        "sub_agent_landing_reserved",
+                        reason="context",
+                        estimated_prompt_tokens=estimated_prompt_tokens,
+                        context_length=context_length,
+                        tool_iterations=state.tool_iterations,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                    )
+                    return await _forced_synthesis(
+                        state,
+                        spec,
+                        llm_client,
+                        tool_defs,
+                        trace_ctx,
+                        trace_id,
+                        session_id,
+                        effective_timeout,
+                        deadline_monotonic,
+                        stop_reason="context_reserve",
+                    )
+
             remaining_s = deadline_monotonic - time.monotonic()
             mean_round_s = state.mean_round_s(effective_timeout)
             if remaining_s < mean_round_s + effective_timeout:
                 logger.info(
                     "sub_agent_landing_reserved",
+                    reason="time",
                     remaining_s=round(remaining_s, 2),
                     mean_round_s=round(mean_round_s, 2),
                     effective_timeout=effective_timeout,
+                    estimated_prompt_tokens=estimated_prompt_tokens,
+                    context_length=context_length,
                     tool_iterations=state.tool_iterations,
                     trace_id=trace_id,
                     session_id=session_id,
@@ -1749,9 +2000,46 @@ async def _run_tool_loop(
                 deadline_monotonic,
                 stop_reason="timeout",
             )
+        except Exception as exc:
+            # FRE-1522 AC-4: a context rejection is not a crash. Caught once, landed
+            # on the trimmed history via the same forced-synthesis path the proactive
+            # reserve above uses — never resent identically. Anything that is not a
+            # context-window rejection re-raises unchanged, reaching run_sub_agent's
+            # outer `except Exception` exactly as it does today. This is ONE attempt:
+            # if the landing call this triggers ALSO fails (including with a second
+            # context rejection), `_write_landing_report`'s own `except Exception`
+            # already turns that into a ledger with no further retry — nothing new
+            # is needed there. (This is sub_agent.py's own no-retry behaviour; it does
+            # not reach into litellm's separate, pre-existing transport-level
+            # `num_retries`, which is out of this ticket's scope.)
+            if not is_context_window_error(exc):
+                raise
+            logger.warning(
+                "sub_agent_round_context_window_exceeded",
+                error=str(exc),
+                tool_iterations=state.tool_iterations,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return await _forced_synthesis(
+                state,
+                spec,
+                llm_client,
+                tool_defs,
+                trace_ctx,
+                trace_id,
+                session_id,
+                effective_timeout,
+                deadline_monotonic,
+                stop_reason="context_reserve",
+            )
         state.cost_usd += _extract_call_cost(raw_response)
         raw_tool_calls = _extract_tool_calls(raw_response)
         round_finish_reason = _extract_finish_reason(raw_response)
+        prompt_tokens = _extract_prompt_tokens(raw_response)
+        if prompt_tokens is not None:
+            state.last_round_prompt_tokens = prompt_tokens
+            state.last_round_message_count = len(state.messages)
 
         if not raw_tool_calls and round_finish_reason == "length":
             # ADR-0150 D6: decided before the content is read anywhere else —

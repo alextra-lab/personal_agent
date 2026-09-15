@@ -2254,6 +2254,475 @@ class TestLandingReserve:
         assert result.tool_iterations == 1
 
 
+class TestContextReserve:
+    """FRE-1522 AC-1/AC-2 — the reserve fires on measured context pressure, not noise."""
+
+    @staticmethod
+    def _client_with_context_length(context_length: int, responses: list[Any]) -> AsyncMock:
+        from types import SimpleNamespace
+
+        client, _ = _recording_client(responses)
+        client.model_def = SimpleNamespace(context_length=context_length, max_tokens=8192)
+        return client
+
+    @staticmethod
+    def _round_with_usage(prompt_tokens: int) -> dict[str, Any]:
+        resp = _llm_response(
+            "searching", tool_calls=[{"id": "c", "name": "run_python", "arguments": "{}"}]
+        )
+        resp["usage"] = {"prompt_tokens": prompt_tokens}
+        return resp
+
+    @pytest.mark.asyncio
+    async def test_fires_before_a_round_would_cross_the_reserved_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1: usage.prompt_tokens climbing toward the catalog context_length trips
+
+        the reserve before a round is sent past ``context_length - reserve_tokens``.
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+        monkeypatch.setattr(settings, "sub_agent_context_reserve_tokens", 16000)
+
+        responses = [
+            self._round_with_usage(100_000),
+            # 120_000 + a small delta for the countdown/tool-result messages pushes
+            # the NEXT round's estimate past 131072 - 16000 = 115072.
+            self._round_with_usage(120_000),
+            _llm_response("Report from what I gathered."),
+        ]
+        client = self._client_with_context_length(131072, responses)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=30.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "context_reserve"
+        assert result.report_kind == "synthesized"
+        assert result.tool_iterations == 2
+        # Exactly the two rounds plus the tools-off landing call.
+        assert client.respond.call_count == 3
+        landing_call = client.respond.call_args_list[-1]
+        assert landing_call.kwargs["tool_choice"] == "none"
+        assert "Your context window is nearly full." in str(
+            landing_call.kwargs["messages"][-1]["content"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_seeded_negative_ample_headroom_runs_rounds_normally(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-2: with real headroom, the context reserve must not fire — or it measures nothing."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 2)
+
+        responses = [self._round_with_usage(2_000), _llm_response("done")]
+        client = self._client_with_context_length(131072, responses)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "completed"
+        assert result.tool_iterations == 1
+
+    @pytest.mark.asyncio
+    async def test_no_catalog_context_length_is_inactive_and_logs_debug(self) -> None:
+        """A client with no model_def (direct construction, or a bare test double)
+
+        never fires the reserve — logged as inactive, never invented.
+        """
+        client, _ = _recording_client(
+            [
+                _llm_response(
+                    "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response("done"),
+            ]
+        )
+
+        with (
+            structlog.testing.capture_logs() as logs,
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "completed"
+        inactive = [e for e in logs if e.get("event") == "sub_agent_context_reserve_inactive"]
+        assert len(inactive) >= 1
+        assert inactive[0]["log_level"] == "debug"
+
+
+class TestBoundedLanding:
+    """FRE-1522 AC-3 — every landing call is bounded to a role-aware ceiling."""
+
+    @pytest.mark.asyncio
+    async def test_landing_max_tokens_is_the_role_ceiling_capped_by_the_setting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``min(role_max_tokens, sub_agent_landing_max_tokens)`` — not ``spec.max_tokens``."""
+        from types import SimpleNamespace
+
+        from personal_agent.config import settings
+
+        # 2, not 1: with a 1-round budget, `_effective_hard_deadline` and the time
+        # reserve's own threshold land exactly on the boundary
+        # (hard_deadline == 2 * effective_timeout), so ordinary wall-clock jitter
+        # (e.g. a cold governance-config load) can tip the TIME reserve into firing
+        # before the round this test wants ever runs. 2 rounds gives real margin
+        # (hard_deadline == 3 * effective_timeout against the same threshold).
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 2)
+        monkeypatch.setattr(settings, "sub_agent_landing_max_tokens", 4096)
+
+        client, _ = _recording_client(
+            [
+                _llm_response(
+                    "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response(
+                    "", tool_calls=[{"id": "c1", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response("the report"),
+            ]
+        )
+        client.model_def = SimpleNamespace(context_length=131072, max_tokens=8192)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                # A spec-level override (1024) must NOT reach the landing call.
+                spec=_spec_with_tools(["run_python"], timeout=30.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "cap"
+        assert result.report_kind == "synthesized"
+        landing_call = client.respond.call_args_list[-1]
+        assert landing_call.kwargs["max_tokens"] == 4096
+
+    @pytest.mark.asyncio
+    async def test_no_role_ceiling_falls_back_to_the_setting_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A client with no declared role max_tokens uses the setting outright."""
+        from personal_agent.config import settings
+
+        # See the comment in the previous test for why 2, not 1.
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 2)
+        monkeypatch.setattr(settings, "sub_agent_landing_max_tokens", 4096)
+
+        client, _ = _recording_client(
+            [
+                _llm_response(
+                    "", tool_calls=[{"id": "c0", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response(
+                    "", tool_calls=[{"id": "c1", "name": "run_python", "arguments": "{}"}]
+                ),
+                _llm_response("the report"),
+            ]
+        )
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=30.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "cap"
+        landing_call = client.respond.call_args_list[-1]
+        assert landing_call.kwargs["max_tokens"] == 4096
+
+
+class TestTrimForLanding:
+    """FRE-1522 AC-3 — the landing prompt is trimmed to fit, oldest results first."""
+
+    def test_no_context_length_is_a_noop(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _trim_for_landing
+
+        messages = [
+            {"role": "system", "content": "s"},
+            {"role": "tool", "name": "t", "content": "x" * 1000},
+        ]
+        trimmed, dropped_results, dropped_chars = _trim_for_landing(messages, 100, None)
+
+        assert trimmed is messages
+        assert dropped_results == 0
+        assert dropped_chars == 0
+
+    def test_no_tool_messages_is_a_noop(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _trim_for_landing
+
+        messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "t"}]
+        trimmed, dropped_results, dropped_chars = _trim_for_landing(messages, 100, 10)
+
+        assert trimmed is messages
+        assert dropped_results == 0
+        assert dropped_chars == 0
+
+    def test_stubs_oldest_tool_results_until_it_fits_keeps_system_task_and_newest(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _trim_for_landing
+
+        big = "x" * 20_000
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "task message"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c0", "type": "function", "function": {"name": "run_python"}}
+                ],
+            },
+            {"role": "tool", "name": "run_python", "content": big, "tool_call_id": "c0"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "run_python"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "name": "run_python",
+                "content": "newest result",
+                "tool_call_id": "c1",
+            },
+        ]
+
+        trimmed, dropped_results, dropped_chars = _trim_for_landing(messages, 100, 2000)
+
+        assert dropped_results == 1
+        assert dropped_chars == len(big)
+        assert trimmed[0] == messages[0]
+        assert trimmed[1] == messages[1]
+        assert "stubbed" in str(trimmed[3]["content"])
+        assert "run_python" in str(trimmed[3]["content"])
+        assert f"{len(big):,}" in str(trimmed[3]["content"])
+        assert trimmed[5]["content"] == "newest result"
+
+    def test_still_oversized_after_dropping_everything_is_returned_best_effort(self) -> None:
+        """Best-effort, not a guarantee: if the protected messages alone exceed the
+
+        budget, trimming drops what it can (here: nothing droppable, since the
+        sole tool result is the newest) and returns rather than raising.
+        """
+        from personal_agent.orchestrator.sub_agent import _trim_for_landing
+
+        messages = [
+            {"role": "system", "content": "s" * 50_000},
+            {"role": "user", "content": "t"},
+            {"role": "tool", "name": "run_python", "content": "small", "tool_call_id": "c0"},
+        ]
+
+        trimmed, dropped_results, dropped_chars = _trim_for_landing(messages, 100, 10)
+
+        assert dropped_results == 0
+        assert dropped_chars == 0
+        assert trimmed == messages
+
+
+class TestContextWindowRejectionOnRoundCall:
+    """FRE-1522 AC-4 — a context rejection is not a crash."""
+
+    @staticmethod
+    def _context_window_error() -> Exception:
+        from litellm.exceptions import ContextWindowExceededError
+
+        return ContextWindowExceededError(
+            "This model's maximum context length is exceeded.",
+            model="gpt-x",
+            llm_provider="openai",
+        )
+
+    @pytest.mark.asyncio
+    async def test_one_forced_synthesis_attempt_on_trimmed_history(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+
+        calls: list[dict[str, Any]] = []
+
+        async def _respond(**kwargs: Any) -> Any:
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise self._context_window_error()
+            return _llm_response("Report from what I gathered.")
+
+        client = AsyncMock()
+        client.respond = AsyncMock(side_effect=_respond)
+        client.dialect_for_role = MagicMock(return_value=None)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "context_reserve"
+        assert result.report_kind == "synthesized"
+        assert len(calls) == 2
+        assert calls[-1]["tool_choice"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_second_failure_lands_a_ledger_with_no_third_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sub_agent.py's own one-shot behaviour: no identical re-send of its own.
+
+        (LiteLLM's separate, pre-existing transport-level ``num_retries`` is out
+        of this ticket's scope — this asserts the orchestration layer's call
+        count, not the transport layer's.)
+        """
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+
+        client = AsyncMock()
+        client.respond = AsyncMock(side_effect=self._context_window_error())
+        client.dialect_for_role = MagicMock(return_value=None)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "context_reserve"
+        assert result.report_kind == "ledger"
+        assert client.respond.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_wrapped_context_window_error_is_still_recognized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This codebase's own taxonomy wraps the origin with ``raise ... from exc``
+
+        (litellm_client.py's cloud and local dispatch branches both do this) — the
+        classifier must see through one level of that wrap.
+        """
+        from personal_agent.config import settings
+        from personal_agent.llm_client.types import LLMClientError
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 5)
+
+        def _raise_wrapped() -> None:
+            try:
+                raise self._context_window_error()
+            except Exception as exc:
+                raise LLMClientError(f"LiteLLM call failed: {exc}") from exc
+
+        calls: list[dict[str, Any]] = []
+
+        async def _respond(**kwargs: Any) -> Any:
+            calls.append(kwargs)
+            if len(calls) == 1:
+                _raise_wrapped()
+            return _llm_response("Report from what I gathered.")
+
+        client = AsyncMock()
+        client.respond = AsyncMock(side_effect=_respond)
+        client.dialect_for_role = MagicMock(return_value=None)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c", "run_python", "ok")),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["run_python"], timeout=10.0),
+                llm_client=client,
+                trace_id="t",
+            )
+
+        assert result.stop_reason == "context_reserve"
+        assert len(calls) == 2
+
+
 class TestTerminalPathsDeclareAReport:
     """ADR-0149 AC-2 — every terminal path yields a declared report, never silence."""
 

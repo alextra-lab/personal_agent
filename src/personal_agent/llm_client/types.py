@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from litellm.exceptions import ContextWindowExceededError
 from typing_extensions import NotRequired, TypedDict
 
 
@@ -231,3 +232,40 @@ class DialectParameterRejected(LLMClientError):
     """
 
     pass
+
+
+# Depth bound for `is_context_window_error`'s __cause__/__context__ walk — matches
+# `litellm_client.py`'s own `_exception_chain` limit.
+_CONTEXT_WINDOW_ERROR_CHAIN_WALK_LIMIT = 8
+
+
+def is_context_window_error(exc: BaseException) -> bool:
+    """Whether ``exc``, or its wrap chain, is a context-window-exceeded rejection (FRE-1522).
+
+    Recognizes LiteLLM's own ``ContextWindowExceededError`` and the provider's plain
+    HTTP 400 ``context_length_exceeded`` shape, at any depth of
+    ``__cause__``/``__context__`` wrapping: this module's own error taxonomy
+    (``LLMClientError`` et al.) and ``litellm_client.py``'s dispatch branches both wrap
+    the origin exception with ``raise ... from exc``, so the original LiteLLM exception
+    survives one level down either way. Lives here, not in a caller outside
+    ``llm_client/``, so that every provider-SDK import stays confined to this module
+    (``tests/observability/topology/test_ci_teeth.py::test_model_sdk_confined_to_llm_client``).
+
+    Args:
+        exc: The exception raised by a call through this client.
+
+    Returns:
+        True when this is a context-window rejection, at any wrap depth.
+    """
+    current: BaseException | None = exc
+    seen = 0
+    while current is not None and seen < _CONTEXT_WINDOW_ERROR_CHAIN_WALK_LIMIT:
+        if isinstance(current, ContextWindowExceededError):
+            return True
+        if getattr(current, "status_code", None) == 400 and "context_length_exceeded" in str(
+            current
+        ):
+            return True
+        seen += 1
+        current = current.__cause__ or current.__context__
+    return False

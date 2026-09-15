@@ -22,7 +22,12 @@ from personal_agent.orchestrator.worker_types import Thoroughness, WorkerReport,
 #: ``completed`` — the model replied with no tool calls, which is the only value
 #: a successful worker ever carries. ``cap`` — the round budget was spent.
 #: ``time_reserve`` — the landing reserve fired, so the worker wrote instead of
-#: starting a round it could not finish. ``timeout`` — the per-call generation
+#: starting a round it could not finish. ``context_reserve`` (FRE-1522) — the same
+#: reserve, sized against the deployment's context window instead of the clock: the
+#: next round's estimated prompt would leave less than
+#: ``settings.sub_agent_context_reserve_tokens`` of headroom, or a round call was
+#: actually rejected by the provider for exceeding its context window (caught once,
+#: landed on the trimmed history, never resent). ``timeout`` — the per-call generation
 #: budget fired. ``deadline`` — the outer ``wait_for`` fired, and by definition
 #: no time remained for a report. ``cancelled`` — the dispatcher cancelled the
 #: worker; this value only ever reaches a capture, never a result, because the
@@ -35,6 +40,7 @@ SubAgentStopReason = Literal[
     "completed",
     "cap",
     "time_reserve",
+    "context_reserve",
     "timeout",
     "deadline",
     "cancelled",

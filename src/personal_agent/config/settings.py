@@ -297,6 +297,29 @@ class AppConfig(BaseSettings):
             "numbers are FRE-1487's to set, on the owner's decision."
         ),
     )
+    sub_agent_context_reserve_tokens: int = Field(
+        default=16000,
+        ge=0,
+        description=(
+            "FRE-1522: token headroom the sub-agent tool loop keeps below a worker "
+            "deployment's catalog context_length. Before each round, the loop estimates "
+            "the next prompt size; once the headroom drops under this many tokens it lands "
+            "instead of starting a round it cannot finish (stop_reason=context_reserve), "
+            "the same shape as the existing time reserve (ADR-0149 D3 move 4)."
+        ),
+    )
+    sub_agent_landing_max_tokens: int = Field(
+        default=4096,
+        ge=1,
+        description=(
+            "FRE-1522: ceiling on every sub-agent landing call (the forced-synthesis "
+            "call and the voluntary-stop schema landing, both in _write_landing_report). "
+            "Combined via min() with the sub_agent role's own max_tokens override (8192, "
+            "config/model_roles.yaml) so a landing can never run away to the role's full "
+            "output ceiling -- ADR-0149's own incident had a schema-constrained landing "
+            "produce 8,192 tokens of unclosed JSON against a median completion of 145."
+        ),
+    )
     orchestrator_max_repeated_tool_calls: int = Field(
         default=1,
         ge=0,

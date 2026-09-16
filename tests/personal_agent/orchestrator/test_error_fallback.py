@@ -579,3 +579,81 @@ class TestExecuteTaskSafeLastResortSalvage:
 
 async def _noop_emit(_ctx: ExecutionContext, _classified: ClassifiedError) -> None:
     pass
+
+
+# ---------------------------------------------------------------------------
+# FRE-1527 AC-4 — every failure exit writes a capture, not only the common one
+# (codex review of PR #1183: the state-dispatch loop's own outer except, and
+# execute_task raising entirely, both previously reached execute_task_safe
+# without ever calling _write_task_capture).
+# ---------------------------------------------------------------------------
+
+
+class TestFailedTurnCaptureCoversEveryExit:
+    @pytest.mark.asyncio
+    async def test_exception_escaping_the_state_dispatch_loop_writes_a_capture(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """execute_task's own outer except (not step_llm_call's) sets ctx.error
+
+        and returns normally — this reaches execute_task_safe's `if ctx.error:`
+        branch, which must write the capture.
+        """
+        import contextlib
+        from unittest.mock import AsyncMock, patch
+
+        ctx = _make_ctx()
+        ctx.user_id = uuid4()
+        ctx.tool_results.append({"tool_name": "query_es", "success": True})  # type: ignore[attr-defined]
+        ctx.state = TaskState.TOOL_EXECUTION
+
+        @contextlib.asynccontextmanager
+        async def fake_observe_topology(_ctx: ExecutionContext):
+            yield
+
+        async def raising_step_tool_execution(
+            ctx_in: ExecutionContext, _sm: object, _trace_ctx: object
+        ) -> TaskState:
+            raise LLMServerError("524 origin timeout")
+
+        monkeypatch.setattr(ex, "observe_topology", fake_observe_topology)
+        monkeypatch.setattr(ex, "step_tool_execution", raising_step_tool_execution)
+        monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
+
+        written: list[object] = []
+        with patch("personal_agent.captains_log.capture.write_capture", side_effect=written.append):
+            result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
+
+        assert len(written) == 1
+        assert written[0].outcome == "failed"  # type: ignore[attr-defined]
+        # The capture records what the user actually saw, not None.
+        assert written[0].assistant_response == result["reply"]  # type: ignore[attr-defined]
+        assert "query_es" in written[0].assistant_response  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_execute_task_raising_entirely_writes_a_capture(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """execute_task itself raising (bypassing its own internal handling) is
+
+        the one path only execute_task_safe's own outer except ever sees.
+        """
+        from unittest.mock import patch
+
+        ctx = _make_ctx()
+        ctx.user_id = uuid4()
+
+        async def fake_execute_task(ctx_in: ExecutionContext, _sm: object) -> ExecutionContext:
+            raise LLMServerError("524 origin timeout")
+
+        monkeypatch.setattr(ex, "execute_task", fake_execute_task)
+        monkeypatch.setattr(ex, "_emit_classified_error", _noop_emit)
+
+        written: list[object] = []
+        with patch("personal_agent.captains_log.capture.write_capture", side_effect=written.append):
+            result = await ex.execute_task_safe(ctx, session_manager=None)  # type: ignore[arg-type]
+
+        assert len(written) == 1
+        assert written[0].outcome == "failed"  # type: ignore[attr-defined]
+        assert written[0].assistant_response == result["reply"]  # type: ignore[attr-defined]
+        assert written[0].assistant_response is not None  # type: ignore[attr-defined]

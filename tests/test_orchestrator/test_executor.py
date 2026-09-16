@@ -1,9 +1,11 @@
 """Tests for orchestrator executor and state machine."""
 
+import asyncio
 import json
 import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -2709,3 +2711,575 @@ class TestStepSynthesisDecisionDisclosure:
             reset_decision_disclosures(token)
 
         assert ctx.final_reply == "Here's your artifact."
+
+
+# ============================================================================
+# FRE-1527: primary-turn context-window rejection recovery
+# ============================================================================
+
+
+class TestTrimMessagesForContextRetry:
+    """FRE-1527 AC-3: the trim keeps what matters — pure-function coverage."""
+
+    def test_stubs_every_tool_result_but_the_newest(self) -> None:
+        from personal_agent.orchestrator.executor import _trim_messages_for_context_retry
+
+        user_message = {"role": "user", "content": "Do the thing."}
+        older_tool_result = {
+            "role": "tool",
+            "name": "read_file",
+            "content": "x" * 500,
+            "tool_call_id": "c0",
+        }
+        newest_tool_result = {
+            "role": "tool",
+            "name": "read_file",
+            "content": "y" * 300,
+            "tool_call_id": "c1",
+        }
+        messages = [
+            user_message,
+            {"role": "assistant", "content": "", "tool_calls": []},
+            older_tool_result,
+            {"role": "assistant", "content": "", "tool_calls": []},
+            newest_tool_result,
+        ]
+
+        trimmed, dropped_results, dropped_chars = _trim_messages_for_context_retry(messages)
+
+        assert dropped_results == 1
+        assert dropped_chars == 500
+        assert trimmed[0] == user_message
+        assert "[stubbed:" in trimmed[2]["content"]
+        assert "read_file" in trimmed[2]["content"]
+        assert trimmed[4] == newest_tool_result
+
+    def test_no_tool_messages_is_a_no_op(self) -> None:
+        from personal_agent.orchestrator.executor import _trim_messages_for_context_retry
+
+        messages = [{"role": "user", "content": "Hi"}]
+
+        trimmed, dropped_results, dropped_chars = _trim_messages_for_context_retry(messages)
+
+        assert trimmed is messages
+        assert dropped_results == 0
+        assert dropped_chars == 0
+
+    def test_single_tool_result_is_the_newest_and_never_dropped(self) -> None:
+        from personal_agent.orchestrator.executor import _trim_messages_for_context_retry
+
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "tool", "name": "read_file", "content": "only one", "tool_call_id": "c0"},
+        ]
+
+        trimmed, dropped_results, dropped_chars = _trim_messages_for_context_retry(messages)
+
+        assert trimmed is messages
+        assert dropped_results == 0
+        assert dropped_chars == 0
+
+    def test_already_stubbed_messages_are_not_stubbed_again(self) -> None:
+        """Codex review of PR #1183: a second, separate rejection later in the same
+
+        turn must not re-stub a message this function already stubbed — that
+        drops nothing new and would report a misleadingly small dropped_chars for
+        what looks like a real trim.
+        """
+        from personal_agent.orchestrator.executor import _trim_messages_for_context_retry
+
+        already_stubbed = {
+            "role": "tool",
+            "name": "read_file",
+            "content": "[stubbed: read_file result, 500 chars, dropped after a context-window rejection]",
+            "tool_call_id": "c0",
+        }
+        older_real_result = {
+            "role": "tool",
+            "name": "read_file",
+            "content": "z" * 200,
+            "tool_call_id": "c1",
+        }
+        newest_tool_result = {
+            "role": "tool",
+            "name": "read_file",
+            "content": "y" * 300,
+            "tool_call_id": "c2",
+        }
+        messages = [
+            {"role": "user", "content": "Do the thing."},
+            already_stubbed,
+            older_real_result,
+            newest_tool_result,
+        ]
+
+        trimmed, dropped_results, dropped_chars = _trim_messages_for_context_retry(messages)
+
+        # Only the genuinely-real older result is stubbed — the already-stubbed
+        # one is left exactly as it was.
+        assert dropped_results == 1
+        assert dropped_chars == 200
+        assert trimmed[1] == already_stubbed
+        assert "[stubbed:" in trimmed[2]["content"]
+        assert trimmed[3] == newest_tool_result
+
+    def test_only_the_newest_is_droppable_and_it_is_already_stubbed(self) -> None:
+        """The one non-newest tool result is already stubbed and the newest is
+
+        never touched — nothing left to drop, a clean no-op.
+        """
+        from personal_agent.orchestrator.executor import _trim_messages_for_context_retry
+
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "tool",
+                "name": "read_file",
+                "content": "[stubbed: read_file result, 500 chars, dropped after a context-window rejection]",
+                "tool_call_id": "c0",
+            },
+            {"role": "tool", "name": "read_file", "content": "newest", "tool_call_id": "c1"},
+        ]
+
+        trimmed, dropped_results, dropped_chars = _trim_messages_for_context_retry(messages)
+
+        assert trimmed is messages
+        assert dropped_results == 0
+        assert dropped_chars == 0
+
+
+class TestPrimaryContextWindowRejectionRecovery:
+    """FRE-1527 AC-1/AC-2/AC-4: a primary-turn context overrun is recovered, not lost."""
+
+    @staticmethod
+    def _context_window_error() -> Exception:
+        from litellm.exceptions import ContextWindowExceededError
+
+        return ContextWindowExceededError(
+            "This model's maximum context length is exceeded.",
+            model="gpt-x",
+            llm_provider="openai",
+        )
+
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_rejection_is_recovered_with_one_trim_and_one_retry(
+        self, mock_client_class
+    ) -> None:
+        """AC-1: exactly one trim, exactly one retry, and a delivered reply."""
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client_class.return_value = mock_client
+
+        round1 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/a.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 100},
+            "raw": {},
+        }
+        round2 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/b.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 120},
+            "raw": {},
+        }
+        synthesis = {
+            "role": "assistant",
+            "content": "Both files read.",
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 50},
+            "raw": {},
+        }
+
+        mock_client.respond.side_effect = [
+            round1,
+            round2,
+            self._context_window_error(),
+            synthesis,
+        ]
+
+        orchestrator = Orchestrator()
+        result = await orchestrator.handle_user_request(
+            session_id="test-session-fre1527-recover",
+            user_message="Read a.txt then b.txt",
+            mode=Mode.NORMAL,
+            channel=Channel.SYSTEM_HEALTH,
+        )
+
+        # Exactly one retry: 2 tool rounds + 1 failed synthesis attempt + 1 retry.
+        assert mock_client.respond.call_count == 4
+        assert result["reply"] == "Both files read."
+        step_types = [s["type"] for s in result["steps"]]
+        assert "error" not in step_types
+
+        retry_call = mock_client.respond.call_args_list[3]
+        retry_messages = retry_call.kwargs["messages"]
+        tool_messages = [m for m in retry_messages if m.get("role") == "tool"]
+        assert len(tool_messages) == 2
+        assert "[stubbed:" in tool_messages[0]["content"]
+        assert "[stubbed:" not in tool_messages[1]["content"]
+
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_second_failure_delivers_partial_work_with_explicit_context_message(
+        self, mock_client_class
+    ) -> None:
+        """AC-2 + AC-4: a second rejection still delivers, with an explicit message
+
+        (never the generic error text), and the failed turn writes a capture.
+        """
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client_class.return_value = mock_client
+
+        round1 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/a.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 100},
+            "raw": {},
+        }
+        round2 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/b.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 120},
+            "raw": {},
+        }
+
+        mock_client.respond.side_effect = [
+            round1,
+            round2,
+            self._context_window_error(),
+            self._context_window_error(),
+        ]
+
+        written: list[Any] = []
+        with patch("personal_agent.captains_log.capture.write_capture", side_effect=written.append):
+            orchestrator = Orchestrator()
+            result = await orchestrator.handle_user_request(
+                session_id="test-session-fre1527-second-failure",
+                user_message="Read a.txt then b.txt",
+                mode=Mode.NORMAL,
+                channel=Channel.SYSTEM_HEALTH,
+                user_id=uuid4(),
+            )
+
+        # Only one retry attempted — no third call.
+        assert mock_client.respond.call_count == 4
+        assert "ran out of context room" in result["reply"]
+        assert "An error occurred while processing your request" not in result["reply"]
+        # Partial work (the two successful tool calls) was salvaged, not discarded.
+        assert "read_file" in result["reply"]
+
+        assert len(written) == 1
+        assert written[0].trace_id == result["trace_id"]
+        assert written[0].outcome == "failed"
+
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_failed_turn_with_no_tool_results_still_writes_a_capture(
+        self, mock_client_class
+    ) -> None:
+        """AC-4, general case: any failed turn writes a capture, not only context-window ones."""
+        from personal_agent.llm_client.types import LLMServerError
+
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client_class.return_value = mock_client
+        mock_client.respond.side_effect = LLMServerError("boom")
+
+        written: list[Any] = []
+        with patch("personal_agent.captains_log.capture.write_capture", side_effect=written.append):
+            orchestrator = Orchestrator()
+            result = await orchestrator.handle_user_request(
+                session_id="test-session-fre1527-generic-failure",
+                user_message="Hello",
+                mode=Mode.NORMAL,
+                channel=Channel.CHAT,
+                user_id=uuid4(),
+            )
+
+        assert len(written) == 1
+        assert written[0].trace_id == result["trace_id"]
+        assert written[0].outcome == "failed"
+
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_retry_timeout_is_a_graceful_stop_not_a_failure(
+        self, mock_client_class, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retry that runs out of the turn's budget gets the same graceful stop
+
+        as the original call's own timeout — not the generic failure path a
+        bare ``except Exception`` would give it.
+
+        The turn's real remaining budget is deliberately NOT used to force this:
+        setup work before the first LLM call (skill index assembly, etc.) has
+        unpredictable real wall-clock cost, so gating on it would make this test
+        flaky. Instead, ``_turn_deadline_remaining``/``_turn_lifetime_remaining``
+        are patched to report a tiny remaining budget only once the retry itself
+        asks — every earlier call (the two tool rounds' own pre-call gates, and
+        the failing third call) sees a large one and proceeds normally.
+        """
+        import personal_agent.orchestrator.executor as ex
+
+        context_window_error_raised = False
+
+        def _fake_deadline_remaining(_ctx: Any) -> float:
+            return 0.05 if context_window_error_raised else 999.0
+
+        def _fake_lifetime_remaining(_ctx: Any) -> float:
+            return 0.05 if context_window_error_raised else 999.0
+
+        monkeypatch.setattr(ex, "_turn_deadline_remaining", _fake_deadline_remaining)
+        monkeypatch.setattr(ex, "_turn_lifetime_remaining", _fake_lifetime_remaining)
+
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client_class.return_value = mock_client
+
+        round1 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/a.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 100},
+            "raw": {},
+        }
+        round2 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/b.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 120},
+            "raw": {},
+        }
+
+        call_count = 0
+
+        async def _respond(**kwargs: Any) -> Any:
+            nonlocal call_count, context_window_error_raised
+            call_count += 1
+            if call_count == 1:
+                return round1
+            if call_count == 2:
+                return round2
+            if call_count == 3:
+                context_window_error_raised = True
+                raise self._context_window_error()
+            # The retry (4th call): outlive the tiny remaining budget the patched
+            # functions report from here on, so asyncio.wait_for cancels it with a
+            # real TimeoutError.
+            await asyncio.sleep(2)
+            raise AssertionError("the retry should have been cancelled by its timeout")
+
+        mock_client.respond = AsyncMock(side_effect=_respond)
+
+        orchestrator = Orchestrator()
+        result = await orchestrator.handle_user_request(
+            session_id="test-session-fre1527-retry-timeout",
+            user_message="Read a.txt then b.txt",
+            mode=Mode.NORMAL,
+            channel=Channel.SYSTEM_HEALTH,
+        )
+
+        assert call_count == 4
+        assert "stopped early" in result["reply"]
+        assert "An error occurred while processing your request" not in result["reply"]
+        step_types = [s["type"] for s in result["steps"]]
+        assert "error" not in step_types
+
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_retry_failure_unrelated_to_context_is_not_misclassified(
+        self, mock_client_class
+    ) -> None:
+        """Codex review of PR #1183: Python implicitly chains the retry's own
+
+        exception's ``__context__`` to the ContextWindowExceededError this
+        except block is handling (PEP 3134) — an unrelated retry failure (rate
+        limit, connection drop, anything) must not walk that chain back to the
+        original rejection and get classified as ``context_window``.
+        """
+        from personal_agent.llm_client.types import LLMRateLimit
+
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client_class.return_value = mock_client
+
+        round1 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/a.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 100},
+            "raw": {},
+        }
+        round2 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/b.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 120},
+            "raw": {},
+        }
+
+        mock_client.respond.side_effect = [
+            round1,
+            round2,
+            self._context_window_error(),
+            LLMRateLimit("429 Too Many Requests"),
+        ]
+
+        orchestrator = Orchestrator()
+        result = await orchestrator.handle_user_request(
+            session_id="test-session-fre1527-retry-unrelated-failure",
+            user_message="Read a.txt then b.txt",
+            mode=Mode.NORMAL,
+            channel=Channel.SYSTEM_HEALTH,
+        )
+
+        assert mock_client.respond.call_count == 4
+        assert "ran out of context room" not in result["reply"]
+        assert "rate-limiting" in result["reply"] or "rate limit" in result["reply"].lower()
+
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_retry_skipped_when_budget_already_exhausted_by_first_attempt(
+        self, mock_client_class, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex review of PR #1183: if the rejected first attempt itself used up
+
+        the turn's remaining budget, the retry must not be dispatched at all — the
+        turn gets the same graceful stop a pre-call budget check or a mid-call
+        timeout would give it, not a generic failure.
+        """
+        import personal_agent.orchestrator.executor as ex
+
+        context_window_error_raised = False
+
+        def _fake_deadline_remaining(_ctx: Any) -> float:
+            return -1.0 if context_window_error_raised else 999.0
+
+        def _fake_lifetime_remaining(_ctx: Any) -> float:
+            return -1.0 if context_window_error_raised else 999.0
+
+        monkeypatch.setattr(ex, "_turn_deadline_remaining", _fake_deadline_remaining)
+        monkeypatch.setattr(ex, "_turn_lifetime_remaining", _fake_lifetime_remaining)
+
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client_class.return_value = mock_client
+
+        round1 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/a.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 100},
+            "raw": {},
+        }
+        round2 = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": "/tmp/b.txt"}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 120},
+            "raw": {},
+        }
+
+        call_count = 0
+
+        async def _respond(**kwargs: Any) -> Any:
+            nonlocal call_count, context_window_error_raised
+            call_count += 1
+            if call_count == 1:
+                return round1
+            if call_count == 2:
+                return round2
+            context_window_error_raised = True
+            raise self._context_window_error()
+
+        mock_client.respond = AsyncMock(side_effect=_respond)
+
+        orchestrator = Orchestrator()
+        result = await orchestrator.handle_user_request(
+            session_id="test-session-fre1527-retry-budget-exhausted",
+            user_message="Read a.txt then b.txt",
+            mode=Mode.NORMAL,
+            channel=Channel.SYSTEM_HEALTH,
+        )
+
+        assert call_count == 3, "no retry was dispatched — the budget was already gone"
+        assert "stopped early" in result["reply"]
+        assert "An error occurred while processing your request" not in result["reply"]
+        step_types = [s["type"] for s in result["steps"]]
+        assert "error" not in step_types

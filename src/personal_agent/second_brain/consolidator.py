@@ -308,6 +308,19 @@ class SecondBrainConsolidator:
                     user_id=str(capture.user_id),
                 ):
                     try:
+                        # FRE-1527: a failed turn's capture (outcome="failed") exists so the
+                        # failure is analysable, not so its (often empty, or partial +
+                        # generic-error-suffixed) assistant_response is treated as a real
+                        # answer and entity-extracted into the graph.
+                        if capture.outcome == "failed":
+                            captures_skipped += 1
+                            log.debug(
+                                "consolidation_skipped_failed_turn",
+                                capture_num=i,
+                                capture_trace_id=capture.trace_id,
+                                trace_id=capture.trace_id,
+                            )
+                            continue
                         if await self.memory_service.turn_exists(
                             capture.trace_id, trace_id=capture.trace_id
                         ):

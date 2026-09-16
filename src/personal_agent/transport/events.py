@@ -333,6 +333,7 @@ class ClassifiedErrorEvent:
         "budget_denied",
         "tool_failure",
         "attachment_unsupported",
+        "context_window",
         "generic",
     ]
     reason: str

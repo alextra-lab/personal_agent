@@ -36,6 +36,10 @@ MODEL_CALL_COMPLETED = "model_call_completed"
 MODEL_CALL_ERROR = "model_call_error"
 HISTORY_SANITISED = "history_sanitised"
 
+# FRE-1527: a primary-turn call was rejected for exceeding the model's context
+# window and was retried once on a trimmed message list.
+PRIMARY_CONTEXT_WINDOW_TRIMMED = "primary_context_window_trimmed"
+
 # ADR-0074 / FRE-376 Phase 3: orchestrator step-planning boundary.
 # Distinct from MODEL_CALL_* (which the model clients emit with the full
 # canonical shape). Before Phase 3, the orchestrator also emitted

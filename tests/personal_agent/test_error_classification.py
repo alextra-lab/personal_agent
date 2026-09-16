@@ -181,6 +181,50 @@ class TestClassifyInferenceSlotTimeout:
         assert classify_error(InferenceSlotTimeout("no slot")).category == "timeout"
 
 
+class TestClassifyContextWindowError:
+    """FRE-1527: a context-window rejection gets its own category, not a generic one."""
+
+    @staticmethod
+    def _context_window_error() -> Exception:
+        from litellm.exceptions import ContextWindowExceededError
+
+        return ContextWindowExceededError(
+            "This model's maximum context length is exceeded.",
+            model="gpt-x",
+            llm_provider="openai",
+        )
+
+    def test_category(self) -> None:
+        assert classify_error(self._context_window_error()).category == "context_window"
+
+    def test_reason_mentions_context(self) -> None:
+        reason = classify_error(self._context_window_error()).reason.lower()
+        assert "context" in reason
+
+    def test_actions_include_retry(self) -> None:
+        assert "retry" in classify_error(self._context_window_error()).actions
+
+    def test_wrapped_context_window_error_is_still_recognized(self) -> None:
+        """This codebase's own taxonomy wraps the origin with ``raise ... from exc``
+
+        (litellm_client.py's cloud and local dispatch branches both do this) — the
+        classifier must see through one level of that wrap, same as
+        ``is_context_window_error`` itself (FRE-1522).
+        """
+        try:
+            try:
+                raise self._context_window_error()
+            except Exception as origin:
+                raise LLMServerError("wrapped") from origin
+        except LLMServerError as wrapped:
+            assert classify_error(wrapped).category == "context_window"
+
+    def test_takes_priority_over_llm_server_error(self) -> None:
+        """A context-window rejection is more specific than the generic server-error text."""
+        result = classify_error(self._context_window_error())
+        assert "returned an error" not in result.reason
+
+
 class TestClassifyGenericFallback:
     def test_category_for_unknown_exception(self) -> None:
         assert classify_error(ValueError("something weird")).category == "generic"

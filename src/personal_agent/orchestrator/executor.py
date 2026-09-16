@@ -70,6 +70,7 @@ from personal_agent.llm_client.models import (
     Placement,
     synthesis_retains_tools,
 )
+from personal_agent.llm_client.types import is_context_window_error
 from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
@@ -106,6 +107,7 @@ from personal_agent.telemetry import (
     LLM_STEP_COMPLETED,
     MODEL_CALL_ERROR,
     ORCHESTRATOR_FATAL_ERROR,
+    PRIMARY_CONTEXT_WINDOW_TRIMMED,
     REPLY_READY,
     STATE_TRANSITION,
     STEP_EXECUTED,
@@ -1161,6 +1163,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.error_classification import ClassifiedError
     from personal_agent.grounding.entailment import ModelEntailmentJudge
     from personal_agent.llm_client.litellm_client import LiteLLMClient
+    from personal_agent.llm_client.models import ToolCallingStrategy
+    from personal_agent.llm_client.types import LLMResponse
     from personal_agent.mcp.gateway import MCPGatewayAdapter
     from personal_agent.memory.service import MemoryService
     from personal_agent.orchestrator.cache_reset_scheduler import ResetDecision
@@ -2905,6 +2909,108 @@ def _salvage_partial_reply(
     return classified
 
 
+def _write_task_capture(ctx: ExecutionContext, *, outcome: str) -> None:
+    """Write the turn's structured capture record, whatever the outcome (FRE-1527).
+
+    Previously only called for a ``COMPLETED`` turn — a turn that ended in
+    ``FAILED`` wrote no capture at all, so it reached neither memory nor later
+    analysis. Callable for either exit so a failed turn is recorded too, with
+    ``outcome`` set accordingly.
+
+    Never raises: capture failure must not affect the turn's own outcome.
+
+    Args:
+        ctx: Execution context describing the finished (or failed) turn.
+        outcome: ``TaskCapture.outcome`` — ``"completed"`` or ``"failed"``.
+    """
+    try:
+        from personal_agent.captains_log.capture import TaskCapture, write_capture
+
+        # Calculate duration from metrics summary if available
+        duration_ms = None
+        if ctx.metrics_summary and "duration_seconds" in ctx.metrics_summary:
+            duration_ms = ctx.metrics_summary["duration_seconds"] * 1000
+
+        # Extract tools used and accumulate token counts from steps
+        tools_used = []
+        cap_prompt_tokens = 0
+        cap_completion_tokens = 0
+        cap_total_tokens = 0
+        cap_llm_calls = 0
+        for step in ctx.steps:
+            if step.get("type") == "tool_call":
+                tool_name = (step.get("metadata") or {}).get("tool_name")
+                if tool_name:
+                    tools_used.append(tool_name)
+            elif step.get("type") == "llm_call":
+                meta = step.get("metadata") or {}
+                cap_llm_calls += 1
+                cap_prompt_tokens += meta.get("prompt_tokens", 0)
+                cap_completion_tokens += meta.get("completion_tokens", 0)
+                cap_total_tokens += meta.get("tokens", 0)
+
+        # FRE-343: TaskCapture.user_id is non-optional. ExecutionContext.user_id
+        # is typed UUID | None for legacy reasons but is always populated in
+        # production by the orchestrator from request_user.user_id (which
+        # get_request_user always resolves). Pydantic validation catches the
+        # None case as a real bug.
+        assert ctx.user_id is not None, (
+            "ExecutionContext.user_id missing — orchestrator should populate it "
+            "from request_user.user_id (FRE-343)"
+        )
+        capture = TaskCapture(
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            timestamp=datetime.now(timezone.utc),
+            user_message=ctx.user_message,
+            assistant_response=ctx.final_reply,
+            steps=cast(list[dict[str, Any]], ctx.steps),
+            tools_used=list(set(tools_used)),  # Deduplicate
+            duration_ms=duration_ms,
+            metrics_summary=ctx.metrics_summary,
+            outcome=outcome,
+            memory_context_used=bool(ctx.memory_context),
+            memory_conversations_found=len(ctx.memory_context) if ctx.memory_context else 0,
+            input_tokens=cap_prompt_tokens,
+            output_tokens=cap_completion_tokens,
+            total_tokens=cap_total_tokens,
+            tool_results=ctx.tool_results,
+            user_id=ctx.user_id,
+            eval_mode=ctx.eval_mode,
+            # ADR-0125 D3 (FRE-1004). The turn evidence is stamped with the
+            # turn's real primary-call count here, at the only point it is
+            # known; the record itself still describes call 0 alone.
+            recall_admission=(ctx.turn_evidence.recall if ctx.turn_evidence else None),
+            assembled_context=(
+                ctx.turn_evidence.assembled_context.model_copy(
+                    update={"primary_call_count": cap_llm_calls}
+                )
+                if ctx.turn_evidence
+                else None
+            ),
+            grounding=ctx.grounding_record,
+            evidence_presence=derive_evidence_presence(
+                user_message=ctx.user_message,
+                assistant_response=ctx.final_reply,
+                tool_results=ctx.tool_results,
+                llm_call_count=cap_llm_calls,
+                turn_evidence=ctx.turn_evidence,
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                user_id=ctx.user_id,
+            ),
+        )
+        write_capture(capture)
+    except Exception as e:
+        # Don't fail the task if capture fails.
+        log.warning(
+            "capture_write_failed",
+            trace_id=ctx.trace_id,
+            error=str(e),
+            exc_info=True,
+        )
+
+
 def _stop_turn_for_deadline(ctx: ExecutionContext) -> None:
     """Populate ``ctx.final_reply`` for a graceful turn-deadline stop (FRE-973).
 
@@ -4069,88 +4175,10 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 # elsewhere (tools/linear.py gate, request-trace ES handler, and the
                 # promotion pipeline which skips eval-derived entries).
                 # Fast capture (Phase 2.2): Write structured capture immediately (no LLM)
+                _write_task_capture(ctx, outcome="completed")
+
+                # Publish request.captured event (ADR-0041)
                 try:
-                    from personal_agent.captains_log.capture import TaskCapture, write_capture
-
-                    # Calculate duration from metrics summary if available
-                    duration_ms = None
-                    if ctx.metrics_summary and "duration_seconds" in ctx.metrics_summary:
-                        duration_ms = ctx.metrics_summary["duration_seconds"] * 1000
-
-                    # Extract tools used and accumulate token counts from steps
-                    tools_used = []
-                    cap_prompt_tokens = 0
-                    cap_completion_tokens = 0
-                    cap_total_tokens = 0
-                    cap_llm_calls = 0
-                    for step in ctx.steps:
-                        if step.get("type") == "tool_call":
-                            tool_name = (step.get("metadata") or {}).get("tool_name")
-                            if tool_name:
-                                tools_used.append(tool_name)
-                        elif step.get("type") == "llm_call":
-                            meta = step.get("metadata") or {}
-                            cap_llm_calls += 1
-                            cap_prompt_tokens += meta.get("prompt_tokens", 0)
-                            cap_completion_tokens += meta.get("completion_tokens", 0)
-                            cap_total_tokens += meta.get("tokens", 0)
-
-                    # FRE-343: TaskCapture.user_id is non-optional. ExecutionContext.user_id
-                    # is typed UUID | None for legacy reasons but is always populated in
-                    # production by the orchestrator from request_user.user_id (which
-                    # get_request_user always resolves). Pydantic validation catches the
-                    # None case as a real bug.
-                    assert ctx.user_id is not None, (
-                        "ExecutionContext.user_id missing — orchestrator should populate it "
-                        "from request_user.user_id (FRE-343)"
-                    )
-                    capture = TaskCapture(
-                        trace_id=ctx.trace_id,
-                        session_id=ctx.session_id,
-                        timestamp=datetime.now(timezone.utc),
-                        user_message=ctx.user_message,
-                        assistant_response=ctx.final_reply,
-                        steps=cast(list[dict[str, Any]], ctx.steps),
-                        tools_used=list(set(tools_used)),  # Deduplicate
-                        duration_ms=duration_ms,
-                        metrics_summary=ctx.metrics_summary,
-                        outcome="completed",
-                        memory_context_used=bool(ctx.memory_context),
-                        memory_conversations_found=len(ctx.memory_context)
-                        if ctx.memory_context
-                        else 0,
-                        input_tokens=cap_prompt_tokens,
-                        output_tokens=cap_completion_tokens,
-                        total_tokens=cap_total_tokens,
-                        tool_results=ctx.tool_results,
-                        user_id=ctx.user_id,
-                        eval_mode=ctx.eval_mode,
-                        # ADR-0125 D3 (FRE-1004). The turn evidence is stamped with the
-                        # turn's real primary-call count here, at the only point it is
-                        # known; the record itself still describes call 0 alone.
-                        recall_admission=(ctx.turn_evidence.recall if ctx.turn_evidence else None),
-                        assembled_context=(
-                            ctx.turn_evidence.assembled_context.model_copy(
-                                update={"primary_call_count": cap_llm_calls}
-                            )
-                            if ctx.turn_evidence
-                            else None
-                        ),
-                        grounding=ctx.grounding_record,
-                        evidence_presence=derive_evidence_presence(
-                            user_message=ctx.user_message,
-                            assistant_response=ctx.final_reply,
-                            tool_results=ctx.tool_results,
-                            llm_call_count=cap_llm_calls,
-                            turn_evidence=ctx.turn_evidence,
-                            trace_id=ctx.trace_id,
-                            session_id=ctx.session_id,
-                            user_id=ctx.user_id,
-                        ),
-                    )
-                    write_capture(capture)
-
-                    # Publish request.captured event (ADR-0041)
                     from personal_agent.captains_log.background import (
                         run_in_background as _run_bg,
                     )
@@ -4167,9 +4195,9 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     )
                     _run_bg(get_event_bus().publish(STREAM_REQUEST_CAPTURED, event))
                 except Exception as e:
-                    # Don't fail task if capture fails
+                    # Don't fail task if the event publish fails
                     log.warning(
-                        "capture_write_failed",
+                        "request_captured_event_publish_failed",
                         trace_id=ctx.trace_id,
                         error=str(e),
                         exc_info=True,
@@ -4210,6 +4238,9 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     session_id=ctx.session_id,
                     error=str(ctx.error) if ctx.error else "Unknown error",
                 )
+                # FRE-1527 AC-4: previously a failed turn wrote no capture at all, so
+                # the failure reached neither memory nor later analysis.
+                _write_task_capture(ctx, outcome="failed")
 
         except Exception as e:
             log.error(
@@ -5693,6 +5724,263 @@ async def step_planning(
     return TaskState.LLM_CALL
 
 
+def _trim_messages_for_context_retry(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Stub every tool result but the newest, once, after a context-window rejection (FRE-1527).
+
+    The primary tool loop has no proactive reserve the way
+    :func:`~personal_agent.orchestrator.sub_agent._trim_for_landing` does for sub-agent
+    landings (FRE-1522) — this only runs reactively, after the model server has already
+    rejected a call for being too large, so there is no size target to trim down to:
+    every droppable tool result is stubbed unconditionally, in one pass.
+    ``step_llm_call`` retries the call exactly once on the result; a second rejection
+    falls through to the turn's normal error handling rather than trimming again.
+
+    Never touches the system prompt (not part of ``messages`` on the primary path — it
+    is a separate ``respond()`` parameter) or any ``user``/``assistant`` message — only
+    ``role == "tool"`` messages are ever stubbed. Never touches the newest tool result
+    either, so the retried call still sees at least the most recent tool output.
+
+    Args:
+        messages: The full message list the rejected call sent.
+
+    Returns:
+        A tuple of (message list, tool results dropped, characters dropped). Returns
+        the SAME input list object, unmodified, when there is nothing to drop (no tool
+        messages, or only one) — the caller reads ``dropped_results`` to tell a no-op
+        apart from a real trim.
+    """
+    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    droppable = tool_indices[:-1]  # every tool result except the newest
+    if not droppable:
+        return messages, 0, 0
+    trimmed = list(messages)
+    dropped_results = 0
+    dropped_chars = 0
+    for i in droppable:
+        original = trimmed[i]
+        content = str(original.get("content") or "")
+        tool_name = str(original.get("name") or "tool")
+        trimmed[i] = {
+            **original,
+            "content": (
+                f"[stubbed: {tool_name} result, {len(content):,} chars, "
+                "dropped after a context-window rejection]"
+            ),
+        }
+        dropped_results += 1
+        dropped_chars += len(content)
+    return trimmed, dropped_results, dropped_chars
+
+
+def _handle_llm_call_deadline_timeout(
+    ctx: ExecutionContext,
+    *,
+    model_role: ModelRole,
+    trace_ctx: TraceContext,
+    span_id: str,
+    lifetime_remaining: float,
+    deadline_remaining: float,
+) -> TaskState:
+    """Turn a primary-call timeout into a graceful stop, not a failure (ADR-0142 D4a).
+
+    Shared by the original call in :func:`step_llm_call` and its one context-window
+    retry (FRE-1527): a timeout on either call means the turn ran out of its work
+    deadline or its absolute lifetime cap mid-call — whichever budget was tighter — and
+    both are graceful stops, not errors: ``ctx.final_reply`` is populated and the turn
+    ends ``COMPLETED``, not ``FAILED``. Before FRE-1527 the retry had no timeout branch
+    of its own, so a retry that timed out fell through to the generic error path and
+    the turn ended FAILED — the same budget exhaustion the first attempt already
+    handles gracefully.
+
+    Args:
+        ctx: Execution context.
+        model_role: The role the call used.
+        trace_ctx: Trace context, for the completion log's parent span id.
+        span_id: This step's span id.
+        lifetime_remaining: Seconds left in the turn's absolute lifetime cap, as
+            measured at the point the timed-out call was dispatched.
+        deadline_remaining: Seconds left in the turn's work deadline, as measured at
+            the same point.
+
+    Returns:
+        Always TaskState.SYNTHESIS.
+    """
+    if lifetime_remaining <= deadline_remaining:
+        log.warning(
+            "turn_lifetime_cap_exceeded_mid_call",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            span_id=span_id,
+            budget_seconds=settings.orchestrator_turn_lifetime_seconds,
+        )
+        _stop_turn_for_lifetime_cap(ctx)
+    else:
+        log.warning(
+            "turn_wall_clock_budget_exceeded_mid_call",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            span_id=span_id,
+            budget_seconds=settings.orchestrator_task_timeout_seconds,
+        )
+        _stop_turn_for_deadline(ctx)
+    # ADR-0074 §I3: pair the STEP_PLANNING_STARTED emitted above this try
+    # with a completion, matching the success/error exits below.
+    log.info(
+        STEP_PLANNING_COMPLETED,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        span_id=span_id,
+        parent_span_id=trace_ctx.parent_span_id,
+        model_role=model_role.value,
+        channel=ctx.channel.value,
+        status="deadline_exceeded",
+        next_state="synthesis",
+    )
+    return TaskState.SYNTHESIS
+
+
+async def _finalize_llm_call_success(
+    ctx: ExecutionContext,
+    response: "LLMResponse",
+    *,
+    model_role: ModelRole,
+    trace_ctx: TraceContext,
+    span_id: str,
+    cite_only_retry: bool,
+    tool_strategy: "ToolCallingStrategy",
+    step_start_time: float,
+) -> TaskState:
+    """Apply a successful primary ``respond()`` result to ``ctx`` and pick the next state.
+
+    Shared by the normal call in :func:`step_llm_call` and its one context-window
+    retry (FRE-1527) — the two differ only in which ``messages`` were sent, not in how
+    a successful response updates ``ctx`` (cost, history, steps, next state).
+
+    Args:
+        ctx: Execution context.
+        response: The successful LLM response.
+        model_role: The role the call used.
+        trace_ctx: Trace context, for the completion log's parent span id.
+        span_id: This step's span id.
+        cite_only_retry: Whether this call was a grounding cite-only retry
+            (ADR-0151 D3) — its tool calls are dropped if present.
+        tool_strategy: The resolved tool-calling strategy, for logging.
+        step_start_time: ``time.time()`` at the top of the step, for duration_ms.
+
+    Returns:
+        TOOL_EXECUTION when the response carries tool calls, else SYNTHESIS.
+    """
+    # Extract response content and tool calls
+    response_content = response["content"] or ""
+    response_tool_calls = response["tool_calls"] or []
+
+    # ADR-0151 D3 (FRE-1509): the cite-only retry never executes a tool. The request
+    # pins tool_choice="none", but a non-native strategy cannot carry the pin and a
+    # backend may ignore it. Dropping the calls here keeps the retry to one generation
+    # that can cite only what the turn already registered.
+    if cite_only_retry and response_tool_calls:
+        log.warning(
+            "grounding_cite_only_retry_tool_calls_dropped",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            tool_call_count=len(response_tool_calls),
+            tool_strategy=tool_strategy.value,
+        )
+        response_tool_calls = []
+
+    # Track response_id for stateful /v1/responses API
+    if response.get("response_id"):
+        ctx.last_response_id = response["response_id"]
+
+    duration_ms = int((time.time() - step_start_time) * 1000)
+    total_tokens = response.get("usage", {}).get("total_tokens", 0)
+    prompt_tokens = response.get("usage", {}).get("prompt_tokens", 0)
+    completion_tokens = response.get("usage", {}).get("completion_tokens", 0)
+
+    # Accumulate the primary loop's per-call cost — this feeds the durable row's
+    # cost_live_usd for primary turns (ADR-0088 D3); the live meter itself climbs from
+    # turn.model_call_completed events. Report progress so tool/context refresh.
+    ctx.turn_cost_usd += float(response.get("cost_usd") or 0.0)
+    # FRE-1326: capture the real, provider-reported input-token count for the
+    # status-bar context meter. Guarded on truthy — a response that genuinely omits
+    # usage must not clobber a good prior reading with 0.
+    if prompt_tokens:
+        ctx.last_prompt_tokens = prompt_tokens
+    await _report_turn_progress(ctx)
+
+    log.info(
+        LLM_STEP_COMPLETED,
+        trace_id=ctx.trace_id,
+        span_id=span_id,
+        model_role=model_role.value,
+        tokens=total_tokens,
+    )
+    # Record step
+    step: OrchestratorStep = {
+        "type": "llm_call",
+        "description": f"LLM call with {model_role.value} model",
+        "metadata": {
+            "model_role": model_role.value,
+            "span_id": span_id,
+            "duration_ms": duration_ms,
+            "tokens": total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+        },
+    }
+    ctx.steps.append(step)
+
+    # Some reasoning models may emit router-style JSON with a `response` field.
+    # Unwrap it to avoid returning JSON to the user.
+    response_content = _unwrap_embedded_response_json(response_content)
+
+    # Add assistant message to history (with tool calls if present).
+    # Tool_call ids are rewritten with a turn prefix so ids do not collide
+    # across rounds — see _build_assistant_tool_calls for why this matters.
+    assistant_message: dict[str, Any] = {"role": "assistant", "content": response_content}
+    # Preserve thinking trace for templates that support `preserve_thinking`
+    # (Qwen3.6 unsloth template reads `message.reasoning_content` first,
+    # falls back to <think> tags in content). Cloud paths and sub-agents
+    # with disable_thinking emit reasoning_trace=None, so this is a no-op
+    # for them. Until the slm_server flag flips, the template ignores it.
+    reasoning_trace = response.get("reasoning_trace")
+    if reasoning_trace:
+        assistant_message["reasoning_content"] = reasoning_trace
+    if response_tool_calls:
+        assistant_message["tool_calls"] = _build_assistant_tool_calls(
+            response_tool_calls,
+            turn_id=ctx.tool_iteration_count,
+        )
+    ctx.messages.append(assistant_message)
+
+    # ADR-0074 §I3: emit STEP_PLANNING_COMPLETED on every success exit so
+    # the planning event pairs cleanly. Status indicates branch taken.
+    log.info(
+        STEP_PLANNING_COMPLETED,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        span_id=span_id,
+        parent_span_id=trace_ctx.parent_span_id,
+        model_role=model_role.value,
+        channel=ctx.channel.value,
+        status="success",
+        next_state="tool_execution" if response_tool_calls else "synthesis",
+    )
+
+    # If tool calls present, transition to tool execution
+    if response_tool_calls:
+        return TaskState.TOOL_EXECUTION
+    else:
+        # No tools, set final reply and synthesize. FRE-734 Defect 2: when a
+        # thinking model (Qwen3.6) emits the answer in the reasoning channel with
+        # empty content — as on vision turns (ADR-0101) — surface the reasoning
+        # trace rather than collapsing to a generic "Task completed".
+        ctx.final_reply = _select_no_tool_final_reply(ctx, response_content, reasoning_trace)
+        return TaskState.SYNTHESIS
+
+
 async def step_llm_call(
     ctx: ExecutionContext, session_manager: SessionManager, trace_ctx: TraceContext
 ) -> TaskState:
@@ -6618,148 +6906,119 @@ async def step_llm_call(
             # ADR-0142 D4a (FRE-1392): the same tighter-bound reasoning as the
             # pre-call gate above — the call was bounded by _remaining, so a
             # timeout here means whichever of the two was the binding one fired.
-            if _lifetime_remaining <= _deadline_remaining:
-                log.warning(
-                    "turn_lifetime_cap_exceeded_mid_call",
-                    trace_id=ctx.trace_id,
-                    session_id=ctx.session_id,
-                    span_id=span_id,
-                    budget_seconds=settings.orchestrator_turn_lifetime_seconds,
-                )
-                _stop_turn_for_lifetime_cap(ctx)
-            else:
-                log.warning(
-                    "turn_wall_clock_budget_exceeded_mid_call",
-                    trace_id=ctx.trace_id,
-                    session_id=ctx.session_id,
-                    span_id=span_id,
-                    budget_seconds=settings.orchestrator_task_timeout_seconds,
-                )
-                _stop_turn_for_deadline(ctx)
-            # ADR-0074 §I3: pair the STEP_PLANNING_STARTED emitted above this try
-            # with a completion, matching the success/error exits below.
-            log.info(
-                STEP_PLANNING_COMPLETED,
-                trace_id=ctx.trace_id,
-                session_id=ctx.session_id,
+            return _handle_llm_call_deadline_timeout(
+                ctx,
+                model_role=model_role,
+                trace_ctx=trace_ctx,
                 span_id=span_id,
-                parent_span_id=trace_ctx.parent_span_id,
-                model_role=model_role.value,
-                channel=ctx.channel.value,
-                status="deadline_exceeded",
-                next_state="synthesis",
+                lifetime_remaining=_lifetime_remaining,
+                deadline_remaining=_deadline_remaining,
             )
-            return TaskState.SYNTHESIS
 
-        # Extract response content and tool calls
-        response_content = response["content"] or ""
-        response_tool_calls = response["tool_calls"] or []
-
-        # ADR-0151 D3 (FRE-1509): the cite-only retry never executes a tool. The request
-        # pins tool_choice="none", but a non-native strategy cannot carry the pin and a
-        # backend may ignore it. Dropping the calls here keeps the retry to one generation
-        # that can cite only what the turn already registered.
-        if cite_only_retry and response_tool_calls:
-            log.warning(
-                "grounding_cite_only_retry_tool_calls_dropped",
-                trace_id=ctx.trace_id,
-                session_id=ctx.session_id,
-                tool_call_count=len(response_tool_calls),
-                tool_strategy=tool_strategy.value,
-            )
-            response_tool_calls = []
-
-        # Track response_id for stateful /v1/responses API
-        if response.get("response_id"):
-            ctx.last_response_id = response["response_id"]
-
-        duration_ms = int((time.time() - step_start_time) * 1000)
-        total_tokens = response.get("usage", {}).get("total_tokens", 0)
-        prompt_tokens = response.get("usage", {}).get("prompt_tokens", 0)
-        completion_tokens = response.get("usage", {}).get("completion_tokens", 0)
-
-        # Accumulate the primary loop's per-call cost — this feeds the durable row's
-        # cost_live_usd for primary turns (ADR-0088 D3); the live meter itself climbs from
-        # turn.model_call_completed events. Report progress so tool/context refresh.
-        ctx.turn_cost_usd += float(response.get("cost_usd") or 0.0)
-        # FRE-1326: capture the real, provider-reported input-token count for the
-        # status-bar context meter. Guarded on truthy — a response that genuinely omits
-        # usage must not clobber a good prior reading with 0.
-        if prompt_tokens:
-            ctx.last_prompt_tokens = prompt_tokens
-        await _report_turn_progress(ctx)
-
-        log.info(
-            LLM_STEP_COMPLETED,
-            trace_id=ctx.trace_id,
+        return await _finalize_llm_call_success(
+            ctx,
+            response,
+            model_role=model_role,
+            trace_ctx=trace_ctx,
             span_id=span_id,
-            model_role=model_role.value,
-            tokens=total_tokens,
+            cite_only_retry=cite_only_retry,
+            tool_strategy=tool_strategy,
+            step_start_time=step_start_time,
         )
-        # Record step
-        step: OrchestratorStep = {
-            "type": "llm_call",
-            "description": f"LLM call with {model_role.value} model",
-            "metadata": {
-                "model_role": model_role.value,
-                "span_id": span_id,
-                "duration_ms": duration_ms,
-                "tokens": total_tokens,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-            },
-        }
-        ctx.steps.append(step)
-
-        # Some reasoning models may emit router-style JSON with a `response` field.
-        # Unwrap it to avoid returning JSON to the user.
-        response_content = _unwrap_embedded_response_json(response_content)
-
-        # Add assistant message to history (with tool calls if present).
-        # Tool_call ids are rewritten with a turn prefix so ids do not collide
-        # across rounds — see _build_assistant_tool_calls for why this matters.
-        assistant_message: dict[str, Any] = {"role": "assistant", "content": response_content}
-        # Preserve thinking trace for templates that support `preserve_thinking`
-        # (Qwen3.6 unsloth template reads `message.reasoning_content` first,
-        # falls back to <think> tags in content). Cloud paths and sub-agents
-        # with disable_thinking emit reasoning_trace=None, so this is a no-op
-        # for them. Until the slm_server flag flips, the template ignores it.
-        reasoning_trace = response.get("reasoning_trace")
-        if reasoning_trace:
-            assistant_message["reasoning_content"] = reasoning_trace
-        if response_tool_calls:
-            assistant_message["tool_calls"] = _build_assistant_tool_calls(
-                response_tool_calls,
-                turn_id=ctx.tool_iteration_count,
-            )
-        ctx.messages.append(assistant_message)
-
-        # ADR-0074 §I3: emit STEP_PLANNING_COMPLETED on every success exit so
-        # the planning event pairs cleanly. Status indicates branch taken.
-        log.info(
-            STEP_PLANNING_COMPLETED,
-            trace_id=ctx.trace_id,
-            session_id=ctx.session_id,
-            span_id=span_id,
-            parent_span_id=trace_ctx.parent_span_id,
-            model_role=model_role.value,
-            channel=ctx.channel.value,
-            status="success",
-            next_state="tool_execution" if response_tool_calls else "synthesis",
-        )
-
-        # If tool calls present, transition to tool execution
-        if response_tool_calls:
-            return TaskState.TOOL_EXECUTION
-        else:
-            # No tools, set final reply and synthesize. FRE-734 Defect 2: when a
-            # thinking model (Qwen3.6) emits the answer in the reasoning channel with
-            # empty content — as on vision turns (ADR-0101) — surface the reasoning
-            # trace rather than collapsing to a generic "Task completed".
-            ctx.final_reply = _select_no_tool_final_reply(ctx, response_content, reasoning_trace)
-            return TaskState.SYNTHESIS
 
     except Exception as e:
+        # FRE-1527: a context-window rejection is not the end of the turn. Trim the
+        # oldest tool results (all but the newest) once and retry the exact same call
+        # on the trimmed history — persisted onto ctx.messages so a later round in this
+        # same tool loop does not immediately re-overflow. Only one retry: a second
+        # rejection (including another context-window one) falls through to the
+        # ordinary error handling below, same as any other failure.
+        if is_context_window_error(e):
+            estimated_prompt_tokens = estimate_messages_tokens(ctx.messages)
+            trimmed_messages, dropped_results, dropped_chars = _trim_messages_for_context_retry(
+                ctx.messages
+            )
+            if dropped_results:
+                ctx.messages = trimmed_messages
+                retry_messages = ctx.messages
+                if tools:
+                    retry_messages = _append_no_think_to_last_user_message(retry_messages)
+                retry_messages = _validate_and_fix_conversation_roles(retry_messages)
+                # The trim changed what is actually sent — recompute rather than reuse
+                # the pre-trim _prompt_identity, so cache telemetry describes this call.
+                retry_prompt_identity = derive_orchestrator_prompt_identity(
+                    static_prefix=_static_prefix,
+                    request_messages=retry_messages,
+                    tools=tools,
+                    component_ids=tuple(_component_ids),
+                )
+                log.warning(
+                    PRIMARY_CONTEXT_WINDOW_TRIMMED,
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                    span_id=span_id,
+                    estimated_prompt_tokens=estimated_prompt_tokens,
+                    context_length=_resolve_context_max(),
+                    dropped_results=dropped_results,
+                    dropped_chars=dropped_chars,
+                )
+                # Recomputed rather than reusing the pre-call _remaining/_deadline_remaining/
+                # _lifetime_remaining: the failed first attempt already spent some of the
+                # turn's budget.
+                _retry_deadline_remaining = _turn_deadline_remaining(ctx)
+                _retry_lifetime_remaining = _turn_lifetime_remaining(ctx)
+                _retry_remaining = min(_retry_deadline_remaining, _retry_lifetime_remaining)
+                if _retry_remaining > 0:
+                    try:
+                        async with phase_span(
+                            session_id=ctx.session_id,
+                            phase=_inference_phase,
+                            detail=_inference_detail,
+                        ):
+                            response = await asyncio.wait_for(
+                                llm_client.respond(
+                                    role=respond_role,
+                                    messages=retry_messages,
+                                    system_prompt=system_prompt,
+                                    tools=tools if tools else None,
+                                    tool_choice=tool_choice,
+                                    trace_ctx=span_ctx,
+                                    previous_response_id=ctx.last_response_id,
+                                    max_retries=max_retries_override,
+                                    priority=InferencePriority.USER_FACING,
+                                    prompt_identity=retry_prompt_identity,
+                                ),
+                                timeout=_retry_remaining,
+                            )
+                        return await _finalize_llm_call_success(
+                            ctx,
+                            response,
+                            model_role=model_role,
+                            trace_ctx=trace_ctx,
+                            span_id=span_id,
+                            cite_only_retry=cite_only_retry,
+                            tool_strategy=tool_strategy,
+                            step_start_time=step_start_time,
+                        )
+                    except TimeoutError:
+                        # Same graceful-stop treatment as the original call's own
+                        # TimeoutError branch — a retry that runs out of budget is not
+                        # a failure any more than the first attempt running out is.
+                        return _handle_llm_call_deadline_timeout(
+                            ctx,
+                            model_role=model_role,
+                            trace_ctx=trace_ctx,
+                            span_id=span_id,
+                            lifetime_remaining=_retry_lifetime_remaining,
+                            deadline_remaining=_retry_deadline_remaining,
+                        )
+                    except Exception as retry_exc:
+                        # Falls through to the ordinary error handling below, classified
+                        # from the retry's own exception (still a context-window
+                        # rejection if the trim was not enough; whatever else it may be
+                        # otherwise).
+                        e = retry_exc
+
         log.error(
             MODEL_CALL_ERROR,
             trace_id=ctx.trace_id,

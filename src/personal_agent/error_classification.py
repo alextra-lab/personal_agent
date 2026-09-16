@@ -30,6 +30,7 @@ class ClassifiedError:
         "budget_denied",
         "tool_failure",
         "attachment_unsupported",
+        "context_window",
         "generic",
     ]
     reason: str
@@ -64,9 +65,21 @@ def classify_error(error: Exception) -> ClassifiedError:
         LLMRateLimit,
         LLMServerError,
         LLMTimeout,
+        is_context_window_error,
     )
 
     retry_actions = ("retry", "stop")
+
+    # Checked before LLMServerError: a context-window rejection often arrives
+    # wrapped as one (FRE-1527), and the specific reason is more useful than
+    # the generic "the model server returned an error" text.
+    if is_context_window_error(error):
+        return ClassifiedError(
+            category="context_window",
+            reason="This turn ran out of context room in the model's window.",
+            next_step="Start a new turn, or ask a narrower question.",
+            actions=retry_actions,
+        )
 
     if isinstance(error, LLMServerError):
         return ClassifiedError(

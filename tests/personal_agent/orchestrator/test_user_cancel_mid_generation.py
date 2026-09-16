@@ -450,3 +450,113 @@ class TestGroundingSkippedWhenStoppedEarly:
         assert result == TaskState.COMPLETED
         assert not verify_mock.called
         assert ctx.final_reply == "Stopped before gathering any results."
+
+
+class TestCancelDuringContextWindowRetry:
+    """FRE-1527 + codex review of PR #1183: the context-window retry must race
+
+    the user's cancel event exactly like the original call does — the retry
+    previously used a plain ``asyncio.wait_for`` with no cancel race at all, so
+    Stop pressed during recovery did nothing until the retry itself finished or
+    timed out.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _active_connection(self) -> object:
+        _register_connection("sess-cancel-001")
+        yield
+        ws_endpoint._active_connections.pop("sess-cancel-001", None)
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_the_retry_stops_without_waiting_for_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "orchestrator_task_timeout_seconds", 30)
+        ctx = _make_ctx(
+            messages=[
+                {"role": "user", "content": "seven day budget analysis"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c0",
+                            "type": "function",
+                            "function": {"name": "query_es", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "name": "query_es",
+                    "content": "older result",
+                    "tool_call_id": "c0",
+                },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "query_es", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "name": "query_es",
+                    "content": "newest result",
+                    "tool_call_id": "c1",
+                },
+            ]
+        )
+
+        cancel_event = ws_endpoint.get_cancel_event(ctx.session_id)
+        completed = {"value": False}
+        call_count = {"n": 0}
+
+        from litellm.exceptions import ContextWindowExceededError
+
+        async def _respond(**_kwargs: object) -> dict[str, object]:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise ContextWindowExceededError(
+                    "This model's maximum context length is exceeded.",
+                    model="gpt-x",
+                    llm_provider="openai",
+                )
+            # The retry: outlive a cancel fired mid-generation.
+            await asyncio.sleep(0.05)
+            cancel_event.set()  # simulate USER_CANCEL arriving during recovery
+            await asyncio.sleep(5.0)
+            completed["value"] = True  # must never be reached
+            return {
+                "content": "final answer",
+                "tool_calls": [],
+                "response_id": None,
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+        respond_mock = AsyncMock(side_effect=_respond)
+        mock_llm = _mock_llm_client(respond_mock)
+        trace_ctx = TraceContext.new_trace()
+
+        with (
+            _step_llm_call_patches(mock_llm),
+            patch(
+                "personal_agent.orchestrator.executor._emit_turn_cancelled",
+                new=AsyncMock(),
+            ) as emit_mock,
+        ):
+            result = await asyncio.wait_for(
+                ex.step_llm_call(ctx, _mock_session(), trace_ctx),  # type: ignore[arg-type]
+                timeout=5.0,
+            )
+
+        assert result == TaskState.SYNTHESIS
+        assert call_count["n"] == 2, "exactly one retry was attempted, then cancelled"
+        assert completed["value"] is False, "the retry must be aborted, not allowed to finish"
+        assert emit_mock.await_count == 1, "the cancellation must be emitted for the retry too"
+        assert ctx.final_reply is not None
+        assert "stopped" in ctx.final_reply.lower()

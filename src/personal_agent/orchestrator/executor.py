@@ -4238,9 +4238,15 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     session_id=ctx.session_id,
                     error=str(ctx.error) if ctx.error else "Unknown error",
                 )
-                # FRE-1527 AC-4: previously a failed turn wrote no capture at all, so
-                # the failure reached neither memory nor later analysis.
-                _write_task_capture(ctx, outcome="failed")
+                # FRE-1527 AC-4: a failed turn's capture is written by
+                # execute_task_safe instead of here — codex review of PR #1183
+                # found this call site alone missed two failure exits (an
+                # exception escaping this state-dispatch loop's own outer
+                # `except`, and one escaping execute_task entirely) and wrote the
+                # capture before the classified/salvaged reply existed, leaving
+                # assistant_response=None for a turn the user did receive a reply
+                # for. execute_task_safe is the one choke point every exit
+                # (success, normal failure, and fatal) already funnels through.
 
         except Exception as e:
             log.error(
@@ -5724,6 +5730,11 @@ async def step_planning(
     return TaskState.LLM_CALL
 
 
+# Shared between the stub text this writes and the already-stubbed check below,
+# so the two can never drift apart (FRE-1527).
+_STUBBED_TOOL_RESULT_PREFIX = "[stubbed: "
+
+
 def _trim_messages_for_context_retry(
     messages: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int, int]:
@@ -5745,14 +5756,25 @@ def _trim_messages_for_context_retry(
     Args:
         messages: The full message list the rejected call sent.
 
+    A later, separate rejection in the same turn (a fresh ``step_llm_call`` round
+    that also overflows) calls this again over ``ctx.messages``, which by then may
+    already hold a message this function stubbed earlier — that one is excluded from
+    ``droppable`` rather than stubbed again: re-stubbing already-tiny placeholder text
+    drops nothing new and would report a misleading, near-zero ``dropped_chars`` for
+    what looks like a real trim (codex review, PR #1183).
+
     Returns:
         A tuple of (message list, tool results dropped, characters dropped). Returns
         the SAME input list object, unmodified, when there is nothing to drop (no tool
-        messages, or only one) — the caller reads ``dropped_results`` to tell a no-op
-        apart from a real trim.
+        messages, only one, or every older one is already stubbed) — the caller reads
+        ``dropped_results`` to tell a no-op apart from a real trim.
     """
     tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    droppable = tool_indices[:-1]  # every tool result except the newest
+    droppable = [
+        i
+        for i in tool_indices[:-1]  # every tool result except the newest
+        if not str(messages[i].get("content") or "").startswith(_STUBBED_TOOL_RESULT_PREFIX)
+    ]
     if not droppable:
         return messages, 0, 0
     trimmed = list(messages)
@@ -5765,7 +5787,7 @@ def _trim_messages_for_context_retry(
         trimmed[i] = {
             **original,
             "content": (
-                f"[stubbed: {tool_name} result, {len(content):,} chars, "
+                f"{_STUBBED_TOOL_RESULT_PREFIX}{tool_name} result, {len(content):,} chars, "
                 "dropped after a context-window rejection]"
             ),
         }
@@ -5839,6 +5861,138 @@ def _handle_llm_call_deadline_timeout(
         next_state="synthesis",
     )
     return TaskState.SYNTHESIS
+
+
+async def _call_primary_llm(
+    ctx: ExecutionContext,
+    llm_client: Any,
+    *,
+    respond_role: ModelRole,
+    messages: list[dict[str, Any]],
+    system_prompt: str | None,
+    tools: list[dict[str, Any]] | None,
+    tool_choice: Any,
+    span_ctx: Any,
+    max_retries_override: int | None,
+    prompt_identity: Any,
+    remaining: float,
+    phase: Any,
+    detail: str | None,
+    span_id: str,
+    trace_ctx: TraceContext,
+    model_role: ModelRole,
+) -> "LLMResponse | TaskState":
+    """Make one primary ``respond()`` call, racing the user's cancel event (ADR-0076/FRE-1375).
+
+    Shared by the original call in :func:`step_llm_call` and its one context-window
+    retry (FRE-1527), so both get identical cancel-race and timeout-bounding behavior
+    — codex review of PR #1183 caught the retry silently skipping the cancel race,
+    which meant pressing Stop during recovery did nothing until the retry itself
+    completed or timed out.
+
+    Args:
+        ctx: Execution context.
+        llm_client: The resolved LLM client for this call.
+        respond_role: The role to call ``respond()`` with.
+        messages: The message list to send.
+        system_prompt: The system prompt to send.
+        tools: Tool definitions, or an empty/falsy value for none.
+        tool_choice: The tool-choice directive for this call.
+        span_ctx: The span-scoped trace context for this call.
+        max_retries_override: Transport-level retry override for this call.
+        prompt_identity: The prompt identity to send, for cache tracking.
+        remaining: Seconds to bound this call to.
+        phase: The transport phase (``Phase.PLANNING``/``Phase.SYNTHESIS``) to
+            bracket this call with.
+        detail: Phase detail string (e.g. ``"round 2"``), or ``None``.
+        span_id: This step's span id, for logging.
+        trace_ctx: Trace context, for the cancel-exit completion log.
+        model_role: The role the call used, for logging.
+
+    Returns:
+        The raw ``LLMResponse`` on success, or ``TaskState.SYNTHESIS`` if the user
+        cancelled mid-generation — ``ctx.final_reply`` is already populated in that
+        case via :func:`_stop_turn_for_cancel`.
+
+    Raises:
+        TimeoutError: If the call outruns ``remaining``. The caller decides how to
+            turn that into a graceful stop
+            (:func:`_handle_llm_call_deadline_timeout`), since the two call sites log
+            different remaining-budget numbers.
+    """
+    from personal_agent.llm_client.concurrency import InferencePriority  # noqa: PLC0415
+    from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
+
+    async with phase_span(session_id=ctx.session_id, phase=phase, detail=detail):
+        _respond_coro = llm_client.respond(
+            role=respond_role,
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tools if tools else None,
+            tool_choice=tool_choice,
+            trace_ctx=span_ctx,
+            previous_response_id=ctx.last_response_id,
+            max_retries=max_retries_override,
+            priority=InferencePriority.USER_FACING,
+            prompt_identity=prompt_identity,
+        )
+        _cancel_event = _get_cancel_event(ctx.session_id) if ctx.session_id else None
+        if _cancel_event is None:
+            return await asyncio.wait_for(_respond_coro, timeout=remaining)
+
+        # ADR-0076 / FRE-1375: race the call against the user's cancel event too, so
+        # Stop aborts an in-flight generation instead of only being read between tool
+        # rounds (where a turn almost never is). Two real tasks via asyncio.wait
+        # rather than a watcher cancelling the inner future out-of-band from
+        # asyncio.wait_for's own timeout — mixing two independent cancellation
+        # sources on one future is fragile across asyncio's cancel/uncancel
+        # bookkeeping (codex plan-review).
+        _respond_task = asyncio.ensure_future(_respond_coro)
+        _cancel_wait_task = asyncio.ensure_future(_cancel_event.wait())
+        _race_tasks = (_respond_task, _cancel_wait_task)
+        try:
+            done, _pending = await asyncio.wait(
+                _race_tasks,
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            # Unconditional: runs even if this await is itself cancelled from
+            # outside (a turn-level cancellation), so _respond_task is never
+            # orphaned still generating and holding its concurrency slot (codex
+            # plan-review).
+            for _t in _race_tasks:
+                if not _t.done():
+                    _t.cancel()
+            await asyncio.gather(*_race_tasks, return_exceptions=True)
+
+        # Cancel checked first: if both complete in the same asyncio.wait() call,
+        # Stop must win — a response landing in the same instant as a cancel must
+        # never be delivered (AC-3).
+        if _cancel_wait_task in done:
+            log.info(
+                "user_cancel_mid_generation",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                span_id=span_id,
+            )
+            await _emit_turn_cancelled(session_id=ctx.session_id, trace_id=ctx.trace_id)
+            _stop_turn_for_cancel(ctx)
+            log.info(
+                STEP_PLANNING_COMPLETED,
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                span_id=span_id,
+                parent_span_id=trace_ctx.parent_span_id,
+                model_role=model_role.value,
+                channel=ctx.channel.value,
+                status="user_cancelled",
+                next_state="synthesis",
+            )
+            return TaskState.SYNTHESIS
+        if _respond_task in done:
+            return cast("LLMResponse", _respond_task.result())
+        raise TimeoutError
 
 
 async def _finalize_llm_call_success(
@@ -6687,7 +6841,6 @@ async def step_llm_call(
                 for msg in request_messages
             ],
         )
-        from personal_agent.llm_client.concurrency import InferencePriority
         from personal_agent.llm_client.prompt_identity import derive_orchestrator_prompt_identity
 
         # Build the orchestrator.primary PromptIdentity (ADR-0078 D1/D4, FRE-405).
@@ -6814,7 +6967,6 @@ async def step_llm_call(
         # round is the "final synthesis" inference. Tight scope — the span closes
         # when respond() returns/raises, before tool processing or the expansion
         # hook — so it never overlaps the EXPANSION parent phase.
-        from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
         from personal_agent.transport.events import Phase  # noqa: PLC0415
 
         _inference_phase = Phase.PLANNING if ctx.tool_iteration_count == 0 else Phase.SYNTHESIS
@@ -6828,80 +6980,24 @@ async def step_llm_call(
             f"round {ctx.tool_iteration_count}" if _inference_phase is Phase.SYNTHESIS else None
         )
         try:
-            async with phase_span(
-                session_id=ctx.session_id, phase=_inference_phase, detail=_inference_detail
-            ):
-                _respond_coro = llm_client.respond(
-                    role=respond_role,
-                    messages=request_messages,
-                    system_prompt=system_prompt,
-                    tools=tools if tools else None,
-                    tool_choice=tool_choice,
-                    trace_ctx=span_ctx,
-                    previous_response_id=ctx.last_response_id,
-                    max_retries=max_retries_override,
-                    priority=InferencePriority.USER_FACING,
-                    prompt_identity=_prompt_identity,
-                )
-                _cancel_event = _get_cancel_event(ctx.session_id) if ctx.session_id else None
-                if _cancel_event is None:
-                    response = await asyncio.wait_for(_respond_coro, timeout=_remaining)
-                else:
-                    # ADR-0076 / FRE-1375: race the call against the user's cancel
-                    # event too, so Stop aborts an in-flight generation instead of
-                    # only being read between tool rounds (where a turn almost
-                    # never is). Two real tasks via asyncio.wait rather than a
-                    # watcher cancelling the inner future out-of-band from
-                    # asyncio.wait_for's own timeout — mixing two independent
-                    # cancellation sources on one future is fragile across
-                    # asyncio's cancel/uncancel bookkeeping (codex plan-review).
-                    _respond_task = asyncio.ensure_future(_respond_coro)
-                    _cancel_wait_task = asyncio.ensure_future(_cancel_event.wait())
-                    _race_tasks = (_respond_task, _cancel_wait_task)
-                    try:
-                        done, _pending = await asyncio.wait(
-                            _race_tasks,
-                            timeout=_remaining,
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                    finally:
-                        # Unconditional: runs even if this await is itself
-                        # cancelled from outside (a turn-level cancellation), so
-                        # _respond_task is never orphaned still generating and
-                        # holding its concurrency slot (codex plan-review).
-                        for _t in _race_tasks:
-                            if not _t.done():
-                                _t.cancel()
-                        await asyncio.gather(*_race_tasks, return_exceptions=True)
-
-                    # Cancel checked first: if both complete in the same
-                    # asyncio.wait() call, Stop must win — a response landing in
-                    # the same instant as a cancel must never be delivered (AC-3).
-                    if _cancel_wait_task in done:
-                        log.info(
-                            "user_cancel_mid_generation",
-                            trace_id=ctx.trace_id,
-                            session_id=ctx.session_id,
-                            span_id=span_id,
-                        )
-                        await _emit_turn_cancelled(session_id=ctx.session_id, trace_id=ctx.trace_id)
-                        _stop_turn_for_cancel(ctx)
-                        log.info(
-                            STEP_PLANNING_COMPLETED,
-                            trace_id=ctx.trace_id,
-                            session_id=ctx.session_id,
-                            span_id=span_id,
-                            parent_span_id=trace_ctx.parent_span_id,
-                            model_role=model_role.value,
-                            channel=ctx.channel.value,
-                            status="user_cancelled",
-                            next_state="synthesis",
-                        )
-                        return TaskState.SYNTHESIS
-                    if _respond_task in done:
-                        response = _respond_task.result()
-                    else:
-                        raise TimeoutError
+            call_result = await _call_primary_llm(
+                ctx,
+                llm_client,
+                respond_role=respond_role,
+                messages=request_messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                tool_choice=tool_choice,
+                span_ctx=span_ctx,
+                max_retries_override=max_retries_override,
+                prompt_identity=_prompt_identity,
+                remaining=_remaining,
+                phase=_inference_phase,
+                detail=_inference_detail,
+                span_id=span_id,
+                trace_ctx=trace_ctx,
+                model_role=model_role,
+            )
         except TimeoutError:
             # ADR-0142 D4a (FRE-1392): the same tighter-bound reasoning as the
             # pre-call gate above — the call was bounded by _remaining, so a
@@ -6915,9 +7011,12 @@ async def step_llm_call(
                 deadline_remaining=_deadline_remaining,
             )
 
+        if isinstance(call_result, TaskState):
+            return call_result  # SYNTHESIS via user cancel
+
         return await _finalize_llm_call_success(
             ctx,
-            response,
+            call_result,
             model_role=model_role,
             trace_ctx=trace_ctx,
             span_id=span_id,
@@ -6968,56 +7067,81 @@ async def step_llm_call(
                 _retry_deadline_remaining = _turn_deadline_remaining(ctx)
                 _retry_lifetime_remaining = _turn_lifetime_remaining(ctx)
                 _retry_remaining = min(_retry_deadline_remaining, _retry_lifetime_remaining)
-                if _retry_remaining > 0:
-                    try:
-                        async with phase_span(
-                            session_id=ctx.session_id,
-                            phase=_inference_phase,
-                            detail=_inference_detail,
-                        ):
-                            response = await asyncio.wait_for(
-                                llm_client.respond(
-                                    role=respond_role,
-                                    messages=retry_messages,
-                                    system_prompt=system_prompt,
-                                    tools=tools if tools else None,
-                                    tool_choice=tool_choice,
-                                    trace_ctx=span_ctx,
-                                    previous_response_id=ctx.last_response_id,
-                                    max_retries=max_retries_override,
-                                    priority=InferencePriority.USER_FACING,
-                                    prompt_identity=retry_prompt_identity,
-                                ),
-                                timeout=_retry_remaining,
-                            )
-                        return await _finalize_llm_call_success(
-                            ctx,
-                            response,
-                            model_role=model_role,
-                            trace_ctx=trace_ctx,
-                            span_id=span_id,
-                            cite_only_retry=cite_only_retry,
-                            tool_strategy=tool_strategy,
-                            step_start_time=step_start_time,
-                        )
-                    except TimeoutError:
-                        # Same graceful-stop treatment as the original call's own
-                        # TimeoutError branch — a retry that runs out of budget is not
-                        # a failure any more than the first attempt running out is.
-                        return _handle_llm_call_deadline_timeout(
-                            ctx,
-                            model_role=model_role,
-                            trace_ctx=trace_ctx,
-                            span_id=span_id,
-                            lifetime_remaining=_retry_lifetime_remaining,
-                            deadline_remaining=_retry_deadline_remaining,
-                        )
-                    except Exception as retry_exc:
-                        # Falls through to the ordinary error handling below, classified
-                        # from the retry's own exception (still a context-window
-                        # rejection if the trim was not enough; whatever else it may be
-                        # otherwise).
-                        e = retry_exc
+                if _retry_remaining <= 0:
+                    # The rejected first attempt itself exhausted the turn's budget —
+                    # the same graceful stop the pre-call gate and a mid-call timeout
+                    # both give this, not a dispatched-then-cancelled second call
+                    # (codex review, PR #1183: this previously fell through to the
+                    # generic failure path below instead).
+                    return _handle_llm_call_deadline_timeout(
+                        ctx,
+                        model_role=model_role,
+                        trace_ctx=trace_ctx,
+                        span_id=span_id,
+                        lifetime_remaining=_retry_lifetime_remaining,
+                        deadline_remaining=_retry_deadline_remaining,
+                    )
+                try:
+                    retry_call_result = await _call_primary_llm(
+                        ctx,
+                        llm_client,
+                        respond_role=respond_role,
+                        messages=retry_messages,
+                        system_prompt=system_prompt,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        span_ctx=span_ctx,
+                        max_retries_override=max_retries_override,
+                        prompt_identity=retry_prompt_identity,
+                        remaining=_retry_remaining,
+                        phase=_inference_phase,
+                        detail=_inference_detail,
+                        span_id=span_id,
+                        trace_ctx=trace_ctx,
+                        model_role=model_role,
+                    )
+                except TimeoutError:
+                    # Same graceful-stop treatment as the original call's own
+                    # TimeoutError branch — a retry that runs out of budget is not
+                    # a failure any more than the first attempt running out is.
+                    return _handle_llm_call_deadline_timeout(
+                        ctx,
+                        model_role=model_role,
+                        trace_ctx=trace_ctx,
+                        span_id=span_id,
+                        lifetime_remaining=_retry_lifetime_remaining,
+                        deadline_remaining=_retry_deadline_remaining,
+                    )
+                except Exception as retry_exc:
+                    # Python implicitly chains retry_exc.__context__ to `e` (the
+                    # ContextWindowExceededError this except block is handling) since
+                    # this raise happens while that block is active — sever it, or an
+                    # unrelated retry failure (rate limit, connection drop) would
+                    # still walk back to the original rejection via
+                    # is_context_window_error's own __context__ fallback and get
+                    # misclassified as context_window below (codex review, PR #1183).
+                    # __cause__ is untouched: a deliberate `raise ... from origin`
+                    # inside the retry's own call stack is a real, meaningful chain
+                    # and stays intact.
+                    retry_exc.__context__ = None
+                    e = retry_exc
+                else:
+                    # In its own `else`, not inside the `try`: a bug in
+                    # _finalize_llm_call_success itself must not be caught by the
+                    # `except Exception as retry_exc` above and misattributed to the
+                    # retry call (same reasoning as the __context__ severing).
+                    if isinstance(retry_call_result, TaskState):
+                        return retry_call_result  # SYNTHESIS via user cancel
+                    return await _finalize_llm_call_success(
+                        ctx,
+                        retry_call_result,
+                        model_role=model_role,
+                        trace_ctx=trace_ctx,
+                        span_id=span_id,
+                        cite_only_retry=cite_only_retry,
+                        tool_strategy=tool_strategy,
+                        step_start_time=step_start_time,
+                    )
 
         log.error(
             MODEL_CALL_ERROR,
@@ -7841,6 +7965,13 @@ async def execute_task_safe(
                 }
             )
             await _emit_classified_error(ctx, classified)
+            # FRE-1527 AC-4: a failed turn's capture must record what the user
+            # actually saw. ctx.final_reply may still be None here (nothing
+            # salvaged) even though result["reply"] now holds the classified
+            # fallback text the user is about to receive — materialize it before
+            # writing, or the capture would wrongly say no reply was given.
+            ctx.final_reply = result["reply"]
+            _write_task_capture(ctx, outcome="failed")
 
         # ADR-0081 §D3 Decision 3: the reactive 0.65 soft compaction trigger was
         # removed with the cache_frozen_layout_enabled flag (FRE-941) — the
@@ -7903,11 +8034,17 @@ async def execute_task_safe(
             fatal_error=True,
         )
         await _emit_classified_error(ctx, classified)
+        # FRE-1527 AC-4: this is the one path a completely unexpected exception
+        # (escaping execute_task itself, not just a modeled turn failure) reaches
+        # — codex review of PR #1183 found it previously wrote no capture at all.
+        # Materialize the same fallback the returned reply uses before writing.
+        ctx.final_reply = ctx.final_reply or f"{classified.reason} {classified.next_step}"
+        _write_task_capture(ctx, outcome="failed")
         return {
             # FRE-973: surface any salvaged partial reply instead of always the
             # bare classified message (this previously ignored ctx.final_reply
             # unconditionally).
-            "reply": ctx.final_reply or f"{classified.reason} {classified.next_step}",
+            "reply": ctx.final_reply,
             # FRE-973: preserve steps recorded before the fatal exception instead
             # of discarding them (this previously replaced ctx.steps outright).
             "steps": [

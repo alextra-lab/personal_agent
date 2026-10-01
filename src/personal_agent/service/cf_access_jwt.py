@@ -34,6 +34,9 @@ log = structlog.get_logger(__name__)
 # Refresh the JWKS at most once per hour under normal operation. A
 # signing-key miss (kid not present) forces an immediate refresh.
 _JWKS_TTL_SECONDS = 3600
+# A forced refresh runs at most once per window, whatever the TTL says. Without it a
+# caller that sends random ``kid`` values makes every request fetch from Cloudflare.
+_JWKS_FORCE_REFRESH_COOLDOWN_SECONDS = 60
 _JWKS_FETCH_TIMEOUT_SECONDS = 10.0
 
 
@@ -66,6 +69,7 @@ class CFAccessVerifier:
         self._certs_url = f"https://{self._team_domain}/cdn-cgi/access/certs"
         self._jwks: dict[str, Any] = {}
         self._cached_at: float = 0.0
+        self._last_forced_at: float | None = None
         self._lock = asyncio.Lock()
 
     @property
@@ -94,7 +98,8 @@ class CFAccessVerifier:
         await self._ensure_jwks(force=False)
         try:
             unverified_header = jwt.get_unverified_header(token)
-        except jwt.InvalidTokenError as exc:
+        except (jwt.InvalidTokenError, RecursionError) as exc:
+            # RecursionError: a deeply nested header makes the JSON parser overflow.
             raise CFAccessVerifierError(f"malformed header: {exc}") from exc
 
         kid = unverified_header.get("kid")
@@ -117,7 +122,9 @@ class CFAccessVerifier:
                 audience=self._audience,
                 options={"require": ["exp", "iat", "aud", "email"]},
             )
-        except jwt.PyJWTError as exc:
+        except (jwt.PyJWTError, RecursionError) as exc:
+            # RecursionError: PyJWT < 2.15 let it escape. The 401 contract must not
+            # depend on the library version.
             raise CFAccessVerifierError(f"verification failed: {exc}") from exc
 
         return CFAccessClaims(
@@ -127,17 +134,36 @@ class CFAccessVerifier:
             iss=str(claims.get("iss", "")),
         )
 
+    def _force_cooling_down(self) -> bool:
+        """Return True when a forced refresh ran less than the cooldown ago."""
+        return (
+            self._last_forced_at is not None
+            and (time.monotonic() - self._last_forced_at) < _JWKS_FORCE_REFRESH_COOLDOWN_SECONDS
+        )
+
     async def _ensure_jwks(self, *, force: bool) -> None:
-        """Populate the JWKS cache. Force=True bypasses the TTL."""
+        """Populate the JWKS cache.
+
+        ``force=True`` bypasses the TTL but not the cooldown: a forced refresh that follows
+        another forced attempt within ``_JWKS_FORCE_REFRESH_COOLDOWN_SECONDS`` is skipped,
+        and the caller then sees an unknown ``kid`` and fails closed. A failed attempt
+        starts the cooldown too, so a failing endpoint is not retried on every request.
+        """
         if not force and self._jwks and (time.monotonic() - self._cached_at) < _JWKS_TTL_SECONDS:
             return
         async with self._lock:
+            if force and self._force_cooling_down():
+                # Checked only here, not before the lock: a request that arrives while a
+                # forced fetch is in flight must queue behind it and read the fresh keys.
+                return
             if (
                 not force
                 and self._jwks
                 and (time.monotonic() - self._cached_at) < _JWKS_TTL_SECONDS
             ):
                 return
+            if force:
+                self._last_forced_at = time.monotonic()
             async with create_guarded_http_client(timeout=_JWKS_FETCH_TIMEOUT_SECONDS) as client:
                 resp = await client.get(self._certs_url)
                 resp.raise_for_status()

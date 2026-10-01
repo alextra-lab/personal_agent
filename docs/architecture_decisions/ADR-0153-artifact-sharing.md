@@ -14,35 +14,61 @@ FRE-1525 asks whether that changes, and how.
 
 ### Today's behaviour (verified on `main` at `bc6c2206`, 2026-10-01)
 
-- **One owner per artifact.** The `artifacts` table (`docker/postgres/init.sql:404-420`) has a
+- **One owner per artifact.** The `artifacts` table (`docker/postgres/init.sql:404-421`) has a
   single `user_id` and no visibility, grant, or token column.
-- **Every read path filters on `artifacts.user_id = <caller>` and nothing else:**
+- **Every caller-facing read filters on the caller's `user_id`.** Some also filter on `type` or
+  `upload_pending`. None admits a second user:
 
-  | Path | Location | On mismatch |
+  | Caller-facing read | Location | On mismatch |
   |---|---|---|
-  | `GET /internal/artifacts/{id}` (the Worker calls it) | `service/artifacts_router.py:141-240` | 404 |
+  | `GET /internal/artifacts/{id}` (the Worker calls it) | `service/artifacts_router.py:141-240` | HTTP 404 |
   | `GET /api/v1/artifacts` (list) | `artifacts_router.py:243-290` | empty list |
-  | `GET /api/v1/artifacts/{id}` (metadata) | `artifacts_router.py:293-336` | 404 |
-  | `GET /api/v1/artifacts/{id}/export` | `artifacts_router.py:428-520` | 404 |
-  | `artifact_list` tool | `tools/artifact_tools.py:520-597` | empty list |
+  | `GET /api/v1/artifacts/{id}` (metadata) | `artifacts_router.py:293-336` | HTTP 404 |
+  | `GET /api/v1/artifacts/{id}/export` (HTML only) | `artifacts_router.py:428-520` | HTTP 404 |
+  | `artifact_list` tool (`type='artifact'` only) | `tools/artifact_tools.py:520-597` | empty list |
   | `artifact_read` tool | `tools/artifact_tools.py:600-735` | `ToolExecutionError` |
-  | Chat attachments | `service/app.py:155` (`_validate_attachments`) | id dropped |
+  | Chat attachments, first turn | `service/app.py:155-210` (`_validate_attachments`) | id dropped silently |
   | `notes_search` (pgvector) | `tools/notes_tools.py:387-484` | empty |
 
+- **Three other reads exist. Two can serve bytes without the ownership check:**
+  - **Attachment continuations.** A cloud-cost confirmation and a PDF page continuation rebuild
+    `AttachmentRef` from a stored `r2_key` with no new check
+    (`orchestrator/executor.py:4392-4405`, `4554-4565`). The bytes are then fetched from R2
+    (`orchestrator/attachment_resolution.py:195-198`, `orchestrator/document_resolution.py:296-299`).
+  - **`expand_tool_result`** passes a caller-supplied R2 key to `store.get` with only a content
+    hash guard (`tools/tool_result_expand.py:75-102`). The store checks no namespace
+    (`storage/artifact_store.py:230-266`). The tool is dormant: it registers only when
+    `tool_result_compression_enabled` is on (`tools/__init__.py:137`, ADR-0085 Parked), and the
+    live gateway leaves it off.
+  - **System reads:** the joinability walk reads artifact ids by session
+    (`observability/joinability/walk.py:595-620`), and `grafana_ro` can select the whole table
+    (`docker/postgres/migrations/0028_grafana_ro_artifacts.sql`). Neither serves bytes to a user.
+- **The only ID-addressed mutation is upload completion**, `POST /api/uploads/{artifact_id}/complete`
+  (`service/uploads_router.py:223`), which filters on owner. The two `DELETE FROM artifacts`
+  statements touch pending uploads only (`uploads_router.py:314`, `:402`).
 - **404, not 403.** ADR-0069 D3 inherits ADR-0064 D3: an ownership mismatch returns 404, which
   hides existence. ADR-0069 Verification item 4 states the case: user A writes, user B gets 404.
-- **Memory is global.** ADR-0064 D5 keeps the knowledge graph shared, and new facts default to
-  `group` visibility (`memory/service.py:187-212`). So user B's agent can recall a fact from the
-  owner's turns, but B cannot open the artifact that the fact came from.
+- **Memory is global.** ADR-0064 D5 keeps the knowledge graph shared. Authenticated sessions write
+  `group` visibility (`second_brain/consolidator.py:789-791`), and reads apply the visibility
+  filter at `memory/service.py:187-212`. So user B's agent can recall a fact from the owner's
+  turns, but B cannot open the artifact that the fact came from.
 - **Sessions have one user.** `sessions.user_id` is a single column. The multi-participant
   session work is FRE-420, which is in Backlog and unscheduled.
 - **No content from outside is fenced.** Tool output enters the model context as raw JSON
   (`orchestrator/tool_dispatch.py:256`). `artifact_read` decodes R2 bytes straight into
   `output["content"]` (`artifact_tools.py:721`). `web_fetch` has the same property.
-- **The main API path trusts a plaintext header.** `get_request_user` (`service/auth.py:194`)
-  takes identity from `Cf-Access-Authenticated-User-Email` with no JWT check. The JWT verifier
-  (`service/cf_access_jwt.py`) has one call site, the Worker path (`artifacts_router.py:191`,
-  confirmed by FRE-1530). Reachability of this header without Cloudflare Access is not verified.
+- **The main API path trusts a plaintext header.** `get_request_user` (`service/auth.py:176`)
+  takes identity from `Cf-Access-Authenticated-User-Email` at line 195, with no JWT check. The JWT
+  verifier (`service/cf_access_jwt.py`) has one call site, the Worker path
+  (`artifacts_router.py:190`, confirmed by FRE-1530). Reachability of this header without
+  Cloudflare Access is not verified.
+- **Tool approval fails open.** `check_permission` allows a tool that requires approval when there
+  is no session id, when `approval_ui_enabled` is false, or when no transport is attached
+  (`tools/executor.py:226-280`). No `ToolExecutionLayer` is built with a transport
+  (`orchestrator/executor.py:3252`, `orchestrator/tool_dispatch.py:58`, `config/bootstrap.py:122`),
+  and no code assigns one later. The live gateway sets `AGENT_APPROVAL_UI_ENABLED=true`. So a
+  tool with `requires_approval: true` runs with a warning log and no prompt. This affects `bash`
+  and seven MCP write tools today (`config/governance/tools.yaml`).
 
 ### Demand
 
@@ -72,7 +98,7 @@ Add `artifact_grants`:
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `UUID PRIMARY KEY` | |
-| `artifact_id` | `UUID NOT NULL` | FK `artifacts(id) ON DELETE CASCADE` |
+| `artifact_id` | `UUID NOT NULL` | FK `artifacts(id) ON DELETE RESTRICT` |
 | `grantee_user_id` | `UUID NOT NULL` | FK `users(user_id)` |
 | `granted_by` | `UUID NOT NULL` | FK `users(user_id)`. Always the artifact owner (D2) |
 | `granted_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
@@ -80,9 +106,13 @@ Add `artifact_grants`:
 | `revoked_by` | `UUID NULL` | FK `users(user_id)` |
 
 A partial unique index on `(artifact_id, grantee_user_id) WHERE revoked_at IS NULL` allows one
-active grant per pair. A revoke sets `revoked_at` and `revoked_by`. It never deletes the row, so
-the table records who shared what, with whom, and when it ended. A later re-grant inserts a new
-row.
+active grant per pair. A revoke sets `revoked_at` and `revoked_by`. It never deletes the row. A
+later re-grant inserts a new row, so the history keeps every grant period.
+
+`ON DELETE RESTRICT` keeps the history: an artifact with grant rows cannot be deleted. This costs
+nothing today, because the only delete paths remove pending uploads, which cannot hold a grant
+(D3). A future delete path for shared types must decide how to keep the history. It must not add a
+cascade.
 
 The schema change goes in `docker/postgres/init.sql` and a new file in
 `docker/postgres/migrations/`, run as the `agent` superuser (FRE-808).
@@ -90,15 +120,19 @@ The schema change goes in `docker/postgres/init.sql` and a new file in
 ### D2 — Only the owner grants, and a grantee only reads
 
 The owner is `artifacts.user_id`. Only the owner can create, revoke, or list the grants on an
-artifact. A grantee cannot re-share, overwrite, or delete the artifact. A grant request on an
-artifact that the caller does not own returns 404, the same answer as for an unknown id.
+artifact. A grantee cannot re-share, overwrite, or delete it.
+
+**Check order.** Every grant-management request checks ownership first. A caller who does not own
+the artifact gets the unknown-id response before any check of type, email, or self-grant. So a
+non-owner cannot learn whether an id is a note, a capture, or a shareable artifact.
 
 ### D3 — Shareable types: `artifact` and `upload`
 
-A grant can target `type IN ('artifact', 'upload')`. `note` is excluded. A note is a chain of
-revisions under one slug (`notes_tools.py:204-219`), and a grant on one revision id does not fit
-that model. `capture` is excluded because it is not a user-facing type. A grant request on an
-excluded type returns 400 to the owner.
+A grant can target `type IN ('artifact', 'upload')` with `upload_pending = FALSE`. `note` is
+excluded. A note is a chain of revisions under one slug (`notes_tools.py:204-219`), and a grant on
+one revision id does not fit that model. `capture` is excluded because it is not a user-facing
+type. After the D2 ownership check, a grant request on an excluded or pending item returns 400 to
+the owner.
 
 ### D4 — Grant by email, to existing users only
 
@@ -111,54 +145,94 @@ There is no user directory to browse. The error tells the owner whether an email
 Seshat user. This is accepted, because every caller is already on the Access allowlist. A grant to
 oneself returns 400.
 
-### D5 — "Owned or actively granted" in every read path, through one predicate
+### D5 — One read predicate, in the database, used by every read path
 
-One shared predicate decides read access: the caller owns the artifact, **or** an
-`artifact_grants` row exists for the artifact and the caller with `revoked_at IS NULL`. These
-paths use it:
+A Postgres function `artifact_readable_by(artifact_id UUID, user_id UUID) RETURNS boolean`
+decides read access. It returns true when the artifact is not pending and one of these holds:
+
+- the caller owns it, or
+- the type is `artifact` or `upload` and an `artifact_grants` row exists for the artifact and
+  the caller with `revoked_at IS NULL`.
+
+The function is the one place the rule lives. It works from raw SQL and from SQLAlchemy
+(`func.artifact_readable_by`), which covers both query styles in the read paths. These paths call
+it and drop their own ownership filter:
 
 - `GET /internal/artifacts/{id}` (browser access through the Worker)
 - `GET /api/v1/artifacts/{id}` (metadata)
 - `GET /api/v1/artifacts/{id}/export`
 - `artifact_read`
-- chat attachments (`_validate_attachments`)
+- chat attachments on the first turn (`_validate_attachments`)
+- **attachment continuations**: before a cloud-confirmation or PDF-continuation turn re-injects an
+  attachment, it calls the function by `artifact_id` and drops any attachment that fails. A
+  stored `r2_key` is never authority.
 
-Write, delete, and grant-management paths keep the owner-only filter. `notes_search` keeps the
-owner-only filter, because notes are not shareable (D3).
+Write, delete, upload-completion, and grant-management paths keep the owner-only filter.
+`notes_search` keeps the owner-only filter, because notes are not shareable (D3). The system reads
+(joinability walk, `grafana_ro`) do not change.
 
-The predicate lives in one place. A read path that re-implements its own ownership filter is the
-defect that D5 forbids.
+**`expand_tool_result` is confined to its namespace.** It rejects any key that does not start with
+`tool-results/{session_id}/` for a session that the caller owns. It returns one error for a
+rejected key, a missing object, and a hash mismatch, so it cannot confirm that a key exists. This
+closes a byte path to `artifact/`, `upload/`, and `note/` keys that bypasses the function. The tool
+is dormant today, so this is a condition for turning `tool_result_compression_enabled` on, built
+with the read-path work because it is small.
 
 ### D6 — Discovery: a scope on the list paths
 
-`artifact_list` and `GET /api/v1/artifacts` take a scope: `own` (the default), `shared`, or
-`all`. `shared` returns the artifacts with an active grant to the caller, of type `artifact` or
-`upload`. The default stays `own`, so the existing behaviour of both paths does not change.
+`artifact_list` and `GET /api/v1/artifacts` take a scope: `own` (the default), `shared`, or `all`.
+Each row in a result appears once.
+
+| Scope | `GET /api/v1/artifacts` (`type` filter still applies) | `artifact_list` |
+|---|---|---|
+| `own` | Caller's own rows of the requested type, as today | Caller's own `artifact` rows, as today |
+| `shared` | Rows with an active grant to the caller. A `type` other than `artifact` or `upload` returns an empty list | Rows of type `artifact` or `upload` with an active grant to the caller |
+| `all` | Union of `own` and `shared` | Union of `own` and `shared` |
+
+Each shared row carries `shared: true` and `shared_by`. Pending uploads never appear. Revoked
+grants never appear. The default stays `own`, so the existing behaviour of both paths does not
+change.
 
 The grantee's agent finds shared items with `artifact_list(scope="shared")` and reads them with
 `artifact_read`. This meets the owner's answer 4.
 
-### D7 — The agent can share, only with the owner's approval
+### D7 — The agent can share, only with the owner's approval, and the tool fails closed
 
 A new tool, `artifact_share(artifact_id, email)`, creates a grant on an artifact that the caller
-owns. It carries `requires_approval: true` in `config/governance/tools.yaml` in every mode. The
-approval prompt shows the artifact title and the grantee email, so the owner sees what they
-approve.
+owns, through the same D2 to D4 checks as the API.
+
+- **It fails closed.** The tool creates a grant only after an affirmative `approve` decision from
+  the approval round-trip. With no session id, no transport, approval UI disabled, a timeout, or a
+  denial, it creates nothing and returns a refusal. It does not rely on the generic
+  `check_permission` approval branch, because that branch fails open (Context).
+- **The prompt shows trusted values.** Before the prompt, the tool reads the artifact title from
+  the `artifacts` row and resolves the email to a user. The prompt shows that title and email, not
+  only the model's arguments.
+- **Dependency.** Today no transport reaches the tool layer, so the tool refuses every call until
+  the approval channel is wired into the primary tool path. Until then, granting works through the
+  API and the PWA only.
 
 **Why approval:** text injected into a web page or a shared artifact can tell the agent to share
 the owner's artifacts. The blast radius is limited to allowlisted users, but the owner must still
-decide each grant. The approval step is that decision.
+decide each grant.
 
 Revoke is available through the API and the PWA. The agent has no revoke tool in v1.
 
 ### D8 — Existence hiding stays, and revocation is immediate
 
-- A caller with no grant gets 404 on every read path. The body is the same as for an id that does
-  not exist.
-- A revoked grantee also gets 404 with the same body.
-- The next request after a revoke gets 404. The internal artifact endpoint returns
-  `Cache-Control: private, no-store`, so no shared cache holds the bytes. If the Worker rewrites
-  this header, the Worker change goes in the private secrets repo (ADR-0069 D8).
+A caller who cannot read an artifact gets the same outcome as for an id that does not exist. The
+outcome depends on the surface:
+
+| Surface | Outcome for no access, revoked access, or an unknown id |
+|---|---|
+| Worker, metadata, export, grant management | HTTP 404 with an identical body |
+| `artifact_read` | `ToolExecutionError` with an identical message |
+| Chat attachments, first turn and continuations | The id is dropped, with the same log event and no different user-visible text |
+| `artifact_list`, `GET /api/v1/artifacts` | The row is absent |
+
+The next request after a revoke gets that outcome. The internal artifact endpoint returns
+`Cache-Control: private, no-store`, so no shared cache holds the bytes. If the Worker rewrites this
+header, the Worker change goes in the private secrets repo (ADR-0069 D8).
 
 **Revocation cannot recall copies.** These copies stay after a revoke:
 
@@ -173,12 +247,12 @@ This ADR states that limit and does not try to remove it.
 Each of these actions emits a structlog event with `trace_id`, `artifact_id`, `owner_user_id`, and
 `grantee_user_id`, which reaches Elasticsearch:
 
-- `artifact_grant_created` (also carries `via`: `api` or `agent_tool`)
+- `artifact_grant_created`, with `via`: `api` or `agent_tool`
 - `artifact_grant_revoked`
-- `artifact_read_by_grantee` (also carries `surface`: `worker`, `metadata`, `export`,
-  `artifact_read`, or `attachment`)
+- `artifact_read_by_grantee`, with `surface`: `worker`, `metadata`, `export`, `artifact_read`, or
+  `attachment`
 
-The owner can list the active and revoked grants on their artifact through
+The owner lists the active and revoked grants on their artifact through
 `GET /api/v1/artifacts/{id}/grants`.
 
 ### D10 — The agent knows who wrote a shared artifact
@@ -195,12 +269,13 @@ the same gap and a larger exposure.
 With grants, identity is the whole access gate. Before any grant path ships, `get_request_user`
 must verify `Cf-Access-Jwt-Assertion` with the existing `CFAccessVerifier`, and take identity
 from the verified `email` claim only. The plaintext email header alone must not resolve a user in
-production. The dev fallback (`gateway_auth_enabled=False` resolves to `agent_owner_email`,
-ADR-0064 D4) stays.
+production. If the verifier is not configured in production, the request returns 503, as the
+Worker path does today (ADR-0069 Dev-3). The dev fallback (`gateway_auth_enabled=False` resolves to
+`agent_owner_email`, ADR-0064 D4) stays.
 
-If the implementation shows that Cloudflare Access always strips and re-injects the header, so a
-forged value cannot reach the gateway, the ticket records that proof and still adds the JWT check.
-A defense that depends on edge configuration is not one this ADR relies on.
+If the implementation shows that Cloudflare Access always strips and re-injects the header, the
+ticket records that proof and still adds the JWT check. This ADR does not rely on a defense that
+depends on edge configuration.
 
 ### Out of scope (owner-confirmed 2026-10-01)
 
@@ -208,13 +283,15 @@ A defense that depends on edge configuration is not one this ADR relies on.
 - **Notifying the grantee.** The grantee sees the item under scope `shared`.
 - **Session-scoped sharing.** When FRE-420 gives a session more than one participant, the
   participants can get implicit grants on that session's artifacts. The grant table and the D5
-  predicate are the place for that rule. This ADR records the path and does not build it.
+  function are the place for that rule. This ADR records the path and does not build it.
 
 ---
 
 ## Alternatives Considered
 
-### Option 1: Do nothing
+### Sharing models
+
+#### Option 1: Do nothing
 
 **Description:** Artifacts stay personal. Outside sharing stays manual through export.
 **Pros:** No build cost. No new access path.
@@ -222,7 +299,7 @@ A defense that depends on edge configuration is not one this ADR relies on.
 stricter than the memory wall, which already shares facts.
 **Why Rejected:** The owner wants per-individual sharing inside Seshat.
 
-### Option 2: A group visibility flag
+#### Option 2: A group visibility flag
 
 **Description:** A per-artifact `visibility` column with `private` and `group`, reusing the
 ADR-0064 D6 levels. `group` means every Cloudflare Access user.
@@ -230,7 +307,7 @@ ADR-0064 D6 levels. `group` means every Cloudflare Access user.
 **Cons:** It cannot express "this person but not that one".
 **Why Rejected:** The owner requires individual access control (answer 2).
 
-### Option 3: Share links
+#### Option 3: Share links
 
 **Description:** A per-artifact token that the Worker accepts in place of an identity.
 **Pros:** Reaches people outside the allowlist.
@@ -241,7 +318,7 @@ private secrets repo.
 **Why Rejected:** Outside sharing is not planned (answer 3). Export plus a file covers the rare
 case.
 
-### Option 4: Session-scoped sharing only
+#### Option 4: Session-scoped sharing only
 
 **Description:** Every participant of a shared session sees the artifacts created in it.
 **Pros:** It follows the collaborative-sessions North Star with no separate sharing concept.
@@ -249,13 +326,37 @@ case.
 artifact from a solo session.
 **Why Rejected:** Blocked today. Kept as a future rule on top of D1 and D5.
 
-### Option 5: Grants without the JWT precondition
+#### Option 5: Grants without the JWT precondition
 
 **Description:** Ship D1 to D10 and leave `get_request_user` on the plaintext header.
 **Pros:** One ticket less.
 **Cons:** A forged header reads every artifact granted to the spoofed user, not only that user's
 own artifacts.
 **Why Rejected:** Grants raise the value of a spoofed identity. D11 closes the gap first.
+
+### Enforcement mechanisms for D5
+
+#### Option 6: The predicate repeated in application code
+
+**Description:** Each read path adds its own "owned or granted" SQL.
+**Pros:** No database object.
+**Cons:** The read paths use raw SQL and SQLAlchemy in different files. Eight copies drift, and one
+missed copy is a bypass. Two such bypasses already exist (attachment continuations, live, and
+`expand_tool_result`, dormant).
+**Why Rejected:** D5 needs one definition that both query styles can call.
+
+#### Option 7: Postgres row-level security
+
+**Description:** An RLS policy on `artifacts`, with the caller id set per request through a session
+variable.
+**Pros:** The database enforces the rule even for a query that forgets it.
+**Cons:** The gateway shares pooled asyncpg connections, so a per-request session variable can leak
+to the next request if one reset is missed. System reads (joinability walk, `grafana_ro`,
+consolidation) need a bypass role or policy. Owner-only paths need a second policy. The failure is
+silent: a wrong variable returns another user's rows with no error.
+**Why Rejected:** The risk moves from a missed filter to a missed reset, which is harder to see. The
+D5 function plus AC-11 gives one definition without per-connection state. RLS can come later if
+the read paths grow.
 
 ---
 
@@ -267,36 +368,42 @@ own artifacts.
 - The grantee's agent can find and read shared artifacts in a turn, with provenance.
 - The grant table is a complete record of who shared what with whom.
 - The main API path gains JWT verification, which protects the owner-only paths too.
+- Two bypasses close: attachment continuations (live) and `expand_tool_result` (dormant).
 
 ### Negative Consequences
 
-- Every read path gains a join or an `EXISTS` on `artifact_grants`.
+- Every read path calls a function that may query `artifact_grants`.
 - A new PWA surface (share dialog, access list, shared items) needs build and maintenance.
 - An owner can learn whether an email belongs to a Seshat user (D4).
 - Revocation cannot recall a downloaded file, session history, or knowledge-graph facts (D8).
+- `artifact_share` refuses every call until the approval channel reaches the tool layer (D7).
 
 ### Risks and Mitigations
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| A read path keeps its own owner filter, or a new one skips the predicate | Medium | D5: one predicate. AC-1 and AC-2 probe every surface |
-| Injected text makes the agent share an artifact | Medium | D7: `requires_approval: true` in every mode, prompt shows title and email. AC-6 seeds the negative |
-| A shared artifact carries instructions to the grantee's agent | Low | D10: `shared_by` provenance and a tool-description rule. The sharer is an allowlisted user |
+| A read path keeps its own owner filter, or a new one skips the function | Medium | D5 function. AC-11 checks for artifact authorization SQL outside it |
+| A persisted attachment serves bytes after a revoke | Medium | D5 continuation check. AC-3 covers continuations |
+| Injected text makes the agent share an artifact | Medium | D7 fail-closed approval with trusted values. AC-6 seeds the negative |
+| A shared artifact carries instructions to the grantee's agent | Low | D10 provenance and a tool-description rule. The sharer is an allowlisted user |
 | A spoofed identity reads granted artifacts | Medium | D11 precondition. AC-8 |
-| A cache serves bytes after a revoke | Low | D8: `Cache-Control: private, no-store`. AC-3 |
+| A cache serves bytes after a revoke | Low | D8 `Cache-Control: private, no-store`. AC-3 |
 
 ---
 
 ## Implementation Notes
 
-- **Order:** D11 first. D1, D5, D6, and D10 next. Then grant management (D2, D4, D7, D9). Then
-  the PWA.
-- **Files:** `service/auth.py`, `service/cf_access_jwt.py` (call site only),
-  `service/artifacts_router.py`, `service/app.py`, `tools/artifact_tools.py`,
-  `config/governance/tools.yaml`, `docker/postgres/init.sql`, a new migration,
-  `seshat-pwa/src/components/ArtifactCard.tsx` and the artifact list surface.
-- **D11 and FRE-1530** both touch `cf_access_jwt.py`. The D11 ticket follows FRE-1530.
-- **Testing:** the test stack (`tests/CLAUDE.md`, FRE-375) with two `users` rows. Live
+- **Order:** D11 first. Then D1, D5, D6, D8, and D10 (schema and read paths). Then D2, D3, D4, and
+  D9 (grant API and audit). Then the PWA. D7 comes last and depends on the approval channel.
+- **Files:** `service/auth.py`, `service/artifacts_router.py`, `service/app.py`,
+  `orchestrator/executor.py` (continuations), `tools/artifact_tools.py`,
+  `tools/tool_result_expand.py`, `config/governance/tools.yaml`, `docker/postgres/init.sql`, a new
+  migration, `seshat-pwa/src/components/ArtifactCard.tsx` and the artifact list surface.
+- **D11 and FRE-1530** both touch the JWT code path. The D11 ticket follows FRE-1530.
+- **The approval fail-open** in `check_permission` affects `bash` and seven MCP write tools today.
+  D7 does not depend on fixing it, because `artifact_share` enforces its own approval. Fixing the
+  generic branch is separate work.
+- **Testing:** the test stack (`tests/CLAUDE.md`, FRE-375) with three `users` rows. Live
   verification uses the owner and the real second user, with the owner's OK.
 
 ---
@@ -304,55 +411,85 @@ own artifacts.
 ## Verification / Acceptance Criteria
 
 Adjudicated on the umbrella ticket FRE-1525, after the implementation chain lands and deploys.
-User A owns artifact X. User B holds a grant on X. User C holds no grant.
 
-- **AC-1 — A grant opens every read surface to the grantee.** B gets X's bytes from the Worker
-  URL, X's metadata, X's export, and X's content from B's agent through `artifact_read`, which
-  returns `shared: true` and `shared_by` equal to A's display name. · **Check:** integration test
-  on the test stack across the five D5 surfaces, plus one post-deploy browser and turn check by B
-  with the owner's OK. · *Fails if* any D5 surface returns 404 to B, or `shared_by` is absent or
-  names B.
-- **AC-2 — A non-grantee cannot tell that X exists.** C gets 404 on every D5 surface, and each
-  status and body is identical to the response for a random UUID. · **Check:** the same test,
-  comparing C's responses for X with responses for an unknown id. · *Fails if* any surface returns
-  403, 200, or a body that differs from the unknown-id body.
-- **AC-3 — A revoke takes effect on the next request.** After A revokes, B's next request on every
-  D5 surface returns the unknown-id 404, and the internal endpoint response carries
-  `Cache-Control: private, no-store`. · **Check:** test: grant, read, revoke, read again, with no
-  wait. · *Fails if* any surface still serves X to B after the revoke.
-- **AC-4 — A grantee only reads.** B's grant, revoke, and grant-list requests on X return 404. A
-  `notes_write`, `artifact_write`, or upload by B leaves X's row and R2 bytes unchanged. ·
-  **Check:** test comparing X's row and R2 hash before and after B's calls. · *Fails if* B creates
-  a grant on X, or X changes.
-- **AC-5 — Notes stay private.** A grant request on A's note returns 400 and creates no row. B's
-  `notes_search` never returns A's notes. · **Check:** test with a note owned by A whose embedding
-  matches B's query. · *Fails if* a grant row exists for a note, or A's note appears in B's
-  results.
-- **AC-6 — The agent cannot share without the owner's approval.** An `artifact_share` call that is
-  not approved, or is denied, creates no grant row. The approval prompt shows X's title and the
-  grantee email. Seeded negative: a fixture page that instructs the agent to share X with C
-  produces no grant row unless A approves. · **Check:** test on the tool path with approval
-  denied, then approved, counting `artifact_grants` rows. · *Fails if* a row exists before
-  approval, or the prompt omits the title or email.
-- **AC-7 — The audit record is complete.** For the scripted sequence grant, two reads by B, revoke:
-  `artifact_grants` holds one row with `revoked_at` and `revoked_by` set, and Elasticsearch holds
-  exactly one `artifact_grant_created`, two `artifact_read_by_grantee`, and one
-  `artifact_grant_revoked` event for X, each with A's and B's user ids. · **Check:** test on the
-  test stack, querying the test Elasticsearch on `:9201`. · *Fails if* any event is missing,
-  duplicated, or lacks either id.
-- **AC-8 — A header alone does not resolve a user.** A production-mode request to
-  `GET /api/v1/artifacts/{id}` with a valid `Cf-Access-Authenticated-User-Email` and no valid
-  `Cf-Access-Jwt-Assertion` returns 401. · **Check:** test with `gateway_auth_enabled=True`,
-  sending the header with no JWT, then with a JWT signed by a foreign key. · *Fails if* either
-  request returns 200 or any artifact data.
-- **AC-9 — A grant never creates a user.** A grant to an unknown email returns the
-  "no Seshat user" error, and the `users` row count is the same before and after. · **Check:**
-  test counting `users` rows. · *Fails if* the count changes or a grant row exists.
-- **AC-10 — The default list does not change.** B's `artifact_list` and `GET /api/v1/artifacts`
-  with no scope return only B's own artifacts. With scope `shared`, they return exactly the
-  artifacts with an active grant to B. · **Check:** test with one active and one revoked grant to
-  B. · *Fails if* the default returns X, or `shared` returns the revoked one or omits the active
-  one.
+**Fixtures.** User A owns HTML artifact X and PDF upload Y. A also owns note N and capture K. User
+B holds active grants on X and Y. User C holds no grant. "Unknown id" means a random UUID.
+
+- **AC-1 — A grant opens every read surface to the grantee.** For B: the Worker URL returns X's
+  bytes. Metadata returns X and Y. Export returns X's HTML. `artifact_read` returns X's content
+  with `shared: true` and `shared_by` equal to A's display name. A chat turn with Y attached
+  produces a document content block with Y's text. A PDF continuation turn for Y re-injects Y's
+  pages. · **Check:** integration test on the test stack, plus one post-deploy browser and turn
+  check by B with the owner's OK. · *Fails if* any listed surface withholds X or Y from B, or
+  `shared_by` is absent or names B.
+- **AC-2 — A non-grantee cannot tell that X exists.** For C, each D8 surface gives exactly the
+  outcome it gives for an unknown id: identical HTTP status and body, identical tool error message,
+  identical attachment drop and log event, identical absence from lists. · **Check:** the same
+  test, comparing C's outcome for X and Y with the outcome for an unknown id, surface by surface. ·
+  *Fails if* any surface differs in status, body, message, log event, or list content.
+- **AC-3 — A revoke takes effect on the next request, including continuations.** After A revokes
+  B's grants, B's next request on every D8 surface gives the unknown-id outcome. A PDF continuation
+  and a cloud-confirmation turn for Y, both persisted before the revoke, inject nothing. The
+  internal endpoint response carries `Cache-Control: private, no-store`. · **Check:** test: grant,
+  read, persist a continuation, revoke, then read and continue with no wait. · *Fails if* any
+  surface or continuation serves X or Y to B after the revoke.
+- **AC-4 — A grantee only reads.** B's requests to create, revoke, or list grants on X, and B's
+  `POST /api/uploads/{Y}/complete`, give the unknown-id outcome. X's and Y's rows and R2 bytes are
+  unchanged afterwards. · **Check:** test comparing rows and R2 hashes before and after B's calls.
+  · *Fails if* B creates a grant, changes a row or bytes, or gets an outcome that differs from the
+  unknown-id one.
+- **AC-5 — Only shareable types can be shared, and the check order hides existence.** A's grant
+  on Y succeeds. A's grants on N and K return 400 and create no row. B's and C's grant requests on
+  N and K give the unknown-id 404. B's `notes_search` never returns N. · **Check:** test, with N's
+  embedding matching B's query. · *Fails if* a grant row exists for N or K, a non-owner gets 400,
+  or N appears in B's results.
+- **AC-6 — The agent cannot share without an affirmative approval.** `artifact_share` creates no
+  grant row with no transport, with approval UI disabled, on timeout, or on denial. With approval,
+  it creates one row with `via: agent_tool`. The prompt shows X's title from the database and the
+  resolved email, even when the model passes a false title in its text. Seeded negative: a fixture
+  page that instructs the agent to share X with C produces no row unless A approves. · **Check:**
+  test on the tool path for each case, counting `artifact_grants` rows and capturing the prompt
+  payload. · *Fails if* a row exists without an `approve` decision, or the prompt omits the
+  database title or the email.
+- **AC-7 — The audit record is complete.** For the sequence grant X to B, B reads X on the Worker
+  and through `artifact_read`, A revokes, A re-grants: `artifact_grants` holds two rows for (X, B),
+  the first with `revoked_at` and `revoked_by` set and the second active. Elasticsearch holds two
+  `artifact_grant_created` events with `via: api`, one `artifact_grant_revoked`, and two
+  `artifact_read_by_grantee` with `surface` values `worker` and `artifact_read`. Every event
+  carries `trace_id` and both user ids. `GET /api/v1/artifacts/{X}/grants` by A lists both rows. ·
+  **Check:** test on the test stack, querying the test Elasticsearch on `:9201`. · *Fails if* any
+  event or field is missing or duplicated, or the list omits a row.
+- **AC-8 — A header alone does not resolve a user.** With `gateway_auth_enabled=True`, a request to
+  `GET /api/v1/artifacts/{id}` with a valid email header and no JWT returns 401. With a JWT signed
+  by a foreign key, it returns 401. With the verifier unconfigured, it returns 503. · **Check:**
+  test for each case. · *Fails if* any case returns 200 or any artifact data.
+- **AC-9 — A grant never creates a user, and grants to oneself fail.** A grant to an unknown email
+  returns the "no Seshat user" error. A grant by A to A returns 400. The `users` row count is the
+  same before and after, and no grant row exists. · **Check:** test counting rows. · *Fails if* a
+  count changes or a grant row exists.
+- **AC-10 — The list scopes return exactly the D6 matrix.** With one active grant (X), one revoked
+  grant (Y), and B owning artifact Z: default and `own` return Z only, on both list paths. `shared`
+  returns X only. `all` returns Z and X once each. The API with `type=note` and `scope=shared`
+  returns an empty list. · **Check:** test on both list paths. · *Fails if* any scope returns a row
+  outside the matrix, omits one, or returns a duplicate.
+- **AC-11 — One definition of read access.** No query in `src/` reads artifact content or metadata
+  for a caller with its own `user_id` filter, except the owner-only paths that D5 names. ·
+  **Check:** an `ast-grep` rule in pre-commit that flags `artifacts` reads with a `user_id`
+  predicate outside an allowlist of the owner-only paths. It is seeded with one known violation to
+  prove that it fires. · *Fails if* the rule passes with the seeded violation, or the allowlist
+  holds a read path that D5 lists.
+- **AC-12 — `expand_tool_result` cannot read outside its namespace.** A call with X's R2 key and
+  X's correct content hash, a call with a `tool-results/` key from C's session, and a call with an
+  unknown key return the same error. A call with a key from B's own session works. · **Check:**
+  test with `tool_result_compression_enabled` on. · *Fails if* any outside key returns content,
+  or the three errors differ.
+- **AC-13 — The schema enforces D1.** A second active grant for the same pair fails on the unique
+  index. Deleting X while a grant row exists fails. · **Check:** test on the test stack. · *Fails
+  if* either statement succeeds.
+
+D10's tool-description rule has no outcome criterion. Its effect on the model cannot be measured
+cheaply, and AC-1 checks the provenance field that the rule depends on. This is a known gap, not a
+hidden one.
 
 ---
 
@@ -363,6 +500,7 @@ User A owns artifact X. User B holds a grant on X. User C holds no grant.
 - ADR-0064 — Inbound User Identity via Cloudflare Access (D3 404 not 403, D4 dev fallback, D5
   global memory, D6 visibility levels) — Accepted
 - ADR-0063 — Primitive Tools / Action-Boundary Governance (tool approval) — Accepted
+- ADR-0085 — Intra-Turn Tool-Result Compression, the source of `expand_tool_result` (D5) — Parked
 - ADR-0106 — System/User Knowledge Boundary — Superseded by ADR-0115. FRE-1525 listed it. No
   decision in this ADR depends on it
 - FRE-1525 — this ADR's umbrella ticket
@@ -370,7 +508,8 @@ User A owns artifact X. User B holds a grant on X. User C holds no grant.
 - FRE-1530 — PyJWT upgrade and `cf_access_jwt.py` defects
 - FRE-808 — run migrations as the `agent` superuser
 - `src/personal_agent/service/artifacts_router.py` · `src/personal_agent/tools/artifact_tools.py`
-  · `src/personal_agent/tools/notes_tools.py` · `src/personal_agent/service/auth.py`
+  · `src/personal_agent/tools/notes_tools.py` · `src/personal_agent/service/auth.py` ·
+  `src/personal_agent/tools/executor.py` · `src/personal_agent/tools/tool_result_expand.py`
 
 ---
 

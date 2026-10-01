@@ -313,6 +313,7 @@ A detailed implementation plan will be written in `docs/superpowers/plans/YYYY-M
 2. **Access policy**: an unauthenticated browser session attempting `GET https://artifacts.example.com/{any-id}` is blocked at the Cloudflare Access edge before reaching the Worker. ✅ verified — returns 302 to `team.cloudflareaccess.com/cdn-cgi/access/login/...`.
 3. **Prefix escape**: `notes_write` cannot write to an `artifact_*` R2 prefix; governance + storage layer both reject. Negative tests in FRE-227.
 4. **Cross-user ownership**: user A writes an artifact; user B's `artifact_list` does not return it; user B's `GET /{artifact_id}` returns 404 per ADR-0064 D3 semantics.
+   *Note (2026-10-01):* under ADR-0153 (artifact sharing, Proposed) this holds for a user B who holds no grant. A grantee can read a shared artifact.
 5. **Sovereignty**: R2 bucket location confirmed `EEUR` (physical EU residency, no CF contractual EU jurisdiction — see Dev-1).
 6. **CLI fallback**: a CLI-originated `notes_write` resolves to the deployment owner's `user_id` and is visible to the same user through the PWA (no disjoint identity across entry points).
 7. **Cost monitoring**: monthly R2 + Workers spend visible via Cloudflare dashboard; alert at 80% of bundled limits (alerting itself deferred to ops follow-up).

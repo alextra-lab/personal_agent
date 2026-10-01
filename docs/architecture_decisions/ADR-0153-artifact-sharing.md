@@ -220,8 +220,8 @@ owns, through the same D2 to D4 checks as the API.
   from the `artifacts` row, and resolves the email to a user, all before its single approval
   request. The request shows that title and email, not only the model's arguments.
 - **Dependency.** Today no `ToolExecutionLayer` is built with a transport, so the stub denies every
-  call until the transport is wired into the primary tool path. Until then, granting works through
-  the API and the PWA only.
+  call until the transport is wired into the primary tool path (FRE-1535). Until then, granting
+  works through the API and the PWA only.
 
 **Why approval:** text injected into a web page or a shared artifact can tell the agent to share
 the owner's artifacts. The blast radius is limited to allowlisted users, but the owner must still
@@ -420,7 +420,7 @@ the read paths grow.
 - **D11 and FRE-1530** both touch the JWT code path. The D11 ticket follows FRE-1530.
 - **The approval fail-open** in `check_permission` affects `bash` and seven MCP write tools today.
   D7 does not depend on fixing it, because `artifact_share` enforces its own approval. Fixing the
-  generic branch is separate work.
+  generic branch is separate work: FRE-1535, filed outside this chain on the owner's choice.
 - **Testing:** the test stack (`tests/CLAUDE.md`, FRE-375) with three `users` rows. Live
   verification uses the owner and the real second user, with the owner's OK.
 
@@ -548,6 +548,9 @@ checks the provenance field that the rule depends on. This is a known gap, not a
 - FRE-420 — collaborative sessions (multi-participant), Backlog
 - FRE-1530 — PyJWT upgrade and `cf_access_jwt.py` defects
 - FRE-808 — run migrations as the `agent` superuser
+- FRE-1535 — tool approval fails open (wires the transport and the `approve` callable D7 needs)
+- Implementation chain: FRE-1531 (D11) → FRE-1532 (read side) → FRE-1533 (grant API) → FRE-1534
+  (PWA) and FRE-1536 (D7, also blocked by FRE-1535)
 - `src/personal_agent/service/artifacts_router.py` · `src/personal_agent/tools/artifact_tools.py`
   · `src/personal_agent/tools/notes_tools.py` · `src/personal_agent/service/auth.py` ·
   `src/personal_agent/tools/executor.py` · `src/personal_agent/tools/tool_result_expand.py`

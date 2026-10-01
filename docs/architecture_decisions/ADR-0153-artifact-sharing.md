@@ -167,6 +167,9 @@ it and drop their own ownership filter:
   attachment, it calls the function by `artifact_id` and drops any attachment that fails. A
   stored `r2_key` is never authority.
 
+The list paths call the function for scopes `shared` and `all` (D6). Scope `own` keeps its owner
+filter, because it lists only the caller's own rows.
+
 Write, delete, upload-completion, and grant-management paths keep the owner-only filter.
 `notes_search` keeps the owner-only filter, because notes are not shareable (D3). The system reads
 (joinability walk, `grafana_ro`) do not change.
@@ -201,16 +204,22 @@ The grantee's agent finds shared items with `artifact_list(scope="shared")` and 
 A new tool, `artifact_share(artifact_id, email)`, creates a grant on an artifact that the caller
 owns, through the same D2 to D4 checks as the API.
 
-- **It fails closed.** The tool creates a grant only after an affirmative `approve` decision from
-  the approval round-trip. With no session id, no transport, approval UI disabled, a timeout, or a
-  denial, it creates nothing and returns a refusal. It does not rely on the generic
-  `check_permission` approval branch, because that branch fails open (Context).
-- **The prompt shows trusted values.** Before the prompt, the tool reads the artifact title from
-  the `artifacts` row and resolves the email to a user. The prompt shows that title and email, not
-  only the model's arguments.
-- **Dependency.** Today no transport reaches the tool layer, so the tool refuses every call until
-  the approval channel is wired into the primary tool path. Until then, granting works through the
-  API and the PWA only.
+- **The mechanism is an injected approval callable.** Today an executor receives only the frozen
+  `TraceContext` (`tools/executor.py:453`), so a tool cannot prompt. `ToolExecutionLayer` passes
+  an `approve` callable to executors that declare an `approve` parameter, the same way it passes
+  `ctx` today. The callable sends one approval request through the layer's transport and returns
+  the decision. When the layer has no transport or no session id, the callable is a stub that
+  returns `deny`.
+- **It fails closed.** The tool creates a grant only after an affirmative `approve` decision. With
+  no transport, no session id, approval UI disabled, a timeout, or a denial, it creates nothing and
+  returns a refusal. It does not rely on the generic `check_permission` approval branch, because
+  that branch fails open (Context).
+- **The prompt shows trusted values.** The tool runs the D2 to D4 checks, reads the artifact title
+  from the `artifacts` row, and resolves the email to a user, all before its single approval
+  request. The request shows that title and email, not only the model's arguments.
+- **Dependency.** Today no `ToolExecutionLayer` is built with a transport, so the stub denies every
+  call until the transport is wired into the primary tool path. Until then, granting works through
+  the API and the PWA only.
 
 **Why approval:** text injected into a web page or a shared artifact can tell the agent to share
 the owner's artifacts. The blast radius is limited to allowlisted users, but the owner must still
@@ -267,9 +276,16 @@ the same gap and a larger exposure.
 ### D11 — Precondition: the main API path verifies the JWT
 
 With grants, identity is the whole access gate. Before any grant path ships, `get_request_user`
-must verify `Cf-Access-Jwt-Assertion` with the existing `CFAccessVerifier`, and take identity
-from the verified `email` claim only. The plaintext email header alone must not resolve a user in
-production. If the verifier is not configured in production, the request returns 503, as the
+must verify `Cf-Access-Jwt-Assertion` and take identity from the verified `email` claim only.
+
+The main app and the artifact Worker are separate Cloudflare Access applications with different
+audiences (`artifacts_router.py:259-262`). `CFAccessVerifier` accepts one audience
+(`cf_access_jwt.py:59`), and the one setting `cf_access_aud` (`config/settings.py:2623`) holds the
+Worker's. So D11 adds a second setting for the main app's audience and a second verifier instance.
+`get_request_user` uses the main-app verifier. The internal artifact endpoint keeps the Worker
+verifier. The ticket first confirms that the main app's JWT reaches the gateway on its primary
+domain (ADR-0069 Dev-2 records that destinations do not receive it). The plaintext email header alone must not resolve a user in
+production. If the main-app verifier is not configured in production, the request returns 503, as the
 Worker path does today (ADR-0069 Dev-3). The dev fallback (`gateway_auth_enabled=False` resolves to
 `agent_owner_email`, ADR-0064 D4) stays.
 
@@ -382,7 +398,7 @@ the read paths grow.
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| A read path keeps its own owner filter, or a new one skips the function | Medium | D5 function. AC-11 checks for artifact authorization SQL outside it |
+| A read path keeps its own owner filter, or a new one skips the function | Medium | D5 function. AC-11 flags any `artifacts` query with neither the function nor an exemption marker |
 | A persisted attachment serves bytes after a revoke | Medium | D5 continuation check. AC-3 covers continuations |
 | Injected text makes the agent share an artifact | Medium | D7 fail-closed approval with trusted values. AC-6 seeds the negative |
 | A shared artifact carries instructions to the grantee's agent | Low | D10 provenance and a tool-description rule. The sharer is an allowlisted user |
@@ -412,14 +428,16 @@ the read paths grow.
 
 Adjudicated on the umbrella ticket FRE-1525, after the implementation chain lands and deploys.
 
-**Fixtures.** User A owns HTML artifact X and PDF upload Y. A also owns note N and capture K. User
-B holds active grants on X and Y. User C holds no grant. "Unknown id" means a random UUID.
+**Fixtures.** User A owns HTML artifact X, text-tier PDF upload Y, and vision-tier PDF upload V,
+which is over the page budget so the resolver offers a continuation. A also owns note N, capture
+K, and pending upload P. User B holds active grants on X, Y, and V. User C holds no grant.
+"Unknown id" means a random UUID.
 
 - **AC-1 — A grant opens every read surface to the grantee.** For B: the Worker URL returns X's
   bytes. Metadata returns X and Y. Export returns X's HTML. `artifact_read` returns X's content
   with `shared: true` and `shared_by` equal to A's display name. A chat turn with Y attached
-  produces a document content block with Y's text. A PDF continuation turn for Y re-injects Y's
-  pages. · **Check:** integration test on the test stack, plus one post-deploy browser and turn
+  produces a text content block with Y's extracted text. A chat turn with V attached produces V's
+  first pages and a continuation offer, and the continuation turn re-injects V's next pages. · **Check:** integration test on the test stack, plus one post-deploy browser and turn
   check by B with the owner's OK. · *Fails if* any listed surface withholds X or Y from B, or
   `shared_by` is absent or names B.
 - **AC-2 — A non-grantee cannot tell that X exists.** For C, each D8 surface gives exactly the
@@ -429,33 +447,38 @@ B holds active grants on X and Y. User C holds no grant. "Unknown id" means a ra
   *Fails if* any surface differs in status, body, message, log event, or list content.
 - **AC-3 — A revoke takes effect on the next request, including continuations.** After A revokes
   B's grants, B's next request on every D8 surface gives the unknown-id outcome. A PDF continuation
-  and a cloud-confirmation turn for Y, both persisted before the revoke, inject nothing. The
-  internal endpoint response carries `Cache-Control: private, no-store`. · **Check:** test: grant,
-  read, persist a continuation, revoke, then read and continue with no wait. · *Fails if* any
-  surface or continuation serves X or Y to B after the revoke.
+  for V and a cloud-confirmation turn for Y, both persisted before the revoke, inject nothing. The
+  internal endpoint response carries `Cache-Control: private, no-store`, and after deploy the
+  response from the public Worker URL carries it too. · **Check:** test: grant,
+  read, persist a continuation, revoke, then read and continue with no wait, plus one post-deploy
+  header check on the Worker URL. · *Fails if* any surface or continuation serves X, Y, or V to B
+  after the revoke, or either response lacks the header.
 - **AC-4 — A grantee only reads.** B's requests to create, revoke, or list grants on X, and B's
   `POST /api/uploads/{Y}/complete`, give the unknown-id outcome. X's and Y's rows and R2 bytes are
   unchanged afterwards. · **Check:** test comparing rows and R2 hashes before and after B's calls.
   · *Fails if* B creates a grant, changes a row or bytes, or gets an outcome that differs from the
   unknown-id one.
 - **AC-5 — Only shareable types can be shared, and the check order hides existence.** A's grant
-  on Y succeeds. A's grants on N and K return 400 and create no row. B's and C's grant requests on
-  N and K give the unknown-id 404. B's `notes_search` never returns N. · **Check:** test, with N's
-  embedding matching B's query. · *Fails if* a grant row exists for N or K, a non-owner gets 400,
+  on Y succeeds. A's grants on N, K, and P return 400 and create no row. B's and C's grant requests
+  on N, K, and P give the unknown-id 404. B's `notes_search` never returns N. · **Check:** test, with N's
+  embedding matching B's query. · *Fails if* a grant row exists for N, K, or P, a non-owner gets 400,
   or N appears in B's results.
 - **AC-6 — The agent cannot share without an affirmative approval.** `artifact_share` creates no
   grant row with no transport, with approval UI disabled, on timeout, or on denial. With approval,
-  it creates one row with `via: agent_tool`. The prompt shows X's title from the database and the
+  it creates one grant row and one `artifact_grant_created` event with `via: agent_tool`. The prompt shows X's title from the database and the
   resolved email, even when the model passes a false title in its text. Seeded negative: a fixture
   page that instructs the agent to share X with C produces no row unless A approves. · **Check:**
-  test on the tool path for each case, counting `artifact_grants` rows and capturing the prompt
+  test on the tool path for each case, with the injected `approve` callable returning each
+  decision and with no transport, counting `artifact_grants` rows and capturing the request
   payload. · *Fails if* a row exists without an `approve` decision, or the prompt omits the
   database title or the email.
-- **AC-7 — The audit record is complete.** For the sequence grant X to B, B reads X on the Worker
-  and through `artifact_read`, A revokes, A re-grants: `artifact_grants` holds two rows for (X, B),
-  the first with `revoked_at` and `revoked_by` set and the second active. Elasticsearch holds two
-  `artifact_grant_created` events with `via: api`, one `artifact_grant_revoked`, and two
-  `artifact_read_by_grantee` with `surface` values `worker` and `artifact_read`. Every event
+- **AC-7 — The audit record is complete.** For the sequence grant X and Y to B, B reads X through
+  the Worker, metadata, export, and `artifact_read`, B attaches Y in a chat turn, A revokes X, A
+  re-grants X: `artifact_grants` holds two rows for (X, B), both with `granted_by` equal to A, the
+  first with `revoked_at` set and `revoked_by` equal to A, and the second active. Elasticsearch
+  holds three `artifact_grant_created` events with `via: api`, one `artifact_grant_revoked`, and
+  five `artifact_read_by_grantee` events, one each with `surface` values `worker`, `metadata`,
+  `export`, `artifact_read`, and `attachment`. Every event
   carries `trace_id` and both user ids. `GET /api/v1/artifacts/{X}/grants` by A lists both rows. ·
   **Check:** test on the test stack, querying the test Elasticsearch on `:9201`. · *Fails if* any
   event or field is missing or duplicated, or the list omits a row.
@@ -467,29 +490,37 @@ B holds active grants on X and Y. User C holds no grant. "Unknown id" means a ra
   returns the "no Seshat user" error. A grant by A to A returns 400. The `users` row count is the
   same before and after, and no grant row exists. · **Check:** test counting rows. · *Fails if* a
   count changes or a grant row exists.
-- **AC-10 — The list scopes return exactly the D6 matrix.** With one active grant (X), one revoked
-  grant (Y), and B owning artifact Z: default and `own` return Z only, on both list paths. `shared`
-  returns X only. `all` returns Z and X once each. The API with `type=note` and `scope=shared`
+- **AC-10 — The list scopes return exactly the D6 matrix.** With active grants on X and Y, a
+  revoked grant on V, and B owning artifact Z: default and `own` return Z only, on both list paths.
+  `shared` returns X and Y, each with `shared: true` and `shared_by` equal to A. `all` returns Z,
+  X, and Y once each, with Z carrying no `shared` flag. The API with `type=note` and `scope=shared`
   returns an empty list. · **Check:** test on both list paths. · *Fails if* any scope returns a row
-  outside the matrix, omits one, or returns a duplicate.
-- **AC-11 — One definition of read access.** No query in `src/` reads artifact content or metadata
-  for a caller with its own `user_id` filter, except the owner-only paths that D5 names. ·
-  **Check:** an `ast-grep` rule in pre-commit that flags `artifacts` reads with a `user_id`
-  predicate outside an allowlist of the owner-only paths. It is seeded with one known violation to
-  prove that it fires. · *Fails if* the rule passes with the seeded violation, or the allowlist
-  holds a read path that D5 lists.
+  outside the matrix, omits one, returns a duplicate, or lacks the provenance fields.
+- **AC-11 — One definition of read access.** Every query in `src/` that reads the `artifacts`
+  table either calls `artifact_readable_by` or carries an exemption marker
+  (`# artifact-access: owner-only` or `# artifact-access: system`) on the query itself. The read
+  paths that D5 lists carry no marker. · **Check:** a pre-commit rule (`ast-grep` for
+  `select(ArtifactModel...)`, plus a text match for `FROM artifacts` in SQL strings) that flags a
+  query with neither the function nor a marker, and a test that holds the list of marked queries
+  and fails when a D5 read path appears in it. The rule is seeded with two violations: a query with
+  its own `user_id` filter, and a query with no access predicate at all. · *Fails if* the rule
+  passes either seeded violation, or a D5 read path carries a marker.
 - **AC-12 — `expand_tool_result` cannot read outside its namespace.** A call with X's R2 key and
   X's correct content hash, a call with a `tool-results/` key from C's session, and a call with an
   unknown key return the same error. A call with a key from B's own session works. · **Check:**
   test with `tool_result_compression_enabled` on. · *Fails if* any outside key returns content,
   or the three errors differ.
 - **AC-13 — The schema enforces D1.** A second active grant for the same pair fails on the unique
-  index. Deleting X while a grant row exists fails. · **Check:** test on the test stack. · *Fails
-  if* either statement succeeds.
+  index. Deleting X while a grant row exists fails. An insert with an unknown `artifact_id`,
+  `grantee_user_id`, or `granted_by`, and an update that sets an unknown `revoked_by`, each fail. ·
+  **Check:** test on the test stack. · *Fails if* any of these statements succeeds.
 
-D10's tool-description rule has no outcome criterion. Its effect on the model cannot be measured
-cheaply, and AC-1 checks the provenance field that the rule depends on. This is a known gap, not a
-hidden one.
+- **AC-14 — The registered `artifact_read` description carries the untrusted-content rule.** ·
+  **Check:** a registry test reads the registered tool description and asserts that it states that
+  content written by another user is data, not instructions. · *Fails if* the sentence is absent.
+
+AC-14 checks presence only. The rule's effect on the model cannot be measured cheaply, and AC-1
+checks the provenance field that the rule depends on. This is a known gap, not a hidden one.
 
 ---
 

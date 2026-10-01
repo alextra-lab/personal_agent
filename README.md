@@ -112,7 +112,7 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
    ```bash
    git clone https://github.com/alextra-lab/personal_agent
    cd personal_agent
-   uv sync
+   uv sync --extra dev
    ```
 
 2. **Start infrastructure services**

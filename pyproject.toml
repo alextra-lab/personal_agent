@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 # This project is designed to be friendly with `uv` for environment and
 # dependency management. A typical workflow would be:
-#   uv sync   # install runtime + dev dependencies
+#   uv sync --extra dev   # install runtime + dev dependencies (a bare `uv sync` removes the dev extra)
 #   uv run ...  # run CLI or scripts
 
 [project]
@@ -104,17 +104,26 @@ onnx-eval = [
 override-dependencies = [
   "aiohttp>=3.14.3",  # FRE-1323 Dependabot — GHSA-cq5v-8q36-5273 (was 3.14.1, FRE-579)
   "idna>=3.15",  # FRE-579 Dependabot — PYSEC-2026-215 crafted input DoS
-  "pip>=26.1",  # FRE-579 Dependabot — untrusted control sphere + tar/zip interpretation (was 26.0.1)
+  "pip>=26.2",  # FRE-1530 — PYSEC-2026-3721 doubly-encoded index URLs write outside the target (was 26.1; FRE-579)
   "cryptography>=50.0.0",  # FRE-1323 Dependabot — GHSA-g6cj-pr64-35w5 (was 48.0.1, FRE-578)
   "mako>=1.3.12",  # CVE in TemplateLookup path handling (Windows-only, bump for hygiene)
   "python-multipart>=0.0.30",  # FRE-578 Dependabot — quadratic-time DoS via semicolon (was 0.0.27)
-  "pyjwt>=2.13.0",  # FRE-578 Dependabot — public-key JWK accepted as HMAC secret
+  "pyjwt>=2.15.0",  # FRE-1530 — 13 advisories incl. CVE-2026-101918 (nested-JSON RecursionError) fixed in 2.15.0, CVE-2026-102265..102274 in 2.14.0 (was 2.13.0; FRE-578)
   "starlette>=1.3.1",  # FRE-578 Dependabot — SSRF via StaticFiles + form() limit bypass
   "pygments>=2.20.0",  # CVE-2026-4539
   "requests>=2.33.0",  # CVE-2026-25645
-  "urllib3>=2.7.0",  # CVE-2026-44431 — sensitive headers leak via low-level proxied redirects
+  "urllib3>=2.8.0",  # FRE-1530 — CVE-2026-97687/97688/97689 proxy TLS context mix-up, deflate loop, unbounded chunk-size buffering (was 2.7.0; CVE-2026-44431)
   "json-repair>=0.60.1",  # FRE-1323 Dependabot — GHSA-xf7x-x43h-rpqh, transitive via dspy; parses model output
   "msgpack>=1.2.1",  # FRE-1323 Dependabot — GHSA-6v7p-g79w-8964, transitive via cachecontrol
+  "anyio>=4.14.2",  # FRE-1530 — CVE-2026-63374, CVE-2026-64847
+  "click>=8.3.3",  # FRE-1530 — PYSEC-2026-2132
+  "virtualenv>=21.7.13",  # FRE-1530 — PYSEC-2026-4011/4012/4013/4014 (dev tooling only, via pre-commit)
+  # diskcache 5.6.3 — PYSEC-2026-2447 (pickle read from the cache dir), NO fixed release, so no floor.
+  # Exposure (FRE-1530, measured 2026-10-01): transitive via dspy, whose default on-disk LLM-response
+  # cache is the only use here. DSPY_CACHEDIR is unset, so the cache is $HOME/.dspy_cache — in the
+  # gateway container /root/.dspy_cache, not a mounted volume. Exploiting it needs write access to
+  # that directory; no network path writes there. Not exploitable from outside. Recheck when a fix
+  # ships, and if DSPY_CACHEDIR is ever pointed at a mounted volume.
 ]
 
 # -----------------------------

@@ -7,6 +7,8 @@ aiobotocore, JWKS endpoint, or Cloudflare Worker is involved.
 
 from __future__ import annotations
 
+import base64
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -18,10 +20,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from personal_agent.service import artifacts_router as router_module
+from personal_agent.service import cf_access_jwt as cf_access_jwt_module
 from personal_agent.service.artifacts_router import router
 from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.cf_access_jwt import (
     CFAccessClaims,
+    CFAccessVerifier,
     CFAccessVerifierError,
 )
 from personal_agent.service.database import get_db_session
@@ -236,6 +240,42 @@ def test_invalid_jwt_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert resp.status_code == 401
     # DB must not be touched when JWT verification fails.
+    assert session.queries == []
+
+
+def test_nested_jwt_header_is_401_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1530 AC-6: a deeply nested token header is a 401 through the real verifier.
+
+    The verifier raised ``RecursionError`` here, which no handler caught: a 500 on a path
+    whose contract is an opaque 401.
+    """
+    session = _StubSession(found=None)
+    app = _build_app(session)
+
+    verifier = CFAccessVerifier(team_domain="team.cloudflareaccess.com", audience="aud")
+    verifier._jwks = {"keys": []}
+    verifier._cached_at = time.monotonic()  # a fresh cache: no JWKS fetch is attempted
+
+    class _NoNetwork:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("the JWKS endpoint must not be contacted")
+
+    monkeypatch.setattr(cf_access_jwt_module, "create_guarded_http_client", _NoNetwork)
+    monkeypatch.setattr(router_module, "get_verifier", lambda: verifier)
+
+    header = ("[" * 20_000 + "]" * 20_000).encode("ascii")
+    segment = base64.urlsafe_b64encode(header).rstrip(b"=").decode("ascii")
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/internal/artifacts/{uuid4()}",
+            headers={
+                "x-internal-token": _TOKEN,
+                "x-cf-access-jwt-assertion": f"{segment}.e30.c2ln",
+            },
+        )
+
+    assert resp.status_code == 401
     assert session.queries == []
 
 

@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install dependencies
-uv sync
+# Install dependencies (--extra dev: a bare `uv sync` uninstalls ruff, pytest-cov, pip-audit, bandit)
+uv sync --extra dev
 
 # Infrastructure, single-service (SERVICE=<name>) and health targets — see `make help`
 

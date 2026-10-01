@@ -19,6 +19,7 @@ def primitives_enabled():
     """Ensure prefer_primitives_enabled is True for all routing tests."""
     with patch("personal_agent.orchestrator.skills.settings") as mock_settings:
         mock_settings.prefer_primitives_enabled = True
+        mock_settings.skill_bodies_max_tokens = 8192  # FRE-1529 default
         yield mock_settings
 
 

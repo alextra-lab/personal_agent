@@ -520,6 +520,13 @@ class ExecutionContext:
     # Model ID returned by the routing call (for telemetry breakdown across cells).
     skill_routing_model_id: str = ""
 
+    # --- FRE-1529: one volatile fence per turn ---
+    # Set True once this request's <turn_context> block is in ctx.messages. Later
+    # step_llm_call rounds then neither re-select skill bodies nor inline again, so a
+    # mid-turn user-role message (tool-budget warning, forced synthesis, cite-only
+    # retry) never receives a second copy. Valid because a context serves one request.
+    turn_context_inlined: bool = False
+
     # --- ADR-0081 §D3 cache-aware compaction (FRE-434) ---
     # Bounded salient highlights produced by the most recent frozen reset; ride
     # the current turn's volatile block (regenerated on reset, never frozen).

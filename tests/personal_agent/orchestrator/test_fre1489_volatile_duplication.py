@@ -193,9 +193,9 @@ class TestHybridToolLoopBytes:
     ) -> None:
         """The duplication, stated as a count.
 
-        Scoped to the carrier: the tool-budget and forced-synthesis injectors append
-        their own tail message, which legitimately takes a fence of its own, so the
-        invariant is per carrier rather than per request.
+        Scoped to the carrier. Since FRE-1529 the injected tail messages (tool-budget
+        warning, forced synthesis) no longer take a fence of their own either — that
+        per-request count is asserted in ``test_fre1529_volatile_once_per_turn.py``.
         """
         wires = await _drive_loop(_make_ctx(hybrid=True), 3, monkeypatch)
         counts = [_carrier_text(w).count(_FENCE) for w in wires]

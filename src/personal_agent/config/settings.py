@@ -2733,6 +2733,19 @@ class AppConfig(BaseSettings):
             "Env var: AGENT_SKILL_INDEX_MAX_TOKENS"
         ),
     )
+    skill_bodies_max_tokens: int = Field(
+        default=8192,
+        ge=0,
+        alias="AGENT_SKILL_BODIES_MAX_TOKENS",
+        description=(
+            "Budget for the per-turn skill-bodies block (header, separators and bodies), "
+            "estimated at 4 chars/token like the index. Bodies are kept in priority order "
+            "(bash, then by keyword hits) while they fit; the rest are dropped and logged as "
+            "skill_bodies_truncated. The default admits bash plus the largest single body, so "
+            "no skill becomes unreachable by keyword; a dropped one stays reachable through "
+            "read_skill (FRE-1529). Env var: AGENT_SKILL_BODIES_MAX_TOKENS"
+        ),
+    )
     skill_routing_model_key: str = Field(
         default="claude_haiku",
         alias="AGENT_SKILL_ROUTING_MODEL_KEY",

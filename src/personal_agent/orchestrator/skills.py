@@ -293,9 +293,60 @@ def assemble_skill_usage_directives(
     return f"<{_SKILL_USAGE_DIRECTIVES_TAG}>\n{inner}\n</{_SKILL_USAGE_DIRECTIVES_TAG}>"
 
 
+def fit_skill_bodies(
+    docs: collections.abc.Sequence[SkillDoc],
+    *,
+    cap_tokens: int,
+    separator: str,
+    fixed_chars: int = 0,
+    trace_id: str | None = None,
+) -> tuple[SkillDoc, ...]:
+    """Keep the bodies that fit the budget, in the given priority order (FRE-1529).
+
+    The budget covers the whole joined block: ``fixed_chars`` (a header) plus every kept
+    body plus one ``separator`` between each pair. A body that does not fit is skipped and
+    the scan continues, so one oversized body never blocks a smaller one after it. Every
+    drop is logged as ``skill_bodies_truncated``. Same 4 chars/token estimate as
+    :func:`assemble_skill_index`.
+
+    Args:
+        docs: Candidate skills, highest priority first.
+        cap_tokens: Budget for the joined block, in estimated tokens.
+        separator: The string the caller joins the bodies with.
+        fixed_chars: Characters the caller adds once when at least one body is kept.
+        trace_id: Request trace id for the drop log.
+
+    Returns:
+        The kept skills, in their input order. Empty when no body fits.
+    """
+    cap_chars = cap_tokens * _CHARS_PER_TOKEN
+    kept: list[SkillDoc] = []
+    dropped: list[str] = []
+    total = fixed_chars
+    for doc in docs:
+        cost = len(doc.body) + (len(separator) if kept else 0)
+        if total + cost <= cap_chars:
+            kept.append(doc)
+            total += cost
+        else:
+            dropped.append(doc.name)
+    if dropped:
+        log.info(
+            "skill_bodies_truncated",
+            cap_tokens=cap_tokens,
+            dropped_count=len(dropped),
+            dropped_skills=dropped,
+            kept_skills=[d.name for d in kept],
+            kept_chars=total if kept else 0,
+            trace_id=trace_id,
+        )
+    return tuple(kept)
+
+
 def get_skill_bodies(
     message: str | None = None,
     loaded_skills: frozenset[str] | set[str] | None = None,
+    trace_id: str | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Return the skill library block *and* the names of the skills it contains.
 
@@ -304,11 +355,16 @@ def get_skill_bodies(
     were loaded" is answerable only by name, not by the presence flag the existing
     prompt-component taxonomy records.
 
+    The block is bounded by ``settings.skill_bodies_max_tokens`` (FRE-1529). Priority:
+    ``bash`` first, then keyword matches by the number of distinct keywords hit, file
+    order on ties. Bodies that do not fit are dropped and logged.
+
     Args:
         message: The original user message used for keyword-based routing.
             Pass ``None`` to get the bash-only block.
         loaded_skills: Skill names already loaded this conversation. Bodies for
             these skills are suppressed to avoid duplication. Ignored when None.
+        trace_id: Request trace id for the drop log.
 
     Returns:
         Tuple of (block text, ordered skill names). Both are empty when no skill loads.
@@ -318,31 +374,44 @@ def get_skill_bodies(
 
     _already_loaded = loaded_skills or set()
     cache = _get_cache()
-    chunks: list[str] = []
-    seen: list[str] = []
+    candidates: list[SkillDoc] = []
 
     bash_doc = cache.docs.get("bash")
     if bash_doc and bash_doc.body and "bash" not in _already_loaded:
-        chunks.append(bash_doc.body)
-        seen.append("bash")
+        candidates.append(bash_doc)
 
     if message:
         msg_lower = message.lower()
+        matched: list[tuple[int, SkillDoc]] = []
         for skill in cache.docs.values():
-            if skill.name in seen or skill.name in _already_loaded:
+            if skill.name == "bash" or skill.name in _already_loaded:
                 continue
-            if skill.keywords and any(kw.lower() in msg_lower for kw in skill.keywords):
-                chunks.append(skill.body)
-                seen.append(skill.name)
+            hits = sum(1 for kw in skill.keywords if kw.lower() in msg_lower)
+            if hits:
+                matched.append((hits, skill))
                 log.debug(
                     "skill_route_matched",
                     skill=skill.name,
+                    keyword_hits=hits,
                     message_preview=message[:80],
+                    trace_id=trace_id,
                 )
+        # Stable sort: equal hit counts keep file order.
+        candidates.extend(skill for _, skill in sorted(matched, key=lambda m: -m[0]))
 
-    if not chunks:
+    kept = fit_skill_bodies(
+        candidates,
+        cap_tokens=settings.skill_bodies_max_tokens,
+        separator=_SEPARATOR,
+        fixed_chars=len(SKILL_BLOCK_HEADER),
+        trace_id=trace_id,
+    )
+    if not kept:
         return "", ()
-    return SKILL_BLOCK_HEADER + _SEPARATOR.join(chunks), tuple(seen)
+    return (
+        SKILL_BLOCK_HEADER + _SEPARATOR.join(d.body for d in kept),
+        tuple(d.name for d in kept),
+    )
 
 
 def get_skill_block(

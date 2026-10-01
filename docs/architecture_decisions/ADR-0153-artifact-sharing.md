@@ -213,7 +213,9 @@ owns, through the same D2 to D4 checks as the API.
 - **It fails closed.** The tool creates a grant only after an affirmative `approve` decision. With
   no transport, no session id, approval UI disabled, a timeout, or a denial, it creates nothing and
   returns a refusal. It does not rely on the generic `check_permission` approval branch, because
-  that branch fails open (Context).
+  that branch fails open (Context). Its entry in `config/governance/tools.yaml` therefore sets
+  `requires_approval: false` and no `requires_approval_in_modes`, so the generic branch never sends
+  a second request.
 - **The prompt shows trusted values.** The tool runs the D2 to D4 checks, reads the artifact title
   from the `artifacts` row, and resolves the email to a user, all before its single approval
   request. The request shows that title and email, not only the model's arguments.
@@ -428,9 +430,10 @@ the read paths grow.
 
 Adjudicated on the umbrella ticket FRE-1525, after the implementation chain lands and deploys.
 
-**Fixtures.** User A owns HTML artifact X, text-tier PDF upload Y, and vision-tier PDF upload V,
-which is over the page budget so the resolver offers a continuation. A also owns note N, capture
-K, and pending upload P. User B holds active grants on X, Y, and V. User C holds no grant.
+**Fixtures.** User A owns HTML artifact X, text-tier PDF upload Y, vision-tier PDF upload V,
+which is over the page budget so the resolver offers a continuation, and image upload W. A also
+owns note N, capture K, and pending upload P. B owns pending upload Q. User B holds active grants
+on X, Y, V, and W. User C holds no grant.
 "Unknown id" means a random UUID.
 
 - **AC-1 — A grant opens every read surface to the grantee.** For B: the Worker URL returns X's
@@ -438,8 +441,8 @@ K, and pending upload P. User B holds active grants on X, Y, and V. User C holds
   with `shared: true` and `shared_by` equal to A's display name. A chat turn with Y attached
   produces a text content block with Y's extracted text. A chat turn with V attached produces V's
   first pages and a continuation offer, and the continuation turn re-injects V's next pages. · **Check:** integration test on the test stack, plus one post-deploy browser and turn
-  check by B with the owner's OK. · *Fails if* any listed surface withholds X or Y from B, or
-  `shared_by` is absent or names B.
+  check by B with the owner's OK. · *Fails if* any listed surface withholds X, Y, or V from B,
+  V's continuation is missing or injects nothing, or `shared_by` is absent or names B.
 - **AC-2 — A non-grantee cannot tell that X exists.** For C, each D8 surface gives exactly the
   outcome it gives for an unknown id: identical HTTP status and body, identical tool error message,
   identical attachment drop and log event, identical absence from lists. · **Check:** the same
@@ -447,12 +450,13 @@ K, and pending upload P. User B holds active grants on X, Y, and V. User C holds
   *Fails if* any surface differs in status, body, message, log event, or list content.
 - **AC-3 — A revoke takes effect on the next request, including continuations.** After A revokes
   B's grants, B's next request on every D8 surface gives the unknown-id outcome. A PDF continuation
-  for V and a cloud-confirmation turn for Y, both persisted before the revoke, inject nothing. The
+  for V and a cloud-confirmation turn for W, both persisted before the revoke, inject nothing. W is
+  attached under a cloud-priced primary model with the confirmation threshold set so that the cost
+  gate fires. The
   internal endpoint response carries `Cache-Control: private, no-store`, and after deploy the
   response from the public Worker URL carries it too. · **Check:** test: grant,
   read, persist a continuation, revoke, then read and continue with no wait, plus one post-deploy
-  header check on the Worker URL. · *Fails if* any surface or continuation serves X, Y, or V to B
-  after the revoke, or either response lacks the header.
+  header check on the Worker URL. · *Fails if* any surface or continuation serves X, Y, V, or W to B after the revoke, or either response lacks the header.
 - **AC-4 — A grantee only reads.** B's requests to create, revoke, or list grants on X, and B's
   `POST /api/uploads/{Y}/complete`, give the unknown-id outcome. X's and Y's rows and R2 bytes are
   unchanged afterwards. · **Check:** test comparing rows and R2 hashes before and after B's calls.
@@ -460,8 +464,9 @@ K, and pending upload P. User B holds active grants on X, Y, and V. User C holds
   unknown-id one.
 - **AC-5 — Only shareable types can be shared, and the check order hides existence.** A's grant
   on Y succeeds. A's grants on N, K, and P return 400 and create no row. B's and C's grant requests
-  on N, K, and P give the unknown-id 404. B's `notes_search` never returns N. · **Check:** test, with N's
-  embedding matching B's query. · *Fails if* a grant row exists for N, K, or P, a non-owner gets 400,
+  on N, K, and P give the unknown-id 404. B's grant requests on Y, naming an unknown email and
+  naming B's own email, also give the unknown-id 404. B's `notes_search` never returns N. · **Check:** test, with N's
+  embedding matching B's query. · *Fails if* a grant row exists for N, K, or P, a non-owner gets 400 or an email-specific error,
   or N appears in B's results.
 - **AC-6 — The agent cannot share without an affirmative approval.** `artifact_share` creates no
   grant row with no transport, with approval UI disabled, on timeout, or on denial. With approval,
@@ -469,9 +474,11 @@ K, and pending upload P. User B holds active grants on X, Y, and V. User C holds
   resolved email, even when the model passes a false title in its text. Seeded negative: a fixture
   page that instructs the agent to share X with C produces no row unless A approves. · **Check:**
   test on the tool path for each case, with the injected `approve` callable returning each
-  decision and with no transport, counting `artifact_grants` rows and capturing the request
-  payload. · *Fails if* a row exists without an `approve` decision, or the prompt omits the
-  database title or the email.
+  decision and with no transport, counting `artifact_grants` rows, counting approval requests, and
+  querying the test Elasticsearch for `artifact_grant_created`. · *Fails if* a row exists without
+  an `approve` decision, the prompt omits the database title or the email, a transport case sends
+  more or fewer than one approval request, or the approved case lacks exactly one
+  `artifact_grant_created` event with `via: agent_tool` and every D9 field.
 - **AC-7 — The audit record is complete.** For the sequence grant X and Y to B, B reads X through
   the Worker, metadata, export, and `artifact_read`, B attaches Y in a chat turn, A revokes X, A
   re-grants X: `artifact_grants` holds two rows for (X, B), both with `granted_by` equal to A, the
@@ -484,8 +491,11 @@ K, and pending upload P. User B holds active grants on X, Y, and V. User C holds
   event or field is missing or duplicated, or the list omits a row.
 - **AC-8 — A header alone does not resolve a user.** With `gateway_auth_enabled=True`, a request to
   `GET /api/v1/artifacts/{id}` with a valid email header and no JWT returns 401. With a JWT signed
-  by a foreign key, it returns 401. With the verifier unconfigured, it returns 503. · **Check:**
-  test for each case. · *Fails if* any case returns 200 or any artifact data.
+  by a foreign key, it returns 401. With the main-app verifier unconfigured, it returns 503. A valid
+  Worker-audience JWT returns 401 on the main API, and a valid main-app JWT returns 404 on the
+  internal artifact endpoint. A valid main-app JWT on the main API returns 200. · **Check:** test
+  for each case. · *Fails if* any rejection case returns 200 or artifact data, or the valid
+  main-app case fails.
 - **AC-9 — A grant never creates a user, and grants to oneself fail.** A grant to an unknown email
   returns the "no Seshat user" error. A grant by A to A returns 400. The `users` row count is the
   same before and after, and no grant row exists. · **Check:** test counting rows. · *Fails if* a
@@ -493,7 +503,7 @@ K, and pending upload P. User B holds active grants on X, Y, and V. User C holds
 - **AC-10 — The list scopes return exactly the D6 matrix.** With active grants on X and Y, a
   revoked grant on V, and B owning artifact Z: default and `own` return Z only, on both list paths.
   `shared` returns X and Y, each with `shared: true` and `shared_by` equal to A. `all` returns Z,
-  X, and Y once each, with Z carrying no `shared` flag. The API with `type=note` and `scope=shared`
+  X, and Y once each, with Z carrying no `shared` flag. B's pending upload Q appears in no scope. The API with `type=note` and `scope=shared`
   returns an empty list. · **Check:** test on both list paths. · *Fails if* any scope returns a row
   outside the matrix, omits one, returns a duplicate, or lacks the provenance fields.
 - **AC-11 — One definition of read access.** Every query in `src/` that reads the `artifacts`

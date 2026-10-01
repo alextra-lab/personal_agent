@@ -306,6 +306,111 @@ class TestGetSkillBodies:
         assert get_skill_bodies(message="show me logs") == ("", ())
 
 
+class TestSkillBodiesBudget:
+    """FRE-1529 AC-3: the bodies block is bounded, and every drop is logged."""
+
+    @pytest.fixture(autouse=True)
+    def _library(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A small library: bash, plus three keyword skills of known sizes."""
+
+        def write(name: str, keywords: list[str], body: str) -> None:
+            kw = f"keywords: {keywords}\n" if keywords else ""
+            (tmp_path / f"{name}.md").write_text(
+                f"---\nname: {name}\ndescription: d\nwhen_to_use: w\n{kw}---\n\n{body}",
+                encoding="utf-8",
+            )
+
+        write("bash", [], "B" * 100)
+        write("alpha", ["alpha"], "A" * 400)
+        write("beta", ["beta", "second"], "C" * 300)
+        write("gamma", ["gamma"], "G" * 50)
+        monkeypatch.setattr(skills_module, "_SKILLS_DIR", tmp_path)
+        monkeypatch.setattr(skills_module, "_cache", None)
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+
+    @pytest.mark.parametrize("cap_tokens", range(0, 400, 7))
+    def test_get_skill_bodies_never_exceeds_cap(
+        self, cap_tokens: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """At every cap, the whole block — header included — fits in ``cap * 4`` chars."""
+        from personal_agent.orchestrator.skills import get_skill_bodies
+
+        monkeypatch.setattr(settings, "skill_bodies_max_tokens", cap_tokens)
+        text, names = get_skill_bodies(message="alpha beta second gamma")
+
+        assert len(text) <= cap_tokens * 4
+        assert bool(text) == bool(names)
+
+    def test_drop_is_logged_with_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from structlog.testing import capture_logs
+
+        from personal_agent.orchestrator.skills import SKILL_BLOCK_HEADER, get_skill_bodies
+
+        # header + bash + one separator + beta: room for one keyword body beside bash.
+        cap_chars = len(SKILL_BLOCK_HEADER) + 100 + 7 + 300 + 7 + 50
+        monkeypatch.setattr(settings, "skill_bodies_max_tokens", cap_chars // 4 + 1)
+        with capture_logs() as logs:
+            _, names = get_skill_bodies(message="alpha beta second gamma", trace_id="t-1529")
+
+        events = [e for e in logs if e["event"] == "skill_bodies_truncated"]
+        assert len(events) == 1
+        assert events[0]["dropped_count"] == 1
+        assert events[0]["dropped_skills"] == ["alpha"]
+        assert events[0]["trace_id"] == "t-1529"
+        assert names == ("bash", "beta", "gamma")
+
+    def test_higher_hit_skill_kept_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Two keyword hits outrank one: beta is ranked ahead of alpha and gamma."""
+        from personal_agent.orchestrator.skills import get_skill_bodies
+
+        monkeypatch.setattr(settings, "skill_bodies_max_tokens", 10_000)
+        _, names = get_skill_bodies(message="alpha beta second gamma")
+
+        assert names == ("bash", "beta", "alpha", "gamma")
+
+    def test_an_oversized_body_does_not_block_a_smaller_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Alpha does not fit, so the scan continues to gamma rather than stopping."""
+        from personal_agent.orchestrator.skills import SKILL_BLOCK_HEADER, get_skill_bodies
+
+        cap_chars = len(SKILL_BLOCK_HEADER) + 100 + 7 + 50
+        monkeypatch.setattr(settings, "skill_bodies_max_tokens", cap_chars // 4 + 1)
+        _, names = get_skill_bodies(message="alpha gamma")
+
+        assert names == ("bash", "gamma")
+
+    def test_cap_below_every_body_gives_no_block(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No orphan header: nothing fits, so nothing is sent."""
+        from personal_agent.orchestrator.skills import get_skill_bodies
+
+        monkeypatch.setattr(settings, "skill_bodies_max_tokens", 10)
+        assert get_skill_bodies(message="alpha") == ("", ())
+
+    def test_no_drop_logs_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from structlog.testing import capture_logs
+
+        from personal_agent.orchestrator.skills import get_skill_bodies
+
+        monkeypatch.setattr(settings, "skill_bodies_max_tokens", 10_000)
+        with capture_logs() as logs:
+            get_skill_bodies(message="alpha")
+
+        assert not [e for e in logs if e["event"] == "skill_bodies_truncated"]
+
+    def test_default_budget_admits_bash_and_the_largest_real_body(self) -> None:
+        """The 8,192 default must never make a real skill unreachable by keyword."""
+        from personal_agent.config.settings import AppConfig
+        from personal_agent.orchestrator.skills import SKILL_BLOCK_HEADER, _load_all_skills
+
+        real = _load_all_skills(Path(skills_module.__file__).resolve().parents[3] / "docs/skills")
+        largest = max(len(d.body) for n, d in real.docs.items() if n != "bash")
+        needed = len(SKILL_BLOCK_HEADER) + len(real.docs["bash"].body) + 7 + largest
+        default = AppConfig.model_fields["skill_bodies_max_tokens"].default
+
+        assert needed <= default * 4
+
+
 class TestWebSearchSkill:
     """FRE-1290: docs/skills/web-search.md loads and routes outward-facing questions."""
 

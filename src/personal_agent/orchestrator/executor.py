@@ -6315,16 +6315,16 @@ async def step_llm_call(
         assemble_skill_index,
         assemble_skill_index_directive,
         assemble_skill_usage_directives,
+        fit_skill_bodies,
         get_all_skills,
         get_skill_bodies,
     )
 
     if settings.prefer_primitives_enabled:
-        _user_message: str | None = None
-        for _msg in reversed(ctx.messages):
-            if isinstance(_msg, dict) and _msg.get("role") == "user":
-                _user_message = get_text_content(_msg.get("content", ""))
-                break
+        # FRE-1529: route on the request's own text. The last user message is the
+        # fenced query after round 1 (its memory and skill bodies match many more
+        # keywords) or a mid-turn directive, which inflated the bodies about 7x.
+        _user_message: str | None = ctx.user_message or None
 
         # Priority: per-request override > global setting.
         from personal_agent.config.selection import (  # noqa: PLC0415
@@ -6393,27 +6393,37 @@ async def step_llm_call(
 
         _all_skills = get_all_skills()
 
-        if _routing_mode == "model_decided":
-            # Index (stable) + bodies of any pre-loaded (router-selected) skills.
+        if _routing_mode in ("model_decided", "hybrid"):
             _skill_index_text = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
-            _preloaded_bodies: list[str] = []
-            _preloaded_names: list[str] = []
-            if ctx.loaded_skills:
-                for _name in sorted(ctx.loaded_skills):
-                    _doc = _all_skills.get(_name)
-                    if _doc and _doc.body:
-                        _preloaded_bodies.append(_doc.body)
-                        _preloaded_names.append(_name)
-            _skill_bodies_text = "\n\n".join(p for p in _preloaded_bodies if p)
-            _skill_body_names = tuple(_preloaded_names)
+
+        if ctx.turn_context_inlined:
+            # FRE-1529: this turn's fence already carries the bodies chosen on its first
+            # call, and nothing new is inlined, so do not re-select (or re-log a drop).
+            pass
+        elif _routing_mode == "model_decided":
+            # Bodies of any pre-loaded (router-selected) skills, in name order.
+            _preloaded = fit_skill_bodies(
+                [
+                    _doc
+                    for _name in sorted(ctx.loaded_skills)
+                    if (_doc := _all_skills.get(_name)) is not None and _doc.body
+                ],
+                cap_tokens=settings.skill_bodies_max_tokens,
+                separator="\n\n",
+                trace_id=ctx.trace_id,
+            )
+            _skill_bodies_text = "\n\n".join(_doc.body for _doc in _preloaded)
+            _skill_body_names = tuple(_doc.name for _doc in _preloaded)
         elif _routing_mode == "hybrid":
-            _skill_index_text = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
             _skill_bodies_text, _skill_body_names = get_skill_bodies(
                 message=_user_message,
                 loaded_skills=ctx.loaded_skills,
+                trace_id=ctx.trace_id,
             )
         else:  # keyword (default / legacy) — bodies only, no index
-            _skill_bodies_text, _skill_body_names = get_skill_bodies(message=_user_message)
+            _skill_bodies_text, _skill_body_names = get_skill_bodies(
+                message=_user_message, trace_id=ctx.trace_id
+            )
 
         _has_index = bool(_skill_index_text)
         _has_bodies = bool(_skill_bodies_text)
@@ -6789,6 +6799,15 @@ async def step_llm_call(
         # (e.g. post-tool synthesis, where the current user query — already inlined
         # on the tool-request call — still carries the volatile earlier in the
         # sequence).
+        #
+        # FRE-1529: inlined ONCE per turn, on the turn's first primary call. The owner
+        # is that call's last user message: the user's own query, or on an expansion
+        # turn the worker-synthesis prompt step_init appends before the call. Later
+        # rounds never inline, because the budget warning, forced synthesis and
+        # cite-only retry each append a user-role message that would otherwise become
+        # the "last user message" and take a full second copy (trace 91b57b5c: four
+        # copies, 154,096 prompt tokens). The owner's bytes never change afterwards, so
+        # the sequence stays a forward extension.
         # Order (ADR-0081 §D4/§D3): skill bodies + usage-directives → recalled
         # memory → D3 salient highlights → the ADR-0122 §5 artifact-builder
         # planning note, the latter two closest to the query.
@@ -6803,7 +6822,16 @@ async def step_llm_call(
             )
             if p
         )
-        ctx.messages, _inline_outcome = _inline_volatile_with_outcome(ctx.messages, _volatile_block)
+        if ctx.turn_context_inlined:
+            _inline_outcome = InlineOutcome.ALREADY_WRAPPED
+        else:
+            ctx.messages, _inline_outcome = _inline_volatile_with_outcome(
+                ctx.messages, _volatile_block
+            )
+            ctx.turn_context_inlined = _inline_outcome in (
+                InlineOutcome.INLINED,
+                InlineOutcome.ALREADY_WRAPPED,
+            )
 
         # Call the unified client's respond()
         # Pass previous_response_id for stateful /v1/responses API

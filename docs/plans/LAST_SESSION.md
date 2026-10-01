@@ -1,70 +1,82 @@
-# Last session — 2026-09-14 05:40 to ~15:00 UTC
+# Last session — master, 2026-09-15 04:40 UTC to 2026-10-01 08:40 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The owner held both build streams from 07:05 to 14:46 UTC while the adr seat ran model tests on the
-local SLM, and released them at 14:46. At the reset, build1 is running the FRE-1508 AC-2/AC-3 replay
-for PR #1166, build2 launched FRE-1507 at 14:49, and adr holds FRE-1502. FRE-1505 passed its live eval check at 14:51 and is Done.
-No PR is mid-merge.
+The owner's primary-model study (FRE-1517) ran to a decision, and then the owner's own production
+turns became the evidence stream for three new tickets. Production serves llama.cpp Flash-Next with
+workers ON, the briefing planner and the FRE-1522 context reserve. One blocker is physical: the Mac's
+external model drive (EnvoyUltra) detached on 2026-09-17 at about 19:35 UTC, so the local model is
+down until the owner reconnects it. Nothing is at the gate; build2 heads FRE-1529, adr heads FRE-1525.
 
 ## What was decided and why
 
-**FRE-1372 (PR #1161) merged as infrastructure, not closed.** The first gate bounced it: no codex
-plan-review on a diff that moved a `settings.py` guard and the eval credential set. Codex then found the
-real trade: copying production's `AGENT_SUBSTRATE_PROFILE=managed_embedder` into eval switches off
-`_validate_owner_storage_allowlist` there, and the new `_validate_eval_deployment_isolation` replaces it,
-now covering `sysgraph_database_url` too. The ticket stays Awaiting Deploy because AC-1 fails (a
-`:Turn` node leaks across arms) and AC-2 was never measured (the probe has no `reseed`). Both criteria
-now live on FRE-1506. FRE-1372 closes when FRE-1506's live two-arm probe passes both. The owner approved
-the `gpt-5.4-mini` extraction those probes use. The approval was given outside the seat transcript, so
-master first reported it as missing.
+**Engine: llama.cpp, not MTPLX.** Blind rubric scoring (two Opus scorers, turns 1–5) put llama.cpp
+with workers at 17.0/25, every MTPLX setup at 12.0–16.5, Sonnet with no workers at 17.5. The cause is
+engine-side: on MTPLX every worker landing re-prefilled cold (0 cached, 2.5–6 min) because the memory
+guard cleared the cache near its 103 GB limit and low free disk capped the SSD spill. The owner:
+"MLX models are known to struggle with long context."
 
-**FRE-1505's exposure was live, not prospective.** The eval-treatment gateway already held the
-Anthropic and OpenAI keys, with bash and curl auto-approved. Master added outcome criteria, including
-`cat /proc/1/environ`, because scrubbing only the child environment does not close the hole. The fix
-drops eval bash to `nobody` with an allowlisted environment, and Linear refuses on eval. Master did not
-rebuild the production gateway: the code is inert there, and a restart could have disrupted adr's tests.
+**Workers stay ON, although delivery alone argued against them.** No-workers delivered 8/8 against
+6/8, but scored *worst* (12.0) — its turn 3 answer was truncated at 370 chars and still counted as
+delivered. Quality decided it, not the delivered flag. Explore added a separate `truncated` flag
+(PR #1182) rather than fold truncation into the pre-registered rubric.
 
-**ADR-0151 accepted by the owner, D2 as written.** Master's reading, which the owner took: `unresolved`,
-`source_not_entitled`, `unreachable` and `contradicted_by_source` are all repairable by a cite-only retry.
-Pre-generation forcing (heavy) is withdrawn. The owner approved FRE-1507, 1508, 1509 and 1510.
+**Master's first root-cause reading was wrong, and explore corrected it.** The two lost owner turns
+were not tool output: the skill-bodies block (114,599 chars, ~28.6k tokens) is re-assembled every
+round, and each mid-turn user-role message admits the current one again. Three budget warnings
+produced four copies and 154,096 prompt tokens. The block is *not* bounded by
+`skill_index_max_tokens` (2,048), which covers only the 4,659-char index.
 
-**PR #1166 (FRE-1508) is on HOLD, not bounced.** The design is reject-only: a `supported` verdict passes
-nothing, and the cost cap is 8 extra judge calls per turn. Master waived `/code-review ultra` under the
-standing directive. AC-2 and AC-3 wait on the replay. The owner refused to release that replay during
-model testing, even though it calls only the cloud `entailment` role.
+**Holding PR #1183 for a missing codex review paid for itself.** That post-hoc review found five real
+bugs, including Stop being ignored during the context retry and an unrelated retry failure being
+reported to the user as a context error. The precedent: when a seat records a skipped plan review on
+the primary turn loop, ask for it post-hoc rather than bounce or wave it through.
 
-**The model-testing hold protocol is now memory** (`feedback_owner_model_testing_hold`): pause builds
-with stream labels, not the kill switch, and hold even GPU-safe paid work until the owner says done.
+**Consolidation now skips `outcome == "failed"` captures.** Decided at that same gate: FRE-1527 made
+every failed turn write a capture, and with memory writes on those would have entered the graph.
 
-**Master errors worth not repeating.**
-1. Relayed "nothing that calls an LLM" to the seats, which was broader than the owner's GPU rule.
-2. Reported "3 pytest processes running". The count matched master's own command: the fifth repeat
-   of the pgrep lesson, now updated in memory.
-3. Set the kill switch before the owner specified stream labels, and removed it about 2 minutes later.
+**A live probe's capture must be archived before consolidation runs, not after.** The 05:07 AC-5 probe
+reached the graph because consolidation ran first; the owner then had its turn removed. The order is:
+master pauses consolidation → the seat fires → the seat reports → master archives.
+
+**AC-5 for FRE-1527 waits for a natural overrun** (owner's choice), rather than a designed turn that
+would write another synthetic turn into production.
+
+**FRE-1502 was parked** (stream label removed, state untouched) so the adr seat could reach FRE-1525.
+A backwards state transition would have wedged the stream.
 
 ## Worktrees — anything special
-- `build` (build1): FRE-1508's branch. Its context disposition is **keep**. The capture export and the
-  "before" worktree for the replay live in that seat's tmpfs scratchpad, so a reboot means re-exporting.
-- The untracked `*.bak*` files at the root and in `telemetry/` are the owner's.
+- `explore`: all runners and the blind-export tooling committed and merged (PRs #1181, #1182). Its raw
+  run output under `scripts/eval/fre1517/out/` is deliberately untracked.
+- The untracked `*.bak*` files at the repo root and under `telemetry/` are the owner's.
+- Master's `.env` backups (`env.before-*`) live in a tmpfs scratchpad and may be gone after a reboot;
+  the live `.env` carries dated comments for every study setting instead.
 
 ## Sequence position + drift
-- build1: FRE-1508 (PR on hold until the replay posts), then FRE-1506 (High).
-- build2: FRE-1507 merged (PR #1168) and deployed; FRE-1509 is next. FRE-1510 and FRE-1495 are blocked by FRE-1506.
-- adr: FRE-1502.
-- The production gateway was rebuilt at 15:21 UTC for FRE-1507 (`664f503e`), carrying #1161 and #1165
-  too. Source parity and /health verified.
+- Master audited all 24 `Awaiting Deploy` tickets on 2026-09-17 and closed three (FRE-1492, FRE-1494,
+  FRE-1507) on evidence that already existed in telemetry and had never been folded back. The rest are
+  correctly open, each with a named unmet live check.
+- **Drift:** three ADR umbrellas (FRE-1118, FRE-1450, FRE-1470) sit in `Awaiting Deploy` although
+  nothing about them awaits a deploy. The owner was offered a move to `Backlog` and has not answered.
+- **Open finding on FRE-1484:** on owner trace 1ba5cf4f a worker returned `report_kind ledger`, which
+  matches `_fanout_pause_tasks`, yet no `sub_agent_fanout_incomplete` pause was emitted. The trailer
+  did fire. Not eval mode, no stored preference. Three candidate causes are on the ticket.
+- slm_server: PR #16 and PR #18 merged, PR #17 (MTPLX backend) is a draft awaiting a live window.
+  Master's reviews are posted; merging there is the owner's.
 
 ## Answers for the fresh start
-- **What returns to the gate first?** PR #1166, when build1 posts the replay. Gate it against the
-  pre-registered bar on FRE-1508: unsettled falls by 20 or more, no unsettled span reaches `passed`,
-  no settled outcome changes, and 10 or more faithful turns. `/code-review ultra` is already waived.
-  After merge it needs a `seshat-gateway` rebuild, which adds up to 8 `claude_sonnet` calls per turn.
-- **Is the eval stack safe to run?** Yes, for credentials. FRE-1505's live probe passed at 14:51: eval bash runs as `nobody` and leaks nothing. The Turn-node leak (FRE-1506) is a separate contamination problem, so multi-arm evals still wait on FRE-1506.
-- **What closes FRE-1372?** FRE-1506's live probe passing AC-1 and AC-2 together.
-- **What live checks are still owed?** FRE-1501's runtime proof, at the first local fan-out with
-  researchers: no "Failed to parse tool call arguments as JSON" 500, and any cut worker shows
-  `stop_reason` `tool_call_truncated`. If the 500 recurs, FRE-1501 goes to Verify Failed.
-- **What else waits on master?** FRE-1338 is Approved and Urgent with no stream label, and its thread
-  was updated on 2026-09-14. Read the thread before labelling it.
-- **What does the owner owe?** FRE-1507's AC-5: one live tool turn and one no-tool turn, each checked
-  against `grounding_verification_completed` (runbook on FRE-1507). Until then it stays Awaiting Deploy.
+- **Is the local model up?** No. The EnvoyUltra drive is detached (not merely unmounted — the Mac
+  lists no external disk). Owner action. Verify recovery with a real completion through `:8600`, never
+  with `/health`, which answers from the router.
+- **Was any owner turn lost to that outage?** No. Zero turn events between 19:20 and 21:25 UTC.
+- **What is at the gate?** Nothing. build2 → FRE-1529 (Urgent, the skill-block duplication),
+  adr → FRE-1525 (artifact sharing ADR-0153).
+- **What needs the owner?** Reconnect the drive; approve FRE-1524 (the budget warning); decide the
+  umbrella move; decide whether slm_server merges PR #17 after its live window.
+- **What is deliberately still in `.env`?** `AGENT_EXPANSION_ENABLED=true` and
+  `AGENT_PLANNER_BRIEF_MODE=briefing` are the owner's 2026-09-16 production decision, not leftover
+  study settings. `AGENT_ENABLE_SECOND_BRAIN=true` since the study ended.
+- **Study captures:** 71 archived to `captains_log/captures_archive_fre1517` inside the gateway volume,
+  so they can never be consolidated. Do not move them back.
+- **Linear MCP:** its token expired at 08:37 UTC on 2026-10-01. Re-authorize before any board work.
+- **Master's own correction worth remembering:** master printed a visible "Private list of what I need
+  next" block in nearly every reply until the owner asked why. Keep that reasoning internal.

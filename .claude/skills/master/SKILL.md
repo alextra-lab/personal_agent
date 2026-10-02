@@ -35,8 +35,11 @@ dependabot authorship); it renders no verdict — you decide. Gate on:
 - If a backing ADR exists: the diff implements it **as designed**; silent divergence bounces.
   (If the design genuinely changed, the ADR document is updated first.)
 
-**Bounce channel:** a direct `send-keys` message to the worker's `cc-<stream>` seat naming the
-PR and the fix; written detail in a PR comment. The seat is warm and self-completes.
+**Bounce channel:** a `SendMessage` to the worker's `cc-<stream>` seat (find it with `ListAgents`)
+naming the PR and the fix; written detail in a PR comment. The seat is warm and self-completes.
+The message is delivered at the seat's next tool round, so a seat held at a prompt receives it
+after the prompt clears. Fall back to `tmux send-keys` (plus a separate `Enter`) only when the
+seat is missing from `ListAgents`.
 
 ## 4 — Merge
 `gh pr merge <n> --merge --delete-branch` with a review summary; `git pull` on main.

@@ -48,7 +48,7 @@ other; a human is always at one end.
 - **master → you:** a tagged question arrives in your input (`[from master, re PR #X] …`). Work it
   through *with the owner*, in depth, without spending master's context. When the owner says it's
   ready, send the **distilled, decision-ready result** back — the answer, not the deliberation.
-- **you → master / adr (owner-gated only):** at the owner's request, `send-keys` the result to
+- **you → master / adr (owner-gated only):** at the owner's request, `SendMessage` the result to
   `cc-master` (a decision to execute) or `cc-adrs` (an idea to formalize), tagged `[from explore]`.
   Only on the owner's say-so — never on your own initiative.
 - The watcher/dispatcher never target you; you are not a worker and not a gate.

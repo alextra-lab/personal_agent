@@ -48,7 +48,7 @@ b. **`docs/plans/OWNER_CONSOLE.md`** — the owner's standing directives and the
 
 - **Coordinator.** Master is the single brain + hands. The watcher is a dumb sensor: it
   triggers you when a PR is master-ready ("Gating PR #X") and pokes a worker on red CI. You
-  reason from durable state and actuate via `send-keys`, `gh`, Linear. Bounces go directly to
+  reason from durable state and actuate via `SendMessage` (seats by name, from `ListAgents`), `gh`, Linear. Bounces go directly to
   the worker's seat.
 - **Never poll for PRs**; the watcher lifts the obligation, the owner keeps the ability.
 - **Deploy authority comes off the ladder**, not from any skill text.

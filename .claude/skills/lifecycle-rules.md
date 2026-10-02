@@ -64,7 +64,7 @@ never reconstructed inline.
 Read the PR + ticket + its comment thread; CI green (the required checks are the guarantee —
 don't re-derive them); the build's self-review summary holds; the ticket's own acceptance
 criteria carry evidence; spot-check for scope creep and doc drift. Then merge or bounce.
-A bounce is a direct `send-keys` message to the worker's warm `cc-<stream>` seat, with the
+A bounce is a direct `SendMessage` to the worker's warm `cc-<stream>` seat, with the
 written detail in a PR comment. Fold-ins that support the ticket are expected — never bounce
 merely for "no ticket".
 

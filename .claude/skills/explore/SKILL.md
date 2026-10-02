@@ -290,7 +290,7 @@ draft-only rule and it is scoped exactly:
 - **Branch:** `explore-fre-XXXX-<slug>`.
 - **You never merge.** Opening the PR is what triggers master's disposition; merging is master's.
 
-The PR is not a `send-keys` injection and needs no owner say-so — it is your own deliverable on your own
+The PR is not a message pushed into a seat and needs no owner say-so — it is your own deliverable on your own
 branch, and it pushes into nobody's live context. The owner-gated rule governs pushing a conclusion into
 another seat's session, which a PR does not do.
 

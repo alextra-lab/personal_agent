@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v57-theme-init';
+const CACHE_NAME = 'seshat-v58-fre-1538';
 
 const PRECACHE_URLS = [
   '/',

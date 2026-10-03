@@ -32,6 +32,7 @@ import type {
 } from '@/lib/types';
 import { reconcilePhaseSnapshot } from '@/lib/phase-state';
 import { buildTurnSummary } from '@/lib/phase-summary';
+import { clearStoredTools, mergeTurnStatus, persistTurnStatus } from '@/lib/turn-status-store';
 
 /** Server-authoritative model-selection change, from a `session_selection` STATE_DELTA. */
 export interface ServerSelection {
@@ -179,8 +180,9 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   // it here so the DONE handler can stamp it onto the completed assistant message
   // (the rating control joins on trace_id).
   const currentTurnTraceIdRef = useRef<string>('');
-  // FRE-575 (fold-in to FRE-573): track latest turn_status so DONE can persist
-  // tool state to localStorage for engagement-lane remount restore.
+  // FRE-1538: the source of truth for the DISPLAYED status. Every writer goes through
+  // commitTurnStatus, so the ref and the `turnStatus` state never diverge and a late
+  // updater (REST hydration) always folds onto the latest live reading.
   const lastTurnStatusRef = useRef<TurnStatus | null>(null);
   // FRE-236: mirrors isStreaming state for use in non-React closures (event handlers).
   // Must be updated alongside every setIsStreaming call.
@@ -202,6 +204,11 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   // detaching the old connection.
   const activeSessionIdRef = useRef<string | undefined>(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+
+  const commitTurnStatus = useCallback((next: TurnStatus | null) => {
+    lastTurnStatusRef.current = next;
+    setTurnStatus(next);
+  }, []);
 
   const updatePhases = useCallback((fn: (prev: PhaseNode[]) => PhaseNode[]): PhaseNode[] => {
     const next = fn(phasesRef.current);
@@ -399,9 +406,12 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
       case 'STATE_DELTA': {
         const { key, value } = event.data as { key: string; value: unknown };
         if (key === 'turn_status' && value !== null && typeof value === 'object') {
-          const next = value as TurnStatus;
-          lastTurnStatusRef.current = next;
-          setTurnStatus(next);
+          // FRE-1538: fold onto the displayed status (a reading with no resolved ceiling
+          // must not blank ctx), then persist exactly what is displayed, under the
+          // session this connection was opened for — never the current one (FRE-1414).
+          const merged = mergeTurnStatus(lastTurnStatusRef.current, value as TurnStatus);
+          commitTurnStatus(merged);
+          persistTurnStatus(ownerSessionId, merged);
           // FRE-407: capture the turn's trace_id for the DONE handler to stamp.
           const tid = (value as { trace_id?: unknown }).trace_id;
           if (typeof tid === 'string' && tid.length > 0) {
@@ -665,30 +675,12 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
         }
 
         currentTurnTraceIdRef.current = '';
-        // FRE-575 (fold-in to FRE-573): persist the completed engagement's tool
-        // state so the engagement lane restores on remount (e.g. artifact → back).
-        // Write on every DONE; remove the key for zero-tool turns to avoid stale data.
-        if (typeof window !== 'undefined' && currentSessionRef.current) {
-          const ts = lastTurnStatusRef.current;
-          const storageKey = `seshat-tool-state-${currentSessionRef.current}`;
-          // Only persist a genuinely-received reading; nulls must never be stored
-          // and read back as if they were data (FRE-928 AC-4).
-          if (ts && ts.tool_iteration !== null && ts.tool_iteration > 0) {
-            localStorage.setItem(
-              storageKey,
-              JSON.stringify({
-                tool_iteration: ts.tool_iteration,
-                tool_iteration_max: ts.tool_iteration_max,
-              }),
-            );
-          } else {
-            localStorage.removeItem(storageKey);
-          }
-        }
+        // FRE-1538: nothing to persist here — the bar's readings are stored on every
+        // turn_status, so a DONE that never reaches a suspended page loses nothing.
         break;
       }
     }
-  }, [dropPendingConstraint, updatePhases, updateTools, attachTurnSummary]);
+  }, [dropPendingConstraint, updatePhases, updateTools, attachTurnSummary, commitTurnStatus]);
 
   // --------------------------------------------------------------------------
   // Public API
@@ -705,7 +697,6 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
       }
       currentContentRef.current = '';
       currentSessionRef.current = sessionId;
-      lastTurnStatusRef.current = null;
 
       // FRE-236: clear any stale draft and reconnect state from a previous turn.
       localStorage.removeItem(DRAFT_KEY(sessionId));
@@ -735,9 +726,15 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
       // own CONSTRAINT_RESOLVED (or on CANCELLED, which does resolve every waiter).
       setResolvedConstraints([]);
       setCancelled(false);
-      // Note: turnStatus is intentionally NOT reset here — the status bar stays
-      // visible between turns (showing the last turn's metrics) and is
-      // overwritten by the first turn_status of the new turn (ADR-0076).
+      // FRE-1538 (owner decisions, 2026-10-03): the send resets the tools lane only. The
+      // ctx lane (headroom) and cost stay until a new reading replaces them. The
+      // status bar stays visible, and the new turn's turn_status overwrites the rest
+      // (ADR-0076).
+      const shown = lastTurnStatusRef.current;
+      if (shown !== null) {
+        commitTurnStatus({ ...shown, tool_iteration: null, tool_iteration_max: null });
+      }
+      clearStoredTools(sessionId);
 
       // 1. Connect WebSocket BEFORE sending the message so we don't miss
       //    events from the background task.
@@ -797,7 +794,7 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
         return;
       }
     },
-    [handleEvent, updatePhases, updateTools],
+    [handleEvent, updatePhases, updateTools, commitTurnStatus],
   );
 
   // FRE-1414: close/detach a stream left open for a session the caller has
@@ -931,11 +928,13 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   // FRE-1401: also accepts an updater so a late REST hydration can merge onto
   // whatever is current (e.g. a live turn_status that already resolved a real
   // ceiling) instead of unconditionally overwriting it.
+  // FRE-1538: an updater is evaluated here against the ref (the latest committed status),
+  // not handed to React — so no ref mutation hides inside a state updater.
   const seedTurnStatus = useCallback(
     (status: TurnStatus | ((prev: TurnStatus | null) => TurnStatus)) => {
-      setTurnStatus(status);
+      commitTurnStatus(typeof status === 'function' ? status(lastTurnStatusRef.current) : status);
     },
-    [],
+    [commitTurnStatus],
   );
 
   return {

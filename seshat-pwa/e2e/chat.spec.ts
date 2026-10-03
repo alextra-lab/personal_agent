@@ -254,15 +254,17 @@ test.describe('RUN_ERROR error card', () => {
 // ---------------------------------------------------------------------------
 // Regression guard for the real bug (trace 0b959afd, 2026-06-17): navigating
 // from the conversation to the artifact view and back reset the meter to 0.
-// FRE-573 fixed this via localStorage persist (DONE) + seedTurnStatus restore
+// FRE-573 fixed this via localStorage persist + seedTurnStatus restore
 // (cost + tools). FRE-1401 (2026-09-05) removed the context-ceiling half of
-// that restore: a stale numerator beside a real ceiling reads as "plenty of
-// room", so after a remount the ctx lane is the cold-lane "—/—" until a live
-// turn_status resolves it again — only cost and tools survive the remount.
+// that restore. FRE-1538 (owner decisions, 2026-10-03: "the context size/usage
+// should only be reset at compaction or a new session. I need to know how much
+// headroom I have.") replaces that rule for the same session: after a remount
+// the ctx lane shows its last live reading, stored per session on every
+// turn_status. Cost and tools survive the remount too.
 // ---------------------------------------------------------------------------
 
 test.describe('TurnStatusBar remount resilience', () => {
-  test('cost and engagement lanes survive artifact → conversation view-switch; ctx lane does not rehydrate (FRE-1401)', async ({
+  test('cost, engagement and ctx lanes survive artifact → conversation view-switch (FRE-1538)', async ({
     page,
   }) => {
     // Base REST stubs (GET /sessions/{id} → 404 by default).
@@ -359,10 +361,10 @@ test.describe('TurnStatusBar remount resilience', () => {
 
     // Cost is restored from FRE-426 hydration, not reset to 0.
     await expect(page.getByText('$0.47')).toBeVisible();
-    // FRE-1401: the ctx ceiling is NOT rehydrated on remount — it reads the cold-lane
-    // "—/—" until a live turn_status resolves it, never the stale 25% from before.
-    await expect(page.getByText('—/—', { exact: true })).toBeVisible();
-    await expect(page.getByText(/25%/)).not.toBeVisible();
+    // FRE-1538 (replaces the FRE-1401 rule): the ctx lane keeps its last live reading
+    // across the remount — the owner needs the headroom figure to stay.
+    await expect(page.getByText(/25K\/100K 25%/)).toBeVisible();
+    await expect(page.getByText('—/—', { exact: true })).not.toBeVisible();
 
     // Engagement lane must be restored from localStorage, not show 0/6.
     await expect(page.getByText(/tools 4\/6/)).toBeVisible();
@@ -383,8 +385,8 @@ test.describe('TurnStatusBar remount resilience', () => {
 
 const SESSION_B = '00000000-0000-0000-0000-0000000000ac3';
 
-test.describe('Session switch resets the status bar (FRE-1401 AC-3)', () => {
-  test("switching away and back never shows the other session's ctx reading", async ({
+test.describe('Session switch swaps the status bar to the target session (FRE-1401 AC-3, FRE-1538)', () => {
+  test("switching away and back shows each session's own ctx reading, never the other's", async ({
     page,
   }) => {
     await stubRest(page, TEST_SESSION);
@@ -494,11 +496,11 @@ test.describe('Session switch resets the status bar (FRE-1401 AC-3)', () => {
     await page.getByRole('button', { name: /Session Alpha/ }).click();
     await page.waitForURL(`**/c/${TEST_SESSION}`);
 
-    // Returning to Alpha shows the cold-lane dash — never Alpha's own stale
-    // pre-switch reading (no live turn_status has fired for it in this mount)
-    // and never Bravo's reading either.
-    await expect(page.getByText('—/—', { exact: true })).toBeVisible();
-    await expect(page.getByText(/25K\/100K 25%/)).not.toBeVisible();
+    // Returning to Alpha shows Alpha's OWN last reading (FRE-1538 replaces the FRE-1401
+    // dash rule for the same session), and never Bravo's reading (the cross-session
+    // leak guard, unchanged).
+    await expect(page.getByText(/25K\/100K 25%/)).toBeVisible();
+    await expect(page.getByText('—/—', { exact: true })).not.toBeVisible();
     await expect(page.getByText(/5\.0K\/50K 10%/)).not.toBeVisible();
   });
 });

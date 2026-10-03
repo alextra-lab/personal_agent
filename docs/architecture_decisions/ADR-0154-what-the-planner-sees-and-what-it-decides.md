@@ -186,7 +186,7 @@ Three parts change:
   | > 0 | `declined` or `expanded` | `used`, `none_relevant` or `unstated` only |
 
   A valid decline is a plan, so it carries the planner's judgment of the digest. A decline can carry `used`, for example when memory shows that the request is already answered.
-- **The terminal planner event (ADR-0147 D5) fires on every planner attempt,** on every path: a decline, an expansion, every failure reason including `input_too_large`, and a fallback plan outside D2. It carries the D6 planner fields, the prompt hash of D7 and the digest fields of ADR-0147 D5.
+- **The terminal planner event (ADR-0147 D5) fires exactly once per planner run,** on every path: a decline, an expansion, every failure reason including `input_too_large`, and a fallback plan outside D2. A run that fails and then uses the fallback plan is one run, and its one event records the fallback. It carries the D6 planner fields, the prompt hash of D7 and the digest fields of ADR-0147 D5.
 
 The digest's effect on the decision is unmeasured. AC-8 measures it before the umbrella closes, and AC-11 carries ADR-0147's invariant checks.
 
@@ -430,7 +430,7 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 
 - **AC-6 — The inputs stay inside their bounds.** · **Check:** over the window, `planner_input_chars` on every row with a non-null `planner_decision`, and the digest fields of ADR-0147 D5. A unit test feeds an oversized history, an oversized digest set and an oversized message. · *Fails if* any row that ran the planner records history, digest and message together above 64,000 characters, any row above that total lacks `planner_failure_reason = input_too_large`, a history above 60,000 characters, or a digest above 20 items, 120 characters per line or 300 estimated tokens. It also fails if the test finds the message cut, the history trimmed other than from the oldest end, or an oversized message that does not fail with `input_too_large`.
 
-- **AC-7 — Thinking off is what ran, on every deployment.** · **Check:** over the window, `planner_reasoning_chars`, `planner_mode` and `planner_completion_tokens` on every planner call. · *Fails if* any call in a `planner` mode records `planner_reasoning_chars` above 0, or the p50 `planner_completion_tokens` of declined calls on any deployment exceeds 40. With thinking off, declines took a median 13 completion tokens, at most 19. With thinking on, they took a median 165, so a thinking leak cannot pass this check.
+- **AC-7 — Thinking off is what ran, on every deployment.** · **Check:** over the window, `planner_reasoning_chars`, `planner_mode` and `planner_completion_tokens` on every planner call. · *Fails if* any call in a `planner` mode records `planner_reasoning_chars` above 0, or the p50 `planner_completion_tokens` of declined calls on any deployment exceeds 40. The p50 needs at least 10 live declined calls on a deployment. For a deployment with fewer, the committed probe's declined calls on that deployment, run in the window, take their place under the same threshold. With thinking off, declines took a median 13 completion tokens, at most 19. With thinking on, they took a median 165, so a thinking leak cannot pass this check.
 
 - **AC-8 — The digest informs the plan and does not damage the decision.** · **Check, three parts:**
   1. *Seeded pair:* ADR-0147 AC-2's integration test, run on the D2 prompt. A coined token in a relevant digest must reach a goal, and an unrelated digest must return `none_relevant` and leak nothing.
@@ -447,9 +447,9 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
   - *Parity:* a unit test feeds session items, blank items and more than 47 items, and asserts that every digest line is a prefix of the renderer's own line for the same item. Live, on the terminal planner event, the digest keys are an ordered sub-multiset of the rendered keys.
   - *No memory section in a worker:* `memory_in_context` on every sub-agent capture in the window.
   - *Relevance matrix:* D5's matrix over every terminal planner event in the window.
-  - *Event coverage:* the count of terminal planner events equals the count of turns with a non-null `planner_decision`.
+  - *Event coverage:* every turn with a non-null `planner_decision` has exactly one terminal planner event, joined on `trace_id`.
 
-  · *Fails if* the parity test fails or any live digest key is absent from the rendered keys, any capture reports `memory_in_context = true`, any event falls outside the matrix, or the two counts differ.
+  · *Fails if* the parity test fails or any live digest key is absent from the rendered keys, any capture reports `memory_in_context = true`, any event falls outside the matrix, or a turn with a non-null `planner_decision` has zero or more than one terminal event.
 
 ---
 
@@ -477,7 +477,7 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 
 ### 2026-10-03 - Proposed
 **Changed By:** `adr` seat (FRE-1537)
-**Reason:** Drafted on the owner's "Draft it" after the 2026-10-03 measurement, the choice of design A with thinking off, and the choice to keep the ADR-0147 digest.
+**Reason:** Drafted on the owner's "Draft it" after the 2026-10-03 measurement, the choice of design A with thinking off, and the choice to keep the ADR-0147 digest. Codex round 1 (8 blocking): an enforced input bound, a per-deployment planner gate with response evidence of thinking off, the relevance matrix keyed on the planner's decision, a counterfactual history size for the baseline, paired per-fixture delays with two contaminated rows excluded, statistics stated as "no difference detected", and the router alternative restored. Codex round 2 (5 blocking): no owner bypass of the gate except an ADR amendment, a completion-token threshold in D7, a separate `planner_gate_reason`, capture coverage and a pre-registered challenge list in AC-4, and a minimum short-history sample in AC-5. Codex round 3 (2 blocking): a minimum sample for AC-7 and one terminal event per planner run in AC-11. The round budget is exhausted at three.
 
 ---
 

@@ -1,7 +1,7 @@
 # ADR-0036: Expansion Controller — Deterministic Workflow Enforcement
 
 **Date:** 2026-03-28
-**Status:** Accepted
+**Status:** Accepted · **D1 and D5 amended by [ADR-0154](ADR-0154-what-the-planner-sees-and-what-it-decides.md) — 2026-10-03:** for `CONVERSATIONAL`, `TOOL_USE`, `ANALYSIS` and `PLANNING`, on a deployment with a qualified `planner` mode, the planner decides whether to expand and may decline (ADR-0154 D2).
 **Deciders:** Alex (project lead)
 **Linear Issue:** FRE-154
 **Depends on:** EVAL-07 (evaluation findings synthesis), EVAL-08 (Slice 3 priority ranking)

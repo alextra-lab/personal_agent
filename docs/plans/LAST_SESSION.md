@@ -1,4 +1,4 @@
-# Last session — master, 2026-10-03 08:00 UTC to 14:45 UTC
+# Last session — master, 2026-10-03 08:00 UTC to 15:00 UTC
 
 ## Doing / discussing  (≤5 sentences)
 The owner asked for "all recommendations" to be followed; cc-master was then restarted (`-c`).
@@ -7,7 +7,9 @@ accepted ADR-0154 and approved its chain at 13:01: the build streams now run it 
 the record). FRE-1512 deployed at 14:15; its AC-2/AC-3 live halves need the first 20 turns.
 FRE-1511 (the planner probe) merged and is Done: 11/11 D7 thresholds on the local binding. FRE-1541
 is next on build2; it must switch the probe to the production digest builder (comment on it).
-FRE-1543 queues on build1 after FRE-1471 (owner: "leave order as is").
+FRE-1471 (the digest) merged and deployed 14:56; its live check is the next owner memory turn.
+On build1, FRE-1472 runs next, then FRE-1543 (owner: "leave order as is"). Master accepted
+FRE-1471's choice that digest lines are renderer-line prefixes with no kind label (FRE-1472 tests it).
 The Awaiting Deploy sweep closed six tickets. The rest wait on the owner decisions listed below.
 
 ## What was decided and why

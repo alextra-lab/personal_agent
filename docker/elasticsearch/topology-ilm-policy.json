@@ -1,8 +1,8 @@
 {
   "policy": {
     "_meta": {
-      "description": "ILM for agent-topology-* (monthly index agent-topology-YYYY-MM; FRE-548 / ADR-0088 execution-topology projection of the Postgres route-trace ledger). min_age-based delete from origination date (no rollover write-alias). Retention: 90d — no prior precedent, owner-approved 2026-07-31 (FRE-1036) as the operational-telemetry default. warm forcemerge fires at 32d, matching the user-turn-ratings-policy precedent so the current monthly index isn't merged while still open. Authored in FRE-1036; this family previously had no ILM policy at all (indices accreted forever).",
-      "retention_days": 90,
+      "description": "ILM for agent-topology-* (monthly index agent-topology-YYYY-MM; FRE-548 / ADR-0088 execution-topology projection of the Postgres route-trace ledger). min_age-based delete from origination date (no rollover write-alias). Retention: 123d (owner rule 2026-10-03: a monthly index keeps the current month plus 3 full months; the longest 4-month run is 123 days; was 90d) — no prior precedent, owner-approved 2026-07-31 (FRE-1036) as the operational-telemetry default. warm forcemerge fires at 32d, matching the user-turn-ratings-policy precedent so the current monthly index isn't merged while still open. Authored in FRE-1036; this family previously had no ILM policy at all (indices accreted forever).",
+      "retention_days": 123,
       "managed_by": "scripts/setup-elasticsearch.sh"
     },
     "phases": {
@@ -20,7 +20,7 @@
         }
       },
       "delete": {
-        "min_age": "90d",
+        "min_age": "123d",
         "actions": { "delete": {} }
       }
     }

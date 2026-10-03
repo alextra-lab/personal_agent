@@ -479,7 +479,7 @@ ILM_FAMILIES = [
         "monitors-slm-health-ilm-policy.json",
         "agent-monitors-slm-health-policy",
         "monitors-slm-health-index-template.json",
-        90,
+        123,
     ),
     (
         "slm-requests-ilm-policy.json",
@@ -497,7 +497,7 @@ ILM_FAMILIES = [
         "caddy-access-ilm-policy.json",
         "caddy-access-policy",
         "caddy-access-index-template.json",
-        90,
+        123,
     ),
 ]
 
@@ -549,6 +549,39 @@ def test_ilm_policy_registered_in_setup_script(
     assert f"/_ilm/policy/{policy_name}" in script, f"{policy_name} not PUT by setup script"
     assert f"docker/elasticsearch/{policy_file}" in script, (
         f"{policy_file} path not referenced by setup script"
+    )
+
+
+# Owner rule 2026-10-03: a monthly index keeps the current month plus 3 full
+# months. ILM ages an index from its creation on the 1st, so the delete age must
+# cover the longest 4-month run (July to October): 123 days. A 30d delete on a
+# monthly index removed all of agent-logs-2026-09 on 2026-10-01.
+MONTHLY_MIN_RETENTION_DAYS = 123
+
+# Policies for families that are NOT monthly. Every other policy file must meet
+# the monthly floor, so a new family meets it by default.
+NON_MONTHLY_POLICY_FILES = {
+    "slm-requests-ilm-policy.json",  # daily slm-requests-YYYY-MM-DD (FRE-1106)
+}
+
+
+@pytest.mark.parametrize(
+    "policy_file",
+    sorted(
+        p.name for p in ES_DIR.glob("*ilm-policy.json") if p.name not in NON_MONTHLY_POLICY_FILES
+    ),
+)
+def test_monthly_policy_keeps_current_month_plus_three(policy_file: str) -> None:
+    """A monthly family's delete age keeps the current month plus 3 full months."""
+    policy = _load(policy_file)["policy"]
+    min_age = policy["phases"]["delete"]["min_age"]
+    assert min_age.endswith("d"), f"{policy_file}: delete min_age must be in days"
+    assert int(min_age[:-1]) >= MONTHLY_MIN_RETENTION_DAYS, (
+        f"{policy_file}: delete min_age {min_age} is below "
+        f"{MONTHLY_MIN_RETENTION_DAYS}d (current month plus 3 full months)"
+    )
+    assert policy["_meta"]["retention_days"] == int(min_age[:-1]), (
+        f"{policy_file}: _meta.retention_days must match the delete min_age"
     )
 
 

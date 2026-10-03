@@ -9,11 +9,13 @@ is visible.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import re
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 import httpx
@@ -21,10 +23,16 @@ from scripts.eval.fre1537.common import RunPaths
 from scripts.eval.fre1537.fixtures import REPO_ROOT
 from scripts.eval.fre1537.llama import Inputs, PlannerMode, sampling
 
+if TYPE_CHECKING:
+    from scripts.eval.fre1537.cloud import CloudTarget
+
+MANAGED_BUILD = "managed (provider reports no build)"
+MANAGED_QUANT = "managed (not reported)"
 _QUANT = re.compile(r"(?:UD-)?(?:I?Q\d(?:_[A-Z0-9]+)+|BF16|F16|F32)", re.IGNORECASE)
 # The fields whose change makes two runs different configurations.
 _IDENTITY_PATHS = (
     ("engine", "build"),
+    ("engine", "served_model"),
     ("model", "name"),
     ("model", "quant"),
     ("planner_mode",),
@@ -196,5 +204,68 @@ def fill_engine_build(paths: RunPaths, system_fingerprint: object) -> None:
     if engine.get("build") not in (None, "", "unknown"):
         return
     engine.update(build=system_fingerprint, build_source="reply:system_fingerprint")
+    stored["engine"] = engine
+    paths.fingerprint.write_text(json.dumps(stored, indent=2, sort_keys=True))
+
+
+def build_cloud_fingerprint(
+    target: CloudTarget, inputs: Inputs, paths: RunPaths, digest: str | None
+) -> dict[str, object]:
+    """Build the configuration fingerprint of a managed-deployment run.
+
+    A managed API reports no engine build and no quant, so those two fields say so. The model name that a
+    reply reports is kept apart, in ``engine.served_model``, and a change of it is a different
+    configuration. It reads ``unknown`` until the first reply fills it.
+
+    Args:
+        target: The managed deployment and its mode.
+        inputs: The run inputs.
+        paths: The run paths.
+        digest: The digest text of a digest run, or ``None``.
+
+    Returns:
+        The fingerprint. The credential is not in it.
+    """
+    fingerprint: dict[str, object] = {
+        "engine": {
+            "name": target.provider,
+            "build": MANAGED_BUILD,
+            "build_source": "managed",
+            "served_model": "unknown",
+            "url": target.endpoint,
+        },
+        "model": {
+            "name": target.model_id,
+            "quant": MANAGED_QUANT,
+            "quant_source": "managed",
+            "path": "n/a",
+        },
+        "planner_mode": {"name": target.mode_name, "params": dict(target.declared)},
+        "system_prompt_sha256": inputs.prompts["prompt_hash"],
+        "captured_primary": _captured_summary(paths, inputs),
+        "client": {"litellm": importlib.metadata.version("litellm")},
+        "git_head": _git_head(),
+    }
+    if digest:
+        fingerprint["digest_sha256"] = hashlib.sha256(digest.encode()).hexdigest()
+    return fingerprint
+
+
+def fill_served_model(paths: RunPaths, served_model: object) -> None:
+    """Record the model name that a managed reply reports, when the fingerprint has none.
+
+    A value that is already known is never overwritten.
+
+    Args:
+        paths: The run paths.
+        served_model: The ``model`` of a reply, or ``None``.
+    """
+    if not isinstance(served_model, str) or not served_model:
+        return
+    stored = json.loads(paths.fingerprint.read_text())
+    engine = stored.get("engine", {})
+    if engine.get("served_model") not in (None, "", "unknown"):
+        return
+    engine["served_model"] = served_model
     stored["engine"] = engine
     paths.fingerprint.write_text(json.dumps(stored, indent=2, sort_keys=True))

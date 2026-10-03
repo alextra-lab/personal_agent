@@ -214,6 +214,23 @@ def planner_request(
     }
 
 
+def planner_user(inputs: Inputs, label: str, digest: str | None = None) -> str:
+    """Build the planner user message of one fixture.
+
+    Args:
+        inputs: The run inputs.
+        label: Fixture label.
+        digest: Optional memory digest text. It goes after the history and before the query.
+
+    Returns:
+        The user message.
+    """
+    fx = inputs.fixture(label)
+    if digest:
+        return render.build_user_message(str(fx["history"]), digest, str(fx["query"]))
+    return str(fx["user"])
+
+
 def planner_body(
     inputs: Inputs, label: str, mode: PlannerMode, digest: str | None = None
 ) -> dict[str, object]:
@@ -228,13 +245,9 @@ def planner_body(
     Returns:
         The request body.
     """
-    fx = inputs.fixture(label)
-    user = (
-        render.build_user_message(str(fx["history"]), digest, str(fx["query"]))
-        if digest
-        else str(fx["user"])
+    return planner_request(
+        inputs.system, planner_user(inputs, label, digest), inputs.body(label), mode, 16384
     )
-    return planner_request(inputs.system, user, inputs.body(label), mode, 16384)
 
 
 def primary_body(inputs: Inputs, label: str, max_tokens: int | None = None) -> dict[str, object]:

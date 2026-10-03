@@ -112,6 +112,8 @@ class Draw:
     secs: float | None
     reasoning_chars: int
     completion_tokens: float | None
+    thinking_blocks: int = 0
+    reasoning_tokens: int = 0
 
 
 def _dedupe(rows: Sequence[Mapping[str, object]]) -> tuple[list[Mapping[str, object]], int]:
@@ -136,6 +138,8 @@ def _draw(row: Mapping[str, object]) -> Draw:
         secs=_num(row.get("secs")),
         reasoning_chars=int(_num(row.get("reasoning_chars")) or 0),
         completion_tokens=_num(_mapping(row.get("usage")).get("completion_tokens")),
+        thinking_blocks=int(_num(row.get("thinking_blocks")) or 0),
+        reasoning_tokens=int(_num(_mapping(row.get("usage")).get("reasoning_tokens")) or 0),
     )
 
 
@@ -221,7 +225,9 @@ def _dig(d: Mapping[str, object], path: tuple[str, ...]) -> object:
 
 def _fingerprint_check(fingerprint: Mapping[str, object]) -> Check:
     missing = [
-        ".".join(p) for p in _FINGERPRINT_FIELDS if _dig(fingerprint, p) in (None, "", "unknown")
+        ".".join(p)
+        for p in _fingerprint_fields(fingerprint)
+        if _dig(fingerprint, p) in (None, "", "unknown")
     ]
     return Check(
         "Configuration fingerprint complete",
@@ -229,6 +235,22 @@ def _fingerprint_check(fingerprint: Mapping[str, object]) -> Check:
         "complete" if not missing else "missing " + ", ".join(missing),
         not missing,
     )
+
+
+def _reasoning_text(chars: int, blocks: int, tokens: int) -> str:
+    text = str(chars)
+    if blocks:
+        text += f", {blocks} thinking block(s)"
+    if tokens:
+        text += f", {tokens} reasoning token(s)"
+    return text
+
+
+def _fingerprint_fields(fingerprint: Mapping[str, object]) -> tuple[tuple[str, ...], ...]:
+    """Return the fields a fingerprint must hold. A managed run also names the served model."""
+    if "served_model" in _mapping(fingerprint.get("engine")):
+        return (*_FINGERPRINT_FIELDS, ("engine", "served_model"))
+    return _FINGERPRINT_FIELDS
 
 
 def _long_call(rows: Sequence[Mapping[str, object]], key: str) -> float | None:
@@ -280,11 +302,14 @@ def score(
     invalid = sum(d.outcome == "invalid" for d in draws) + sum(
         classify(c.get("plan")) == "invalid" for c in side_calls if c
     )
+    # A managed provider can think without a visible character: a redacted thinking block, or a
+    # reasoning-token count with the text hidden. Both count (FRE-1516). Local rows carry neither field.
+    side = [_draw({**c, "label": "side"}) for c in side_calls if c]
     reasoning = max(
-        [d.reasoning_chars for d in draws]
-        + [int(_num(c.get("reasoning_chars")) or 0) for c in side_calls],
-        default=0,
+        [d.reasoning_chars for d in draws] + [d.reasoning_chars for d in side], default=0
     )
+    blocks = sum(d.thinking_blocks for d in [*draws, *side])
+    reasoning_tokens = max([d.reasoning_tokens for d in [*draws, *side]], default=0)
     declined = [d for d in draws if d.outcome == "decline"]
     tokens = [d.completion_tokens for d in declined if d.completion_tokens is not None]
     single_secs = [d.secs for d in declined if d.kind == "single" and d.secs is not None]
@@ -301,7 +326,12 @@ def score(
             "Follow-ups expand-correct", FOLLOWUP_MIN, FOLLOWUP_OF, *correct(fu_exp, "expand")
         ),
         Check("Plans that fail to parse or validate", "0", str(invalid), invalid == 0),
-        Check("Reasoning characters on any call", "0", str(reasoning), reasoning == 0),
+        Check(
+            "Reasoning characters on any call",
+            "0",
+            _reasoning_text(reasoning, blocks, reasoning_tokens),
+            reasoning == 0 and blocks == 0 and reasoning_tokens == 0,
+        ),
         Check(
             "Completion tokens, declined calls (p50)",
             f"<= {COMPLETION_TOKENS_P50_MAX}",

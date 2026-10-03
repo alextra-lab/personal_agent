@@ -9,6 +9,7 @@ See: ADR-0036 (expansion-controller), ADR-0035 (seshat-backend-decision)
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
@@ -128,3 +129,55 @@ class SubAgentInterval:
     task_name: str
     start_monotonic: float
     end_monotonic: float
+
+
+@dataclass(frozen=True)
+class MemoryItemKey:
+    """The compound key of one memory item in a digest (ADR-0147 D1, FRE-1471 AC-6).
+
+    An identity alone is not a key: two entities can share a name, and an item whose
+    identity cannot be resolved collapses to the empty string. The ordinal separates them.
+    A comparison of keys is an ordered multiset comparison, never a set comparison.
+
+    Args:
+        kind: The item kind, a ``MemoryItemKind`` value.
+        identity: The item identity from ``memory_item_identity``. It can be empty.
+        ordinal: The 0-based position of the item in the shared selection's output, which
+            is the relevance order. It is not the renderer's section order.
+    """
+
+    kind: str
+    identity: str
+    ordinal: int
+
+
+@dataclass(frozen=True)
+class PlannerMemoryDigest:
+    """A bounded, one-line-per-item digest of the memory the primary renders (ADR-0147 D1, D4).
+
+    Built from the renderer's own selection and text helpers, so no line carries a fact or a
+    wording that the primary's memory section does not carry.
+
+    Args:
+        text: The digest lines joined by newlines. Empty when there is nothing to say.
+        item_keys: One key per emitted line, in order.
+        rendered_item_keys: One key per item the renderer emits, in the shared selection's
+            order (relevance order). The ``item_keys`` are an ordered sub-multiset of these.
+        item_count: The number of lines in ``text``.
+        eligible_count: The number of items the shared selection returned.
+        dropped_count: The number of lines the token ceiling dropped from the tail. The
+            item cap does not count here.
+        kind_counts: The number of emitted lines for each item kind.
+        max_line_chars: The length of the longest emitted line. Zero when empty.
+        estimated_tokens: The estimated token size of ``text``.
+    """
+
+    text: str
+    item_keys: tuple[MemoryItemKey, ...]
+    rendered_item_keys: tuple[MemoryItemKey, ...]
+    item_count: int
+    eligible_count: int
+    dropped_count: int
+    kind_counts: Mapping[str, int]
+    max_line_chars: int
+    estimated_tokens: int

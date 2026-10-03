@@ -226,13 +226,13 @@ def denials_from_events(events: Sequence[Mapping[str, object]]) -> tuple[Approva
     return tuple(found)
 
 
-def approval_capable_tools(tools_yaml: Path = DEFAULT_TOOLS_YAML) -> frozenset[str]:
+def approval_capable_tools(tools_yaml: Path | None = None) -> frozenset[str]:
     """Return the tools that can need approval, in any mode.
 
     The set is a superset on purpose: a mode change at the gateway then cannot hide a tool.
 
     Args:
-        tools_yaml: The governance tool policy file.
+        tools_yaml: The governance tool policy file. ``None`` reads :data:`DEFAULT_TOOLS_YAML`.
 
     Returns:
         Every tool with ``requires_approval: true`` or a non-empty ``requires_approval_in_modes``.
@@ -241,8 +241,10 @@ def approval_capable_tools(tools_yaml: Path = DEFAULT_TOOLS_YAML) -> frozenset[s
         OSError: If the file cannot be read.
         yaml.YAMLError: If the file is not valid YAML.
         KeyError: If the file has no ``tools`` mapping.
+        TypeError: If the file is empty.
     """
-    tools = yaml.safe_load(tools_yaml.read_text())["tools"]
+    path = tools_yaml if tools_yaml is not None else DEFAULT_TOOLS_YAML
+    tools = yaml.safe_load(path.read_text())["tools"]
     return frozenset(
         name
         for name, policy in tools.items()
@@ -367,7 +369,7 @@ def check_turn(
     """
     try:
         capable = approval_capable_tools()
-    except (OSError, yaml.YAMLError, KeyError, AttributeError):
+    except (OSError, yaml.YAMLError, KeyError, TypeError, AttributeError):
         return ApprovalVerdict("unverified", (), False, UNVERIFIED_TOOLS_YAML)
     http = client if client is not None else httpx.Client()
     try:
@@ -419,7 +421,7 @@ def check_turn(
                 "_source": ["task_id", "rounds.tool"],
             },
         )
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:  # ValueError: a reply that is not JSON
         return ApprovalVerdict(
             "unverified", (), False, f"{UNVERIFIED_ES_ERROR}: {type(exc).__name__}"
         )

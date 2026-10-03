@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from pathlib import Path
 
 import httpx
+import pytest
+from scripts.eval import approval_denial
 from scripts.eval.approval_denial import (
     CAPTURES_INDEX,
     ApprovalVerdict,
@@ -264,3 +267,24 @@ def test_verdict_serialises_for_a_jsonl_row() -> None:
     assert row["denials"] == [
         {"tool_name": "bash", "reason": "approval_connection_lost", "source": "capture"}
     ]
+
+
+def test_check_turn_a_reply_that_is_not_json_is_unverified_and_does_not_raise() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>gateway error</html>")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    verdict = check_turn("t-1", es_url="http://es", client=client, wait_s=0)
+    assert verdict.validity == "unverified"
+    assert (verdict.unverified_reason or "").startswith("es_error")
+
+
+def test_check_turn_an_empty_policy_file_is_unverified_and_does_not_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty = tmp_path / "tools.yaml"
+    empty.write_text("")
+    monkeypatch.setattr(approval_denial, "DEFAULT_TOOLS_YAML", empty)
+    verdict = check_turn("t-1", es_url="http://es", client=_es([_capture()]), wait_s=0)
+    assert verdict.validity == "unverified"
+    assert verdict.unverified_reason == "tools_yaml_unreadable"

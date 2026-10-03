@@ -83,6 +83,51 @@ a catalog change needs a new run.
 The user message of every arm comes from the production `build_planner_user_message`, so the probe runs the
 bound and the framing that ship.
 
+## A managed deployment (ADR-0154 D7, FRE-1516)
+
+The OVH `qwen3.8-27b-ovh` and `claude_sonnet` deployments qualify on the same probe. They are paid. Ask
+the owner before the run, and set a cap.
+
+Steps 1 to 4 (capture and render) are the same: they call no model and cost nothing. Replace steps 5 to 7
+with the commands below. Run them one deployment at a time.
+
+```bash
+D=qwen3.8-27b-ovh        # or claude_sonnet
+CAND='{"temperature": 1.0, "reasoning_effort": "none"}'   # claude_sonnet: '{"effort": "low"}'
+# The credential of the provider, and the EVAL Postgres (port 5434). Never the production database.
+export AGENT_MANAGED_EMBEDDING_TOKEN=...   # OVH   (claude_sonnet: AGENT_ANTHROPIC_API_KEY)
+export AGENT_DATABASE_URL=postgresql+asyncpg://agent:...@127.0.0.1:5434/<database>
+uv run python -m scripts.eval.fre1537.replay   --run-dir $RUN --deployment $D --mode planner --candidate "$CAND" --tag $D-planner --max-usd 5
+uv run python -m scripts.eval.fre1537.longhist --run-dir $RUN --deployment $D --mode planner --candidate "$CAND" --tag $D-planner --max-usd 5
+uv run python -m scripts.eval.fre1537.score    --run-dir $RUN --tag $D-planner
+```
+
+- `--candidate` is the `planner` mode of a deployment whose catalog has none yet. It is checked against the
+  dialect of the deployment (ADR-0145), so a field that the catalog loader refuses is refused here.
+- The request is the production one. The probe calls `LiteLLMClient.respond` the way the planner call does,
+  so the dialect parameters, the provider's base URL and the Anthropic cache blocks are the gateway's.
+  It never calls `litellm` directly (ADR-0141 AC-6).
+- `respond` reserves and records cost through the `CostGate` (ADR-0065). The probe registers a real gate. It
+  refuses to start unless `AGENT_DATABASE_URL` is the eval Postgres, so no cost row reaches production
+  (FRE-375). `make eval-infra-up` starts that database.
+- `--max-usd` is required. It caps the cost of every tag of the run directory together. A call is refused
+  when the spent total plus its worst-case input cost reaches the cap. Output cost counts when the call
+  returns. Every row records `cost_usd`.
+- The timing arm and the primary call of the long-history arm prime the llama.cpp prefix cache and decide no
+  threshold. A managed run skips both.
+- The production cloud client reports `reasoning_trace: None` whatever the model did. The probe reads the
+  reasoning evidence from the provider message instead. The reasoning threshold fails on any reasoning
+  character, any thinking block (a redacted one too) and any reasoning token that the provider reports.
+- A managed API reports no engine build and no quant. The fingerprint says `managed (provider reports no
+  build)` and `managed (not reported)`. The model name that a reply reports goes to `engine.served_model`,
+  and a change of it is a different configuration.
+- To prove that the instrument sees reasoning, run `--mode default --labels <expand fixtures> --trials 1`
+  under another tag. The default mode thinks, so the report must show reasoning on it.
+
+**After a pass,** add the mode to `config/models.yaml`. Then repeat the `replay` command with the same tag,
+`--mode planner` and no `--candidate`. The rows are complete, so it makes no call. It stops with "different
+configuration" when the catalog differs from the run that passed.
+
 ## A digest run (ADR-0154 AC-8)
 
 `replay --digest-file <file>` inserts the file's text after the history and before the query. The system prompt

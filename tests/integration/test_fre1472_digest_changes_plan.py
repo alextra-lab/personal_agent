@@ -5,9 +5,16 @@ judge the digest ``used``. A coined token in an unrelated digest must reach no g
 constraint, and the planner must judge the digest ``none_relevant``. Plan text merely
 differing between the two runs is not a pass.
 
-Fires real planner calls on the primary deployment in its ``planner`` mode. Run only with
-``PERSONAL_AGENT_INTEGRATION=1 make test-integration`` (the Makefile guard), never in an
-agent session.
+Fires real planner calls on the primary deployment in its ``planner`` mode. Run only in an
+owner-approved model window, never unattended in an agent session.
+``tests/conftest.py`` pins ``AGENT_SLM_BASE_URL`` to an unreachable port unless it is set,
+so the run must name the model server:
+
+    PERSONAL_AGENT_INTEGRATION=1 AGENT_SLM_BASE_URL=http://localhost:8600 \
+        uv run pytest tests/integration/test_fre1472_digest_changes_plan.py
+
+Without it, every call fails to connect, the fallback plan runs, and the
+``not plan.is_fallback`` guard fails both tests.
 """
 
 from __future__ import annotations

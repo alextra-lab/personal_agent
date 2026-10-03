@@ -1089,7 +1089,10 @@ def test_run_once_ledger_untouched_for_unroutable_worker() -> None:
         ledger=ledger,
         ledger_persist=ledger.update,
     )
-    assert ledger == {}
+    # FRE-1540 records the attempt so the master-alert clock can run. What this test guards
+    # still holds: no pending actuation, nothing sent, nothing for reconcile() to retry.
+    assert snapshot_unconsumed(ledger) == ()
+    assert all(e.command == "" and e.sent_at is None for e in ledger.values())
 
 
 def test_run_once_master_holds_when_busy_session_no_keys_sent() -> None:
@@ -2815,3 +2818,233 @@ def test_seeded_negative_without_effectiveness_check_ac1_fails(monkeypatch) -> N
     monkeypatch.setattr(watcher, "_poke_count", lambda _sent, _pr, _sha: 0)
     with pytest.raises(AssertionError):
         _assert_ac1_repoke_is_recorded_ineffective()
+
+
+# --- FRE-1540: an undelivered worker trigger alerts master once ---------------
+# 2026-10-03: the channel was down and the seat held an unsent draft. The watcher
+# tried every minute for 155 attempts and told nobody.
+
+_SEAT_PANE = "=cc-2build:0.0"
+_MASTER_PANE = "=cc-master:0.0"
+_T0 = 1000.0
+
+
+class _PaneRunner(_RecordingRunner):
+    """Answers ``capture-pane`` per pane, so a busy seat and an idle master can coexist."""
+
+    def __init__(self, panes: dict[str, str]) -> None:
+        super().__init__()
+        self.panes = panes
+
+    def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+        argv_t = tuple(argv)
+        self.calls.append(argv_t)
+        if argv_t[:2] == ("tmux", "capture-pane"):
+            return _FakeRunResult(stdout=self.panes[argv_t[3]])
+        return _FakeRunResult()
+
+
+def _stuck_runner() -> _PaneRunner:
+    """The seat is busy (a trigger cannot land); master is idle (an alert can)."""
+    return _PaneRunner({_SEAT_PANE: _BUSY_PANE, _MASTER_PANE: _REAL_IDLE_PANE})
+
+
+def _tick(
+    state: dict[str, float],
+    now: float,
+    runner: _RecordingRunner,
+    ledger: dict,
+    *,
+    logger: object | None = None,
+    resolver=_resolve_build2,  # type: ignore[no-untyped-def]
+    **kwargs: object,
+) -> None:
+    run_once(
+        state,
+        now=now,
+        board_fetcher=lambda: [_pr(ci="failure")],
+        session_resolver=resolver,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=logger or _NullLogger(),  # type: ignore[arg-type]
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def _master_texts(runner: _RecordingRunner) -> list[str]:
+    return _sent_text(runner, _MASTER_PANE)
+
+
+def test_ac1_failed_deliveries_for_15_minutes_alert_master_exactly_once(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _stuck_runner()
+    logger = _CapturingLogger()
+    for minute in range(0, 15):  # t0 .. t0+840: 15 attempts, 14 minutes
+        _tick(state, _T0 + minute * 60, runner, ledger, logger=logger)
+    assert _master_texts(runner) == []  # nothing before 15 minutes
+    _tick(state, _T0 + 900, runner, ledger, logger=logger)  # the 16th attempt
+    for minute in range(16, 21):  # five more minutes of the same failure
+        _tick(state, _T0 + minute * 60, runner, ledger, logger=logger)
+
+    alerts = _master_texts(runner)
+    assert len(alerts) == 1, alerts
+    text = alerts[0]
+    assert text.startswith("[DISPATCH ALERT]")
+    assert "PR #412" in text and "cc-2build" in text
+    assert "Reason: busy." in text
+    assert "Attempts: 16." in text
+    assert "1970-01-01 00:16:40Z" in text  # the first attempt, t0 = 1000 s
+    assert _sent_text(runner, _SEAT_PANE) == []  # the trigger itself never landed
+    assert ledger[_WORKER_KEY].alerted_at == _T0 + 900
+    assert [e for e, _ in logger.warnings].count("gating_alert_sent") == 1
+
+
+def test_ac1_delivery_within_15_minutes_sends_no_alert(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _stuck_runner()
+    for minute in range(0, 5):  # busy for five minutes
+        _tick(state, _T0 + minute * 60, runner, ledger)
+    runner.panes[_SEAT_PANE] = _REAL_IDLE_PANE  # the seat frees up
+    for minute in range(5, 18):  # well past 15 minutes in total
+        _tick(state, _T0 + minute * 60, runner, ledger)
+    assert _sent_text(runner, _SEAT_PANE) == ["PR #412 failed CI checks - correct them"]
+    assert _master_texts(runner) == []
+
+
+def test_alert_reason_names_the_channel_failure_and_the_busy_seat(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setitem(
+        launcher._TOPOLOGY,
+        "build2",
+        dataclasses.replace(launcher._TOPOLOGY["build2"], mode="channel"),
+    )
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _stuck_runner()
+    poster = _FakeChannelPoster(outcome="unreachable")
+    for minute in range(0, 17):
+        _tick(
+            state,
+            _T0 + minute * 60,
+            runner,
+            ledger,
+            channel_poster=poster,
+            channel_secret="s3cret",
+        )
+    (alert,) = _master_texts(runner)
+    assert "Reason: channel_delivery_failed+busy." in alert
+
+
+def test_alert_reason_for_a_vanished_seat_is_absent(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    runner = _stuck_runner()
+    real = runner.__call__
+
+    def gone(argv: Sequence[str]) -> _FakeRunResult:
+        if tuple(argv)[:3] == ("tmux", "has-session", "-t") and argv[3] == "=cc-2build":
+            runner.calls.append(tuple(argv))
+            return _FakeRunResult(returncode=1)
+        return real(argv)
+
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    for minute in range(0, 17):
+        _tick(state, _T0 + minute * 60, gone, ledger)  # type: ignore[arg-type]
+    (alert,) = _master_texts(runner)
+    assert "Reason: absent." in alert
+
+
+def test_unroutable_worker_trigger_alerts_master_despite_the_log_suppression() -> None:
+    """The unroutable verdict logs once per six hours; the alert clock must not wait for that."""
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _stuck_runner()
+    for minute in range(0, 21):
+        _tick(state, _T0 + minute * 60, runner, ledger, resolver=_no_session)
+    (alert,) = _master_texts(runner)
+    assert "PR #412" in alert and "Reason: unroutable." in alert and "Seat: none." in alert
+    assert all(entry.consumed_at is not None for entry in ledger.values())  # reconcile-safe
+
+
+def test_busy_master_defers_the_alert_until_it_is_idle(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _stuck_runner()
+    runner.panes[_MASTER_PANE] = _BUSY_PANE
+    logger = _CapturingLogger()
+    for minute in range(0, 18):  # due at minute 15, master busy
+        _tick(state, _T0 + minute * 60, runner, ledger, logger=logger)
+    assert _master_texts(runner) == []
+    assert ledger[_WORKER_KEY].alerted_at is None  # not latched: it was not delivered
+    assert "gating_alert_deferred" in [e for e, _ in logger.warnings]
+    runner.panes[_MASTER_PANE] = _REAL_IDLE_PANE
+    for minute in range(18, 24):
+        _tick(state, _T0 + minute * 60, runner, ledger, logger=logger)
+    assert len(_master_texts(runner)) == 1
+
+
+def test_ac3_restart_between_every_tick_keeps_the_clock_and_alerts_once(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    """Each tick reloads the ledger from disk, as the daemon does after a restart."""
+    from scripts.dispatch import trigger_ledger
+
+    _send_keys_mode(monkeypatch)
+    path = tmp_path / "ledger.json"
+    state: dict[str, float] = {}
+    runner = _stuck_runner()
+
+    def restarted_tick(now: float) -> None:
+        ledger = trigger_ledger.load_ledger(path, _NullLogger())
+        run_once(
+            state,
+            now=now,
+            board_fetcher=lambda: [_pr(ci="failure")],
+            session_resolver=_resolve_build2,
+            runner=runner,
+            persist=lambda _s: None,
+            logger=_NullLogger(),
+            execute=True,
+            ledger=ledger,
+            ledger_persist=lambda lg: trigger_ledger.save_ledger(path, lg),
+        )
+
+    for minute in range(0, 21):
+        restarted_tick(_T0 + minute * 60)
+    assert len(_master_texts(runner)) == 1  # the clock survived 21 restarts
+
+    # The daemon is down for two hours, then returns to the same failing trigger. The gap
+    # restarts the clock, so run past 15 minutes again: only the carried latch holds it back.
+    for minute in range(0, 20):
+        restarted_tick(_T0 + 7200 + minute * 60)
+    assert len(_master_texts(runner)) == 1  # a long gap does not repeat the alert
+
+
+def test_unroutable_trigger_over_a_just_sent_entry_is_not_a_failed_attempt() -> None:
+    """A duplicate result (sent within the TTL) is no failed attempt; it must not raise an alert."""
+    from scripts.dispatch import trigger_ledger
+
+    ledger, _ = trigger_ledger.record_pending(
+        {},
+        event_id=_WORKER_KEY,
+        source="worker-ci-red",
+        target_pane="cc-2build",
+        ticket="412",
+        command="poke",
+        preconditions={},
+        now=_T0 - 5000.0,
+        ttl_s=900.0,
+    )
+    ledger = trigger_ledger.mark_sent(ledger, _WORKER_KEY, _T0 - 100.0)
+    ledger = trigger_ledger.mark_consumed(ledger, _WORKER_KEY, _T0 - 100.0)  # inside the 900 s TTL
+    runner = _stuck_runner()
+    _tick({}, _T0, runner, ledger, resolver=_no_session)
+    assert _master_texts(runner) == []
+    assert ledger[_WORKER_KEY].attempts == 1  # untouched: not recorded as a retry

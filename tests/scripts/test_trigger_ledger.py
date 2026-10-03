@@ -24,8 +24,10 @@ from scripts.dispatch.trigger_ledger import (
     LedgerEntry,
     load_ledger,
     main,
+    mark_alerted,
     mark_consumed,
     mark_consumed_if_present,
+    mark_failure,
     mark_queued,
     mark_send_started,
     mark_sent,
@@ -850,3 +852,160 @@ def test_mark_consumed_if_present_closes_existing_entry() -> None:
     )
     result = mark_consumed_if_present(ledger, "dispatch-notify:dispatch_stall:build1", 200.0)
     assert result["dispatch-notify:dispatch_stall:build1"].consumed_at == 200.0
+
+
+# --- episode tracking for master alerts (FRE-1540) -----------------------------
+# `created_at` means "when the current unresolved episode began". A retry of an
+# abandoned trigger and a renotify of a surfaced entry both keep it, so a 15-minute
+# alert clock survives the rewrite those two writers do on every pass.
+
+_KEY = "worker:412:abc"
+
+
+def _pend(ledger: dict[str, LedgerEntry], now: float) -> dict[str, LedgerEntry]:
+    updated, outcome = record_pending(
+        ledger,
+        event_id=_KEY,
+        source="worker-ci-red",
+        target_pane="cc-2build",
+        ticket="412",
+        command="poke",
+        preconditions={"head_sha": "abc"},
+        now=now,
+        ttl_s=900.0,
+    )
+    assert outcome == "new"
+    return updated
+
+
+def _abandon(ledger: dict[str, LedgerEntry], now: float) -> dict[str, LedgerEntry]:
+    return mark_consumed(mark_send_started(ledger, _KEY, now), _KEY, now)
+
+
+def test_new_entry_starts_an_episode_of_one_attempt() -> None:
+    entry = _pend({}, 100.0)[_KEY]
+    assert (entry.created_at, entry.attempts, entry.alerted_at, entry.last_failure) == (
+        100.0,
+        1,
+        None,
+        "",
+    )
+
+
+def test_retry_of_an_abandoned_entry_keeps_the_clock_and_counts_attempts() -> None:
+    ledger = _abandon(_pend({}, 100.0), 100.0)
+    ledger = _abandon(_pend(ledger, 160.0), 160.0)
+    entry = _pend(ledger, 220.0)[_KEY]
+    assert entry.created_at == 100.0
+    assert entry.attempts == 3
+
+
+def test_retry_after_a_gap_restarts_the_clock_but_keeps_alerted_at() -> None:
+    ledger = _abandon(_pend({}, 100.0), 100.0)
+    ledger = mark_alerted(ledger, _KEY, 1000.0)
+    entry = _pend(ledger, 100.0 + 1800.0 + 1.0)[_KEY]
+    assert entry.created_at == 100.0 + 1800.0 + 1.0
+    assert entry.attempts == 1
+    assert entry.alerted_at == 1000.0
+
+
+def test_alerted_at_carries_across_retries_within_the_gap() -> None:
+    ledger = mark_alerted(_abandon(_pend({}, 100.0), 100.0), _KEY, 1000.0)
+    assert _pend(ledger, 1060.0)[_KEY].alerted_at == 1000.0
+
+
+def test_a_sent_entry_starts_a_fresh_episode() -> None:
+    ledger = _pend({}, 100.0)
+    ledger = mark_alerted(ledger, _KEY, 1000.0)
+    ledger = mark_consumed(
+        mark_sent(mark_send_started(ledger, _KEY, 1100.0), _KEY, 1100.0), _KEY, 1100.0
+    )
+    entry = _pend(ledger, 1100.0 + 900.0)[_KEY]
+    assert (entry.created_at, entry.attempts, entry.alerted_at) == (2000.0, 1, None)
+
+
+def test_mark_failure_and_mark_alerted_set_their_fields() -> None:
+    ledger = _abandon(_pend({}, 100.0), 100.0)
+    ledger = mark_failure(ledger, _KEY, "channel_delivery_failed+busy")
+    ledger = mark_alerted(ledger, _KEY, 1000.0)
+    entry = ledger[_KEY]
+    assert entry.last_failure == "channel_delivery_failed+busy"
+    assert entry.alerted_at == 1000.0
+
+
+def _surface(ledger: dict[str, LedgerEntry], now: float) -> dict[str, LedgerEntry]:
+    return record_surfaced(
+        ledger,
+        event_id="dispatch-notify:dispatch_stall:build1",
+        source="dispatch_stall",
+        target_pane="build1",
+        ticket="FRE-1",
+        preconditions={},
+        now=now,
+    )
+
+
+def test_renotify_of_an_open_surfaced_entry_keeps_created_at_and_alerted_at() -> None:
+    ledger = _surface({}, 100.0)
+    ledger = mark_alerted(ledger, "dispatch-notify:dispatch_stall:build1", 1000.0)
+    entry = _surface(ledger, 1300.0)["dispatch-notify:dispatch_stall:build1"]
+    assert entry.created_at == 100.0
+    assert entry.alerted_at == 1000.0
+    assert entry.surfaced_at == 1300.0  # still refreshed
+
+
+def test_surfacing_again_after_the_entry_was_consumed_starts_a_new_episode() -> None:
+    ledger = mark_consumed_if_present(
+        mark_alerted(_surface({}, 100.0), "dispatch-notify:dispatch_stall:build1", 1000.0),
+        "dispatch-notify:dispatch_stall:build1",
+        1100.0,
+    )
+    entry = _surface(ledger, 5000.0)["dispatch-notify:dispatch_stall:build1"]
+    assert (entry.created_at, entry.alerted_at, entry.consumed_at) == (5000.0, None, None)
+
+
+def test_episode_fields_survive_a_save_and_load(tmp_path: Path) -> None:
+    """A restart reloads the ledger from disk: the clock and the alert latch must come back."""
+    ledger = mark_alerted(
+        mark_failure(_abandon(_pend({}, 100.0), 100.0), _KEY, "busy"), _KEY, 1000.0
+    )
+    path = tmp_path / "ledger.json"
+    save_ledger(path, ledger)
+    entry = load_ledger(path, _NullLogger())[_KEY]
+    assert (entry.created_at, entry.attempts, entry.last_failure, entry.alerted_at) == (
+        100.0,
+        1,
+        "busy",
+        1000.0,
+    )
+
+
+def test_a_ledger_file_from_before_fre_1540_loads_with_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "old.json"
+    path.write_text(
+        json.dumps(
+            {
+                _KEY: {
+                    "event_id": _KEY,
+                    "source": "s",
+                    "target_pane": "p",
+                    "ticket": "1",
+                    "command": "c",
+                    "preconditions": {},
+                    "created_at": 5.0,
+                }
+            }
+        )
+    )
+    entry = load_ledger(path, _NullLogger())[_KEY]
+    assert (entry.attempts, entry.last_failure, entry.alerted_at) == (0, "", None)
+
+
+def test_cli_json_reports_the_episode_fields(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "ledger.json"
+    save_ledger(path, mark_alerted(_pend({}, 100.0), _KEY, 1000.0))
+    assert main(["--ledger-file", str(path), "--all", "--json"]) == 0
+    row = json.loads(capsys.readouterr().out)[0]
+    assert (row["attempts"], row["alerted_at"]) == (1, 1000.0)

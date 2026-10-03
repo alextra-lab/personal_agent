@@ -53,7 +53,8 @@ from urllib.parse import urlparse
 
 import structlog
 
-from scripts.dispatch import trigger_ledger
+from scripts.dispatch import master_alert, trigger_ledger
+from scripts.dispatch.gating_watcher import MASTER_SESSION, send_to_session
 from scripts.dispatch.launcher import (
     CommandRunner,
     execute_plan,
@@ -1096,7 +1097,57 @@ def run_once(
             sleeper=sleeper,
             seat_turn=seat_turn,
         )
+    if execute and notify_ledger_path is not None:
+        _alert_stale_notifications(notify_ledger_path, runner=runner, now=now, logger=logger)
     return state
+
+
+def _alert_stale_notifications(
+    ledger_path: Path, *, runner: CommandRunner, now: float, logger: Logger
+) -> None:
+    """Tell ``cc-master`` once about each notify-ledger entry open for 15 minutes (FRE-1540).
+
+    Nothing but master's prime step read ``dispatch_notify_ledger.json``, so a wedge could last
+    days unseen. An entry's ``created_at`` is the start of its episode (``record_surfaced`` keeps
+    it across a renotify), and ``alerted_at`` is the once-only latch. Both live in the file, so a
+    restart cannot repeat an alert. The orchestrator stays the only writer of this file.
+
+    The send is idle-gated. If ``cc-master`` is busy or absent, nothing is latched and the next
+    tick retries, so the alert is late and never lost. A crash between the send and the save can
+    repeat one alert, the safe direction to fail.
+
+    Args:
+        ledger_path: The orchestrator's notify ledger.
+        runner: The command runner seam (shells ``tmux``).
+        now: Wall-clock epoch seconds.
+        logger: Structured logger.
+    """
+    trace_id = str(uuid.uuid4())
+    ledger = trigger_ledger.load_ledger(ledger_path, logger)
+    for event_id, entry in list(ledger.items()):
+        if entry.consumed_at is not None or not master_alert.is_due(entry, now):
+            continue
+        outcome = send_to_session(
+            MASTER_SESSION, master_alert.format_notify_entry(entry, now), runner
+        )
+        if outcome != "sent":
+            logger.warning(
+                "dispatch_alert_deferred",
+                trace_id=trace_id,
+                dispatch_event=entry.source,
+                stream=entry.target_pane,
+                master_outcome=outcome,
+            )
+            return  # master is unreachable for every entry alike; retry next tick
+        ledger = trigger_ledger.mark_alerted(ledger, event_id, now)
+        trigger_ledger.save_ledger(ledger_path, ledger)
+        logger.warning(
+            "dispatch_alert_sent",
+            trace_id=trace_id,
+            dispatch_event=entry.source,
+            stream=entry.target_pane,
+            ticket=entry.ticket,
+        )
 
 
 def _apply(

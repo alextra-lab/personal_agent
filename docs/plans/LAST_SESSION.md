@@ -1,69 +1,66 @@
-# Last session — master, 2026-10-01 09:39 UTC to 2026-10-03 07:30 UTC
+# Last session — master, 2026-10-03 08:00 UTC to 12:40 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The session began with VPS maintenance (kernel, OpenSSL, Docker 29.8.2, reboot) and a re-prime.
-It then cleared two dispatch stalls, shipped FRE-1529 and FRE-1530, merged ADR-0153, and replaced
-master's `tmux send-keys` with `SendMessage`. The owner then disabled the `remember` plugin and
-trimmed this file's template. Two threads are open: FRE-1535 (tool approval, the owner's four
-policy answers relayed on 2026-10-03 07:18 UTC) and FRE-1537 (the planner ADR).
+The owner asked for "all recommendations" to be followed, then a tmux restart of cc-master.
+Two worker PRs wait at the gate: #1197 (FRE-1540, dispatch alerts) and #1196 (ADR-0154 for
+FRE-1537). Hold #1196 until the adr seat posts its handoff, and the owner reviews an ADR.
+FRE-1538 is deployed and waits only for the owner's AC-6 check (leave the app mid-turn, return).
+The Awaiting Deploy sweep closed six tickets. The rest wait on the owner decisions listed below.
 
 ## What was decided and why
 
-**Severity follows reachability, not the CVE list.** 13 PyJWT advisories looked High. The only
-JWT call site, `artifacts_router.py:191`, runs behind `_verify_internal_token`, which fails closed.
-No anonymous caller reaches it, so master folded the two drafts into one Medium ticket (FRE-1530).
+**ES retention: a monthly index keeps the current month plus 3 full months (owner rule).** ILM has
+no month unit, so delete `min_age` is 123d (July to October). The guard test enforces it. Three
+`*-2026-07-05` indices had entered the delete phase before the policy PUT, and master moved them
+back with `_ilm/move`. A policy change does not stop a delete in progress.
 
-**Dispatch stalled for two weeks and nobody saw it.** build2 logged `dispatch_seat_wedged` for
-4,119 ticks (about 14 days) on an Urgent ticket. The reboot cleared it. adr stalled 17 days on
-FRE-1502, parked by removing its stream label while it stayed In Progress. Master then repeated the
-mistake: it moved FRE-1525 to Backlog without clearing its record, and caught it the next morning.
-Each time, the orchestrator wrote an alert to the notify ledger, and the ledger reached nobody.
+**Correction: September logs are not lost.** Master told the owner they were. Only the ES copy is
+gone. The gateway's disk log (`current.jsonl*` in the telemetry volume) covers 2026-07-30 onward.
 
-**Escalated diff, owner review waived.** PR #1185 (FRE-1529) merged without `/code-review ultra`
-under the 2026-08-31 directive. The tests reproduced the defect on the old source.
+**Status bar (owner):** tools reset at the next send. ctx resets only at compaction or a new
+session ("I need to know how much headroom I have"). This replaces FRE-1401's rule that ctx is
+never restored, for the same session only. The cross-session guard stays.
 
-**An ADR PR waits for the seat's handoff.** Master held PR #1187 (ADR-0153) until the adr seat
-posted its handoff, because ADR-0152 merged early on 2026-09-14 and the owner reopened it.
+**Approval on production harness turns: no bypass (owner).** A harness turn has no PWA socket, so
+an approval tool is denied. FRE-1539 marks such a turn invalid. Tools that need approval run on the
+eval stack (opt-out plus `bash` as `nobody`). Master's first FRE-1539 probe used `echo`, which is on
+the bash auto-approve list and ran. Use a command outside that list, such as `pwd`.
 
-**ADR-0152 is superseded, not amended.** The owner said "go" to one ADR that merges ADR-0147 and
-ADR-0152, filed as FRE-1537. Worker round budgets stay out of it (FRE-1487 owns them).
+**`AGENT_ENABLE_SECOND_BRAIN=false` does pause consolidation.** The event consumer stays
+subscribed, but `scheduler.on_request_captured` checks the flag first (`scheduler.py:348`).
+`/health` still reports `second_brain: running`. That shows only that the scheduler is up, so prove
+the pause with the graph count.
 
-**FRE-1535 had a wrong tool in its list.** It named `mcp_list_indices`, which needs no approval.
-The eighth tool is `mcp_mcp-remove` (`tools.yaml:823`). Master corrected the ticket.
+**The dispatch channel never worked until today.** Seats started by `cc-sessions` lacked the port,
+the secret and `--channels`, so every trigger fell back to `send-keys`. Fixed in `~/cc-env`
+(commit 5fff3b4, port column plus `cc-seat-exec`), and all three worker seats were restarted.
+cc-master has no channel by design. The owner said: "Fix the discovered root cause".
 
-**FRE-1530's live check used an internal request, not a gateway turn.** Master sent two bad JWTs
-to `/internal/artifacts/{id}` from inside the container: no model call, no write. That needed no
-owner OK, unlike a `/chat` turn.
+**A stale draft in a seat's input blocks the watcher.** cc-1build held an old unsent "Master
+bounced PR #1161" text. The watcher read the seat as busy for 2.5 h. FRE-1540 makes such a stall
+reach the owner.
 
-**FRE-1529 AC-4 waits for a natural owner turn** (the owner's choice, as for FRE-1527 AC-5). The
-qualifying trace is listed on the ticket.
-
-**`SendMessage` replaces `send-keys` for master** (PR #1189). Tested on cc-2build: reply in about
-15 s, no approval hold across permission modes. The Python daemons keep `send-keys`.
-
-**The `remember` plugin is disabled; the `.remember/` folder is kept.** It is third-party, not
-ours. Its one shared handoff (a FRE-1122 note from 2026-09-08) reached every seat 96 times.
+**The 09:01 searxng outage repeated FRE-1344**, whose `required: false` fix did not hold.
+FRE-1542 asks for a reproduction before any fix. Master did not ship an untested `--no-deps`.
 
 ## Worktrees — anything special
-- `adrs`: the git-ignored `telemetry/archive/fre1502-planner-probe/` holds the raw ADR-0152 probe
-  rows. FRE-1537 can reuse them.
-- Untracked `*.bak*` files at the repo root and under `telemetry/` are the owner's.
+- The eval substrate containers (`*-eval`) still run under project name `seshat` from the adrs
+  worktree. Never run a compose command with `-p seshat` near them (FRE-1542).
+- Untracked `*.bak*` files are the owner's.
 
 ## Answers for the fresh start
-- **Ticket, stream and seat state:** `uv run python -m scripts.dispatch.next_resolver`, Linear and
-  `telemetry/dispatch_state.json`. Not copied here.
-- **`python` is not on PATH on this host.** Every skill now says `uv run python -m ...`.
-- **Session start shows no `LAST HANDOFF` or `MEMORY` block, and prompts carry no time stamp.**
-  That is the plugin change, not a fault. Use `date -u`.
-- **Restarts still due** (plugin off, Claude Code 2.1.288 installed): cc-master at this reset,
-  cc-1build and cc-adrs after their current PRs, cc-explore when the owner finishes there. Start
-  each with `cc-sessions restart <seat>`, then check the pane for a "Resume from summary" prompt.
-- **cc-explore is the owner's own seat for now** (Laya and Jev research). Do not message it.
-- **The explore skill's no-argument resolver call always fails:** the resolver accepts `adr`,
-  `build1` and `build2` only. Explore runs on an explicit ticket id. Not fixed: registering an
-  explore stream is a design choice.
-- **Pending owner decision:** whether dispatch alerts must reach the owner. The notify ledger
-  records stalls and wedges, and nothing reads it (see "two weeks" above).
-- **Deliberate `.env` settings** carry dated owner comments in `.env` itself.
-- **Local model:** a real completion through `:8600` answered on 2026-10-01. Recheck with a
-  completion, never `/health`.
+- **State:** use `next_resolver`, Linear and `telemetry/dispatch_state.json`. None of it is copied here.
+- **Owner decisions pending** (each recorded on its ticket by the sweep, or still to be asked):
+  FRE-1473, confirm the 30-day and 10-item ceilings · FRE-1477, pick a course (reranker bound,
+  another embedder, or a lower 90% bar) · FRE-1359, accept window 1 read from the disk log as the
+  AC-3 source · FRE-1398, retitle or close in favour of the slm_server stderr-pipe defect ·
+  FRE-1122, authorize the baseline run · FRE-1402, three owner turns (confirm the skill really
+  loads: `skills_loaded` has never shown `sequential-thinking`).
+- **Also open:** FRE-1485 (AC-2 and AC-3), FRE-1527 (AC-5) and FRE-1382 (AC-1) need a natural or
+  authorized live turn. FRE-1474 needs its generation check turned on, in an SLM window on the
+  owner's Mac. FRE-1503 needs an eval run. FRE-1372 waits on FRE-1506.
+- **Forced-synthesis overflow (FRE-1485 finding):** on 91b57b5c, keeping 25 tools in the forced
+  synthesis pushed a 120k prompt past the window. Not ticketed yet.
+- **Restarts:** the owner restarts cc-master after this reset. That ends the `remember` plugin
+  output and applies Claude Code 2.1.288. cc-explore is the owner's seat. Do not restart or message it.
+- **A seat restarted outside `cc-sessions` loses the channel.** Check with `ss -ltn | grep 879`.

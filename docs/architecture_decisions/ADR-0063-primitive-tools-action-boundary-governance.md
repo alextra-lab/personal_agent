@@ -267,3 +267,37 @@ Summary:
 - ADR-0028 §Industry Standardization — CLI-first evidence from OpenClaw, mcp2cli, Phil Rentier's analysis
 - ADR-0062 — per-tool FSM loop detection (retained, severity split per D5)
 - ADR-0054 — feedback stream bus convention (no interaction with this ADR)
+
+---
+
+## Amendment A — Approval fails closed (FRE-1535, 2026-10-03)
+
+**Status**: Accepted. The project owner decided each point below on 2026-10-03.
+
+### Context
+
+D3 says the agent pauses until approval arrives. The code did not: `check_permission` allowed an
+approval-required tool, with only a warning, when the session id was empty, when
+`AGENT_APPROVAL_UI_ENABLED` was false, and when no transport was attached. No `ToolExecutionLayer`
+was built with a transport. On the live gateway the flag is true, so every approval-required call
+ran without a prompt. The affected tools are `bash` outside the allowlist, `mcp_mcp-remove` and six
+Linear write tools.
+
+### Decisions
+
+| # | Case | Outcome |
+|---|------|---------|
+| A1 | Flag true, the turn has a PWA client | The call waits for the owner. Only `approve` runs it. `deny`, `timeout` and `connection_lost` refuse it. |
+| A2 | Flag true, the turn has no PWA client (CLI HTTP `/chat`, harness, probe) | **Deny.** The log event is `approval_denied` with the decision `connection_lost`, or `approval_denied_no_transport` or `approval_denied_no_session_id` when the layer has no channel at all. |
+| A3 | Flag false | **Explicit opt-out.** The tool runs without a prompt and the log event is `approval_ui_disabled_proceeding`. The eval stack sets the flag false on purpose (FRE-1505). |
+| A4 | Sub-agent | **The FRE-1461 broker stays the gate.** It asks once per tool per turn. The layer skips its own approval step only for a call the broker approved (`approved_upstream`). A tool the broker did not gate keeps the layer gate, which denies without a transport. |
+| A5 | Which tools prompt | All tools with `requires_approval` in `tools.yaml`, unchanged. |
+
+### Consequences
+
+- In the PWA, `bash` outside the allowlist and the Linear write tools now ask. Parallel calls in one
+  assistant message each send a card. A card waits `AGENT_APPROVAL_TIMEOUT_SECONDS`, then denies.
+- `bash` outside the allowlist no longer runs in a CLI turn.
+- `ToolExecutionLayer` injects an `approve` callable into async executors that declare an `approve`
+  parameter (ADR-0153 D7). The name is reserved. With no channel the callable returns `deny`.
+- The code default of the flag is still false. A deployment that does not set it true stays open.

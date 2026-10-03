@@ -2295,6 +2295,10 @@ async def _run_tool_loop(
                 session_id=session_id,
                 loaded_skills=loaded_skills,
                 principal="sub_agent",
+                # FRE-1535: the layer's own approval step is satisfied only for a call
+                # the broker gated above. The set is frozen at spawn and the layer
+                # reads the mode per call, so a tool outside it keeps the layer's gate.
+                approved_upstream=tool_name in approval_required_tools,
             )
             state.tools_used.append(tool_name)
             _absorb(tool_call_id, tool_name, raw_arguments, str(dispatch_result["content"]))

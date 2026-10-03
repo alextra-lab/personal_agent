@@ -43,7 +43,7 @@ restate it. Coding standards live in `.claude/CLAUDE.md`.
 ## Dispatch (Linear-native)
 
 A worker's NEXT = `Approved` + `stream:<mine>` + no open blocked-by relation, priority
-descending, oldest first — always computed by `python -m scripts.dispatch.next_resolver`,
+descending, oldest first — always computed by `uv run python -m scripts.dispatch.next_resolver`,
 never reconstructed inline.
 
 - A blocker is open until its MERGE lands (`Awaiting Deploy`/`Done`/`Canceled`/`Duplicate`).

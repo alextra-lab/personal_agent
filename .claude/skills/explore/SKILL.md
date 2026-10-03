@@ -10,7 +10,7 @@ Read `.claude/skills/lifecycle-rules.md` first (§ Explore session, § Coordinat
 Implements ADR-0135 D3–D6.
 
 **Argument: none → resolve NEXT via the external dispatch resolver**
-(`python -m scripts.dispatch.next_resolver --stream explore --json`). A nonzero exit, invalid JSON, or a
+(`uv run python -m scripts.dispatch.next_resolver --stream explore --json`). A nonzero exit, invalid JSON, or a
 printed error → STOP and surface stderr; never reconstruct the busy-guard/priority/blocked-by logic
 inline (ADR-0113 §1). A `null` result (the stream is occupied, or no eligible `Approved` candidate — the
 resolver conflates both) → STOP. An explicit `FRE-…` id skips the queue.

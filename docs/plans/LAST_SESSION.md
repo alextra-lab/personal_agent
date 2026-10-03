@@ -1,82 +1,69 @@
-# Last session — master, 2026-09-15 04:40 UTC to 2026-10-01 08:40 UTC
+# Last session — master, 2026-10-01 09:39 UTC to 2026-10-03 07:30 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The owner's primary-model study (FRE-1517) ran to a decision, and then the owner's own production
-turns became the evidence stream for three new tickets. Production serves llama.cpp Flash-Next with
-workers ON, the briefing planner and the FRE-1522 context reserve. One blocker is physical: the Mac's
-external model drive (EnvoyUltra) detached on 2026-09-17 at about 19:35 UTC, so the local model is
-down until the owner reconnects it. Nothing is at the gate; build2 heads FRE-1529, adr heads FRE-1525.
+The session began with VPS maintenance (kernel, OpenSSL, Docker 29.8.2, reboot) and a re-prime.
+It then cleared two dispatch stalls, shipped FRE-1529 and FRE-1530, merged ADR-0153, and replaced
+master's `tmux send-keys` with `SendMessage`. The owner then disabled the `remember` plugin and
+trimmed this file's template. Two threads are open: FRE-1535 (tool approval, the owner's four
+policy answers relayed on 2026-10-03 07:18 UTC) and FRE-1537 (the planner ADR).
 
 ## What was decided and why
 
-**Engine: llama.cpp, not MTPLX.** Blind rubric scoring (two Opus scorers, turns 1–5) put llama.cpp
-with workers at 17.0/25, every MTPLX setup at 12.0–16.5, Sonnet with no workers at 17.5. The cause is
-engine-side: on MTPLX every worker landing re-prefilled cold (0 cached, 2.5–6 min) because the memory
-guard cleared the cache near its 103 GB limit and low free disk capped the SSD spill. The owner:
-"MLX models are known to struggle with long context."
+**Severity follows reachability, not the CVE list.** 13 PyJWT advisories looked High. The only
+JWT call site, `artifacts_router.py:191`, runs behind `_verify_internal_token`, which fails closed.
+No anonymous caller reaches it, so master folded the two drafts into one Medium ticket (FRE-1530).
 
-**Workers stay ON, although delivery alone argued against them.** No-workers delivered 8/8 against
-6/8, but scored *worst* (12.0) — its turn 3 answer was truncated at 370 chars and still counted as
-delivered. Quality decided it, not the delivered flag. Explore added a separate `truncated` flag
-(PR #1182) rather than fold truncation into the pre-registered rubric.
+**Dispatch stalled for two weeks and nobody saw it.** build2 logged `dispatch_seat_wedged` for
+4,119 ticks (about 14 days) on an Urgent ticket. The reboot cleared it. adr stalled 17 days on
+FRE-1502, parked by removing its stream label while it stayed In Progress. Master then repeated the
+mistake: it moved FRE-1525 to Backlog without clearing its record, and caught it the next morning.
+Each time, the orchestrator wrote an alert to the notify ledger, and the ledger reached nobody.
 
-**Master's first root-cause reading was wrong, and explore corrected it.** The two lost owner turns
-were not tool output: the skill-bodies block (114,599 chars, ~28.6k tokens) is re-assembled every
-round, and each mid-turn user-role message admits the current one again. Three budget warnings
-produced four copies and 154,096 prompt tokens. The block is *not* bounded by
-`skill_index_max_tokens` (2,048), which covers only the 4,659-char index.
+**Escalated diff, owner review waived.** PR #1185 (FRE-1529) merged without `/code-review ultra`
+under the 2026-08-31 directive. The tests reproduced the defect on the old source.
 
-**Holding PR #1183 for a missing codex review paid for itself.** That post-hoc review found five real
-bugs, including Stop being ignored during the context retry and an unrelated retry failure being
-reported to the user as a context error. The precedent: when a seat records a skipped plan review on
-the primary turn loop, ask for it post-hoc rather than bounce or wave it through.
+**An ADR PR waits for the seat's handoff.** Master held PR #1187 (ADR-0153) until the adr seat
+posted its handoff, because ADR-0152 merged early on 2026-09-14 and the owner reopened it.
 
-**Consolidation now skips `outcome == "failed"` captures.** Decided at that same gate: FRE-1527 made
-every failed turn write a capture, and with memory writes on those would have entered the graph.
+**ADR-0152 is superseded, not amended.** The owner said "go" to one ADR that merges ADR-0147 and
+ADR-0152, filed as FRE-1537. Worker round budgets stay out of it (FRE-1487 owns them).
 
-**A live probe's capture must be archived before consolidation runs, not after.** The 05:07 AC-5 probe
-reached the graph because consolidation ran first; the owner then had its turn removed. The order is:
-master pauses consolidation → the seat fires → the seat reports → master archives.
+**FRE-1535 had a wrong tool in its list.** It named `mcp_list_indices`, which needs no approval.
+The eighth tool is `mcp_mcp-remove` (`tools.yaml:823`). Master corrected the ticket.
 
-**AC-5 for FRE-1527 waits for a natural overrun** (owner's choice), rather than a designed turn that
-would write another synthetic turn into production.
+**FRE-1530's live check used an internal request, not a gateway turn.** Master sent two bad JWTs
+to `/internal/artifacts/{id}` from inside the container: no model call, no write. That needed no
+owner OK, unlike a `/chat` turn.
 
-**FRE-1502 was parked** (stream label removed, state untouched) so the adr seat could reach FRE-1525.
-A backwards state transition would have wedged the stream.
+**FRE-1529 AC-4 waits for a natural owner turn** (the owner's choice, as for FRE-1527 AC-5). The
+qualifying trace is listed on the ticket.
+
+**`SendMessage` replaces `send-keys` for master** (PR #1189). Tested on cc-2build: reply in about
+15 s, no approval hold across permission modes. The Python daemons keep `send-keys`.
+
+**The `remember` plugin is disabled; the `.remember/` folder is kept.** It is third-party, not
+ours. Its one shared handoff (a FRE-1122 note from 2026-09-08) reached every seat 96 times.
 
 ## Worktrees — anything special
-- `explore`: all runners and the blind-export tooling committed and merged (PRs #1181, #1182). Its raw
-  run output under `scripts/eval/fre1517/out/` is deliberately untracked.
-- The untracked `*.bak*` files at the repo root and under `telemetry/` are the owner's.
-- Master's `.env` backups (`env.before-*`) live in a tmpfs scratchpad and may be gone after a reboot;
-  the live `.env` carries dated comments for every study setting instead.
-
-## Sequence position + drift
-- Master audited all 24 `Awaiting Deploy` tickets on 2026-09-17 and closed three (FRE-1492, FRE-1494,
-  FRE-1507) on evidence that already existed in telemetry and had never been folded back. The rest are
-  correctly open, each with a named unmet live check.
-- **Drift:** three ADR umbrellas (FRE-1118, FRE-1450, FRE-1470) sit in `Awaiting Deploy` although
-  nothing about them awaits a deploy. The owner was offered a move to `Backlog` and has not answered.
-- **Open finding on FRE-1484:** on owner trace 1ba5cf4f a worker returned `report_kind ledger`, which
-  matches `_fanout_pause_tasks`, yet no `sub_agent_fanout_incomplete` pause was emitted. The trailer
-  did fire. Not eval mode, no stored preference. Three candidate causes are on the ticket.
-- slm_server: PR #16 and PR #18 merged, PR #17 (MTPLX backend) is a draft awaiting a live window.
-  Master's reviews are posted; merging there is the owner's.
+- `adrs`: the git-ignored `telemetry/archive/fre1502-planner-probe/` holds the raw ADR-0152 probe
+  rows. FRE-1537 can reuse them.
+- Untracked `*.bak*` files at the repo root and under `telemetry/` are the owner's.
 
 ## Answers for the fresh start
-- **Is the local model up?** No. The EnvoyUltra drive is detached (not merely unmounted — the Mac
-  lists no external disk). Owner action. Verify recovery with a real completion through `:8600`, never
-  with `/health`, which answers from the router.
-- **Was any owner turn lost to that outage?** No. Zero turn events between 19:20 and 21:25 UTC.
-- **What is at the gate?** Nothing. build2 → FRE-1529 (Urgent, the skill-block duplication),
-  adr → FRE-1525 (artifact sharing ADR-0153).
-- **What needs the owner?** Reconnect the drive; approve FRE-1524 (the budget warning); decide the
-  umbrella move; decide whether slm_server merges PR #17 after its live window.
-- **What is deliberately still in `.env`?** `AGENT_EXPANSION_ENABLED=true` and
-  `AGENT_PLANNER_BRIEF_MODE=briefing` are the owner's 2026-09-16 production decision, not leftover
-  study settings. `AGENT_ENABLE_SECOND_BRAIN=true` since the study ended.
-- **Study captures:** 71 archived to `captains_log/captures_archive_fre1517` inside the gateway volume,
-  so they can never be consolidated. Do not move them back.
-- **Linear MCP:** its token expired at 08:37 UTC on 2026-10-01. Re-authorize before any board work.
-- **Master's own correction worth remembering:** master printed a visible "Private list of what I need
-  next" block in nearly every reply until the owner asked why. Keep that reasoning internal.
+- **Ticket, stream and seat state:** `uv run python -m scripts.dispatch.next_resolver`, Linear and
+  `telemetry/dispatch_state.json`. Not copied here.
+- **`python` is not on PATH on this host.** Every skill now says `uv run python -m ...`.
+- **Session start shows no `LAST HANDOFF` or `MEMORY` block, and prompts carry no time stamp.**
+  That is the plugin change, not a fault. Use `date -u`.
+- **Restarts still due** (plugin off, Claude Code 2.1.288 installed): cc-master at this reset,
+  cc-1build and cc-adrs after their current PRs, cc-explore when the owner finishes there. Start
+  each with `cc-sessions restart <seat>`, then check the pane for a "Resume from summary" prompt.
+- **cc-explore is the owner's own seat for now** (Laya and Jev research). Do not message it.
+- **The explore skill's no-argument resolver call always fails:** the resolver accepts `adr`,
+  `build1` and `build2` only. Explore runs on an explicit ticket id. Not fixed: registering an
+  explore stream is a design choice.
+- **Pending owner decision:** whether dispatch alerts must reach the owner. The notify ledger
+  records stalls and wedges, and nothing reads it (see "two weeks" above).
+- **Deliberate `.env` settings** carry dated owner comments in `.env` itself.
+- **Local model:** a real completion through `:8600` answered on 2026-10-01. Recheck with a
+  completion, never `/health`.

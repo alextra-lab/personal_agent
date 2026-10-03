@@ -122,7 +122,11 @@ class LedgerEntry:
         command: The exact command line a retry would resend.
         preconditions: A small snapshot of the state that justified this event
             (e.g. the head SHA), for audit/reconstruction.
-        created_at: When the entry was first written (ledger-before-send).
+        created_at: When the current unresolved episode began (FRE-1540), which
+            is when the entry was first written (ledger-before-send). A retry of
+            an abandoned entry within ``EPISODE_GAP_S`` and a renotify of an open
+            surfaced entry keep it. This includes a master-ready entry: its age
+            in ``resolve_queued_triggers`` counts from the first attempt.
         send_started_at: Set immediately before the send attempt; ``None``
             means the send was never attempted.
         sent_at: Set only after the send is confirmed to have succeeded.

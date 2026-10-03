@@ -1427,11 +1427,15 @@ def _alert_master_if_due(
 
 def _track_unroutable(
     ledger: trigger_ledger.Ledger, trigger: Trigger, *, now: float
-) -> trigger_ledger.Ledger:
+) -> tuple[trigger_ledger.Ledger, bool]:
     """Record an unroutable worker trigger as one abandoned attempt (FRE-1540).
 
     The trigger has no seat, so no send is tried. The attempt is written and consumed in the
     caller's single persist: ``reconcile`` must never see an unconsumed entry with no command.
+
+    Returns:
+        The ledger and whether an attempt was recorded. ``False`` means the key already holds
+        an open or recently sent entry, which is not a failed attempt and must not alert.
     """
     ledger, outcome = trigger_ledger.record_pending(
         ledger,
@@ -1445,9 +1449,9 @@ def _track_unroutable(
         ttl_s=trigger.ttl_s,
     )
     if outcome == "duplicate":
-        return ledger
+        return ledger, False
     ledger = trigger_ledger.mark_consumed(ledger, trigger.dedup_key, now)
-    return trigger_ledger.mark_failure(ledger, trigger.dedup_key, "unroutable")
+    return trigger_ledger.mark_failure(ledger, trigger.dedup_key, "unroutable"), True
 
 
 def run_once(
@@ -1588,19 +1592,20 @@ def run_once(
         if trigger.session is None and trigger.kind == "worker" and execute:
             # FRE-1540: before the log suppression below, which skips this whole body for
             # six hours. The alert clock must not wait on a log-noise window.
-            tick_ledger = _track_unroutable(tick_ledger, trigger, now=now)
+            tick_ledger, tracked = _track_unroutable(tick_ledger, trigger, now=now)
             ledger_persist(tick_ledger)
-            tick_ledger = _alert_master_if_due(
-                tick_ledger,
-                event_id=trigger.dedup_key,
-                pr=trigger.pr,
-                seat="none",
-                now=now,
-                runner=runner,
-                logger=logger,
-                trace_id=trace_id,
-                ledger_persist=ledger_persist,
-            )
+            if tracked:
+                tick_ledger = _alert_master_if_due(
+                    tick_ledger,
+                    event_id=trigger.dedup_key,
+                    pr=trigger.pr,
+                    seat="none",
+                    now=now,
+                    runner=runner,
+                    logger=logger,
+                    trace_id=trace_id,
+                    ledger_persist=ledger_persist,
+                )
         if trigger.session is None:
             unroutable_key = f"unroutable:{trigger.pr}:{trigger.head_sha}"
             if execute and _suppressed(state, unroutable_key, now, unroutable_ttl_s):

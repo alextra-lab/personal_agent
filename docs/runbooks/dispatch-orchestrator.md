@@ -492,6 +492,11 @@ for the PR trigger `/master <n>`.
 - **A busy `cc-master` defers the alert.** The daemon retries on its next tick (watcher 60 s,
   orchestrator 300 s), so the alert arrives between 15 and 20 minutes after the first failure
   (orchestrator) or soon after master goes idle.
+- **First deploy sends a burst.** Every notify entry already open is older than 15 minutes and has
+  no `alerted_at`. The first orchestrator tick after the deploy sends one alert for each. This is
+  intended: it surfaces conditions that were silent before.
+- **A repeat at the same trigger key does not alert again.** The latch is per dedup key
+  (`worker:<pr>:<sha>`), as the ticket says "once per trigger". A new head SHA is a new trigger.
 - **Find an alert after the fact.** `grep -E 'gating_alert_(sent|deferred)|dispatch_alert_(sent|deferred)'`
   in the daemon journal, or read `alerted_at` and `attempts` in `python -m scripts.dispatch.trigger_ledger --all --json`.
 

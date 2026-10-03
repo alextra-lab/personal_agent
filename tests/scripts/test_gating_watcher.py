@@ -3020,7 +3020,31 @@ def test_ac3_restart_between_every_tick_keeps_the_clock_and_alerts_once(
         restarted_tick(_T0 + minute * 60)
     assert len(_master_texts(runner)) == 1  # the clock survived 21 restarts
 
-    # The daemon is down for two hours, then returns to the same failing trigger.
-    for minute in range(0, 10):
+    # The daemon is down for two hours, then returns to the same failing trigger. The gap
+    # restarts the clock, so run past 15 minutes again: only the carried latch holds it back.
+    for minute in range(0, 20):
         restarted_tick(_T0 + 7200 + minute * 60)
     assert len(_master_texts(runner)) == 1  # a long gap does not repeat the alert
+
+
+def test_unroutable_trigger_over_a_just_sent_entry_is_not_a_failed_attempt() -> None:
+    """A duplicate result (sent within the TTL) is no failed attempt; it must not raise an alert."""
+    from scripts.dispatch import trigger_ledger
+
+    ledger, _ = trigger_ledger.record_pending(
+        {},
+        event_id=_WORKER_KEY,
+        source="worker-ci-red",
+        target_pane="cc-2build",
+        ticket="412",
+        command="poke",
+        preconditions={},
+        now=_T0 - 5000.0,
+        ttl_s=900.0,
+    )
+    ledger = trigger_ledger.mark_sent(ledger, _WORKER_KEY, _T0 - 100.0)
+    ledger = trigger_ledger.mark_consumed(ledger, _WORKER_KEY, _T0 - 100.0)  # inside the 900 s TTL
+    runner = _stuck_runner()
+    _tick({}, _T0, runner, ledger, resolver=_no_session)
+    assert _master_texts(runner) == []
+    assert ledger[_WORKER_KEY].attempts == 1  # untouched: not recorded as a retry

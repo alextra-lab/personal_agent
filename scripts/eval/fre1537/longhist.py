@@ -15,6 +15,7 @@ import sys
 from collections.abc import Sequence
 
 import httpx
+from scripts.eval.fre1537 import fingerprint as fp_mod
 from scripts.eval.fre1537 import render
 from scripts.eval.fre1537.common import RunPaths, append_jsonl, read_jsonl
 from scripts.eval.fre1537.fixtures import load_histories
@@ -101,6 +102,7 @@ def run_longhist(
             continue
         first = render_history(size, secrets.token_hex(4))
         cold = _call(client, url, model, inputs, mode, first, FIRST_QUERY)
+        fp_mod.fill_engine_build(paths, cold.get("system_fingerprint"))
         between = stream(
             client, url, model, primary_body(inputs, reference_label(inputs), max_tokens=1)
         )

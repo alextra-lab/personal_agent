@@ -113,11 +113,17 @@ def build_fingerprint(
         "engine": {
             "name": "llama.cpp",
             "build": engine_build or props.get("build_info") or "unknown",
+            "build_source": "cli"
+            if engine_build
+            else "props"
+            if props.get("build_info")
+            else "unknown",
             "url": f"{urlsplit(url).scheme}://{urlsplit(url).netloc}",
         },
         "model": {
             "name": model,
             "quant": quant or (quant_match.group(0) if quant_match else "unknown"),
+            "quant_source": "cli" if quant else "props" if quant_match else "unknown",
             "path": model_path or "unknown",
         },
         "planner_mode": {"name": mode.name, "params": dict(mode.params), "sampling": base_sampling},
@@ -140,6 +146,14 @@ def _identity(fingerprint: Mapping[str, object]) -> list[object]:
     return out
 
 
+def _same_configuration(existing: Mapping[str, object], new: Mapping[str, object]) -> bool:
+    """Compare two fingerprints. A value that the new one cannot report yet is not a difference."""
+    return all(
+        old == fresh or (fresh in (None, "unknown") and old not in (None, "unknown"))
+        for old, fresh in zip(_identity(existing), _identity(new), strict=True)
+    )
+
+
 def ensure_compatible(paths: RunPaths, fingerprint: Mapping[str, object]) -> None:
     """Write the fingerprint, or check it against the one the tag already holds.
 
@@ -154,7 +168,7 @@ def ensure_compatible(paths: RunPaths, fingerprint: Mapping[str, object]) -> Non
     """
     if paths.fingerprint.exists():
         existing = json.loads(paths.fingerprint.read_text())
-        if _identity(existing) != _identity(fingerprint):
+        if not _same_configuration(existing, fingerprint):
             raise SystemExit(
                 f"tag {paths.tag!r} holds rows of a different configuration "
                 f"({paths.fingerprint}); use a new --tag"
@@ -162,3 +176,25 @@ def ensure_compatible(paths: RunPaths, fingerprint: Mapping[str, object]) -> Non
         return
     paths.rows.mkdir(parents=True, exist_ok=True)
     paths.fingerprint.write_text(json.dumps(fingerprint, indent=2, sort_keys=True))
+
+
+def fill_engine_build(paths: RunPaths, system_fingerprint: object) -> None:
+    """Record the engine build that a reply reports, when the fingerprint has none.
+
+    llama.cpp puts its build in the ``system_fingerprint`` of every reply chunk. The ``/props`` document
+    that would also carry it is not always reachable through the proxy. A build that is already known,
+    from ``/props`` or from ``--engine-build``, is never overwritten.
+
+    Args:
+        paths: The run paths.
+        system_fingerprint: The ``system_fingerprint`` of a reply, or ``None``.
+    """
+    if not isinstance(system_fingerprint, str) or not system_fingerprint:
+        return
+    stored = json.loads(paths.fingerprint.read_text())
+    engine = stored.get("engine", {})
+    if engine.get("build") not in (None, "", "unknown"):
+        return
+    engine.update(build=system_fingerprint, build_source="reply:system_fingerprint")
+    stored["engine"] = engine
+    paths.fingerprint.write_text(json.dumps(stored, indent=2, sort_keys=True))

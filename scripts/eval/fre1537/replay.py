@@ -86,6 +86,7 @@ def run_decide(
                 result = stream(client, url, model, planner_body(inputs, label, mode, digest))
                 plan = parse_plan(str(result["content"]))
                 row.update(result)
+                fp_mod.fill_engine_build(paths, result.get("system_fingerprint"))
                 row["plan"] = plan
                 row["declined"] = plan.get("declined")
             except (httpx.HTTPError, ValueError) as exc:
@@ -147,6 +148,7 @@ def run_timing(
             )
             stream(client, url, model, prime_body(inputs, label))
             planner = stream(client, url, model, planner_body(inputs, label, mode, digest))
+            fp_mod.fill_engine_build(paths, planner.get("system_fingerprint"))
             planner["plan"] = parse_plan(str(planner.pop("content")))
             row["T3_planner"] = planner
             row["T3_primary"] = stream(

@@ -364,3 +364,92 @@ def test_timing_arm_sends_the_digest_between_history_and_query(tmp_path: Path) -
         )
     (user,) = users
     assert user.index("assistant: hello") < user.index("DIGEST") < user.index("Query: research it")
+
+
+def sse_with_fingerprint(build: str) -> httpx.Response:
+    chunk = {"system_fingerprint": build, "choices": [{"delta": {"content": DECLINE}}]}
+    usage = {"choices": [], "usage": {"completion_tokens": 13}}
+    body = f"data: {json.dumps(chunk)}\n\ndata: {json.dumps(usage)}\n\ndata: [DONE]\n\n".encode()
+    return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+
+def test_stream_records_the_engine_system_fingerprint() -> None:
+    res = llama.stream(
+        client_for(lambda req: sse_with_fingerprint("b9999-feed")), URL, "m", {"messages": []}
+    )
+    assert res["system_fingerprint"] == "b9999-feed"
+    assert (
+        llama.stream(client_for(lambda req: sse_response(content=DECLINE)), URL, "m", {})[
+            "system_fingerprint"
+        ]
+        is None
+    )
+
+
+def test_an_unknown_engine_build_is_filled_from_the_first_reply_and_never_overwritten(
+    tmp_path: Path,
+) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    with client_for(lambda req: httpx.Response(404)) as client:
+        fp = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, None
+        )
+    fingerprint.ensure_compatible(paths, fp)
+    fingerprint.fill_engine_build(paths, None)  # a reply without a fingerprint changes nothing
+    assert json.loads(paths.fingerprint.read_text())["engine"]["build"] == "unknown"
+    fingerprint.fill_engine_build(paths, "b9999-feed")
+    fingerprint.fill_engine_build(paths, "b0000-other")
+    stored = json.loads(paths.fingerprint.read_text())["engine"]
+    assert stored["build"] == "b9999-feed" and stored["build_source"] == "reply:system_fingerprint"
+
+
+def test_a_resumed_run_keeps_the_build_that_an_earlier_reply_filled_in(tmp_path: Path) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    with client_for(lambda req: httpx.Response(404)) as client:
+        fp = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, None
+        )
+    fingerprint.ensure_compatible(paths, fp)
+    fingerprint.fill_engine_build(paths, "b9999-feed")
+    fingerprint.ensure_compatible(paths, fp)  # same configuration, props still silent: allowed
+
+
+def test_the_fingerprint_names_the_source_of_the_build_and_the_quant(tmp_path: Path) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    with client_for(props_handler()) as client:
+        from_engine = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, None
+        )
+    with client_for(lambda req: httpx.Response(404)) as client:
+        from_cli = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, "UD-IQ4_XS", "b1", None
+        )
+    assert (
+        from_engine["engine"]["build_source"] == "props"
+        and from_engine["model"]["quant_source"] == "props"
+    )  # type: ignore[index]
+    assert (
+        from_cli["engine"]["build_source"] == "cli" and from_cli["model"]["quant_source"] == "cli"
+    )  # type: ignore[index]
+
+
+def test_run_decide_fills_the_engine_build_from_the_first_reply(tmp_path: Path) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    with client_for(lambda req: httpx.Response(404)) as client:
+        fp = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, None
+        )
+    fingerprint.ensure_compatible(paths, fp)
+    with client_for(lambda req: sse_with_fingerprint("b7777-cafe")) as client:
+        replay.run_decide(
+            client,
+            URL,
+            "m",
+            paths,
+            inputs,
+            llama.MODES["thinking_off"],
+            None,
+            ["greeting"],
+            trials=1,
+        )
+    assert json.loads(paths.fingerprint.read_text())["engine"]["build"] == "b7777-cafe"

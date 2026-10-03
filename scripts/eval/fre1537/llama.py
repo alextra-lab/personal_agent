@@ -265,6 +265,7 @@ def stream(
     reasoning_chars = 0
     tool_names: list[str] = []
     finish: object = None
+    engine_build: object = None
     usage: Mapping[str, object] = {}
     timings: Mapping[str, object] = {}
     with client.stream("POST", url, json=request) as response:
@@ -274,6 +275,7 @@ def stream(
                 continue
             chunk = json.loads(line[6:])
             usage = chunk.get("usage") or usage
+            engine_build = chunk.get("system_fingerprint") or engine_build
             timings = chunk.get("timings") or timings
             for choice in chunk.get("choices") or []:
                 delta = choice.get("delta") or {}
@@ -303,6 +305,7 @@ def stream(
         "reasoning_chars": reasoning_chars,
         "tool_names": tool_names,
         "finish_reason": finish,
+        "system_fingerprint": engine_build,
         "usage": dict(usage),
         "timings": {
             k: timings.get(k)

@@ -18,6 +18,12 @@ What it does per session:
   pre-registered outcome (``session_runner.turn_outcome``) into one JSONL row.
 - **Graph checks:** after turn 1 and after the session, re-reads the counts. Any growth stops
   the runner with exit 7.
+- **Approval check (FRE-1539):** production has no PWA WebSocket, so FRE-1535 denies every
+  approval-capable tool call. The turn still completes. After each turn the runner reads the
+  evidence (``scripts/eval/approval_denial.py``) and records ``outcome.validity``. At the end it
+  prints the valid, invalid and unverified counts. The delivered rate counts valid turns only. Exit
+  11 when any turn is invalid. This runner has no bypass: a study that needs those tools runs on
+  the eval stack.
 
 Run from the repo root, one session per invocation, only with the owner's approval:
 
@@ -34,10 +40,12 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from scripts.eval.approval_denial import check_turn
 from scripts.eval.fre1517.session_runner import (
     HERE,
     apply_session_facts,
@@ -292,6 +300,51 @@ def _trace_reads(es: httpx.Client, trace_id: str) -> dict[str, Any]:
     }
 
 
+def session_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Count the session's turns by validity and compute the delivered rate over valid turns.
+
+    Args:
+        rows: The session's JSONL rows. A row with no ``outcome`` (a failed call) is not a turn.
+
+    Returns:
+        ``turns``, the ``valid``, ``invalid``, ``unverified`` and ``unassessed`` counts, and
+        ``delivered_rate`` as ``delivered/valid``, or ``n/a`` with no valid turn. An invalid or
+        unverified turn is in no rate, even when it delivered a reply.
+    """
+    outcomes = [r["outcome"] for r in rows if isinstance(r.get("outcome"), Mapping)]
+    by_validity = {
+        name: [o for o in outcomes if o.get("validity") == name]
+        for name in ("valid", "invalid", "unverified")
+    }
+    valid = by_validity["valid"]
+    delivered = sum(1 for o in valid if o.get("delivered"))
+    return {
+        "turns": len(outcomes),
+        "valid": len(valid),
+        "invalid": len(by_validity["invalid"]),
+        "unverified": len(by_validity["unverified"]),
+        "unassessed": sum(1 for o in outcomes if "validity" not in o),
+        "delivered_rate": f"{delivered}/{len(valid)}" if valid else "n/a",
+    }
+
+
+def format_summary(summary: Mapping[str, Any]) -> str:
+    """Render :func:`session_summary` as one console line.
+
+    Args:
+        summary: The mapping :func:`session_summary` returned.
+
+    Returns:
+        The line the runner prints at the end of a session.
+    """
+    return (
+        f"session summary: turns={summary['turns']} valid={summary['valid']} "
+        f"invalid={summary['invalid']} unverified={summary['unverified']} "
+        f"unassessed={summary['unassessed']} "
+        f"delivered_rate_over_valid={summary['delivered_rate']}"
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     """Drive one scripted session on production.
 
@@ -300,7 +353,7 @@ def run(args: argparse.Namespace) -> int:
 
     Returns:
         0 on completion, 2 on a refused start, 3 on a failed turn, 5 on an arm mismatch,
-        7 on graph growth.
+        7 on graph growth, 11 on completion with an invalid turn (an approval tool was denied).
     """
     arm = apply_session_facts(load_arm(args.arm), args.session_fact)
     script = load_script(args.script)
@@ -409,6 +462,7 @@ def run(args: argparse.Namespace) -> int:
             session_id, trace_id = str(data["session_id"]), str(data["trace_id"])
             time.sleep(15)  # let the trace's events reach Elasticsearch
             reads = _trace_reads(es, trace_id)
+            approval = check_turn(trace_id, es_url=PROD_ES, client=es)
             brief = None
             if args.expect_brief_mode:
                 # FRE-1521 Phase B: every planner call must run in the expected brief mode and
@@ -449,6 +503,7 @@ def run(args: argparse.Namespace) -> int:
                 errors_by_role=reads["errors_by_role"],
                 primary_models=reads["primary_models"],
                 telemetry_model=arm["telemetry_model"],
+                approval=approval,
             )
             row = {
                 **base_row,
@@ -468,7 +523,7 @@ def run(args: argparse.Namespace) -> int:
             print(
                 f"  t{turn['n']:02d} session={session_id[:8]} trace={trace_id[:8]} delivered={outcome['delivered']} "
                 f"{outcome['reasons']} route={rt.get('decomposition_strategy')} workers={len(reads['sub_agent_captures'])} "
-                f"wall={http_wall}s growth={row.get('graph_growth')}",
+                f"wall={http_wall}s growth={row.get('graph_growth')} approval={approval.summary()}",
                 flush=True,
             )
             if outcome["attribution"] == "mismatch":
@@ -501,6 +556,16 @@ def run(args: argparse.Namespace) -> int:
             if row.get("graph_growth"):
                 sys.stderr.write(f"STOP: production graph grew: {row['graph_growth']}\n")
                 return 7
+    summary = session_summary(
+        [json.loads(line) for line in rows_path.read_text().splitlines() if line.strip()]
+    )
+    print(format_summary(summary), flush=True)
+    if summary["invalid"]:
+        sys.stderr.write(
+            f"INVALID: {summary['invalid']} turn(s) had an approval tool denied; "
+            "they are in no rate. Run this study on the eval stack.\n"
+        )
+        return 11
     return 0
 
 

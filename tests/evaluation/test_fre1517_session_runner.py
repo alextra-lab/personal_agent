@@ -7,6 +7,7 @@ gateway, a model or a substrate. ``run_turn``'s per-session wipe is covered ther
 from __future__ import annotations
 
 import pytest
+from scripts.eval.approval_denial import ApprovalVerdict
 from scripts.eval.fre1517 import classify
 from scripts.eval.fre1517.session_runner import (
     TRAILER_MARKER,
@@ -186,3 +187,86 @@ def test_committed_scripts_pass_the_offline_classification() -> None:
     for path in sorted(classify.SCRIPTS_DIR.glob("*.yaml")):
         _, failures = classify.check_script(path)
         assert failures == [], failures
+
+
+# --- FRE-1539: a production turn whose approval tool was denied is invalid -----------------
+
+
+def _approval_denied() -> ApprovalVerdict:
+    from scripts.eval.approval_denial import ApprovalDenial
+
+    denial = ApprovalDenial("bash", "approval_connection_lost", "capture")
+    return ApprovalVerdict("invalid", (denial,), True)
+
+
+def test_outcome_without_an_approval_verdict_carries_no_validity_key() -> None:
+    """The eval-stack runner passes none, so its rows keep their shape."""
+    outcome = turn_outcome(
+        reply="Here is your plan.",
+        errors_by_role={},
+        primary_models=["mtplx-a"],
+        telemetry_model="mtplx-a",
+    )
+    assert "validity" not in outcome
+
+
+def test_denied_turn_is_marked_invalid_and_its_delivery_is_unchanged() -> None:
+    """The model replied, so `delivered` stays true. `validity` is the separate flag."""
+    outcome = turn_outcome(
+        reply="Here is your plan.",
+        errors_by_role={},
+        primary_models=["mtplx-a"],
+        telemetry_model="mtplx-a",
+        approval=_approval_denied(),
+    )
+    assert outcome["delivered"] is True
+    assert outcome["validity"] == "invalid"
+    assert outcome["approval"]["denials"] == [
+        {"tool_name": "bash", "reason": "approval_connection_lost", "source": "capture"}
+    ]
+
+
+def _row(validity: str | None, delivered: bool) -> dict[str, object]:
+    outcome: dict[str, object] = {"delivered": delivered}
+    if validity is not None:
+        outcome["validity"] = validity
+    return {"outcome": outcome}
+
+
+def test_session_summary_leaves_invalid_turns_out_of_the_delivered_rate() -> None:
+    """AC-3: the denied turn is counted as invalid and is not in the rate."""
+    from scripts.eval.fre1517.prod_session_runner import format_summary, session_summary
+
+    rows = [
+        _row("valid", True),
+        _row("valid", True),
+        _row("valid", False),
+        _row("invalid", True),  # delivered, but denied: it must not lift the rate
+        _row("unverified", True),
+        {"http_error": "boom"},  # a failed call has no outcome and is not a turn
+    ]
+    summary = session_summary(rows)
+    assert summary["turns"] == 5
+    assert summary["valid"] == 3
+    assert summary["invalid"] == 1
+    assert summary["unverified"] == 1
+    assert summary["delivered_rate"] == "2/3"
+    text = format_summary(summary)
+    assert "invalid=1" in text
+    assert "delivered_rate_over_valid=2/3" in text
+
+
+def test_session_summary_with_no_valid_turn_has_no_rate() -> None:
+    from scripts.eval.fre1517.prod_session_runner import session_summary
+
+    summary = session_summary([_row("invalid", True)])
+    assert summary["delivered_rate"] == "n/a"
+
+
+def test_session_summary_counts_a_row_with_no_verdict_as_unassessed() -> None:
+    from scripts.eval.fre1517.prod_session_runner import session_summary
+
+    summary = session_summary([_row(None, True)])
+    assert summary["unassessed"] == 1
+    assert summary["valid"] == 0
+    assert summary["delivered_rate"] == "n/a"

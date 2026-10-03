@@ -45,6 +45,10 @@ import yaml  # type: ignore[import-untyped]
 
 from personal_agent.config import get_settings
 
+# The `scripts` package sits at the repo root, which a script run does not put on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from scripts.eval.approval_denial import UNASSESSED, check_turn, in_rates  # noqa: E402
+
 log = structlog.get_logger(__name__)
 
 DEFAULT_CHAT_URL = "http://localhost:9001/chat"
@@ -86,6 +90,10 @@ class TurnMetric:
         static_prefix_hash: Stable-prefix hash (should be constant across turns).
         dynamic_hash: Full-prompt hash (changes when the volatile block changes).
         primary_call_count: Number of primary model calls observed in the trace.
+        validity: ``valid``, ``invalid`` (an approval tool was denied, FRE-1539), ``unverified``
+            or ``unassessed`` (a re-read pass with no verdict). Only ``valid`` and ``unassessed``
+            turns are in the reuse rate.
+        approval_summary: The denied tools and reasons, or the unverified reason.
     """
 
     session_label: str
@@ -101,6 +109,8 @@ class TurnMetric:
     static_prefix_hash: str | None
     dynamic_hash: str | None
     primary_call_count: int
+    validity: str = UNASSESSED
+    approval_summary: str = ""
 
 
 def load_dataset(path: Path) -> list[SessionDef]:
@@ -373,6 +383,9 @@ async def run_session(
             session_id or "",
             min_prompt_tokens,
         )
+        approval = await asyncio.to_thread(check_turn, trace_id, es_url=es_url, logs_index=index)
+        metric.validity = approval.validity
+        metric.approval_summary = approval.summary()
         metrics.append(metric)
         log.info(
             "turn_metric",
@@ -382,6 +395,7 @@ async def run_session(
             input_tokens=metric.input_tokens,
             static_hash=metric.static_prefix_hash,
             dynamic_hash=metric.dynamic_hash,
+            approval=metric.approval_summary or metric.validity,
         )
     return metrics
 
@@ -401,18 +415,29 @@ def render_markdown(run_meta: dict[str, Any], metrics: list[TurnMetric]) -> str:
         "|---|---|---|---|---|---|---|---|---|",
     ]
     for m in metrics:
+        if not in_rates(m.validity):
+            # FRE-1539: a denied or unproven turn measured another behaviour. No metric cells.
+            lines.append(
+                f"| {m.session_label} | {m.turn_index} | **{m.validity.upper()}** — "
+                f"{m.approval_summary} | | | | | | |"
+            )
+            continue
         ep = (m.endpoint or "")[-22:]
         lines.append(
             f"| {m.session_label} | {m.turn_index} | {ep} | {m.input_tokens} | "
             f"**{m.cache_read_tokens}** | {m.cache_creation_input_tokens} | {m.latency_ms} | "
             f"{(m.static_prefix_hash or '-')[:12]} | {(m.dynamic_hash or '-')[:12]} |"
         )
-    # Cross-turn reuse rollup (turns >= 2 only).
-    cross = [m for m in metrics if m.turn_index >= 2]
+    # Cross-turn reuse rollup (turns >= 2 only). A turn that is not in a rate is left out.
+    cross = [m for m in metrics if m.turn_index >= 2 and in_rates(m.validity)]
     reused = [m for m in cross if (m.cache_read_tokens or 0) > 0]
+    invalid = sum(1 for m in metrics if m.validity == "invalid")
+    unverified = sum(1 for m in metrics if m.validity == "unverified")
     lines += [
         "",
         f"**Cross-turn reuse (turn>=2): {len(reused)}/{len(cross)} turns had cache_read > 0.**",
+        f"Turn validity (FRE-1539): invalid {invalid} · unverified {unverified}"
+        " — left out of the rate.",
         "PASS for arm `tail` = most turn>=2 calls show cache_read > 0 vs ~0 on arm `head`.",
     ]
     return "\n".join(lines)
@@ -451,6 +476,9 @@ async def reextract(args: argparse.Namespace) -> int:
                 str(m.get("session_id", "")),
                 args.min_prompt_tokens,
             )
+            # The verdict was read when the turn ran. This re-read must not erase it.
+            metric.validity = str(m.get("validity", UNASSESSED))
+            metric.approval_summary = str(m.get("approval_summary", ""))
             all_metrics.append(metric)
             log.info(
                 "reextract_turn",
@@ -520,6 +548,12 @@ async def amain(args: argparse.Namespace) -> int:
     )
     (out_dir / f"{stem}.md").write_text(render_markdown(run_meta, all_metrics))
     log.info("pass_written", out=str(out_dir / f"{stem}.md"), turns=len(all_metrics))
+    if any(m.validity == "invalid" for m in all_metrics):
+        log.error(
+            "approval_denied_turns",
+            turns=[m.trace_id for m in all_metrics if m.validity == "invalid"],
+        )
+        return 1
     return 0
 
 

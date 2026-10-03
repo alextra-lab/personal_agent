@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import pytest
 import yaml  # type: ignore[import-untyped]
+from scripts.eval.approval_denial import ApprovalDenial, ApprovalVerdict
 
 from personal_agent.observability.route_trace.types import RouteTraceRow
 
@@ -37,6 +38,7 @@ from scripts.eval.fre453_canonical_evalset.harness import (  # noqa: E402
     evaluate_case,
     load_dataset,
     render_markdown,
+    validity_counts,
 )
 
 DATASET_PATH = REPO_ROOT / "scripts" / "eval" / "fre453_canonical_evalset" / "dataset.yaml"
@@ -440,3 +442,90 @@ class TestRenderer:
         )
         md = self._render_single(evalset, case, row)
         assert "Delegate disposition" not in md
+
+
+# ---------------------------------------------------------------------------
+# 5. FRE-1539 — a turn whose approval tool was denied is invalid, not a result
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalValidity:
+    """The report keeps a denied turn out of the findings and prints the invalid count."""
+
+    @staticmethod
+    def _result(
+        evalset: EvalSet, case_id: str, row: RouteTraceRow, verdict: ApprovalVerdict | None
+    ) -> dict[str, object]:
+        case = _case(evalset, case_id)
+        result: dict[str, object] = {
+            "case": case,
+            "row": row,
+            "evaluation": evaluate_case(case, row),
+            "response_text": "hi!",
+            "background": [],
+        }
+        if verdict is not None:
+            result["approval"] = verdict
+        return result
+
+    @staticmethod
+    def _render(evalset: EvalSet, results: list[dict[str, object]]) -> str:
+        return render_markdown(
+            run_meta={"run_id": "unit-smoke", "profile": "local", "timestamp": "t"},
+            results=results,
+            evalset=evalset,
+        )
+
+    @staticmethod
+    def _denied() -> ApprovalVerdict:
+        denial = ApprovalDenial("bash", "approval_connection_lost", "capture")
+        return ApprovalVerdict("invalid", (denial,), True)
+
+    def test_denied_case_is_counted_invalid_and_left_out_of_the_findings(
+        self, evalset: EvalSet
+    ) -> None:
+        """AC-3: the invalid count prints, and the denied case shows no MATCH or MISMATCH."""
+        valid = self._result(
+            evalset, "trivial_conversational", _make_row(), ApprovalVerdict("valid", (), True)
+        )
+        # tool_heavy_research expects tool use. With none, it WOULD render a MISMATCH.
+        denied = self._result(
+            evalset, "tool_heavy_research", _make_row(tools_used=()), self._denied()
+        )
+        md = self._render(evalset, [valid, denied])
+        assert "valid 1 · invalid 1 · unverified 0" in md
+        assert "INVALID TURN" in md
+        assert "bash(approval_connection_lost)" in md
+        assert "**MISMATCH**" not in md  # the table row form, not the header text
+        assert "| MATCH |" in md  # the valid case still reports its findings
+
+    def test_unverified_case_is_excluded_and_named(self, evalset: EvalSet) -> None:
+        """An unverified turn is not proof of a clean turn, so it is not scored either."""
+        verdict = ApprovalVerdict("unverified", (), False, "capture_not_found")
+        result = self._result(evalset, "tool_heavy_research", _make_row(tools_used=()), verdict)
+        md = self._render(evalset, [result])
+        assert "unverified 1" in md
+        assert "UNVERIFIED TURN" in md
+        assert "capture_not_found" in md
+        assert "**MISMATCH**" not in md
+
+    def test_report_without_verdicts_renders_as_before(self, evalset: EvalSet) -> None:
+        """A result with no ``approval`` key (an older caller) has no validity line."""
+        md = self._render(
+            evalset, [self._result(evalset, "trivial_conversational", _make_row(), None)]
+        )
+        assert "turn validity" not in md
+        assert "MATCH" in md
+
+    def test_validity_counts_treat_a_missing_verdict_as_unassessed(self, evalset: EvalSet) -> None:
+        """A case with no verdict is unassessed. It is not counted as valid."""
+        results = [
+            self._result(evalset, "trivial_conversational", _make_row(), None),
+            self._result(evalset, "tool_heavy_research", _make_row(), self._denied()),
+        ]
+        assert validity_counts(results) == {
+            "valid": 0,
+            "invalid": 1,
+            "unverified": 0,
+            "unassessed": 1,
+        }

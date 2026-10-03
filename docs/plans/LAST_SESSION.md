@@ -2,9 +2,9 @@
 
 ## Doing / discussing  (≤5 sentences)
 The owner asked for "all recommendations" to be followed, then a tmux restart of cc-master.
-PR #1197 (FRE-1540, dispatch alerts) waits at the gate. ADR-0154 (FRE-1537) merged as Proposed
-at 12:47. FRE-1537 is now its umbrella in Backlog, and the adr dispatch record was cleared.
-Add "Amended by ADR-0154" to ADR-0036 and ADR-0142 only when the owner accepts ADR-0154.
+FRE-1540 merged and its daemons restarted; its AC-4 waits for a natural alert. The owner
+accepted ADR-0154 and approved its chain at 13:01: the build streams now run it (FRE-1537 holds
+the record). FRE-1514 is approved but unlabeled until its criteria are settled against ADR-0154 D7.
 FRE-1538 is deployed and waits only for the owner's AC-6 check (leave the app mid-turn, return).
 The Awaiting Deploy sweep closed six tickets. The rest wait on the owner decisions listed below.
 

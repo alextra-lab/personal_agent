@@ -94,22 +94,40 @@ class TestEvalComposeRedisIsolation:
             assert "redis-eval" in depends_on
             assert "redis" not in depends_on
 
+    @staticmethod
+    def _eval_infra_up_commands() -> list[str]:
+        """The recipe's `docker compose ... up` commands, as `make -n` expands them.
+
+        FRE-1542 split the single `up` into a substrate phase and a gateway phase, so these
+        tests read the expanded recipe instead of one Makefile line.
+        """
+        recipe = subprocess.run(
+            ["make", "-n", "eval-infra-up"],
+            cwd=repo_root(),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        commands = [
+            part.strip().removesuffix("|| exit 1").strip()
+            for line in recipe.replace("\\\n", " ").splitlines()
+            for part in line.split(";")
+            if " up -d " in part and "--dry-run" not in part
+        ]
+        assert len(commands) == 2, commands
+        return commands
+
     def test_makefile_eval_infra_up_names_eval_services_explicitly(self) -> None:
-        makefile = (repo_root() / "Makefile").read_text()
-        lines = makefile.splitlines()
-        target_line = next(i for i, line in enumerate(lines) if line.startswith("eval-infra-up:"))
-        up_line = next(
-            line
-            for line in lines[target_line : target_line + 5]
-            if "compose" in line and "up" in line
-        )
-        assert up_line.rstrip().endswith(
-            "up -d --build postgres-eval neo4j-eval elasticsearch-eval redis-eval "
-            "seshat-gateway-control seshat-gateway-treatment"
+        substrate, gateways = self._eval_infra_up_commands()
+        assert substrate.rstrip().endswith(
+            "up -d --no-deps --wait postgres-eval neo4j-eval elasticsearch-eval redis-eval"
         ), (
             "eval-infra-up must name eval services explicitly, not bring up the "
-            f"union of both compose files with no service args: {up_line!r}"
+            f"union of both compose files with no service args: {substrate!r}"
         )
+        assert gateways.rstrip().endswith(
+            "up -d --no-deps --build seshat-gateway-control seshat-gateway-treatment"
+        ), f"eval-infra-up must name the eval gateways explicitly: {gateways!r}"
 
     def test_makefile_eval_infra_up_always_rebuilds_with_a_fresh_fingerprint(self) -> None:
         """FRE-1341: a cached seshat-gateway:latest can silently serve months-stale code.
@@ -118,14 +136,7 @@ class TestEvalComposeRedisIsolation:
         the current working tree (including uncommitted changes) so the image that gets
         built actually reflects what a rebuild produces, and /health can report it.
         """
-        makefile = (repo_root() / "Makefile").read_text()
-        lines = makefile.splitlines()
-        target_line = next(i for i, line in enumerate(lines) if line.startswith("eval-infra-up:"))
-        up_line = next(
-            line
-            for line in lines[target_line : target_line + 5]
-            if "compose" in line and "up" in line
-        )
-        assert "BUILD_FINGERPRINT=" in up_line
-        assert "scripts.eval.gateway_freshness --print-fingerprint" in up_line
-        assert " --build " in up_line
+        _, gateways = self._eval_infra_up_commands()
+        assert "BUILD_FINGERPRINT=" in gateways
+        assert "scripts.eval.gateway_freshness --print-fingerprint" in gateways
+        assert " --build " in gateways

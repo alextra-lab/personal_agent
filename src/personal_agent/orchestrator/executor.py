@@ -5401,6 +5401,9 @@ async def step_init(
                 # block renders from, so a worker and its caller never disagree
                 # about what day it is. The worker had no date at all before this.
                 turn_started_at=ctx.turn_started_at,
+                # ADR-0154 D5: the planner's memory digest, from the memory context
+                # already in hand (no recall query). It reaches the planner call only.
+                memory_digest=_build_planner_memory_digest(ctx.memory_context or []),
             )
 
             ctx.expansion_plan = expansion_result.plan

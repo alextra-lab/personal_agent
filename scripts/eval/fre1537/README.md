@@ -132,8 +132,13 @@ configuration" when the catalog differs from the run that passed.
 
 `replay --digest-file <file>` inserts the file's text after the history and before the query. The system prompt
 does not change. The tag is `<mode>-digest` unless `--tag` is set, and the fingerprint records the digest hash.
-The message framing and the total bound are production code (FRE-1541). The digest text is still the file's,
-because production has no digest builder yet (ADR-0154 D5). When it has one, feed its output to the probe.
+The message framing and the total bound are production code (FRE-1541). The block title ("What memory already
+holds, most relevant first:") is also production framing (FRE-1472), so the file holds the digest lines only, with
+no title. Build the lines with the production builder, `executor._build_planner_memory_digest` (FRE-1471).
+
+A digest run reuses the history that was rendered without a digest. Production gives the history what the query
+and the digest leave, so the two can differ only when the history, the digest and the query together exceed
+`planner_input_max_chars` (64,000). A 60,000-char history, a 2,400-char digest and the fixture queries stay below it.
 
 ## The scorer
 

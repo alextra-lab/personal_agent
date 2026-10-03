@@ -84,7 +84,8 @@ async def _run_step_init(
         "personal_agent.orchestrator.expansion_controller.ExpansionController", controller_ctor
     )
     monkeypatch.setattr(
-        "personal_agent.llm_client.factory.get_llm_client", lambda role_name=None: MagicMock()
+        "personal_agent.llm_client.factory.get_llm_client",
+        lambda role_name=None, mode=None: MagicMock(),
     )
     state = await ex.step_init(
         ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1")
@@ -178,7 +179,8 @@ async def test_synthesis_appended_is_set_only_when_a_synthesis_message_is_added(
             lambda: controller,
         )
         monkeypatch.setattr(
-            "personal_agent.llm_client.factory.get_llm_client", lambda role_name=None: MagicMock()
+            "personal_agent.llm_client.factory.get_llm_client",
+            lambda role_name=None, mode=None: MagicMock(),
         )
         await ex.step_init(ctx, _session_manager(), TraceContext(trace_id="t1", session_id="s1"))
         return ctx

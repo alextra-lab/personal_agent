@@ -71,16 +71,24 @@ that adds the `planner` mode.
 
 | Mode | Parameters | Use |
 |------|------------|-----|
-| `thinking_off` | `chat_template_kwargs.enable_thinking: false` | The D4 configuration. The only one that can qualify. |
+| `planner` | read from the `planner` mode of `qwen3.8-flash-next` in `config/models.yaml` | The mode that ships (ADR-0154 D4). Use it to qualify a catalog change. |
+| `thinking_off` | `chat_template_kwargs.enable_thinking: false` | The D4 measurement configuration, fixed in the probe. |
 | `server_default` | none | Thinking on, as production runs the planner today. It fails the reasoning-characters threshold. |
 
-Sampling is that of the captured primary request.
+Sampling is that of the captured primary request. The `planner` mode refuses to load when the catalog gives
+it a sampler that differs from the default mode's, because the probe cannot measure that. Pass `--mode planner`
+to `replay` and `longhist`, and `--tag planner` to `score`. The fingerprint records the mode's parameters, so
+a catalog change needs a new run.
+
+The user message of every arm comes from the production `build_planner_user_message`, so the probe runs the
+bound and the framing that ship.
 
 ## A digest run (ADR-0154 AC-8)
 
 `replay --digest-file <file>` inserts the file's text after the history and before the query. The system prompt
 does not change. The tag is `<mode>-digest` unless `--tag` is set, and the fingerprint records the digest hash.
-Production has no digest builder before FRE-1541. When it has one, switch `render.build_user_message` to call it.
+The message framing and the total bound are production code (FRE-1541). The digest text is still the file's,
+because production has no digest builder yet (ADR-0154 D5). When it has one, feed its output to the probe.
 
 ## The scorer
 

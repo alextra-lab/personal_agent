@@ -631,29 +631,27 @@ class AppConfig(BaseSettings):
             "sized there for '128K prefill + up to 32K thinking output'."
         ),
     )
-    planner_brief_mode: Literal["current", "briefing"] = Field(
-        default="current",
-        description=(
-            "current: the planner sees only Strategy + Query, byte-for-byte as today. "
-            "briefing: the planner user message also carries the conversation history "
-            "(FRE-1521), rendered as plain role-labelled text and trimmed to "
-            "planner_history_max_chars from the oldest end, before the Strategy/Query "
-            "text; the system prompt also gains the briefing rules (copy every "
-            "applicable standing rule and fact into each task's constraints; state "
-            "each task's end point as a count; keep every task narrow). FRE-1517's "
-            "production runs found 0 of 8 lunch/price tasks under 'current' carried a "
-            "turn-1 rule to the worker. Requires a process restart to take effect "
-            "(settings are a cached singleton)."
-        ),
-    )
     planner_history_max_chars: int = Field(
         default=60000,
         ge=0,
         description=(
             "Character budget for the conversation history rendered into the planner "
-            "user message when planner_brief_mode='briefing' (FRE-1521). History is "
-            "dropped whole-message from the oldest end once the budget is exceeded; "
-            "the current query is a separate field and is never trimmed."
+            "user message (FRE-1521, ADR-0154 D1). History is dropped whole-message "
+            "from the oldest end once the budget is exceeded; the current query is a "
+            "separate field and is never trimmed. The history also never receives more "
+            "than what planner_input_max_chars leaves after the query and the digest."
+        ),
+    )
+    planner_input_max_chars: int = Field(
+        default=64000,
+        ge=0,
+        description=(
+            "Total character bound on the planner user message: history, memory digest "
+            "and query together, framing included (ADR-0154 D1). The query is never cut "
+            "and the digest keeps its own bounds. The history receives what remains, up "
+            "to planner_history_max_chars. When the query and the digest alone exceed "
+            "this bound, the planner is not called and the attempt fails with reason "
+            "'input_too_large'."
         ),
     )
     worker_queue_absorption_seconds: float = Field(

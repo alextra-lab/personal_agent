@@ -48,20 +48,15 @@ class TestPrefixStabilityAcrossTurns:
         system_prompt = _msg("system", "You are a helpful AI assistant.")
 
         messages_turn_1 = [system_prompt] + [
-            _msg("user" if i % 2 == 0 else "assistant", f"Turn content {i}" * 20)
-            for i in range(10)
+            _msg("user" if i % 2 == 0 else "assistant", f"Turn content {i}" * 20) for i in range(10)
         ]
         messages_turn_2 = messages_turn_1 + [
             _msg("user", "Another question" * 20),
             _msg("assistant", "Another response" * 20),
         ]
 
-        out_1 = apply_context_window(
-            messages_turn_1, max_tokens=300, reserved_tokens=0
-        )
-        out_2 = apply_context_window(
-            messages_turn_2, max_tokens=300, reserved_tokens=0
-        )
+        out_1 = apply_context_window(messages_turn_1, max_tokens=300, reserved_tokens=0)
+        out_2 = apply_context_window(messages_turn_2, max_tokens=300, reserved_tokens=0)
 
         assert out_1[0] == system_prompt
         assert out_2[0] == system_prompt
@@ -71,13 +66,10 @@ class TestPrefixStabilityAcrossTurns:
         system_prompt = _msg("system", "You are a helpful AI assistant.")
 
         messages = [system_prompt] + [
-            _msg("user" if i % 2 == 0 else "assistant", f"content {i}" * 20)
-            for i in range(10)
+            _msg("user" if i % 2 == 0 else "assistant", f"content {i}" * 20) for i in range(10)
         ]
 
-        out_no_summary = apply_context_window(
-            messages, max_tokens=300, reserved_tokens=0
-        )
+        out_no_summary = apply_context_window(messages, max_tokens=300, reserved_tokens=0)
         out_with_summary = apply_context_window(
             messages,
             max_tokens=300,
@@ -87,9 +79,7 @@ class TestPrefixStabilityAcrossTurns:
 
         assert out_no_summary[0] == system_prompt
         assert out_with_summary[0] == system_prompt
-        assert compute_prefix_hash(out_no_summary[0]) == compute_prefix_hash(
-            out_with_summary[0]
-        )
+        assert compute_prefix_hash(out_no_summary[0]) == compute_prefix_hash(out_with_summary[0])
 
     def test_compression_summary_at_index_1_not_index_0(self) -> None:
         """The compressed summary should be at index 1, not replacing index 0."""
@@ -97,8 +87,7 @@ class TestPrefixStabilityAcrossTurns:
         summary = "Earlier conversation summary"
 
         messages = [system_prompt] + [
-            _msg("user" if i % 2 == 0 else "assistant", f"content {i}" * 20)
-            for i in range(10)
+            _msg("user" if i % 2 == 0 else "assistant", f"content {i}" * 20) for i in range(10)
         ]
 
         output = apply_context_window(

@@ -8,6 +8,8 @@ import pytest
 from scripts.eval.fre1537 import render
 from scripts.eval.fre1537.fixtures import load_fixtures
 
+from personal_agent.orchestrator.expansion_controller import _render_planner_history
+
 SURFACE = ["web_search", "read_file"]
 HISTORY = [
     {"role": "user", "content": "Replace my boiler?"},
@@ -72,7 +74,7 @@ def test_digest_goes_between_history_and_query() -> None:
         with_digest["messages"][0]["content"].encode() == without["messages"][0]["content"].encode()
     )
     assert without["messages"][1]["content"] == (
-        f"Conversation so far:\n{render._render_history(HISTORY, 60000)}\n\n"
+        f"Conversation so far:\n{_render_planner_history(HISTORY, 60000)}\n\n"
         f"Strategy: HYBRID\nQuery: {QUERY}\n\nProduce the JSON plan."
     )
 

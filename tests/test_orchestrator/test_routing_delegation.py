@@ -172,9 +172,7 @@ class TestLLMDelegation:
     """Verify PRIMARY model handles all query types directly (ADR-0033 two-tier taxonomy)."""
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_primary_handles_factual_query(
-        self, mock_get_llm_client: Any
-    ) -> None:
+    async def test_primary_handles_factual_query(self, mock_get_llm_client: Any) -> None:
         """Factual queries are handled by PRIMARY in a single LLM call (no router)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -194,9 +192,7 @@ class TestLLMDelegation:
         assert "Paris" in result["reply"]
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_primary_handles_live_data_query(
-        self, mock_get_llm_client: Any
-    ) -> None:
+    async def test_primary_handles_live_data_query(self, mock_get_llm_client: Any) -> None:
         """Live-data queries go to PRIMARY (tool-capable) in a single LLM call."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -215,9 +211,7 @@ class TestLLMDelegation:
         assert mock_client.respond.call_args_list[0].kwargs["role"] == ModelRole.PRIMARY
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_primary_handles_reasoning_query(
-        self, mock_get_llm_client: Any
-    ) -> None:
+    async def test_primary_handles_reasoning_query(self, mock_get_llm_client: Any) -> None:
         """Reasoning queries go directly to PRIMARY without a separate router call."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -238,9 +232,7 @@ class TestLLMDelegation:
         assert mock_client.respond.call_args_list[0].kwargs["role"] == ModelRole.PRIMARY
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_primary_handles_research_synthesis(
-        self, mock_get_llm_client: Any
-    ) -> None:
+    async def test_primary_handles_research_synthesis(self, mock_get_llm_client: Any) -> None:
         """Research synthesis queries go to PRIMARY — no dedicated reasoning tier."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -261,9 +253,7 @@ class TestLLMDelegation:
         assert mock_client.respond.call_args_list[0].kwargs["role"] == ModelRole.PRIMARY
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_all_queries_use_exactly_one_llm_call(
-        self, mock_get_llm_client: Any
-    ) -> None:
+    async def test_all_queries_use_exactly_one_llm_call(self, mock_get_llm_client: Any) -> None:
         """Any user query results in exactly one LLM call to PRIMARY (ADR-0033: no router)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -292,9 +282,7 @@ class TestToolPromptAssembly:
     """Verify TOOL_USE_SYSTEM_PROMPT is assembled correctly for the PRIMARY role (ADR-0033)."""
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_primary_role_receives_tool_use_prompt(
-        self, mock_client_class: Any
-    ) -> None:
+    async def test_primary_role_receives_tool_use_prompt(self, mock_client_class: Any) -> None:
         """PRIMARY model call must include TOOL_USE_SYSTEM_PROMPT in its system prompt."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -338,9 +326,7 @@ class TestToolPromptAssembly:
         assert TOOL_USE_SYSTEM_PROMPT in system_prompt
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_primary_call_includes_tool_use_prompt(
-        self, mock_client_class: Any
-    ) -> None:
+    async def test_primary_call_includes_tool_use_prompt(self, mock_client_class: Any) -> None:
         """PRIMARY call must include TOOL_USE_SYSTEM_PROMPT — no separate router call (ADR-0033)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -359,12 +345,12 @@ class TestToolPromptAssembly:
         primary_call = mock_client.respond.call_args_list[0]
         system_prompt = primary_call.kwargs.get("system_prompt") or ""
         assert TOOL_USE_SYSTEM_PROMPT in system_prompt
-        assert "perplexity_query" in system_prompt  # native tool (FRE-254; mcp_perplexity_ask removed)
+        assert (
+            "perplexity_query" in system_prompt
+        )  # native tool (FRE-254; mcp_perplexity_ask removed)
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_assembled_tool_prompt_within_baseline(
-        self, mock_client_class: Any
-    ) -> None:
+    async def test_assembled_tool_prompt_within_baseline(self, mock_client_class: Any) -> None:
         """System prompt assembled for a PRIMARY tool call must meet minimum size baseline."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -388,9 +374,7 @@ class TestToolPromptAssembly:
         )
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_primary_call_excludes_routing_instructions(
-        self, mock_client_class: Any
-    ) -> None:
+    async def test_primary_call_excludes_routing_instructions(self, mock_client_class: Any) -> None:
         """PRIMARY call must not receive routing classification instructions (ADR-0033: no router)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)

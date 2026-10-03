@@ -131,3 +131,29 @@ class LinearProjectNotFoundError(ValueError):
         self.project = project
         self.team = team
         super().__init__(f"Linear project {project!r} does not exist on team {team!r}.")
+
+
+class PlannerInputTooLargeError(ValueError):
+    """Raised when the planner's query and digest alone exceed the input bound.
+
+    ADR-0154 D1 bounds the planner user message at ``planner_input_max_chars``.
+    The query is never cut and the digest keeps its own bounds, so when those two
+    exceed the bound there is nothing left to trim: the planner is not called and
+    the attempt fails with reason ``input_too_large``.
+    """
+
+    def __init__(self, message_chars: int, digest_chars: int, max_chars: int) -> None:
+        """Initialize the error.
+
+        Args:
+            message_chars: Length of the framed query, from ``Strategy:`` to the closing instruction.
+            digest_chars: Length of the memory digest text (0 when there is none).
+            max_chars: The bound that the message and the digest exceeded.
+        """
+        self.message_chars = message_chars
+        self.digest_chars = digest_chars
+        self.max_chars = max_chars
+        super().__init__(
+            f"planner input too large: message {message_chars} + digest {digest_chars} "
+            f"chars exceed the {max_chars}-char bound."
+        )

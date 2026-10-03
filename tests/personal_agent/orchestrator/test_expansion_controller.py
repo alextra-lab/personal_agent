@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -2153,10 +2154,8 @@ class TestPlannerKnowsTheWorkerBudget:
 
         prompt = _build_planner_system_prompt(["web_search"])
 
-        assert (
-            "quick (4 tool round(s)), standard (4 tool round(s)), thorough (4 tool round(s))"
-            in prompt
-        )
+        # FRE-1541: briefing is the only path, so a uniform budget renders collapsed.
+        assert "quick, standard, thorough (4 tool round(s) each)" in prompt
         assert "Scope every task so a worker can answer it inside its budget." in prompt
 
     def test_the_numbers_track_the_setting_rather_than_being_written_in(
@@ -2580,62 +2579,6 @@ class TestOriginErrorStopsDispatch:
         assert expansion_result.skip_reason == "turn_budget"
 
 
-class TestPlannerBriefModeCurrentUnchanged:
-    """FRE-1521 AC-1 — planner_brief_mode="current" (the default) reproduces
-    today's planner call byte-for-byte: no history, no briefing rules.
-    """
-
-    @pytest.fixture
-    def controller(self) -> ExpansionController:
-        return ExpansionController()
-
-    @pytest.mark.asyncio
-    async def test_default_brief_mode_leaves_planner_messages_unchanged(
-        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from personal_agent.config import get_settings
-        from personal_agent.orchestrator.expansion_controller import (
-            _build_planner_system_prompt,
-        )
-
-        monkeypatch.setattr(get_settings(), "planner_brief_mode", "current")
-
-        client = AsyncMock()
-        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
-        mock_results = [_make_sub_agent_result("task_0")]
-
-        history = [
-            {"role": "user", "content": "Standing rule: prices in euros."},
-            {"role": "assistant", "content": "Noted."},
-        ]
-
-        with (
-            patch(
-                "personal_agent.orchestrator.expansion_controller._current_sub_agent_tool_surface",
-                return_value=["run_python"],
-            ),
-            patch(
-                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-                side_effect=mock_results,
-            ),
-        ):
-            await controller.execute(
-                query="Plan lunch",
-                strategy="HYBRID",
-                llm_client=client,
-                trace_id="test-trace-brief-current",
-                messages=history,
-            )
-
-        planner_messages = client.respond.call_args.kwargs["messages"]
-        assert planner_messages[0]["content"] == _build_planner_system_prompt(["run_python"])
-        assert (
-            planner_messages[1]["content"]
-            == "Strategy: HYBRID\nQuery: Plan lunch\n\nProduce the JSON plan."
-        )
-        assert "prices in euros" not in planner_messages[1]["content"]
-
-
 class TestRenderPlannerHistory:
     """FRE-1521 — ``_render_planner_history`` unit-level budget contract.
 
@@ -2676,9 +2619,9 @@ class TestRenderPlannerHistory:
 
 
 class TestPlannerBriefingMode:
-    """FRE-1521 AC-2 — planner_brief_mode="briefing" carries the conversation
-    into the planner's user message, before the Strategy/Query text, trimmed
-    from the oldest end to planner_history_max_chars.
+    """FRE-1521 AC-2 / FRE-1541 AC-2 — the planner user message carries the
+    conversation, before the Strategy/Query text, trimmed from the oldest end
+    to planner_history_max_chars. Briefing is the only path (ADR-0154 D1).
     """
 
     @pytest.fixture
@@ -2687,12 +2630,8 @@ class TestPlannerBriefingMode:
 
     @pytest.mark.asyncio
     async def test_briefing_user_message_carries_history_before_query(
-        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+        self, controller: ExpansionController
     ) -> None:
-        from personal_agent.config import get_settings
-
-        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
-
         client = AsyncMock()
         client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
         mock_results = [_make_sub_agent_result("task_0")]
@@ -2726,7 +2665,6 @@ class TestPlannerBriefingMode:
     ) -> None:
         from personal_agent.config import get_settings
 
-        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
         monkeypatch.setattr(get_settings(), "planner_history_max_chars", 40)
 
         client = AsyncMock()
@@ -2758,13 +2696,9 @@ class TestPlannerBriefingMode:
 
     @pytest.mark.asyncio
     async def test_briefing_with_no_history_omits_the_conversation_block(
-        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+        self, controller: ExpansionController
     ) -> None:
         """No messages: the user text stays exactly Strategy/Query, no empty block."""
-        from personal_agent.config import get_settings
-
-        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
-
         client = AsyncMock()
         client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
         mock_results = [_make_sub_agent_result("task_0")]
@@ -2786,7 +2720,7 @@ class TestPlannerBriefingMode:
 
     @pytest.mark.asyncio
     async def test_briefing_drops_the_current_turn_duplicated_in_messages(
-        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+        self, controller: ExpansionController
     ) -> None:
         """A codex-review catch: the production caller passes `messages` as the
         turn's full window, which already ends with the current query
@@ -2796,10 +2730,6 @@ class TestPlannerBriefingMode:
         no reason. None of the other briefing tests exercise this shape (their
         `messages` fixtures never repeat the query), so this is dedicated.
         """
-        from personal_agent.config import get_settings
-
-        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
-
         client = AsyncMock()
         client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
         mock_results = [_make_sub_agent_result("task_0")]
@@ -2838,7 +2768,6 @@ class TestPlannerBriefingMode:
         """
         from personal_agent.config import get_settings
 
-        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
         monkeypatch.setattr(get_settings(), "planner_history_max_chars", 5)
 
         client = AsyncMock()
@@ -2865,40 +2794,32 @@ class TestPlannerBriefingMode:
 
 class TestPlannerBriefingSystemPromptRules:
     """FRE-1521 AC-2 (master's ticket comment, 2026-09-15 07:24 UTC, Phase B
-    wording): rules 1-4 appear in the briefing system prompt and do not
-    appear in the "current" prompt.
+    wording) / FRE-1541: rules 1-4 are part of every planner system prompt.
     """
 
-    def test_briefing_rules_appear_only_in_briefing_prompt(self) -> None:
+    def test_briefing_rules_are_in_the_planner_prompt(self) -> None:
         from personal_agent.orchestrator.expansion_controller import (
             _PLANNER_BRIEFING_RULES,
             _build_planner_system_prompt,
         )
 
-        current_prompt = _build_planner_system_prompt(["run_python"])
-        briefing_prompt = _build_planner_system_prompt(["run_python"], "briefing")
+        prompt = _build_planner_system_prompt(["run_python"])
 
         assert len(_PLANNER_BRIEFING_RULES) == 4
         for rule in _PLANNER_BRIEFING_RULES:
-            assert rule not in current_prompt
-            assert rule in briefing_prompt
+            assert rule in prompt
 
-    def test_briefing_collapses_uniform_round_annotation(self) -> None:
+    def test_planner_prompt_collapses_uniform_round_annotation(self) -> None:
         """Rule 5: drop the per-level round annotation when every level is equal.
 
         Test settings default sub_agent_rounds_by_thoroughness to empty, so
-        every level reads the shared cap — the collapsed form applies only
-        under briefing (`current` must render byte-identically, AC-1).
+        every level reads the shared cap.
         """
         from personal_agent.orchestrator.expansion_controller import (
             _build_planner_system_prompt,
         )
 
-        current_prompt = _build_planner_system_prompt([])
-        briefing_prompt = _build_planner_system_prompt([], "briefing")
-
-        assert "tool round(s) each" not in current_prompt
-        assert "tool round(s) each" in briefing_prompt
+        assert "tool round(s) each" in _build_planner_system_prompt([])
 
 
 class TestWorkerReceivesConstraints:
@@ -2987,26 +2908,46 @@ class TestWorkerReceivesConstraints:
 
 
 class TestPlannerCompletedTelemetryFRE1521:
-    """FRE-1521 AC-4 — planner_completed records brief_mode, history_chars,
-    and the plan's per-task constraints count.
+    """FRE-1521 AC-4 / FRE-1541 scope 4 — planner_completed records history_chars,
+    the plan's per-task constraints count, the mode that ran, the reasoning the
+    response carried and the characters of each input.
     """
 
     @pytest.fixture
     def controller(self) -> ExpansionController:
         return ExpansionController()
 
-    @pytest.mark.asyncio
-    async def test_planner_completed_logs_brief_mode_history_chars_and_constraints(
+    async def _completed_event(
         self,
         controller: ExpansionController,
         caplog: pytest.LogCaptureFixture,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from personal_agent.config import get_settings
-
-        monkeypatch.setattr(get_settings(), "planner_brief_mode", "briefing")
+        client: Any,
+        messages: list[dict[str, str]],
+    ) -> dict[str, Any]:
         caplog.set_level("INFO", logger="personal_agent.orchestrator.expansion_controller")
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=[_make_sub_agent_result("task_0")],
+        ):
+            await controller.execute(
+                query="Plan lunch",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-telemetry",
+                messages=messages,
+            )
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "planner_completed"
+        ]
+        assert len(events) == 1
+        return events[0]
 
+    @pytest.mark.asyncio
+    async def test_planner_completed_logs_history_chars_and_constraints(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
         plan_json = json.dumps(
             {
                 "strategy": "HYBRID",
@@ -3022,63 +2963,136 @@ class TestPlannerCompletedTelemetryFRE1521:
         )
         client = AsyncMock()
         client.respond = AsyncMock(return_value={"content": plan_json, "cost_usd": 0.0})
-        mock_results = [_make_sub_agent_result("task_0")]
 
-        with patch(
-            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-            side_effect=mock_results,
-        ):
-            await controller.execute(
-                query="Plan lunch",
-                strategy="HYBRID",
-                llm_client=client,
-                trace_id="test-trace-telemetry",
-                messages=[{"role": "user", "content": "Standing rule: euros"}],
-            )
+        event = await self._completed_event(
+            controller, caplog, client, [{"role": "user", "content": "Standing rule: euros"}]
+        )
 
-        events = [
-            r.msg
-            for r in caplog.records
-            if isinstance(r.msg, dict) and r.msg.get("event") == "planner_completed"
-        ]
-        assert len(events) == 1
-        assert events[0]["brief_mode"] == "briefing"
-        assert events[0]["history_chars"] > 0
-        assert events[0]["task_constraints_count"] == [1]
+        assert "brief_mode" not in event
+        assert event["history_chars"] > 0
+        assert event["task_constraints_count"] == [1]
 
     @pytest.mark.asyncio
-    async def test_planner_completed_logs_zero_history_chars_under_current(
-        self,
-        controller: ExpansionController,
-        caplog: pytest.LogCaptureFixture,
-        monkeypatch: pytest.MonkeyPatch,
+    async def test_planner_completed_logs_zero_history_chars_with_no_messages(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+
+        event = await self._completed_event(controller, caplog, client, [])
+
+        assert event["history_chars"] == 0
+
+    @pytest.mark.asyncio
+    async def test_planner_completed_logs_per_input_character_counts(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+
+        event = await self._completed_event(
+            controller, caplog, client, [{"role": "user", "content": "Standing rule: euros"}]
+        )
+
+        chars = event["planner_input_chars"]
+        user_content = client.respond.call_args.kwargs["messages"][1]["content"]
+        system_content = client.respond.call_args.kwargs["messages"][0]["content"]
+        assert chars["system"] == len(system_content)
+        assert chars["history"] == len("user: Standing rule: euros")
+        assert chars["digest"] == 0
+        assert chars["message"] == len(
+            "Strategy: HYBRID\nQuery: Plan lunch\n\nProduce the JSON plan."
+        )
+        assert chars["total"] == len(user_content)
+
+    @pytest.mark.asyncio
+    async def test_planner_completed_counts_the_reasoning_the_response_carried(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = AsyncMock()
+        client.respond = AsyncMock(
+            return_value={
+                "content": _make_plan_json(1),
+                "reasoning_trace": "r" * 120,
+                "cost_usd": 0.0,
+            }
+        )
+
+        event = await self._completed_event(controller, caplog, client, [])
+
+        assert event["planner_reasoning_chars"] == 120
+
+    @pytest.mark.asyncio
+    async def test_planner_completed_logs_zero_reasoning_when_thinking_is_off(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = AsyncMock()
+        client.respond = AsyncMock(
+            return_value={"content": _make_plan_json(1), "reasoning_trace": None, "cost_usd": 0.0}
+        )
+
+        event = await self._completed_event(controller, caplog, client, [])
+
+        assert event["planner_reasoning_chars"] == 0
+
+    @pytest.mark.asyncio
+    async def test_planner_completed_logs_the_mode_the_client_dispatches_in(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+        client.model_def = SimpleNamespace(default_mode="planner")
+
+        event = await self._completed_event(controller, caplog, client, [])
+
+        assert event["planner_mode"] == "planner"
+
+    @pytest.mark.asyncio
+    async def test_planner_completed_logs_no_mode_for_a_client_without_a_definition(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+
+        event = await self._completed_event(controller, caplog, client, [])
+
+        assert event["planner_mode"] is None
+
+
+class TestPlannerInputTooLargeFRE1541:
+    """FRE-1541 AC-1 — when the query and the digest alone exceed the bound, the
+    planner is not called and the attempt takes today's failure path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_oversized_query_does_not_call_the_model_and_takes_the_failure_path(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from personal_agent.config import get_settings
 
-        monkeypatch.setattr(get_settings(), "planner_brief_mode", "current")
+        monkeypatch.setattr(get_settings(), "planner_input_max_chars", 500)
         caplog.set_level("INFO", logger="personal_agent.orchestrator.expansion_controller")
 
         client = AsyncMock()
         client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
-        mock_results = [_make_sub_agent_result("task_0")]
 
         with patch(
             "personal_agent.orchestrator.expansion_controller.run_sub_agent",
-            side_effect=mock_results,
+            side_effect=[_make_sub_agent_result("task_0")],
         ):
-            await controller.execute(
-                query="Plan lunch",
+            result = await ExpansionController().execute(
+                query="q" * 600,
                 strategy="HYBRID",
                 llm_client=client,
-                trace_id="test-trace-telemetry-current",
-                messages=[{"role": "user", "content": "Standing rule: euros"}],
+                trace_id="test-trace-too-large",
+                messages=[{"role": "user", "content": "an older turn"}],
             )
 
-        events = [
-            r.msg
-            for r in caplog.records
-            if isinstance(r.msg, dict) and r.msg.get("event") == "planner_completed"
-        ]
-        assert len(events) == 1
-        assert events[0]["brief_mode"] == "current"
-        assert events[0]["history_chars"] == 0
+        client.respond.assert_not_called()
+        client.respond.assert_not_awaited()
+        events = {r.msg["event"]: r.msg for r in caplog.records if isinstance(r.msg, dict)}
+        assert events["planner_failed"]["reason"] == "input_too_large"
+        assert events["planner_failed"]["planner_input_chars"]["message"] > 600
+        assert "fallback_planner_used" in events
+        assert "planner_completed" not in events
+        assert result.plan is not None

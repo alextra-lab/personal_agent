@@ -28,8 +28,7 @@ def test_anti_fabrication_rule_in_tool_rules() -> None:
     f-string interpolation.
     """
     assert _ANTI_FAB_FRAGMENT in _TOOL_RULES, (
-        f"Anti-fabrication rule missing from _TOOL_RULES. "
-        f"Expected fragment: {_ANTI_FAB_FRAGMENT!r}"
+        f"Anti-fabrication rule missing from _TOOL_RULES. Expected fragment: {_ANTI_FAB_FRAGMENT!r}"
     )
 
 

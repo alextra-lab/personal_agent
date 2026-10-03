@@ -5355,7 +5355,11 @@ async def step_init(
             # SUB_AGENT-built client would keep silently dispatching to the
             # SUB_AGENT deployment. This must be a second client, not a
             # request-time override.
-            planner_llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value)
+            # ADR-0154 D4 (FRE-1541): the planner asks for its own `planner` mode, the
+            # deployment's default sampling with thinking off. A deployment that
+            # declares no `planner` mode keeps its default mode (logged), so an
+            # unqualified deployment never runs a mode nobody measured.
+            planner_llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value, mode="planner")
             controller = ExpansionController()
             # ADR-0088 D4: report progress at dispatch start so tool/context fields are
             # live during the (potentially multi-minute) expansion window. Cost itself

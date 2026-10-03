@@ -183,6 +183,15 @@ One explicit delta, hand-edited rather than regenerated:
    decision). They are study deployments that a session selects through ``/chat``'s
    ``model`` parameter. **No role binding, resolved definition or price changed.**
 
+**Rebaselined an eighth time, deliberately, for FRE-1541 (ADR-0154 D4).**
+One explicit delta, hand-edited rather than regenerated:
+
+1. **A ``planner`` mode on ``qwen3.8-flash-next``,** the deployment ``primary`` and
+   ``sub_agent`` resolve onto, so both cells gain the same additive ``modes`` entry:
+   the ``default`` mode's sampling with ``enable_thinking`` false. It is admitted
+   because the committed probe passed on it (the result is on FRE-1541). **No role
+   binding, resolved key, existing mode body, timeout or price changed.**
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

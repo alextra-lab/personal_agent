@@ -352,6 +352,38 @@ def resolve_inherited_deployment(config: ModelConfig) -> str:
     return resolve_selected_deployment("primary", get_current_selection("primary"), config)
 
 
+def with_requested_mode(
+    definition: ModelDefinition, mode: str, *, role: str, deployment_key: str
+) -> ModelDefinition:
+    """Return ``definition`` with ``mode`` as its default mode, when it declares that mode.
+
+    The one rule for a requested mode (ADR-0145 D2): the deployment's own mode of that
+    name if it declares one, else its own ``default_mode`` unchanged, with the fallback
+    logged. Used for a binding's ``mode`` and for a call site's request (ADR-0154 D4), so
+    the two cannot disagree.
+
+    Args:
+        definition: The deployment's effective definition, already resolved.
+        mode: The requested mode name.
+        role: The role asking, for the fallback log.
+        deployment_key: The catalog key of ``definition``, for the fallback log.
+
+    Returns:
+        A copy whose ``default_mode`` is ``mode``, or ``definition`` itself when it
+        declares no such mode.
+    """
+    if mode in definition.modes:
+        return definition.model_copy(update={"default_mode": mode})
+    log.warning(
+        "role_binding_mode_missing_on_deployment",
+        role=role,
+        requested_mode=mode,
+        deployment=deployment_key,
+        default_mode=definition.default_mode,
+    )
+    return definition
+
+
 def resolve_role_target(
     role: str,
     *,
@@ -414,19 +446,10 @@ def resolve_role_target(
         if (value := getattr(binding, field)) is not None
     }
 
+    effective = definition.model_copy(update=overrides) if overrides else definition
     if binding.mode is not None:
-        if binding.mode in definition.modes:
-            overrides["default_mode"] = binding.mode
-        else:
-            log.warning(
-                "role_binding_mode_missing_on_deployment",
-                role=role,
-                requested_mode=binding.mode,
-                deployment=key,
-                default_mode=definition.default_mode,
-            )
-
-    return key, (definition.model_copy(update=overrides) if overrides else definition)
+        effective = with_requested_mode(effective, binding.mode, role=role, deployment_key=key)
+    return key, effective
 
 
 def resolve_role_definition(

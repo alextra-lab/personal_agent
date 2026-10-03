@@ -4,6 +4,8 @@ Design A is an isolated planner call: the planner system prompt, then one user m
 rendered conversation history, an optional memory digest, and the query. The history and the
 system prompt come from the production functions in ``expansion_controller``. The decline rule is
 inserted as ADR-0152 D1 and the FRE-1502 probe wrote it, because production code does not carry it yet.
+The user message comes from the production ``build_planner_user_message``, so the bound and the framing
+are those that ship (FRE-1541).
 
 This file imports nothing from ``scripts``. The live step runs it inside the gateway container,
 where the settings are those of the image under test:
@@ -38,13 +40,7 @@ DECLINE_RULE = (
 def _production_system_prompt(surface: Sequence[str]) -> str:
     from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
 
-    return _build_planner_system_prompt(list(surface), "briefing")
-
-
-def _render_history(messages: Sequence[Mapping[str, str]], max_chars: int) -> str:
-    from personal_agent.orchestrator.expansion_controller import _render_planner_history
-
-    return _render_planner_history([dict(m) for m in messages], max_chars)
+    return _build_planner_system_prompt(list(surface))
 
 
 def render_system_prompt(surface: Sequence[str]) -> str:
@@ -77,8 +73,9 @@ def prompt_hash(system_prompt: str) -> str:
 def build_user_message(history: str, digest: str | None, query: str) -> str:
     """Build the planner user message: history, then digest, then query.
 
-    The stable parts come first, so a change in the digest or the query never breaks the cached
-    history before it (ADR-0154 D1).
+    A thin wrapper over the production framing in ``expansion_controller``, for a caller that
+    holds a rendered history and no messages. The stable parts come first, so a change in the
+    digest or the query never breaks the cached history before it (ADR-0154 D1).
 
     Args:
         history: Rendered conversation history. Empty for a first turn.
@@ -88,14 +85,12 @@ def build_user_message(history: str, digest: str | None, query: str) -> str:
     Returns:
         The user message text.
     """
-    tail = f"Strategy: HYBRID\nQuery: {query}\n\nProduce the JSON plan."
-    parts = []
-    if history:
-        parts.append(f"Conversation so far:\n{history}")
-    if digest:
-        parts.append(digest)
-    parts.append(tail)
-    return "\n\n".join(parts)
+    from personal_agent.orchestrator.expansion_controller import (
+        _frame_planner_query,
+        _join_planner_blocks,
+    )
+
+    return _join_planner_blocks(history, digest or "", _frame_planner_query(query, "HYBRID"))
 
 
 def build_planner_request(
@@ -118,14 +113,26 @@ def build_planner_request(
     Returns:
         ``{"messages": [system, user], "history": str, "history_chars": int}``.
     """
-    history = _render_history(history_messages, history_max_chars) if history_messages else ""
+    from personal_agent.config import settings
+    from personal_agent.orchestrator.expansion_controller import build_planner_user_message
+
+    # The production builder, so the probe qualifies the message that ships: the same bound,
+    # the same fill order, the same framing (FRE-1541). It drops the trailing query message.
+    built = build_planner_user_message(
+        query,
+        "HYBRID",
+        [*(dict(m) for m in history_messages), {"role": "user", "content": query}],
+        digest_text=digest or "",
+        history_max_chars=history_max_chars,
+        input_max_chars=settings.planner_input_max_chars,
+    )
     return {
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": build_user_message(history, digest, query)},
+            {"role": "user", "content": built.content},
         ],
-        "history": history,
-        "history_chars": len(history),
+        "history": built.history_text,
+        "history_chars": built.history_chars,
     }
 
 

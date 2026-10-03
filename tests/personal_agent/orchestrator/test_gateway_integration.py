@@ -206,7 +206,7 @@ class TestExpansionCostRollup:
         )
         monkeypatch.setattr(
             "personal_agent.llm_client.factory.get_llm_client",
-            lambda role_name=None: MagicMock(),
+            lambda role_name=None, mode=None: MagicMock(),
         )
 
         session_manager = MagicMock()
@@ -285,7 +285,7 @@ class TestExpansionFallbackVisibleInTurnRecord:
         )
         monkeypatch.setattr(
             "personal_agent.llm_client.factory.get_llm_client",
-            lambda role_name=None: MagicMock(),
+            lambda role_name=None, mode=None: MagicMock(),
         )
 
         session_manager = MagicMock()
@@ -350,7 +350,7 @@ class TestExpansionFallbackVisibleInTurnRecord:
         )
         monkeypatch.setattr(
             "personal_agent.llm_client.factory.get_llm_client",
-            lambda role_name=None: MagicMock(),
+            lambda role_name=None, mode=None: MagicMock(),
         )
 
         session_manager = MagicMock()
@@ -458,7 +458,7 @@ class TestUnmeasuredClaimVisibleInTurnRecord:
         )
         monkeypatch.setattr(
             "personal_agent.llm_client.factory.get_llm_client",
-            lambda role_name=None: MagicMock(),
+            lambda role_name=None, mode=None: MagicMock(),
         )
 
         session_manager = MagicMock()
@@ -513,7 +513,7 @@ class TestUnmeasuredClaimVisibleInTurnRecord:
         )
         monkeypatch.setattr(
             "personal_agent.llm_client.factory.get_llm_client",
-            lambda role_name=None: MagicMock(),
+            lambda role_name=None, mode=None: MagicMock(),
         )
         # ADR-0149 D4 (FRE-1484, amended 2026-09-11): this fixture's report_kind
         # defaults to "synthesized" (only success is False), so it does not
@@ -626,6 +626,9 @@ class TestEnforcedExpansionClientRole:
         assert get_llm_client_spy.call_count == 2
         calls = [c.kwargs.get("role_name") for c in get_llm_client_spy.call_args_list]
         assert calls == [ModelRole.SUB_AGENT.value, ModelRole.PRIMARY.value]
+        # FRE-1541 AC-3 / ADR-0154 D4: only the planner call requests the `planner` mode.
+        modes = [c.kwargs.get("mode") for c in get_llm_client_spy.call_args_list]
+        assert modes == [None, "planner"]
 
         # The dispatch client and the planner client passed into
         # controller.execute() must be the two DISTINCT get_llm_client() return

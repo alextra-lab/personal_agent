@@ -137,7 +137,12 @@ def _build_client(
     )
 
 
-def get_llm_client(role_name: str = "primary", *, selection_key: str | None = None) -> Any:
+def get_llm_client(
+    role_name: str = "primary",
+    *,
+    selection_key: str | None = None,
+    mode: str | None = None,
+) -> Any:
     """Return the appropriate LLM client for a role, honouring a session selection.
 
     Resolution order (ADR-0121 §4/§6):
@@ -174,6 +179,11 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
         selection_key: An advisory selected deployment key for this role, applied
             through the guardrail. ``None`` falls back to the per-turn selection
             context, then the role's binding default.
+        mode: A named mode this call site asks for (ADR-0154 D4). It resolves against
+            the deployment the role finally lands on, after the selection and the
+            binding: that deployment's own mode of this name, or its default mode
+            with a logged fallback when it declares none. ``None`` keeps the
+            role's own mode.
 
     Returns:
         An LLM client instance matching the resolved deployment's provider placement.
@@ -183,6 +193,7 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
     from personal_agent.config.model_loader import (
         resolve_role_target,
         resolve_selected_deployment,
+        with_requested_mode,
     )
     from personal_agent.config.selection import get_current_selection
 
@@ -198,6 +209,10 @@ def get_llm_client(role_name: str = "primary", *, selection_key: str | None = No
         model_key = None
 
     resolved_key, model_def = resolve_role_target(role_name, model_key=model_key, config=config)
+    if mode is not None and model_def is not None:
+        model_def = with_requested_mode(
+            model_def, mode, role=role_name, deployment_key=resolved_key
+        )
 
     from personal_agent.cost_gate import budget_role_for
 

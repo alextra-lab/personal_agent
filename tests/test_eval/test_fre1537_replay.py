@@ -453,3 +453,107 @@ def test_run_decide_fills_the_engine_build_from_the_first_reply(tmp_path: Path) 
             trials=1,
         )
     assert json.loads(paths.fingerprint.read_text())["engine"]["build"] == "b7777-cafe"
+
+
+# ── FRE-1541: the probe qualifies the `planner` mode that config/models.yaml declares ──────────
+
+
+def write_catalog(tmp_path: Path, planner: dict[str, object] | None) -> Path:
+    """A one-deployment catalog: a default mode, and optionally a ``planner`` mode."""
+    default = {
+        "enable_thinking": True,
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 0.0,
+        "repeat_penalty": 1.0,
+    }
+    modes: dict[str, object] = {"default": default}
+    if planner is not None:
+        modes["planner"] = {**default, **planner}
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        json.dumps(
+            {"models": {llama.CATALOG_DEPLOYMENT: {"default_mode": "default", "modes": modes}}}
+        )
+    )  # JSON is YAML
+    return path
+
+
+def test_the_planner_mode_reads_its_thinking_switch_from_the_catalog(tmp_path: Path) -> None:
+    off = llama.catalog_planner_mode(write_catalog(tmp_path, {"enable_thinking": False}))
+    assert off.name == "planner"
+    assert off.params == {"chat_template_kwargs": {"enable_thinking": False}}
+    # A catalog mode that leaves thinking on sends no switch, so the probe's 0-reasoning
+    # threshold fails honestly instead of the probe forcing thinking off.
+    on = llama.catalog_planner_mode(write_catalog(tmp_path, {"enable_thinking": True}))
+    assert on.params == {}
+
+
+def test_a_catalog_without_a_planner_mode_cannot_be_probed(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="declares no `planner` mode"):
+        llama.catalog_planner_mode(write_catalog(tmp_path, None))
+
+
+def test_a_planner_mode_that_changes_the_sampling_cannot_be_qualified(tmp_path: Path) -> None:
+    # The probe replays the captured primary's sampling, so it cannot measure another sampling.
+    with pytest.raises(ValueError, match="temperature"):
+        llama.catalog_planner_mode(
+            write_catalog(tmp_path, {"enable_thinking": False, "temperature": 0.7})
+        )
+
+
+def test_resolve_mode_keeps_the_fixed_modes_and_reads_planner_from_the_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(llama, "CATALOG", write_catalog(tmp_path, {"enable_thinking": False}))
+    assert llama.resolve_mode("thinking_off") is llama.MODES["thinking_off"]
+    assert llama.resolve_mode("planner").params == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+    assert "planner" in llama.MODE_NAMES
+
+
+def test_the_catalog_parameters_reach_the_request_the_fingerprint_and_the_long_history_arm(
+    tmp_path: Path,
+) -> None:
+    """Outcome: a changed catalog value changes what the probe sends and records."""
+    paths, inputs = make_inputs(tmp_path)
+    mode = llama.catalog_planner_mode(write_catalog(tmp_path, {"enable_thinking": False}))
+    assert llama.planner_body(inputs, "greeting", mode)["chat_template_kwargs"] == {
+        "enable_thinking": False
+    }
+    with client_for(props_handler()) as client:
+        fp = fingerprint.build_fingerprint(client, URL, "m", mode, inputs, paths, None, None, None)
+    assert fp["planner_mode"]["name"] == "planner"  # type: ignore[index]
+    assert fp["planner_mode"]["params"] == mode.params  # type: ignore[index]
+
+    bodies: list[dict[str, object]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(req.content))
+        return sse_response(content=DECLINE)
+
+    with client_for(handler) as client:
+        longhist.run_longhist(client, URL, "m", paths, inputs, mode, sizes=(2000,))
+    # The cold and the extended planner calls carry the catalog's switch; the primary call does not.
+    assert bodies[0]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert bodies[2]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_the_long_history_step_runs_the_mode_that_prepare_resolved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression: ``longhist.main`` re-resolved the mode from a fixed table, so a catalog mode
+    would have been replaced by a different one.
+    """
+    sentinel = llama.PlannerMode("planner", {"chat_template_kwargs": {"enable_thinking": False}})
+    paths, inputs = make_inputs(tmp_path)
+    seen: list[llama.PlannerMode] = []
+    monkeypatch.setattr(longhist, "prepare", lambda args, client: (paths, inputs, sentinel, None))
+    monkeypatch.setattr(
+        longhist, "run_longhist", lambda client, url, model, p, i, mode: seen.append(mode)
+    )
+    longhist.main(["--run-dir", str(tmp_path), "--mode", "planner"])
+    assert seen == [sentinel]

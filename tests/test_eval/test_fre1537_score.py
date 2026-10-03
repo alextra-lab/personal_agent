@@ -318,3 +318,53 @@ def test_wilson_interval_matches_appendix_a(k: int, n: int, text: str) -> None:
 def test_percentile_uses_the_index_rule_of_appendix_a4() -> None:
     assert score.percentile([4.0, 1.0, 3.0, 2.0], 0.5) == 3.0  # index round(0.5 * 3) = 2
     assert score.percentile([], 0.5) is None
+
+
+def timing_row(reasoning: int = 0, plan: dict[str, object] | None = None) -> dict[str, object]:
+    return {
+        "label": "greeting",
+        "trial": 0,
+        "T1_primary": {"ttft_any": 1.0},
+        "T3_planner": {
+            "secs": 1.0,
+            "reasoning_chars": reasoning,
+            "plan": plan or _plan("decline"),
+        },
+        "T3_primary": {"ttft_any": 1.0},
+    }
+
+
+def run_with_timing(rows: list[dict[str, object]]) -> score.Report:
+    return score.score(
+        decide_rows=make_decide_rows(),
+        longhist_rows=make_longhist_rows(),
+        timing_rows=rows,
+        fingerprint=GOOD_FINGERPRINT,
+    )
+
+
+def test_a_reasoning_character_in_a_timing_planner_call_fails() -> None:
+    report = run_with_timing([timing_row(reasoning=900)])
+    assert not line(report, "Reasoning characters on any call").passed
+    assert line(report, "Reasoning characters on any call").measured == "900"
+
+
+def test_an_invalid_plan_in_a_timing_planner_call_fails() -> None:
+    report = run_with_timing([timing_row(plan=_plan("invalid"))])
+    assert not line(report, "Plans that fail to parse or validate").passed
+    assert line(report, "Plans that fail to parse or validate").measured == "1"
+
+
+def test_an_invalid_plan_in_the_long_history_arm_fails() -> None:
+    long_rows = make_longhist_rows()
+    long_rows[0]["extended"]["plan"] = _plan("invalid")  # type: ignore[index]
+    report = run(longhist=long_rows)
+    assert line(report, "Plans that fail to parse or validate").measured == "1"
+    assert not report.passed
+
+
+def test_empty_planner_mode_params_are_a_known_value_not_a_missing_one() -> None:
+    """A thinking-on mode has no extra parameters. That is a recorded value."""
+    fingerprint = copy.deepcopy(GOOD_FINGERPRINT)
+    fingerprint["planner_mode"] = {"name": "server_default", "params": {}}  # type: ignore[assignment]
+    assert line(run(fingerprint=fingerprint), "Configuration fingerprint complete").passed

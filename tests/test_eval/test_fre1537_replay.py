@@ -333,3 +333,34 @@ def test_a_tag_refuses_rows_from_a_different_configuration(tmp_path: Path) -> No
     fingerprint.ensure_compatible(paths, first)  # same configuration: fine
     with pytest.raises(SystemExit, match="different configuration"):
         fingerprint.ensure_compatible(paths, second)
+
+
+def test_reasoning_written_inline_in_the_content_counts_as_reasoning() -> None:
+    client = client_for(lambda req: sse_response(content="<think>abcde</think>" + DECLINE))
+    res = llama.stream(client, URL, "m", {"messages": []})
+    assert res["reasoning_chars"] == 5
+
+
+def test_timing_arm_sends_the_digest_between_history_and_query(tmp_path: Path) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    users: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content)
+        if body.get("response_format"):
+            users.append(body["messages"][1]["content"])
+        return sse_response(content=DECLINE)
+
+    with client_for(handler) as client:
+        replay.run_timing(
+            client,
+            URL,
+            "m",
+            paths,
+            inputs,
+            llama.MODES["thinking_off"],
+            ["boiler_expand"],
+            digest="DIGEST",
+        )
+    (user,) = users
+    assert user.index("assistant: hello") < user.index("DIGEST") < user.index("Query: research it")

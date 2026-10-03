@@ -221,9 +221,7 @@ def _dig(d: Mapping[str, object], path: tuple[str, ...]) -> object:
 
 def _fingerprint_check(fingerprint: Mapping[str, object]) -> Check:
     missing = [
-        ".".join(p)
-        for p in _FINGERPRINT_FIELDS
-        if _dig(fingerprint, p) in (None, "", {}, "unknown")
+        ".".join(p) for p in _FINGERPRINT_FIELDS if _dig(fingerprint, p) in (None, "", "unknown")
     ]
     return Check(
         "Configuration fingerprint complete",
@@ -274,13 +272,19 @@ def score(
     fu_dec = [d for d in dec if d.kind == "followup"]
     fu_exp = [d for d in exp if d.kind == "followup"]
 
-    invalid = sum(d.outcome == "invalid" for d in draws)
-    long_reasoning = [
-        int(_num(_mapping(r.get(k)).get("reasoning_chars")) or 0)
-        for r in longhist_rows
-        for k in ("cold", "extended")
+    # Every planner call of the run counts for these two thresholds: the decision draws, the planner call
+    # of the timing arm, and both planner calls of the long-history arm.
+    side_calls = [_mapping(r.get("T3_planner")) for r in timing_rows] + [
+        _mapping(r.get(k)) for r in longhist_rows for k in ("cold", "extended")
     ]
-    reasoning = max([d.reasoning_chars for d in draws] + long_reasoning, default=0)
+    invalid = sum(d.outcome == "invalid" for d in draws) + sum(
+        classify(c.get("plan")) == "invalid" for c in side_calls if c
+    )
+    reasoning = max(
+        [d.reasoning_chars for d in draws]
+        + [int(_num(c.get("reasoning_chars")) or 0) for c in side_calls],
+        default=0,
+    )
     declined = [d for d in draws if d.outcome == "decline"]
     tokens = [d.completion_tokens for d in declined if d.completion_tokens is not None]
     single_secs = [d.secs for d in declined if d.kind == "single" and d.secs is not None]

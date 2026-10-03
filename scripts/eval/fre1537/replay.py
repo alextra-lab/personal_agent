@@ -110,6 +110,7 @@ def run_timing(
     inputs: Inputs,
     mode: PlannerMode,
     labels: Sequence[str],
+    digest: str | None = None,
 ) -> None:
     """Run the timing arm: time to first token with and without the planner call.
 
@@ -124,6 +125,7 @@ def run_timing(
         inputs: The run inputs.
         mode: The planner mode.
         labels: Fixture labels to run.
+        digest: Optional digest text inserted after the history and before the query.
     """
     seen = done_keys(paths.timing)
     for label in labels:
@@ -144,7 +146,7 @@ def run_timing(
                 client, url, model, primary_body(inputs, label, max_tokens=1)
             )
             stream(client, url, model, prime_body(inputs, label))
-            planner = stream(client, url, model, planner_body(inputs, label, mode))
+            planner = stream(client, url, model, planner_body(inputs, label, mode, digest))
             planner["plan"] = parse_plan(str(planner.pop("content")))
             row["T3_planner"] = planner
             row["T3_primary"] = stream(
@@ -222,7 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     client, args.url, args.model, paths, inputs, mode, digest, labels, args.trials
                 )
             elif arm == "timing":
-                run_timing(client, args.url, args.model, paths, inputs, mode, labels)
+                run_timing(client, args.url, args.model, paths, inputs, mode, labels, digest)
             else:
                 raise SystemExit(f"unknown arm {arm!r}: use decide or timing")
     rows = len(read_jsonl(paths.decide)) + len(read_jsonl(paths.timing))

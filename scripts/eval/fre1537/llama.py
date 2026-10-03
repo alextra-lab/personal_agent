@@ -291,11 +291,15 @@ def stream(
                     c["function"]["name"] for c in calls if (c.get("function") or {}).get("name")
                 ]
                 finish = choice.get("finish_reason") or finish
+    text = "".join(content)
+    # A server that writes its reasoning inline, before `</think>`, still thought: count it.
+    inline = re.match(r"^(?:<think>)?(.*?)</think>", text, flags=re.S)
+    reasoning_chars += len(inline.group(1)) if inline else 0
     return {
         "secs": round(time.monotonic() - t0, 2),
         "ttft_any": None if first_any is None else round(first_any, 2),
         "ttft_content": None if first_content is None else round(first_content, 2),
-        "content": "".join(content),
+        "content": text,
         "reasoning_chars": reasoning_chars,
         "tool_names": tool_names,
         "finish_reason": finish,

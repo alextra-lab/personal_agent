@@ -18,9 +18,10 @@ See: ADR-0036 (expansion-controller)
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -38,12 +39,16 @@ from personal_agent.governance.sub_agent_tools import (
 )
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.llm_client.types import ModelRole
+from personal_agent.observability.route_trace.types import PlannerDecision, PlannerFailureReason
 from personal_agent.observability.topology import report_degradation
 from personal_agent.orchestrator.expansion_types import (
     SKIP_REASON_TEXT,
     ExpansionPhase,
     ExpansionPlan,
+    MemoryItemKey,
+    MemoryRelevance,
     PhaseResult,
+    PlannerMemoryDigest,
     PlanTask,
     SkipReason,
     SubAgentInterval,
@@ -89,6 +94,10 @@ _PLANNER_BRIEFING_RULES: tuple[str, ...] = (
     "Do not name example places, businesses or sources in a task unless they "
     "appear in the conversation. Workers must find them.",
 )
+
+# ADR-0154 D5: the title of the memory digest block in the planner user message. The
+# system prompt names the same title, so the planner knows which block to judge.
+_DIGEST_TITLE = "What memory already holds, most relevant first"
 
 
 def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
@@ -169,7 +178,7 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "Output ONLY valid JSON matching this schema:\n"
         '{"strategy": "HYBRID|DECOMPOSE", "tasks": [{"name": "string", '
         f'"goal": "string", "constraints": ["string"], "type": "{type_names}", '
-        f'"thoroughness": "{level_names}"}}]}}\n\n'
+        f'"thoroughness": "{level_names}"}}], "memory_relevance": "used|none_relevant"}}\n\n'
         "Rules:\n"
         "- Each task must be independently answerable. No task sees another task's "
         "result, and the final answer is written from all task reports together, so "
@@ -183,6 +192,13 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "use the type's default. A round may hold several parallel tool calls. Scope "
         "every task so a worker can answer it inside its budget. Prefer one precise "
         "task over one broad one.\n"
+        # ADR-0154 D5 / ADR-0147 D3: always present, so the system prompt is byte-identical
+        # with and without a digest and the cached prefix holds.
+        f'- The message may hold a "{_DIGEST_TITLE}" block. A worker cannot see it, so '
+        "write into each task's goal what memory already knows that the task depends on. "
+        "Set memory_relevance to used when at least one memory line shaped a task goal, "
+        "or to none_relevant when nothing in the block bears on the query. Without the "
+        "block, omit memory_relevance\n"
         "- Do NOT answer the question — only produce the plan"
     )
     briefing_rules = "\n".join(f"- {rule}" for rule in _PLANNER_BRIEFING_RULES)
@@ -247,6 +263,7 @@ def planner_history_text(messages: list[dict[str, Any]] | None, query: str, max_
 
 
 _HISTORY_HEADER = "Conversation so far:\n"
+_DIGEST_HEADER = f"{_DIGEST_TITLE}:\n"
 _BLOCK_SEPARATOR = "\n\n"
 
 
@@ -288,7 +305,7 @@ def _join_planner_blocks(history_text: str, digest_text: str, tail: str) -> str:
     if history_text:
         parts.append(f"{_HISTORY_HEADER}{history_text}")
     if digest_text:
-        parts.append(digest_text)
+        parts.append(f"{_DIGEST_HEADER}{digest_text}")
     parts.append(tail)
     return _BLOCK_SEPARATOR.join(parts)
 
@@ -325,7 +342,9 @@ def build_planner_user_message(
             ``input_max_chars``.
     """
     tail = _frame_planner_query(query, strategy)
-    fixed_chars = len(tail) + (len(digest_text) + len(_BLOCK_SEPARATOR) if digest_text else 0)
+    fixed_chars = len(tail) + (
+        len(_DIGEST_HEADER) + len(digest_text) + len(_BLOCK_SEPARATOR) if digest_text else 0
+    )
     if fixed_chars > input_max_chars:
         raise PlannerInputTooLargeError(
             message_chars=len(tail), digest_chars=len(digest_text), max_chars=input_max_chars
@@ -372,6 +391,145 @@ def _planner_reasoning_chars(response: Mapping[str, Any]) -> int:
         The length of ``reasoning_trace``, 0 when the response carries none.
     """
     return len(response.get("reasoning_trace") or "")
+
+
+def _planner_deployment(llm_client: Any) -> str | None:
+    """Return the deployment key that the planner client dispatches to (ADR-0154 D6).
+
+    Args:
+        llm_client: The client of the planner call.
+
+    Returns:
+        The client's ``model_key``, or ``None`` for a client without one (a stub).
+    """
+    key = getattr(llm_client, "model_key", None)
+    return key if isinstance(key, str) else None
+
+
+def _planner_usage(response: Mapping[str, Any]) -> tuple[int | None, int | None]:
+    """Read the engine's own prompt and completion token counts (ADR-0154 D6).
+
+    Args:
+        response: The normalised ``LLMResponse`` of the planner call.
+
+    Returns:
+        ``(prompt_tokens, completion_tokens)``. A count the response does not carry as a
+        non-negative int is ``None``, never a guess.
+    """
+    usage = response.get("usage")
+    if not isinstance(usage, Mapping):
+        return None, None
+    counts = (usage.get("prompt_tokens"), usage.get("completion_tokens"))
+    prompt, completion = (c if isinstance(c, int) and c >= 0 else None for c in counts)
+    return prompt, completion
+
+
+def resolve_memory_relevance(
+    digest_items: int,
+    decision: PlannerDecision,
+    is_fallback: bool,
+    stated: MemoryRelevance,
+) -> MemoryRelevance:
+    """Apply the ADR-0154 D5 matrix to the planner's stated judgment of the digest.
+
+    ``not_applicable`` is written by the code and takes precedence over the model: on an
+    empty digest the planner was never asked, and on a failed run or a fallback plan no
+    planner plan exists. On a decline or an expansion with a digest, the planner's value
+    stands, and ``not_applicable`` is not one of the planner's values.
+
+    Args:
+        digest_items: Lines the digest carried.
+        decision: ``declined``, ``expanded`` or ``failed``.
+        is_fallback: Whether the plan came from the fallback planner.
+        stated: The value the plan validator recorded.
+
+    Returns:
+        The judgment the run records.
+    """
+    if digest_items == 0 or decision == "failed" or is_fallback:
+        return "not_applicable"
+    return "unstated" if stated == "not_applicable" else stated
+
+
+def _memory_item_keys(keys: Sequence[MemoryItemKey]) -> list[dict[str, str | int]]:
+    """Render compound memory keys as JSON-ready mappings, in order."""
+    return [{"kind": k.kind, "identity": k.identity, "ordinal": k.ordinal} for k in keys]
+
+
+def planner_outcome_fields(
+    *,
+    decision: PlannerDecision,
+    failure_reason: PlannerFailureReason | None,
+    is_fallback: bool,
+    stated_relevance: MemoryRelevance,
+    plan_task_count: int,
+    digest: PlannerMemoryDigest | None,
+    deployment: str | None,
+    mode: str | None,
+    reasoning_chars: int | None,
+    duration_ms: float | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    input_chars: Mapping[str, int],
+    system_prompt_sha256: str | None,
+) -> dict[str, object]:
+    """Build the fields of the one terminal planner event (ADR-0154 D5, ADR-0147 D5).
+
+    Every emitter goes through this function, so no path can skip the relevance matrix
+    or omit a field.
+
+    Args:
+        decision: ``declined``, ``expanded`` or ``failed``.
+        failure_reason: Why the run failed; ``None`` unless ``decision == "failed"``.
+        is_fallback: Whether the plan came from the fallback planner.
+        stated_relevance: The value the plan validator recorded (``not_applicable`` when
+            no planner plan exists).
+        plan_task_count: Tasks in the plan the run returned (0 for none).
+        digest: The digest the planner was given, or ``None`` for none.
+        deployment: The deployment key of the planner call.
+        mode: The catalog mode of the planner call.
+        reasoning_chars: Reasoning characters the response carried; ``None`` when no
+            response exists.
+        duration_ms: Wall clock of the planner call; ``None`` when the model was not called.
+        prompt_tokens: The engine's prompt-token count; ``None`` when not reported.
+        completion_tokens: The engine's completion-token count; ``None`` when not reported.
+        input_chars: Characters of each planner input (ADR-0154 D6).
+        system_prompt_sha256: SHA-256 hex of the rendered system prompt (ADR-0154 D7);
+            ``None`` when it was never rendered.
+
+    Returns:
+        The event fields, without ``trace_id``.
+    """
+    digest_items = digest.item_count if digest is not None else 0
+    return {
+        "planner_decision": decision,
+        "planner_failure_reason": failure_reason,
+        "is_fallback": is_fallback,
+        "memory_relevance": resolve_memory_relevance(
+            digest_items, decision, is_fallback, stated_relevance
+        ),
+        "plan_task_count": plan_task_count,
+        "planner_deployment": deployment,
+        "planner_mode": mode,
+        "planner_reasoning_chars": reasoning_chars,
+        "planner_duration_ms": duration_ms,
+        "planner_prompt_tokens": prompt_tokens,
+        "planner_completion_tokens": completion_tokens,
+        "planner_input_chars": dict(input_chars),
+        "planner_system_prompt_sha256": system_prompt_sha256,
+        "memory_digest_eligible_items": digest.eligible_count if digest is not None else 0,
+        "memory_digest_items": digest_items,
+        "memory_digest_items_dropped": digest.dropped_count if digest is not None else 0,
+        "memory_digest_kinds": dict(digest.kind_counts) if digest is not None else {},
+        "memory_digest_max_line_chars": digest.max_line_chars if digest is not None else 0,
+        "memory_digest_tokens": digest.estimated_tokens if digest is not None else 0,
+        "memory_digest_item_keys": (
+            _memory_item_keys(digest.item_keys) if digest is not None else []
+        ),
+        "memory_rendered_item_keys": (
+            _memory_item_keys(digest.rendered_item_keys) if digest is not None else []
+        ),
+    }
 
 
 # ADR-0154 D6: the task types whose turns record ``conversation_history_chars``.
@@ -578,6 +736,7 @@ class ExpansionController:
         authenticated: bool = False,
         turn_started_at: datetime | None = None,
         expansion_budget: int | None = None,
+        memory_digest: PlannerMemoryDigest | None = None,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -633,6 +792,9 @@ class ExpansionController:
                 strategy's task-count cap below, never relaxes it. ``None``
                 (the default) leaves the strategy cap as the only bound, for a
                 caller that has not been updated to pass it.
+            memory_digest: The planner's memory digest (ADR-0154 D5), built by the caller
+                from the memory context already in hand. It reaches the planner call only:
+                no worker receives it (ADR-0147 D2). ``None`` gives the planner no digest.
 
         Returns:
             ExpansionResult with plan, sub-agent results, and synthesis context.
@@ -659,6 +821,7 @@ class ExpansionController:
             messages=messages,
             history_max_chars=settings.planner_history_max_chars,
             input_max_chars=settings.planner_input_max_chars,
+            memory_digest=memory_digest,
         )
         result.plan = plan
 
@@ -767,6 +930,7 @@ class ExpansionController:
         messages: list[dict[str, Any]] | None = None,
         history_max_chars: int = 60000,
         input_max_chars: int | None = None,
+        memory_digest: PlannerMemoryDigest | None = None,
     ) -> ExpansionPlan:
         """Phase 1: Get a plan from the LLM or fallback planner.
 
@@ -804,9 +968,12 @@ class ExpansionController:
                 and the digest alone exceed it, the planner is not called and
                 the attempt takes the failure path with reason
                 ``input_too_large``.
+            memory_digest: The memory digest (ADR-0154 D5). Its text goes in the user
+                message after the history and before the query. ``None`` gives no digest.
 
         Returns:
-            An ExpansionPlan — either LLM-generated or fallback.
+            An ExpansionPlan — either LLM-generated or fallback. Exactly one
+            ``planner_outcome`` event records the run (ADR-0154 D5).
         """
         start_ms = time.monotonic() * 1000
 
@@ -819,10 +986,22 @@ class ExpansionController:
         # ADR-0154 D6: the characters of each input, for `planner_completed` and for an
         # `input_too_large` failure. Zero until measured, never a sentinel.
         input_chars = {"system": 0, "history": 0, "digest": 0, "message": 0}
+        # ADR-0154 D5: the facts of this run for its one terminal `planner_outcome` event,
+        # which is emitted outside the try, so a failure in an emitter cannot add a second.
+        llm_plan: ExpansionPlan | None = None
+        failure_reason: PlannerFailureReason | None = None
+        reasoning_chars: int | None = None
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
+        call_started: float | None = None
+        call_duration_ms: float | None = None
+        system_prompt_sha256: str | None = None
+        digest_text = memory_digest.text if memory_digest is not None else ""
         try:
             tool_surface = _current_sub_agent_tool_surface(trace_id)
             planner_system_prompt = _build_planner_system_prompt(tool_surface)
             input_chars["system"] = len(planner_system_prompt)
+            system_prompt_sha256 = hashlib.sha256(planner_system_prompt.encode()).hexdigest()
             # ADR-0154 D1: the query is never cut, and the history receives what the bound
             # leaves. The last message is dropped when it is the current query (see
             # planner_history_text), so it is not rendered twice.
@@ -830,6 +1009,7 @@ class ExpansionController:
                 query,
                 strategy,
                 messages,
+                digest_text=digest_text,
                 history_max_chars=history_max_chars,
                 input_max_chars=(
                     input_max_chars
@@ -849,6 +1029,7 @@ class ExpansionController:
 
             from personal_agent.telemetry.trace import TraceContext
 
+            call_started = time.monotonic()
             raw_response = await asyncio.wait_for(
                 llm_client.respond(
                     # FRE-1390: decomposition is a reasoning judgement about work
@@ -879,9 +1060,12 @@ class ExpansionController:
             )
 
             duration_ms = time.monotonic() * 1000 - start_ms
+            call_duration_ms = (time.monotonic() - call_started) * 1000
+            prompt_tokens, completion_tokens = _planner_usage(raw_response)
             # FRE-501: capture planner-call cost so the executor can roll it into
             # the live turn meter. Paid/cloud calls populate cost_usd; 0.0 otherwise.
             result.planner_cost_usd = float(raw_response.get("cost_usd") or 0.0)
+            reasoning_chars = _planner_reasoning_chars(raw_response)
             plan = _validate_plan_json(
                 raw_response["content"], strategy, max_tasks=expansion_budget
             )
@@ -909,29 +1093,31 @@ class ExpansionController:
                     # mode that ran and the reasoning the response carried show on the
                     # first turn a mode stops disabling thinking.
                     planner_mode=_planner_mode_name(llm_client),
-                    planner_reasoning_chars=_planner_reasoning_chars(raw_response),
+                    planner_reasoning_chars=reasoning_chars,
                     planner_input_chars=input_chars,
                     planner_input_total_chars=planner_input.total_chars,
                     trace_id=trace_id,
                 )
-                return plan
-
-            # FRE-1413 AC-3: a response cut off at the token ceiling
-            # (finish_reason == "length") must not surface identically to a
-            # genuinely malformed one — that ambiguity is what let the
-            # FRE-1390 cap-sizing defect run unnoticed. Checked only once
-            # validation has already failed: the prompt requires bare JSON
-            # with nothing after it, so a successful parse is accepted as
-            # complete regardless of finish_reason.
-            truncated = raw_response.get("finish_reason") == "length"
-            logger.warning(
-                "planner_failed",
-                reason="output_truncated" if truncated else "schema_validation_failed",
-                finish_reason=raw_response.get("finish_reason"),
-                trace_id=trace_id,
-            )
+                llm_plan = plan
+            else:
+                failure_reason = "invalid"
+                # FRE-1413 AC-3: a response cut off at the token ceiling
+                # (finish_reason == "length") must not surface identically to a
+                # genuinely malformed one — that ambiguity is what let the
+                # FRE-1390 cap-sizing defect run unnoticed. Checked only once
+                # validation has already failed: the prompt requires bare JSON
+                # with nothing after it, so a successful parse is accepted as
+                # complete regardless of finish_reason.
+                truncated = raw_response.get("finish_reason") == "length"
+                logger.warning(
+                    "planner_failed",
+                    reason="output_truncated" if truncated else "schema_validation_failed",
+                    finish_reason=raw_response.get("finish_reason"),
+                    trace_id=trace_id,
+                )
 
         except asyncio.TimeoutError:
+            failure_reason = "timeout"
             logger.warning(
                 "planner_failed",
                 reason="timeout",
@@ -941,6 +1127,7 @@ class ExpansionController:
         except PlannerInputTooLargeError as exc:
             # ADR-0154 D1: the model was not called. Until the routing change (FRE-1515)
             # this follows today's failure path, the fallback planner.
+            failure_reason = "input_too_large"
             input_chars.update(message=exc.message_chars, digest=exc.digest_chars)
             logger.warning(
                 "planner_failed",
@@ -951,12 +1138,50 @@ class ExpansionController:
             )
 
         except Exception as exc:
+            failure_reason = "exception"
             logger.warning(
                 "planner_failed",
                 reason="exception",
                 error=str(exc),
                 trace_id=trace_id,
             )
+
+        mode = _planner_mode_name(llm_client)
+        deployment = _planner_deployment(llm_client)
+        if call_duration_ms is None and call_started is not None:
+            # A timeout or an exception during the call: the call still ran this long.
+            call_duration_ms = (time.monotonic() - call_started) * 1000
+        if llm_plan is not None:
+            llm_plan = replace(
+                llm_plan,
+                memory_relevance=resolve_memory_relevance(
+                    memory_digest.item_count if memory_digest is not None else 0,
+                    "expanded",
+                    False,
+                    llm_plan.memory_relevance,
+                ),
+            )
+            logger.info(
+                "planner_outcome",
+                **planner_outcome_fields(
+                    decision="expanded",
+                    failure_reason=None,
+                    is_fallback=False,
+                    stated_relevance=llm_plan.memory_relevance,
+                    plan_task_count=len(llm_plan.tasks),
+                    digest=memory_digest,
+                    deployment=deployment,
+                    mode=mode,
+                    reasoning_chars=reasoning_chars,
+                    duration_ms=call_duration_ms,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    input_chars=input_chars,
+                    system_prompt_sha256=system_prompt_sha256,
+                ),
+                trace_id=trace_id,
+            )
+            return llm_plan
 
         # --- Fallback planner ---
         fallback_plan = generate_fallback_plan(
@@ -979,6 +1204,28 @@ class ExpansionController:
             "fallback_planner_used",
             reason="planner_failure",
             task_count=len(fallback_plan.tasks),
+            trace_id=trace_id,
+        )
+        # ADR-0154 D5: a run that fails and then uses the fallback plan is one run, and
+        # its one event records the fallback.
+        logger.info(
+            "planner_outcome",
+            **planner_outcome_fields(
+                decision="failed",
+                failure_reason=failure_reason or "exception",
+                is_fallback=True,
+                stated_relevance=fallback_plan.memory_relevance,
+                plan_task_count=len(fallback_plan.tasks),
+                digest=memory_digest,
+                deployment=deployment,
+                mode=mode,
+                reasoning_chars=reasoning_chars,
+                duration_ms=call_duration_ms,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                input_chars=input_chars,
+                system_prompt_sha256=system_prompt_sha256,
+            ),
             trace_id=trace_id,
         )
 
@@ -1633,8 +1880,18 @@ def _validate_plan_json(
     if not tasks:
         return None
 
+    # ADR-0147 D3: the planner writes `used` or `none_relevant`. A missing or invalid
+    # value is `unstated`; `_run_planner` then applies the ADR-0154 D5 matrix.
+    stated = data.get("memory_relevance")
+    memory_relevance: MemoryRelevance = "unstated"
+    if stated == "used":
+        memory_relevance = "used"
+    elif stated == "none_relevant":
+        memory_relevance = "none_relevant"
+
     return ExpansionPlan(
         strategy=data.get("strategy", strategy),
         tasks=tasks,
         is_fallback=False,
+        memory_relevance=memory_relevance,
     )

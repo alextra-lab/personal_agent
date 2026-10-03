@@ -11,8 +11,10 @@ import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
+import yaml
 from scripts.eval.fre1537 import render
 from scripts.eval.fre1537.common import RunPaths
 
@@ -52,6 +54,74 @@ MODES: dict[str, PlannerMode] = {
     "server_default": PlannerMode("server_default", {}),
 }
 _THINKING_OFF = MODES["thinking_off"].params
+
+# FRE-1541: the `planner` mode is read from the catalog that ships, so the probe qualifies the
+# parameters the gateway will send and not a copy of them.
+CATALOG = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
+CATALOG_DEPLOYMENT = "qwen3.8-flash-next"
+MODE_NAMES = (*MODES, "planner")
+_SAMPLER_KEYS = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p",
+    "presence_penalty",
+    "repeat_penalty",
+)
+
+
+def catalog_planner_mode(
+    path: Path | None = None, deployment: str = CATALOG_DEPLOYMENT
+) -> PlannerMode:
+    """Read the ``planner`` mode of a deployment from ``config/models.yaml``.
+
+    The probe replays the captured primary's sampling in every arm, so it can measure a thinking
+    switch and nothing else. A mode that changes a sampler therefore cannot be qualified by it.
+
+    Args:
+        path: The catalog file. Default is the repo's ``config/models.yaml``.
+        deployment: The catalog key of the deployment.
+
+    Returns:
+        A mode named ``planner``. Its parameters carry ``enable_thinking: false`` only when the
+        catalog declares it. A mode that leaves thinking on carries none, so the scorer's
+        0-reasoning threshold fails it.
+
+    Raises:
+        ValueError: The deployment declares no ``planner`` mode, or its sampling differs from
+            its default mode's.
+    """
+    entry = yaml.safe_load((path or CATALOG).read_text())["models"][deployment]
+    modes = entry["modes"]
+    declared = modes.get("planner")
+    if declared is None:
+        raise ValueError(
+            f"{deployment!r} declares no `planner` mode in the catalog. Add it, then run the probe "
+            "on it; ADR-0154 D7 admits a mode only with a passing result."
+        )
+    default = modes[entry["default_mode"]]
+    changed = [k for k in _SAMPLER_KEYS if declared.get(k) != default.get(k)]
+    if changed:
+        raise ValueError(
+            f"the `planner` mode of {deployment!r} changes {', '.join(changed)} against its default "
+            "mode. The probe replays the captured primary's sampling, so it cannot qualify that."
+        )
+    thinking_off = declared.get("enable_thinking") is False
+    return PlannerMode(
+        "planner", {"chat_template_kwargs": {"enable_thinking": False}} if thinking_off else {}
+    )
+
+
+def resolve_mode(name: str) -> PlannerMode:
+    """Return the planner mode a command-line name selects.
+
+    Args:
+        name: One of :data:`MODE_NAMES`.
+
+    Returns:
+        The fixed mode of that name, or the catalog's ``planner`` mode.
+    """
+    return catalog_planner_mode() if name == "planner" else MODES[name]
 
 
 @dataclass(frozen=True)

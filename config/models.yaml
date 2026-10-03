@@ -250,6 +250,19 @@ models:
         min_p: 0.0
         presence_penalty: 1.5
         repeat_penalty: 1.0     # llama.cpp's wire name (FRE-1430 F2); was `repetition_penalty`
+      # ADR-0154 D4 (FRE-1541): the planner call's mode. The `default` mode's sampling with
+      # thinking off, NOT `worker`'s (which also changes the sampling). Admitted on this
+      # deployment only because the committed probe (scripts/eval/fre1537) passed on it in
+      # this mode: the scorer output and fingerprint are on FRE-1541 (ADR-0154 D7). A change
+      # to any value here is a routing change and needs a new passing run.
+      planner:
+        enable_thinking: false
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repeat_penalty: 1.0
     supports_function_calling: true
     supports_vision: true         # SLM catalog reports model_type: multimodal
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)

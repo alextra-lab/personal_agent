@@ -27,7 +27,7 @@ from scripts.eval.fre1537.common import RunPaths, append_jsonl, done_keys, read_
 from scripts.eval.fre1537.llama import (
     DEFAULT_MODEL,
     DEFAULT_URL,
-    MODES,
+    MODE_NAMES,
     Inputs,
     PlannerMode,
     load_inputs,
@@ -35,6 +35,7 @@ from scripts.eval.fre1537.llama import (
     planner_body,
     primary_body,
     prime_body,
+    resolve_mode,
     stream,
 )
 
@@ -163,7 +164,7 @@ def run_timing(
 def common_arguments(parser: argparse.ArgumentParser) -> None:
     """Add the arguments that every llama.cpp step shares."""
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--mode", choices=sorted(MODES), default="thinking_off")
+    parser.add_argument("--mode", choices=sorted(MODE_NAMES), default="thinking_off")
     parser.add_argument("--tag", default=None, help="rows directory name; default is the mode")
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--model", default=DEFAULT_MODEL)
@@ -194,7 +195,7 @@ def prepare(
     tag = args.tag or (f"{args.mode}-digest" if digest else args.mode)
     paths = RunPaths(args.run_dir, tag)
     inputs = load_inputs(paths)
-    mode = MODES[args.mode]
+    mode = resolve_mode(args.mode)
     fingerprint = fp_mod.build_fingerprint(
         client, args.url, args.model, mode, inputs, paths, args.quant, args.engine_build, digest
     )

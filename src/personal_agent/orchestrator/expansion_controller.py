@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -29,6 +30,7 @@ import structlog
 
 from personal_agent.brainstem import ModeManagerError, get_current_mode
 from personal_agent.config import GovernanceConfigError, get_settings, load_governance_config
+from personal_agent.exceptions import PlannerInputTooLargeError
 from personal_agent.governance.sub_agent_tools import (
     SUB_AGENT_DENIED_MODES,
     SubAgentToolGrant,
@@ -70,13 +72,12 @@ _MAX_TASKS = {"HYBRID": 3, "DECOMPOSE": 5}
 # already capped at the source; this bounds the union across every task).
 _MAX_GAP_NAMES_PER_TASK = 10
 
-# FRE-1521: appended to the planner system prompt's Rules list only when
-# planner_brief_mode="briefing" — `current` must stay byte-for-byte identical
-# to today (AC-1). Wording set by master's ticket comment (Phase B, from the
-# explore seat's Phase A V0/V1/V2 probe): rules 1-4. Rule 5 (drop the
-# per-level round annotation when every level renders the same number) is not
-# prose for the planner to read — it is a formatting change to the `levels`
-# string itself, applied below.
+# FRE-1521: appended to the planner system prompt's Rules list. Wording set by
+# master's ticket comment (Phase B, from the explore seat's Phase A V0/V1/V2
+# probe): rules 1-4. Rule 5 (drop the per-level round annotation when every
+# level renders the same number) is not prose for the planner to read — it is
+# a formatting change to the `levels` string itself, applied below. ADR-0154
+# D1 (FRE-1541): the briefing is the only path; the `current` prompt is gone.
 _PLANNER_BRIEFING_RULES: tuple[str, ...] = (
     "Before writing tasks, identify the user's standing rules and the facts from "
     "the conversation that apply to this request. Put into each task's constraints "
@@ -118,9 +119,7 @@ def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
     return list(governance_config.granted_sub_agent_tool_names())
 
 
-def _build_planner_system_prompt(
-    available_sub_agent_tools: list[str], brief_mode: str = "current"
-) -> str:
+def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
     """Build the planner system prompt with the live sub-agent tool surface.
 
     Dynamic rather than hardcoded (FRE-1389 AC-1): the eligible set is read
@@ -133,15 +132,12 @@ def _build_planner_system_prompt(
         available_sub_agent_tools: Tool names currently grantable to a
             sub-agent in the active mode (from
             :func:`_current_sub_agent_tool_surface`).
-        brief_mode: ``settings.planner_brief_mode`` (FRE-1521). ``"current"``
-            (the default) reproduces today's prompt byte-for-byte — every
-            existing caller's behaviour is unchanged. ``"briefing"`` appends
-            ``_PLANNER_BRIEFING_RULES`` to the Rules list and collapses the
-            per-level round annotation when every level renders the same
-            number (rule 5, a formatting change rather than prose).
 
     Returns:
-        The complete planner system prompt.
+        The complete planner system prompt. It carries ``_PLANNER_BRIEFING_RULES``
+        in the Rules list and collapses the per-level round annotation when every
+        level renders the same number (FRE-1521 rule 5, a formatting change rather
+        than prose).
     """
     # ADR-0150 D2: the planner picks a registry type per task, never tools. Each
     # type's description is rendered live from the registry, with the part of its
@@ -160,7 +156,7 @@ def _build_planner_system_prompt(
     rounds_by_level = {
         level: get_settings().sub_agent_rounds_for(level) for level in THOROUGHNESS_LEVELS
     }
-    if brief_mode == "briefing" and len(set(rounds_by_level.values())) == 1:
+    if len(set(rounds_by_level.values())) == 1:
         (uniform_rounds,) = set(rounds_by_level.values())
         levels = f"{', '.join(THOROUGHNESS_LEVELS)} ({uniform_rounds} tool round(s) each)"
     else:
@@ -189,10 +185,8 @@ def _build_planner_system_prompt(
         "task over one broad one.\n"
         "- Do NOT answer the question — only produce the plan"
     )
-    if brief_mode == "briefing":
-        briefing_rules = "\n".join(f"- {rule}" for rule in _PLANNER_BRIEFING_RULES)
-        prompt = f"{prompt}\n{briefing_rules}"
-    return prompt
+    briefing_rules = "\n".join(f"- {rule}" for rule in _PLANNER_BRIEFING_RULES)
+    return f"{prompt}\n{briefing_rules}"
 
 
 def _render_planner_history(messages: list[dict[str, Any]], max_chars: int) -> str:
@@ -250,6 +244,134 @@ def planner_history_text(messages: list[dict[str, Any]] | None, query: str, max_
     if history_source and get_text_content(history_source[-1].get("content", "")) == query:
         history_source = history_source[:-1]
     return _render_planner_history(history_source, max_chars)
+
+
+_HISTORY_HEADER = "Conversation so far:\n"
+_BLOCK_SEPARATOR = "\n\n"
+
+
+@dataclass(frozen=True)
+class PlannerUserMessage:
+    """The planner's user message and the size of each input in it (ADR-0154 D1).
+
+    Attributes:
+        content: The complete user message: history, then digest, then query.
+        history_chars: Characters of the rendered history (0 when none fits).
+        digest_chars: Characters of the digest text (0 when there is none).
+        history_text: The rendered history that went into ``content`` (empty when none fits).
+        message_chars: Characters of the framed query, ``Strategy: …`` to the closing
+            instruction. The query is never cut.
+        total_chars: ``len(content)``: the three inputs plus the history header and the
+            separators between the blocks. This is the figure the bound applies to.
+    """
+
+    content: str
+    history_text: str
+    history_chars: int
+    digest_chars: int
+    message_chars: int
+    total_chars: int
+
+
+def _frame_planner_query(query: str, strategy: str) -> str:
+    """Frame the query as the planner reads it: the strategy, the query, the closing instruction."""
+    return f"Strategy: {strategy}\nQuery: {query}\n\nProduce the JSON plan."
+
+
+def _join_planner_blocks(history_text: str, digest_text: str, tail: str) -> str:
+    """Join the planner user message: history, then digest, then the framed query.
+
+    The one place the message is assembled, so the committed probe (``scripts/eval/fre1537``)
+    qualifies the text that ships.
+    """
+    parts = []
+    if history_text:
+        parts.append(f"{_HISTORY_HEADER}{history_text}")
+    if digest_text:
+        parts.append(digest_text)
+    parts.append(tail)
+    return _BLOCK_SEPARATOR.join(parts)
+
+
+def build_planner_user_message(
+    query: str,
+    strategy: str,
+    messages: list[dict[str, Any]] | None,
+    *,
+    digest_text: str = "",
+    history_max_chars: int,
+    input_max_chars: int,
+) -> PlannerUserMessage:
+    """Build the planner user message inside ``input_max_chars`` (ADR-0154 D1).
+
+    Fill order: the framed query is never cut. The digest keeps its own bounds. The
+    history receives what remains, at most ``history_max_chars``, trimmed whole-message
+    from the oldest end. The stable parts come first, so a change in the digest or the
+    query never breaks the cached history before it.
+
+    Args:
+        query: The turn's current user query.
+        strategy: ``"HYBRID"`` or ``"DECOMPOSE"``.
+        messages: The turn's conversation window, oldest first.
+        digest_text: The memory digest, already built to its own bounds. Empty for none.
+        history_max_chars: ``settings.planner_history_max_chars``.
+        input_max_chars: ``settings.planner_input_max_chars``, the bound on the whole message.
+
+    Returns:
+        The message and the size of each input.
+
+    Raises:
+        PlannerInputTooLargeError: The framed query and the digest alone exceed
+            ``input_max_chars``.
+    """
+    tail = _frame_planner_query(query, strategy)
+    fixed_chars = len(tail) + (len(digest_text) + len(_BLOCK_SEPARATOR) if digest_text else 0)
+    if fixed_chars > input_max_chars:
+        raise PlannerInputTooLargeError(
+            message_chars=len(tail), digest_chars=len(digest_text), max_chars=input_max_chars
+        )
+    history_budget = min(
+        history_max_chars,
+        input_max_chars - fixed_chars - len(_HISTORY_HEADER) - len(_BLOCK_SEPARATOR),
+    )
+    history_text = (
+        planner_history_text(messages, query, history_budget) if history_budget > 0 else ""
+    )
+    content = _join_planner_blocks(history_text, digest_text, tail)
+    return PlannerUserMessage(
+        content=content,
+        history_text=history_text,
+        history_chars=len(history_text),
+        digest_chars=len(digest_text),
+        message_chars=len(tail),
+        total_chars=len(content),
+    )
+
+
+def _planner_mode_name(llm_client: Any) -> str | None:
+    """Return the catalog mode that the planner client dispatches in (ADR-0154 D4).
+
+    Args:
+        llm_client: The client of the planner call.
+
+    Returns:
+        The client's default mode name, or ``None`` for a client with no catalog
+        definition (a stub).
+    """
+    mode = getattr(getattr(llm_client, "model_def", None), "default_mode", None)
+    return mode if isinstance(mode, str) else None
+
+
+def _planner_reasoning_chars(response: Mapping[str, Any]) -> int:
+    """Count the reasoning characters that a planner response carried (ADR-0154 D4).
+
+    Args:
+        response: The normalised ``LLMResponse`` of the planner call.
+
+    Returns:
+        The length of ``reasoning_trace``, 0 when the response carries none.
+    """
+    return len(response.get("reasoning_trace") or "")
 
 
 # ADR-0154 D6: the task types whose turns record ``conversation_history_chars``.
@@ -535,8 +657,8 @@ class ExpansionController:
             # slices for sub-agents (messages[-4:]) — here in full, for the
             # planner's briefing user message.
             messages=messages,
-            brief_mode=settings.planner_brief_mode,
             history_max_chars=settings.planner_history_max_chars,
+            input_max_chars=settings.planner_input_max_chars,
         )
         result.plan = plan
 
@@ -643,8 +765,8 @@ class ExpansionController:
         eval_mode: bool = False,
         expansion_budget: int | None = None,
         messages: list[dict[str, Any]] | None = None,
-        brief_mode: str = "current",
         history_max_chars: int = 60000,
+        input_max_chars: int | None = None,
     ) -> ExpansionPlan:
         """Phase 1: Get a plan from the LLM or fallback planner.
 
@@ -671,18 +793,17 @@ class ExpansionController:
                 and the fallback plan, never relaxes it. ``None`` (the
                 default) leaves the strategy cap as the only bound.
             messages: The turn's conversation window (FRE-1521), the same one
-                ``_run_dispatch`` slices for sub-agents. Read only when
-                ``brief_mode == "briefing"``; ``"current"`` never touches it,
-                so a caller that has not been updated (``None``) is exactly
-                as safe as one that has.
-            brief_mode: ``settings.planner_brief_mode`` (FRE-1521). ``"current"``
-                (the default) reproduces today's planner call byte-for-byte
-                (AC-1). ``"briefing"`` adds the rendered conversation history
-                to the user message and the briefing rules to the system
-                prompt.
+                ``_run_dispatch`` slices for sub-agents. Rendered into the
+                planner user message as the conversation history. ``None``
+                renders no history.
             history_max_chars: ``settings.planner_history_max_chars``
-                (FRE-1521) — the character budget for the rendered history
-                when ``brief_mode == "briefing"``. Unused otherwise.
+                (FRE-1521) — the character budget for the rendered history.
+            input_max_chars: The bound on the whole planner user message (ADR-0154 D1).
+                ``None`` (the default) reads ``settings.planner_input_max_chars``, so a
+                caller that omits it never carries a copy of the value. When the query
+                and the digest alone exceed it, the planner is not called and
+                the attempt takes the failure path with reason
+                ``input_too_large``.
 
         Returns:
             An ExpansionPlan — either LLM-generated or fallback.
@@ -695,24 +816,35 @@ class ExpansionController:
         # fallback), and shared with the fallback planner so both plan against the
         # same grant surface. Empty until read, which fails closed to `general`.
         tool_surface: list[str] = []
-        # FRE-1521 AC-4: 0 outside `briefing`, matching `_render_planner_history`'s
-        # own empty-input result rather than a sentinel — `planner_completed`
-        # always carries a real character count.
-        history_chars = 0
+        # ADR-0154 D6: the characters of each input, for `planner_completed` and for an
+        # `input_too_large` failure. Zero until measured, never a sentinel.
+        input_chars = {"system": 0, "history": 0, "digest": 0, "message": 0}
         try:
             tool_surface = _current_sub_agent_tool_surface(trace_id)
-            planner_system_prompt = _build_planner_system_prompt(tool_surface, brief_mode)
-            user_content = f"Strategy: {strategy}\nQuery: {query}\n\nProduce the JSON plan."
-            if brief_mode == "briefing":
-                # FRE-1521: the last message is dropped when it is the current query
-                # (see planner_history_text), so it is not rendered twice.
-                history_text = planner_history_text(messages, query, history_max_chars)
-                history_chars = len(history_text)
-                if history_text:
-                    user_content = f"Conversation so far:\n{history_text}\n\n{user_content}"
+            planner_system_prompt = _build_planner_system_prompt(tool_surface)
+            input_chars["system"] = len(planner_system_prompt)
+            # ADR-0154 D1: the query is never cut, and the history receives what the bound
+            # leaves. The last message is dropped when it is the current query (see
+            # planner_history_text), so it is not rendered twice.
+            planner_input = build_planner_user_message(
+                query,
+                strategy,
+                messages,
+                history_max_chars=history_max_chars,
+                input_max_chars=(
+                    input_max_chars
+                    if input_max_chars is not None
+                    else get_settings().planner_input_max_chars
+                ),
+            )
+            input_chars.update(
+                history=planner_input.history_chars,
+                digest=planner_input.digest_chars,
+                message=planner_input.message_chars,
+            )
             planner_messages = [
                 {"role": "system", "content": planner_system_prompt},
-                {"role": "user", "content": user_content},
+                {"role": "user", "content": planner_input.content},
             ]
 
             from personal_agent.telemetry.trace import TraceContext
@@ -769,12 +901,17 @@ class ExpansionController:
                     task_thoroughness=[task.thoroughness for task in plan.tasks],
                     parse_success=True,
                     fallback_used=False,
-                    # FRE-1521 AC-4: which brief mode produced this plan, how much
-                    # history it saw, and how many constraints per task it wrote —
-                    # the evidence a study comparing brief modes reads.
-                    brief_mode=brief_mode,
-                    history_chars=history_chars,
+                    # FRE-1521 AC-4: how much history the planner saw, and how many
+                    # constraints per task it wrote.
+                    history_chars=input_chars["history"],
                     task_constraints_count=[len(task.constraints) for task in plan.tasks],
+                    # ADR-0154 D4/D6: the evidence is the response, not the request. The
+                    # mode that ran and the reasoning the response carried show on the
+                    # first turn a mode stops disabling thinking.
+                    planner_mode=_planner_mode_name(llm_client),
+                    planner_reasoning_chars=_planner_reasoning_chars(raw_response),
+                    planner_input_chars=input_chars,
+                    planner_input_total_chars=planner_input.total_chars,
                     trace_id=trace_id,
                 )
                 return plan
@@ -798,6 +935,18 @@ class ExpansionController:
             logger.warning(
                 "planner_failed",
                 reason="timeout",
+                trace_id=trace_id,
+            )
+
+        except PlannerInputTooLargeError as exc:
+            # ADR-0154 D1: the model was not called. Until the routing change (FRE-1515)
+            # this follows today's failure path, the fallback planner.
+            input_chars.update(message=exc.message_chars, digest=exc.digest_chars)
+            logger.warning(
+                "planner_failed",
+                reason="input_too_large",
+                planner_input_chars=input_chars,
+                input_max_chars=exc.max_chars,
                 trace_id=trace_id,
             )
 

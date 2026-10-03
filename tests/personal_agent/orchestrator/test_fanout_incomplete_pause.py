@@ -114,7 +114,7 @@ def _patch_expansion(monkeypatch: pytest.MonkeyPatch, exp_result: ExpansionResul
     )
     monkeypatch.setattr(
         "personal_agent.llm_client.factory.get_llm_client",
-        lambda role_name=None: MagicMock(),
+        lambda role_name=None, mode=None: MagicMock(),
     )
     return controller.execute
 

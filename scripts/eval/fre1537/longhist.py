@@ -20,7 +20,6 @@ from scripts.eval.fre1537 import render
 from scripts.eval.fre1537.common import RunPaths, append_jsonl, read_jsonl
 from scripts.eval.fre1537.fixtures import load_histories
 from scripts.eval.fre1537.llama import (
-    MODES,
     Inputs,
     PlannerMode,
     parse_plan,
@@ -137,7 +136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     with httpx.Client(timeout=900.0) as client:
         paths, inputs, mode, _digest = prepare(args, client)
-        run_longhist(client, args.url, args.model, paths, inputs, MODES[args.mode])
+        run_longhist(client, args.url, args.model, paths, inputs, mode)
     print(f"rows in {paths.longhist}. Next: score --run-dir {args.run_dir} --tag {paths.tag}")
     return 0
 

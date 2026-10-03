@@ -279,7 +279,7 @@ async def test_enforced_expansion_subpath_also_emits_exactly_once(
     )
     monkeypatch.setattr(
         "personal_agent.llm_client.factory.get_llm_client",
-        lambda role_name=None: MagicMock(),
+        lambda role_name=None, mode=None: MagicMock(),
     )
 
     ctx = _gateway_ctx([{"role": "user", "content": "build X and Y"}], DecompositionStrategy.HYBRID)
@@ -417,7 +417,7 @@ async def test_enforced_expansion_subpath_also_emits_conversation_context_loaded
     )
     monkeypatch.setattr(
         "personal_agent.llm_client.factory.get_llm_client",
-        lambda role_name=None: MagicMock(),
+        lambda role_name=None, mode=None: MagicMock(),
     )
 
     ctx = _gateway_ctx([{"role": "user", "content": "build X and Y"}], DecompositionStrategy.HYBRID)

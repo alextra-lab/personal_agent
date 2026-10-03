@@ -61,14 +61,20 @@ Three designs were measured on the production llama.cpp. Appendix A holds the me
 | B, thinking off | 3 | 25/30 = 83% (66–93%) | 43/48 = 90% (78–95%) | 12/12 / 12/12 |
 | C, first action, thinking on | 3 | 30/30 = 100% (89–100%) | 1/48 = 2% (0–11%) | 12/12 / 1/12 |
 
-**Whole-turn time to first token**, one draw per fixture, p50 / p90. The time is the planner call plus the primary's first streamed token.
+**Planner call time**, from the decision arms (Appendix A5):
 
-| Path | Turns that must decline | All turns |
-|---|---|---|
-| SINGLE today (primary alone) | 6.0 / 14.6 s | 6.1 / 14.6 s |
-| A, thinking off | 6.8 / 8.3 s | 14.4 / 18.5 s |
-| B, thinking off | 9.0 / 26.2 s | 23.6 / 29.2 s |
-| A, thinking on (production setting) | — | 26.2 / 36.9 s |
+| Design | Declined calls: n, p50 / p90 | Expanded calls: n, p50 / p90 | Completion tokens on declines: p50, max |
+|---|---|---|---|
+| A, thinking off | 32, 0.8 / 1.3 s | 46, 9.6 / 14.4 s | 13, 19 |
+| A, thinking on (production setting) | 11, 5.3 / 11.5 s | 15, 25.5 / 31.2 s | 165, 646 |
+| B, thinking off | 30, 8.4 / 16.7 s | 48, 24.6 / 37.1 s | 13, 13 |
+
+**Whole-turn time to first token, paired per fixture.** Protocol T measured each fixture three ways on the same prompt: the primary alone (today's `SINGLE` turn), the planner then the primary, and the other planner then the primary. The added delay is the planner path minus the primary alone, for the same fixture. Two rows are excluded because the preceding step left their prompt cached (Appendix A4). One draw per fixture.
+
+| Fixtures | SINGLE today, median | A thinking off, added: median (range) | B thinking off, added: median (range) |
+|---|---|---|---|
+| 9 that must decline | 6.0 s | 1.0 s (0.8–1.9 s) | 2.5 s (2.1–20.6 s) |
+| 15 that must expand | 6.1 s | 10.3 s (0.7–13.4 s) | 19.1 s (2.3–32.7 s) |
 
 **Long histories, design A thinking off**, timing only:
 
@@ -78,13 +84,15 @@ Three designs were measured on the production llama.cpp. Appendix A holds the me
 | 30,000 chars | 8,646 | 19.4 s | 5.4 s (6,598 cached, 2,071 new) |
 | 60,000 chars | 16,684 | 40.2 s | 5.9 s (14,636 cached, 2,071 new) |
 
-What the measurement settles:
+What the measurement settles, and what it does not:
 
-1. **Thinking off does not make the planner worse, and it makes it much faster.** A thinking-off and A thinking-on are not shown different on either rate, because the intervals overlap. A declined planner call took 0.8 s at the p50 with thinking off, against 5.3 s with thinking on. Over all calls, the p50 is 6.8 s against 20.1 s. FRE-1430 F16 found the same direction (11.3 s to 5.1 s).
-2. **The fork does not pay for itself.** B was expected to be cheap, because its prefill is work the primary does anyway. The primary did start in 0.2 s after B. But B's planner instruction comes after this turn's new content, so the engine prefills it again on every call. B also declined worse: it expanded "Please run the nfl-prediction tool" in 3 of 3 draws, with a plan to collect NFL schedules. Its full context, with the tools and the date, seems to pull it toward doing the work.
-3. **The primary does not delegate.** Under C, the primary's first action was `web_search` 43 times, `search_memory` 18, text 9, `bash` 5, `recall_personal_history` 2, and `start_workers` 1. This confirms FRE-1498 C4.
-4. **A did not push the primary's cache out on any of the 27 fixtures** when the run held one session and no worker. The primary's `cache_n` stayed at 6,540 tokens. Eviction does occur: after the 27-call A thinking-on arm, the primary's prefix was gone (`cache_n` 0, a 20 s cold prefill).
-5. **A long-session planner call costs about 5–6 s even with a warm cache.** Every warm extension prefilled about 2,071 tokens, not only the new text. The primary shows the same pattern (`prompt_n` p50 2,157). This model mixes attention types, and llama.cpp seems to restore its cache only from saved checkpoints. That cause is an inference, not a measurement. A cold call scales with the history: 40.2 s at 60,000 characters.
+1. **Thinking off showed no loss of quality, and it is much faster.** The sample detected no difference between A thinking-off and A thinking-on on either rate. The sample is small and the intervals are wide, so this is not a proof of equal quality. The delay difference is large and consistent: a declined call takes 0.8 s at the p50 against 5.3 s. FRE-1430 F16 found the same direction (11.3 s to 5.1 s).
+2. **B showed no gain to pay for its cost.** B was expected to be cheap, because its prefill is work the primary does anyway. The primary did start in 0.2 s after B. But B's planner instruction comes after this turn's new content, so the engine prefills it again on every call. On the 9 clean declines, B added 2.5 s at the median against A's 1.0 s, and on every one of the 9 B added more than A. On quality, B's point estimates are lower on both rates, but the intervals overlap, so the sample does not show B worse overall. One pattern is consistent: B expanded "Please run the nfl-prediction tool" in 3 of 3 draws, with a plan to collect NFL schedules, where A declined it 3 of 3. Its full context, with the tools and the date, may pull it toward doing the work.
+3. **The primary almost never delegates as its first action.** Under C, the primary's first action was `web_search` 43 times, `search_memory` 18, text 9, `bash` 5, `recall_personal_history` 2, and `start_workers` 1. Its expand-correct interval (0–11%) does not overlap A's (86–99%). A `start_workers` call later in the loop is not measured. This agrees with FRE-1498 C4.
+4. **A did not push the primary's cache out on any of the 25 clean timing rows.** The run held one session and no worker, and the primary's `cache_n` stayed at 6,540 tokens on every clean row. Eviction does occur under more load: after the 27-call A thinking-on arm, the primary's prefix was gone (`cache_n` 0, a 20 s cold prefill). The load of an expansion turn, with its workers on the same server, was not measured.
+5. **A long-session planner call costs about 5–6 s even with a warm cache.** Every warm extension prefilled about 2,071 tokens, not only the new text. The primary shows the same pattern (`prompt_n` p50 2,157). This model mixes attention types, and llama.cpp may restore its cache only from saved checkpoints. That cause is an inference, not a measurement. A cold call scales with the history: 40.2 s at 60,000 characters.
+
+**The choice is operational, under uncertainty.** The sample shows A thinking-off at least as good as B and C on its point estimates and clearly better than C on expansion. It does not prove A's quality superior to B's. A is chosen because it is the fastest on the turns that most traffic produces, and because no measured quality difference favours another design.
 
 ### What this ADR does not decide
 
@@ -101,24 +109,34 @@ What the measurement settles:
 
 The planner call carries exactly four inputs, in this order:
 
-| # | Input | Bound | Token cost, measured on Flash-Next llama.cpp | Cache behaviour |
+| # | Input | Enforced bound | Token cost, measured on Flash-Next llama.cpp | Cache behaviour |
 |---|---|---|---|---|
-| 1 | System prompt: schema, rules, briefing rules, decline rule (D2) | Static text | 574 tokens (cached on every measured call) | Stable across turns |
-| 2 | Rendered conversation history | `planner_history_max_chars` = 60,000 chars | about 3.7 chars per token, so at most about 16,100 tokens | Extends forward across turns until the trim starts |
-| 3 | Memory digest (D5) | 300 estimated tokens (ADR-0147 D4) | At most about 300 tokens. Not measured: the eval graph was empty | Changes every turn |
-| 4 | The current message, as `Strategy: HYBRID\nQuery: …` | The message itself | 33–148 tokens over the 19 single-turn fixtures (prompt total 607–722) | Changes every turn |
+| 1 | System prompt: schema, rules, briefing rules, decline rule (D2) | Static text, 2,439 chars at this date | 574 tokens (cached on every measured call) | Stable across turns |
+| 2 | Rendered conversation history | The history budget below | About 3.7 chars per token on the measured content. 60,000 chars measured 16,069 tokens | Extends forward across turns until the trim starts |
+| 3 | Memory digest (D5) | 20 items, 120 chars per line, 300 estimated tokens (ADR-0147 D4) | At most 2,400 chars. Not measured: the eval graph was empty | Changes every turn |
+| 4 | The current message, as `Strategy: HYBRID\nQuery: …` | The total bound below | 33–148 tokens over the 19 single-turn fixtures (prompt total 607–722) | Changes every turn |
+
+**The total bound.** The user message (history, digest and message together) is at most `planner_input_max_chars`, 64,000 characters. The parts are filled in a fixed order:
+1. The message is never cut.
+2. The digest is built to its own bounds.
+3. The history receives what remains, at most `planner_history_max_chars` (60,000), and is trimmed whole-message from the oldest end, as today.
+4. If the message and the digest alone exceed 64,000 characters, the planner does not run. The turn records `planner_decision = failed` with `planner_failure_reason = input_too_large`, and it returns to the tool loop as any planner failure does (D2).
+
+The bound is in characters because characters are what the code controls before the call. The served token count varies by tokenizer, so it is recorded, not predicted: D6 records the engine's own `planner_prompt_tokens` for the whole prompt, and the character length and estimated tokens of each input.
 
 The user message puts the stable parts first: history, then digest, then query. A change in the digest or the query never breaks the cached history before it.
 
-The planner receives no tools array, no skill bodies and no primary system prompt. Those are design B's inputs, and B lost (Context, point 2).
+The planner receives no tools array, no skill bodies and no primary system prompt. Those are design B's inputs, and B was rejected (Option 1).
 
 `planner_brief_mode=briefing` becomes the only behaviour, and the `current` path and its setting are removed. Production already runs `briefing`. The `current` mode is the input set that FRE-1517 F6 measured at 14/53 carry-through.
 
-**Against FRE-1138.** The planner runs once per turn, before the tool loop, so its input is not within-turn growth. Its worst case is about 16,100 + 574 + 300 tokens plus the message, and D6 records the real figure per turn.
+**Against FRE-1138.** The planner runs once per turn, before the tool loop, so its input is not within-turn growth. Its input is bounded at 2,439 + 64,000 characters, and D6 records the real size per turn.
 
 ### D2 — The planner decides expansion for the four register types
 
-`_apply_matrix` routes `CONVERSATIONAL`, `TOOL_USE`, `ANALYSIS` and `PLANNING` to `HYBRID` with the reason `planner_asked`, at every complexity. This deletes `conversational_always_single`, `tool_use_single`, `analysis_simple` and `planning_simple`. It replaces the routing half of FRE-1394, including the `TOOL_USE` forcing that FRE-1394 kept. FRE-1394's cap half (the per-type iteration cap) stays with FRE-1394.
+When the session's primary deployment declares a `planner` mode (D4), `_apply_matrix` routes `CONVERSATIONAL`, `TOOL_USE`, `ANALYSIS` and `PLANNING` to `HYBRID` with the reason `planner_asked`, at every complexity. This deletes `conversational_always_single`, `tool_use_single`, `analysis_simple` and `planning_simple` for those sessions. It replaces the routing half of FRE-1394, including the `TOOL_USE` forcing that FRE-1394 kept. FRE-1394's cap half (the per-type iteration cap) stays with FRE-1394.
+
+**A deployment without a `planner` mode keeps today's routing.** For a session whose primary deployment declares no `planner` mode, the four types route as they do today, with the reason `planner_mode_absent` recorded beside the old reason. This fails closed: a deployment never reaches D2 with an unverified thinking control. D7 says when a deployment receives a `planner` mode.
 
 These stay as they are:
 - `MEMORY_RECALL` and `SELF_IMPROVE` keep `SINGLE`. They rest on the shape of the work, not on the register of the request.
@@ -130,37 +148,47 @@ The rest of D2 carries ADR-0152 D1 unchanged:
 - When the flag is true, the system prompt carries the decline rule, with the FRE-1498 text unchanged, and the schema admits `SINGLE`.
 - Validation: `SINGLE` with no tasks is a valid decline. `SINGLE` with tasks is a planner failure. `HYBRID` or `DECOMPOSE` with at least one valid task is a valid expansion. Anything else is a planner failure.
 - A decline returns the turn to the ordinary tool loop. It dispatches no worker and appends no synthesis message.
-- A planner failure (invalid output, a timeout or an exception) on a `planner_asked` turn also returns the turn to the tool loop. The fallback planner does not run. When the flag is false, the fallback planner keeps its role.
+- A planner failure (invalid output, a timeout, an exception, or D1's `input_too_large`) on a `planner_asked` turn also returns the turn to the tool loop. The fallback planner does not run. When the flag is false, the fallback planner keeps its role.
 
 ### D3 — The bound on expansion
 
 1. At most min(3, `governance.expansion_budget`) workers per turn (FRE-1382).
 2. A `DECOMPOSE` answer on a `planner_asked` turn is dispatched as `HYBRID` under the same cap. The stored plan and all telemetry carry the effective strategy.
-3. No round budget changes. The prompt renders the round budget that binds, and under `briefing` it already does: "(20 tool round(s) each)" while every level is 20.
+3. No round budget changes. At this date `sub_agent_rounds_by_thoroughness` is unset, so `settings.sub_agent_rounds_for(level)` returns `sub_agent_max_tool_iterations` (20) for every level. This chain changes neither setting. FRE-1487 may change them under its own ticket and the owner's decision. The prompt renders the round budget that binds, and under `briefing` it already does: "(20 tool round(s) each)".
 
 ### D4 — The planner call runs with thinking off
 
 The planner call uses the session's primary deployment, with that deployment's default sampling and its thinking disabled. On the local Flash-Next binding, this is the measured configuration: temperature 1.0, top_p 0.95, top_k 20, min_p 0, presence penalty 0, and `chat_template_kwargs.enable_thinking: false`. It is not the `worker` mode, which also changes the sampling (temperature 0.7, presence penalty 1.5).
 
-The setting lives in the deployment's catalog entry as a `planner` mode in `config/models.yaml`, and the planner call requests that mode. A deployment with no `planner` mode runs the planner in its default mode, and D6 records that the planner ran with thinking on. D7 decides whether such a deployment qualifies.
+The setting lives in the deployment's catalog entry as a `planner` mode in `config/models.yaml`, and the planner call requests that mode. Each provider dialect states thinking off in its own way (ADR-0145): `enable_thinking: false` on the local llama.cpp templates, and the provider's own control on a cloud deployment. A `planner` mode is written for one deployment at a time, and only after the probe of D7 shows that its thinking is off in effect. The evidence is the response, not the request: zero reasoning characters and a small completion count on declines.
+
+D6 records the reasoning the response actually carried, so a mode that stops disabling thinking is visible on the first turn.
 
 This amends ADR-0152 D5 ("no planner-specific mode"). ADR-0152 tested effort levels, never thinking off. The planner keeps the primary's model and temperature. No planner temperature is adopted.
 
 ### D5 — The memory digest, carried from ADR-0147
 
-ADR-0147 D1 to D7 carry into this ADR unchanged in substance:
+ADR-0147 D1, D2, D4, D6 and D7 carry into this ADR unchanged in substance:
 - **D1:** a digest of at most one line per item, built from the primary renderer's own selection and text helpers, so no fact reaches the planner that was not eligible for the primary's render.
 - **D2:** no memory item ever enters `SubAgentSpec.context`, and no rendered memory section reaches a worker. A fact may travel inside a goal, by design, and nothing bounds that mechanically.
-- **D3:** the plan's `memory_relevance` field (`used`, `none_relevant`, `unstated`, `not_applicable`).
 - **D4:** at most 20 items, 120 characters per line and 300 estimated tokens.
-- **D5:** one terminal planner event on every path.
 - **D6:** no enrichment write path. **D7:** no further memory tool for a worker.
 
-Two changes follow from this ADR:
-- **Placement.** The digest goes in the user message after the history and before the query (D1). ADR-0147 put it in the system prompt, where its per-turn change breaks the cached prefix.
-- **A decline is a plan.** On a valid decline, `memory_relevance` is still the planner's judgment of the digest, so a decline can carry `used` (for example, memory shows that the request is already answered). D6's matrix applies unchanged.
+Three parts change:
 
-The digest's effect on the decline decision is unmeasured. AC-8 measures it before the umbrella closes.
+- **Placement.** The digest goes in the user message after the history and before the query (D1). ADR-0147 put it in the system prompt, where its per-turn change breaks the cached prefix.
+- **The relevance field (ADR-0147 D3) is keyed on the planner's decision.** ADR-0147's matrix assumed that a missing plan always meant a fallback plan. Under D2, a failed `planner_asked` turn has no plan and no fallback. The allowed matrix becomes:
+
+  | `memory_digest_items` | `planner_decision` | Allowed `memory_relevance` |
+  |---|---|---|
+  | 0 | any | `not_applicable` only |
+  | > 0 | `failed`, or a fallback plan | `not_applicable` only |
+  | > 0 | `declined` or `expanded` | `used`, `none_relevant` or `unstated` only |
+
+  A valid decline is a plan, so it carries the planner's judgment of the digest. A decline can carry `used`, for example when memory shows that the request is already answered.
+- **The terminal planner event (ADR-0147 D5) fires on every path of D2,** including a decline and every failure reason. It carries the D6 planner fields and the digest fields of ADR-0147 D5.
+
+The digest's effect on the decision is unmeasured. AC-8 measures it before the umbrella closes, and AC-11 carries ADR-0147's invariant checks.
 
 ### D6 — The planner's decision, inputs and delay are recorded
 
@@ -169,16 +197,22 @@ Every turn gains these durable fields, in `route_traces` and in the ES projectio
 | Field | Values | Set when |
 |---|---|---|
 | `planner_decision` | `declined`, `expanded`, `failed`, or null | null when the planner did not run |
-| `planner_deployment` | the deployment key of the planner call | the planner ran |
-| `planner_thinking` | true or false, as sent | the planner ran |
+| `planner_failure_reason` | `invalid`, `timeout`, `exception`, `input_too_large`, or null | `planner_decision = failed` |
+| `planner_deployment`, `planner_mode` | the deployment key and the catalog mode of the planner call | the planner ran |
+| `planner_reasoning_chars` | the reasoning characters the response carried | the planner ran |
 | `planner_duration_ms` | the planner call's wall clock | the planner ran |
 | `planner_prompt_tokens`, `planner_completion_tokens` | the engine's usage counts | the planner ran |
-| `planner_history_chars` | the rendered history length | the planner ran |
+| `planner_input_chars` | the characters of each D1 input: system prompt, history, digest, message | the planner ran |
+| `conversation_history_chars` | the length the planner's history render has, or would have, for this turn | always, on the four types |
 | `expansion_budget` | `governance.expansion_budget` for the turn | always |
 | `synthesis_appended` | true when a synthesis message was added | always |
 | `first_token_ms` | from request receipt to the first token streamed to the user | always |
 
-`first_token_ms` is new. Nothing records it today: `latency_total_ms` and `latency_breakdown` are null on all 12 conversational turns since 2026-09-15. It is the measure the owner experiences, and AC-5 compares against it. **It ships before the routing change**, so that a pre-change baseline of `SINGLE` turns exists.
+`first_token_ms` is new. Nothing records it today: `latency_total_ms` and `latency_breakdown` are null on all 12 conversational turns since 2026-09-15. It is the measure the owner experiences, and AC-5 compares against it.
+
+`conversation_history_chars` is recorded on every turn of the four types, whether or not the planner runs. The render is a pure function of the session messages and costs no model call. On a turn before the routing change, it gives the history size the planner would have received, so that AC-5 can compare like with like.
+
+**These fields ship before the routing change,** so that a pre-change baseline of `SINGLE` turns exists.
 
 The fields need an idempotent migration under `docker/postgres/migrations/` and the matching columns in `docker/postgres/init.sql`, plus the row type, ledger, assembler and ES mapping.
 
@@ -187,9 +221,9 @@ A decline reads as a decline in every derived view, as ADR-0152 D4 states:
 - `_resolve_topology` returns `primary` for those rows.
 - `ctx.expansion_strategy` is cleared on a decline or a failure.
 
-### D7 — A planner configuration qualifies on a committed probe
+### D7 — A planner configuration qualifies on a committed probe, and only a qualified one reaches D2
 
-The probe used for Appendix A must be committed under `scripts/eval/` before the routing change ships. That means the capture step, the replay arms, both fixture sets, the scorer and the long-history arm. A configuration is the engine, model, quant and planner mode. It qualifies when the probe gives:
+The probe used for Appendix A must be committed under `scripts/eval/` before the routing change ships. That means the capture step, the replay arms, both fixture sets, the scorer and the long-history arm. The probe must run its eval gateway outside the production compose project (Implementation Notes). A configuration is the engine, model, quant and planner mode. It qualifies when the probe gives:
 
 | Criterion | Threshold | Measured, A thinking off |
 |---|---|---|
@@ -197,22 +231,24 @@ The probe used for Appendix A must be committed under `scripts/eval/` before the
 | Expand-correct | at least 43 of 48 | 46/48 |
 | Each follow-up direction | at least 11 of 12 | 12/12 and 12/12 |
 | Plans that fail to parse | 0 | 0 |
+| Reasoning characters on any thinking-off call | 0 | 0 |
 | Declined planner call, single-turn fixtures | p50 at most 2 s | 0.8 s |
 | Planner call, 60,000-char history, extended | at most 10 s | 5.9 s |
 | Planner call, 60,000-char history, cold | at most 60 s | 40.2 s |
 
-The decision thresholds sit two to three draws below the measured counts. The delay thresholds sit at about twice the measured values.
+The decision thresholds sit one to three draws below the measured counts. The delay thresholds sit at about twice the measured values. The thresholds are a regression floor for this fixture set, not a claim about real-traffic accuracy. AC-4 measures real traffic.
 
-**Where qualification binds.** This carries ADR-0152 D6:
-- The default local primary binding must qualify before a new deployment replaces it.
-- Other deployments a user can select for a session, today the OVH `Qwen3.8-27B` and `claude_sonnet`, are probed and the result is reported to the owner.
-- For a selectable deployment that fails, the owner decides: a gate on D2 for that deployment, or removal from selection.
+**Qualification is the gate.** A deployment receives a `planner` mode in `config/models.yaml` only in a change that posts its passing probe result on FRE-1537 (or, later, on the ticket of that change). Without a `planner` mode, D2 does not apply to the deployment (D2). So a deployment that fails the probe keeps today's routing until it passes. The owner may still accept a deployment that misses a threshold. That acceptance is recorded on the ticket, in the owner's words, with the scorer output beside it.
 
-A change to the planner prompt is a routing change and needs a new probe run.
+The default local primary binding must qualify before the routing change ships. Other deployments a user can select for a session, today the OVH `Qwen3.8-27B` and `claude_sonnet`, are probed after it. Until each one qualifies, its sessions keep today's routing.
+
+A change to the planner prompt is a routing change and needs a new probe run on every deployment with a `planner` mode.
 
 ---
 
 ## Alternatives Considered
+
+The sample is small (Appendix A4). Each rejection below is an operational choice on the measured evidence, not a proof that the alternative is worse in every case.
 
 ### Option 1: The fork planner (design B)
 
@@ -223,10 +259,10 @@ A change to the planner prompt is a routing change and needs a new probe run.
 - The primary's next call is almost free: 0.2 s to first token, with 5 new tokens.
 
 **Cons:**
-- Decline-correct 25/30 = 83% (66–93%), against A's 30/30. It expanded the command fixtures (`susan_1_run_tool` 3 of 3).
-- On declined turns, slower than A: 9.0 / 26.2 s to first token against 6.8 / 8.3 s. The planner instruction sits after this turn's new content, so it is prefilled on every call.
+- Slower than A on every one of the 9 clean declined fixtures: 2.5 s added at the median against A's 1.0 s. The planner instruction sits after this turn's new content, so it is prefilled on every call.
+- Lower point estimates on both rates: decline-correct 25/30 = 83% (66–93%) against A's 30/30 (89–100%). The intervals overlap. The misses are consistent on commands: `susan_1_run_tool` expanded in 3 of 3 draws.
 
-**Why Rejected:** It is worse on the decision that most traffic needs, and slower.
+**Why Rejected:** It costs more on the turns that most traffic produces, and no measured quality gain pays for that cost.
 
 ### Option 2: The primary decides through a tool (design C)
 
@@ -237,10 +273,10 @@ A change to the planner prompt is a routing change and needs a new probe run.
 - The decision uses everything the primary sees.
 
 **Cons:**
-- Expand-correct 1/48 = 2% (0–11%). The primary researches the question itself.
-- The measurement stopped at the first action, so a later `start_workers` call is not measured. 43 of 48 research questions began with `web_search`. So this limit does not rescue the design.
+- As its first action, the primary chose `start_workers` on 1 of 48 research draws: 2% (0–11%), against A's 96% (86–99%). The intervals do not overlap.
+- A later `start_workers` call in the loop is not measured. 43 of 48 research draws began with `web_search`, so the primary was doing the research itself.
 
-**Why Rejected:** It does not expand.
+**Why Rejected:** It almost never delegates at the point where delegation saves work. Measuring complete C turns stays a candidate for a later study.
 
 ### Option 3: Keep the planner's thinking on (ADR-0152 D5)
 
@@ -250,10 +286,10 @@ A change to the planner prompt is a routing change and needs a new probe run.
 - No new mode in the catalog.
 
 **Cons:**
-- Not shown better: 10/10 and 15/16 against thinking off's 30/30 and 46/48.
-- The call's p50 is 20.1 s against 6.8 s. On declines, 5.3 s against 0.8 s.
+- No difference detected: 10/10 and 15/16 against thinking off's 30/30 and 46/48, on one draw against three.
+- A declined call takes 5.3 s at the p50 against 0.8 s, and an expanded call 25.5 s against 9.6 s.
 
-**Why Rejected:** It adds about 13 s per call for no measured gain.
+**Why Rejected:** It adds about 4.5 s to every declined call, for no measured gain.
 
 ### Option 4: No memory for the planner
 
@@ -266,9 +302,22 @@ A change to the planner prompt is a routing change and needs a new probe run.
 **Cons:**
 - The history carries what the user said in this session, not what the system knows from earlier sessions. The digest is the one input that the history lacks.
 
-**Why Rejected:** The owner chose the digest on 2026-10-03. Its cost is at most 300 tokens, after the cached history. AC-8 checks that it does not damage the decision.
+**Why Rejected:** The owner chose the digest on 2026-10-03. Its cost is at most 300 estimated tokens, after the cached history. AC-8 checks that it does not damage the decision.
 
-### Option 5: Remove the forcings and let the complexity matrix decide (FRE-1394 as scoped)
+### Option 5: A router model in front of the planner
+
+**Description:** A small routing model decides expand or decline. Only an expansion pays for a planner call. ADR-0152 Option 4 measured Arch-Router-1.5B on llama.cpp on 2026-09-14.
+
+**Pros:**
+- A declined turn costs about 0.2 s.
+
+**Cons:**
+- It agreed on 35 of 54 draws (65%, 51–76%) and declined research questions that every planner expanded. It was measured on the old prompt and the old fixtures only, with no history.
+- With A thinking off, a declined planner call already costs 0.8 s at the p50, so the router's gain is small.
+
+**Why Rejected:** It fails on quality, and the delay it saves is now small. Carried from ADR-0152 unchanged.
+
+### Option 6: Remove the forcings and let the complexity matrix decide (FRE-1394 as scoped)
 
 **Description:** Delete the `CONVERSATIONAL` branch, so those turns fall through to the complexity matrix.
 
@@ -278,7 +327,7 @@ A change to the planner prompt is a routing change and needs a new probe run.
 
 **Why Rejected:** It does not reach the short requests it was written for. This is ADR-0152 Option 1, unchanged.
 
-### Option 6: Keep the ladder
+### Option 7: Keep the ladder
 
 **Description:** Leave the matrix as it is.
 
@@ -298,15 +347,15 @@ A change to the planner prompt is a routing change and needs a new probe run.
 - The planner decides with the conversation and with a bounded view of memory, so a follow-up such as "OK, now research the second option" has the turn it refers to.
 - A failed planner no longer dispatches workers on turns that nobody chose to expand.
 - The turn's time to first token is recorded for the first time (D6), so the delay is measured where the owner experiences it.
-- The planner call drops from about 20 s to about 7 s at the p50 (D4), on turns that already reach the planner today.
+- A deployment reaches D2 only after its thinking-off planner is measured (D7), so an unmeasured deployment keeps today's behaviour.
 
 ### Negative Consequences
 
-- **Every turn of the four types pays for one planner call.** On a short declined turn this adds about 0.8 s at the p50. On a long session it adds about 5–6 s with a warm cache, and up to about 40 s cold at 60,000 characters of history. A turn that expands also pays for writing the plan: 318 completion tokens at the p50, 695 at the most.
+- **Every turn of the four types pays for one planner call.** On a short declined turn this added 1.0 s at the median (0.8–1.9 s) in the paired measurement. On a long session the planner call costs about 5–6 s with a warm cache, and up to about 40 s cold at 60,000 characters of history. A turn that expands also pays for writing the plan: 319 completion tokens at the p50, 695 at the most.
 - **The same message can route differently on a retry.** The planner samples at temperature 1.0. Under A thinking-off, `c4_deliverable` and `c4_process` each declined in 1 of 3 draws.
-- **Cache eviction is real under load.** One session at a time showed no eviction. After 27 distinct planner prompts, the primary's prefix was gone, at a cost of a 20 s cold prefill. An expansion turn, with its workers on the same server, is the load case. It was not measured.
-- **The routing policy depends on the selected deployment.** The OVH `Qwen3.8-27B` and `claude_sonnet` are unmeasured as thinking-off planners.
-- **The planner prompt is part of routing.** A prompt change needs the probe (D7).
+- **Cache eviction is real under load.** One session at a time showed no eviction on the 25 clean timing rows. After 27 distinct planner prompts, the primary's prefix was gone, at a cost of a 20 s cold prefill. An expansion turn, with its workers on the same server, is the load case. It was not measured.
+- **The routing policy depends on the selected deployment.** The OVH `Qwen3.8-27B` and `claude_sonnet` keep today's routing until each qualifies (D7).
+- **The planner prompt is part of routing.** A prompt change needs the probe on every qualified deployment (D7).
 - **The change carries a Postgres migration and an ES mapping change** (D6), so its deployment is in the stricter class.
 - **The digest is new exposure, carried from ADR-0147 D2.** A memory-derived fact can reach a worker inside a goal, and a worker that holds `web_search` can carry it into a search query. Nothing bounds that mechanically.
 
@@ -314,10 +363,10 @@ A change to the planner prompt is a routing change and needs a new probe run.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| The delay on long sessions is higher than measured, because the cache misses more often under real load | High | AC-5 compares `first_token_ms` per history size against the pre-change baseline. D6 records prompt and history size, so a cold-cache pattern is visible. |
+| The delay on long sessions is higher than measured, because the cache misses more often under real load | High | AC-5 compares `first_token_ms` per history size against the pre-change baseline. D6 records the input sizes and prompt tokens, so a cold-cache pattern is visible. |
 | The fixtures overfit: 27 messages, 10 of them decline-type | Medium | AC-4 scores the planner against owner labels on real turns, with separate rates. |
-| The digest changes declines for the worse | Medium | AC-8 runs the probe with a seeded digest before the umbrella closes. |
-| A selectable deployment expands most turns | Medium | AC-10 probes each one, and D7 hands a failure to the owner. D3's cap bounds the cost meanwhile. |
+| The digest changes the decision for the worse | Medium | AC-8 runs the probe with relevant and unrelated seeded digests before the umbrella closes. |
+| A selectable deployment expands most turns | Medium | D7: it keeps today's routing until it qualifies. |
 | A planner failure costs the call's time on the single lane | Low | D2 sends a failure to the tool loop, so the cost is the call and nothing else. AC-3 checks it. |
 
 ---
@@ -325,50 +374,78 @@ A change to the planner prompt is a routing change and needs a new probe run.
 ## Implementation Notes
 
 **Files:**
-- `src/personal_agent/request_gateway/decomposition.py`: the `planner_asked` branch.
-- `src/personal_agent/orchestrator/expansion_controller.py`: the decline rule and schema, validation, the decline and failure returns, `DECOMPOSE` normalization, `briefing` as the only path, the digest's place in the user message, the planner mode request, and the terminal planner event.
-- `src/personal_agent/orchestrator/executor.py`: `planner_may_decline`, the return to `LLM_CALL` without a synthesis message, clearing `ctx.expansion_strategy`, the digest builder (ADR-0147 D1), and `first_token_ms`.
+- `src/personal_agent/request_gateway/decomposition.py`: the `planner_asked` branch and the `planner_mode_absent` gate.
+- `src/personal_agent/orchestrator/expansion_controller.py`: the decline rule and schema, validation, the decline and failure returns, `DECOMPOSE` normalization, `briefing` as the only path, the D1 total bound, the digest's place in the user message, the planner mode request, and the terminal planner event.
+- `src/personal_agent/orchestrator/executor.py`: `planner_may_decline`, the return to `LLM_CALL` without a synthesis message, clearing `ctx.expansion_strategy`, the digest builder (ADR-0147 D1), `conversation_history_chars` and `first_token_ms`.
 - `src/personal_agent/orchestrator/expansion_types.py`: `PlannerMemoryDigest` and `ExpansionPlan.memory_relevance`.
-- `config/models.yaml`: a `planner` mode on each local primary deployment.
-- `src/personal_agent/config/settings.py`: remove `planner_brief_mode`.
+- `config/models.yaml`: a `planner` mode on the local primary deployment, after it qualifies.
+- `src/personal_agent/config/settings.py`: remove `planner_brief_mode`. Add `planner_input_max_chars`.
 - `src/personal_agent/observability/route_trace/` (types, assembler, ledger and `_LABEL_LIE_SQL`), `src/personal_agent/observability/topology/`, `docker/postgres/init.sql`, `docker/postgres/migrations/`, and the ES index template.
 - `scripts/eval/`: the probe of D7.
 
 **Order:**
 1. The committed probe (D7), because AC-8 and AC-10 need it.
-2. The decision record with `first_token_ms` (D6). It ships first and runs long enough to give a pre-change baseline.
+2. The decision record with `first_token_ms` and `conversation_history_chars` (D6). It ships first and runs long enough to give the pre-change baseline of AC-5.
 3. The digest (D5).
-4. The planner mode (D4).
+4. The planner mode for the local binding (D4), with its passing probe result.
 5. The routing change (D2, D3), after 1 to 4.
-6. Qualification of the selectable deployments (D7).
+6. Qualification of the selectable deployments (D7), one at a time.
 
-**Eval-stack hazard found during the measurement.** Running the eval compose files with `-p seshat` from a worktree recreated production's `cloud-sim-searxng` with the worktree's bind mount. That cost about 7 minutes of degraded web search on 2026-10-03. The probe of D7 must run its gateway as a separate container or compose project, never under `-p seshat`.
+**Eval-stack hazard found during the measurement.** Running the eval compose files with `-p seshat` from a worktree recreated production's `cloud-sim-searxng` with the worktree's bind mount. That cost about 7 minutes of degraded web search on 2026-10-03. The probe of D7 must run its gateway as a standalone container or under its own compose project, never under `-p seshat`.
 
 ---
 
 ## Verification / Acceptance Criteria
 
-These criteria belong to this ADR. They are adjudicated on FRE-1537 after the implementation chain deploys, not at the merge of this ADR. "The window" is a deployed window of at least 200 turns after the routing change. "The baseline" is the window of at least 100 turns between the D6 deploy and the routing change.
+These criteria belong to this ADR. They are adjudicated on FRE-1537 after the implementation chain deploys, not at the merge of this ADR. Two periods are used:
+- **The baseline:** from the D6 deploy to the routing change, at least 14 days.
+- **The window:** 60 days after the routing change, or until AC-4's natural sample is full, whichever is first.
 
-- **AC-1 — The four types reach the planner.** · **Check:** a deterministic test of `_apply_matrix` over every combination of the four types and every `Complexity` value asserts `HYBRID` with `planner_asked`. The same test asserts that `MEMORY_RECALL`, `SELF_IMPROVE`, `DELEGATION` and the two resource forcings are unchanged. Live: `route_traces` over the window, grouped by `task_type` and `decomposition_reason`. · *Fails if* any test case differs, or any turn of the four types with expansion permitted records one of the four deleted reasons, or a null `planner_decision`.
+Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and mostly declines. Each criterion states the minimum count it needs, and what happens when real traffic cannot reach it.
+
+- **AC-1 — The four types reach the planner, and only on a qualified deployment.** · **Check:** a deterministic test of `_apply_matrix` over every combination of the four types and every `Complexity` value asserts `HYBRID` with `planner_asked` for a deployment with a `planner` mode, and today's routing with `planner_mode_absent` for one without. The same test asserts that `MEMORY_RECALL`, `SELF_IMPROVE`, `DELEGATION` and the two resource forcings are unchanged. Live: `route_traces` over the window, grouped by `task_type`, `decomposition_reason` and `planner_deployment`. · *Fails if* any test case differs, or any live turn of the four types on a qualified deployment, with expansion permitted, records one of the four deleted reasons or a null `planner_decision`.
 
 - **AC-2 — A decline is honoured and reads as a decline.** · **Check:** a test drives a `planner_asked` turn whose planner stub declines, and asserts no worker, no synthesis message, and the next state `LLM_CALL`. Live, over the window: rows with `planner_decision = declined`. · *Fails if* the test finds a worker or a synthesis message, or any live declined row has `sub_agent_count > 0`, `synthesis_appended = true`, a match on the label-lie predicate, or an ES `topology` other than `primary`.
 
-- **AC-3 — A failed planner does not expand.** · **Check:** three tests drive a `planner_asked` turn with a planner stub that returns invalid JSON, times out, or raises. Each asserts zero workers, no `fallback_planner_used` event, `planner_decision = failed`, and an answer through `LLM_CALL`. A fourth test asserts that a turn with `planner_may_decline` false still reaches the fallback planner. Live: rows with `planner_decision = failed`. · *Fails if* any of the first three tests dispatches, the fourth does not reach the fallback, or any live failed row has `sub_agent_count > 0`.
+- **AC-3 — A failed planner does not expand.** · **Check:** four tests drive a `planner_asked` turn with a planner stub that returns invalid JSON, times out, raises, or receives a message over D1's total bound. Each asserts zero workers, no `fallback_planner_used` event, `planner_decision = failed` with the matching `planner_failure_reason`, and an answer through `LLM_CALL`. A fifth test asserts that a turn with `planner_may_decline` false still reaches the fallback planner. Live: rows with `planner_decision = failed`. · *Fails if* any of the first four tests dispatches, the fifth does not reach the fallback, or any live failed row has `sub_agent_count > 0`.
 
-- **AC-4 — On real traffic, the planner agrees with the owner, in each direction.** · **Check:** the owner labels `planner_asked` turns from the window as "should expand" or "should not", blind to the decision. Each message is read from its Captain's Log capture (`user_message`, joined on `trace_id`). The sample holds at least 30 turns the owner labels "should not" and at least 15 labelled "should expand". Decline-correct and expand-correct are reported separately, each with a 95% Wilson interval. Real traffic is small (18 real chat turns from 2026-09-15 to 2026-10-02) and mostly declines. So the "should expand" stratum may be filled with research questions the owner sends live during the window, marked as such. · *Fails if* decline-correct is below 27 of 30 (90%) or expand-correct below 12 of 15 (80%), if either rate is computed from fewer turns than stated, or if one pooled agreement figure is reported in place of the two.
+- **AC-4 — On real traffic, the planner agrees with the owner, in each direction.** Two samples, reported separately and never pooled.
+  - *Natural sample.* Every `planner_asked` turn in the window, labelled by the owner "should expand" or "should not", blind to the decision. Each message is read from its Captain's Log capture (`user_message`, joined on `trace_id`).
+  - *Challenge sample.* 15 research questions that the owner writes after the routing change, not taken from the fixtures, labelled "should expand" before they are sent, and sent live in the window. The rows are marked as challenge rows.
 
-- **AC-5 — The delay the owner experiences is the one measured.** · **Check:** `first_token_ms` on declined `planner_asked` turns in the window, against `SINGLE` turns of the same task types in the baseline, on the same deployment. Both are split at `planner_history_chars` 8,000 (for baseline turns, the history the planner would have received). · *Fails if* the median added delay exceeds 3 s below 8,000 characters or 10 s at or above it, if the baseline holds fewer than 30 turns in either split, or if the comparison uses `planner_duration_ms` in place of `first_token_ms`.
+  **Error budget, and its basis.** An unwanted expansion costs the owner time and money on a turn that needed neither: the measured plan alone adds about 10 s, and the workers add far more (FRE-1517: 6,576 s with workers against 1,712 s without, over 8 turns). A wrong decline costs answer depth, and the owner can recover it by asking again. So the budget is tighter on declines.
 
-- **AC-6 — The inputs stay inside their bounds.** · **Check:** over the window, `planner_history_chars` and `planner_prompt_tokens` per planner call, and the digest fields of ADR-0147 D5. · *Fails if* any call records `planner_history_chars` above 60,000, a digest above 20 items, 120 characters per line or 300 estimated tokens, or a planner prompt above 574 + 16,100 + 300 tokens plus the message's own tokens.
+  · **Check:** decline-correct over the natural "should not" turns, and expand-correct over the challenge sample, each with a 95% Wilson interval. The natural "should expand" turns are reported with their interval as exploratory. · *Fails if* the natural sample holds fewer than 30 "should not" turns at the end of the window, or more than 2 of them were expanded (decline-correct below 28 of 30), or the challenge sample shows expand-correct below 12 of 15, or one pooled figure is reported in place of the two. At these sizes, a pass still allows a true rate as low as the interval's lower bound (78.7% for 28/30, 54.8% for 12/15). The ADR states that limit, and a real-traffic result stays a floor check, not an accuracy estimate.
 
-- **AC-7 — Thinking off is what ran.** · **Check:** over the window, `planner_thinking` and `planner_completion_tokens` on the local binding. · *Fails if* any local planner call records `planner_thinking = true`, or the p50 `planner_completion_tokens` of declined calls exceeds 40. The measured p50 is 13 tokens, at most 19. A decline that thinks spends hundreds of tokens, so a thinking leak cannot pass this check.
+- **AC-5 — The delay the owner experiences is the one measured.** · **Check:** `first_token_ms` on declined `planner_asked` turns in the window, against `SINGLE` turns of the same task types in the baseline, on the same deployment. Both are split by `conversation_history_chars` at 8,000. · *Fails if*:
+  - the median added delay exceeds 3 s below 8,000 characters, with at least 20 turns in each period; or
+  - the median added delay exceeds 10 s at or above 8,000 characters, when each period holds at least 10 such turns; or
+  - the comparison uses `planner_duration_ms` in place of `first_token_ms`.
 
-- **AC-8 — The digest informs the plan and does not damage the decision.** · **Check, two parts.** *Seeded:* ADR-0147 AC-2's paired integration test (a coined token in a relevant digest must reach a goal, and an unrelated digest must return `none_relevant` and leak nothing), run on the D2 prompt. *Probe:* the committed probe re-run with an unrelated seeded digest on every fixture. · *Fails if* the seeded test fails, or the probe with the digest misses any D7 decision threshold.
+  If the long split cannot reach 10 turns in either period, it is decided instead by the committed probe's long-history arm on the production engine (D7), with its extended-call threshold. The ADR states this replacement in advance, because long sessions are rare in real traffic.
 
-- **AC-9 — The bound holds and no round budget moved.** · **Check:** over the window, `sub_agent_count` against `expansion_budget`. Then compare `sub_agent_rounds_by_thoroughness` in the deployed configuration at the end of the chain with its value on 2026-10-03, which is unset. · *Fails if* any turn records more than min(3, `expansion_budget`) workers, or the round budget value differs.
+- **AC-6 — The inputs stay inside their bounds.** · **Check:** over the window, `planner_input_chars` per planner call, and the digest fields of ADR-0147 D5. A unit test feeds an oversized history, an oversized digest set and an oversized message. · *Fails if* any live call records history, digest and message together above 64,000 characters, a history above 60,000 characters, or a digest above 20 items, 120 characters per line or 300 estimated tokens. It also fails if the test finds the message cut, the history trimmed other than from the oldest end, or an oversized message that does not fail with `input_too_large`.
 
-- **AC-10 — The deployments a user can select are probed.** · **Check:** the committed probe, run from the repo, on the local primary binding and on each selectable primary deployment in its planner configuration. The scorer output is posted on FRE-1537 against the D7 thresholds. · *Fails if* the probe cannot run from the repo against a deployment, the local binding misses a threshold, or a selectable deployment misses one and FRE-1537 holds no owner decision on it. The miss itself does not fail this criterion.
+- **AC-7 — Thinking off is what ran, on every deployment.** · **Check:** over the window, `planner_reasoning_chars`, `planner_mode` and `planner_completion_tokens` on every planner call. · *Fails if* any call in a `planner` mode records `planner_reasoning_chars` above 0, or the p50 `planner_completion_tokens` of declined calls on any deployment exceeds 40. With thinking off, declines took a median 13 completion tokens, at most 19. With thinking on, they took a median 165, so a thinking leak cannot pass this check.
+
+- **AC-8 — The digest informs the plan and does not damage the decision.** · **Check, three parts:**
+  1. *Seeded pair:* ADR-0147 AC-2's integration test, run on the D2 prompt. A coined token in a relevant digest must reach a goal, and an unrelated digest must return `none_relevant` and leak nothing.
+  2. *Unrelated digest:* the committed probe re-run with an unrelated seeded digest on every fixture.
+  3. *Relevant digest:* 4 expand fixtures and 4 decline fixtures re-run with a digest that bears on the question but does not change its right answer. For example, a heat-pump question with a digest line that the user lives in Brittany.
+
+  · *Fails if* the seeded pair fails, if part 2 misses any D7 decision threshold, or if part 3 changes the decision on more than 1 of the 24 draws (8 fixtures × 3).
+
+- **AC-9 — The bound holds, and this chain moved no round budget.** · **Check:** over the window, `sub_agent_count` against `expansion_budget`. Then the combined diff of this ADR's implementation PRs, for `sub_agent_rounds_by_thoroughness`, `sub_agent_max_tool_iterations` and `sub_agent_rounds_for`, in code, configuration and `.env.example`. · *Fails if* any turn records more than min(3, `expansion_budget`) workers, or any implementation PR of this chain changes one of those three. A change made under FRE-1487 is outside this check.
+
+- **AC-10 — Only qualified deployments reach D2.** · **Check:** for each deployment with a `planner` mode in the deployed `config/models.yaml`, the ticket that added the mode holds the probe's scorer output, run from the repo, or the owner's recorded acceptance of a miss. Live: `route_traces` over the window, grouped by `planner_deployment`. · *Fails if* a deployment has a `planner` mode without a posted passing result or a recorded owner acceptance, if the local binding has no passing result, or if any live `planner_asked` turn ran on a deployment without a `planner` mode.
+
+- **AC-11 — ADR-0147's invariants hold under this design.** · **Check, carried from ADR-0147 AC-1, AC-5 and AC-6:**
+  - *Parity:* a unit test feeds session items, blank items and more than 47 items, and asserts that every digest line is a prefix of the renderer's own line for the same item. Live, on the terminal planner event, the digest keys are an ordered sub-multiset of the rendered keys.
+  - *No memory section in a worker:* `memory_in_context` on every sub-agent capture in the window.
+  - *Relevance matrix:* D5's matrix over every terminal planner event in the window.
+  - *Event coverage:* the count of terminal planner events equals the count of turns with a non-null `planner_decision`.
+
+  · *Fails if* the parity test fails or any live digest key is absent from the rendered keys, any capture reports `memory_in_context = true`, any event falls outside the matrix, or the two counts differ.
 
 ---
 
@@ -489,9 +566,22 @@ For C, the count is draws whose first action was not `start_workers`.
 ### A4. Instrument notes and limits
 
 - **No memory, no MCP tools.** The eval graph was empty, so the captured prompts carry no memory section. The MCP gateway is a production container and stayed off, so the prompts carry no MCP tools. Production's first primary call reaches about 25,000 prompt tokens on a long session (a 2026-09-28 capture: 25,040). The eval prompts were about 8,700.
-- **A cache artifact on two rows.** On `tool_logs` and `tariffs_expand`, the primary after design A found the full prompt cached from the preceding B step (`cache_n` 15,299 and 15,134). Those two "A planner + primary" figures are optimistic. Both prompts were larger than the others, and their SINGLE figures (24.5 s) include a colder prefill.
+- **A cache artifact on two rows.** On `tool_logs` and `tariffs_expand`, the primary after design A found the full prompt cached from the preceding B step (`cache_n` 15,299 and 15,134). Those two "A planner + primary" figures are optimistic, and both rows are excluded from every paired figure in this ADR. Both prompts were larger than the others, and their SINGLE figures (24.5 s) include a colder prefill. On the other 25 rows, the primary's `cache_n` after A was 6,540 on every row. The protocol ran B before A on every fixture, in one fixed order. A randomized order was not run.
 - **Cache restore granularity.** Every warm extension prefilled about 2,071 tokens (planner) or 2,157 (primary, p50), not only the new text. The cause given in Context point 5 is an inference.
 - **C stops at the first action.** A `start_workers` call later in the primary's loop is not measured.
 - **Sample size.** 10 decline-type fixtures and 16 expand-type fixtures. The intervals are wide, and AC-4 exists for that reason.
+- **Quantiles.** A p50 or p90 is the value at index round(q·(n−1)) of the sorted values. With n of 9 to 15, a p90 is close to the maximum and moves with one draw. For that reason the timing comparison uses paired per-fixture differences, with their median and range.
 - **Real-traffic weights.** The 2026-07/08 mix in Context is the weight to apply. At 90% decline traffic, A thinking-off's weighted agreement is 100%, and B's is 84%. These weighted figures do not decide anything. The two separate rates do.
 - **Raw rows.** One JSON line per call, kept in the `adr` worktree's git-ignored `telemetry/archive/fre1537-planner-probe/`, with the stub, the capture driver, the replay and analysis scripts, and the captured request bodies. They are not committed, because they are run output and the request bodies hold full prompts. D7 commits the probe.
+
+### A5. Planner call summaries (decision arms)
+
+Scored draws only (`c5_noverb` excluded). Seconds are the planner call's wall clock, streamed.
+
+| Arm | Declined: n | p50 / p90 s | Completion tokens p50 / max | Expanded: n | p50 / p90 s | Completion tokens p50 / max | All: n, p50 / p90 s |
+|---|---|---|---|---|---|---|---|
+| A, thinking off | 32 | 0.76 / 1.25 | 13 / 19 | 46 | 9.61 / 14.44 | 319 / 695 | 78, 6.81 / 13.33 |
+| A, thinking on | 11 | 5.32 / 11.49 | 165 / 646 | 15 | 25.52 / 31.22 | 825 / 1,359 | 26, 20.05 / 29.66 |
+| B, thinking off | 30 | 8.43 / 16.70 | 13 / 13 | 48 | 24.60 / 37.14 | 584 / 1,371 | 78, 20.29 / 32.34 |
+
+The declined counts include draws that declined an expand fixture, so they differ from the decline-fixture counts in A2. Design A's prompt was 607–722 tokens on single-turn fixtures and 776–820 with the short fixture histories. Design B's prompt was 9,300 tokens at the p50.

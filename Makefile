@@ -384,11 +384,37 @@ test-infra-ps:          ## Show test infra container status
 # copy (verified missing several FRE-1372/FRE-1498 behaviour keys).
 EVAL_ENV_FILE := --env-file /opt/seshat/.env
 
-eval-infra-up:          ## Start eval infra (names eval services explicitly — FRE-1342, never the file union; always rebuilds — FRE-1341: a cached image can silently serve stale code)
-	@BUILD_FINGERPRINT=$$(uv run python -m scripts.eval.gateway_freshness --print-fingerprint) docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml $(EVAL_ENV_FILE) up -d --build postgres-eval neo4j-eval elasticsearch-eval redis-eval seshat-gateway-control seshat-gateway-treatment
+# FRE-1542: the eval stack shares production's compose project name (`seshat`) on purpose —
+# its volumes (`seshat_*_eval`) and its `cloud-sim` network, which carries the DNS names
+# `caddy` and `searxng`, are project-scoped. Left to default, the project name follows the
+# working directory (`build` in a worktree), which gives a worktree run empty eval volumes and
+# an unreachable `caddy`. Pinned, so the stack is the same one from every directory.
+#
+# Every command below names eval services and passes `--no-deps`. Without it, `depends_on`
+# pulls production's `searxng` into the scope of an `up` (FRE-1344's `required: false` did not
+# stop that on 2026-10-03: a worktree run recreated the live container with a bind mount that
+# lacks the gitignored settings.yml). `--no-deps` also drops compose's wait for healthy
+# substrate, so the substrate comes up first, with `--wait`, then the gateways.
+#
+# Before acting, a `--dry-run` of the same command is piped to `compose_plan_guard`, which
+# refuses a plan that touches any container `docker-compose.eval.yml` does not define.
+EVAL_PROJECT ?= seshat
+EVAL_COMPOSE := docker compose -p $(EVAL_PROJECT) -f docker-compose.cloud.yml -f docker-compose.eval.yml $(EVAL_ENV_FILE)
+EVAL_SUBSTRATE := postgres-eval neo4j-eval elasticsearch-eval redis-eval
+EVAL_GATEWAYS := seshat-gateway-control seshat-gateway-treatment
 
-eval-infra-down:        ## Stop eval infra
-	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml $(EVAL_ENV_FILE) down seshat-gateway-control seshat-gateway-treatment postgres-eval neo4j-eval elasticsearch-eval redis-eval
+eval-infra-up:          ## Start eval infra (eval services only, --no-deps, plan guarded — FRE-1542; always rebuilds — FRE-1341: a cached image can silently serve stale code)
+	@plan=$$($(EVAL_COMPOSE) up -d --no-deps --dry-run $(EVAL_SUBSTRATE) $(EVAL_GATEWAYS) 2>&1) \
+	  || { printf '%s\n' "$$plan" >&2; exit 1; }; \
+	printf '%s\n' "$$plan" | uv run python -m scripts.eval.compose_plan_guard || exit 1; \
+	$(EVAL_COMPOSE) up -d --no-deps --wait $(EVAL_SUBSTRATE) || exit 1; \
+	BUILD_FINGERPRINT=$$(uv run python -m scripts.eval.gateway_freshness --print-fingerprint) $(EVAL_COMPOSE) up -d --no-deps --build $(EVAL_GATEWAYS)
+
+eval-infra-down:        ## Stop eval infra (plan guarded — FRE-1542)
+	@plan=$$($(EVAL_COMPOSE) down --dry-run $(EVAL_GATEWAYS) $(EVAL_SUBSTRATE) 2>&1) \
+	  || { printf '%s\n' "$$plan" >&2; exit 1; }; \
+	printf '%s\n' "$$plan" | uv run python -m scripts.eval.compose_plan_guard --allow-empty-plan || exit 1; \
+	$(EVAL_COMPOSE) down $(EVAL_GATEWAYS) $(EVAL_SUBSTRATE)
 
 # ─── Study infrastructure (FRE-838, ADR-0114 D1) ─────────────────────────────
 # Isolated Neo4j+GDS sandbox for the decoupled associative-memory research

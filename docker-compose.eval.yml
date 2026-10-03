@@ -25,16 +25,17 @@
 #
 # Usage:
 #
-#   docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
-#     up -d postgres-eval neo4j-eval elasticsearch-eval redis-eval \
-#            seshat-gateway-control seshat-gateway-treatment
+#   make eval-infra-up
 #
 #   curl -fsS http://localhost:9002/health   # control
 #   curl -fsS http://localhost:9003/health   # treatment
 #
-#   docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
-#     down seshat-gateway-control seshat-gateway-treatment \
-#          postgres-eval neo4j-eval elasticsearch-eval redis-eval
+#   make eval-infra-down
+#
+# FRE-1542: use the make targets, not a raw `docker compose up`. A raw `up` of the gateways
+# pulls production's `searxng` into its scope through `depends_on`, and a run from a worktree
+# recreated the live container (2026-10-03). The targets pass `--no-deps` and refuse any plan
+# that touches a container this file does not define (scripts/eval/compose_plan_guard.py).
 #
 # Reusable for FRE-263 (PIVOT-4) and FRE-264 (PIVOT-5) evals.
 
@@ -66,6 +67,8 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
     # failed despite the target naming eval services explicitly. `required: false` lets the
     # eval gateways address it by name without compose managing its lifecycle on their
     # behalf. Search is not needed for the gateway to become healthy.
+    # FRE-1542: this did NOT prevent a recreate from a worktree on 2026-10-03. The guarantee
+    # is `--no-deps` in `make eval-infra-up`, not this line.
     searxng:
       condition: service_started
       required: false

@@ -1,6 +1,6 @@
 # ADR-0142: Capability Is Not a Property of Register — a Turn Earns Its Budget by Demonstrating Need, and the User Arbitrates
 
-**Status:** Accepted — 2026-09-05 (owner)
+**Status:** Accepted — 2026-09-05 (owner) · **D1's routing half superseded by [ADR-0154](ADR-0154-what-the-planner-sees-and-what-it-decides.md) — 2026-10-03** (the four register types route to the planner on a qualified deployment; D1's cap half is unchanged).
 **Date:** 2026-09-05
 **Deciders:** Owner (architect); adr seat (Opus)
 **Tags:** routing, request-gateway, orchestrator, governance, cost-control, transport

@@ -31,6 +31,9 @@ from personal_agent.exceptions import MissingIdentityError
 from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
 from personal_agent.observability.route_trace.types import (
     OrchestrationEvent,
+    PlannerDecision,
+    PlannerFailureReason,
+    PlannerGateReason,
     RouteTraceRow,
 )
 
@@ -53,7 +56,12 @@ _INSERT_SQL = """
         cost_live_usd, cost_authoritative_usd, cost_reconciled,
         input_tokens, output_tokens,
         fallback_triggered, error_type, error_class,
-        effective_tool_iteration_ceiling, constraint_resolutions
+        effective_tool_iteration_ceiling, constraint_resolutions,
+        planner_decision, planner_failure_reason, planner_deployment, planner_mode,
+        planner_reasoning_chars, planner_duration_ms,
+        planner_prompt_tokens, planner_completion_tokens, planner_input_chars,
+        planner_gate_reason, conversation_history_chars, expansion_budget,
+        synthesis_appended, first_token_ms
     ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9,
@@ -68,7 +76,12 @@ _INSERT_SQL = """
         $34, $35, $36,
         $37, $38,
         $39, $40, $41,
-        $42, $43::jsonb
+        $42, $43::jsonb,
+        $44, $45, $46, $47,
+        $48, $49,
+        $50, $51, $52::jsonb,
+        $53, $54, $55,
+        $56, $57
     )
     ON CONFLICT (trace_id, task_id) DO NOTHING
 """
@@ -101,7 +114,20 @@ _LABEL_LIE_SQL = (
     "OR "
     "(decomposition_strategy = 'single' AND orchestration_event IN "
     "('delegate_called', 'delegate_result_used', 'delegate_result_discarded'))"
-    ")"
+    ") "
+    # ADR-0154 D6 / ADR-0152 D4: a planner that declined or failed returned the turn to the
+    # tool loop on purpose, so the HYBRID label it was routed under is not a lie.
+    # COALESCE keeps the exclusion two-valued: ``NULL IN (...)`` is NULL, and ``AND NOT NULL``
+    # would drop every row that has no planner decision.
+    "AND NOT (COALESCE(decomposition_reason, '') = 'planner_asked' "
+    "AND COALESCE(planner_decision, '') IN ('declined', 'failed'))"
+)
+
+
+# ADR-0154 D6 (FRE-1512): the one post-insert write. Turn-level row only; first write wins.
+_SET_FIRST_TOKEN_SQL = (
+    "UPDATE route_traces SET first_token_ms = $2 "
+    "WHERE trace_id = $1 AND task_id IS NULL AND first_token_ms IS NULL RETURNING *"
 )
 
 
@@ -262,6 +288,24 @@ class RouteTraceLedger:
                 row.error_class,
                 row.effective_tool_iteration_ceiling,
                 json.dumps(list(row.constraint_resolutions)),
+                row.planner_decision,
+                row.planner_failure_reason,
+                row.planner_deployment,
+                row.planner_mode,
+                row.planner_reasoning_chars,
+                row.planner_duration_ms,
+                row.planner_prompt_tokens,
+                row.planner_completion_tokens,
+                (
+                    json.dumps(dict(row.planner_input_chars))
+                    if row.planner_input_chars is not None
+                    else None
+                ),
+                row.planner_gate_reason,
+                row.conversation_history_chars,
+                row.expansion_budget,
+                row.synthesis_appended,
+                row.first_token_ms,
             )
         log.debug(
             "route_trace_written",
@@ -270,6 +314,29 @@ class RouteTraceLedger:
             orchestration_event=row.orchestration_event,
             gateway_label=row.gateway_label,
         )
+
+    async def set_first_token_ms(
+        self, trace_id: UUID, first_token_ms: float
+    ) -> RouteTraceRow | None:
+        """Record the turn's time to first token on its turn-level row (ADR-0154 D6).
+
+        The seam writes the row before the reply is pushed to the user, so the value
+        arrives afterwards. The first write wins: a row that already carries a value is
+        left alone.
+
+        Args:
+            trace_id: The turn trace identifier.
+            first_token_ms: Request receipt to the first user-visible push, in ms.
+
+        Returns:
+            The updated row, or ``None`` when no turn-level row needed the update (the
+            seam write failed, the row already had a value, or the ledger is not
+            connected).
+        """
+        if not self.pool:
+            return None
+        record = await self.pool.fetchrow(_SET_FIRST_TOKEN_SQL, trace_id, first_token_ms)
+        return None if record is None else _row_from_record(record)
 
     async def get_by_trace_id(self, trace_id: UUID) -> list[RouteTraceRow]:
         """Read all route-trace rows for a ``trace_id`` — turn-level + segments (FRE-517).
@@ -366,6 +433,7 @@ def _row_from_record(record: asyncpg.Record) -> RouteTraceRow:
     latency_breakdown = _loads(record["latency_breakdown"])
     ped = _loads(record["pedagogical_outcomes"])
     constraint_resolutions = _loads(record["constraint_resolutions"]) or []
+    planner_input_chars = _loads(record["planner_input_chars"])
     return RouteTraceRow(
         trace_id=record["trace_id"],
         session_id=record["session_id"],
@@ -410,6 +478,20 @@ def _row_from_record(record: asyncpg.Record) -> RouteTraceRow:
         error_class=record["error_class"],
         effective_tool_iteration_ceiling=record["effective_tool_iteration_ceiling"],
         constraint_resolutions=tuple(constraint_resolutions),
+        planner_decision=cast(PlannerDecision | None, record["planner_decision"]),
+        planner_failure_reason=cast(PlannerFailureReason | None, record["planner_failure_reason"]),
+        planner_deployment=record["planner_deployment"],
+        planner_mode=record["planner_mode"],
+        planner_reasoning_chars=record["planner_reasoning_chars"],
+        planner_duration_ms=record["planner_duration_ms"],
+        planner_prompt_tokens=record["planner_prompt_tokens"],
+        planner_completion_tokens=record["planner_completion_tokens"],
+        planner_input_chars=planner_input_chars,
+        planner_gate_reason=cast(PlannerGateReason | None, record["planner_gate_reason"]),
+        conversation_history_chars=record["conversation_history_chars"],
+        expansion_budget=record["expansion_budget"],
+        synthesis_appended=record["synthesis_appended"],
+        first_token_ms=record["first_token_ms"],
     )
 
 

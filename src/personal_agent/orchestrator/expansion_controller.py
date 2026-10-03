@@ -57,6 +57,7 @@ from personal_agent.orchestrator.worker_types import (
     render_worker_report_body,
     worker_types_declaring,
 )
+from personal_agent.request_gateway.types import TaskType
 
 logger = structlog.get_logger(__name__)
 
@@ -226,6 +227,57 @@ def _render_planner_history(messages: list[dict[str, Any]], max_chars: int) -> s
         line_chars += len(line)
     kept.reverse()
     return "\n".join(kept)
+
+
+def planner_history_text(messages: list[dict[str, Any]] | None, query: str, max_chars: int) -> str:
+    """Render the conversation history the planner is given for a turn (FRE-1521).
+
+    The production caller's ``messages`` is the turn's full window and already ends
+    with the current query. Left in, that last entry would render into the history
+    block and the "Query:" line, so it is dropped here. The planner call and the
+    ``conversation_history_chars`` record (ADR-0154 D6) both use this function, so
+    the recorded size is the size the planner would receive.
+
+    Args:
+        messages: The turn's conversation window, oldest first.
+        query: The turn's current user query.
+        max_chars: Character budget for the render.
+
+    Returns:
+        The history render, oldest kept line first.
+    """
+    history_source = messages or []
+    if history_source and get_text_content(history_source[-1].get("content", "")) == query:
+        history_source = history_source[:-1]
+    return _render_planner_history(history_source, max_chars)
+
+
+# ADR-0154 D6: the task types whose turns record ``conversation_history_chars``.
+_REGISTER_TASK_TYPES = frozenset(
+    {TaskType.CONVERSATIONAL, TaskType.TOOL_USE, TaskType.ANALYSIS, TaskType.PLANNING}
+)
+
+
+def conversation_history_chars(
+    task_type: TaskType, messages: list[dict[str, Any]] | None, max_chars: int
+) -> int | None:
+    """Return the length the planner's history render has, or would have, for a turn.
+
+    A pure function of the session messages: it costs no model call and does not depend
+    on whether the planner runs (ADR-0154 D6).
+
+    Args:
+        task_type: The gateway-classified task type.
+        messages: The turn's conversation window, oldest first.
+        max_chars: The planner's history budget (``settings.planner_history_max_chars``).
+
+    Returns:
+        The render length, or ``None`` outside the four register types.
+    """
+    if task_type not in _REGISTER_TASK_TYPES:
+        return None
+    query = get_text_content(messages[-1].get("content", "")) if messages else ""
+    return len(planner_history_text(messages, query, max_chars))
 
 
 def _render_worker_task(task: PlanTask) -> str:
@@ -652,19 +704,9 @@ class ExpansionController:
             planner_system_prompt = _build_planner_system_prompt(tool_surface, brief_mode)
             user_content = f"Strategy: {strategy}\nQuery: {query}\n\nProduce the JSON plan."
             if brief_mode == "briefing":
-                history_source = messages or []
-                # FRE-1521: the production caller's `messages` is the turn's
-                # full window and already ends with the current query
-                # (executor.py derives `query` from `ctx.messages[-1]`) — left
-                # in, that last entry would render into the history block AND
-                # the "Query:" line, wasting budget on a duplicate and
-                # crowding out an older standing rule for no reason.
-                if (
-                    history_source
-                    and get_text_content(history_source[-1].get("content", "")) == query
-                ):
-                    history_source = history_source[:-1]
-                history_text = _render_planner_history(history_source, history_max_chars)
+                # FRE-1521: the last message is dropped when it is the current query
+                # (see planner_history_text), so it is not rendered twice.
+                history_text = planner_history_text(messages, query, history_max_chars)
                 history_chars = len(history_text)
                 if history_text:
                     user_content = f"Conversation so far:\n{history_text}\n\n{user_content}"

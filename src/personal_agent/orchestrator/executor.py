@@ -5017,6 +5017,16 @@ async def step_init(
         # the reset itself should run on this path is the separate, larger review that this
         # emit exists to give ground truth to.
         _emit_cache_reset_decision(ctx)
+        # ADR-0154 D6 (FRE-1512): the size of the planner's history render for this turn,
+        # stamped on the four register types before any expansion decision, so a turn
+        # where the planner does not run still records the size it would have received.
+        from personal_agent.orchestrator.expansion_controller import (  # noqa: PLC0415
+            conversation_history_chars,
+        )
+
+        ctx.conversation_history_chars = conversation_history_chars(
+            gw.intent.task_type, ctx.messages, settings.planner_history_max_chars
+        )
         # FRE-945: the sibling conversation_context_loaded emit was dark for the identical
         # reason — its call site (below apply_context_window/_maybe_frozen_reset) sits below
         # this same branch's return. Placed here, at the top, for the same reason as the
@@ -5401,6 +5411,7 @@ async def step_init(
                     ),
                 }
                 ctx.messages.append(synthesis_msg)
+                ctx.synthesis_appended = True  # ADR-0154 D6 (FRE-1512)
 
             log.info(
                 "expansion_controller_complete",

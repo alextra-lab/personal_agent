@@ -49,6 +49,7 @@ class Orchestrator:
         eval_mode: bool = False,
         authenticated: bool = False,
         attachments: Sequence[AttachmentRef] | None = None,
+        expansion_budget: int | None = None,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -77,6 +78,10 @@ class Orchestrator:
             attachments: Structured attachment references for this turn (FRE-661 /
                 ADR-0101 §2), kept separate from user_message so Captain's Log and
                 entity extraction never see attachment metadata (AC-5).
+            expansion_budget: The per-turn expansion budget the entry point computed
+                (ADR-0154 D6, FRE-1512). Carried because ``gateway_output`` is ``None``
+                when the gateway pipeline failed, and the route-trace row records the
+                budget on every turn.
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -124,6 +129,7 @@ class Orchestrator:
             eval_mode=eval_mode,
             authenticated=authenticated,
             attachments=tuple(attachments or ()),
+            expansion_budget=expansion_budget,
         )
 
         # Execute task

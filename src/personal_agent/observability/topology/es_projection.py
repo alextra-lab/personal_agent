@@ -91,7 +91,47 @@ def build_topology_doc(row: RouteTraceRow, *, topology: str) -> dict[str, Any]:
         doc["decomposition_strategy"] = row.decomposition_strategy
     if row.decomposition_reason is not None:
         doc["decomposition_reason"] = row.decomposition_reason
+    _add_planner_fields(doc, row)
     return doc
+
+
+def _add_planner_fields(doc: dict[str, Any], row: RouteTraceRow) -> None:
+    """Add the ADR-0154 D6 fields to ``doc`` (FRE-1512), omitting every ``None``.
+
+    Segment rows leave all of them unset, so none reaches a segment document.
+
+    Args:
+        doc: The document under construction; mutated in place.
+        row: The route-trace row being projected.
+    """
+    for name in (
+        "planner_decision",
+        "planner_failure_reason",
+        "planner_deployment",
+        "planner_mode",
+        "planner_gate_reason",
+    ):
+        value = getattr(row, name)
+        if value is not None:
+            doc[name] = value
+    for name in (
+        "planner_reasoning_chars",
+        "planner_prompt_tokens",
+        "planner_completion_tokens",
+        "conversation_history_chars",
+        "expansion_budget",
+    ):
+        value = getattr(row, name)
+        if value is not None:
+            doc[name] = int(value)
+    for name in ("planner_duration_ms", "first_token_ms"):
+        value = getattr(row, name)
+        if value is not None:
+            doc[name] = float(value)
+    if row.planner_input_chars is not None:
+        doc["planner_input_chars"] = {k: int(v) for k, v in row.planner_input_chars.items()}
+    if row.synthesis_appended is not None:
+        doc["synthesis_appended"] = bool(row.synthesis_appended)
 
 
 def project_route_trace_to_es(row: RouteTraceRow, *, topology: str) -> None:

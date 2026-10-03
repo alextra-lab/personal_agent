@@ -242,6 +242,7 @@ def assemble_route_trace(
     decomposition_reason: str | None = None
     degraded_stages: tuple[str, ...] = ()
     mode: str | None = None
+    gateway_expansion_budget: int | None = None
     if gateway_output is not None:
         task_type = _enum_value(gateway_output.intent.task_type)
         complexity = _enum_value(gateway_output.intent.complexity)
@@ -250,6 +251,7 @@ def assemble_route_trace(
         decomposition_reason = gateway_output.decomposition.reason
         degraded_stages = tuple(gateway_output.degraded_stages or ())
         mode = _enum_value(gateway_output.governance.mode)
+        gateway_expansion_budget = getattr(gateway_output.governance, "expansion_budget", None)
 
     gateway_label = f"{task_type or 'unknown'}/{strategy or 'unknown'}"
 
@@ -283,6 +285,12 @@ def assemble_route_trace(
     else:
         cost_live = float(authoritative_cost_usd)
     orchestration_event = classify_orchestration_event(ctx)
+
+    # ADR-0154 D6 (FRE-1512). The budget the app computed wins: gateway_output is None when
+    # the gateway pipeline failed, and D6 records the budget on every turn.
+    planner_run = getattr(ctx, "planner_run", None)
+    planner_input_chars = getattr(planner_run, "input_chars", None)
+    ctx_budget = getattr(ctx, "expansion_budget", None)
 
     # FRE-1291: ctx.loaded_skills is written only by model_decided's pre-load path and the
     # read_skill tool handler — it is also the dedup key those two paths (and the hybrid/
@@ -355,4 +363,27 @@ def assemble_route_trace(
             {"constraint": r.constraint, "action_id": r.action_id}
             for r in getattr(ctx, "constraint_resolutions", None) or ()
         ),
+        # ADR-0154 D6 (FRE-1512)
+        planner_decision=getattr(planner_run, "decision", None),
+        planner_failure_reason=getattr(planner_run, "failure_reason", None),
+        planner_deployment=getattr(planner_run, "deployment", None),
+        planner_mode=getattr(planner_run, "mode", None),
+        planner_reasoning_chars=getattr(planner_run, "reasoning_chars", None),
+        planner_duration_ms=getattr(planner_run, "duration_ms", None),
+        planner_prompt_tokens=getattr(planner_run, "prompt_tokens", None),
+        planner_completion_tokens=getattr(planner_run, "completion_tokens", None),
+        planner_input_chars=(
+            None
+            if planner_input_chars is None
+            else {
+                "system": planner_input_chars.system,
+                "history": planner_input_chars.history,
+                "digest": planner_input_chars.digest,
+                "message": planner_input_chars.message,
+            }
+        ),
+        planner_gate_reason=getattr(ctx, "planner_gate_reason", None),
+        conversation_history_chars=getattr(ctx, "conversation_history_chars", None),
+        expansion_budget=ctx_budget if ctx_budget is not None else gateway_expansion_budget,
+        synthesis_appended=bool(getattr(ctx, "synthesis_appended", False)),
     )

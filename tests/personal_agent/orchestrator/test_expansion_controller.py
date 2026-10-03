@@ -3003,7 +3003,8 @@ class TestPlannerCompletedTelemetryFRE1521:
         assert chars["message"] == len(
             "Strategy: HYBRID\nQuery: Plan lunch\n\nProduce the JSON plan."
         )
-        assert chars["total"] == len(user_content)
+        assert set(chars) == {"system", "history", "digest", "message"}
+        assert event["planner_input_total_chars"] == len(user_content)
 
     @pytest.mark.asyncio
     async def test_planner_completed_counts_the_reasoning_the_response_carried(
@@ -3096,3 +3097,25 @@ class TestPlannerInputTooLargeFRE1541:
         assert "fallback_planner_used" in events
         assert "planner_completed" not in events
         assert result.plan is not None
+
+    @pytest.mark.asyncio
+    async def test_a_caller_that_omits_the_bound_gets_the_settings_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import get_settings
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        monkeypatch.setattr(get_settings(), "planner_input_max_chars", 300)
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+
+        await ExpansionController()._run_planner(
+            query="q" * 400,
+            strategy="HYBRID",
+            llm_client=client,
+            trace_id="test-trace-default-bound",
+            timeout_s=5.0,
+            result=ExpansionResult(),
+        )
+
+        client.respond.assert_not_awaited()

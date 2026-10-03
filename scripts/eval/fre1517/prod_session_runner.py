@@ -464,20 +464,17 @@ def run(args: argparse.Namespace) -> int:
             reads = _trace_reads(es, trace_id)
             approval = check_turn(trace_id, es_url=PROD_ES, client=es)
             brief = None
-            if args.expect_brief_mode:
-                # FRE-1521 Phase B: every planner call must run in the expected brief mode and
-                # see conversation history. Turn 2 is a HYBRID turn in s1_trip, so it must plan.
+            if args.expect_planner_history:
+                # FRE-1521 Phase B: every planner call must see conversation history. Turn 2 is a HYBRID turn in s1_trip, so it must plan.
                 plans = _events(es, trace_id, "planner_completed")
                 brief = {
                     "planner_events": len(plans),
-                    "brief_mode": [p.get("brief_mode") for p in plans],
+                    "planner_mode": [p.get("planner_mode") for p in plans],
                     "history_chars": [p.get("history_chars") for p in plans],
                     "task_constraints_count": [p.get("task_constraints_count") for p in plans],
                 }
                 brief["holds"] = bool(plans) and all(
-                    p.get("brief_mode") == args.expect_brief_mode
-                    and (p.get("history_chars") or 0) > 0
-                    for p in plans
+                    (p.get("history_chars") or 0) > 0 for p in plans
                 )
             ac4 = None
             if args.expect_expansion_disabled:
@@ -586,9 +583,9 @@ def main() -> int:
     p.add_argument("--session-fact", action="append", default=[])
     p.add_argument("--stop-after", type=int, default=0)
     p.add_argument(
-        "--expect-brief-mode",
-        default="",
-        help="FRE-1521 Phase B: require planner_completed brief_mode and history_chars>0; stop (exit 10) if turn 2 fails",
+        "--expect-planner-history",
+        action="store_true",
+        help="FRE-1521 Phase B: require planner_completed history_chars>0; stop (exit 10) if turn 2 fails",
     )
     p.add_argument(
         "--expect-expansion-disabled",

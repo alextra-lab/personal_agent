@@ -766,7 +766,7 @@ class ExpansionController:
         expansion_budget: int | None = None,
         messages: list[dict[str, Any]] | None = None,
         history_max_chars: int = 60000,
-        input_max_chars: int = 64000,
+        input_max_chars: int | None = None,
     ) -> ExpansionPlan:
         """Phase 1: Get a plan from the LLM or fallback planner.
 
@@ -798,8 +798,9 @@ class ExpansionController:
                 renders no history.
             history_max_chars: ``settings.planner_history_max_chars``
                 (FRE-1521) — the character budget for the rendered history.
-            input_max_chars: ``settings.planner_input_max_chars`` (ADR-0154 D1)
-                — the bound on the whole planner user message. When the query
+            input_max_chars: The bound on the whole planner user message (ADR-0154 D1).
+                ``None`` (the default) reads ``settings.planner_input_max_chars``, so a
+                caller that omits it never carries a copy of the value. When the query
                 and the digest alone exceed it, the planner is not called and
                 the attempt takes the failure path with reason
                 ``input_too_large``.
@@ -817,7 +818,7 @@ class ExpansionController:
         tool_surface: list[str] = []
         # ADR-0154 D6: the characters of each input, for `planner_completed` and for an
         # `input_too_large` failure. Zero until measured, never a sentinel.
-        input_chars = {"system": 0, "history": 0, "digest": 0, "message": 0, "total": 0}
+        input_chars = {"system": 0, "history": 0, "digest": 0, "message": 0}
         try:
             tool_surface = _current_sub_agent_tool_surface(trace_id)
             planner_system_prompt = _build_planner_system_prompt(tool_surface)
@@ -830,13 +831,16 @@ class ExpansionController:
                 strategy,
                 messages,
                 history_max_chars=history_max_chars,
-                input_max_chars=input_max_chars,
+                input_max_chars=(
+                    input_max_chars
+                    if input_max_chars is not None
+                    else get_settings().planner_input_max_chars
+                ),
             )
             input_chars.update(
                 history=planner_input.history_chars,
                 digest=planner_input.digest_chars,
                 message=planner_input.message_chars,
-                total=planner_input.total_chars,
             )
             planner_messages = [
                 {"role": "system", "content": planner_system_prompt},
@@ -907,6 +911,7 @@ class ExpansionController:
                     planner_mode=_planner_mode_name(llm_client),
                     planner_reasoning_chars=_planner_reasoning_chars(raw_response),
                     planner_input_chars=input_chars,
+                    planner_input_total_chars=planner_input.total_chars,
                     trace_id=trace_id,
                 )
                 return plan
@@ -936,11 +941,7 @@ class ExpansionController:
         except PlannerInputTooLargeError as exc:
             # ADR-0154 D1: the model was not called. Until the routing change (FRE-1515)
             # this follows today's failure path, the fallback planner.
-            input_chars.update(
-                message=exc.message_chars,
-                digest=exc.digest_chars,
-                total=exc.message_chars + exc.digest_chars,
-            )
+            input_chars.update(message=exc.message_chars, digest=exc.digest_chars)
             logger.warning(
                 "planner_failed",
                 reason="input_too_large",

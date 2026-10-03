@@ -1,8 +1,8 @@
 {
   "policy": {
     "_meta": {
-      "description": "ILM for agent-logs-* (monthly index agent-logs-YYYY-MM; ADR-0090 telemetry catch-all). min_age-based delete from origination date (no rollover write-alias — the prior rollover action here was dead: agent-logs-template never set index.lifecycle.name, so no index was ever ILM-managed and agent-logs-000001, its rollover-alias bootstrap index, sat at 0 docs). Retention: 30d, unchanged from the prior policy's delete phase and from the elasticsearch_logs RETENTION_POLICIES entry (telemetry/lifecycle.py) whose client-side sweep this same ticket retires. No warm/forcemerge phase: the 32d min_age used elsewhere (matching the user-turn-ratings-policy precedent, so a still-open monthly index isn't merged) is >= this family's own 30d retention -- ES rejects a policy whose warm min_age exceeds its delete min_age (hot must precede warm must precede delete). At only 30 days total lifetime the forcemerge optimization has little value anyway. Authored in FRE-1036, replacing the dead rollover scaffold.",
-      "retention_days": 30,
+      "description": "ILM for agent-logs-* (monthly index agent-logs-YYYY-MM; ADR-0090 telemetry catch-all). min_age-based delete from origination date (no rollover write-alias — the prior rollover action here was dead: agent-logs-template never set index.lifecycle.name, so no index was ever ILM-managed and agent-logs-000001, its rollover-alias bootstrap index, sat at 0 docs). Retention: 123d (owner rule 2026-10-03: a monthly index keeps the current month plus 3 full months; the longest 4-month run is 123 days). It was 30d, measured from the index's creation on the 1st, so each month's index was deleted the day the next one started: agent-logs-2026-09 was deleted on 2026-10-01. No warm/forcemerge phase: it was omitted when retention was 30d and is not added by the retention change. Authored in FRE-1036, replacing the dead rollover scaffold.",
+      "retention_days": 123,
       "managed_by": "scripts/setup-elasticsearch.sh"
     },
     "phases": {
@@ -13,7 +13,7 @@
         }
       },
       "delete": {
-        "min_age": "30d",
+        "min_age": "123d",
         "actions": {
           "delete": {}
         }

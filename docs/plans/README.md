@@ -11,7 +11,7 @@ Name them `YYYY-MM-DD-fre-XXX-<slug>.md`. Do not write implementation plans into
 |------|---------|
 | [`OWNER_CONSOLE.md`](OWNER_CONSOLE.md) | The owner's standing directives + the trust ladder (ADR-0131) |
 | [`LAST_SESSION.md`](LAST_SESSION.md) | The last session's conversational overlay (written at wind-down) |
-| [`DEV_TRACKER.md`](DEV_TRACKER.md) | Linear workspace links and quick-reference index |
+| [`DEV_TRACKER.md`](DEV_TRACKER.md) | Linear workspace links and quick-reference index (dormant since 2026-07-31) |
 | [`PHASE_2.3_PLAN.md`](PHASE_2.3_PLAN.md) | Active phase sub-plan |
 | [`VELOCITY_TRACKING.md`](VELOCITY_TRACKING.md) | Development velocity metrics |
 
@@ -19,7 +19,7 @@ Name them `YYYY-MM-DD-fre-XXX-<slug>.md`. Do not write implementation plans into
 
 | Directory | Contents |
 |-----------|----------|
-| [`sessions/`](sessions/) | Development session logs |
+| [`sessions/`](sessions/) | Development session logs (dormant since 2026-04-16) |
 | [`completed/`](completed/) | Archived plans, summaries, and completed phase docs |
 
 ## What belongs here vs. elsewhere
@@ -40,6 +40,6 @@ Name them `YYYY-MM-DD-fre-XXX-<slug>.md`. Do not write implementation plans into
 2. **Get tasks**: Query Linear via MCP for approved issues
 3. **Find the spec**: Issue description links to `docs/specs/` or `docs/architecture_decisions/`
 4. **Implement**: Follow the spec and acceptance criteria
-5. **Log the session**: Use `sessions/SESSION_TEMPLATE.md`
+5. **Record the reasoning on the Linear ticket.** Session logs in `sessions/` are dormant (last 2026-04-16); do not write new ones.
 
 Specs live in `docs/specs/`. ADRs live in `docs/architecture_decisions/`.

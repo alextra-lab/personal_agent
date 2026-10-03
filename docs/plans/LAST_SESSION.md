@@ -2,8 +2,9 @@
 
 ## Doing / discussing  (≤5 sentences)
 The owner asked for "all recommendations" to be followed, then a tmux restart of cc-master.
-Two worker PRs wait at the gate: #1197 (FRE-1540, dispatch alerts) and #1196 (ADR-0154 for
-FRE-1537). Hold #1196 until the adr seat posts its handoff, and the owner reviews an ADR.
+PR #1197 (FRE-1540, dispatch alerts) waits at the gate. ADR-0154 (FRE-1537) merged as Proposed
+at 12:47. FRE-1537 is now its umbrella in Backlog, and the adr dispatch record was cleared.
+Add "Amended by ADR-0154" to ADR-0036 and ADR-0142 only when the owner accepts ADR-0154.
 FRE-1538 is deployed and waits only for the owner's AC-6 check (leave the app mid-turn, return).
 The Awaiting Deploy sweep closed six tickets. The rest wait on the owner decisions listed below.
 

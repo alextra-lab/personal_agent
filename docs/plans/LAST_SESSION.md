@@ -1,10 +1,10 @@
-# Last session — master, 2026-10-03 08:00 UTC to 12:40 UTC
+# Last session — master, 2026-10-03 08:00 UTC to 13:25 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The owner asked for "all recommendations" to be followed, then a tmux restart of cc-master.
+The owner asked for "all recommendations" to be followed; cc-master was then restarted (`-c`).
 FRE-1540 merged and its daemons restarted; its AC-4 waits for a natural alert. The owner
 accepted ADR-0154 and approved its chain at 13:01: the build streams now run it (FRE-1537 holds
-the record). FRE-1514 is approved but unlabeled until its criteria are settled against ADR-0154 D7.
+the record). The orchestrator runs FRE-1511 (build2) and FRE-1512 (build1).
 FRE-1538 is deployed and waits only for the owner's AC-6 check (leave the app mid-turn, return).
 The Awaiting Deploy sweep closed six tickets. The rest wait on the owner decisions listed below.
 
@@ -42,11 +42,13 @@ bounced PR #1161" text. The watcher read the seat as busy for 2.5 h. FRE-1540 ma
 reach the owner.
 
 **The 09:01 searxng outage repeated FRE-1344**, whose `required: false` fix did not hold.
-FRE-1542 asks for a reproduction before any fix. Master did not ship an untested `--no-deps`.
+FRE-1542 (Done) made `make eval-infra-up/down` safe: eval services only, `--no-deps`, a pinned
+project name and a dry-run plan guard. A hand-typed `docker compose -p seshat … up` is still unsafe.
 
 ## Worktrees — anything special
-- The eval substrate containers (`*-eval`) still run under project name `seshat` from the adrs
-  worktree. Never run a compose command with `-p seshat` near them (FRE-1542).
+- The eval stack is up (gateways :9002 and :9003, substrates `*-eval`) under project `seshat`.
+  Start and stop it only with the make targets. The test stack (`seshat-*-test-1`) shows as orphans
+  of that project, so never pass `--remove-orphans`.
 - Untracked `*.bak*` files are the owner's.
 
 ## Answers for the fresh start
@@ -56,12 +58,13 @@ FRE-1542 asks for a reproduction before any fix. Master did not ship an untested
   another embedder, or a lower 90% bar) · FRE-1359, accept window 1 read from the disk log as the
   AC-3 source · FRE-1398, retitle or close in favour of the slm_server stderr-pipe defect ·
   FRE-1122, authorize the baseline run · FRE-1402, three owner turns (confirm the skill really
-  loads: `skills_loaded` has never shown `sequential-thinking`).
+  loads: `skills_loaded` has never shown `sequential-thinking`) · FRE-1514, approved but
+  unlabeled: its criteria cite ADR-0152 D6 and call the measure open; the owner or the adr seat
+  must restate them against ADR-0154 D7 before it can be queued.
 - **Also open:** FRE-1485 (AC-2 and AC-3), FRE-1527 (AC-5) and FRE-1382 (AC-1) need a natural or
   authorized live turn. FRE-1474 needs its generation check turned on, in an SLM window on the
   owner's Mac. FRE-1503 needs an eval run. FRE-1372 waits on FRE-1506.
 - **Forced-synthesis overflow (FRE-1485 finding):** on 91b57b5c, keeping 25 tools in the forced
   synthesis pushed a 120k prompt past the window. Not ticketed yet.
-- **Restarts:** the owner restarts cc-master after this reset. That ends the `remember` plugin
-  output and applies Claude Code 2.1.288. cc-explore is the owner's seat. Do not restart or message it.
+- **cc-explore is the owner's seat.** Do not restart or message it.
 - **A seat restarted outside `cc-sessions` loses the channel.** Check with `ss -ltn | grep 879`.

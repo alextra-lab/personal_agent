@@ -1,6 +1,6 @@
 # ADR-0147: Memory Belongs to the Planner — a Bounded Digest Shapes the Specs, and No Memory Section Reaches the Worker
 
-**Status:** Proposed
+**Status:** Superseded by [ADR-0154](ADR-0154-what-the-planner-sees-and-what-it-decides.md) — 2026-10-03 (FRE-1537)
 **Date:** 2026-09-08
 **Deciders:** Owner (design direction, 2026-09-08), adr seat (author)
 **Tags:** orchestrator, expansion, memory, sub-agents, context-budget
@@ -603,3 +603,7 @@ and AC-2 is a paired seeded planner run. Codex round 3 confirmed D3 free of ambi
 unreachable states, and closed the last gaps: AC-1's comparison set is now logged rather than
 assumed, AC-2's oracle is a coined seed token rather than a semantic judgment, and AC-3's one
 undefined threshold is a plurality test. The round budget is exhausted at three.
+
+### 2026-10-03 - Superseded by ADR-0154
+**Changed By:** `adr` seat (FRE-1537)
+**Reason:** ADR-0147 and ADR-0152 write to the same planner prompt and the same planner call, so the owner asked for one design (2026-10-02). ADR-0154 decides what the planner sees and what it decides, on a 2026-10-03 measurement of three designs on the production llama.cpp.

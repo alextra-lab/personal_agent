@@ -1,6 +1,6 @@
 # ADR-0152: The Planner Decides Whether to Expand — Asked, It May Decline
 
-**Status:** Proposed
+**Status:** Superseded by [ADR-0154](ADR-0154-what-the-planner-sees-and-what-it-decides.md) — 2026-10-03 (FRE-1537)
 **Date:** 2026-09-14
 **Deciders:** Owner (the direction in FRE-1502; "write the ADR on the choice-axis evidence", 2026-09-13; the planner-probe matrix, its quant and effort rules, the dispositions of the open questions, and a planner temperature adopted only on test, 2026-09-14), `adr` seat at Opus 5 (author, the 2026-09-14 planner-probe matrix), `explore` seat (the FRE-1498 study), `slm_server` session (model serving, tuning and the server-side logs of the probe)
 **Tags:** routing, expansion, planner, decomposition, sub-agents, latency
@@ -512,6 +512,10 @@ the routing change.
 ### 2026-09-14 - Proposed
 **Changed By:** `adr` seat
 **Reason:** Drafted on the owner's "draft it" after the planner-probe matrix and the dispositions of the open questions.
+
+### 2026-10-03 - Superseded by ADR-0154
+**Changed By:** `adr` seat (FRE-1537)
+**Reason:** ADR-0147 and ADR-0152 write to the same planner prompt and the same planner call, so the owner asked for one design (2026-10-02). ADR-0154 decides what the planner sees and what it decides, on a 2026-10-03 measurement of three designs on the production llama.cpp.
 
 ---
 

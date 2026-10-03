@@ -1,0 +1,76 @@
+# FRE-1537 AC-3: paired two-turn fixtures. Each history has one follow-up that must
+# expand and one that must decline. The assistant turn is scripted, so every arm sees
+# the same history.
+histories:
+  boiler:
+    user: "I'm thinking about replacing my gas boiler. What are my main options?"
+    assistant: |
+      You have three main options:
+
+      1. **Air-source heat pump.** An outdoor unit extracts heat from the air. It is the cheapest heat pump to install and works with most radiators if they are sized for lower flow temperatures.
+      2. **Ground-source heat pump.** Pipes buried in the garden or in a borehole collect heat from the ground. It is more efficient in winter and quieter, but installation costs much more and needs land or drilling.
+      3. **Hybrid system.** A smaller heat pump works alongside a new condensing gas boiler, which takes over on the coldest days. It costs less up front but keeps you on gas.
+
+      Air-source is usually the cheapest to install. Ground-source has the lowest running costs.
+  lisbon:
+    user: "We have four days in Lisbon in November. Give me a rough plan."
+    assistant: |
+      Here is a rough four-day plan:
+
+      - **Day 1 — Alfama and Baixa.** São Jorge Castle in the morning, walk down through Alfama, then Praça do Comércio and the Baixa at sunset.
+      - **Day 2 — Belém.** Jerónimos Monastery, the Belém Tower and pastéis de Belém, then the MAAT along the river.
+      - **Day 3 — Day trip.** Choose one of three: **Sintra** (Pena Palace and Quinta da Regaleira), **Cascais** (coast and old town), or **Évora** (Roman temple and the Chapel of Bones).
+      - **Day 4 — Bairro Alto and LX Factory.** Miradouros in the afternoon, then dinner and fado in Bairro Alto.
+  laptop:
+    user: "I need a new laptop for photo editing, budget about 1,500 euros. What should I look at?"
+    assistant: |
+      For photo editing, look at three things first: a screen with wide colour gamut (close to 100% DCI-P3), at least 16 GB of RAM, and a fast SSD.
+
+      Three candidates in your budget:
+
+      1. **MacBook Air M4 15-inch** — excellent screen and battery, silent, but limited ports.
+      2. **ASUS ProArt P16** — OLED screen calibrated for creators, a dedicated GPU, heavier.
+      3. **Dell XPS 14** — good OLED option, strong build, shorter battery life with the OLED panel.
+  tariffs:
+    user: "Explain how French electricity tariffs work: Base, HP/HC and Tempo."
+    assistant: |
+      France's regulated EDF tariffs come in three main options:
+
+      - **Base** — one price per kWh at all hours. Simple, best if your use is spread through the day.
+      - **HP/HC (Heures Pleines / Heures Creuses)** — eight off-peak hours per day are cheaper, the other hours cost more. Good if you heat water or charge a car at night.
+      - **Tempo** — each day is blue, white or red. Blue days are cheap, white days are average, and the 22 red days in winter are very expensive at peak hours. Good if you can cut use on red days.
+
+      The subscription price depends on your power rating in kVA.
+fixtures:
+  - label: boiler_expand
+    history: boiler
+    expected: expand
+    message: "OK, now research the second option properly: installation cost in France, the grants I can get, and real owners' experience with noise and running costs."
+  - label: boiler_decline
+    history: boiler
+    expected: decline
+    message: "Thanks. Which of the three did you say is cheapest to install?"
+  - label: lisbon_expand
+    history: lisbon
+    expected: expand
+    message: "Good. Now research each of the three day trips you mentioned: opening days in November, train times from Lisbon, and ticket prices."
+  - label: lisbon_decline
+    history: lisbon
+    expected: decline
+    message: "Can you make that shorter, just one line per day?"
+  - label: laptop_expand
+    history: laptop
+    expected: expand
+    message: "OK, now research the second option: independent reviews of its screen colour accuracy, its real battery life, and current prices in France."
+  - label: laptop_decline
+    history: laptop
+    expected: decline
+    message: "What did you mean by colour gamut?"
+  - label: tariffs_expand
+    history: tariffs
+    expected: expand
+    message: "Now compare the three for my case: research the current 2026 price per kWh for each, the subscription cost at 9 kVA, and how many red days Tempo had last winter."
+  - label: tariffs_decline
+    history: tariffs
+    expected: decline
+    message: "So Tempo is the one with red days?"

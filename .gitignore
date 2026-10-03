@@ -235,6 +235,9 @@ telemetry/evaluation/fre996-digest-contract/
 # matter live in the ticket handoff and the PR description)
 telemetry/evaluation/fre1390-planner-role-ab/
 
+# FRE-1511 planner probe run outputs (captured request bodies hold full prompts; never committed)
+telemetry/evaluation/fre1537-planner-probe/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

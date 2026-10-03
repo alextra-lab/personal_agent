@@ -235,7 +235,7 @@ class TestPolicyTable:
 @pytest.mark.usefixtures("no_phase_events")
 class TestSubAgentUpstreamApproval:
     @pytest.mark.asyncio
-    async def test_without_the_flag_a_transportless_layer_denies(self) -> None:
+    async def test_a_transportless_layer_denies_by_default(self) -> None:
         recorder = _Recorder()
         layer = _layer(recorder.run, transport=None)
         with patch("personal_agent.tools.executor.settings", _settings(ui_enabled=True)):
@@ -244,6 +244,7 @@ class TestSubAgentUpstreamApproval:
             )
 
         assert result.success is False
+        assert "approval_no_transport" in (result.error or "")
         assert recorder.calls == []
 
     @pytest.mark.asyncio
@@ -513,6 +514,7 @@ class TestRealTransportBlocksBash:
             transport=AGUITransport(),
         )
 
+        task: asyncio.Task[Any] | None = None
         try:
             with (
                 patch("personal_agent.tools.executor.settings", _settings(ui_enabled=True)),
@@ -537,6 +539,8 @@ class TestRealTransportBlocksBash:
                 result = await asyncio.wait_for(task, timeout=10)
             return ran_before_decision, marker.exists(), [requests[0], result]
         finally:
+            if task is not None and not task.done():
+                task.cancel()
             ws_endpoint._active_connections.pop(sid, None)
 
     @pytest.mark.asyncio

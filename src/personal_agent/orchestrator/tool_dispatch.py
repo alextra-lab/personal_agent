@@ -73,6 +73,7 @@ async def dispatch_tool_call(
     gate_result: GateResult | None = None,
     loop_policy: ToolLoopPolicy | None = None,
     principal: Literal["primary", "sub_agent"] = "primary",
+    approved_upstream: bool = False,
 ) -> dict[str, Any]:
     """Execute one validated tool call and return its result payload.
 
@@ -102,6 +103,10 @@ async def dispatch_tool_call(
             reduction. Defaults to ``"primary"``, which never calls the clamp
             function at all — the primary's own tool policy is untouched by
             this parameter's existence, not merely by its value.
+        approved_upstream: True only when the sub-agent approval broker approved
+            this exact call (FRE-1461, FRE-1535). It satisfies the layer's approval
+            step. It is separate from ``principal`` because the broker's set is
+            frozen at spawn while the layer reads the mode per call.
 
     Returns:
         A dict with keys: ``tool_call_id``, ``tool_name``, ``content``,
@@ -249,7 +254,11 @@ async def dispatch_tool_call(
     # Execute tool (governance + telemetry happen inside execute_tool).
     try:
         result = await tool_layer.execute_tool(
-            tool_name, arguments, trace_ctx, session_id=session_id
+            tool_name,
+            arguments,
+            trace_ctx,
+            session_id=session_id,
+            approved_upstream=approved_upstream,
         )
 
         if result.success:

@@ -3241,6 +3241,10 @@ def _unwrap_embedded_response_json(response_content: str) -> str:
 def _get_tool_execution_layer() -> ToolExecutionLayer:
     """Get or create the global tool execution layer.
 
+    The primary layer carries the AG-UI transport so an approval-required tool can
+    ask the owner (FRE-1535). The transport holds no state: it reaches the session's
+    WebSocket through module-level registries, so one instance serves every session.
+
     Returns:
         ToolExecutionLayer instance with MVP tools registered.
     """
@@ -3249,7 +3253,9 @@ def _get_tool_execution_layer() -> ToolExecutionLayer:
         global _tool_registry
         if _tool_registry is None:
             _tool_registry = get_default_registry()
-        _tool_execution_layer = ToolExecutionLayer(_tool_registry)
+        from personal_agent.transport.agui.transport import AGUITransport  # noqa: PLC0415
+
+        _tool_execution_layer = ToolExecutionLayer(_tool_registry, transport=AGUITransport())
     return _tool_execution_layer
 
 

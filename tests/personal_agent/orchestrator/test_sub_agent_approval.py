@@ -653,6 +653,89 @@ class TestNoBrokerDeniesRatherThanAllows:
         assert result.tools_used == []
 
 
+class TestApprovedUpstreamFlag:
+    """FRE-1535 — the generic gate is skipped only for a call the broker approved.
+
+    The broker set is frozen at spawn and the generic gate reads the mode per call, so
+    the flag must follow the broker's decision for THIS call, never the principal.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_broker_approved_call_is_dispatched_with_the_flag(
+        self, monkeypatch: pytest.MonkeyPatch, installed_broker: SubAgentApprovalBroker
+    ) -> None:
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", _approve)
+        dispatch = AsyncMock(return_value=_dispatch_result("c0", "run_python", "42"))
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.resolve_sub_agent_approval_requirements",
+                return_value=frozenset({"run_python"}),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch),
+        ):
+            await run_sub_agent(
+                spec=_spec(["run_python"]),
+                llm_client=_wants_run_python_then_answers(),
+                trace_id="t",
+            )
+
+        assert dispatch.call_args.kwargs["approved_upstream"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_call_the_broker_did_not_gate_keeps_the_generic_gate(self) -> None:
+        dispatch = AsyncMock(return_value=_dispatch_result("c0", "run_python", "42"))
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.resolve_sub_agent_approval_requirements",
+                return_value=frozenset(),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch),
+        ):
+            await run_sub_agent(
+                spec=_spec(["run_python"]),
+                llm_client=_wants_run_python_then_answers(),
+                trace_id="t",
+            )
+
+        assert dispatch.call_args.kwargs["approved_upstream"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_broker_denial_never_dispatches(
+        self, monkeypatch: pytest.MonkeyPatch, installed_broker: SubAgentApprovalBroker
+    ) -> None:
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", _deny)
+        dispatch = AsyncMock(return_value=_dispatch_result("c0", "run_python", "42"))
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("run_python"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.resolve_sub_agent_approval_requirements",
+                return_value=frozenset({"run_python"}),
+            ),
+            patch("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch),
+        ):
+            await run_sub_agent(
+                spec=_spec(["run_python"]),
+                llm_client=_wants_run_python_then_answers(),
+                trace_id="t",
+            )
+
+        assert dispatch.call_count == 0
+
+
 class TestApprovalOutcomeShape:
     """A recorded answer must not be editable after the fact."""
 

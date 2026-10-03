@@ -6,8 +6,9 @@ with permission checks, argument validation, execution, and telemetry.
 
 import os
 import time
+from collections.abc import Mapping
 from fnmatch import fnmatch
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
 from opentelemetry.trace import Status, StatusCode
@@ -30,8 +31,30 @@ from personal_agent.tools.types import ToolResult
 
 if TYPE_CHECKING:
     from personal_agent.transport.agui.transport import AGUITransport
+    from personal_agent.transport.agui.ws_endpoint import ApprovalDecision
 
 log = get_logger(__name__)
+
+# Name of the executor parameter that receives the injected approval callable
+# (ADR-0153 D7). Reserved: the layer removes any model-supplied value of this name
+# and sets the real callable, so a tool definition cannot expose it to the model.
+_APPROVE_PARAM = "approve"
+
+
+class ApproveFn(Protocol):
+    """The approval callable injected into executors that declare ``approve``."""
+
+    async def __call__(self, *, args: Mapping[str, Any], reason: str) -> "ApprovalDecision":
+        """Send one approval request and return the owner's decision.
+
+        Args:
+            args: The trusted values the owner sees on the approval card.
+            reason: Why the tool asks for approval.
+
+        Returns:
+            The decision. ``deny`` when no approval channel exists.
+        """
+        ...
 
 
 class PermissionResult:
@@ -150,6 +173,50 @@ def _validate_tool_arguments(
     return PermissionResult(allowed=True)
 
 
+async def _request_approval(
+    *,
+    transport: "AGUITransport",
+    tool_name: str,
+    args: Mapping[str, Any],
+    reason: str,
+    session_id: str,
+    trace_ctx: TraceContext,
+) -> "ApprovalDecision":
+    """Send one approval request through the AG-UI transport and wait for the decision.
+
+    Shared by the generic gate in :func:`_check_permissions` and the ``approve``
+    callable injected into executors, so both send the same request.
+
+    Args:
+        transport: AG-UI transport for the round trip.
+        tool_name: Tool awaiting approval.
+        args: Values shown on the approval card.
+        reason: Human-readable reason shown on the card.
+        session_id: Session the request belongs to.
+        trace_ctx: Trace context of this invocation.
+
+    Returns:
+        The owner's decision, or a timeout or connection-lost decision.
+    """
+    # Import here to avoid circular imports at module load time.
+    from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
+    from personal_agent.transport.events import Phase  # noqa: PLC0415
+
+    # ADR-0123 §1 (FRE-934): the turn is blocked on the user's approval —
+    # an explicit WAITING_FOR_CHOICE phase (excluded from the AC-2 clock).
+    async with phase_span(session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=tool_name):
+        return await transport.request_tool_approval(
+            request_id=str(uuid4()),
+            trace_id=trace_ctx.trace_id,
+            session_id=session_id,
+            tool=tool_name,
+            args=args,
+            risk_level="high",  # primitives will pass the real level later
+            reason=reason,
+            timeout_seconds=settings.approval_timeout_seconds,
+        )
+
+
 async def _check_permissions(
     tool_name: str,
     tool_def: Any,
@@ -160,8 +227,14 @@ async def _check_permissions(
     session_id: str | None = None,
     *,
     trace_ctx: TraceContext,
+    approved_upstream: bool = False,
 ) -> PermissionResult:
     """Check if tool execution is permitted, requesting UI approval if required.
+
+    An approval-required tool follows ADR-0063 Amendment A (FRE-1535). With
+    ``approval_ui_enabled`` false the call proceeds: an explicit opt-out. With it true,
+    the call is denied unless the owner approves through the transport. No session id,
+    no transport, a timeout, a denial and a lost connection all deny.
 
     Args:
         tool_name: Name of the tool.
@@ -170,10 +243,12 @@ async def _check_permissions(
         current_mode: Current operational mode.
         governance_config: Governance configuration.
         transport: Optional AG-UI transport for interactive approval round-trips.
-            When ``None``, approval-required tools log a warning and are allowed
-            (legacy MVP behaviour, preserved until approval UI is deployed).
+            When ``None`` and the approval UI is enabled, approval-required tools
+            are denied.
         session_id: Session identifier forwarded to the approval waiter.
         trace_ctx: Trace context for telemetry correlation in approval events.
+        approved_upstream: True when the sub-agent approval broker already approved
+            this exact call (FRE-1461). The approval step is then satisfied.
 
     Returns:
         PermissionResult indicating if execution is allowed.
@@ -223,53 +298,19 @@ async def _check_permissions(
             )
             # Fall through to normal approval flow with the bad segment as context.
 
-    # 2. Approval check
+    # 2. Approval check (ADR-0063 Amendment A, FRE-1535)
     if tool_policy and (
         mode_str in tool_policy.requires_approval_in_modes or tool_policy.requires_approval
     ):
-        if settings.approval_ui_enabled and not session_id:
-            # Guard: approval UI is enabled but no session_id was supplied.
-            # Registering a waiter with an empty session_id can never be
-            # correctly resolved by the endpoint (it compares caller_session_id
-            # against the registered value).  Fall through to the warn-and-allow
-            # path rather than creating an un-resolvable waiter.
-            log.warning(
-                "approval_skipped_no_session_id",
+        if approved_upstream:
+            log.info(
+                "approval_satisfied_upstream",
                 tool_name=tool_name,
                 mode=mode_str,
-                message="Approval required but session_id is empty; skipping interactive approval",
                 trace_id=trace_ctx.trace_id,
             )
-        elif settings.approval_ui_enabled and transport is not None:
-            # Perform interactive approval round-trip via the PWA.
-            # Import here to avoid circular imports at module load time.
-            from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
-            from personal_agent.transport.agui.ws_endpoint import (
-                ApprovalDecision,  # noqa: PLC0415, I001
-            )
-            from personal_agent.transport.events import Phase  # noqa: PLC0415
-
-            # ADR-0123 §1 (FRE-934): the turn is blocked on the user's approval —
-            # an explicit WAITING_FOR_CHOICE phase (excluded from the AC-2 clock).
-            async with phase_span(
-                session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=tool_name
-            ):
-                decision: ApprovalDecision = await transport.request_tool_approval(
-                    request_id=str(uuid4()),
-                    trace_id=trace_ctx.trace_id,
-                    session_id=session_id or "",
-                    tool=tool_name,
-                    args=arguments,
-                    risk_level="high",  # primitives will pass the real level later
-                    reason=f"Tool '{tool_name}' requires approval in {mode_str} mode",
-                    timeout_seconds=settings.approval_timeout_seconds,
-                )
-            if decision.decision != "approve":
-                return PermissionResult(
-                    allowed=False,
-                    reason=f"approval_{decision.decision}",
-                )
-        else:
+        elif not settings.approval_ui_enabled:
+            # Explicit opt-out (the eval stack sets it on purpose, FRE-1505).
             log.warning(
                 "approval_ui_disabled_proceeding",
                 tool_name=tool_name,
@@ -277,7 +318,43 @@ async def _check_permissions(
                 message="Approval required but AGENT_APPROVAL_UI_ENABLED=false — proceeding without prompt",
                 trace_id=trace_ctx.trace_id,
             )
-            # Allow the call when approval UI is explicitly disabled.
+        elif not session_id:
+            # A waiter registered with an empty session_id can never be resolved.
+            log.warning(
+                "approval_denied_no_session_id",
+                tool_name=tool_name,
+                mode=mode_str,
+                message="Approval required but session_id is empty; denying",
+                trace_id=trace_ctx.trace_id,
+            )
+            return PermissionResult(allowed=False, reason="approval_no_session_id")
+        elif transport is None:
+            log.warning(
+                "approval_denied_no_transport",
+                tool_name=tool_name,
+                mode=mode_str,
+                message="Approval required but no approval transport is attached; denying",
+                trace_id=trace_ctx.trace_id,
+            )
+            return PermissionResult(allowed=False, reason="approval_no_transport")
+        else:
+            decision = await _request_approval(
+                transport=transport,
+                tool_name=tool_name,
+                args=arguments,
+                reason=f"Tool '{tool_name}' requires approval in {mode_str} mode",
+                session_id=session_id,
+                trace_ctx=trace_ctx,
+            )
+            if decision.decision != "approve":
+                log.warning(
+                    "approval_denied",
+                    tool_name=tool_name,
+                    mode=mode_str,
+                    decision=decision.decision,
+                    trace_id=trace_ctx.trace_id,
+                )
+                return PermissionResult(allowed=False, reason=f"approval_{decision.decision}")
 
     # 3. Rate limit check (for MVP, we skip - Phase 2 will implement)
     # TODO: Implement rate limiting via telemetry query
@@ -307,8 +384,8 @@ class ToolExecutionLayer:
             governance_config: Governance configuration. If None, loads from default.
             mode_manager: Mode manager. If None, uses global instance.
             transport: Optional AG-UI transport used for interactive tool-approval
-                round-trips (FRE-261).  When ``None``, approval-required tools
-                fall back to the legacy warn-and-allow path.
+                round-trips (FRE-261).  When ``None`` and the approval UI is
+                enabled, approval-required tools are denied (FRE-1535).
         """
         self.registry = registry
         if governance_config is None:
@@ -325,14 +402,69 @@ class ToolExecutionLayer:
 
         log.debug("tool_execution_layer_initialized")
 
+    def _build_approve(
+        self, tool_name: str, session_id: str | None, trace_ctx: TraceContext
+    ) -> ApproveFn:
+        """Build the approval callable for one invocation (ADR-0153 D7).
+
+        The callable sends one request through this layer's transport.  It fails
+        closed: with the approval UI disabled, no session id, or no transport it
+        returns ``deny`` and sends nothing.
+
+        Args:
+            tool_name: Tool the request is made for.
+            session_id: Session of this invocation.
+            trace_ctx: Trace context of this invocation.
+
+        Returns:
+            The callable bound to this invocation.
+        """
+        transport = self.transport
+
+        async def approve(*, args: Mapping[str, Any], reason: str) -> "ApprovalDecision":
+            from personal_agent.transport.agui.ws_endpoint import (  # noqa: PLC0415
+                ApprovalDecision,
+            )
+
+            if not settings.approval_ui_enabled:
+                cause = "ui_disabled"
+            elif not session_id:
+                cause = "no_session_id"
+            elif transport is None:
+                cause = "no_transport"
+            else:
+                return await _request_approval(
+                    transport=transport,
+                    tool_name=tool_name,
+                    args=args,
+                    reason=reason,
+                    session_id=session_id,
+                    trace_ctx=trace_ctx,
+                )
+            log.warning(
+                "approval_callable_denied",
+                tool_name=tool_name,
+                cause=cause,
+                trace_id=trace_ctx.trace_id,
+            )
+            return ApprovalDecision(decision="deny", reason=cause)
+
+        return approve
+
     async def execute_tool(
         self,
         tool_name: str,
         arguments: dict[str, Any],
         trace_ctx: TraceContext,
         session_id: str | None = None,
+        approved_upstream: bool = False,
     ) -> ToolResult:
         """Execute a tool with full governance and observability.
+
+        An executor that declares an ``approve`` parameter receives an
+        :class:`ApproveFn` bound to this call (ADR-0153 D7).  The name is
+        reserved: a model-supplied ``approve`` argument is always dropped.  Only
+        async executors may declare it.
 
         Args:
             tool_name: Name of the tool to execute.
@@ -341,6 +473,9 @@ class ToolExecutionLayer:
             session_id: Optional session identifier forwarded to the approval
                 waiter so that approval requests are scoped to the originating
                 session.
+            approved_upstream: True only when the sub-agent approval broker
+                approved this exact call (FRE-1461).  The generic approval step
+                is then satisfied.  Never derive it from the caller's identity.
 
         Returns:
             ToolResult with execution outcome.
@@ -378,6 +513,7 @@ class ToolExecutionLayer:
             transport=self.transport,
             session_id=session_id,
             trace_ctx=trace_ctx,
+            approved_upstream=approved_upstream,
         )
 
         if not permission.allowed:
@@ -399,7 +535,9 @@ class ToolExecutionLayer:
         # 3. Validate and filter arguments to match tool definition
         # This prevents LLM from sending extra/invalid parameters
         valid_param_names = {param.name for param in tool_def.parameters}
-        filtered_arguments = {k: v for k, v in arguments.items() if k in valid_param_names}
+        filtered_arguments = {
+            k: v for k, v in arguments.items() if k in valid_param_names and k != _APPROVE_PARAM
+        }
 
         # Log if LLM sent invalid parameters
         invalid_params = set(arguments.keys()) - valid_param_names
@@ -457,6 +595,16 @@ class ToolExecutionLayer:
                 pass_ctx = "ctx" in sig.parameters
                 if pass_ctx:
                     filtered_arguments = {**filtered_arguments, "ctx": trace_ctx}
+                if _APPROVE_PARAM in sig.parameters:
+                    if not inspect.iscoroutinefunction(executor):
+                        raise ToolExecutionError(
+                            f"Tool '{tool_name}' declares '{_APPROVE_PARAM}' but its executor "
+                            "is not async; it cannot await the approval"
+                        )
+                    filtered_arguments = {
+                        **filtered_arguments,
+                        _APPROVE_PARAM: self._build_approve(tool_name, session_id, trace_ctx),
+                    }
 
                 if inspect.iscoroutinefunction(executor):
                     result = await executor(**filtered_arguments)

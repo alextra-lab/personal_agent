@@ -48,11 +48,12 @@ DELETE IT. Do not list commit subjects here.>
 <One line per seat, ONLY if notable: priority build · preserved WIP · blocked ·
 mid-something. Skip a seat that's just idle-and-clean.>
 
-## Sequence position + drift
-<Where this session sits against the owner console's standing directives and the
-resolver's queue. Did we deviate or drift? WHY? Honest — drift-with-a-reason is
-the point, not a confession.>
-
 ## Answers for the fresh start
-<The questions the next session will actually ask, answered now. Anticipate the
-re-prime's "wait, why is X like this?" and pre-empt it. Just enough.>
+<The questions the next session will actually ask, answered now, with facts no
+durable source holds: a deviation from the owner console's directives and WHY, an
+owner decision still pending, a physical fact (a detached drive, a deliberate
+`.env` setting). Drift-with-a-reason is the point, not a confession.
+
+NEVER copy ticket, stream or seat state here. Write a pointer instead: the
+resolver (`next_resolver`), Linear, `telemetry/dispatch_state.json`. A copy goes
+stale as soon as work continues; it misled master on 2026-09-13 and 2026-10-01.>

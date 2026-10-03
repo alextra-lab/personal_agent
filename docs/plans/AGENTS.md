@@ -30,6 +30,9 @@ Plans track *what* and *when*; specs and ADRs track *how* and *why*.
 
 ## Session Logs
 
+> **Dormant.** The last log is dated 2026-04-16. Do not write new ones: the reasoning goes on the
+> Linear ticket, and the session overlay goes in `LAST_SESSION.md`. Kept for history.
+
 ### When to Create
 
 - Significant implementation work (>1 hour)

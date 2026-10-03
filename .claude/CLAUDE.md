@@ -39,8 +39,8 @@ Linear MCP: Team `FrenchForest` · `save_issue` to create · `get_issue` to veri
 | `/tests/` | Test suite |
 | `/docs/reference/` | Standards, policies, checklists |
 | `/docs/specs/` | Technical specifications |
-| `/docs/plans/` | OWNER_CONSOLE, LAST_SESSION, DEV_TRACKER (project-level only) |
-| `/docs/plans/sessions/` | Session logs |
+| `/docs/plans/` | OWNER_CONSOLE, LAST_SESSION (project-level only). `DEV_TRACKER.md` is dormant (last change 2026-07-31) |
+| `/docs/plans/sessions/` | **Dormant** (last log 2026-04-16) — do not write session logs; reasoning goes on the Linear ticket, the session overlay in `LAST_SESSION.md` |
 | `/docs/architecture_decisions/` | ADRs |
 | `/docs/superpowers/plans/` | Implementation plans (canonical location) |
 | `/config/` | Runtime configuration templates |

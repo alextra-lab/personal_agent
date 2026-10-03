@@ -34,8 +34,11 @@ ticket states (Linear), or health (the probe). Sections:
 - **What was decided and why** — the reasoning behind the commits: approaches rejected,
   corrections made, assumptions now known false. This section earns the file.
 - **Worktrees — anything special** (skip the merely-idle).
-- **Sequence position + drift** — where this sits vs the console's directives; deviations and why.
-- **Answers for the fresh start** — the next session's questions, pre-empted.
+- **Answers for the fresh start** — the next session's questions, pre-empted, with facts no durable
+  source holds: a deviation from the console's directives and why, an owner decision still pending,
+  a physical fact (a detached drive, a deliberate `.env` setting). **Never copy ticket, stream or
+  seat state here** — point to `next_resolver`, Linear and `telemetry/dispatch_state.json`. A copy
+  goes stale as soon as work continues (it misled master on 2026-09-13 and 2026-10-01).
 
 **Size bound: 90 lines.** Over it, cut — never carry overflow to another file. Test for every
 line: if it could be derived from `git log`, Linear or a probe, delete it.

@@ -103,7 +103,10 @@ def _tool_parameter_names(tool_name: str) -> set[str]:
     from personal_agent.tools.primitives.run_python import run_python_tool
     from personal_agent.tools.primitives.write import write_tool
 
-    known = {t.name: t for t in [bash_tool, read_tool, write_tool, run_python_tool]}
+    known = {
+        t.name: t
+        for t in [bash_tool, read_tool, write_tool, run_python_tool]
+    }
     tool_def = known.get(tool_name)
     if tool_def is not None:
         return {p.name for p in tool_def.parameters}

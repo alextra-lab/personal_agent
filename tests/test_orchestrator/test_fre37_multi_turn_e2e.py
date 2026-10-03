@@ -109,7 +109,9 @@ async def test_scenario_2_context_window_under_pressure() -> None:
                 {"role": "assistant", "content": f"Answer {i + 1}: this is a placeholder."}
             )
 
-    orchestrator.session_manager.create_session(Mode.NORMAL, Channel.CHAT, session_id=session_id)
+    orchestrator.session_manager.create_session(
+        Mode.NORMAL, Channel.CHAT, session_id=session_id
+    )
     orchestrator.session_manager.update_session(session_id, messages=synthetic_messages)
 
     # Verify the session starts at 30 messages.
@@ -245,7 +247,9 @@ async def test_scenario_4_session_resumption_after_restart() -> None:
 
     # --- "After restart" — fresh Orchestrator, history injected from 'DB' ---
     orchestrator_b = Orchestrator()
-    orchestrator_b.session_manager.create_session(Mode.NORMAL, Channel.CHAT, session_id=session_id)
+    orchestrator_b.session_manager.create_session(
+        Mode.NORMAL, Channel.CHAT, session_id=session_id
+    )
     orchestrator_b.session_manager.update_session(session_id, messages=persisted_messages)
 
     # Verify injection worked before making the LLM call.
@@ -334,5 +338,6 @@ async def test_scenario_5_memory_graph_enrichment() -> None:
     reply_lower = result_b["reply"].lower()
     memory_keywords = ("paris", "eiffel", "seine", "cycling", "cycle")
     assert any(kw in reply_lower for kw in memory_keywords), (
-        f"Cross-session memory recall must surface Paris context. Got: {result_b['reply']!r}"
+        f"Cross-session memory recall must surface Paris context. "
+        f"Got: {result_b['reply']!r}"
     )

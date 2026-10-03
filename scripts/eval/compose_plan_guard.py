@@ -23,6 +23,10 @@ import yaml
 
 _CONTAINER_LINE = re.compile(r"^\s*Container\s+(\S+)\s+\S+\s*$")
 
+#: Any line that names a container at all. A line that matches this but not `_CONTAINER_LINE`
+#: has a shape the guard cannot read, so it must refuse rather than skip it.
+_MENTIONS_CONTAINER = re.compile(r"\bContainer\b")
+
 #: Compose names the replacement of a recreated container `<12 hex>_<name>` while it runs.
 _RECREATE_PREFIX = re.compile(r"^[0-9a-f]{12}_")
 
@@ -92,9 +96,7 @@ def production_containers_in(plan: str, eval_containers: Iterable[str]) -> list[
     return found
 
 
-def check_plan(
-    plan: str, eval_containers: Iterable[str], *, allow_empty: bool = False
-) -> None:
+def check_plan(plan: str, eval_containers: Iterable[str], *, allow_empty: bool = False) -> None:
     """Raise if the plan is empty or touches a production container.
 
     Args:
@@ -104,12 +106,23 @@ def check_plan(
             already stopped has none. An `up` always has some, so leave this off for `up`.
 
     Raises:
-        PlanGuardError: The plan has no container line, or names a production container.
+        PlanGuardError: The plan has no container line, has a container line the guard cannot
+            read, or names a production container.
     """
     if not allow_empty and not any(_CONTAINER_LINE.match(line) for line in plan.splitlines()):
         raise PlanGuardError(
             "the dry-run printed no container lines; it failed or its output changed, "
             "so the plan cannot be checked"
+        )
+    unreadable = [
+        line.strip()
+        for line in plan.splitlines()
+        if _MENTIONS_CONTAINER.search(line) and not _CONTAINER_LINE.match(line)
+    ]
+    if unreadable:
+        raise PlanGuardError(
+            "the dry-run printed a container line in a shape the guard cannot read: "
+            f"{unreadable[0]!r}. The compose output format may have changed."
         )
     production = production_containers_in(plan, eval_containers)
     if production:

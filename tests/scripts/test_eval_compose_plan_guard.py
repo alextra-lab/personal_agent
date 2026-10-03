@@ -94,6 +94,15 @@ class TestPlanGuard:
         with pytest.raises(guard.PlanGuardError, match="no container"):
             guard.check_plan("error during connect: daemon not running\n", _EVAL_CONTAINERS)
 
+    def test_a_container_line_in_an_unreadable_shape_is_refused_not_skipped(self) -> None:
+        """A format change must fail closed: one unread production line would pass the rest."""
+        plan = (
+            " Container cloud-sim-postgres-eval Recreate\n"
+            " Container cloud-sim-searxng Stopped 0.2s\n"
+        )
+        with pytest.raises(guard.PlanGuardError, match="cannot read"):
+            guard.check_plan(plan, _EVAL_CONTAINERS)
+
     def test_a_down_of_a_stopped_stack_may_have_an_empty_plan(self) -> None:
         guard.check_plan("", _EVAL_CONTAINERS, allow_empty=True)
         with pytest.raises(guard.PlanGuardError, match="cloud-sim-searxng"):

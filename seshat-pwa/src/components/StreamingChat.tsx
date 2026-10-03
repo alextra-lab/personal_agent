@@ -10,7 +10,7 @@ import { generateUUID } from '@/lib/uuid';
 import { LAST_SESSION_KEY } from '@/lib/session';
 import { useAgentStream } from '@/hooks/useAgentStream';
 import { useSessionConfig } from '@/hooks/useSessionConfig';
-import type { TurnStatus } from '@/lib/types';
+import { loadTurnStatus } from '@/lib/turn-status-store';
 
 import { resolutionLabel } from '@/lib/constraint-options';
 import { isTurnCollapsed } from '@/lib/phase-summary';
@@ -27,26 +27,6 @@ import { PhaseIndicator } from './PhaseIndicator';
 import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
 import { TurnStatusBar } from './TurnStatusBar';
-
-// FRE-575 (fold-in to FRE-573): per-session key for last completed engagement tool state.
-const toolStateKey = (sid: string) => `seshat-tool-state-${sid}`;
-
-// FRE-1401: the cold-lane reading. No context ceiling has resolved for this session
-// in this process, so both meter halves render "—" (owner decision: dash, not
-// rehydration — a stale numerator beside a real ceiling reads as "plenty of room").
-const COLD_SESSION_TURN_STATUS: TurnStatus = {
-  context_tokens: 0,
-  context_max: null,
-  tool_iteration: null,
-  tool_iteration_max: null,
-  turn_cost_usd: 0,
-  session_cost_usd: 0,
-  session_context_tokens: 0,
-  compaction_count: 0,
-  cache_reset_count: 0,
-  quality_alert_count: 0,
-  quality_alert: null,
-};
 
 // FRE-1269 follow-up: gesture trigger for the safe-area debug overlay, for
 // launch modes (standalone home-screen PWA) with no URL bar to carry
@@ -179,13 +159,14 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     }
   }, [serverSelection, refetchConfig]);
 
-  // FRE-1401: reset the status bar the instant the session changes, before the
-  // browser paints — a layout effect (not a passive one) so a session switch
-  // never carries the previous session's ctx/cost/tools reading, even for one
-  // rendered frame.
+  // FRE-1401 + FRE-1538: replace the status bar the instant the session changes, before
+  // the browser paints — a layout effect (not a passive one) so a session switch never
+  // carries the previous session's ctx/cost/tools reading, even for one rendered frame.
+  // The replacement is the target session's OWN last readings (per-session storage), or
+  // the cold "—" when it has none. A remount or reload therefore shows the last values.
   useLayoutEffect(() => {
     if (!sessionId) return;
-    seedTurnStatus(COLD_SESSION_TURN_STATUS);
+    seedTurnStatus(loadTurnStatus(sessionId));
   }, [sessionId, seedTurnStatus]);
 
   // Hydrate message history from the backend when the session changes.
@@ -228,47 +209,21 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         if (cancelled || s === null) return;
         if (s.turn_count !== undefined) setSessionTurnCount(s.turn_count);
         setSessionTitle(s.session_label ?? s.title ?? null);
-        // FRE-575 (fold-in to FRE-573): restore last completed engagement tool
-        // state from localStorage so the engagement lane doesn't reset on
-        // remount (e.g. after navigating to an artifact and back).
-        // FRE-928 AC-4 / FRE-935: with nothing stored, the lane stays UNKNOWN.
-        // It must never be seeded with an invented ceiling — a fabricated 6 once
-        // rendered an amber near-limit warning on a turn whose real ceiling was 25.
-        let restoredTool: { tool_iteration: number | null; tool_iteration_max: number | null } = {
-          tool_iteration: null,
-          tool_iteration_max: null,
-        };
-        if (typeof window !== 'undefined' && sessionId) {
-          try {
-            const raw = localStorage.getItem(toolStateKey(sessionId));
-            if (raw) {
-              const parsed = JSON.parse(raw) as { tool_iteration: number; tool_iteration_max: number };
-              if (typeof parsed.tool_iteration === 'number' && typeof parsed.tool_iteration_max === 'number') {
-                restoredTool = parsed;
-              }
-            }
-          } catch {
-            // Corrupt localStorage entry — keep defaults.
-          }
-        }
-        // FRE-1401: restore cost + tools only. The context ceiling is resolved
-        // per-turn by the live projector (ADR-0092 §D3, process-local) and must
-        // never be rehydrated from a durable source (owner decision, FRE-1401) —
-        // it stays the cold-lane "—" until a live turn_status resolves it. Merge
-        // onto whatever is current (an updater, not a plain value) rather than
-        // overwriting outright: a live turn_status can resolve a real ceiling
-        // (or, for tools, a real count — two turns can run concurrently on one
-        // session) before this REST call returns, and this must not stomp it.
-        seedTurnStatus((prev) => {
-          const base = prev ?? COLD_SESSION_TURN_STATUS;
-          return {
-            ...base,
-            tool_iteration: base.tool_iteration ?? restoredTool.tool_iteration,
-            tool_iteration_max: base.tool_iteration_max ?? restoredTool.tool_iteration_max,
-            turn_cost_usd: s.cost_usd ?? 0,
-            session_cost_usd: s.cost_usd ?? 0,
-          };
-        });
+        // FRE-1538: only cost comes from here. The tools and ctx readings were seeded
+        // from per-session storage before paint. The ctx lane used to stay a cold "—"
+        // until a live turn_status (FRE-1401: never rehydrate it from a durable
+        // source). The owner decisions of 2026-10-03 replace that rule: the ctx lane
+        // keeps its last live reading ("I need to know how much headroom I have") and
+        // resets only when a new reading replaces it or the session is new. This still
+        // never invents a value (FRE-928 AC-4 / FRE-935): with nothing stored, the
+        // lanes stay unknown. Merge onto whatever is current (an updater, not a plain
+        // value) — a live turn_status can land before this REST call returns, and this
+        // must not stomp it.
+        seedTurnStatus((prev) => ({
+          ...(prev ?? loadTurnStatus(sessionId)),
+          turn_cost_usd: s.cost_usd ?? 0,
+          session_cost_usd: s.cost_usd ?? 0,
+        }));
       })
       .catch(() => {
         // Keep the cached pill on a transient fetch error.

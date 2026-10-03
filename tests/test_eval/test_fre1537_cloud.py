@@ -204,6 +204,30 @@ def test_a_cost_gate_denial_stops_the_run(stack: dict[str, Any]) -> None:
     assert stack["calls"] == []
 
 
+def test_a_session_registers_the_catalog_pricing(stack: dict[str, Any]) -> None:
+    import litellm
+
+    litellm.model_cost.pop("ovhcloud/Qwen3.8-27B", None)
+    with cloud.CloudSession(target(OVH), gate=stack["gate"]):
+        pass
+    assert litellm.model_cost["ovhcloud/Qwen3.8-27B"]["input_cost_per_token"] == 0.00000047
+
+
+def test_an_unpriced_response_still_meters_a_cost(
+    stack: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """litellm prices an unknown model at 0. The cap must not believe that."""
+    import litellm
+
+    monkeypatch.setattr(cloud, "register_model_pricing", lambda config: 0)
+    monkeypatch.delitem(litellm.model_cost, "ovhcloud/Qwen3.8-27B", raising=False)
+    with patch("litellm.completion_cost", return_value=0.0):
+        with cloud.CloudSession(target(OVH), gate=stack["gate"]) as session:
+            row = session.call("SYS", "USER")
+    # 1000 prompt tokens * 0.00000047 + 13 completion tokens * 0.00000319
+    assert row["cost_usd"] == pytest.approx(0.00051147)
+
+
 # ── The database guard (FRE-375) ─────────────────────────────────────────────
 
 
@@ -502,6 +526,37 @@ def test_a_managed_long_history_row_has_no_primary_call(tmp_path: Path) -> None:
     (row,) = read_jsonl(paths.longhist)
     assert {"cold", "extended"} <= set(row) and "primary_between" not in row
     assert len(session.calls) == 2  # a planner call, then the extended planner call
+
+
+def test_a_failed_extended_call_keeps_the_cold_call_cost_and_is_retried(tmp_path: Path) -> None:
+    session = FakeSession(target(OVH))
+    paths, inputs = start(tmp_path, session)
+    real_call = session.call
+
+    def fail_second(system: str, user: str) -> dict[str, object]:
+        if len(session.calls) == 1:
+            session.calls.append((system, user))
+            raise cloud.CloudCallError("timeout")
+        return real_call(system, user)
+
+    session.call = fail_second  # type: ignore[method-assign]
+    args = (None, "", "", paths, inputs, llama.PlannerMode("planner", session.target.declared))
+    with pytest.raises(cloud.CloudCallError):
+        longhist.run_longhist(*args, sizes=(2000,), cloud=session)  # type: ignore[arg-type]
+    (partial,) = read_jsonl(paths.longhist)
+    assert "error" in partial and partial["cold"]["cost_usd"] > 0 and "extended" not in partial
+    assert cloud.Budget(tmp_path, max_usd=5.0).spent() > 0  # the cold call is counted
+    session.call = real_call  # type: ignore[method-assign]
+    longhist.run_longhist(*args, sizes=(2000,), cloud=session)  # type: ignore[arg-type]
+    rows = read_jsonl(paths.longhist)
+    assert len(rows) == 2 and "error" not in rows[1] and "extended" in rows[1]
+
+
+def test_the_cap_counts_a_call_that_is_in_flight(tmp_path: Path) -> None:
+    budget = cloud.Budget(tmp_path, max_usd=0.5)
+    budget.check(target(OVH), "S", "x" * 300)
+    with pytest.raises(SystemExit, match="cap"):
+        budget.check(target(OVH), "S", "x" * 300, pending=0.5)
 
 
 # ── The fingerprint ──────────────────────────────────────────────────────────

@@ -49,6 +49,7 @@ from personal_agent.llm_client.models import (
     ModeSpec,
     Placement,
 )
+from personal_agent.llm_client.pricing import register_model_pricing
 from personal_agent.llm_client.types import LLMClientError, ModelRole
 from personal_agent.telemetry.trace import SystemTraceContext
 
@@ -61,7 +62,22 @@ _CHARS_PER_TOKEN = 3  # a low estimate, so the worst-case input cost is high
 
 
 class CloudCallError(RuntimeError):
-    """A managed deployment call failed."""
+    """A managed deployment call failed.
+
+    Attributes:
+        input_estimate_usd: The worst-case input cost of the failed call. A failed call may still be
+            billed, so the run records it.
+    """
+
+    def __init__(self, message: str, input_estimate_usd: float = 0.0) -> None:
+        """Build the error.
+
+        Args:
+            message: What failed.
+            input_estimate_usd: The worst-case input cost of the failed call.
+        """
+        super().__init__(message)
+        self.input_estimate_usd = input_estimate_usd
 
 
 @dataclass(frozen=True)
@@ -261,14 +277,19 @@ class CloudSession:
             SystemExit: If the database is not the eval Postgres.
         """
         self.target = target
-        self._loop = asyncio.new_event_loop()
         self._gate: CostGate | None = None
         if gate is None:
             url = get_settings().database_url
-            assert_eval_database(url)
+            assert_eval_database(url)  # before anything that opens a connection or a loop
+        self._loop = asyncio.new_event_loop()
+        if gate is None:
             self._gate = CostGate(config=load_budget_config(), db_url=url)
             self._loop.run_until_complete(self._gate.connect())
             set_default_gate(self._gate)
+        # The gateway registers the catalog rates at startup. Without them litellm prices a model
+        # that it does not know, such as the OVH Qwen3.8-27B, at 0, and neither the gate nor the cap
+        # would see the spend.
+        register_model_pricing(load_model_config())
         client = get_llm_client_for_key(target.key, budget_role=BUDGET_LANE)
         # The client reads its mode from `model_def` at call time. A candidate mode is not in the
         # catalog yet, so the effective definition replaces the catalog's.
@@ -312,17 +333,30 @@ class CloudSession:
             raise SystemExit(f"the cost gate denied the call: {exc}") from exc
         except (LLMClientError, TimeoutError) as exc:
             raise CloudCallError(str(exc)[:300]) from exc
-        return row_from_response(response, time.monotonic() - started)
+        row = row_from_response(response, time.monotonic() - started)
+        # Never trust a cost below the declared rates times the billed tokens.
+        usage = row["usage"]
+        assert isinstance(usage, dict)
+        floor = (
+            usage["prompt_tokens"] * self.target.input_cost
+            + usage["completion_tokens"] * self.target.output_cost
+        )
+        row["cost_usd"] = round(max(float(row["cost_usd"]), floor), 8)  # type: ignore[arg-type]
+        return row
 
     def close(self) -> None:
         """Release the gate and the loop."""
-        if self._gate is not None:
-            set_default_gate(None)
-            self._loop.run_until_complete(self._gate.reap_stale())
-            self._loop.run_until_complete(self._gate.disconnect())
-            self._gate = None
-        if not self._loop.is_closed():
-            self._loop.close()
+        try:
+            if self._gate is not None:
+                set_default_gate(None)
+                try:
+                    self._loop.run_until_complete(self._gate.reap_stale())
+                finally:
+                    self._loop.run_until_complete(self._gate.disconnect())
+                    self._gate = None
+        finally:
+            if not self._loop.is_closed():
+                self._loop.close()
 
     def __enter__(self) -> CloudSession:
         """Return the session."""
@@ -359,7 +393,7 @@ class Budget:
                     total += _row_cost(row)
         return total
 
-    def check(self, target: CloudTarget, system: str, user: str) -> float:
+    def check(self, target: CloudTarget, system: str, user: str, *, pending: float = 0.0) -> float:
         """Refuse a call that could reach the cap. Return its worst-case input cost.
 
         Output cost is counted when the call returns. A failed call is recorded at this estimate.
@@ -368,6 +402,7 @@ class Budget:
             target: The deployment of the call.
             system: The system prompt.
             user: The user message.
+            pending: The cost of a call of this run that is not on disk yet.
 
         Returns:
             The estimated input cost in USD.
@@ -376,7 +411,7 @@ class Budget:
             SystemExit: If the spent total plus this estimate reaches the cap.
         """
         estimate = (len(system) + len(user)) / _CHARS_PER_TOKEN * target.input_cost
-        spent = self.spent()
+        spent = self.spent() + pending
         if spent + estimate >= self.max_usd:
             raise SystemExit(
                 f"cost cap of {self.max_usd:g} USD reached: {spent:.4f} USD spent in {self.run_dir}, "

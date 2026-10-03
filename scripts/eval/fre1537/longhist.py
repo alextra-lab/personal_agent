@@ -68,12 +68,17 @@ def _call(
     query: str,
     cloud: cloud_mod.CloudSession | None = None,
     budget: cloud_mod.Budget | None = None,
+    pending: float = 0.0,
 ) -> dict[str, object]:
     user = render.build_user_message(history, None, query)
     if cloud is not None:
-        if budget:
-            budget.check(cloud.target, inputs.system, user)
-        result = cloud.call(inputs.system, user)
+        estimate = (
+            budget.check(cloud.target, inputs.system, user, pending=pending) if budget else 0.0
+        )
+        try:
+            result = cloud.call(inputs.system, user)
+        except cloud_mod.CloudCallError as exc:
+            raise cloud_mod.CloudCallError(str(exc), estimate) from exc
     else:
         body = planner_request(
             inputs.system, user, inputs.body(reference_label(inputs)), mode, MAX_TOKENS
@@ -95,7 +100,10 @@ def run_longhist(
     cloud: cloud_mod.CloudSession | None = None,
     budget: cloud_mod.Budget | None = None,
 ) -> None:
-    """Run the long-history arm, one row per size. A size that already has a row is skipped.
+    """Run the long-history arm, one row per size. A size that already has a complete row is skipped.
+
+    A managed call that fails leaves an ``error`` row that holds what the size had already cost, so the
+    spending cap sees it. A rerun does the size again.
 
     Args:
         client: HTTP client.
@@ -109,18 +117,21 @@ def run_longhist(
             prefix cache and decides no threshold, so a managed row has none.
         budget: The spending cap, for a managed deployment.
     """
-    seen = {int(str(r["size_chars"])) for r in read_jsonl(paths.longhist)}
+    seen = {int(str(r["size_chars"])) for r in read_jsonl(paths.longhist) if "error" not in r}
     for size in sizes:
         if size in seen:
             continue
         first = render_history(size, secrets.token_hex(4))
-        cold = _call(client, url, model, inputs, mode, first, FIRST_QUERY, cloud, budget)
-        row: dict[str, object] = {
-            "arm": "longhist",
-            "tag": paths.tag,
-            "size_chars": size,
-            "cold": cold,
-        }
+        row: dict[str, object] = {"arm": "longhist", "tag": paths.tag, "size_chars": size}
+        try:
+            cold = _call(client, url, model, inputs, mode, first, FIRST_QUERY, cloud, budget)
+        except cloud_mod.CloudCallError as exc:
+            append_jsonl(
+                paths.longhist,
+                {**row, "error": repr(exc)[:300], "cost_usd": exc.input_estimate_usd},
+            )
+            raise
+        row["cold"] = cold
         if cloud is None:
             fp_mod.fill_engine_build(paths, cold.get("system_fingerprint"))
             between = stream(
@@ -131,9 +142,26 @@ def run_longhist(
         else:
             fp_mod.fill_served_model(paths, cold.get("served_model"))
         extended_history = f"{first}\nuser: {FIRST_QUERY}\nassistant: {FIRST_REPLY}"
-        row["extended"] = _call(
-            client, url, model, inputs, mode, extended_history, SECOND_QUERY, cloud, budget
-        )
+        try:
+            row["extended"] = _call(
+                client,
+                url,
+                model,
+                inputs,
+                mode,
+                extended_history,
+                SECOND_QUERY,
+                cloud,
+                budget,
+                pending=float(cold.get("cost_usd") or 0),  # type: ignore[arg-type]
+            )
+        except (cloud_mod.CloudCallError, SystemExit) as exc:
+            if cloud is not None:  # keep the cold call's cost on disk
+                estimate = getattr(exc, "input_estimate_usd", 0.0)
+                append_jsonl(
+                    paths.longhist, {**row, "error": repr(exc)[:300], "cost_usd": estimate}
+                )
+            raise
         append_jsonl(paths.longhist, row)
         print("longhist", size, cold["secs"], row["extended"]["secs"], flush=True)  # type: ignore[index]
 

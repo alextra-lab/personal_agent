@@ -39,9 +39,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
+from pathlib import Path
 
 import httpx
+
+# The `scripts` package sits at the repo root, which a script run does not put on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from scripts.eval.approval_denial import check_turn  # noqa: E402
 
 ES = "http://localhost:9200"  # fre-375-allow: A/B measures real cloud-sim turns; must read live ES
 CHAT = "http://localhost:9001/chat"
@@ -90,8 +96,34 @@ def _agg_count(c: httpx.Client, trace_id: str, event_type: str) -> int:
     return int(r.json()["hits"]["total"]["value"])
 
 
+def verdict_lines(total_fresh: int, artifact: int, failed: int, validity: str) -> tuple[str, str]:
+    """Return the reduction line and the verdict for the turn.
+
+    Args:
+        total_fresh: Total fresh input tokens of the turn.
+        artifact: Count of ``artifact_write_committed`` events.
+        failed: Count of ``task_failed`` events.
+        validity: The turn's approval verdict (FRE-1539): ``valid``, ``invalid`` or ``unverified``.
+
+    Returns:
+        The reduction text and ``PASS``/``FAIL``. A turn that is not ``valid`` has no reduction
+        and the verdict is its validity in capitals: the percentage is a rate, and a denied turn
+        measured another behaviour.
+    """
+    if validity != "valid":
+        return "n/a (the turn is not valid)", validity.upper()
+    reduction = (BASELINE_FRESH - total_fresh) / BASELINE_FRESH * 100
+    verdict = (
+        "PASS"
+        if (total_fresh <= BASELINE_FRESH * 0.7 and artifact >= 1 and failed == 0)
+        else "FAIL"
+    )
+    return f"{reduction:>9.1f}%   (PASS gate: >= 30%)", verdict
+
+
 def extract(trace_id: str) -> None:
     """Print the per-round fresh-input curve, totals, and the baseline comparison."""
+    approval = check_turn(trace_id, es_url=ES)
     with httpx.Client() as c:
         body = {
             "size": 200,
@@ -142,22 +174,17 @@ def extract(trace_id: str) -> None:
     print(f"fresh input : {total_fresh:>10,}")
     print(f"cache_read  : {total_cache:>10,}")
     print(f"output      : {total_out:>10,}")
+    reduction, verdict = verdict_lines(total_fresh, artifact, failed, approval.validity)
     print("\n--- vs baseline a0a07227 ---")
     print(f"baseline fresh : {BASELINE_FRESH:>10,}")
     print(f"this run fresh : {total_fresh:>10,}")
-    if BASELINE_FRESH:
-        red = (BASELINE_FRESH - total_fresh) / BASELINE_FRESH * 100
-        print(f"reduction      : {red:>9.1f}%   (PASS gate: >= 30%)")
+    print(f"reduction      : {reduction}")
     print("\n--- digest / quality ---")
     print(f"digests recorded   : {dig}")
     print(f"expand calls       : {reexpand}")
     print(f"artifact committed : {artifact}  (need 1)")
     print(f"task_failed events : {failed}  (need 0)")
-    verdict = (
-        "PASS"
-        if (total_fresh <= BASELINE_FRESH * 0.7 and artifact >= 1 and failed == 0)
-        else "FAIL"
-    )
+    print(f"approval check     : {approval.summary()}")
     print(f"\nVERDICT: {verdict}")
 
 

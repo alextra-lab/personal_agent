@@ -61,6 +61,7 @@ from typing import Any
 
 import httpx
 import yaml
+from scripts.eval.approval_denial import ApprovalVerdict
 from scripts.eval.eval_isolation import (
     IsolatedArmRunner,
     create_eval_driver,
@@ -193,6 +194,7 @@ def turn_outcome(
     errors_by_role: dict[str, int],
     primary_models: list[str],
     telemetry_model: str,
+    approval: ApprovalVerdict | None = None,
 ) -> dict[str, Any]:
     """The pre-registered per-turn outcome (A3), and the arm attribution (A4).
 
@@ -202,12 +204,16 @@ def turn_outcome(
             :data:`ARM_BOUND_ROLES` fail the turn.
         primary_models: The ``model`` of every ``primary`` ``model_call_completed`` on the trace.
         telemetry_model: The arm's expected ``model`` value.
+        approval: The turn's approval-denial verdict (FRE-1539). Only a production run passes
+            it, because only there a denied tool leaves a completed turn that looks valid.
 
     Returns:
         ``delivered`` and the reason for each failed condition, plus ``attribution``:
         ``match`` (every primary call names the arm), ``mismatch`` (one names another
         model) or ``unverified`` (no primary call found — Elasticsearch counts are
-        provisional, FRE-1051, so an absence is not a mismatch).
+        provisional, FRE-1051, so an absence is not a mismatch). With ``approval``, also
+        ``validity`` and ``approval``. ``delivered`` does not change: a denied turn can still
+        deliver a reply, and ``validity`` is what keeps it out of a rate.
     """
     reasons = []
     if not reply.strip():
@@ -223,12 +229,16 @@ def turn_outcome(
     else:
         attribution = "mismatch"
         reasons.append("arm_mismatch")
-    return {
+    outcome: dict[str, Any] = {
         "delivered": not reasons,
         "reasons": reasons,
         "attribution": attribution,
         "truncated": reply_truncated(reply),
     }
+    if approval is not None:
+        outcome["validity"] = approval.validity
+        outcome["approval"] = approval.as_dict()
+    return outcome
 
 
 #: The grounding note's fixed opening, appended after the answer (the user sees it).

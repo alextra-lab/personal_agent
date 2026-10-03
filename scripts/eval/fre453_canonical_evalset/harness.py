@@ -65,6 +65,10 @@ from personal_agent.observability.route_trace.classifier import (
 from personal_agent.observability.route_trace.ledger import RouteTraceLedger
 from personal_agent.observability.route_trace.types import RouteTraceRow
 
+# The `scripts` package sits at the repo root, which a script run does not put on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from scripts.eval.approval_denial import ApprovalVerdict, check_turn, merge  # noqa: E402
+
 log = structlog.get_logger(__name__)
 
 DEFAULT_CHAT_URL = "http://localhost:9001/chat"
@@ -712,6 +716,23 @@ def _disposition_block(row: RouteTraceRow) -> list[str]:
     return lines
 
 
+def validity_counts(results: Sequence[Mapping[str, object]]) -> dict[str, int]:
+    """Count the cases by turn validity (FRE-1539).
+
+    Args:
+        results: Per-case dicts. ``approval`` is an ``ApprovalVerdict``, or absent.
+
+    Returns:
+        The ``valid``, ``invalid``, ``unverified`` and ``unassessed`` counts. A case with no
+        verdict is ``unassessed``. It is never counted as valid.
+    """
+    counts = {"valid": 0, "invalid": 0, "unverified": 0, "unassessed": 0}
+    for r in results:
+        approval = r.get("approval")
+        counts[approval.validity if isinstance(approval, ApprovalVerdict) else "unassessed"] += 1
+    return counts
+
+
 def render_markdown(
     run_meta: Mapping[str, object],
     results: Sequence[Mapping[str, object]],
@@ -739,17 +760,29 @@ def render_markdown(
         f"- **profile**: `{run_meta['profile']}`  ·  **timestamp**: {run_meta['timestamp']}",
         f"- **cases**: {len(results)}  ·  posture: every expectation is a hypothesis —",
         "  MATCH/MISMATCH are findings, never gates (spec §5). First run = baseline.",
-        "",
-        "## Per-case findings",
-        "",
     ]
+    if any("approval" in r for r in results):
+        counts = validity_counts(results)
+        lines.append(
+            f"- **turn validity**: valid {counts['valid']} · invalid {counts['invalid']} · "
+            f"unverified {counts['unverified']} — an invalid or unverified case is left out of "
+            "the findings (FRE-1539)"
+        )
+    lines += ["", "## Per-case findings", ""]
     for r in results:
         case = r["case"]
         row = r["row"]
         evaluation = r["evaluation"]
+        approval = r.get("approval")
         assert isinstance(case, EvalCase)
         lines.append(f"### `{case.id}` ({case.tier}) — {case.title}")
         lines.append("")
+        if isinstance(approval, ApprovalVerdict) and approval.validity != "valid":
+            # A denied approval tool means the turn measured a different behaviour. An
+            # unverified turn could not be proven clean. Neither is a finding.
+            lines.append(f"**{approval.validity.upper()} TURN** — {approval.summary()}")
+            lines.append("")
+            continue
         if row is None:
             lines.append("**NO ROUTE-TRACE ROW (instrument-health failure)**")
             lines.append("")
@@ -834,6 +867,9 @@ def _result_to_json(r: Mapping[str, object]) -> dict[str, object]:
         "setup_trace_ids": r.get("setup_trace_ids", []),
         "background": [asdict(o) for o in (r.get("background") or [])],  # type: ignore[union-attr]
     }
+    approval = r.get("approval")
+    if isinstance(approval, ApprovalVerdict):
+        out["approval"] = approval.as_dict()
     return out
 
 
@@ -895,6 +931,15 @@ async def run_case(
     background = await observe_background_surfaces(
         es, es_url, logs_index, args.captures_index, trace_id, args.background_wait_s
     )
+    # FRE-1539: a denied approval tool in any turn of the case (setup turns shape the scored
+    # one) makes the case invalid. Run after the settle wait: the capture lands post-turn.
+    approval = merge(
+        [
+            await asyncio.to_thread(check_turn, tid, es_url=es_url, logs_index=logs_index)
+            for tid in (*setup_trace_ids, trace_id)
+        ]
+    )
+    log.info("approval_checked", case=case.id, trace_id=trace_id, verdict=approval.summary())
     return {
         "case": case,
         "row": row,
@@ -902,6 +947,7 @@ async def run_case(
         "response_text": response_text,
         "setup_trace_ids": setup_trace_ids,
         "background": background,
+        "approval": approval,
     }
 
 
@@ -977,6 +1023,10 @@ async def amain(args: argparse.Namespace) -> int:
     missing = [r["case"].id for r in results if r["row"] is None]  # type: ignore[union-attr]
     if missing:
         log.error("instrument_health_failure", cases_without_rows=missing)
+        return 1
+    counts = validity_counts(results)
+    if counts["invalid"]:
+        log.error("approval_denied_turns", **counts)
         return 1
     return 0
 

@@ -48,6 +48,10 @@ import yaml  # type: ignore[import-untyped]
 
 from personal_agent.config import get_settings
 
+# The `scripts` package sits at the repo root, which a script run does not put on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from scripts.eval.approval_denial import UNASSESSED, check_turn, in_rates  # noqa: E402
+
 log = structlog.get_logger(__name__)
 
 DEFAULT_CHAT_URL = "http://localhost:9001/chat"
@@ -117,6 +121,9 @@ class TurnReport:
             material — paired across arms for the ADR §2 side-by-side rating).
         artifact_id: Artifact id if surfaced by ``/chat`` (else None).
         response_text: The captured response (for the human side-by-side eval).
+        validity: ``valid``, ``invalid`` (an approval tool was denied, FRE-1539), ``unverified``
+            or ``unassessed``. An invalid or unverified turn shows no metrics in the report.
+        approval_summary: The denied tools and reasons, or the unverified reason.
     """
 
     label: str
@@ -137,6 +144,8 @@ class TurnReport:
     artifact_response_chars: int
     artifact_id: str | None
     response_text: str = field(default="", repr=False)
+    validity: str = UNASSESSED
+    approval_summary: str = ""
 
 
 def load_dataset(path: Path) -> list[PromptDef]:
@@ -453,6 +462,10 @@ def build_report(
 
 def render_markdown(run_meta: dict[str, Any], reports: list[TurnReport]) -> str:
     """Render an A/B-friendly markdown summary for one pass."""
+    counts = {
+        name: sum(1 for r in reports if r.validity == name)
+        for name in ("valid", "invalid", "unverified")
+    }
     lines: list[str] = [
         f"# FRE-481 artifact-decomposition A/B — {run_meta['run_id']}",
         "",
@@ -460,6 +473,9 @@ def render_markdown(run_meta: dict[str, Any], reports: list[TurnReport]) -> str:
         f"({'HYBRID decomposition' if run_meta['arm'] == 'decompose' else 'serial SINGLE baseline'})",
         f"- **profile/backend**: `{run_meta['profile']}`",
         f"- **timestamp**: {run_meta['timestamp']}",
+        f"- **turn validity**: valid {counts['valid']} · invalid {counts['invalid']} · "
+        f"unverified {counts['unverified']} — an invalid or unverified turn shows no metrics "
+        "(FRE-1539)",
         "",
         "Deterministic claim (ADR-0086 D4): parent `max_fresh_in` is bounded under "
         "`decompose` (digests cross the boundary, not the 71 k discovery tail). "
@@ -469,7 +485,15 @@ def render_markdown(run_meta: dict[str, Any], reports: list[TurnReport]) -> str:
         "| prompt | strategy | reason | rounds | max_fresh_in | Σin | Σcache_rd | Σout | wall_s | sa_iters | sa_done | artifact_chars |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
+
     for rep in reports:
+        if not in_rates(rep.validity):
+            # FRE-1539: a denied or unproven turn measured another behaviour. No metric cells.
+            lines.append(
+                f"| {rep.label} | **{rep.validity.upper()}** — {rep.approval_summary} "
+                "| | | | | | | | | |"
+            )
+            continue
         lines.append(
             f"| {rep.label} | {rep.strategy} | {rep.reason} | {rep.round_count} | "
             f"**{rep.max_parent_fresh_in}** | {rep.total_input_tokens} | "
@@ -479,15 +503,16 @@ def render_markdown(run_meta: dict[str, Any], reports: list[TurnReport]) -> str:
         )
     lines += [
         "",
-        "## Per-round token curve (first report)",
+        "## Per-round token curve (first counted report)",
         "",
     ]
-    if reports:
+    counted = [rep for rep in reports if in_rates(rep.validity)]
+    if counted:
         lines += [
             "| seq | role | in_tok | cache_rd | out | lat_ms |",
             "|---|---|---|---|---|---|",
         ]
-        for r in reports[0].rounds:
+        for r in counted[0].rounds:
             lines.append(
                 f"| {r.seq} | {r.role} | {r.input_tokens} | {r.cache_read_tokens} | "
                 f"{r.output_tokens} | {r.latency_ms} |"
@@ -520,6 +545,7 @@ async def run_prompt(
     rounds, wall_time_s = await fetch_rounds(es, es_url, index, trace_id)
     strategy, reason, signals = await fetch_routing(es, es_url, index, trace_id)
     sa_iters, sa_done = await fetch_subagent_slice(es, es_url, index, trace_id, session_id)
+    approval = await asyncio.to_thread(check_turn, trace_id, es_url=es_url, logs_index=index)
     report = build_report(
         prompt,
         trace_id,
@@ -533,6 +559,8 @@ async def run_prompt(
         sa_done,
         body,
     )
+    report.validity = approval.validity
+    report.approval_summary = approval.summary()
     log.info(
         "turn_report",
         label=prompt.label,
@@ -542,6 +570,7 @@ async def run_prompt(
         max_fresh_in=report.max_parent_fresh_in,
         wall_s=round(report.wall_time_s, 1),
         sa_iters=sa_iters,
+        approval=report.approval_summary,
     )
     return report
 
@@ -581,6 +610,11 @@ async def amain(args: argparse.Namespace) -> int:
     )
     (out_dir / f"{stem}.md").write_text(render_markdown(run_meta, reports))
     log.info("pass_written", out=str(out_dir / f"{stem}.md"), prompts=len(reports))
+    if any(r.validity == "invalid" for r in reports):
+        log.error(
+            "approval_denied_turns", labels=[r.label for r in reports if r.validity == "invalid"]
+        )
+        return 1
     return 0
 
 

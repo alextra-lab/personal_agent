@@ -25,7 +25,7 @@ acceptance-criteria adherence. Bounce rules:
 - Fold-ins that support the ticket are expected; bounce one only if it's risky or unrelated.
 
 ## 3 — Gate
-`python -m scripts.pr_gate <PR#>` collects the raw signals (CI check states, mergeability,
+`uv run python -m scripts.pr_gate <PR#>` collects the raw signals (CI check states, mergeability,
 dependabot authorship); it renders no verdict — you decide. Gate on:
 - CI green; PR checklist is pre-merge-only (post-deploy items → Linear comment after merge).
 - **Each acceptance criterion written on this ticket has evidence it is delivered end to end** —
@@ -68,7 +68,7 @@ touched an emit site / schema / cost / memory write: run
   follow-up, consider rollback.
 - **Advance dispatch at every MERGE** (the merge is what frees the stream): move the merged
   ticket → `Awaiting Deploy`, then run
-  `python -m scripts.dispatch.next_resolver --stream <s> --eligible --json` for the affected
+  `uv run python -m scripts.dispatch.next_resolver --stream <s> --eligible --json` for the affected
   stream(s) — nonzero exit, invalid JSON or a printed error → STOP and surface stderr; never
   reconstruct the ordering inline. Then, per the resolver's output:
   - Remove `blockedBy` relations satisfied by this merge; audit a newly-labeled ticket for a

@@ -16,10 +16,10 @@ unasked* (8) → *how I drive it* (9).
    was decided and why). It never narrates commits — that's #3's job.
 3. **Git history** — `git -C /opt/seshat log -10 --oneline`: the ground truth of what shipped.
 4. **Git status · worktrees · PRs** — `git status` · `git worktree list` · `gh pr list`.
-5. **Trigger ledger** — `python -m scripts.dispatch.trigger_ledger --unconsumed --json`. Any
+5. **Trigger ledger** — `uv run python -m scripts.dispatch.trigger_ledger --unconsumed --json`. Any
    entry is in-flight actuation that survived the clear: `pending` resolves on its own;
    `surfaced` demands owner attention. Nonzero exit is itself an anomaly — surface it.
-5b. **Dispatch notify ledger** (FRE-1405) — `python -m scripts.dispatch.trigger_ledger
+5b. **Dispatch notify ledger** (FRE-1405) — `uv run python -m scripts.dispatch.trigger_ledger
    --ledger-file telemetry/dispatch_notify_ledger.json --unconsumed --json`. A separate,
    orchestrator-owned file (never `trigger_ledger.json` — a second continuous writer to that
    file would race `gating_watcher.py`) carrying the dispatch daemon's own stall/wedge/blocked
@@ -37,7 +37,7 @@ unasked* (8) → *how I drive it* (9).
 
 Two reads, in order:
 a. **The computed queue** — per stream:
-   `python -m scripts.dispatch.next_resolver --stream <s> --eligible --json`. Nonzero exit /
+   `uv run python -m scripts.dispatch.next_resolver --stream <s> --eligible --json`. Nonzero exit /
    invalid JSON → STOP and surface stderr; Linear's UI is the human fallback.
 b. **`docs/plans/OWNER_CONSOLE.md`** — the owner's standing directives and the **trust
    ladder**, your commission: per action class, what you may do unasked, what you report, what

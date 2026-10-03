@@ -9,7 +9,7 @@ Read `.claude/skills/lifecycle-rules.md` first. Confirm the session model is Opu
 (ADR authoring is Opus-only).
 
 **Argument: none → resolve NEXT via the external dispatch resolver.** FIRST `git fetch origin`,
-then run `python -m scripts.dispatch.next_resolver --stream adr --json`. A nonzero exit,
+then run `uv run python -m scripts.dispatch.next_resolver --stream adr --json`. A nonzero exit,
 invalid JSON, or a printed error → STOP and surface stderr — never reconstruct the busy-guard /
 priority / blocked-by logic inline. A `null` result (stream occupied, or no eligible candidate)
 → STOP. A non-null result names the ticket; honor its context flag exactly as `/build` does

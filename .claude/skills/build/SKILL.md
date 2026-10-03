@@ -10,7 +10,7 @@ an explicit Linear issue ID (e.g. `FRE-471`).
 
 **Stream selector (`1`/`2`) → resolve NEXT via the external dispatch resolver.** FIRST
 `git fetch origin` (Step 0 needs latest main), then run
-`python -m scripts.dispatch.next_resolver --stream build<N> --json`. A nonzero exit, invalid
+`uv run python -m scripts.dispatch.next_resolver --stream build<N> --json`. A nonzero exit, invalid
 JSON, or a printed error → STOP and surface stderr — never reconstruct the busy-guard /
 priority / blocked-by logic inline. A `null` result (stream occupied, or no eligible candidate)
 → STOP and ask master. A non-null result names the ticket; honor its **context flag** from the

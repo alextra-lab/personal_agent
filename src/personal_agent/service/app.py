@@ -2,6 +2,7 @@
 
 import asyncio
 import contextvars
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
@@ -27,6 +28,15 @@ from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 from personal_agent.memory.service import MemoryService
+from personal_agent.observability.first_token import (
+    clear_first_token_clock,
+    elapsed_ms,
+    start_first_token_clock,
+)
+from personal_agent.observability.route_trace import get_route_trace_ledger
+from personal_agent.observability.route_trace.types import RouteTraceRow
+from personal_agent.observability.topology.es_projection import project_route_trace_to_es
+from personal_agent.observability.topology.seam import topology_label
 from personal_agent.orchestrator.types import AttachmentRef
 from personal_agent.request_gateway import run_gateway_pipeline
 from personal_agent.security import sanitize_error_message
@@ -210,6 +220,55 @@ async def _validate_attachments(
     return valid
 
 
+async def _record_first_token(trace_id: str, received_monotonic: float, *, delivered: bool) -> None:
+    """Record the turn's time to first token and project its ES document once (ADR-0154 D6).
+
+    The seam writes the route-trace row before the reply reaches the user, so the value is
+    set afterwards by one conditional update. While the first-token clock runs, the seam
+    leaves the turn-level ES document to this function, which writes it exactly once from
+    the finished row: two unordered full-document writes could land in the wrong order and
+    erase the value. Best-effort: a failure is logged and never reaches the turn.
+
+    Args:
+        trace_id: The turn trace identifier.
+        received_monotonic: ``time.monotonic()`` reading taken at request receipt.
+        delivered: Whether the first user-visible push reached the user's stream. When
+            ``False`` the value stays unset: no token reached the user.
+    """
+    try:
+        tid = UUID(trace_id)
+    except ValueError:
+        log.warning("first_token.invalid_trace_id", trace_id=trace_id)
+        return
+    ledger = get_route_trace_ledger()
+    row: RouteTraceRow | None = None
+    if delivered:
+        try:
+            row = await ledger.set_first_token_ms(tid, elapsed_ms(received_monotonic))
+        except Exception as e:
+            log.warning(
+                "first_token.update_failed", trace_id=trace_id, error=sanitize_error_message(e)
+            )
+    try:
+        if row is None:
+            # Not delivered, the update failed, or an earlier write already holds a value.
+            turn_rows = [r for r in await ledger.get_by_trace_id(tid) if r.task_id is None]
+            row = turn_rows[0] if turn_rows else None
+        if row is None:
+            log.info("first_token.no_turn_row", trace_id=trace_id)
+            return
+        project_route_trace_to_es(
+            row,
+            topology=topology_label(
+                row.decomposition_strategy, row.decomposition_reason, row.planner_decision
+            ),
+        )
+    except Exception as e:
+        log.warning(
+            "first_token.projection_failed", trace_id=trace_id, error=sanitize_error_message(e)
+        )
+
+
 async def _process_chat_stream_background(
     session_id: str,
     message: str,
@@ -220,6 +279,7 @@ async def _process_chat_stream_background(
     user_display_name: str | None = None,
     client_msg_id: str | None = None,
     attachments_json: str | None = None,
+    received_monotonic: float | None = None,
 ) -> None:
     """Run the full orchestrator pipeline and push the result to the WS queue.
 
@@ -244,7 +304,12 @@ async def _process_chat_stream_background(
             or ``None``. Validated AFTER gateway classification (so TaskType
             routing is unaffected) and passed to the orchestrator as a structured
             carrier, separate from the message text (FRE-661 / ADR-0101 §2).
+        received_monotonic: ``time.monotonic()`` reading taken when the endpoint received
+            the request (ADR-0154 D6). ``None`` starts the clock here, which omits the
+            time spent before this task ran.
     """
+    # ADR-0154 D6: the first-token clock runs from request receipt, not from this task.
+    received = start_first_token_clock(received_monotonic)
     # ADR-0107 D5: bind once for the whole live request instead of threading
     # trace_id/session_id/user_id as a kwarg at every log call site; every
     # structlog call made anywhere in this task's call tree (gateway pipeline,
@@ -435,6 +500,7 @@ async def _process_chat_stream_background(
                 user_display_name=user_display_name,
                 authenticated=True,
                 attachments=validated_attachments,
+                expansion_budget=expansion_budget,
             )
             response_content = result.get("reply", "No response generated")
 
@@ -457,7 +523,16 @@ async def _process_chat_stream_background(
         # Push full response via dual-write path (Postgres + WS queue).
         from personal_agent.transport.agui.transport import _push_event  # noqa: E402
 
-        await _push_event(TextDeltaEvent(text=response_content, session_id=session_id), session_id)
+        # ADR-0154 D6: this push is the first user-visible token (the reply goes out whole).
+        delivered = False
+        try:
+            delivered = bool(
+                await _push_event(
+                    TextDeltaEvent(text=response_content, session_id=session_id), session_id
+                )
+            )
+        finally:
+            await _record_first_token(trace_id, received, delivered=delivered)
 
         async def _append_assistant_directly() -> None:
             """Append the assistant reply to Postgres directly (no consumer involved)."""
@@ -564,6 +639,7 @@ async def _process_chat_stream_background(
         # Release the dedup entry so the user can immediately retry on error
         # without waiting for TTL expiry (FRE-392).
         get_deduplicator().release(session_id, message, client_msg_id=client_msg_id)
+        clear_first_token_clock()
         structlog.contextvars.clear_contextvars()
 
 
@@ -2063,10 +2139,13 @@ async def chat(
     Returns:
         Response with assistant message and session_id
     """
+    # ADR-0154 D6: the first-token clock runs from request receipt.
+    received = start_first_token_clock()
     trace_id = read_or_mint_trace_id()
     _bind_request_identity(trace_id=trace_id, session_id=session_id, user_id=request_user.user_id)
+    delivered = False
     try:
-        return await _chat_impl(
+        result = await _chat_impl(
             trace_id=trace_id,
             message=message,
             session_id=session_id,
@@ -2076,7 +2155,12 @@ async def chat(
             request_user=request_user,
             db=db,
         )
+        # The JSON response is this path's first (and only) user-visible output.
+        delivered = True
+        return result
     finally:
+        await _record_first_token(trace_id, received, delivered=delivered)
+        clear_first_token_clock()
         structlog.contextvars.clear_contextvars()
 
 
@@ -2322,6 +2406,7 @@ async def _chat_impl(
             user_display_name=request_user.display_name,
             eval_mode=(channel.upper() == "EVAL"),
             authenticated=True,
+            expansion_budget=expansion_budget,
         )
 
         response_content = result.get("reply", "No response generated")
@@ -2554,6 +2639,8 @@ async def chat_stream_endpoint(
     Raises:
         HTTPException: 422 if ``session_id`` is not a valid UUID v4.
     """
+    # ADR-0154 D6: request receipt, for the turn's time to first token.
+    received_monotonic = time.monotonic()
     try:
         UUID(session_id)
     except ValueError as exc:
@@ -2608,6 +2695,7 @@ async def chat_stream_endpoint(
             user_display_name=request_user.display_name,
             client_msg_id=client_msg_id,
             attachments_json=attachments,
+            received_monotonic=received_monotonic,
         )
     )
 

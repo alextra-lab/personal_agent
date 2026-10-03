@@ -29,6 +29,13 @@ OrchestrationEvent = Literal[
 ]
 
 
+# ADR-0154 D6 (FRE-1512): the planner's recorded vocabulary. ``None`` on a row means the
+# planner did not run (or, for a failure reason, did not fail).
+PlannerDecision = Literal["declined", "expanded", "failed"]
+PlannerFailureReason = Literal["invalid", "timeout", "exception", "input_too_large"]
+PlannerGateReason = Literal["planner_mode_absent"]
+
+
 @dataclass(frozen=True)
 class RouteTraceRow:
     """One per-turn route-trace ledger row — the ADR-0088 D6 direct durable record.
@@ -99,13 +106,37 @@ class RouteTraceRow:
         constraint_resolutions: One entry per constraint pause this turn raised, in
             order, each naming the constraint and the resolved ``action_id``. Empty
             when no pause occurred (ADR-0142 AC-2, FRE-1391).
+        planner_decision: ``declined`` / ``expanded`` / ``failed``; ``None`` when the
+            planner did not run (ADR-0154 D6, FRE-1512).
+        planner_failure_reason: Why the planner failed; set only when
+            ``planner_decision == "failed"``.
+        planner_deployment: Deployment key of the planner call, when it ran.
+        planner_mode: Catalog mode of the planner call, when it ran.
+        planner_reasoning_chars: Reasoning characters the planner response carried.
+        planner_duration_ms: Wall clock of the planner call.
+        planner_prompt_tokens: The engine's prompt-token count for the planner call.
+        planner_completion_tokens: The engine's completion-token count.
+        planner_input_chars: Characters of each planner input, as
+            ``{"system", "history", "digest", "message"}``; set on every planner
+            attempt, including ``input_too_large``.
+        planner_gate_reason: ``planner_mode_absent`` on a register-type turn whose
+            deployment declares no ``planner`` mode (written by FRE-1515).
+        conversation_history_chars: Length of the planner's history render for this
+            turn, whether or not the planner ran; ``None`` outside the four register
+            types.
+        expansion_budget: ``governance.expansion_budget`` for the turn (the budget the
+            app computed, even when the gateway pipeline failed).
+        synthesis_appended: Whether a synthesis message was added to the turn.
+        first_token_ms: Request receipt to the first user-visible push. Written by a
+            conditional ``UPDATE`` after the push, so the seam's insert leaves it
+            ``None``.
     """
 
     trace_id: UUID
     session_id: UUID | None
     task_id: UUID | None = None
     created_at: datetime | None = None
-    schema_version: int = 2
+    schema_version: int = 3
 
     # Stimulus (PII-gated)
     user_message_chars: int = 0
@@ -166,3 +197,19 @@ class RouteTraceRow:
     # ADR-0142 instrumentation (FRE-1391)
     effective_tool_iteration_ceiling: int | None = None
     constraint_resolutions: Sequence[Mapping[str, object]] = field(default_factory=tuple)
+
+    # ADR-0154 D6 (FRE-1512): planner decision, inputs and delay; turn timing
+    planner_decision: PlannerDecision | None = None
+    planner_failure_reason: PlannerFailureReason | None = None
+    planner_deployment: str | None = None
+    planner_mode: str | None = None
+    planner_reasoning_chars: int | None = None
+    planner_duration_ms: float | None = None
+    planner_prompt_tokens: int | None = None
+    planner_completion_tokens: int | None = None
+    planner_input_chars: Mapping[str, int] | None = None
+    planner_gate_reason: PlannerGateReason | None = None
+    conversation_history_chars: int | None = None
+    expansion_budget: int | None = None
+    synthesis_appended: bool | None = None
+    first_token_ms: float | None = None

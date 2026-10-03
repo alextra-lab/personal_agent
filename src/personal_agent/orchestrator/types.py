@@ -27,6 +27,11 @@ from personal_agent.governance.models import Mode
 from personal_agent.grounding.enforcement_selection import EnforcementSelection
 from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.llm_client import ModelRole
+from personal_agent.observability.route_trace.types import (
+    PlannerDecision,
+    PlannerFailureReason,
+    PlannerGateReason,
+)
 from personal_agent.orchestrator.loop_gate import ToolLoopGate
 from personal_agent.request_gateway.memory_status import MemoryStatusReport
 from personal_agent.request_gateway.types import GatewayOutput
@@ -174,6 +179,54 @@ class ConstraintResolutionRecord:
 
     constraint: str
     action_id: str
+
+
+@dataclass(frozen=True)
+class PlannerInputChars:
+    """Characters of each input the planner received (ADR-0154 D1/D6).
+
+    Attributes:
+        system: Length of the planner system prompt.
+        history: Length of the rendered conversation history.
+        digest: Length of the memory digest.
+        message: Length of the user message.
+    """
+
+    system: int
+    history: int
+    digest: int
+    message: int
+
+
+@dataclass(frozen=True)
+class PlannerRunRecord:
+    """What one planner run decided and what it cost (ADR-0154 D6, FRE-1512).
+
+    ``ExecutionContext.planner_run`` holds one of these when the planner ran; the
+    route-trace assembler copies it onto the row. ``None`` on the context means the
+    planner did not run.
+
+    Attributes:
+        decision: ``declined``, ``expanded`` or ``failed``.
+        failure_reason: Why the run failed; set only when ``decision == "failed"``.
+        deployment: Deployment key of the planner call.
+        mode: Catalog mode of the planner call.
+        reasoning_chars: Reasoning characters the response carried.
+        duration_ms: Wall clock of the planner call.
+        prompt_tokens: The engine's prompt-token count.
+        completion_tokens: The engine's completion-token count.
+        input_chars: Characters of each planner input; set on every attempt.
+    """
+
+    decision: PlannerDecision
+    failure_reason: PlannerFailureReason | None = None
+    deployment: str | None = None
+    mode: str | None = None
+    reasoning_chars: int | None = None
+    duration_ms: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    input_chars: PlannerInputChars | None = None
 
 
 @dataclass(frozen=True)
@@ -542,6 +595,20 @@ class ExecutionContext:
     # route-trace assembler and carried on stream:turn.observed events.
     topology: str | None = None
 
+    # --- ADR-0154 D6 (FRE-1512): what the route-trace row records about the planner ---
+    # ``expansion_budget`` is the budget the app computed for this turn. It is carried
+    # here because ``gateway_output`` is ``None`` when the gateway pipeline failed, and
+    # D6 records the budget on every turn. ``planner_run`` is ``None`` until a planner
+    # run finishes (use ``record_planner_outcome``). ``planner_gate_reason`` is written
+    # by the routing change (FRE-1515). ``conversation_history_chars`` is stamped once,
+    # on the four register types, before any expansion decision. ``synthesis_appended``
+    # is set when a synthesis message is added to ``messages``.
+    expansion_budget: int | None = None
+    planner_run: PlannerRunRecord | None = None
+    planner_gate_reason: PlannerGateReason | None = None
+    conversation_history_chars: int | None = None
+    synthesis_appended: bool = False
+
     # --- FRE-661 / ADR-0101 §2 structured attachment carrier ---
     # Kept separate from user_message so Captain's Log + entity extraction never
     # see attachment metadata (AC-5). Immutable tuple to prevent caller-side
@@ -621,6 +688,22 @@ class ExecutionContext:
     # appends its own assistant message directly in ``step_init`` and makes no
     # synthesis call for a trailer to attach to).
     fanout_trailer: str | None = None
+
+
+def record_planner_outcome(ctx: ExecutionContext, run: PlannerRunRecord) -> None:
+    """Store a planner run on the context and clear the expansion label it voids.
+
+    A planner that declined or failed returned the turn to the tool loop, so the
+    expansion strategy the gateway set is not what the turn did (ADR-0154 D6,
+    ADR-0152 D4).
+
+    Args:
+        ctx: The turn's execution context.
+        run: The finished planner run.
+    """
+    ctx.planner_run = run
+    if run.decision in ("declined", "failed"):
+        ctx.expansion_strategy = None
 
 
 class OrchestratorStep(TypedDict):

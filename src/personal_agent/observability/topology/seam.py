@@ -30,6 +30,7 @@ from personal_agent.events.models import (
     TurnCompletedEvent,
     TurnDegradedEvent,
 )
+from personal_agent.observability.first_token import first_token_clock_active
 from personal_agent.observability.route_trace import (
     assemble_route_trace,
     assemble_sub_agent_route_trace,
@@ -73,8 +74,36 @@ _STRATEGY_TO_TOPOLOGY: dict[str, str] = {
 }
 
 
+def topology_label(strategy: str | None, reason: str | None, planner_decision: str | None) -> str:
+    """Map a gateway decomposition and a planner decision to the topology label.
+
+    The one rule shared by the seam (from the context) and the first-token update (from
+    the stored row), so both give the same label (ADR-0154 D6, ADR-0152 D4). A planner
+    that declined or failed on a ``planner_asked`` turn returned the turn to the tool
+    loop, so the turn ran as ``primary`` whatever strategy the gateway routed it under.
+
+    Args:
+        strategy: The gateway decomposition strategy value (``single`` / ``hybrid`` /
+            ``decompose`` / ``delegate``), or ``None`` when there is no decision.
+        reason: The gateway decomposition reason.
+        planner_decision: The planner decision (``declined`` / ``expanded`` / ``failed``),
+            or ``None`` when the planner did not run.
+
+    Returns:
+        One of ``primary`` / ``hybrid_fanout`` / ``decompose`` / ``delegate``.
+    """
+    if reason == "planner_asked" and planner_decision in ("declined", "failed"):
+        return "primary"
+    if strategy is None:
+        return "primary"
+    return _STRATEGY_TO_TOPOLOGY.get(strategy, "primary")
+
+
 def _resolve_topology(ctx: ExecutionContext) -> str:
-    """Resolve the turn's execution-topology label from the gateway decision.
+    """Resolve the turn's execution-topology label from the gateway and planner decisions.
+
+    On seam enter no planner decision exists, so the label is the gateway's intent. On seam
+    exit the same call reads ``ctx.planner_run`` and gives the label the turn really had.
 
     Args:
         ctx: The turn's execution context (``gateway_output`` may be absent).
@@ -87,11 +116,16 @@ def _resolve_topology(ctx: ExecutionContext) -> str:
     if gateway_output is None:
         return "primary"
     try:
-        strategy = gateway_output.decomposition.strategy
+        decomposition = gateway_output.decomposition
+        strategy = decomposition.strategy
     except AttributeError:
         return "primary"
-    value = getattr(strategy, "value", strategy)
-    return _STRATEGY_TO_TOPOLOGY.get(str(value), "primary")
+    planner_run = getattr(ctx, "planner_run", None)
+    return topology_label(
+        str(getattr(strategy, "value", strategy)),
+        getattr(decomposition, "reason", None),
+        getattr(planner_run, "decision", None),
+    )
 
 
 async def _publish(event: TurnObservedEvent, *, trace_id: str | None) -> None:
@@ -138,8 +172,12 @@ async def _write_durable_row(ctx: ExecutionContext, topology: str) -> float:
         )
         await ledger.write(row)
         # FRE-548: project the same in-hand row to the dedicated agent-topology-* ES index
-        # (non-blocking, best-effort — cannot raise into the turn).
-        project_route_trace_to_es(row, topology=topology)
+        # (non-blocking, best-effort — cannot raise into the turn). While a first-token
+        # clock is running, the service writes this document once, after it has filled
+        # first_token_ms (ADR-0154 D6): two unordered full-document writes to one id could
+        # land in the wrong order and erase the value.
+        if not first_token_clock_active():
+            project_route_trace_to_es(row, topology=topology)
     except Exception as e:
         log.warning(
             "route_trace_write_failed",
@@ -194,8 +232,9 @@ async def observe_topology(ctx: ExecutionContext) -> AsyncIterator[None]:
     """Wrap a turn's execution topology in the ADR-0088 emission seam (D2).
 
     On enter: resolve + stamp ``ctx.topology`` and publish ``turn.topology_entered``.
-    On exit (including handled exceptions and cancellation): write the direct durable
-    route-trace row and publish ``turn.completed`` carrying the authoritative cost.
+    On exit (including handled exceptions and cancellation): re-resolve the label with the
+    planner's decision (ADR-0154 D6), write the direct durable route-trace row and publish
+    ``turn.completed`` carrying the authoritative cost.
 
     Args:
         ctx: The turn's execution context.
@@ -218,6 +257,10 @@ async def observe_topology(ctx: ExecutionContext) -> AsyncIterator[None]:
         yield
     finally:
         _active_topology.reset(token)
+        # The planner may have declined or failed since enter; the row, the segments and
+        # turn.completed carry the label the turn really had.
+        topology = _resolve_topology(ctx)
+        ctx.topology = topology
         cost = await _write_durable_row(ctx, topology)
         if trace_id and session_id:
             await _publish(

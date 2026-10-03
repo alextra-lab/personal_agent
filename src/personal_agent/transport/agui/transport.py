@@ -98,7 +98,7 @@ def _get_emit_lock(session_id: str) -> asyncio.Lock:
     return lock
 
 
-async def _persist_and_enqueue(session_id: str, make_event: Callable[[], InternalEvent]) -> None:
+async def _persist_and_enqueue(session_id: str, make_event: Callable[[], InternalEvent]) -> bool:
     """Persist an event, then enqueue the sequenced envelope for live WS delivery.
 
     ``make_event`` is called **inside** the per-session emit lock, so the seq order equals
@@ -112,6 +112,12 @@ async def _persist_and_enqueue(session_id: str, make_event: Callable[[], Interna
     Args:
         session_id: Target session identifier.
         make_event: Zero-arg factory producing the event to emit, invoked under the lock.
+
+    Returns:
+        ``True`` when the event was persisted, so a reconnecting client replays it
+        even if the live queue was full. ``False`` when persistence failed and the
+        event reached no one (ADR-0154 D6: ``first_token_ms`` is recorded only for a
+        push that reached the user's stream).
     """
     async with _get_emit_lock(session_id):
         envelope = to_agui_event(make_event())
@@ -129,7 +135,7 @@ async def _persist_and_enqueue(session_id: str, make_event: Callable[[], Interna
             log.exception(
                 "transport.persist_event_failed", session_id=session_id, event_type=event_type
             )
-            return
+            return False
 
         queue = get_event_queue(session_id)
         try:
@@ -140,11 +146,16 @@ async def _persist_and_enqueue(session_id: str, make_event: Callable[[], Interna
                 session_id=session_id,
                 event_type=event_type,
             )
+        return True
 
 
-async def _push_event(event: InternalEvent, session_id: str) -> None:
-    """Persist a pre-built event, then enqueue it for live WS delivery (FRE-518)."""
-    await _persist_and_enqueue(session_id, lambda: event)
+async def _push_event(event: InternalEvent, session_id: str) -> bool:
+    """Persist a pre-built event, then enqueue it for live WS delivery (FRE-518).
+
+    Returns:
+        ``True`` when the event was persisted (see :func:`_persist_and_enqueue`).
+    """
+    return await _persist_and_enqueue(session_id, lambda: event)
 
 
 # ── Session-keyed current-phase projection (FRE-986, ADR-0123 §6) ────────────

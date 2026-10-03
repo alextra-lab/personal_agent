@@ -16,6 +16,7 @@ from personal_agent.observability.route_trace.assembler import (
     assemble_route_trace,
     assemble_sub_agent_route_trace,
 )
+from personal_agent.observability.route_trace.types import RouteTraceRow
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult
 from personal_agent.request_gateway.types import Complexity, DecompositionStrategy, TaskType
@@ -315,3 +316,118 @@ def test_assemble_sub_agent_route_trace_marks_failure() -> None:
     sub = _sub("x", success=False, error="boom")
     row = assemble_sub_agent_route_trace(_base_ctx(), sub)
     assert row.error_type == "sub_agent_failed"
+
+
+# ---------------------------------------------------------------------------
+# FRE-1512 — ADR-0154 D6 fields
+# ---------------------------------------------------------------------------
+
+
+def _d6_ctx(**overrides: object) -> SimpleNamespace:
+    base: dict[str, object] = dict(
+        trace_id=str(uuid4()),
+        session_id=str(uuid4()),
+        user_message="hi",
+        messages=[],
+        steps=[],
+        gateway_output=None,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _assemble_d6(ctx: SimpleNamespace) -> RouteTraceRow:
+    return assemble_route_trace(
+        ctx,
+        authoritative_cost_usd=0.0,
+        input_tokens=0,
+        output_tokens=0,
+        store_preview=False,
+        preview_chars=0,
+    )
+
+
+def test_assembler_copies_planner_run_onto_the_row() -> None:
+    from personal_agent.orchestrator.types import PlannerInputChars, PlannerRunRecord
+
+    run = PlannerRunRecord(
+        decision="failed",
+        failure_reason="input_too_large",
+        deployment="qwen-local",
+        mode="planner",
+        reasoning_chars=0,
+        duration_ms=5.0,
+        prompt_tokens=11,
+        completion_tokens=2,
+        input_chars=PlannerInputChars(system=1, history=2, digest=3, message=4),
+    )
+    row = _assemble_d6(
+        _d6_ctx(
+            planner_run=run,
+            planner_gate_reason=None,
+            conversation_history_chars=77,
+            synthesis_appended=True,
+        )
+    )
+
+    assert row.planner_decision == "failed"
+    assert row.planner_failure_reason == "input_too_large"
+    assert row.planner_deployment == "qwen-local"
+    assert row.planner_mode == "planner"
+    assert row.planner_prompt_tokens == 11 and row.planner_completion_tokens == 2
+    assert row.planner_input_chars == {"system": 1, "history": 2, "digest": 3, "message": 4}
+    assert row.conversation_history_chars == 77
+    assert row.synthesis_appended is True
+
+
+def test_assembler_leaves_planner_fields_none_when_the_planner_did_not_run() -> None:
+    row = _assemble_d6(_d6_ctx())
+    assert row.planner_decision is None
+    assert row.planner_input_chars is None
+    assert row.conversation_history_chars is None
+    assert row.first_token_ms is None  # written after the push, never by the assembler
+    assert row.synthesis_appended is False
+    assert row.expansion_budget is None
+
+
+def test_expansion_budget_prefers_the_app_value_over_the_gateway() -> None:
+    gateway = SimpleNamespace(
+        intent=SimpleNamespace(
+            task_type=SimpleNamespace(value="conversational"),
+            complexity=SimpleNamespace(value="simple"),
+            confidence=0.9,
+        ),
+        decomposition=SimpleNamespace(strategy=SimpleNamespace(value="single"), reason="r"),
+        degraded_stages=(),
+        governance=SimpleNamespace(mode=SimpleNamespace(value="normal"), expansion_budget=3),
+    )
+    assert _assemble_d6(_d6_ctx(gateway_output=gateway)).expansion_budget == 3
+    assert _assemble_d6(_d6_ctx(gateway_output=gateway, expansion_budget=1)).expansion_budget == 1
+
+
+def test_expansion_budget_survives_a_failed_gateway_pipeline() -> None:
+    """gateway_output is None when the pipeline failed; the app's budget still lands."""
+    row = _assemble_d6(_d6_ctx(gateway_output=None, expansion_budget=0))
+    assert row.expansion_budget == 0
+
+
+def test_sub_agent_segment_rows_carry_no_planner_fields() -> None:
+    sub = SimpleNamespace(
+        task_id=uuid4(), cost_usd=0.0, success=True, full_output="", tools_used=[]
+    )
+    row = assemble_sub_agent_route_trace(_d6_ctx(planner_run=object()), sub)
+    assert row.planner_decision is None
+    assert row.expansion_budget is None
+    assert row.synthesis_appended is None
+    assert row.first_token_ms is None
+
+
+def test_record_planner_outcome_clears_expansion_strategy_on_decline_and_failure() -> None:
+    from personal_agent.orchestrator.types import PlannerRunRecord, record_planner_outcome
+
+    for decision, cleared in (("declined", True), ("failed", True), ("expanded", False)):
+        ctx = SimpleNamespace(expansion_strategy="hybrid", planner_run=None)
+        run = PlannerRunRecord(decision=decision)  # type: ignore[arg-type]
+        record_planner_outcome(ctx, run)  # type: ignore[arg-type]
+        assert ctx.planner_run is run
+        assert (ctx.expansion_strategy is None) is cleared

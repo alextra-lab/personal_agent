@@ -29,7 +29,28 @@
         "authoritative_cost_usd":  { "type": "double" },
         "input_tokens":            { "type": "long" },
         "output_tokens":           { "type": "long" },
-        "latency_total_ms":        { "type": "float" }
+        "latency_total_ms":        { "type": "float" },
+        "planner_decision":        { "type": "keyword" },
+        "planner_failure_reason":  { "type": "keyword" },
+        "planner_deployment":      { "type": "keyword" },
+        "planner_mode":            { "type": "keyword" },
+        "planner_gate_reason":     { "type": "keyword" },
+        "planner_reasoning_chars": { "type": "integer" },
+        "planner_duration_ms":     { "type": "float" },
+        "planner_prompt_tokens":   { "type": "integer" },
+        "planner_completion_tokens": { "type": "integer" },
+        "planner_input_chars": {
+          "properties": {
+            "system":  { "type": "integer" },
+            "history": { "type": "integer" },
+            "digest":  { "type": "integer" },
+            "message": { "type": "integer" }
+          }
+        },
+        "conversation_history_chars": { "type": "integer" },
+        "expansion_budget":        { "type": "integer" },
+        "synthesis_appended":      { "type": "boolean" },
+        "first_token_ms":          { "type": "float" }
       }
     }
   },

@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS route_traces (
     session_id UUID,
     task_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    schema_version SMALLINT NOT NULL DEFAULT 2,
+    schema_version SMALLINT NOT NULL DEFAULT 3,
 
     -- Stimulus (PII-gated)
     user_message_chars INTEGER NOT NULL DEFAULT 0,
@@ -190,6 +190,23 @@ CREATE TABLE IF NOT EXISTS route_traces (
     -- loop actually used, and one entry per constraint pause this turn raised.
     effective_tool_iteration_ceiling INTEGER,
     constraint_resolutions JSONB,
+
+    -- ADR-0154 D6 (FRE-1512): the planner's decision, inputs and delay, and the turn's time
+    -- to first token. planner_* stay NULL when the planner did not run.
+    planner_decision VARCHAR(20),
+    planner_failure_reason VARCHAR(40),
+    planner_deployment VARCHAR(120),
+    planner_mode VARCHAR(40),
+    planner_reasoning_chars INTEGER,
+    planner_duration_ms REAL,
+    planner_prompt_tokens INTEGER,
+    planner_completion_tokens INTEGER,
+    planner_input_chars JSONB,
+    planner_gate_reason VARCHAR(40),
+    conversation_history_chars INTEGER,
+    expansion_budget INTEGER,
+    synthesis_appended BOOLEAN,
+    first_token_ms REAL,
 
     -- ADR-0088 seam key (FRE-513): per-topology idempotency. NULLS NOT DISTINCT so the
     -- turn-level write (task_id NULL) still collapses to one row per trace_id.

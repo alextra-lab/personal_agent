@@ -142,7 +142,8 @@ class MemoryItemKey:
     Args:
         kind: The item kind, a ``MemoryItemKind`` value.
         identity: The item identity from ``memory_item_identity``. It can be empty.
-        ordinal: The 0-based position of the item in the renderer's emit order.
+        ordinal: The 0-based position of the item in the shared selection's output, which
+            is the relevance order. It is not the renderer's section order.
     """
 
     kind: str
@@ -160,8 +161,8 @@ class PlannerMemoryDigest:
     Args:
         text: The digest lines joined by newlines. Empty when there is nothing to say.
         item_keys: One key per emitted line, in order.
-        rendered_item_keys: One key per item the renderer emits, in render order. The
-            ``item_keys`` are an ordered sub-multiset of these.
+        rendered_item_keys: One key per item the renderer emits, in the shared selection's
+            order (relevance order). The ``item_keys`` are an ordered sub-multiset of these.
         item_count: The number of lines in ``text``.
         eligible_count: The number of items the shared selection returned.
         dropped_count: The number of lines the token ceiling dropped from the tail. The

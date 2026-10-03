@@ -11,7 +11,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import Token
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
@@ -76,7 +76,12 @@ from personal_agent.orchestrator.context_window import (
     apply_context_window,
     estimate_messages_tokens,
 )
-from personal_agent.orchestrator.expansion_types import SKIP_REASON_TEXT, SkipReason
+from personal_agent.orchestrator.expansion_types import (
+    SKIP_REASON_TEXT,
+    MemoryItemKey,
+    PlannerMemoryDigest,
+    SkipReason,
+)
 from personal_agent.orchestrator.loop_gate import (
     GateDecision,
     GateResult,
@@ -94,6 +99,7 @@ from personal_agent.orchestrator.types import (
     TaskState,
 )
 from personal_agent.orchestrator.unmeasured_claim import detect_unmeasured_claim
+from personal_agent.request_gateway.budget import estimate_tokens
 from personal_agent.request_gateway.memory_status import (
     MEMORY_STATE_LINES,
     MemoryStatus,
@@ -3756,6 +3762,81 @@ def _stance_line(item: dict[str, Any], identifier: str | None = None) -> str:
     return line
 
 
+def _episode_line(item: dict[str, Any], number: int, identifier: str | None = None) -> str:
+    """Render one recalled episode as a numbered line.
+
+    Args:
+        item: The episode item to render.
+        number: The episode's 1-based position among the rendered episodes.
+        identifier: This episode's citation identifier (ADR-0138 D3(a), FRE-1296), or
+            None to render without one.
+    """
+    line = f"{number}. {_episode_text(item)}"
+    return f"{line} [{identifier}]" if identifier else line
+
+
+@dataclass(frozen=True)
+class _SelectedItem:
+    """One memory item the renderer emits, with the kind it was bucketed under."""
+
+    kind: MemoryItemKind
+    item: dict[str, Any]
+
+
+def _has_renderable_content(kind: MemoryItemKind, item: dict[str, Any]) -> bool:
+    """Whether an item of a rendered kind has any content to render."""
+    if kind is MemoryItemKind.ENTITY:
+        return bool((item.get("description") or "").strip())
+    if kind is MemoryItemKind.EPISODE:
+        return bool(_episode_text(item))
+    # D6 (ADR-0126): an empty or whitespace-only affect is never rendered blank.
+    return bool((item.get("affect") or "").strip())
+
+
+def _select_renderable_memory(items: list[dict[str, Any]]) -> tuple[_SelectedItem, ...]:
+    """Select the memory items the primary's memory section renders, in relevance order.
+
+    The one definition of "eligible for the render" (ADR-0147 D1, FRE-1471). The renderer
+    and the planner digest both call it, so a fact cannot reach the planner that the
+    primary's own section does not carry. Session items and items of an unrecognised shape
+    are never selected (an explicit FRE-1010 non-goal for the renderer).
+
+    Each kind is filtered for content BEFORE its cap is applied, so the cap bounds what is
+    actually rendered rather than what was merely considered. Cap-then-filter would let
+    blank items consume slots and silently exclude a later item that does have content —
+    the exact "recalled then discarded" failure FRE-1010 exists to fix, and it would
+    undermine the caps' own purpose (bounding the volatile tail's cost, which only rendered
+    content contributes to). The caps are per kind: ``_MAX_RENDERED_ENTITIES``,
+    ``_MAX_RENDERED_EPISODES``, ``_MAX_RENDERED_STANCES`` (ADR-0126 T1) and
+    ``_MAX_RENDERED_BEHAVIOURAL_STANCES`` (ADR-0126 T2, AC-7's 12, not the entity cap).
+
+    Args:
+        items: Memory-context items of any kind, in upstream relevance order.
+
+    Returns:
+        The eligible items in the order ``items`` carried them. Within one kind, that is
+        the order the renderer emits them.
+    """
+    caps = {
+        MemoryItemKind.ENTITY: _MAX_RENDERED_ENTITIES,
+        MemoryItemKind.EPISODE: _MAX_RENDERED_EPISODES,
+        MemoryItemKind.STANCE: _MAX_RENDERED_STANCES,
+        MemoryItemKind.BEHAVIOURAL_STANCE: _MAX_RENDERED_BEHAVIOURAL_STANCES,
+    }
+    eligible: dict[MemoryItemKind, list[tuple[int, dict[str, Any]]]] = {kind: [] for kind in caps}
+    for position, item in enumerate(items):
+        kind, _ = memory_item_identity(item)
+        if kind in eligible and _has_renderable_content(kind, item):
+            eligible[kind].append((position, item))
+    chosen = [
+        (position, _SelectedItem(kind, item))
+        for kind, entries in eligible.items()
+        for position, item in entries[: caps[kind]]
+    ]
+    chosen.sort(key=lambda entry: entry[0])
+    return tuple(selected for _, selected in chosen)
+
+
 def _render_memory_section_with_ids(
     items: list[dict[str, Any]],
     registry: "SourceRegistry | None" = None,
@@ -3794,39 +3875,11 @@ def _render_memory_section_with_ids(
         call's own report of what it emitted (ADR-0148 D1, FRE-1478)). The first two
         are both empty when nothing renders.
     """
-    entities: list[dict[str, Any]] = []
-    episodes: list[dict[str, Any]] = []
-    stance_items: list[dict[str, Any]] = []
-    behavioural_items: list[dict[str, Any]] = []
-    for item in items:
-        kind, _ = memory_item_identity(item)
-        if kind is MemoryItemKind.ENTITY:
-            entities.append(item)
-        elif kind is MemoryItemKind.EPISODE:
-            episodes.append(item)
-        elif kind is MemoryItemKind.STANCE:
-            stance_items.append(item)
-        elif kind is MemoryItemKind.BEHAVIOURAL_STANCE:
-            behavioural_items.append(item)
-
-    # Filter for content BEFORE applying the bound, so the bound caps what is actually
-    # rendered rather than what was merely considered. Cap-then-filter would let blank
-    # items consume slots and silently exclude a later item that does have content —
-    # the exact "recalled then discarded" failure this ticket exists to fix, and it
-    # would undermine the bounds' own purpose (bounding the volatile tail's cost, which
-    # only rendered content contributes to).
-    described = [m for m in entities if (m.get("description") or "").strip()][
-        :_MAX_RENDERED_ENTITIES
-    ]
-    recalled = [m for m in episodes if _episode_text(m)][:_MAX_RENDERED_EPISODES]
-    # D6 (ADR-0126): an empty or whitespace-only affect is filtered before render, never
-    # rendered blank — this is the same filter-then-cap shape as `described`/`recalled`
-    # above, so a blank stance can never burn a rendered slot ahead of a real one.
-    stances = [m for m in stance_items if (m.get("affect") or "").strip()][:_MAX_RENDERED_STANCES]
-    # ADR-0126 T2: same filter-then-cap shape, own bound (AC-7's 12, not the entity cap).
-    behavioural = [m for m in behavioural_items if (m.get("affect") or "").strip()][
-        :_MAX_RENDERED_BEHAVIOURAL_STANCES
-    ]
+    selected = _select_renderable_memory(items)
+    behavioural = [m.item for m in selected if m.kind is MemoryItemKind.BEHAVIOURAL_STANCE]
+    described = [m.item for m in selected if m.kind is MemoryItemKind.ENTITY]
+    recalled = [m.item for m in selected if m.kind is MemoryItemKind.EPISODE]
+    stances = [m.item for m in selected if m.kind is MemoryItemKind.STANCE]
 
     sections: list[str] = []
     rendered_ids: list[str] = []
@@ -3863,9 +3916,7 @@ def _render_memory_section_with_ids(
         section = "\n\n## Relevant Past Conversations\n"
         section += "The following past conversations may be relevant to the current request:\n\n"
         for index, item in enumerate(recalled, 1):
-            identifier = _identifier_for(item)
-            section += f"{index}. {_episode_text(item)}"
-            section += f" [{identifier}]\n" if identifier else "\n"
+            section += _episode_line(item, index, _identifier_for(item)) + "\n"
             if item.get("key_entities"):
                 section += f"   Entities: {', '.join(item['key_entities'][:5])}\n"
         section += (
@@ -3898,6 +3949,118 @@ def _render_memory_section_with_ids(
         cause="render_dropped_all_recall_items" if had_something_to_drop else None,
     )
     return "".join(sections), tuple(rendered_ids), render_report
+
+
+_DIGEST_MAX_ITEMS = 20
+"""Most items in the planner memory digest (ADR-0147 D4). Not the render bounds: those admit 47."""
+
+_DIGEST_MAX_LINE_CHARS = 120
+"""Most characters in one digest line (ADR-0147 D4)."""
+
+_DIGEST_MAX_TOKENS = 300
+"""Ceiling on the digest's estimated tokens (ADR-0147 D4). It binds by dropping whole lines."""
+
+_DIGEST_CLAUSE_END_RE = re.compile(r"(?<=[,;.:])(?=\s)|(?=\s[—(])")
+"""Zero-width match at the end of a clause: after ``, ; . :`` or before `` —`` and `` (``."""
+
+
+def _fit_digest_line(line: str, *, guard_deictic: bool) -> str:
+    """Shorten one renderer line to one digest line of at most the line bound.
+
+    The result is always a prefix of ``line``'s first physical line, so it carries no
+    wording the renderer did not emit. A cut falls at the last clause end, else the last
+    space, in the second half of the bound; else it is a hard cut. No marker is added: a
+    marker would stop the result being a prefix.
+
+    Args:
+        line: The renderer's line for one item, without a citation identifier.
+        guard_deictic: True for an entity line. A description that says "the user" carries
+            a clarifier that the renderer appends (FRE-1150). When the cut leaves that
+            phrase without the whole clarifier, the line is cut back to before the phrase,
+            so a fact about another conversation cannot read as one about the connected user.
+
+    Returns:
+        The digest line.
+    """
+    first = line.splitlines()[0]
+    if len(first) <= _DIGEST_MAX_LINE_CHARS:
+        fitted = first
+    else:
+        head = first[: _DIGEST_MAX_LINE_CHARS + 1]
+        floor = _DIGEST_MAX_LINE_CHARS // 2
+        clause_ends = [
+            m.start() for m in _DIGEST_CLAUSE_END_RE.finditer(head) if m.start() >= floor
+        ]
+        space = head.rfind(" ")
+        if clause_ends:
+            cut = max(clause_ends)
+        elif space >= floor:
+            cut = space
+        else:
+            cut = _DIGEST_MAX_LINE_CHARS
+        fitted = first[:cut].rstrip()
+    if guard_deictic and _DEICTIC_DISAMBIGUATION not in fitted:
+        deictic = _DEICTIC_USER_RE.search(fitted)
+        if deictic:
+            fitted = fitted[: deictic.start()].rstrip()
+    return fitted
+
+
+def _build_planner_memory_digest(items: list[dict[str, Any]]) -> PlannerMemoryDigest:
+    """Build the planner's memory digest from the primary renderer's own selection and text.
+
+    One line per item, in the relevance order the memory context carries, from the items
+    ``_select_renderable_memory`` returns and the text helpers the renderer calls. The
+    builder reads no raw item field. It is bounded on its own terms (ADR-0147 D4): at most
+    ``_DIGEST_MAX_ITEMS`` items, ``_DIGEST_MAX_LINE_CHARS`` per line, and
+    ``_DIGEST_MAX_TOKENS`` estimated tokens, which binds by dropping whole lines from the
+    tail. It carries no citation identifier, header or guidance paragraph.
+
+    Args:
+        items: Memory-context items of any kind, in upstream relevance order.
+
+    Returns:
+        The digest. An empty memory context, or one whose every item filters out, gives an
+        empty ``text`` and an ``item_count`` of zero.
+    """
+    eligible = _select_renderable_memory(items)
+    rendered_keys = tuple(
+        MemoryItemKey(
+            kind=entry.kind.value, identity=memory_item_identity(entry.item)[1], ordinal=i
+        )
+        for i, entry in enumerate(eligible)
+    )
+    lines: list[str] = []
+    episode_number = 0
+    for entry in eligible[:_DIGEST_MAX_ITEMS]:
+        if entry.kind is MemoryItemKind.ENTITY:
+            line = _fit_digest_line(_entity_line(entry.item), guard_deictic=True)
+        elif entry.kind is MemoryItemKind.EPISODE:
+            episode_number += 1
+            line = _fit_digest_line(_episode_line(entry.item, episode_number), guard_deictic=False)
+        else:
+            line = _fit_digest_line(_stance_line(entry.item), guard_deictic=False)
+        lines.append(line)
+    dropped = 0
+    while lines and estimate_tokens("\n".join(lines)) > _DIGEST_MAX_TOKENS:
+        lines.pop()
+        dropped += 1
+    text = "\n".join(lines)
+    emitted_keys = rendered_keys[: len(lines)]
+    kind_counts: dict[str, int] = {}
+    for key in emitted_keys:
+        kind_counts[key.kind] = kind_counts.get(key.kind, 0) + 1
+    return PlannerMemoryDigest(
+        text=text,
+        item_keys=emitted_keys,
+        rendered_item_keys=rendered_keys,
+        item_count=len(lines),
+        eligible_count=len(eligible),
+        dropped_count=dropped,
+        kind_counts=kind_counts,
+        max_line_chars=max((len(line) for line in lines), default=0),
+        estimated_tokens=estimate_tokens(text),
+    )
 
 
 async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:

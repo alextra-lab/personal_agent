@@ -1,0 +1,491 @@
+{
+ "empty": {
+  "items": [],
+  "plain": {
+   "cause": null,
+   "ids": [],
+   "recall_emitted": 0,
+   "text": ""
+  },
+  "registry": {
+   "cause": null,
+   "ids": [],
+   "recall_emitted": 0,
+   "text": ""
+  }
+ },
+ "full": {
+  "items": [
+   {
+    "description": "description 0",
+    "entity_type": "Concept",
+    "mention_count": 0,
+    "name": "Ent0",
+    "type": "entity"
+   },
+   {
+    "conversation_id": "c0",
+    "key_entities": [
+     "k0",
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6"
+    ],
+    "summary": "episode 0",
+    "type": "episode"
+   },
+   {
+    "affect": "likes 0",
+    "target": "topic0",
+    "type": "stance"
+   },
+   {
+    "affect": "prefers 0",
+    "target": "habit0",
+    "type": "behavioural_stance"
+   },
+   {
+    "description": "description 1",
+    "entity_type": "Concept",
+    "mention_count": 1,
+    "name": "Ent1",
+    "type": "entity"
+   },
+   {
+    "description": "description 2",
+    "entity_type": "Concept",
+    "mention_count": 2,
+    "name": "Ent2",
+    "type": "entity"
+   },
+   {
+    "affect": "likes 2",
+    "target": "topic2",
+    "type": "stance"
+   },
+   {
+    "description": "description 3",
+    "entity_type": "Concept",
+    "mention_count": 3,
+    "name": "Ent3",
+    "type": "entity"
+   },
+   {
+    "conversation_id": "c3",
+    "key_entities": [
+     "k0",
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6"
+    ],
+    "summary": "episode 3",
+    "type": "episode"
+   },
+   {
+    "description": "description 4",
+    "entity_type": "Concept",
+    "mention_count": 4,
+    "name": "Ent4",
+    "type": "entity"
+   },
+   {
+    "affect": "likes 4",
+    "target": "topic4",
+    "type": "stance"
+   },
+   {
+    "affect": "prefers 4",
+    "target": "habit4",
+    "type": "behavioural_stance"
+   },
+   {
+    "description": "description 5",
+    "entity_type": "Concept",
+    "mention_count": 5,
+    "name": "Ent5",
+    "type": "entity"
+   },
+   {
+    "description": "description 6",
+    "entity_type": "Concept",
+    "mention_count": 6,
+    "name": "Ent6",
+    "type": "entity"
+   },
+   {
+    "conversation_id": "c6",
+    "key_entities": [
+     "k0",
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6"
+    ],
+    "summary": "episode 6",
+    "type": "episode"
+   },
+   {
+    "affect": "likes 6",
+    "target": "topic6",
+    "type": "stance"
+   },
+   {
+    "description": "description 7",
+    "entity_type": "Concept",
+    "mention_count": 7,
+    "name": "Ent7",
+    "type": "entity"
+   },
+   {
+    "description": "description 8",
+    "entity_type": "Concept",
+    "mention_count": 8,
+    "name": "Ent8",
+    "type": "entity"
+   },
+   {
+    "affect": "likes 8",
+    "target": "topic8",
+    "type": "stance"
+   },
+   {
+    "affect": "prefers 8",
+    "target": "habit8",
+    "type": "behavioural_stance"
+   },
+   {
+    "description": "description 9",
+    "entity_type": "Concept",
+    "mention_count": 9,
+    "name": "Ent9",
+    "type": "entity"
+   },
+   {
+    "conversation_id": "c9",
+    "key_entities": [
+     "k0",
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6"
+    ],
+    "summary": "episode 9",
+    "type": "episode"
+   },
+   {
+    "description": "description 10",
+    "entity_type": "Concept",
+    "mention_count": 10,
+    "name": "Ent10",
+    "type": "entity"
+   },
+   {
+    "affect": "likes 10",
+    "target": "topic10",
+    "type": "stance"
+   },
+   {
+    "description": "description 11",
+    "entity_type": "Concept",
+    "mention_count": 11,
+    "name": "Ent11",
+    "type": "entity"
+   },
+   {
+    "description": "description 12",
+    "entity_type": "Concept",
+    "mention_count": 12,
+    "name": "Ent12",
+    "type": "entity"
+   },
+   {
+    "conversation_id": "c12",
+    "key_entities": [
+     "k0",
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6"
+    ],
+    "summary": "episode 12",
+    "type": "episode"
+   },
+   {
+    "affect": "likes 12",
+    "target": "topic12",
+    "type": "stance"
+   },
+   {
+    "affect": "prefers 12",
+    "target": "habit12",
+    "type": "behavioural_stance"
+   },
+   {
+    "description": "description 13",
+    "entity_type": "Concept",
+    "mention_count": 13,
+    "name": "Ent13",
+    "type": "entity"
+   },
+   {
+    "description": "description 14",
+    "entity_type": "Concept",
+    "mention_count": 14,
+    "name": "Ent14",
+    "type": "entity"
+   },
+   {
+    "affect": "likes 14",
+    "target": "topic14",
+    "type": "stance"
+   },
+   {
+    "description": "description 15",
+    "entity_type": "Concept",
+    "mention_count": 15,
+    "name": "Ent15",
+    "type": "entity"
+   },
+   {
+    "conversation_id": "c15",
+    "key_entities": [
+     "k0",
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6"
+    ],
+    "summary": "episode 15",
+    "type": "episode"
+   },
+   {
+    "description": "description 16",
+    "entity_type": "Concept",
+    "mention_count": 16,
+    "name": "Ent16",
+    "type": "entity"
+   },
+   {
+    "affect": "likes 16",
+    "target": "topic16",
+    "type": "stance"
+   },
+   {
+    "affect": "prefers 16",
+    "target": "habit16",
+    "type": "behavioural_stance"
+   },
+   {
+    "description": "description 17",
+    "entity_type": "Concept",
+    "mention_count": 17,
+    "name": "Ent17",
+    "type": "entity"
+   },
+   {
+    "description": "  ",
+    "entity_type": "Concept",
+    "name": "Blank",
+    "type": "entity"
+   },
+   {
+    "description": null,
+    "entity_type": "Concept",
+    "name": "NoDesc",
+    "type": "entity"
+   },
+   {
+    "description": "legacy mentions key",
+    "entity_type": "Concept",
+    "mentions": 9,
+    "name": "Legacy",
+    "type": "entity"
+   },
+   {
+    "description": "no count key at all",
+    "entity_type": "Concept",
+    "name": "NoCount",
+    "type": "entity"
+   },
+   {
+    "description": "The user's stated name in the conversation.",
+    "entity_type": "Concept",
+    "name": "Susan",
+    "type": "entity"
+   },
+   {
+    "description": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+    "entity_type": "Concept",
+    "name": "Long",
+    "type": "entity"
+   },
+   {
+    "conversation_id": "blank",
+    "summary": " ",
+    "type": "episode",
+    "user_message": null
+   },
+   {
+    "summary": null,
+    "turn_id": "t9",
+    "type": "episode",
+    "user_message": "fallback message"
+   },
+   {
+    "conversation_id": "undeclared-episode",
+    "summary": "undeclared episode shape"
+   },
+   {
+    "description": "undeclared entity shape",
+    "entity_type": "X",
+    "name": "UndeclaredEntity"
+   },
+   {
+    "affect": "no target",
+    "target": "",
+    "type": "stance"
+   },
+   {
+    "affect": " ",
+    "target": "blankaffect",
+    "type": "stance"
+   },
+   {
+    "session_id": "s1",
+    "summary": "dropped",
+    "type": "session"
+   },
+   {
+    "source_turn": "t1",
+    "type": "session_fact"
+   },
+   {
+    "unknown": "shape"
+   }
+  ],
+  "plain": {
+   "cause": null,
+   "ids": [
+    "behavioural_stance:habit0",
+    "behavioural_stance:habit4",
+    "behavioural_stance:habit8",
+    "behavioural_stance:habit12",
+    "behavioural_stance:habit16",
+    "Ent0",
+    "Ent1",
+    "Ent2",
+    "Ent3",
+    "Ent4",
+    "Ent5",
+    "Ent6",
+    "Ent7",
+    "Ent8",
+    "Ent9",
+    "Ent10",
+    "Ent11",
+    "Ent12",
+    "Ent13",
+    "Ent14",
+    "c0",
+    "c3",
+    "c6",
+    "c9",
+    "c12",
+    "stance:topic0",
+    "stance:topic2",
+    "stance:topic4",
+    "stance:topic6",
+    "stance:topic8",
+    "stance:topic10",
+    "stance:topic12",
+    "stance:topic14",
+    "stance:topic16",
+    ""
+   ],
+   "recall_emitted": 30,
+   "text": "\n\n## Standing Behavioural Preferences\n- habit0: prefers 0\n- habit4: prefers 4\n- habit8: prefers 8\n- habit12: prefers 12\n- habit16: prefers 16\n\n## Your Memory Graph — Known Entities\n- [Concept] Ent0: description 0 (mentioned 0x)\n- [Concept] Ent1: description 1 (mentioned 1x)\n- [Concept] Ent2: description 2 (mentioned 2x)\n- [Concept] Ent3: description 3 (mentioned 3x)\n- [Concept] Ent4: description 4 (mentioned 4x)\n- [Concept] Ent5: description 5 (mentioned 5x)\n- [Concept] Ent6: description 6 (mentioned 6x)\n- [Concept] Ent7: description 7 (mentioned 7x)\n- [Concept] Ent8: description 8 (mentioned 8x)\n- [Concept] Ent9: description 9 (mentioned 9x)\n- [Concept] Ent10: description 10 (mentioned 10x)\n- [Concept] Ent11: description 11 (mentioned 11x)\n- [Concept] Ent12: description 12 (mentioned 12x)\n- [Concept] Ent13: description 13 (mentioned 13x)\n- [Concept] Ent14: description 14 (mentioned 14x)\n\nThese are entities drawn from earlier conversations, including other people; they record what was discussed, not who you are speaking with. Use them to answer questions about what the user has previously discussed.\n\n## Relevant Past Conversations\nThe following past conversations may be relevant to the current request:\n\n1. episode 0\n   Entities: k0, k1, k2, k3, k4\n2. episode 3\n   Entities: k0, k1, k2, k3, k4\n3. episode 6\n   Entities: k0, k1, k2, k3, k4\n4. episode 9\n   Entities: k0, k1, k2, k3, k4\n5. episode 12\n   Entities: k0, k1, k2, k3, k4\n\nYou can reference these past conversations to provide more context-aware responses.\n\n## What The User Thinks About Related Topics\n- topic0: likes 0\n- topic2: likes 2\n- topic4: likes 4\n- topic6: likes 6\n- topic8: likes 8\n- topic10: likes 10\n- topic12: likes 12\n- topic14: likes 14\n- topic16: likes 16\n- : no target"
+  },
+  "registry": {
+   "cause": null,
+   "ids": [
+    "behavioural_stance:habit0",
+    "behavioural_stance:habit4",
+    "behavioural_stance:habit8",
+    "behavioural_stance:habit12",
+    "behavioural_stance:habit16",
+    "Ent0",
+    "Ent1",
+    "Ent2",
+    "Ent3",
+    "Ent4",
+    "Ent5",
+    "Ent6",
+    "Ent7",
+    "Ent8",
+    "Ent9",
+    "Ent10",
+    "Ent11",
+    "Ent12",
+    "Ent13",
+    "Ent14",
+    "c0",
+    "c3",
+    "c6",
+    "c9",
+    "c12",
+    "stance:topic0",
+    "stance:topic2",
+    "stance:topic4",
+    "stance:topic6",
+    "stance:topic8",
+    "stance:topic10",
+    "stance:topic12",
+    "stance:topic14",
+    "stance:topic16",
+    ""
+   ],
+   "recall_emitted": 30,
+   "text": "\n\n## Standing Behavioural Preferences\n- habit0: prefers 0 [S1@aca1a2d223b721c0]\n- habit4: prefers 4 [S2@9aed834474aad80c]\n- habit8: prefers 8 [S3@110b87dc6e5d4ac1]\n- habit12: prefers 12 [S4@4befa3ad989b00e6]\n- habit16: prefers 16 [S5@296a6ca3ca4b764c]\n\n## Your Memory Graph — Known Entities\n- [Concept] Ent0: description 0 (mentioned 0x) [S6@be1f095aa90a3256]\n- [Concept] Ent1: description 1 (mentioned 1x) [S7@0875338e0055467e]\n- [Concept] Ent2: description 2 (mentioned 2x) [S8@073e978bad16d1bb]\n- [Concept] Ent3: description 3 (mentioned 3x) [S9@c214cd8052c65301]\n- [Concept] Ent4: description 4 (mentioned 4x) [S10@77044401af08c7e6]\n- [Concept] Ent5: description 5 (mentioned 5x) [S11@2eae997fd531bf18]\n- [Concept] Ent6: description 6 (mentioned 6x) [S12@bec41f1ad5605c3e]\n- [Concept] Ent7: description 7 (mentioned 7x) [S13@531c2944ccc3b958]\n- [Concept] Ent8: description 8 (mentioned 8x) [S14@244e6774cb01bde3]\n- [Concept] Ent9: description 9 (mentioned 9x) [S15@9587a856b73252e5]\n- [Concept] Ent10: description 10 (mentioned 10x) [S16@d17c9c3ba7d1cb8e]\n- [Concept] Ent11: description 11 (mentioned 11x) [S17@cdd9bbd9384029fb]\n- [Concept] Ent12: description 12 (mentioned 12x) [S18@261880f15ea3d84b]\n- [Concept] Ent13: description 13 (mentioned 13x) [S19@a7b3a6c83cdc3000]\n- [Concept] Ent14: description 14 (mentioned 14x) [S20@f2b958c2dc0e5d59]\n\nThese are entities drawn from earlier conversations, including other people; they record what was discussed, not who you are speaking with. Use them to answer questions about what the user has previously discussed.\n\n## Relevant Past Conversations\nThe following past conversations may be relevant to the current request:\n\n1. episode 0 [S21@abdfcf9cf8f8ce78]\n   Entities: k0, k1, k2, k3, k4\n2. episode 3 [S22@691aeb903f7f6467]\n   Entities: k0, k1, k2, k3, k4\n3. episode 6 [S23@a50c5350eb5e786a]\n   Entities: k0, k1, k2, k3, k4\n4. episode 9 [S24@470f32a42dd6c85a]\n   Entities: k0, k1, k2, k3, k4\n5. episode 12 [S25@fc0605efe89fb8ad]\n   Entities: k0, k1, k2, k3, k4\n\nYou can reference these past conversations to provide more context-aware responses.\n\n## What The User Thinks About Related Topics\n- topic0: likes 0 [S26@425974a2c6cb6bf1]\n- topic2: likes 2 [S27@6ba8447cd1f4b003]\n- topic4: likes 4 [S28@d71f50a6b6cc923c]\n- topic6: likes 6 [S29@c2688f839e85f4f9]\n- topic8: likes 8 [S30@d55c549e0e32470f]\n- topic10: likes 10 [S31@07239d1711c58c85]\n- topic12: likes 12 [S32@9d0d45bad798f1f6]\n- topic14: likes 14 [S33@7f04678f5e3e9de4]\n- topic16: likes 16 [S34@4d77cae8e0d01087]\n- : no target [S35@8e2b5ed66520b6be]"
+  }
+ },
+ "only_blank": {
+  "items": [
+   {
+    "description": " ",
+    "entity_type": "Concept",
+    "name": "B",
+    "type": "entity"
+   },
+   {
+    "session_id": "s",
+    "type": "session"
+   }
+  ],
+  "plain": {
+   "cause": null,
+   "ids": [],
+   "recall_emitted": 0,
+   "text": ""
+  },
+  "registry": {
+   "cause": null,
+   "ids": [],
+   "recall_emitted": 0,
+   "text": ""
+  }
+ }
+}

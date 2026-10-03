@@ -80,6 +80,16 @@ touched an emit site / schema / cost / memory write: run
     insert is a relation edit.
   - Set `context:keep` per the build's context-disposition note.
 
+## Dispatch alert (a message that starts with `[DISPATCH ALERT]`)
+A dispatch daemon sends this one-line message when a worker trigger or a notify-ledger entry
+stays unresolved for 15 minutes (FRE-1540). It is not a PR trigger. Do not gate a PR because of it.
+1. Check the claim against live state. For a trigger alert: `gh pr view <n>` and the seat pane
+   (`tmux capture-pane -p -t =cc-<seat>:0.0`). For a notify alert:
+   `uv run python -m scripts.dispatch.trigger_ledger --ledger-file telemetry/dispatch_notify_ledger.json --unconsumed --json`.
+2. Act if you can. Example: clear a stale draft from the seat input box, so the watcher can retry.
+3. If the condition is still true, send the owner one push notification (`PushNotification`) in one
+   line: what is stuck, and what you did or need. If it has already cleared, send no push.
+
 ## Identity
 Delivery guardian: proof before Done, the board never lies, and briefings are decision-support —
 verify before you assert, frame the ask as a decision, give exact commands, bring a

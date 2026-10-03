@@ -472,6 +472,29 @@ is out of scope for FRE-829, tracked under FRE-832).
 
 Override the path with `--ledger-file` (systemd unit unchanged — defaults are fine).
 
+### Dispatch alert to master (FRE-1540) — an unresolved condition reaches the owner
+
+Both daemons now send `cc-master` one line that starts with `[DISPATCH ALERT]` when a condition
+stays unresolved for 15 minutes. Master checks the live state, acts if it can, and pushes the owner
+one line (`.claude/skills/master/SKILL.md`, section "Dispatch alert"). The prefix cannot be mistaken
+for the PR trigger `/master <n>`.
+
+| Daemon | Condition | Reason text in the alert |
+|--------|-----------|--------------------------|
+| `gating_watcher.py` | A worker trigger (same dedup key) is still undelivered after 15 minutes. | `busy`, `absent`, `unroutable`, or `channel_delivery_failed+busy` |
+| `orchestrator.py` | A `dispatch_notify_ledger.json` entry is still unconsumed after 15 minutes. | the entry's `source`, stream, ticket and `question` |
+
+- **The clock is `created_at`.** It now means "when the current unresolved episode began". A retry
+  of an abandoned worker trigger, or a renotify of a notify entry, keeps it. A sent trigger or a
+  consumed entry starts a new episode. A gap of more than 30 minutes restarts the clock only.
+- **Once per episode.** `alerted_at` is stored in the same ledger file, so a restart does not send a
+  second alert. A crash between the send and the write can repeat one alert.
+- **A busy `cc-master` defers the alert.** The daemon retries on its next tick (watcher 60 s,
+  orchestrator 300 s), so the alert arrives between 15 and 20 minutes after the first failure
+  (orchestrator) or soon after master goes idle.
+- **Find an alert after the fact.** `grep -E 'gating_alert_(sent|deferred)|dispatch_alert_(sent|deferred)'`
+  in the daemon journal, or read `alerted_at` and `attempts` in `python -m scripts.dispatch.trigger_ledger --all --json`.
+
 ### send-keys whitelist wrapper (FRE-831) — not yet wired into any live sender
 
 `scripts/dispatch/send_keys_whitelist.py` is the mechanically-enforced boundary ADR-0113 §2 calls

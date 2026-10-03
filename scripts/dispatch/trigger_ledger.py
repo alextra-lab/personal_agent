@@ -60,6 +60,15 @@ it (``channel`` | ``send_keys``, default ``send_keys``). ``record_pending``'s ex
 dedup is what delivers exactly-once, transport-aware behavior — a single entry per event id, tagged
 post-hoc via ``mark_transport`` only once a channel delivery is confirmed, never optimistically.
 
+**Episodes and master alerts (FRE-1540).** ``created_at`` means "when the current unresolved
+episode began", not "when this row was last written". The two writers that rewrite a row on
+every pass keep it: ``record_pending`` (a retry of an abandoned, never-sent trigger) and
+``record_surfaced`` (a renotify of an open entry). That is what lets a daemon measure "still
+unresolved after 15 minutes" and alert master once. ``alerted_at`` is the once-only latch and
+lives in the same file, so a restart cannot repeat the alert. ``record_pending`` always carries
+``alerted_at`` from an abandoned row, however old, because a retry gap is no evidence that the
+trigger resolved. It carries ``created_at`` and ``attempts`` only within ``EPISODE_GAP_S``.
+
 Callable by hand::
 
     python -m scripts.dispatch.trigger_ledger --unconsumed --json
@@ -82,6 +91,10 @@ from typing import Literal, Protocol
 IdleGatedOutcome = Literal["sent", "busy", "absent"]
 SendOutcome = Literal["sent", "busy", "absent", "queued"]
 Transport = Literal["channel", "send_keys"]
+
+# A retry of an abandoned trigger continues the same episode (same clock, same attempt count)
+# when the previous attempt ended no more than this long ago. A longer gap restarts the clock.
+EPISODE_GAP_S: float = 1800.0
 
 
 class Logger(Protocol):
@@ -131,6 +144,12 @@ class LedgerEntry:
             entry recovered by ``reconcile()`` is retried via the existing
             universal tmux path and is *correctly* audited as ``send_keys``,
             because that is genuinely how it was (re)delivered.
+        attempts: Delivery attempts in the current episode (FRE-1540). ``0`` on
+            an entry that never went through ``record_pending``.
+        last_failure: Why the most recent attempt did not deliver (FRE-1540),
+            e.g. ``busy`` or ``channel_delivery_failed+busy``. Empty if none.
+        alerted_at: When master was alerted about this episode (FRE-1540). Set
+            once; never cleared by a retry.
     """
 
     event_id: str
@@ -146,6 +165,9 @@ class LedgerEntry:
     consumed_at: float | None = None
     surfaced_at: float | None = None
     transport: Transport = "send_keys"
+    attempts: int = 0
+    last_failure: str = ""
+    alerted_at: float | None = None
 
 
 Ledger = dict[str, LedgerEntry]
@@ -183,11 +205,18 @@ def record_pending(
         again right now.
     """
     existing = ledger.get(event_id)
+    created_at, attempts, alerted_at = now, 1, None
     if existing is not None:
         if existing.consumed_at is None:
             return ledger, "duplicate"
         if existing.sent_at is not None and (now - existing.consumed_at) < ttl_s:
             return ledger, "duplicate"
+        if existing.sent_at is None:
+            # An abandoned attempt: this is a retry in the same episode (FRE-1540).
+            alerted_at = existing.alerted_at
+            if (now - existing.consumed_at) <= EPISODE_GAP_S:
+                created_at = existing.created_at
+                attempts = existing.attempts + 1
     updated = dict(ledger)
     updated[event_id] = LedgerEntry(
         event_id=event_id,
@@ -196,7 +225,9 @@ def record_pending(
         ticket=ticket,
         command=command,
         preconditions=dict(preconditions),
-        created_at=now,
+        created_at=created_at,
+        attempts=attempts,
+        alerted_at=alerted_at,
     )
     return updated, "new"
 
@@ -224,6 +255,25 @@ def mark_queued(ledger: Ledger, event_id: str, now: float) -> Ledger:
     """
     updated = dict(ledger)
     updated[event_id] = dataclasses.replace(updated[event_id], queued_at=now)
+    return updated
+
+
+def mark_failure(ledger: Ledger, event_id: str, reason: str) -> Ledger:
+    """Record why the latest attempt on ``event_id`` did not deliver (FRE-1540)."""
+    updated = dict(ledger)
+    updated[event_id] = dataclasses.replace(updated[event_id], last_failure=reason)
+    return updated
+
+
+def mark_alerted(ledger: Ledger, event_id: str, now: float) -> Ledger:
+    """Record that master was alerted about ``event_id``'s episode (FRE-1540).
+
+    Call it once, after the alert is confirmed sent. ``record_pending`` and
+    ``record_surfaced`` carry the value forward, so a retry or a renotify does
+    not alert again.
+    """
+    updated = dict(ledger)
+    updated[event_id] = dataclasses.replace(updated[event_id], alerted_at=now)
     return updated
 
 
@@ -260,8 +310,16 @@ def record_surfaced(
     ``execute_pending`` on it. ``command`` is always empty. Calling this again
     with the same ``event_id`` replaces the entry in place — the caller is
     expected to use a stable, per-episode key so a persisting condition
-    updates one entry rather than accumulating one per call.
+    updates one entry rather than accumulating one per call. While the old
+    entry is still open (``consumed_at is None``) its ``created_at`` and
+    ``alerted_at`` carry over (FRE-1540); after it was consumed, a new call
+    starts a new episode.
     """
+    existing = ledger.get(event_id)
+    created_at, alerted_at = now, None
+    if existing is not None and existing.consumed_at is None:
+        # Same open episode (FRE-1540): keep its start and its alert latch.
+        created_at, alerted_at = existing.created_at, existing.alerted_at
     updated = dict(ledger)
     updated[event_id] = LedgerEntry(
         event_id=event_id,
@@ -270,8 +328,9 @@ def record_surfaced(
         ticket=ticket,
         command="",
         preconditions=dict(preconditions),
-        created_at=now,
+        created_at=created_at,
         surfaced_at=now,
+        alerted_at=alerted_at,
     )
     return updated
 
@@ -432,6 +491,9 @@ def load_ledger(path: Path, logger: Logger) -> Ledger:
             consumed_at=fields.get("consumed_at"),
             surfaced_at=fields.get("surfaced_at"),
             transport=transport,
+            attempts=int(fields.get("attempts") or 0),
+            last_failure=str(fields.get("last_failure") or ""),
+            alerted_at=fields.get("alerted_at"),
         )
     return entries
 
@@ -509,6 +571,9 @@ def _entry_to_json(entry: LedgerEntry) -> dict[str, object]:
         "consumed_at": entry.consumed_at,
         "surfaced_at": entry.surfaced_at,
         "transport": entry.transport,
+        "attempts": entry.attempts,
+        "last_failure": entry.last_failure,
+        "alerted_at": entry.alerted_at,
     }
 
 

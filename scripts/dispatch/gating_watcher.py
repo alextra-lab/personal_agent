@@ -115,7 +115,7 @@ from typing import ContextManager, Literal, Protocol, overload
 
 import structlog
 
-from scripts.dispatch import context_probe, trigger_ledger
+from scripts.dispatch import context_probe, master_alert, trigger_ledger
 from scripts.dispatch.launcher import (
     CommandRunner,
     stream_for_tmux_session,
@@ -1360,6 +1360,96 @@ def resolve_queued_triggers(
     return ledger, tuple(delivered)
 
 
+def _alert_master_if_due(
+    ledger: trigger_ledger.Ledger,
+    *,
+    event_id: str,
+    pr: int,
+    seat: str,
+    now: float,
+    runner: CommandRunner,
+    logger: Logger,
+    trace_id: str,
+    ledger_persist: Callable[[trigger_ledger.Ledger], None],
+) -> trigger_ledger.Ledger:
+    """Tell ``cc-master`` once that a worker trigger stays undelivered (FRE-1540).
+
+    Called after a failed attempt. The entry's ``created_at`` is the first attempt of the
+    episode (``record_pending`` carries it across retries), so "still undelivered after 15
+    minutes" is read straight from the ledger and survives a restart. The send is idle-gated.
+    A busy or absent ``cc-master`` leaves ``alerted_at`` unset, so the next tick retries: the
+    failing trigger runs again every tick. A crash between the send and the persist can repeat
+    one alert. That is on purpose: a duplicate alert is the safe direction to fail.
+
+    Args:
+        ledger: The tick's ledger.
+        event_id: The trigger's dedup key.
+        pr: The PR number.
+        seat: The seat the trigger was meant for.
+        now: Wall-clock epoch seconds.
+        runner: The command runner seam (shells ``tmux``).
+        logger: Structured logger.
+        trace_id: The tick's trace id.
+        ledger_persist: Persists the ledger after the alert is recorded.
+
+    Returns:
+        The ledger, with ``alerted_at`` set when the alert was delivered.
+    """
+    entry = ledger.get(event_id)
+    if entry is None or not master_alert.is_due(entry, now):
+        return ledger
+    text = master_alert.format_undelivered_trigger(
+        pr=pr,
+        seat=seat,
+        reason=entry.last_failure,
+        first_attempt_at=entry.created_at,
+        attempts=entry.attempts,
+        now=now,
+    )
+    outcome = send_to_session(MASTER_SESSION, text, runner)
+    if outcome != "sent":
+        logger.warning(
+            "gating_alert_deferred", trace_id=trace_id, pr=pr, seat=seat, master_outcome=outcome
+        )
+        return ledger
+    ledger = trigger_ledger.mark_alerted(ledger, event_id, now)
+    ledger_persist(ledger)
+    logger.warning(
+        "gating_alert_sent",
+        trace_id=trace_id,
+        pr=pr,
+        seat=seat,
+        reason=entry.last_failure,
+        attempts=entry.attempts,
+    )
+    return ledger
+
+
+def _track_unroutable(
+    ledger: trigger_ledger.Ledger, trigger: Trigger, *, now: float
+) -> trigger_ledger.Ledger:
+    """Record an unroutable worker trigger as one abandoned attempt (FRE-1540).
+
+    The trigger has no seat, so no send is tried. The attempt is written and consumed in the
+    caller's single persist: ``reconcile`` must never see an unconsumed entry with no command.
+    """
+    ledger, outcome = trigger_ledger.record_pending(
+        ledger,
+        event_id=trigger.dedup_key,
+        source=trigger.reason,
+        target_pane="unroutable",
+        ticket=str(trigger.pr),
+        command="",
+        preconditions={"head_sha": trigger.head_sha},
+        now=now,
+        ttl_s=trigger.ttl_s,
+    )
+    if outcome == "duplicate":
+        return ledger
+    ledger = trigger_ledger.mark_consumed(ledger, trigger.dedup_key, now)
+    return trigger_ledger.mark_failure(ledger, trigger.dedup_key, "unroutable")
+
+
 def run_once(
     state: dict[str, float],
     *,
@@ -1495,6 +1585,22 @@ def run_once(
         poke_escalation=worker_poke_escalation,
     )
     for trigger in triggers:
+        if trigger.session is None and trigger.kind == "worker" and execute:
+            # FRE-1540: before the log suppression below, which skips this whole body for
+            # six hours. The alert clock must not wait on a log-noise window.
+            tick_ledger = _track_unroutable(tick_ledger, trigger, now=now)
+            ledger_persist(tick_ledger)
+            tick_ledger = _alert_master_if_due(
+                tick_ledger,
+                event_id=trigger.dedup_key,
+                pr=trigger.pr,
+                seat="none",
+                now=now,
+                runner=runner,
+                logger=logger,
+                trace_id=trace_id,
+                ledger_persist=ledger_persist,
+            )
         if trigger.session is None:
             unroutable_key = f"unroutable:{trigger.pr}:{trigger.head_sha}"
             if execute and _suppressed(state, unroutable_key, now, unroutable_ttl_s):
@@ -1605,6 +1711,7 @@ def run_once(
         tick_ledger = trigger_ledger.mark_send_started(tick_ledger, trigger.dedup_key, now)
         ledger_persist(tick_ledger)
         outcome: trigger_ledger.SendOutcome | None = None
+        channel_failure: str | None = None
         if trigger.mode == "channel":
             if channel_secret is None:
                 logger.warning(
@@ -1614,6 +1721,7 @@ def run_once(
                     session=trigger.session,
                 )
                 channel_result: ChannelOutcome = "unreachable"
+                channel_failure = "channel_secret_missing"
             else:
                 assert trigger.channel_port is not None
                 channel_result = channel_poster(
@@ -1629,6 +1737,7 @@ def run_once(
                 ledger_persist(tick_ledger)
                 outcome = "sent"
             elif channel_secret is not None:
+                channel_failure = "channel_delivery_failed"
                 logger.warning(
                     "channel_delivery_failed",
                     trace_id=trace_id,
@@ -1702,7 +1811,23 @@ def run_once(
             # Abandoned, not sent -- record_pending never suppresses this on a
             # future attempt (no TTL window applies to a non-send).
             tick_ledger = trigger_ledger.mark_consumed(tick_ledger, trigger.dedup_key, now)
+            if trigger.kind == "worker":
+                # FRE-1540: a worker trigger that keeps failing must reach master.
+                failure = outcome if channel_failure is None else f"{channel_failure}+{outcome}"
+                tick_ledger = trigger_ledger.mark_failure(tick_ledger, trigger.dedup_key, failure)
             ledger_persist(tick_ledger)
+            if trigger.kind == "worker":
+                tick_ledger = _alert_master_if_due(
+                    tick_ledger,
+                    event_id=trigger.dedup_key,
+                    pr=trigger.pr,
+                    seat=trigger.session,
+                    now=now,
+                    runner=runner,
+                    logger=logger,
+                    trace_id=trace_id,
+                    ledger_persist=ledger_persist,
+                )
 
     for session, pct in context_pressure(context_reader(), context_pressure_threshold):
         logger.info("context_pressure", trace_id=trace_id, session=session, pct=round(pct, 1))

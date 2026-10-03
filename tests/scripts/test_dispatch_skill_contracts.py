@@ -112,3 +112,26 @@ def test_master_skill_uses_external_resolver_for_advance_dispatch() -> None:
     assert "--eligible" in section
     assert "list_issues(" not in section
     assert "includerelations" not in section
+
+
+# --- FRE-1540: the master skill knows the dispatch alert the daemons send ----
+
+
+def test_master_skill_handles_the_dispatch_alert_the_daemons_send() -> None:
+    from scripts.dispatch.master_alert import ALERT_PREFIX
+
+    text = _read("master/SKILL.md")
+    section = _section(text, "## Dispatch alert", "## Identity")
+    assert ALERT_PREFIX in section  # keyed on the exact prefix the code sends
+    norm = _norm(section)
+    assert "not a pr trigger" in norm  # cannot be confused with `/master <n>`
+    assert "pushnotification" in norm  # the owner hears about it
+    assert "live state" in norm  # check before acting
+
+
+def test_the_alert_text_points_master_at_that_section() -> None:
+    from scripts.dispatch.master_alert import format_notify_entry
+    from scripts.dispatch.trigger_ledger import LedgerEntry
+
+    entry = LedgerEntry("e", "dispatch_stall", "build1", "FRE-1", "", {}, 0.0)
+    assert "Dispatch alert section of the master skill" in format_notify_entry(entry, 900.0)

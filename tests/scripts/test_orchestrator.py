@@ -3339,3 +3339,116 @@ def test_main_wires_the_seat_turn_reader(tmp_path, monkeypatch: pytest.MonkeyPat
     rc = main(["--once", "--state-file", str(tmp_path / "s.json"), "--streams", "build1"])
     assert rc == 0
     assert seen and callable(seen[0])
+
+
+# --- FRE-1540: a notify-ledger entry open for 15 minutes alerts master once ---
+# 2026-09: build2 logged dispatch_seat_wedged for 4,119 ticks. The condition sat in
+# telemetry/dispatch_notify_ledger.json and only master's prime step read it.
+
+_IDLE_MASTER_PANE = Path("tests/fixtures/gating_watcher_real_idle_pane.txt").read_text(
+    encoding="utf-8"
+)
+_ALERT_EVENT = "dispatch-notify:dispatch_seat_wedged:build1"
+
+
+def _master_runner(master_pane: str = _IDLE_MASTER_PANE) -> _RecordingRunner:
+    return _RecordingRunner({"capture-pane": _FakeRunResult(stdout=master_pane)})
+
+
+def _alert_texts(runner: _RecordingRunner) -> list[str]:
+    return [c[5] for c in runner.calls if c[:2] == ("tmux", "send-keys") and "-l" in c]
+
+
+def _seed_open_entry(path: Path, *, now: float = 0.0) -> None:
+    ledger = trigger_ledger.record_surfaced(
+        {},
+        event_id=_ALERT_EVENT,
+        source="dispatch_seat_wedged",
+        target_pane="build1",
+        ticket="FRE-786",
+        preconditions={"question": "Proceed with the merge?", "reason": "idle-with-prompt"},
+        now=now,
+    )
+    trigger_ledger.save_ledger(path, ledger)
+
+
+def _alert_tick(runner: _RecordingRunner, path: Path, now: float, *, execute: bool = True) -> None:
+    _run({}, runner, [], now=now, notify_ledger_path=path, rc_alive=lambda: True, execute=execute)
+
+
+def test_ac2_entry_open_for_15_minutes_alerts_master_exactly_once(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    runner = _master_runner()
+    for now in (300.0, 600.0, 899.0):
+        _alert_tick(runner, path, now)
+    assert _alert_texts(runner) == []  # nothing before 15 minutes
+    for now in (900.0, 1200.0, 1500.0, 3000.0):
+        _alert_tick(runner, path, now)
+    (text,) = _alert_texts(runner)
+    assert text.startswith("[DISPATCH ALERT]")
+    for part in ("dispatch_seat_wedged", "build1", "FRE-786", "Proceed with the merge?"):
+        assert part in text, part
+    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", text) in runner.calls
+    entry = trigger_ledger.load_ledger(path, _NullLogger())[_ALERT_EVENT]
+    assert entry.alerted_at == 900.0
+
+
+def test_ac2_entry_consumed_before_15_minutes_gives_no_alert(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    ledger = trigger_ledger.mark_consumed_if_present(
+        trigger_ledger.load_ledger(path, _NullLogger()), _ALERT_EVENT, 600.0
+    )
+    trigger_ledger.save_ledger(path, ledger)
+    runner = _master_runner()
+    for now in (900.0, 1500.0):
+        _alert_tick(runner, path, now)
+    assert _alert_texts(runner) == []
+
+
+def test_ac3_a_restarted_orchestrator_does_not_alert_again(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    first = _master_runner()
+    _alert_tick(first, path, 900.0)
+    assert len(_alert_texts(first)) == 1
+    # A restart is a fresh run_once over the file on disk, hours later.
+    second = _master_runner()
+    _alert_tick(second, path, 900.0 + 7200.0)
+    assert _alert_texts(second) == []
+
+
+def test_a_renotify_of_an_alerted_condition_neither_realerts_nor_resets_the_clock(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    runner = _master_runner()
+    _alert_tick(runner, path, 900.0)
+    notifier = _trigger_ledger_notifier(path, _NullLogger())
+    notifier("dispatch_seat_wedged", trace_id="t", stream="build1", ticket="FRE-786")
+    _alert_tick(runner, path, 4000.0)
+    assert len(_alert_texts(runner)) == 1
+    entry = trigger_ledger.load_ledger(path, _NullLogger())[_ALERT_EVENT]
+    assert entry.created_at == 0.0 and entry.alerted_at == 900.0
+
+
+def test_a_busy_master_defers_the_notify_alert_until_it_is_idle(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    busy = _master_runner("✽ Working… (esc to interrupt)")
+    _alert_tick(busy, path, 900.0)
+    assert _alert_texts(busy) == []
+    assert trigger_ledger.load_ledger(path, _NullLogger())[_ALERT_EVENT].alerted_at is None
+    idle = _master_runner()
+    _alert_tick(idle, path, 1200.0)
+    assert len(_alert_texts(idle)) == 1
+
+
+def test_a_dry_run_sends_no_notify_alert(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    runner = _master_runner()
+    _alert_tick(runner, path, 900.0, execute=False)
+    assert _alert_texts(runner) == []

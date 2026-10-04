@@ -7,7 +7,10 @@ import re
 import pytest
 
 from personal_agent.exceptions import PlannerInputTooLargeError
-from personal_agent.orchestrator.expansion_controller import build_planner_user_message
+from personal_agent.orchestrator.expansion_controller import (
+    _DIGEST_HEADER,
+    build_planner_user_message,
+)
 
 _TOTAL = 64_000
 _HISTORY = 60_000
@@ -101,6 +104,35 @@ def test_the_bound_is_inclusive_and_one_more_char_fails() -> None:
         _build(query_fits + "q", [])
 
 
+def test_the_bound_counts_the_digest_header_exactly() -> None:
+    # FRE-1472: the digest block carries a title line, and the bound counts it.
+    digest = "- [Concept] A fact."
+    digest_block = len(
+        build_planner_user_message(
+            "q", "HYBRID", None, digest_text=digest, history_max_chars=0, input_max_chars=_TOTAL
+        ).content
+    ) - len(_build("q", []).content)
+    query_fits = "q" * (_TOTAL - _TAIL_OVERHEAD - digest_block)
+    built = _build(query_fits, [], digest=digest)
+    assert len(built.content) == _TOTAL
+    assert digest in built.content
+
+    with pytest.raises(PlannerInputTooLargeError):
+        _build(query_fits + "q", [], digest=digest)
+
+
+def test_history_and_digest_together_stay_inside_the_bound_at_every_size() -> None:
+    digest = "- [Concept] A fact.\n- [Concept] Another fact."
+    query = "the question"
+    for total in range(150, 1_200, 7):
+        try:
+            built = _build(query, _turns(40, 60), digest=digest, total=total)
+        except PlannerInputTooLargeError:
+            continue
+        assert built.total_chars == len(built.content) <= total
+        assert digest in built.content
+
+
 def test_no_room_for_history_omits_the_history_block() -> None:
     query = "q" * (_TOTAL - _TAIL_OVERHEAD - 5)  # five chars left: less than the history header
     built = _build(query, _turns(10, 100))
@@ -133,7 +165,7 @@ def test_counts_describe_each_input() -> None:
     assert built.digest_chars == 3
     assert built.message_chars == _TAIL_OVERHEAD + 3
     assert built.history_chars == len(
-        built.content.split("Conversation so far:\n", 1)[1].split("\n\nDIG", 1)[0]
+        built.content.split("Conversation so far:\n", 1)[1].split(f"\n\n{_DIGEST_HEADER}DIG", 1)[0]
     )
 
 

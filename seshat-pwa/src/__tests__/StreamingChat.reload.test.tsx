@@ -265,3 +265,21 @@ describe('StreamingChat across an iPadOS reload (FRE-1543)', () => {
     expect(screen.queryByText(CTX_19K)).not.toBeInTheDocument();
   });
 });
+
+describe('FRE-1543 review: only an attach can trigger the history refetch', () => {
+  it("an ordinary reconnect's REPLAY_COMPLETE just after a send never replaces the transcript", async () => {
+    render(<StreamingChat sessionId="sess-a" />);
+    await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('composer'));
+    });
+    (getSessionMessages as Mock).mockClear();
+
+    // A send's socket reconnects; the server has not stored the user message yet.
+    deliver('sess-a', { type: 'REPLAY_COMPLETE', seq: null });
+    await settle();
+
+    expect(getSessionMessages).not.toHaveBeenCalled();
+    expect(screen.getByText('hello')).toBeInTheDocument();
+  });
+});

@@ -22,6 +22,14 @@ from personal_agent.service.app import _process_chat_stream_background
 _TEST_USER_ID = uuid4()
 
 
+@pytest.fixture(autouse=True)
+def _no_turn_registry_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1543: ``open_turn`` reads Postgres; a unit test of the chat task must not."""
+    monkeypatch.setattr(
+        "personal_agent.transport.agui.transport.open_turn", AsyncMock(return_value=None)
+    )
+
+
 @asynccontextmanager
 async def _fake_db_session(_mock_db: MagicMock):
     yield _mock_db

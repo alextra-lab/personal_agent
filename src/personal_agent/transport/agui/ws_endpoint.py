@@ -837,12 +837,17 @@ async def _send_attach_replay(conn: _ConnectionState) -> int | None:
             break
 
     inflight_start = turn_start_seq(session_id)
-    async with AsyncSessionLocal() as db:
-        buf = SessionEventBuffer(db)
-        latest = await buf.latest_seq(sid)
-        snapshot = await TurnStatusStore(db).load(sid)
-        replay_after = latest if inflight_start is None else min(inflight_start, latest)
-        events = await buf.replay(sid, after_seq=replay_after)
+    try:
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            latest = await buf.latest_seq(sid)
+            snapshot = await TurnStatusStore(db).load(sid)
+            replay_after = latest if inflight_start is None else min(inflight_start, latest)
+            events = await buf.replay(sid, after_seq=replay_after)
+    except Exception:
+        # The socket closes and the client attaches again with backoff; log why.
+        log.exception("ws.attach_replay_failed", session_id=session_id)
+        return None
 
     frames: list[dict[str, Any]] = []
     if snapshot is not None:

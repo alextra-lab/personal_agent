@@ -29,6 +29,14 @@ _USER_ID = uuid4()
 _REQUEST_USER = RequestUser(user_id=_USER_ID, email="test@example.com")
 
 
+@pytest.fixture(autouse=True)
+def _no_turn_registry_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1543: ``open_turn`` reads Postgres; a unit test of the chat task must not."""
+    monkeypatch.setattr(
+        "personal_agent.transport.agui.transport.open_turn", AsyncMock(return_value=None)
+    )
+
+
 def _turn_row(trace_id: str, **overrides: object) -> RouteTraceRow:
     base: dict[str, object] = dict(
         trace_id=UUID(trace_id),

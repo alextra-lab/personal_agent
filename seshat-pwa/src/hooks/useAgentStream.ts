@@ -623,9 +623,14 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
       }
 
       case 'REPLAY_COMPLETE': {
-        // FRE-1543: the end of an attach replay. A turn still running keeps the live
-        // footer and the Stop button up until its own DONE.
-        if ((event as { turn_in_flight?: unknown }).turn_in_flight === true) {
+        // FRE-1543: the end of an attach replay — only an attach carries
+        // `turn_in_flight`; an ordinary reconnect's REPLAY_COMPLETE (e.g. just after a
+        // send, before the server stored the user message) must not touch anything.
+        const inFlight = (event as { turn_in_flight?: unknown }).turn_in_flight;
+        if (typeof inFlight !== 'boolean') break;
+        if (inFlight) {
+          // A turn still running keeps the live footer and the Stop button up until
+          // its own DONE.
           isStreamingRef.current = true; // FRE-236: keep ref in sync
           setIsStreaming(true);
         } else if (messagesRef.current[messagesRef.current.length - 1]?.role === 'user') {

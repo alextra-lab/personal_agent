@@ -104,6 +104,9 @@ async def seeded_session() -> AsyncIterator[UUID]:
 
     from personal_agent.service.database import AsyncSessionLocal, engine
 
+    # An earlier test may have left pooled connections bound to its own (now closed) event
+    # loop. Drop that pool without touching those connections; this test opens fresh ones.
+    await engine.dispose(close=False)
     user_id = uuid4()
     session_id = uuid4()
     async with AsyncSessionLocal() as db:
@@ -196,6 +199,7 @@ async def test_save_for_an_unknown_session_is_a_no_op() -> None:
         pytest.skip("Test Postgres (:5433) not reachable — run make test-infra-up")
     from personal_agent.service.database import AsyncSessionLocal, engine
 
+    await engine.dispose(close=False)
     try:
         async with AsyncSessionLocal() as db:
             await TurnStatusStore(db).save(uuid4(), _reading(ctx=1, ctx_max=2, tools=None))

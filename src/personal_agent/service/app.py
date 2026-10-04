@@ -655,12 +655,16 @@ async def _process_chat_stream_background(
         # stay ordered behind every prior live emit (FRE-518).
         from personal_agent.transport.agui.transport import emit_done  # noqa: E402
 
-        await emit_done(session_id, trace_id)
-        if turn_after_seq is not None:
-            from personal_agent.transport.agui.transport import close_turn  # noqa: E402
+        try:
+            await emit_done(session_id, trace_id)
+        finally:
+            # FRE-1543: a turn left registered would make every later attach replay
+            # from its start and report it in flight, so this runs even if DONE fails.
+            if turn_after_seq is not None:
+                from personal_agent.transport.agui.transport import close_turn  # noqa: E402
 
-            close_turn(session_id)
-        stop_turn_recording()
+                close_turn(session_id)
+            stop_turn_recording()
         # Release the dedup entry so the user can immediately retry on error
         # without waiting for TTL expiry (FRE-392).
         get_deduplicator().release(session_id, message, client_msg_id=client_msg_id)

@@ -48,6 +48,9 @@ from personal_agent.captains_log.turn_evidence import DropReason
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.proactive import build_proactive_suggestions
 
+# FRE-1545: these tests exercise the path's other gates, not the reranker bound.
+pytestmark = pytest.mark.usefixtures("proactive_rerank_gate_off")
+
 MELON_MESSAGE = "I would like to make a melon/canteloupe ice cream"
 LEXICAL_FLOOR = 0.60
 """The deployed ``AGENT_RECALL_SIMILARITY_FLOOR``; lexical-only rows enter here."""

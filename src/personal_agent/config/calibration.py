@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -40,6 +41,14 @@ BROAD_RECALL_RELEVANCE_BOUND_FILE = "broad_recall_relevance_bound.json"
 #: coincide today. They are still two bounds: the cores are free to diverge, and a
 #: recalibration of one path must never silently move the other's gate.
 ENTITY_MATCH_RELEVANCE_BOUND_FILE = "entity_match_relevance_bound.json"
+
+#: Filename of the proactive path's reranker calibration (FRE-1545).
+#:
+#: Separate from :data:`PROACTIVE_RELEVANCE_BOUND_FILE`, which records the embedder arm's
+#: measured incompatibility (FRE-1477) and stays as that record. The scorer is the same one
+#: broad recall and entity match calibrate, but the population is the proactive path's own
+#: candidates, so the bound is measured on it rather than copied.
+PROACTIVE_RERANK_RELEVANCE_BOUND_FILE = "proactive_rerank_relevance_bound.json"
 
 
 def repository_root() -> Path:
@@ -334,6 +343,39 @@ def load_reranker_calibration(
     """
     payload = _read_artifact(calibration_path(root, filename))
     return None if payload is None else RerankerRelevanceCalibration.model_validate(payload)
+
+
+@lru_cache(maxsize=8)
+def calibrated_reranker_model(filename: str) -> str | None:
+    """The reranker one path's configured bound was calibrated against (FRE-1479/1480/1545).
+
+    Cached: the artifact is committed repository state, read once per process, exactly as
+    ``AppConfig`` itself is. Without the cache this would be a file read on every gated
+    turn. A newly committed calibration takes effect on the next restart, which is the same
+    lifecycle every other configured value already has.
+
+    Read from the committed calibration artifact rather than from the serving role, so a
+    gate compares a score's producer against **what was measured**, not against what
+    happens to be configured now. Those differ exactly when a bound has gone stale, which
+    is the case ``config_guard``'s reranker-bound checks report and this function must not
+    paper over.
+
+    Args:
+        filename: The path's committed artifact filename.
+
+    Returns:
+        The calibrated model identifier, or None when no artifact stands behind the
+        configured bound. None disables only the producer check -- the bound comparison
+        still applies -- because a missing artifact is already a ``config_guard`` finding
+        and must not silently widen admission here as well.
+    """
+    try:
+        calibration = load_reranker_calibration(repository_root(), filename)
+    except ValueError:
+        # A malformed artifact is config_guard's finding to raise, not a path's to fail a
+        # turn on. The bound comparison still binds.
+        return None
+    return None if calibration is None else calibration.component.model
 
 
 def _read_artifact(path: Path) -> object | None:

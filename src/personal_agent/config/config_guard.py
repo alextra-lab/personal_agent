@@ -896,6 +896,39 @@ def check_entity_match_bound_calibration(
     )
 
 
+def check_proactive_rerank_bound_calibration(
+    root: Path, settings: AppConfig | None = None
+) -> list[Finding]:
+    """ADR-0148 D4 / AC-10 (FRE-1545) — the proactive reranker bound traces to a calibration.
+
+    The proactive sibling of :func:`check_broad_recall_bound_calibration`. Same scorer, its
+    own artifact: the bound is measured on the proactive path's candidate population, and
+    AC-10 requires one artifact per configured bound.
+
+    Args:
+        root: The repository root.
+        settings: The ``AppConfig`` to check. ``None`` constructs a fresh default instance.
+
+    Returns:
+        Every finding raised, or an empty list when the configured state is consistent.
+    """
+    from personal_agent.config.calibration import (  # noqa: PLC0415 — avoid import cycle
+        PROACTIVE_RERANK_RELEVANCE_BOUND_FILE,
+    )
+    from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
+
+    if settings is None:
+        settings = AppConfig()
+    return _check_reranker_bound_calibration(
+        root,
+        configured=settings.proactive_memory_rerank_relevance_bound,
+        filename=PROACTIVE_RERANK_RELEVANCE_BOUND_FILE,
+        finding_prefix="proactive_rerank_bound_calibration",
+        setting_name="proactive_memory_rerank_relevance_bound",
+        path_label="proactive",
+    )
+
+
 def _check_reranker_bound_calibration(
     root: Path,
     *,
@@ -1827,6 +1860,7 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_relevance_bound_calibration(root))
     findings.extend(check_broad_recall_bound_calibration(root))
     findings.extend(check_entity_match_bound_calibration(root))
+    findings.extend(check_proactive_rerank_bound_calibration(root))
     findings.extend(check_budget_role_coverage(root))
     findings.extend(check_reasoning_declaration(root))
     return findings

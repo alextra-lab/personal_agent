@@ -17,6 +17,9 @@ from personal_agent.memory.proactive import (
 )
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 
+# FRE-1545: these tests exercise the path's other gates, not the reranker bound.
+pytestmark = pytest.mark.usefixtures("proactive_rerank_gate_off")
+
 
 def _row(
     *,

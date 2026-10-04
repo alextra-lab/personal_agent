@@ -283,6 +283,30 @@ def prime_body(inputs: Inputs, label: str) -> dict[str, object]:
     return body
 
 
+def load_plan_json(text: str | None) -> dict[str, object] | None:
+    """Read the JSON object of a planner reply.
+
+    Args:
+        text: The reply text. A ``</think>`` prefix and a code fence are stripped.
+
+    Returns:
+        The JSON object, or ``None`` when the reply holds no readable object.
+    """
+    t = re.sub(r"^.*</think>", "", text or "", flags=re.S).strip()
+    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S)
+    try:
+        data = json.loads(t)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", t, flags=re.S)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return data if isinstance(data, dict) else None
+
+
 def parse_plan(text: str | None) -> dict[str, object]:
     """Parse a planner reply into the fields the scorer reads.
 
@@ -293,21 +317,9 @@ def parse_plan(text: str | None) -> dict[str, object]:
         ``parse_error`` and ``raw`` for an unreadable reply. Otherwise ``strategy``, ``declined`` (a
         ``SINGLE`` plan with no task), ``task_count``, ``goals`` and ``constraints``.
     """
-    t = re.sub(r"^.*</think>", "", text or "", flags=re.S).strip()
-    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S)
-    failure: dict[str, object] = {"parse_error": True, "raw": (text or "")[:300]}
-    try:
-        data = json.loads(t)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", t, flags=re.S)
-        if not match:
-            return failure
-        try:
-            data = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return failure
-    if not isinstance(data, dict):
-        return failure
+    data = load_plan_json(text)
+    if data is None:
+        return {"parse_error": True, "raw": (text or "")[:300]}
     tasks = data.get("tasks") if isinstance(data.get("tasks"), list) else []
     assert isinstance(tasks, list)
     return {

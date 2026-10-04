@@ -6,7 +6,8 @@
  * already holds — no new server-side storage, per ADR §7.
  */
 
-import type { ChatMessage, PhaseNode, PhaseSummaryEntry, ToolCall, TurnSummary } from './types';
+import { PHASE_LABELS } from './phase-labels';
+import type { ChatMessage, PhaseName, PhaseNode, PhaseSummaryEntry, ToolCall, TurnSummary } from './types';
 
 /**
  * Derive a TurnSummary from a turn's resolved phase nodes and the tools that ran.
@@ -81,4 +82,57 @@ export function groupByParent<T extends { phaseId: string; parentId: string | nu
 export function isTurnCollapsed(messages: readonly ChatMessage[]): boolean {
   const last = messages[messages.length - 1];
   return last?.role === 'assistant' && last.phaseSummary != null;
+}
+
+const SUMMARY_STATES: ReadonlySet<string> = new Set(['completed', 'cancelled', 'error']);
+
+const isString = (v: unknown): v is string => typeof v === 'string';
+const isNullableString = (v: unknown): v is string | null => v === null || typeof v === 'string';
+
+/**
+ * FRE-1543 — map the call history the server stored on an assistant message
+ * (`turn_summary`, snake_case) to the `TurnSummary` the panel renders.
+ *
+ * Defensive: the value comes from the network. A malformed record, or an
+ * individual malformed or unknown-phase row, is dropped — the panel then
+ * renders less, never throws. A record left with no phases and no tools is
+ * `undefined`, the same "no panel" outcome as a live trivial turn.
+ *
+ * @param raw - The message's `turn_summary` field, as received.
+ * @returns The summary to render, or `undefined`.
+ */
+export function parseTurnSummary(raw: unknown): TurnSummary | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const { phases, tools, terminal_state: terminal } = raw as Record<string, unknown>;
+  if (!isString(terminal) || !SUMMARY_STATES.has(terminal)) return undefined;
+
+  const entries: PhaseSummaryEntry[] = [];
+  for (const row of Array.isArray(phases) ? phases : []) {
+    if (row === null || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    if (
+      !isString(r.phase_id) ||
+      !isString(r.phase) ||
+      !(r.phase in PHASE_LABELS) ||
+      !isNullableString(r.detail) ||
+      typeof r.duration_ms !== 'number' ||
+      !Number.isFinite(r.duration_ms) ||
+      !isString(r.state) ||
+      !SUMMARY_STATES.has(r.state) ||
+      !isNullableString(r.parent_id)
+    ) {
+      continue;
+    }
+    entries.push({
+      phaseId: r.phase_id,
+      phase: r.phase as PhaseName,
+      detail: r.detail,
+      durationMs: r.duration_ms,
+      state: r.state as PhaseSummaryEntry['state'],
+      parentId: r.parent_id,
+    });
+  }
+  const toolNames = Array.isArray(tools) ? tools.filter(isString) : [];
+  if (entries.length === 0 && toolNames.length === 0) return undefined;
+  return { phases: entries, tools: toolNames, terminalState: terminal as TurnSummary['terminalState'] };
 }

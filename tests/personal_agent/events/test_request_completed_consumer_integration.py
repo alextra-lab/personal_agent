@@ -109,6 +109,110 @@ async def test_published_request_completed_reaches_session_writer_handler() -> N
     assert mock_redis.xack.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_turn_summary_survives_the_bus_and_is_stored_on_the_message() -> None:
+    """FRE-1543 AC-2: the call history reaches the stored assistant message.
+
+    The record goes through the real serialisation (``model_dump(mode="json")`` → Redis →
+    ``ConsumerRunner`` parse), so a field the bus drops or a shape it mangles fails here.
+    """
+    from personal_agent.transport.turn_summary import TurnSummaryPhase, TurnSummaryRecord
+
+    summary = TurnSummaryRecord(
+        phases=[
+            TurnSummaryPhase(
+                phase_id="p1",
+                phase="planning",
+                detail=None,
+                duration_ms=2500,
+                state="completed",
+                parent_id=None,
+            )
+        ],
+        tools=["web_search"],
+        terminal_state="completed",
+    )
+    event = RequestCompletedEvent(
+        trace_id="trace-int-2",
+        session_id=str(uuid4()),
+        assistant_response="answer",
+        source_component="service.app",
+        turn_summary=summary,
+    )
+    event_json = orjson.dumps(event.model_dump(mode="json")).decode()
+
+    mock_redis = AsyncMock(spec=aioredis.Redis)
+    mock_redis.xadd = AsyncMock(return_value="1-0")
+    mock_redis.xack = AsyncMock(return_value=1)
+    mock_redis.xgroup_create = AsyncMock(return_value=True)
+    mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+    mock_redis.xreadgroup = _make_single_group_xreadgroup(event_json)
+    bus = RedisStreamBus(mock_redis)
+    mock_repo = MagicMock()
+    mock_repo.append_message = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "personal_agent.events.request_completed_handlers.AsyncSessionLocal",
+            side_effect=lambda: _fake_db_session(),
+        ),
+        patch(
+            "personal_agent.events.request_completed_handlers.SessionRepository",
+            return_value=mock_repo,
+        ),
+    ):
+        await bus.subscribe(
+            STREAM_REQUEST_COMPLETED, CG_SESSION_WRITER, "c1", build_session_writer_handler()
+        )
+        runner = ConsumerRunner(bus)
+        await runner.start()
+        await asyncio.sleep(0.2)
+        await runner.stop()
+
+    stored = mock_repo.append_message.await_args.args[1]
+    assert stored["turn_summary"] == {
+        "phases": [
+            {
+                "phase_id": "p1",
+                "phase": "planning",
+                "detail": None,
+                "duration_ms": 2500,
+                "state": "completed",
+                "parent_id": None,
+            }
+        ],
+        "tools": ["web_search"],
+        "terminal_state": "completed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_turn_with_no_summary_stores_no_key() -> None:
+    """A turn with no phases and no tools adds no ``turn_summary`` key (absent stays absent)."""
+    handler = build_session_writer_handler()
+    mock_repo = MagicMock()
+    mock_repo.append_message = AsyncMock(return_value=None)
+    event = RequestCompletedEvent(
+        trace_id="trace-int-3",
+        session_id=str(uuid4()),
+        assistant_response="plain answer",
+        source_component="service.app",
+    )
+    with (
+        patch(
+            "personal_agent.events.request_completed_handlers.AsyncSessionLocal",
+            side_effect=lambda: _fake_db_session(),
+        ),
+        patch(
+            "personal_agent.events.request_completed_handlers.SessionRepository",
+            return_value=mock_repo,
+        ),
+    ):
+        await handler(event)
+
+    assert "turn_summary" not in mock_repo.append_message.await_args.args[1]
+
+
 @asynccontextmanager
 async def _fake_db_session() -> AsyncIterator[MagicMock]:
     yield MagicMock()

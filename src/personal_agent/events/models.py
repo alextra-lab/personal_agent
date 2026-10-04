@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from personal_agent.governance.models import Mode
+from personal_agent.transport.turn_summary import TurnSummaryRecord
 
 # ---------------------------------------------------------------------------
 # Stream and consumer-group constants
@@ -248,6 +249,9 @@ class RequestCompletedEvent(EventBase):
         session_id: Session that originated the request.
         assistant_response: Assistant reply text to persist.
         user_id: Authenticated user UUID for the request (ADR-0107 D5).
+        turn_summary: The turn's folded call history, stored on the assistant message so a
+            reloaded page renders the same panel (FRE-1543). ``None`` for a turn with no
+            phases and no tools.
     """
 
     event_type: Literal["request.completed"] = "request.completed"
@@ -256,6 +260,7 @@ class RequestCompletedEvent(EventBase):
     assistant_response: str
     eval_mode: bool = False
     user_id: UUID | None = None
+    turn_summary: TurnSummaryRecord | None = None
 
 
 # ---------------------------------------------------------------------------

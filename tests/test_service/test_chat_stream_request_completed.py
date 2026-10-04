@@ -33,6 +33,14 @@ from personal_agent.service.app import _process_chat_stream_background
 _TEST_USER_ID = uuid4()
 
 
+@pytest.fixture(autouse=True)
+def _no_turn_registry_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1543: ``open_turn`` reads Postgres; a unit test of the chat task must not."""
+    monkeypatch.setattr(
+        "personal_agent.transport.agui.transport.open_turn", AsyncMock(return_value=None)
+    )
+
+
 @asynccontextmanager
 async def _fake_db_session(_mock_db: MagicMock) -> AsyncIterator[MagicMock]:
     yield _mock_db
@@ -281,3 +289,139 @@ async def test_cancellation_after_waiter_registered_releases_it(
         await task
 
     assert sww._session_write_waiters == {}, "cancellation must not leak the waiter"
+
+
+def _phase_recording_orchestrator() -> MagicMock:
+    """An Orchestrator stand-in that sends one planning phase, as the executor's span does."""
+    from personal_agent.transport.turn_summary import record_turn_event
+
+    orchestrator = _mock_orchestrator()
+
+    async def _handle_user_request(**_kwargs: object) -> dict[str, str]:
+        # What ``_persist_and_enqueue`` records for a persisted PHASE_START / PHASE_END pair.
+        record_turn_event(
+            {
+                "type": "PHASE_START",
+                "data": {
+                    "phase": "planning",
+                    "phase_id": "p1",
+                    "started_at": "2026-10-04T10:00:00+00:00",
+                    "detail": None,
+                    "parent_id": None,
+                },
+            }
+        )
+        record_turn_event(
+            {
+                "type": "PHASE_END",
+                "data": {"phase_id": "p1", "ok": True, "ended_at": "2026-10-04T10:00:02+00:00"},
+            }
+        )
+        return {"reply": "hi there", "trace_id": "trace-1"}
+
+    orchestrator.handle_user_request = AsyncMock(side_effect=_handle_user_request)
+    return orchestrator
+
+
+_EXPECTED_SUMMARY = {
+    "phases": [
+        {
+            "phase_id": "p1",
+            "phase": "planning",
+            "detail": None,
+            "duration_ms": 2000,
+            "state": "completed",
+            "parent_id": None,
+        }
+    ],
+    "tools": [],
+    "terminal_state": "completed",
+}
+
+
+@pytest.mark.asyncio
+@patch("personal_agent.service.app._validate_attachments", new_callable=AsyncMock)
+@patch("personal_agent.transport.agui.transport.close_turn")
+@patch("personal_agent.transport.agui.transport.open_turn", new_callable=AsyncMock)
+@patch("personal_agent.transport.agui.transport.emit_done", new_callable=AsyncMock)
+@patch("personal_agent.transport.agui.transport._push_event", new_callable=AsyncMock)
+@patch("personal_agent.orchestrator.Orchestrator")
+@patch("personal_agent.service.app.SessionRepository")
+@patch("personal_agent.service.app.AsyncSessionLocal")
+async def test_fre1543_turn_summary_is_published_and_the_turn_is_opened_and_closed(
+    mock_session_local: MagicMock,
+    mock_repo_cls: MagicMock,
+    mock_orchestrator_cls: MagicMock,
+    mock_push_event: AsyncMock,
+    mock_emit_done: AsyncMock,
+    mock_open_turn: AsyncMock,
+    mock_close_turn: MagicMock,
+    mock_validate_attachments: AsyncMock,
+    mock_redis: AsyncMock,
+) -> None:
+    """FRE-1543 AC-2: the call history rides request.completed; the turn is registered."""
+    session_id = uuid4()
+    session = SimpleNamespace(session_id=session_id, messages=[], execution_profile="local")
+    mock_repo = MagicMock()
+    mock_repo.get = AsyncMock(return_value=session)
+    mock_repo.append_message = AsyncMock(return_value=None)
+    mock_repo_cls.return_value = mock_repo
+    mock_session_local.side_effect = lambda: _fake_db_session(MagicMock())
+    mock_validate_attachments.return_value = []
+    mock_orchestrator_cls.return_value = _phase_recording_orchestrator()
+    mock_open_turn.return_value = 41
+    set_global_event_bus(RedisStreamBus(mock_redis))
+
+    await _process_chat_stream_background(
+        session_id=str(session_id), message="hi", user_id=_TEST_USER_ID, trace_id="trace-1"
+    )
+
+    payload = orjson.loads(mock_redis.xadd.call_args[0][1]["data"])
+    assert payload["turn_summary"] == _EXPECTED_SUMMARY
+    mock_open_turn.assert_awaited_once_with(str(session_id), "trace-1")
+    mock_close_turn.assert_called_once_with(str(session_id))
+
+
+@pytest.mark.asyncio
+@patch("personal_agent.service.app._validate_attachments", new_callable=AsyncMock)
+@patch("personal_agent.transport.agui.transport.close_turn")
+@patch("personal_agent.transport.agui.transport.open_turn", new_callable=AsyncMock)
+@patch("personal_agent.transport.agui.transport.emit_done", new_callable=AsyncMock)
+@patch("personal_agent.transport.agui.transport._push_event", new_callable=AsyncMock)
+@patch("personal_agent.orchestrator.Orchestrator")
+@patch("personal_agent.service.app.SessionRepository")
+@patch("personal_agent.service.app.AsyncSessionLocal")
+async def test_fre1543_direct_append_stores_turn_summary_and_unopened_turn_is_not_closed(
+    mock_session_local: MagicMock,
+    mock_repo_cls: MagicMock,
+    mock_orchestrator_cls: MagicMock,
+    mock_push_event: AsyncMock,
+    mock_emit_done: AsyncMock,
+    mock_open_turn: AsyncMock,
+    mock_close_turn: MagicMock,
+    mock_validate_attachments: AsyncMock,
+) -> None:
+    """NoOp bus: the direct append stores the record; a failed open is never closed."""
+    session_id = uuid4()
+    session = SimpleNamespace(session_id=session_id, messages=[], execution_profile="local")
+    mock_repo = MagicMock()
+    mock_repo.get = AsyncMock(return_value=session)
+    mock_repo.append_message = AsyncMock(return_value=None)
+    mock_repo_cls.return_value = mock_repo
+    mock_session_local.side_effect = lambda: _fake_db_session(MagicMock())
+    mock_validate_attachments.return_value = []
+    mock_orchestrator_cls.return_value = _phase_recording_orchestrator()
+    mock_open_turn.return_value = None  # the registry could not be written
+    set_global_event_bus(NoOpBus())
+
+    await _process_chat_stream_background(
+        session_id=str(session_id), message="hi", user_id=_TEST_USER_ID, trace_id="trace-1"
+    )
+
+    assistant = [
+        c.args[1]
+        for c in mock_repo.append_message.await_args_list
+        if c.args[1].get("role") == "assistant"
+    ]
+    assert assistant[0]["turn_summary"] == _EXPECTED_SUMMARY
+    mock_close_turn.assert_not_called()

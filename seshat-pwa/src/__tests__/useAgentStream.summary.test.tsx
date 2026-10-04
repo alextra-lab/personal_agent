@@ -153,6 +153,38 @@ describe('useAgentStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () 
     expect(assistant?.phaseSummary?.phases[0]).toMatchObject({ phaseId: 'p1', state: 'cancelled', durationMs: 12_000 });
   });
 
+  it('FRE-1543: the DONE that follows CANCELLED keeps the cancelled summary (it used to relabel it Completed)', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent({ type: 'TEXT_DELTA', data: { text: 'partial' }, seq: 1 });
+    pushEvent(phaseStart(2, { phase_id: 'p1', started_at: '2026-07-30T10:00:00.000Z' }));
+    pushEvent({ type: 'CANCELLED', seq: null });
+    pushEvent({ type: 'DONE', seq: null });
+
+    const assistant = hook.result.current.messages.find((m) => m.role === 'assistant');
+    expect(assistant?.phaseSummary?.terminalState).toBe('cancelled');
+    expect(assistant?.complete).toBe(true);
+  });
+
+  it('FRE-1543: PHASE_END carries the server end stamp, so a replayed phase keeps its real duration', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent(phaseStart(1, { phase_id: 'p1', started_at: '2026-07-30T10:00:00.000Z' }));
+    // The page sees the end an hour later (a reload replay); the phase took 3 s.
+    vi.setSystemTime(new Date('2026-07-30T11:00:00.000Z'));
+    pushEvent({
+      type: 'PHASE_END',
+      seq: 2,
+      data: { phase: 'planning', phase_id: 'p1', parent_id: null, ok: true, ended_at: '2026-07-30T10:00:03.000Z' },
+    });
+    pushEvent({ type: 'DONE', seq: null });
+
+    const assistant = hook.result.current.messages.find((m) => m.role === 'assistant');
+    expect(assistant?.phaseSummary?.phases[0]).toMatchObject({ phaseId: 'p1', durationMs: 3_000 });
+  });
+
   it('RUN_ERROR after a realistic PHASE_END(ok:false) then RUN_ERROR ordering attaches an error summary (AC-9b)', async () => {
     const hook = renderHook(() => useAgentStream());
     await startTurn(hook);

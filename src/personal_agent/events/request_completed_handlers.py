@@ -31,24 +31,26 @@ def build_session_writer_handler() -> Any:
         primary_model_id, config_path_str = resolve_active_attribution(
             trace_id=event.trace_id,
         )
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": event.assistant_response,
+            "trace_id": event.trace_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "metadata": {
+                "source": event.source_component,
+                "model": primary_model_id,
+                "model_role": "primary",
+                "model_config_path": config_path_str,
+            },
+        }
+        # FRE-1543: the folded call history rides on the message, so REST hydration of a
+        # reloaded page renders the panel the live turn showed.
+        if event.turn_summary is not None:
+            message["turn_summary"] = event.turn_summary.model_dump()
         try:
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
-                await repo.append_message(
-                    UUID(sid),
-                    {
-                        "role": "assistant",
-                        "content": event.assistant_response,
-                        "trace_id": event.trace_id,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "metadata": {
-                            "source": event.source_component,
-                            "model": primary_model_id,
-                            "model_role": "primary",
-                            "model_config_path": config_path_str,
-                        },
-                    },
-                )
+                await repo.append_message(UUID(sid), message)
         except Exception as e:
             log.error(
                 "session_writer_append_failed",

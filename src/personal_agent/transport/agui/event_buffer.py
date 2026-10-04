@@ -144,6 +144,25 @@ class SessionEventBuffer:
         row = result.first()
         return row.seq if row is not None else None
 
+    async def latest_seq(self, session_id: UUID) -> int:
+        """Return the session's last allocated ``seq`` (``sessions.last_event_seq``).
+
+        Read from the allocator, not ``MAX(seq)``: the TTL sweep empties ``session_events``
+        but never resets the counter (FRE-1040).
+
+        Args:
+            session_id: Target session.
+
+        Returns:
+            The last allocated seq, or 0 when the session has no row.
+        """
+        result = await self._db.execute(
+            text("SELECT last_event_seq FROM sessions WHERE session_id = :sid"),
+            {"sid": session_id},
+        )
+        row = result.first()
+        return int(row[0]) if row is not None else 0
+
     async def cleanup_expired(self, ttl_hours: int = 24) -> int:
         """Delete events older than *ttl_hours*.
 

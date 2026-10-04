@@ -158,6 +158,11 @@ export interface PhaseEndData {
    * Absent on events persisted before this field shipped; treated as `true`.
    */
   ok?: boolean;
+  /**
+   * ISO-8601 server stamp of the phase end (ADR-0142). The client uses it as the
+   * end, so a phase replayed after a reload keeps its real duration (FRE-1543).
+   */
+  ended_at?: string;
 }
 
 /**

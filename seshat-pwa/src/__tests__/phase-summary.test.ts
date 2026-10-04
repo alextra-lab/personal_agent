@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { buildTurnSummary, groupByParent, isTurnCollapsed } from '@/lib/phase-summary';
+import { buildTurnSummary, groupByParent, isTurnCollapsed, parseTurnSummary } from '@/lib/phase-summary';
 import type { ChatMessage, PhaseNode, ToolCall } from '@/lib/types';
 
 function phaseNode(overrides: Partial<PhaseNode>): PhaseNode {
@@ -137,5 +137,49 @@ describe('isTurnCollapsed', () => {
         chatMessage({ role: 'assistant', phaseSummary: { phases: [], tools: [], terminalState: 'completed' } }),
       ]),
     ).toBe(true);
+  });
+});
+
+describe('parseTurnSummary (FRE-1543)', () => {
+  it('maps the stored snake_case record to the panel shape', () => {
+    expect(
+      parseTurnSummary({
+        phases: [
+          { phase_id: 'p1', phase: 'planning', detail: null, duration_ms: 2500, state: 'completed', parent_id: null },
+          { phase_id: 'c1', phase: 'sub_agent', detail: 'w1', duration_ms: 10, state: 'error', parent_id: 'p1' },
+        ],
+        tools: ['web_search'],
+        terminal_state: 'cancelled',
+      }),
+    ).toEqual({
+      phases: [
+        { phaseId: 'p1', phase: 'planning', detail: null, durationMs: 2500, state: 'completed', parentId: null },
+        { phaseId: 'c1', phase: 'sub_agent', detail: 'w1', durationMs: 10, state: 'error', parentId: 'p1' },
+      ],
+      tools: ['web_search'],
+      terminalState: 'cancelled',
+    });
+  });
+
+  it('drops malformed and unknown-phase rows, never throws', () => {
+    const parsed = parseTurnSummary({
+      phases: [
+        null,
+        { phase_id: 'x', phase: 'teleport', detail: null, duration_ms: 1, state: 'completed', parent_id: null },
+        { phase_id: 'y', phase: 'planning', detail: null, duration_ms: 'slow', state: 'completed', parent_id: null },
+        { phase_id: 'p1', phase: 'planning', detail: null, duration_ms: 5, state: 'completed', parent_id: null },
+      ],
+      tools: ['ok', 3],
+      terminal_state: 'completed',
+    });
+    expect(parsed?.phases.map((p) => p.phaseId)).toEqual(['p1']);
+    expect(parsed?.tools).toEqual(['ok']);
+  });
+
+  it('returns undefined for an absent, malformed or empty record', () => {
+    expect(parseTurnSummary(undefined)).toBeUndefined();
+    expect(parseTurnSummary('nope')).toBeUndefined();
+    expect(parseTurnSummary({ phases: [], tools: [], terminal_state: 'completed' })).toBeUndefined();
+    expect(parseTurnSummary({ phases: [], tools: ['t'], terminal_state: 'exploded' })).toBeUndefined();
   });
 });

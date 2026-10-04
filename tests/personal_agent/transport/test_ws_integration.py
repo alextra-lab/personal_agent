@@ -705,3 +705,180 @@ class TestHardening:
             client.post("/__test/done", params={"session_id": session_id})
             msg = ws.receive_json()
             assert msg["type"] == "DONE"
+
+
+# ── Attach: a page with nothing in memory (FRE-1543) ───────────────────────────
+
+
+def _restart_gateway_process() -> None:
+    """Wipe every piece of in-process transport state, as a gateway restart does.
+
+    The projector is not in this path at all; the queues, connections, phase registry and
+    in-flight registry are. Only the durable stores (the fake buffer and the fake status store,
+    standing for Postgres) survive.
+    """
+    from personal_agent.transport.agui import transport as transport_mod
+    from personal_agent.transport.agui import turn_state
+    from personal_agent.transport.agui import ws_endpoint as wsep
+
+    wsep._session_queues.clear()
+    wsep._active_connections.clear()
+    transport_mod._phase_registry.clear()
+    turn_state._inflight.clear()
+
+
+def _turn_status(client: TestClient, session_id: str, *, tools: int, ctx: int) -> None:
+    client.post(
+        "/__test/turn_status",
+        params={
+            "session_id": session_id,
+            "context_tokens": ctx,
+            "context_max": 128000,
+            "tool_iteration": tools,
+            "tool_iteration_max": 25,
+        },
+    )
+
+
+class TestAttach:
+    """FRE-1543: the snapshot restores the bar; an in-flight turn replays from its start."""
+
+    def test_ac3_attach_after_a_restart_sends_the_last_reading(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        client, fake_buf = harness
+        session_id = str(uuid4())
+        _turn_status(client, session_id, tools=1, ctx=19000)
+        _turn_status(client, session_id, tools=2, ctx=19000)
+        _restart_gateway_process()
+
+        with ws_connect(client, session_id, attach=True) as ws:
+            snapshot = ws.receive_json()
+            complete = ws.receive_json()
+
+        assert snapshot["type"] == "STATE_DELTA"
+        assert snapshot["seq"] is None
+        assert snapshot["data"]["key"] == "turn_status"
+        value = snapshot["data"]["value"]
+        assert (value["tool_iteration"], value["tool_iteration_max"]) == (2, 25)
+        assert (value["session_context_tokens"], value["context_max"]) == (19000, 128000)
+        assert complete["type"] == "REPLAY_COMPLETE"
+        assert complete["turn_in_flight"] is False
+        # The watermark is the session's last seq: the hydrated history covers the rest.
+        assert complete["last_seq"] == fake_buf._store[session_id][-1]["seq"]
+
+    def test_attach_with_no_reading_sends_no_snapshot(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """Absent is never sent as zero (FRE-935)."""
+        client, _ = harness
+        session_id = str(uuid4())
+
+        with ws_connect(client, session_id, attach=True) as ws:
+            first = ws.receive_json()
+
+        assert first["type"] == "REPLAY_COMPLETE"
+        assert first["last_seq"] == 0
+
+    def test_a_send_connect_gets_no_snapshot(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """A send's socket must not bring back the previous turn's tools count (FRE-1538)."""
+        client, _ = harness
+        session_id = str(uuid4())
+        _turn_status(client, session_id, tools=2, ctx=19000)
+        _restart_gateway_process()
+
+        with ws_connect(client, session_id, last_seq=0) as ws:
+            client.post("/__test/text_delta", params={"session_id": session_id, "text": "hi"})
+            first = ws.receive_json()
+
+        assert first["type"] == "TEXT_DELTA"
+
+    def test_send_reset_clears_the_stored_tools_and_keeps_ctx(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        client, _ = harness
+        session_id = str(uuid4())
+        _turn_status(client, session_id, tools=2, ctx=19000)
+        client.post("/__test/open_turn", params={"session_id": session_id})
+
+        with ws_connect(client, session_id, attach=True) as ws:
+            snapshot = ws.receive_json()
+
+        value = snapshot["data"]["value"]
+        assert (value["tool_iteration"], value["tool_iteration_max"]) == (None, None)
+        assert value["session_context_tokens"] == 19000
+        client.post("/__test/close_turn", params={"session_id": session_id})
+
+    def test_ac4_attach_mid_turn_replays_the_completed_round_then_streams_the_next(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        client, _ = harness
+        session_id = str(uuid4())
+        # An earlier, finished turn: its events must NOT replay.
+        client.post("/__test/text_delta", params={"session_id": session_id, "text": "old"})
+        client.post("/__test/done", params={"session_id": session_id, "trace_id": "t-old"})
+        client.post("/__test/open_turn", params={"session_id": session_id})
+        client.post(
+            "/__test/phase_round",
+            params={"session_id": session_id, "phase_id": "p1", "phase": "planning"},
+        )
+        _turn_status(client, session_id, tools=1, ctx=19000)
+
+        with ws_connect(client, session_id, attach=True) as ws:
+            replay: list[dict[str, Any]] = []
+            while True:
+                msg = ws.receive_json()
+                replay.append(msg)
+                if msg["type"] == "REPLAY_COMPLETE":
+                    break
+            client.post(
+                "/__test/phase_round",
+                params={"session_id": session_id, "phase_id": "p2", "phase": "synthesis"},
+            )
+            live = ws.receive_json()
+
+        types = [m["type"] for m in replay]
+        assert "TEXT_DELTA" not in types and "DONE" not in types
+        phase_ids = [
+            m["data"]["phase_id"] for m in replay if m["type"] in ("PHASE_START", "PHASE_END")
+        ]
+        assert phase_ids == ["p1", "p1"]
+        assert replay[-1]["turn_in_flight"] is True
+        assert replay[-1]["last_seq"] == max(m["seq"] for m in replay if m["seq"] is not None)
+        assert (live["type"], live["data"]["phase_id"]) == ("PHASE_START", "p2")
+        client.post("/__test/close_turn", params={"session_id": session_id})
+
+    def test_attach_drops_a_stale_done_sentinel_and_stays_open(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """A DONE left in the queue by a suspended page must not close the new socket."""
+        client, _ = harness
+        session_id = str(uuid4())
+        client.post("/__test/text_delta", params={"session_id": session_id, "text": "a"})
+        client.post("/__test/done", params={"session_id": session_id})
+
+        with ws_connect(client, session_id, attach=True) as ws:
+            assert ws.receive_json()["type"] == "REPLAY_COMPLETE"
+            client.post("/__test/text_delta", params={"session_id": session_id, "text": "b"})
+            live = ws.receive_json()
+
+        assert (live["type"], live["data"]["text"]) == ("TEXT_DELTA", "b")
+
+    def test_eviction_stops_the_old_sender_before_the_new_replay(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """Codex review finding 2: one session queue must never feed two senders."""
+        from personal_agent.transport.agui import ws_endpoint as wsep
+
+        client, _ = harness
+        session_id = str(uuid4())
+
+        with ws_connect(client, session_id, attach=True) as first:
+            assert first.receive_json()["type"] == "REPLAY_COMPLETE"
+            old = wsep.get_active_connection(session_id)
+            assert old is not None and old.sender_task is not None
+            with ws_connect(client, session_id, attach=True) as second:
+                assert second.receive_json()["type"] == "REPLAY_COMPLETE"
+                assert old.sender_task.done()

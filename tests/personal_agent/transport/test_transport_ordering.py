@@ -149,3 +149,33 @@ async def test_emit_done_sentinel_follows_a_concurrent_emit(
     assert done_rows, "emit_done must persist a DONE row"
     assert done_rows[-1]["seq"] == max(r["seq"] for r in _SharedSeqBuffer.rows)
     assert done_rows[-1]["payload"]["trace_id"] == "trace-abc"
+
+
+class _FailingBuffer:
+    """Buffer stand-in whose append always fails (a Postgres outage)."""
+
+    def __init__(self, db: Any) -> None:
+        """Accept and ignore the db session."""
+
+    async def append(self, session_id: Any, event_type: str, payload: dict[str, Any]) -> int:
+        """Fail every persist."""
+        raise RuntimeError("postgres down")
+
+
+@pytest.mark.asyncio
+async def test_the_turn_records_only_events_that_were_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1543: the call history holds what the client could have seen, nothing else."""
+    from personal_agent.transport.turn_summary import start_turn_recording
+
+    _install_fakes(monkeypatch)
+    sid = str(uuid4())
+    recorder = start_turn_recording()
+
+    await transport_mod._push_event(TextDeltaEvent(text="ok", session_id=sid), sid)
+    monkeypatch.setattr(transport_mod, "SessionEventBuffer", _FailingBuffer)
+    await transport_mod._push_event(TextDeltaEvent(text="lost", session_id=sid), sid)
+
+    assert [e["data"] for e in recorder.events] == [{"text": "ok"}]
+    assert recorder.events[0]["seq"] == 1

@@ -133,6 +133,18 @@ class FakeSessionEventBuffer:
             if e["seq"] > after_seq
         ]
 
+    async def latest_seq(self, session_id: UUID) -> int:
+        """Return the session's last stored seq, or 0 (the per-session allocator, FRE-1543).
+
+        Args:
+            session_id: Target session.
+
+        Returns:
+            The highest seq stored for the session, or 0.
+        """
+        events = self._store.get(str(session_id), [])
+        return events[-1]["seq"] if events else 0
+
     async def oldest_available_seq(self, session_id: UUID) -> int | None:
         """Return the smallest retained seq, or ``None`` if no events exist.
 
@@ -156,6 +168,59 @@ class FakeSessionEventBuffer:
             Always 0.
         """
         return 0
+
+
+class FakeTurnStatusStore:
+    """In-memory stand-in for ``TurnStatusStore`` (the ``sessions.metadata`` snapshot).
+
+    Class-level storage stands for Postgres: it outlives every connection and every wipe of
+    the in-process transport state, which is what a gateway restart leaves behind (FRE-1543).
+    The merge rule is the real one.
+    """
+
+    stored: dict[str, dict[str, object]] = {}
+
+    def __init__(self, db: Any) -> None:
+        """Accept and discard the db session parameter.
+
+        Args:
+            db: Unused database session (accepted to match real API).
+        """
+
+    async def save(self, session_id: UUID, value: Any) -> None:
+        """Merge and store a reading.
+
+        Args:
+            session_id: Target session.
+            value: The ``turn_status`` value.
+        """
+        from personal_agent.transport.agui.turn_state import merge_turn_status
+
+        key = str(session_id)
+        type(self).stored[key] = merge_turn_status(type(self).stored.get(key), value)
+
+    async def load(self, session_id: UUID) -> dict[str, object] | None:
+        """Return the stored reading, or None.
+
+        Args:
+            session_id: Target session.
+
+        Returns:
+            A copy of the stored reading, or None.
+        """
+        stored = type(self).stored.get(str(session_id))
+        return dict(stored) if stored is not None else None
+
+    async def clear_tools(self, session_id: UUID) -> None:
+        """Null the tools lane of a stored reading.
+
+        Args:
+            session_id: Target session.
+        """
+        stored = type(self).stored.get(str(session_id))
+        if stored is not None:
+            stored["tool_iteration"] = None
+            stored["tool_iteration_max"] = None
 
 
 class _FakeSessionRepository:
@@ -249,6 +314,11 @@ def build_ws_test_app(
     mp.setattr(_transport, "SessionEventBuffer", lambda _db: fake_buf)
     mp.setattr(_wsep, "SessionEventBuffer", lambda _db: fake_buf)
 
+    # ── Patch TurnStatusStore (FRE-1543 snapshot) ───────────────────────────
+    FakeTurnStatusStore.stored = {}
+    mp.setattr(_transport, "TurnStatusStore", FakeTurnStatusStore)
+    mp.setattr(_wsep, "TurnStatusStore", FakeTurnStatusStore)
+
     # ── Patch SessionRepository ─────────────────────────────────────────────
     mp.setattr(_wsep, "SessionRepository", _FakeSessionRepository)
 
@@ -307,8 +377,37 @@ def build_ws_test_app(
                 "tool_iteration": tool_iteration,
                 "tool_iteration_max": tool_iteration_max,
                 "turn_cost_usd": turn_cost_usd,
+                "session_context_tokens": context_tokens,
             },
         )
+        return {"ok": "sent"}
+
+    @test_router.post("/__test/open_turn")
+    async def _inject_open_turn(session_id: str) -> dict[str, int | None]:
+        from personal_agent.transport.agui.transport import open_turn
+
+        return {"after_seq": await open_turn(session_id, "test-trace")}
+
+    @test_router.post("/__test/close_turn")
+    async def _inject_close_turn(session_id: str) -> dict[str, str]:
+        from personal_agent.transport.agui.transport import close_turn
+
+        close_turn(session_id)
+        return {"ok": "closed"}
+
+    @test_router.post("/__test/phase_round")
+    async def _inject_phase_round(session_id: str, phase_id: str, phase: str) -> dict[str, str]:
+        """One completed phase: a PHASE_START then its PHASE_END."""
+        from personal_agent.transport.agui.transport import emit_phase_end, emit_phase_start
+        from personal_agent.transport.events import Phase
+
+        await emit_phase_start(
+            session_id=session_id,
+            phase=Phase(phase),
+            phase_id=phase_id,
+            started_at=datetime.now(UTC).isoformat(),
+        )
+        await emit_phase_end(session_id=session_id, phase=Phase(phase), phase_id=phase_id)
         return {"ok": "sent"}
 
     @test_router.post("/__test/classified_error")
@@ -427,6 +526,7 @@ def ws_connect(
     client: TestClient,
     session_id: str,
     last_seq: int = 0,
+    attach: bool = False,
 ) -> Generator[Any, None, None]:
     """Open a WebSocket connection and perform the mandatory CONNECT handshake.
 
@@ -442,10 +542,14 @@ def ws_connect(
         session_id: Target session ID path parameter.
         last_seq: Last event seq the client has seen (0 for a fresh connection;
             a positive value triggers replay of events with ``seq > last_seq``).
+        attach: Send ``attach: true`` — a page with nothing in memory (FRE-1543).
 
     Yields:
         The connected ``WebSocketTestSession``.
     """
     with client.websocket_connect(f"/ws/{session_id}") as ws:
-        ws.send_json({"type": "CONNECT", "last_seq": last_seq})
+        connect: dict[str, object] = {"type": "CONNECT", "last_seq": last_seq}
+        if attach:
+            connect["attach"] = True
+        ws.send_json(connect)
         yield ws

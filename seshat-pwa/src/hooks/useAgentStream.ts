@@ -31,7 +31,7 @@ import type {
   TurnSummary,
 } from '@/lib/types';
 import { reconcilePhaseSnapshot } from '@/lib/phase-state';
-import { buildTurnSummary } from '@/lib/phase-summary';
+import { buildTurnSummary, parseTurnSummary } from '@/lib/phase-summary';
 import { clearStoredTools, mergeTurnStatus, persistTurnStatus } from '@/lib/turn-status-store';
 
 /** Server-authoritative model-selection change, from a `session_selection` STATE_DELTA. */
@@ -111,6 +111,13 @@ export interface UseAgentStreamReturn {
   /** Replace the message list with a server-hydrated history. */
   seedMessages: (msgs: ChatMessage[]) => void;
   seedTurnStatus: (status: TurnStatus | ((prev: TurnStatus | null) => TurnStatus)) => void;
+  /**
+   * FRE-1543: open the displayed session's socket on a page that holds nothing
+   * in memory (load, reload, session switch). Call it after the history has been
+   * hydrated. The server answers with the status snapshot and a replay of the
+   * turn in flight. A no-op while a send's socket for that session is open.
+   */
+  attach: (sessionId: string) => void;
   /**
    * True while the WebSocket was lost mid-turn and we are waiting to reconnect.
    * The UI shows a "Reconnecting…" banner while this is set (FRE-236).
@@ -204,6 +211,10 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   // detaching the old connection.
   const activeSessionIdRef = useRef<string | undefined>(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+  // FRE-1543: the committed transcript, readable from the event handler (REPLAY_COMPLETE
+  // checks whether the hydrated history ends without a reply).
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  messagesRef.current = messages;
 
   const commitTurnStatus = useCallback((next: TurnStatus | null) => {
     lastTurnStatusRef.current = next;
@@ -254,6 +265,40 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
     },
     [],
   );
+
+  /**
+   * Replace the transcript with the server's history for the connected session.
+   * Used on REPLAY_GAP, and after an attach that finds the history missing a
+   * reply (FRE-1543).
+   */
+  const rehydrate = useCallback(() => {
+    const sessionId = currentSessionRef.current;
+    if (!sessionId) return;
+    void getSessionMessages(sessionId).then((serverMsgs) => {
+      // FRE-1414: the fetch is async — if the displayed session moved
+      // on while it was in flight, applying it now would overwrite
+      // the newly displayed session's messages with this stale one's.
+      if (currentSessionRef.current !== sessionId) return;
+      const hydrated: ChatMessage[] = serverMsgs.map((m) => ({
+        id: generateUUID(),
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+        traceId: m.trace_id,
+        // FRE-407: hydrated history is complete → rating control renders.
+        complete: true,
+        // FRE-757: preserve any stored rating across a replay-gap rehydrate
+        // (mirrors normal history hydration) so the control shows the real
+        // rating instead of reverting to the resting default.
+        rating: m.rating,
+        // FRE-1543: the stored call history renders the folded panel.
+        phaseSummary: parseTurnSummary(m.turn_summary),
+      }));
+      setMessages(hydrated);
+    }).catch(() => {
+      // Keep the transcript on a transient fetch error.
+    });
+  }, []);
 
   // FRE-236: persist the in-progress draft to localStorage on visibility hide so
   // a kill+relaunch can detect that a turn was in-flight and the relaunch hydration
@@ -392,11 +437,15 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
         // 'error' rather than waiting on a later RUN_ERROR sweep, which may
         // never touch this phase (phase_span's `finally` always emits
         // PHASE_END before an outer error handler runs).
-        const { phase_id, ok } = event.data as unknown as PhaseEndData;
+        const { phase_id, ok, ended_at } = event.data as unknown as PhaseEndData;
+        // FRE-1543: a phase replayed after a reload ended long before it arrives, so
+        // the server's end stamp is the end — not the moment this page saw it.
+        const serverEnd = typeof ended_at === 'string' ? Date.parse(ended_at) : NaN;
+        const endedAt = Number.isFinite(serverEnd) ? serverEnd : Date.now();
         updatePhases((prev) =>
           prev.map((p) =>
             p.phaseId === phase_id && p.state === 'running'
-              ? { ...p, state: ok === false ? 'error' : 'completed', endedAt: Date.now() }
+              ? { ...p, state: ok === false ? 'error' : 'completed', endedAt }
               : p,
           ),
         );
@@ -569,28 +618,25 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
       case 'REPLAY_GAP': {
         // Server indicates our last_seq is older than retained events.
         // Fall back to fetching full conversation history via REST API.
-        const sessionId = currentSessionRef.current;
-        if (sessionId) {
-          void getSessionMessages(sessionId).then((serverMsgs) => {
-            // FRE-1414: the fetch is async — if the displayed session moved
-            // on while it was in flight, applying it now would overwrite
-            // the newly displayed session's messages with this stale one's.
-            if (currentSessionRef.current !== sessionId) return;
-            const hydrated: ChatMessage[] = serverMsgs.map((m) => ({
-              id: generateUUID(),
-              role: m.role as 'user' | 'assistant',
-              content: m.content,
-              timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
-              traceId: m.trace_id,
-              // FRE-407: hydrated history is complete → rating control renders.
-              complete: true,
-              // FRE-757: preserve any stored rating across a replay-gap rehydrate
-              // (mirrors normal history hydration) so the control shows the real
-              // rating instead of reverting to the resting default.
-              rating: m.rating,
-            }));
-            setMessages(hydrated);
-          });
+        rehydrate();
+        break;
+      }
+
+      case 'REPLAY_COMPLETE': {
+        // FRE-1543: the end of an attach replay — only an attach carries
+        // `turn_in_flight`; an ordinary reconnect's REPLAY_COMPLETE (e.g. just after a
+        // send, before the server stored the user message) must not touch anything.
+        const inFlight = (event as { turn_in_flight?: unknown }).turn_in_flight;
+        if (typeof inFlight !== 'boolean') break;
+        if (inFlight) {
+          // A turn still running keeps the live footer and the Stop button up until
+          // its own DONE.
+          isStreamingRef.current = true; // FRE-236: keep ref in sync
+          setIsStreaming(true);
+        } else if (messagesRef.current[messagesRef.current.length - 1]?.role === 'user') {
+          // The history was read while a turn ran, and the turn ended before this
+          // socket attached: its reply is in neither. Fetch the history once more.
+          rehydrate();
         }
         break;
       }
@@ -635,7 +681,10 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
                 ...last,
                 traceId: doneTraceId || last.traceId,
                 complete: true,
-                ...(turnSummary ? { phaseSummary: turnSummary } : {}),
+                // FRE-1543: a summary already on the message wins — the CANCELLED /
+                // RUN_ERROR one (its true terminal state), or the stored one when a
+                // replay re-delivers a DONE.
+                ...(turnSummary && !last.phaseSummary ? { phaseSummary: turnSummary } : {}),
               },
             ];
           }
@@ -680,7 +729,7 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
         break;
       }
     }
-  }, [dropPendingConstraint, updatePhases, updateTools, attachTurnSummary, commitTurnStatus]);
+  }, [dropPendingConstraint, updatePhases, updateTools, attachTurnSummary, commitTurnStatus, rehydrate]);
 
   // --------------------------------------------------------------------------
   // Public API
@@ -835,6 +884,30 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
     setClassifiedError(null);
   }, [activeSessionId, updateTools, updatePhases]);
 
+  const attach = useCallback(
+    (sessionId: string) => {
+      // A send for this session already owns a socket; it carries everything.
+      if (streamRef.current !== null && currentSessionRef.current === sessionId) return;
+      streamRef.current?.close();
+      currentSessionRef.current = sessionId;
+      currentContentRef.current = '';
+      streamRef.current = connectWebSocket(
+        sessionId,
+        // FRE-1414: bind this connection's events to the session it was opened for.
+        (event) => handleEvent(event, sessionId),
+        () => {},
+        {
+          attach: true,
+          onWsDisconnected: () => {
+            if (isStreamingRef.current) setIsReconnecting(true);
+          },
+          onWsConnected: () => setIsReconnecting(false),
+        },
+      );
+    },
+    [handleEvent],
+  );
+
   const resolveInterrupt = useCallback((choice: string) => {
     // Send INTERRUPT_RESPONSE over WebSocket.
     if (streamRef.current && pendingInterrupt) {
@@ -962,5 +1035,6 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
     clearMessages,
     seedMessages,
     seedTurnStatus,
+    attach,
   };
 }

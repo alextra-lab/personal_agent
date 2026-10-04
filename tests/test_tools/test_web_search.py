@@ -130,8 +130,12 @@ def test_exa_content_mode_and_length() -> None:
     This does not weaken ADR-0138 containment: highlights are verbatim excerpts of
     the source page, so a claim can still be checked against returned bytes. It
     narrows what is available to check against, not whether checking is possible.
+
+    Reads settings.yml.example specifically, not the real-file-preferring fallback,
+    because the owner's real file may have a different content_mode for operational
+    reasons. Only the template guarantees the shipped default.
     """
-    cfg = _load_searxng_config()
+    cfg = _load_searxng_example_config()
     exa = next(e for e in cfg["engines"] if e["name"] == "exa")
     assert exa["content_mode"] == "highlights"
     assert exa["content_max_characters"] == 2000

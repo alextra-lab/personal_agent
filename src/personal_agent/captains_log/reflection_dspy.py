@@ -400,13 +400,15 @@ def generate_reflection_dspy(
     metrics_string = format_metrics_string(string_metrics)
 
     # Prepend iteration-limit signal to telemetry_summary so the reflection
-    # model is nudged to propose a cap-raise for the exhausted TaskType.
+    # model is nudged to propose a raise of the global ceiling. The task type is
+    # context only: it does not allocate capability (ADR-0142 D1, FRE-1394).
     if hit_iteration_limit:
         limit_note = (
             f"[ITERATION LIMIT HIT] task_type={task_type or 'unknown'} "
             f"used {iteration_count}/{max_iterations} iterations. "
             "Agent was forced to stop before completing analysis. "
-            "Consider proposing a cap-raise for this TaskType."
+            "Consider proposing a raise of the global tool-iteration ceiling "
+            "(orchestrator_max_tool_iterations); there is no per-TaskType cap."
         )
         telemetry_summary = f"{limit_note}\n{telemetry_summary}"
 

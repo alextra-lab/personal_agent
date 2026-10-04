@@ -310,8 +310,8 @@ async def generate_reflection_entry(
         reply_length: Length of the agent's reply.
         metrics_summary: Optional request-scoped metrics summary from RequestMonitor (ADR-0012).
         hit_iteration_limit: True when the agent was forced to stop by the tool iteration cap.
-            When True, the reflection model is nudged to propose raising the per-TaskType cap.
-        task_type: TaskType value string (e.g. "analysis") for cap-raise proposals.
+            When True, the reflection model is nudged to propose raising the global ceiling.
+        task_type: TaskType value string (e.g. "analysis"), context for the reflection only.
         iteration_count: Actual tool iterations consumed this request.
         max_iterations: Effective cap that was applied.
         session_id: Optional session ID for the task; threaded through to the

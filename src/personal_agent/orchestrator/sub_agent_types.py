@@ -206,7 +206,7 @@ class SubAgentResult:
             timeout, cancellation, exception). Empty when nothing was denied.
         tool_iterations: Number of tool-execution rounds actually run (FRE-1389
             AC-2), bounded by ``settings.sub_agent_max_tool_iterations`` — the
-            sub-agent's own cap, not the primary's per-TaskType one.
+            sub-agent's own cap, not the primary turn's ceiling.
         tool_result_chars_absorbed: Sum of every tool-role message's raw content
             length the sub-agent fed back into its own next inference call —
             successful dispatches, failed dispatches, and synthetic refusal/

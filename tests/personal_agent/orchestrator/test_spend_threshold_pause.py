@@ -6,10 +6,6 @@ Verifies the ticket's own five acceptance criteria:
 - AC-3: a stored preference cannot silence it (allow_preference=False, ADR-0101 §8b).
 - AC-4: headless (no client) terminates at the baseline, not at the deadline.
 - AC-5: the card states the iteration count reached and the threshold crossed.
-
-Plus the codex-plan-review finding that the trigger must respect a per-task-type
-ceiling lower than the global one (the still-live
-``orchestrator_max_tool_iterations_by_task_type``, not removed until FRE-1394).
 """
 
 from __future__ import annotations
@@ -26,16 +22,6 @@ from personal_agent.config import settings
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.types import ExecutionContext, TaskState
-from personal_agent.request_gateway.types import (
-    AssembledContext,
-    Complexity,
-    DecompositionResult,
-    DecompositionStrategy,
-    GatewayOutput,
-    GovernanceContext,
-    IntentResult,
-    TaskType,
-)
 from personal_agent.telemetry.trace import TraceContext
 
 _TRANSPORT = "personal_agent.transport.agui.transport"
@@ -60,26 +46,6 @@ def _mock_session() -> object:
     mock_session.add_message = AsyncMock()
     mock_session.get_messages = AsyncMock(return_value=[])
     return mock_session
-
-
-def _gateway_output(task_type: TaskType) -> GatewayOutput:
-    return GatewayOutput(
-        intent=IntentResult(
-            task_type=task_type,
-            complexity=Complexity.SIMPLE,
-            confidence=0.9,
-            signals=[],
-        ),
-        governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
-        decomposition=DecompositionResult(strategy=DecompositionStrategy.SINGLE, reason="test"),
-        context=AssembledContext(
-            messages=[{"role": "user", "content": "hello"}],
-            memory_context=None,
-            tool_definitions=None,
-        ),
-        session_id="test-session",
-        trace_id="test-trace",
-    )
 
 
 def _patch_no_preference(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -332,50 +298,3 @@ class TestSpendPauseCardContext:
         assert captured["constraint"] == "spend_threshold"
         context = str(captured["context"])
         assert "3" in context  # both the reached count and the threshold are 3 here
-
-
-@pytest.mark.asyncio
-class TestSpendPauseRespectsPerTaskTypeCeiling:
-    """The trigger must never fire at or above the turn's EFFECTIVE ceiling.
-
-    codex plan-review finding: the still-live orchestrator_max_tool_iterations_by_task_type
-    (not removed until FRE-1394) can put the effective ceiling for a turn at or below the
-    configured spend threshold — e.g. conversational's default cap of 6 equals the spend
-    threshold's default of 6. The ordinary tool_iteration_limit path must remain the sole
-    control in that case; the spend pause must not fire redundantly beside it.
-    """
-
-    async def test_conversational_ceiling_at_threshold_never_raises_spend_pause(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(settings, "orchestrator_spend_threshold", 6)
-        monkeypatch.setattr(
-            settings, "orchestrator_max_tool_iterations_by_task_type", {"conversational": 6}
-        )
-
-        pause_called = {"n": 0}
-
-        async def fake_pause(**kwargs: object) -> object:
-            pause_called["n"] += 1
-            from personal_agent.orchestrator.constraint_options import ConstraintDecision
-
-            return ConstraintDecision("finish_now", "user_choice")
-
-        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", fake_pause)
-
-        ctx = _ctx(
-            session_id="sess-5",
-            trace_id="trace-5",
-            messages=[{"role": "assistant", "content": "x", "tool_calls": []}],
-            gateway_output=_gateway_output(TaskType.CONVERSATIONAL),
-        )
-        ctx.tool_iteration_count = 6  # -> 7, past the effective ceiling of 6
-
-        trace_ctx = TraceContext.new_trace()
-        await ex.step_tool_execution(ctx, _mock_session(), trace_ctx)  # type: ignore[arg-type]
-
-        # The ordinary tool_iteration_limit path (also mocked via the same helper) is
-        # the one legitimately entitled to fire here -- but the spend gate must not have
-        # been the reason: assert it was never reached ahead of it a second, spurious time.
-        assert ctx.spend_pause_raised is False
-        assert pause_called["n"] == 1  # exactly the tool_iteration_limit pause, not two

@@ -31,7 +31,7 @@ log = get_logger(__name__)
 WARNING_EVENT_ALLOWLIST: frozenset[str] = frozenset(
     {
         # Iteration cap exhaustion — agent was forced to stop before completing analysis.
-        # Recurrence for a given TaskType signals the per-type cap should be raised.
+        # Recurrence signals the global orchestrator_max_tool_iterations may be too low.
         "tool_iteration_limit_reached",
         "compaction_quality.poor",
         "history_sanitised_orphans_removed",

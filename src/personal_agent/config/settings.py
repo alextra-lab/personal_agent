@@ -267,11 +267,8 @@ class AppConfig(BaseSettings):
             "continue or answer now. A count, not a cost estimate: twenty cheap calls and "
             "twenty expensive ones trip it alike (deliberate, per D2). Sized from the ADR's "
             "own measurement: across 504 conversational turns the average was 1.42 iterations "
-            "and 13 sat at or above 6, so a threshold in that region asks rarely. Only fires "
-            "when it sits below the turn's EFFECTIVE ceiling (_resolve_max_iterations) -- the "
-            "still-live orchestrator_max_tool_iterations_by_task_type can put that ceiling at "
-            "or below this value until FRE-1394 removes it, in which case the ordinary "
-            "tool_iteration_limit pause remains the sole control for that turn."
+            "and 13 sat at or above 6, so a threshold in that region asks rarely. Must sit "
+            "strictly below orchestrator_max_tool_iterations (refused at load otherwise)."
         ),
     )
     sub_agent_max_tool_iterations: int = Field(
@@ -281,9 +278,7 @@ class AppConfig(BaseSettings):
             "FRE-1389 AC-2, FRE-1496: the sub-agent tool loop's outer bound. "
             "ADR-0150 D3 introduced sub_agent_rounds_by_thoroughness as the operative "
             "per-level control; this field is the cap enforced at load. Deliberately "
-            "separate from orchestrator_max_tool_iterations_by_task_type, which is keyed "
-            "on the PARENT turn's TaskType — the wrong axis for a sub-agent's own bounded-"
-            "worker budget."
+            "separate from orchestrator_max_tool_iterations, the primary turn's ceiling."
         ),
     )
     sub_agent_rounds_by_thoroughness: dict[Thoroughness, int] = Field(
@@ -341,23 +336,6 @@ class AppConfig(BaseSettings):
         ge=0,
         description="Max stimulus-preview length when route_trace_store_preview is enabled",
     )
-    orchestrator_max_tool_iterations_by_task_type: dict[str, int] = Field(
-        default_factory=lambda: {
-            "conversational": 6,
-            "memory_recall": 8,
-            "analysis": 25,
-            "planning": 25,
-            "tool_use": 25,
-            "delegation": 25,
-            "self_improve": 25,
-        },
-        description=(
-            "Per-TaskType cap on tool iterations. Intersected with "
-            "orchestrator_max_tool_iterations (whichever is lower wins). "
-            "TaskTypes not listed fall back to orchestrator_max_tool_iterations."
-        ),
-    )
-
     # Routing (router speed and single-model mode)
     routing_policy: str = Field(
         default="heuristic_then_llm",
@@ -3229,10 +3207,9 @@ class AppConfig(BaseSettings):
 
         A threshold that never sits below the ceiling could never fire "below the
         ceiling" as D2 requires -- it would only ever coincide with or trail the
-        existing tool_iteration_limit pause. This is a load-time sanity check on
-        the two GLOBAL settings; the runtime trigger additionally compares against
-        the turn's own effective ceiling (which the still-live per-task-type caps
-        can lower further), since that is a per-turn value this validator cannot see.
+        existing tool_iteration_limit pause. Since ADR-0142 D1 (FRE-1394) every turn's
+        ceiling is this global value plus any grant, and a grant only raises it, so
+        this load-time check holds for every turn.
 
         Raises:
             ValueError: When ``orchestrator_spend_threshold`` is not strictly below

@@ -62,6 +62,11 @@ from personal_agent.telemetry.es_handler import ElasticsearchHandler
 from personal_agent.telemetry.spans import close_root_span, open_root_span
 from personal_agent.telemetry.trace import SystemTraceContext, read_or_mint_trace_id
 from personal_agent.transport.events import TextDeltaEvent
+from personal_agent.transport.turn_summary import (
+    build_turn_summary,
+    start_turn_recording,
+    stop_turn_recording,
+)
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -315,6 +320,10 @@ async def _process_chat_stream_background(
     # structlog call made anywhere in this task's call tree (gateway pipeline,
     # orchestrator, executor) inherits these until the `finally` below clears them.
     _bind_request_identity(trace_id=trace_id, session_id=session_id, user_id=user_id)
+    # FRE-1543: the seq this turn's events follow, once the turn is registered as in flight,
+    # and the recorder of the events this turn sends (its call history).
+    turn_after_seq: int | None = None
+    turn_recorder = start_turn_recording()
 
     try:
         # ADR-0121 §4: pin the resolved primary selection for THIS turn. Set once
@@ -419,6 +428,12 @@ async def _process_chat_stream_background(
                     "metadata": {"source": "service.app"},
                 },
             )
+
+        # FRE-1543: register the turn as in flight before any of its events, so a page
+        # that reloads mid-turn replays it from here, and reset the stored tools lane.
+        from personal_agent.transport.agui.transport import open_turn  # noqa: E402
+
+        turn_after_seq = await open_turn(session_id, trace_id)
 
         # ── Gateway pipeline ─────────────────────────────────────────────
         from personal_agent.brainstem.expansion import compute_expansion_budget
@@ -534,29 +549,33 @@ async def _process_chat_stream_background(
         finally:
             await _record_first_token(trace_id, received, delivered=delivered)
 
+        # FRE-1543: the folded call history, built from the events this turn sent (every
+        # phase span has closed by now), stored with the assistant message.
+        turn_summary = build_turn_summary(turn_recorder.events, now=datetime.now(timezone.utc))
+
         async def _append_assistant_directly() -> None:
             """Append the assistant reply to Postgres directly (no consumer involved)."""
             try:
                 primary_model_id, config_path_str = _resolve_active_model_attribution(
                     trace_id=trace_id,
                 )
+                assistant_message: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": response_content,
+                    "trace_id": trace_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "metadata": {
+                        "source": "service.app",
+                        "model": primary_model_id,
+                        "model_role": "primary",
+                        "model_config_path": config_path_str,
+                    },
+                }
+                if turn_summary is not None:
+                    assistant_message["turn_summary"] = turn_summary.model_dump()
                 async with AsyncSessionLocal() as db:
                     repo = SessionRepository(db)
-                    await repo.append_message(
-                        session_uuid,
-                        {
-                            "role": "assistant",
-                            "content": response_content,
-                            "trace_id": trace_id,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "metadata": {
-                                "source": "service.app",
-                                "model": primary_model_id,
-                                "model_role": "primary",
-                                "model_config_path": config_path_str,
-                            },
-                        },
-                    )
+                    await repo.append_message(session_uuid, assistant_message)
             except Exception as e:
                 log.error(
                     "chat_stream.db_append_assistant_failed",
@@ -584,6 +603,7 @@ async def _process_chat_stream_background(
                         assistant_response=response_content,
                         source_component="service.app",
                         user_id=user_id,
+                        turn_summary=turn_summary,
                     ),
                 )
             except asyncio.CancelledError:
@@ -636,6 +656,11 @@ async def _process_chat_stream_background(
         from personal_agent.transport.agui.transport import emit_done  # noqa: E402
 
         await emit_done(session_id, trace_id)
+        if turn_after_seq is not None:
+            from personal_agent.transport.agui.transport import close_turn  # noqa: E402
+
+            close_turn(session_id)
+        stop_turn_recording()
         # Release the dedup entry so the user can immediately retry on error
         # without waiting for TTL expiry (FRE-392).
         get_deduplicator().release(session_id, message, client_msg_id=client_msg_id)

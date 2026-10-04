@@ -34,6 +34,7 @@ from personal_agent.service.repositories.session_repository import SessionReposi
 from personal_agent.service.ws_ticket import consume_ws_ticket
 from personal_agent.telemetry import get_logger
 from personal_agent.transport.agui.event_buffer import SessionEventBuffer
+from personal_agent.transport.agui.turn_state import TurnStatusStore, turn_start_seq
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -86,6 +87,9 @@ class _ConnectionState:
     waiter_payloads: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiter_timeouts: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     cancel_requested: bool = False
+    #: The task draining the session queue to this socket. A superseding connection stops it
+    #: before its own replay, so no item is taken by a socket that can no longer send it.
+    sender_task: asyncio.Task[None] | None = None
 
 
 _active_connections: dict[str, _ConnectionState] = {}
@@ -687,14 +691,18 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
             await old_conn.websocket.close(code=WS_CLOSE_SUPERSEDED, reason="Superseded")
         except Exception:
             pass
+        # FRE-1543: both senders drain the one session queue. Stop the old one before the
+        # new one reads its replay, so an item the old sender takes but cannot send is
+        # already persisted and the new replay delivers it.
+        await _stop_sender(old_conn)
         log.info("ws.evicted_old_connection", session_id=session_id)
 
     # 3. Accept
     await websocket.accept()
     log.info("ws.connected", session_id=session_id, user_id=str(user.user_id))
 
-    last_seq = await _receive_connect(websocket, session_id)
-    if last_seq is None:
+    connect = await _receive_connect(websocket, session_id)
+    if connect is None:
         try:
             await websocket.close(code=1008, reason="CONNECT required")
         except Exception:
@@ -719,7 +727,8 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     sender_task: asyncio.Task[None] | None = None
     receiver_task: asyncio.Task[None] | None = None
     try:
-        sender_task = asyncio.create_task(_sender(conn, last_seq))
+        sender_task = asyncio.create_task(_sender(conn, connect.last_seq, attach=connect.attach))
+        conn.sender_task = sender_task
         receiver_task = asyncio.create_task(_receiver(conn))
         done, pending = await asyncio.wait(
             {sender_task, receiver_task},
@@ -747,7 +756,35 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
 # ── Sender task ────────────────────────────────────────────────────────────
 
 
-async def _receive_connect(ws: WebSocket, session_id: str) -> int | None:
+async def _stop_sender(conn: _ConnectionState) -> None:
+    """Cancel a superseded connection's sender and wait (bounded) until it has stopped."""
+    task = conn.sender_task
+    if task is None or task.done():
+        return
+    task.cancel()
+    await asyncio.wait({task}, timeout=_SENDER_STOP_TIMEOUT_S)
+
+
+#: Bound on waiting for a superseded sender to stop. Cancellation lands at its next await,
+#: so this is only reached if the old socket's send is wedged.
+_SENDER_STOP_TIMEOUT_S = 2.0
+
+
+@dataclass(frozen=True)
+class _ConnectRequest:
+    """The client's CONNECT handshake.
+
+    Attributes:
+        last_seq: The client's watermark — replay everything after it (0: no replay).
+        attach: True for a page that holds nothing in memory (load, reload, session switch,
+            FRE-1543): the server sends the status snapshot and replays the in-flight turn.
+    """
+
+    last_seq: int
+    attach: bool
+
+
+async def _receive_connect(ws: WebSocket, session_id: str) -> _ConnectRequest | None:
     """Read the required CONNECT message before starting concurrent WS tasks."""
     try:
         raw = await asyncio.wait_for(ws.receive_text(), timeout=10.0)
@@ -761,16 +798,108 @@ async def _receive_connect(ws: WebSocket, session_id: str) -> int | None:
         return None
 
     last_seq: int = msg.get("last_seq", 0)
-    log.debug("ws.connect_received", session_id=session_id, last_seq=last_seq)
-    return last_seq
+    attach = msg.get("attach") is True
+    log.debug("ws.connect_received", session_id=session_id, last_seq=last_seq, attach=attach)
+    return _ConnectRequest(last_seq=last_seq, attach=attach)
 
 
-async def _sender(conn: _ConnectionState, last_seq: int) -> None:
+async def _send_attach_replay(conn: _ConnectionState) -> int | None:
+    """Bring a page that holds nothing in memory up to date (FRE-1543).
+
+    The page has just hydrated its message history over REST. In this order:
+
+    1. Discard the session queue. Every item in it is older than this read or is replayed
+       in step 4 (events are persisted before they are enqueued). This also drops a stale
+       DONE sentinel that would otherwise close this socket at once.
+    2. Read the replay start: the in-flight turn's start, else the session's last seq.
+    3. Read the status snapshot. It is read after step 2, and ``emit_turn_status`` stores a
+       reading before it persists the event, so a reading at or below the step-2 seq is in
+       the snapshot and a later one arrives live.
+    4. Send the snapshot (only when one exists: absent is never sent as zero), replay the
+       in-flight turn, and close the replay with ``REPLAY_COMPLETE`` carrying the highest seq
+       sent and whether a turn is still running.
+
+    Args:
+        conn: The attaching connection.
+
+    Returns:
+        The highest seq sent (the live loop's duplicate guard), or ``None`` if the socket
+        closed.
+    """
+    ws = conn.websocket
+    session_id = conn.session_id
+    sid = UUID(session_id)
+
+    while True:
+        try:
+            conn.outbound_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+    inflight_start = turn_start_seq(session_id)
+    async with AsyncSessionLocal() as db:
+        buf = SessionEventBuffer(db)
+        latest = await buf.latest_seq(sid)
+        snapshot = await TurnStatusStore(db).load(sid)
+        replay_after = latest if inflight_start is None else min(inflight_start, latest)
+        events = await buf.replay(sid, after_seq=replay_after)
+
+    frames: list[dict[str, Any]] = []
+    if snapshot is not None:
+        frames.append(
+            {
+                "type": "STATE_DELTA",
+                "data": {"key": "turn_status", "value": snapshot},
+                "session_id": session_id,
+                "seq": None,
+            }
+        )
+    max_sent_seq = replay_after
+    saw_done = False
+    for evt in events:
+        payload = evt["payload"]
+        seq = int(evt["seq"])
+        payload["seq"] = seq
+        saw_done = saw_done or payload.get("type") == "DONE"
+        frames.append(payload)
+        max_sent_seq = max(max_sent_seq, seq)
+    frames.append(
+        {
+            "type": "REPLAY_COMPLETE",
+            "seq": None,
+            "last_seq": max_sent_seq,
+            "turn_in_flight": inflight_start is not None and not saw_done,
+        }
+    )
+
+    for frame in frames:
+        try:
+            await ws.send_text(json.dumps(frame, default=str))
+        except RuntimeError:
+            return None
+    log.info(
+        "ws.attach_replayed",
+        session_id=session_id,
+        replay_after=replay_after,
+        replayed=len(events),
+        snapshot=snapshot is not None,
+        turn_in_flight=inflight_start is not None and not saw_done,
+    )
+    return max_sent_seq
+
+
+async def _sender(conn: _ConnectionState, last_seq: int, *, attach: bool = False) -> None:
     """Drain the outbound queue and send events over the WebSocket."""
     ws = conn.websocket
     queue = conn.outbound_queue
     session_id = conn.session_id
     max_sent_seq = last_seq
+
+    if attach:
+        attached_seq = await _send_attach_replay(conn)
+        if attached_seq is None:
+            return
+        max_sent_seq = attached_seq
 
     # Replay from Postgres only on reconnect (last_seq > 0). Fresh connections
     # (last_seq == 0) skip replay — a client with no watermark has nothing to
@@ -781,7 +910,7 @@ async def _sender(conn: _ConnectionState, last_seq: int) -> None:
     # order equals enqueue order (FRE-518). That is what makes REPLAY_COMPLETE
     # below authoritative — anything the client has already seen above a hole
     # was enqueued after the hole's own row committed, so replay will find it.
-    if last_seq > 0:
+    if last_seq > 0 and not attach:
         async with AsyncSessionLocal() as db:
             buf = SessionEventBuffer(db)
 

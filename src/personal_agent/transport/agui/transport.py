@@ -31,6 +31,7 @@ from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.telemetry import get_logger
 from personal_agent.transport.agui.adapter import to_agui_event
 from personal_agent.transport.agui.event_buffer import SessionEventBuffer
+from personal_agent.transport.agui.turn_state import TurnStatusStore, turn_ended, turn_started
 from personal_agent.transport.agui.ws_endpoint import (
     DONE_SENTINEL_TYPE,
     ApprovalDecision,
@@ -55,6 +56,7 @@ from personal_agent.transport.events import (
     ToolEndEvent,
     ToolStartEvent,
 )
+from personal_agent.transport.turn_summary import record_turn_event
 
 log = get_logger(__name__)
 
@@ -136,6 +138,8 @@ async def _persist_and_enqueue(session_id: str, make_event: Callable[[], Interna
                 "transport.persist_event_failed", session_id=session_id, event_type=event_type
             )
             return False
+        # FRE-1543: the turn running in this context keeps what it sent, for its call history.
+        record_turn_event(envelope)
 
         queue = get_event_queue(session_id)
         try:
@@ -329,6 +333,43 @@ async def emit_done(session_id: str, trace_id: str) -> None:
             )
 
 
+async def open_turn(session_id: str, trace_id: str) -> int | None:
+    """Mark the start of a turn, before any of its events (FRE-1543).
+
+    Resets the stored tools lane (the send reset, FRE-1538) and records the seq after which
+    this turn's events start, so a page that attaches mid-turn replays the turn from its
+    start. Best-effort: on failure the turn runs as before, without attach replay.
+
+    Args:
+        session_id: The session the turn runs on.
+        trace_id: The turn's trace id, for logs.
+
+    Returns:
+        The seq the turn's events follow, or ``None`` when it could not be read (the turn is
+        then not registered, and :func:`close_turn` must not be called for it).
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            await TurnStatusStore(db).clear_tools(UUID(session_id))
+            start_after = await SessionEventBuffer(db).latest_seq(UUID(session_id))
+    except Exception:
+        log.warning(
+            "transport.open_turn_failed", session_id=session_id, trace_id=trace_id, exc_info=True
+        )
+        return None
+    turn_started(session_id, start_after)
+    return start_after
+
+
+def close_turn(session_id: str) -> None:
+    """Mark the end of a turn opened by :func:`open_turn` (FRE-1543).
+
+    Args:
+        session_id: The session the turn ran on.
+    """
+    turn_ended(session_id)
+
+
 async def register_and_push_constraint(
     *,
     session_id: str,
@@ -428,10 +469,20 @@ async def emit_classified_error(
 async def emit_turn_status(*, session_id: str, value: Mapping[str, Any]) -> None:
     """Persist + enqueue a ``turn_status`` STATE_DELTA event (ADR-0076).
 
+    FRE-1543: the reading is first stored as the session's status snapshot, which an
+    attaching page receives on connect. It is stored *before* the push: a page that attaches
+    after the event's ``seq`` is allocated then finds the reading in the snapshot, and a page
+    that attaches before receives the event live. A failed store never blocks the push.
+
     Args:
         session_id: Target session identifier.
         value: Turn metrics payload (context tokens, tool iteration, cost).
     """
+    try:
+        async with AsyncSessionLocal() as db:
+            await TurnStatusStore(db).save(UUID(session_id), value)
+    except Exception:
+        log.warning("transport.turn_status_store_failed", session_id=session_id, exc_info=True)
     await _push_event(
         StateUpdateEvent(key="turn_status", value=dict(value), session_id=session_id),
         session_id,

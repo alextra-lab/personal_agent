@@ -13,7 +13,7 @@ import { useSessionConfig } from '@/hooks/useSessionConfig';
 import { loadTurnStatus } from '@/lib/turn-status-store';
 
 import { resolutionLabel } from '@/lib/constraint-options';
-import { isTurnCollapsed } from '@/lib/phase-summary';
+import { isTurnCollapsed, parseTurnSummary } from '@/lib/phase-summary';
 import { toggleSafeAreaDebugOverlay } from '@/lib/safeAreaDebug';
 
 import { ApprovalModal } from './ApprovalModal';
@@ -146,6 +146,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     sendUserCancel,
     seedMessages,
     seedTurnStatus,
+    attach,
   } = useAgentStream(sessionId);
 
   // Reconcile the picker when the server broadcasts a selection change to the
@@ -192,8 +193,15 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             // FRE-426: seed the previously-submitted rating so a rated turn
             // renders solid (vs faint default) across reloads.
             rating: m.rating,
+            // FRE-1543: the server stores the call history, so a reload renders
+            // the same folded panel the live turn did.
+            phaseSummary: parseTurnSummary(m.turn_summary),
           })),
         );
+        // FRE-1543: a reloaded page holds nothing in memory. Open the session's
+        // socket now, after the history: the server sends the status snapshot and
+        // replays a turn still in flight.
+        attach(sessionId);
       })
       .catch(() => {
         // Treat fetch errors as empty history — present new-session UX.
@@ -232,7 +240,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, seedMessages, seedTurnStatus]);
+  }, [sessionId, seedMessages, seedTurnStatus, attach]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

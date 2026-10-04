@@ -319,6 +319,15 @@ export interface ConnectWebSocketOpts {
   onWsConnected?: () => void;
   /** Called when the WebSocket closes unexpectedly (not intentional, not superseded). */
   onWsDisconnected?: () => void;
+  /**
+   * FRE-1543: this page holds nothing in memory for the session (load, reload,
+   * session switch). The first CONNECT ignores the stored watermark and asks the
+   * server to attach: it sends the status snapshot and replays the turn in
+   * flight from its start, then `REPLAY_COMPLETE` with the new watermark.
+   * Attach repeats on reconnect until a `REPLAY_COMPLETE` arrives; later
+   * reconnects are normal.
+   */
+  attach?: boolean;
 }
 
 /**
@@ -350,6 +359,8 @@ export function connectWebSocket(
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   let connecting = false;
   let connectGeneration = 0;
+  // FRE-1543: true until the server confirms the attach replay with REPLAY_COMPLETE.
+  let attachPending = opts?.attach === true;
 
   // Keep same key for backward compat — semantics change from max-seen to
   // last-dispatched (ackSeq). Safe: conservative reconnect watermark on first
@@ -509,9 +520,14 @@ export function connectWebSocket(
           return;
         }
         backoffMs = 1000;
+        // FRE-1543: an attach ignores the dead page's watermark — it would drop the
+        // in-flight events this page never rendered. Replayed events wait in the
+        // out-of-order buffer until REPLAY_COMPLETE flushes them.
+        if (attachPending) setAckSeq(0);
         const lastSeq = getAckSeq();
         // FRE-236: include hidden_duration_ms when reconnecting after a visibility hide.
         const connectPayload: Record<string, unknown> = { type: 'CONNECT', last_seq: lastSeq };
+        if (attachPending) connectPayload['attach'] = true;
         if (hiddenAt !== null) {
           connectPayload['hidden_duration_ms'] = Date.now() - hiddenAt;
           hiddenAt = null;
@@ -531,6 +547,9 @@ export function connectWebSocket(
       };
 
       ws.onmessage = (ev: MessageEvent) => {
+        // A closed or superseded connection delivers nothing more (FRE-1543 review:
+        // an A→B→A switch must not let a frame from A's first socket through).
+        if (closed || generation !== connectGeneration) return;
         try {
           const parsed = JSON.parse(ev.data as string) as AGUIEvent;
           if (parsed.seq != null) {
@@ -557,6 +576,16 @@ export function connectWebSocket(
             // Anything still buffered sits behind a hole it cannot fill, so the
             // watermark can now be advanced without losing a recoverable event.
             flushPending();
+            // FRE-1543: an attach ends here. `last_seq` is the highest seq the server
+            // sent (or the session's seq when nothing was in flight — the hydrated
+            // history covers the rest), so live events continue contiguously from it.
+            const serverSeq = (parsed as { last_seq?: unknown }).last_seq;
+            if (attachPending && typeof serverSeq === 'number' && serverSeq > getAckSeq()) {
+              setAckSeq(serverSeq);
+            }
+            attachPending = false;
+            // The hook reads `turn_in_flight` from it (FRE-1543).
+            onEvent(parsed);
             return;
           }
           if (parsed.type === 'DONE' && getAckSeq() === 0 && pendingBuf.size > 0) {
@@ -701,6 +730,11 @@ export interface ServerMessage {
   metadata?: Record<string, unknown>;
   /** Previously-submitted 0–3 rating, joined from user-turn-ratings (FRE-426). */
   rating?: number;
+  /**
+   * The turn's folded call history, stored by the server on the assistant
+   * message (FRE-1543). Raw network shape — parse with `parseTurnSummary`.
+   */
+  turn_summary?: unknown;
 }
 
 /**

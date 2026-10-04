@@ -2792,6 +2792,53 @@ class TestPlannerBriefingMode:
         assert user_content == "Strategy: HYBRID\nQuery: Plan lunch\n\nProduce the JSON plan."
 
 
+class TestPlannerScopeRule:
+    """FRE-1514: the scope rule renders only for a planner call in a ``planner`` mode.
+
+    ADR-0154 D7 admits a ``planner`` mode to a deployment only with a passing probe run,
+    and the probe renders this rule (AC-1). Every other deployment keeps the prompt
+    without it, byte for byte (AC-3).
+    """
+
+    def test_the_rule_is_one_extra_line_and_absent_by_default(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _PLANNER_SCOPE_RULE,
+            _build_planner_system_prompt,
+        )
+
+        without = _build_planner_system_prompt(["run_python"])
+        with_rule = _build_planner_system_prompt(["run_python"], scope_rule=True)
+
+        assert _PLANNER_SCOPE_RULE not in without
+        assert with_rule == f"{without}\n- {_PLANNER_SCOPE_RULE}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("mode", "expect_rule"), [("planner", True), ("default", False)])
+    async def test_the_planner_call_carries_the_rule_only_in_the_planner_mode(
+        self, mode: str, expect_rule: bool
+    ) -> None:
+        from personal_agent.orchestrator.expansion_controller import _PLANNER_SCOPE_RULE
+
+        client = AsyncMock()
+        client.model_def = SimpleNamespace(default_mode=mode)
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(1), "cost_usd": 0.0})
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=[_make_sub_agent_result("task_0")],
+        ):
+            await ExpansionController().execute(
+                query="Which heat pump should I install?",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-scope-rule",
+                messages=[],
+            )
+
+        system = client.respond.call_args_list[0].kwargs["messages"][0]["content"]
+        assert (_PLANNER_SCOPE_RULE in system) is expect_rule
+
+
 class TestPlannerBriefingSystemPromptRules:
     """FRE-1521 AC-2 (master's ticket comment, 2026-09-15 07:24 UTC, Phase B
     wording) / FRE-1541: rules 1-4 are part of every planner system prompt.
@@ -2810,7 +2857,7 @@ class TestPlannerBriefingSystemPromptRules:
             assert rule in prompt
 
     def test_planner_prompt_collapses_uniform_round_annotation(self) -> None:
-        """Rule 5: drop the per-level round annotation when every level is equal.
+        """FRE-1521's formatting item: drop the per-level round annotation when every level is equal.
 
         Test settings default sub_agent_rounds_by_thoroughness to empty, so
         every level reads the shared cap.

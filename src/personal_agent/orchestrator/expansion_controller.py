@@ -79,10 +79,10 @@ _MAX_GAP_NAMES_PER_TASK = 10
 
 # FRE-1521: appended to the planner system prompt's Rules list. Wording set by
 # master's ticket comment (Phase B, from the explore seat's Phase A V0/V1/V2
-# probe): rules 1-4. Rule 5 (drop the per-level round annotation when every
-# level renders the same number) is not prose for the planner to read — it is
-# a formatting change to the `levels` string itself, applied below. ADR-0154
-# D1 (FRE-1541): the briefing is the only path; the `current` prompt is gone.
+# probe): rules 1-4. FRE-1521's fifth item (drop the per-level round annotation
+# when every level renders the same number) is not prose for the planner to
+# read — it is a formatting change to the `levels` string itself, applied below.
+# ADR-0154 D1 (FRE-1541): the briefing is the only path; the `current` prompt is gone.
 _PLANNER_BRIEFING_RULES: tuple[str, ...] = (
     "Before writing tasks, identify the user's standing rules and the facts from "
     "the conversation that apply to this request. Put into each task's constraints "
@@ -94,6 +94,18 @@ _PLANNER_BRIEFING_RULES: tuple[str, ...] = (
     "Do not name example places, businesses or sources in a task unless they "
     "appear in the conversation. Workers must find them.",
 )
+
+# FRE-1514 (FRE-1498 P7): scope each brief to the question as asked. Rendered only
+# for a planner call in a `planner` mode: ADR-0154 D7 admits that mode to a deployment
+# only with a passing probe run, and the probe renders this rule. Every other
+# deployment keeps the prompt without it, byte for byte, because a prompt change is a
+# routing change that needs a probe run on each deployment it reaches (D7).
+_PLANNER_SCOPE_RULE = (
+    "Scope each task to the question as asked. A worker fetches the specific facts the "
+    "answer needs. It does not review the field: do not ask for background, an overview "
+    "or a survey of the topic."
+)
+_PLANNER_MODE = "planner"
 
 # ADR-0154 D5: the title of the memory digest block in the planner user message. The
 # system prompt names the same title, so the planner knows which block to judge.
@@ -128,7 +140,9 @@ def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
     return list(governance_config.granted_sub_agent_tool_names())
 
 
-def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
+def _build_planner_system_prompt(
+    available_sub_agent_tools: list[str], *, scope_rule: bool = False
+) -> str:
     """Build the planner system prompt with the live sub-agent tool surface.
 
     Dynamic rather than hardcoded (FRE-1389 AC-1): the eligible set is read
@@ -141,12 +155,14 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         available_sub_agent_tools: Tool names currently grantable to a
             sub-agent in the active mode (from
             :func:`_current_sub_agent_tool_surface`).
+        scope_rule: Append ``_PLANNER_SCOPE_RULE`` (FRE-1514). True only for a
+            planner call in a ``planner`` mode, which ADR-0154 D7 admits only
+            with a passing probe run.
 
     Returns:
         The complete planner system prompt. It carries ``_PLANNER_BRIEFING_RULES``
         in the Rules list and collapses the per-level round annotation when every
-        level renders the same number (FRE-1521 rule 5, a formatting change rather
-        than prose).
+        level renders the same number (FRE-1521's formatting item, not prose).
     """
     # ADR-0150 D2: the planner picks a registry type per task, never tools. Each
     # type's description is rendered live from the registry, with the part of its
@@ -201,7 +217,10 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "block, omit memory_relevance\n"
         "- Do NOT answer the question — only produce the plan"
     )
-    briefing_rules = "\n".join(f"- {rule}" for rule in _PLANNER_BRIEFING_RULES)
+    rules = (
+        (*_PLANNER_BRIEFING_RULES, _PLANNER_SCOPE_RULE) if scope_rule else _PLANNER_BRIEFING_RULES
+    )
+    briefing_rules = "\n".join(f"- {rule}" for rule in rules)
     return f"{prompt}\n{briefing_rules}"
 
 
@@ -999,7 +1018,9 @@ class ExpansionController:
         digest_text = memory_digest.text if memory_digest is not None else ""
         try:
             tool_surface = _current_sub_agent_tool_surface(trace_id)
-            planner_system_prompt = _build_planner_system_prompt(tool_surface)
+            planner_system_prompt = _build_planner_system_prompt(
+                tool_surface, scope_rule=_planner_mode_name(llm_client) == _PLANNER_MODE
+            )
             input_chars["system"] = len(planner_system_prompt)
             system_prompt_sha256 = hashlib.sha256(planner_system_prompt.encode()).hexdigest()
             # ADR-0154 D1: the query is never cut, and the history receives what the bound

@@ -4,6 +4,8 @@ Design A is an isolated planner call: the planner system prompt, then one user m
 rendered conversation history, an optional memory digest, and the query. The history and the
 system prompt come from the production functions in ``expansion_controller``. The decline rule is
 inserted as ADR-0152 D1 and the FRE-1502 probe wrote it, because production code does not carry it yet.
+The system prompt is the one a planner call in a ``planner`` mode receives, so it carries the FRE-1514
+scope rule.
 The user message comes from the production ``build_planner_user_message``, so the bound and the framing
 are those that ship (FRE-1541).
 
@@ -40,7 +42,9 @@ DECLINE_RULE = (
 def _production_system_prompt(surface: Sequence[str]) -> str:
     from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
 
-    return _build_planner_system_prompt(list(surface))
+    # The prompt of a planner call in a `planner` mode, which is the configuration the probe
+    # qualifies (ADR-0154 D7). Only that call carries the FRE-1514 scope rule.
+    return _build_planner_system_prompt(list(surface), scope_rule=True)
 
 
 def render_system_prompt(surface: Sequence[str]) -> str:

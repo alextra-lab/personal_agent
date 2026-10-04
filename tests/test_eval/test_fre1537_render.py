@@ -47,6 +47,13 @@ def test_system_prompt_admits_single_and_leads_with_the_decline_rule() -> None:
     assert 'output {"strategy": "SINGLE", "tasks": []} and nothing else' in system
 
 
+def test_system_prompt_is_the_planner_mode_prompt_with_the_scope_rule() -> None:
+    """FRE-1514 AC-1: the probe qualifies the prompt that a `planner` mode call receives."""
+    from personal_agent.orchestrator.expansion_controller import _PLANNER_SCOPE_RULE
+
+    assert render.render_system_prompt(SURFACE).endswith(f"\n- {_PLANNER_SCOPE_RULE}")
+
+
 def test_system_prompt_hash_is_stable() -> None:
     a = render.render_system_prompt(SURFACE)
     b = render.render_system_prompt(SURFACE)

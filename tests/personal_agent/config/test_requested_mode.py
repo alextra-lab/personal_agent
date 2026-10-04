@@ -231,6 +231,20 @@ class TestTheShippedCatalog:
         assert sampling["presence_penalty"] == 0.0
         assert body["top_k"] == 20 and body["min_p"] == 0.0 and body["repetition_penalty"] == 1.0
 
+    def test_only_the_probed_deployments_declare_a_planner_mode(self) -> None:
+        """FRE-1514 AC-3 / ADR-0154 D7: a `planner` mode, and with it the scope rule,
+        reaches a deployment only with a passing probe run on its ticket.
+
+        Adding a deployment here is correct only in the change that posts its probe result.
+        """
+        from personal_agent.config.model_loader import _load_model_config_at_path
+
+        repo = Path(__file__).resolve().parents[3]
+        config = _load_model_config_at_path(repo / "config" / "models.yaml")
+        declaring = {key for key, model in config.models.items() if "planner" in model.modes}
+
+        assert declaring == {"qwen3.8-flash-next"}
+
     def test_the_planner_mode_is_not_the_worker_mode(self) -> None:
         model, _ = self._local_primary()
         assert model.resolve_mode("planner").temperature != model.resolve_mode("worker").temperature

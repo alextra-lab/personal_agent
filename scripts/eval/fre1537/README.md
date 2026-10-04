@@ -165,6 +165,24 @@ and the digest leave, so the two can differ only when the history, the digest an
 - If llama.cpp does not report its build or quant, pass `--engine-build` and `--quant` to `replay`. An unknown
   value fails the fingerprint threshold.
 
+## The brief scorer (FRE-1514 AC-2)
+
+`briefs.py` compares the briefs of two arms of the same fixtures: an arm with a planner prompt change
+and a baseline arm without it. Capture each arm from a clean, committed tree, because `gateway up` builds
+the image from the working tree. Run `replay` on both, then:
+
+```bash
+uv run python -m scripts.eval.fre1537.briefs --rule-run $RUN_RULE --baseline-run $RUN_BASE --tag planner
+```
+
+It counts the goals that introduce a term absent from the user's message, and reports tasks per expansion
+and brief length per arm. The counting rule is in the module docstring. It passes when both the count and the
+rate of such goals fall. The report prints the scorer's SHA-256, both prompt hashes and the system prompt
+diff, so a reader can check which rule and which prompts produced it.
+
+The system prompt that `render` builds is the one a planner call in a `planner` mode receives, so it carries
+the FRE-1514 scope rule. A call in any other mode does not carry it (ADR-0154 D7).
+
 ## Tests
 
 `uv run pytest tests/test_eval/test_fre1537_*.py -q` runs offline: no model, no Docker.

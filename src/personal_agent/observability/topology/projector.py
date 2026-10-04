@@ -140,8 +140,11 @@ class SessionAggregate:
             ``api_costs`` and the 32-hex ids live events carry collapse to one entry
             per trace (FRE-1215). The surfaced ``session_cost_usd`` is
             ``sum(costs.values())``.
-        context_tokens: Latest ``context_tokens`` seen for this session; carried across turns
-            so the session lane never resets to zero on new user input (D3).
+        context_tokens: Latest real ``context_tokens`` reading for this session; carried
+            across turns so the session lane never resets to zero on new user input (D3).
+            ``0`` means that no real reading has arrived in this process (FRE-1547): the
+            emitted ctx group is then absent, so the client and the stored snapshot keep
+            their last reading.
         hydrated: ``True`` once the one-per-session substrate hydration has run.
         compaction_b_ids: Identity set for B (within-session compression) passes (§D6).
             One entry per ``CompactionBMarkerEvent.fact_id``; ``len()`` = ⟳ count.
@@ -184,7 +187,8 @@ class TurnObservation:
             into the surfaced meter so concurrent sub-agents never clobber one counter.
         sub_agent_iteration_max: Per-``task_id`` sub-agent cap (FRE-553); summed into the
             surfaced max.
-        context_tokens: Latest estimated context-window occupancy.
+        context_tokens: Latest real context-window occupancy of this turn, or ``0`` while
+            the turn's first primary call has not resolved (FRE-1547).
         context_max: Resolved context-window token budget, or ``None`` while unresolved —
             the absent state, same absent-vs-zero contract as ``tool_iteration_max`` above
             (ADR-0123 §5 / FRE-961).
@@ -199,6 +203,11 @@ class TurnObservation:
             compared offline to ``COUNT(api_costs WHERE trace_id)`` to detect delivery loss.
         compaction_a_fired: Whether a gateway budget compaction (A) fired this turn — used
             at ``turn.completed`` to decide whether to clear the transient ``quality_alert``.
+        is_turn: Whether this trace is a user turn — set by an event only the executor's
+            turn publishes (topology entered, turn progress, sub-agent progress). Only a
+            turn emits ``turn_status`` (FRE-1547): a background job that bills a model call
+            to the session (a session-summary batch child) has its own trace and no turn
+            lifecycle, and its reading would replace the bar and the stored snapshot.
     """
 
     trace_id: str
@@ -219,6 +228,7 @@ class TurnObservation:
     events_received: int = 0
     model_calls_received: int = 0
     compaction_a_fired: bool = False
+    is_turn: bool = False
 
 
 class TurnObservationProjector:
@@ -358,6 +368,7 @@ class TurnObservationProjector:
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
+            obs.is_turn = True
             obs.topology = event.topology
         elif isinstance(event, TurnProgressEvent):
             if trace_completed:
@@ -365,12 +376,16 @@ class TurnObservationProjector:
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
+            obs.is_turn = True
             obs.tool_iteration = event.tool_iteration
             obs.tool_iteration_max = event.tool_iteration_max
-            obs.context_tokens = event.context_tokens
             obs.context_max = event.context_max
-            # ADR-0092 §D3: carry the latest context occupancy across turns (no reset-to-0).
-            sess.context_tokens = event.context_tokens
+            # FRE-1547: only a real reading moves ctx. ``None`` (the turn's first primary
+            # call has not resolved) leaves the last real reading in place.
+            if event.context_tokens:
+                obs.context_tokens = event.context_tokens
+                # ADR-0092 §D3: carry the latest context occupancy across turns.
+                sess.context_tokens = event.context_tokens
             if event.topology is not None:
                 obs.topology = event.topology
         elif isinstance(event, SubAgentProgressEvent):
@@ -383,6 +398,7 @@ class TurnObservationProjector:
             sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
+            obs.is_turn = True
             obs.sub_agent_iterations[event.task_id] = max(
                 obs.sub_agent_iterations.get(event.task_id, 0), event.iteration
             )
@@ -479,7 +495,10 @@ class TurnObservationProjector:
         else:
             return
 
-        await self._emit(obs)
+        # FRE-1547: a trace with no turn lifecycle (yet) folds its state but never writes
+        # the bar. A real turn's pre-seam events show on its first turn emit.
+        if obs.is_turn:
+            await self._emit(obs)
 
     async def _emit(self, obs: TurnObservation) -> None:
         """Emit the full-state ``turn_status`` STATE_DELTA (best-effort)."""
@@ -501,6 +520,12 @@ class TurnObservationProjector:
         sess = self._by_session.get(obs.session_id)
         session_cost_usd = round(sum(sess.costs.values()), 6) if sess else 0.0
         session_context_tokens = sess.context_tokens if sess else 0
+        # FRE-1547: the ctx group is a reading only when the session holds a real one. With
+        # none, the ceiling goes out absent, so the client (``mergeTurnStatus``) and the
+        # stored snapshot (``merge_turn_status``) keep their last reading instead of 0/max.
+        # Until the turn's own first real reading, its lane shows the session's.
+        context_max = obs.context_max if session_context_tokens > 0 else None
+        context_tokens = obs.context_tokens or session_context_tokens
         # ADR-0092 §D5/§D6/§D7: compaction lane fields.
         compaction_count = len(sess.compaction_b_ids) if sess else 0
         cache_reset_count = len(sess.compaction_d_ids) if sess else 0
@@ -510,8 +535,8 @@ class TurnObservationProjector:
             await emit_turn_status(
                 session_id=obs.session_id,
                 value={
-                    "context_tokens": obs.context_tokens,
-                    "context_max": obs.context_max,
+                    "context_tokens": context_tokens,
+                    "context_max": context_max,
                     "tool_iteration": tool_iteration,
                     "tool_iteration_max": tool_iteration_max,
                     "turn_cost_usd": round(obs.live_cost_usd, 6),

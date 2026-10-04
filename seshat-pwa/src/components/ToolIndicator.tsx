@@ -118,8 +118,9 @@ export function ToolIndicator({ tools }: ToolIndicatorProps) {
       </button>
       {expanded && (
         <div className="mt-1.5 flex flex-col gap-1.5 pl-4">
-          {tools.map((tool) => (
-            <ToolRow key={`${tool.name}-${tool.status}`} tool={tool} />
+          {/* FRE-1547: a turn can call one tool several times, so the name is not a key. */}
+          {tools.map((tool, i) => (
+            <ToolRow key={i} tool={tool} />
           ))}
         </div>
       )}

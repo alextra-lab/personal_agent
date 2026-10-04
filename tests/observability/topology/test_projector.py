@@ -276,6 +276,8 @@ async def test_degraded_raises_visible_state(monkeypatch: pytest.MonkeyPatch) ->
     emitted = _capture(monkeypatch)
     proj = TurnObservationProjector()
 
+    # FRE-1547: a degradation shows on a user turn (the decompose planner runs in the seam).
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="decompose"))
     await proj.handle(
         TurnDegradedEvent(
             trace_id="t-1",
@@ -1059,3 +1061,210 @@ async def test_late_compaction_marker_on_completed_trace_still_folds_into_sessio
     # ...but the fact is not lost — it surfaces on the session's next natural emit.
     await proj.handle(TopologyEnteredEvent(trace_id="t-2", session_id="s-1", topology="primary"))
     assert emitted[-1]["compaction_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# FRE-1547 — only a user turn writes the bar; an estimate never replaces real ctx
+# ---------------------------------------------------------------------------
+
+_CTX_MAX = 131072
+
+
+async def _complete_tool_turn(proj: TurnObservationProjector) -> None:
+    """Turn 1 of the owner's test: 2 tool rounds of 25, a real ctx reading of 24,000."""
+    await proj.handle(TopologyEnteredEvent(trace_id="turn-1", session_id="s-1", topology="primary"))
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="turn-1",
+            session_id="s-1",
+            tool_iteration=2,
+            tool_iteration_max=25,
+            context_tokens=24000,
+            context_max=_CTX_MAX,
+            topology="primary",
+        )
+    )
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="turn-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.02
+        )
+    )
+
+
+async def test_non_turn_model_call_does_not_touch_the_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-1: a session-summary batch child bills a model call to the user's session.
+
+    ``emit_turn_status`` is the only writer of the live bar and of the stored snapshot
+    (it stores, then pushes), so no emit means neither changes.
+    """
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+    await _complete_tool_turn(proj)
+    emitted_after_turn = len(emitted)
+    assert (emitted[-1]["tool_iteration"], emitted[-1]["tool_iteration_max"]) == (2, 25)
+    assert emitted[-1]["session_context_tokens"] == 24000
+
+    # The batch-child shape: a model call outside any turn seam, own trace id, same session.
+    await proj.handle(
+        ModelCallCompletedEvent(
+            trace_id="batch-child-2a3b",
+            session_id="s-1",
+            cost_usd=0.001,
+            input_tokens=401,
+            output_tokens=90,
+            model_role="session_summary",
+        )
+    )
+
+    assert len(emitted) == emitted_after_turn
+    assert (emitted[-1]["tool_iteration"], emitted[-1]["tool_iteration_max"]) == (2, 25)
+    assert emitted[-1]["session_context_tokens"] == 24000
+    assert emitted[-1]["trace_id"] == "turn-1"
+
+
+async def test_non_turn_degradation_does_not_touch_the_bar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: a degradation reported under a non-turn trace emits nothing either."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+    await _complete_tool_turn(proj)
+    emitted_after_turn = len(emitted)
+
+    await proj.handle(
+        TurnDegradedEvent(
+            trace_id="batch-child-2a3b",
+            session_id="s-1",
+            where="session_summary",
+            reason="r",
+            severity="warning",
+        )
+    )
+
+    assert len(emitted) == emitted_after_turn
+
+
+async def test_gateway_call_before_the_seam_shows_on_the_first_turn_emit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real turn's pre-seam model call is held, not lost: its cost shows on the first emit."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        ModelCallCompletedEvent(
+            trace_id="t-1", session_id="s-1", cost_usd=0.004, input_tokens=10, output_tokens=5
+        )
+    )
+    assert emitted == []
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    assert emitted[-1]["turn_cost_usd"] == pytest.approx(0.004)
+
+
+async def test_a_lost_topology_entered_is_recovered_by_the_next_turn_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bus is best-effort: with ``topology_entered`` lost, turn progress opens the turn."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        ModelCallCompletedEvent(
+            trace_id="t-1", session_id="s-1", cost_usd=0.004, input_tokens=10, output_tokens=5
+        )
+    )
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            tool_iteration=1,
+            tool_iteration_max=25,
+            context_tokens=9000,
+            context_max=_CTX_MAX,
+            topology="primary",
+        )
+    )
+
+    assert emitted[-1]["tool_iteration"] == 1
+    assert emitted[-1]["turn_cost_usd"] == pytest.approx(0.004)
+
+
+async def test_estimate_never_replaces_a_real_ctx_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-2: a HYBRID turn reports no real reading until its synthesis call resolves.
+
+    Until then the bar and the snapshot keep the last real reading; the first real
+    reading of the new turn replaces it.
+    """
+    from personal_agent.transport.agui.turn_state import merge_turn_status
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+    await _complete_tool_turn(proj)
+    snapshot: dict[str, object] | None = None
+    for value in emitted:
+        snapshot = merge_turn_status(snapshot, value)
+
+    # Turn 2 expands: progress reports carry no real reading before synthesis.
+    await proj.handle(
+        TopologyEnteredEvent(trace_id="turn-2", session_id="s-1", topology="hybrid_fanout")
+    )
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="turn-2",
+            session_id="s-1",
+            tool_iteration=0,
+            tool_iteration_max=25,
+            context_tokens=None,
+            context_max=_CTX_MAX,
+            topology="hybrid_fanout",
+        )
+    )
+    turn_2_emits = emitted[-2:]
+    for value in turn_2_emits:
+        assert value["session_context_tokens"] == 24000
+        assert value["context_tokens"] == 24000
+        snapshot = merge_turn_status(snapshot, value)
+    assert snapshot is not None
+    assert snapshot["session_context_tokens"] == 24000
+    assert snapshot["context_max"] == _CTX_MAX
+
+    # Synthesis resolves: the first real reading of turn 2 replaces 24,000.
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="turn-2",
+            session_id="s-1",
+            tool_iteration=0,
+            tool_iteration_max=25,
+            context_tokens=24481,
+            context_max=_CTX_MAX,
+            topology="hybrid_fanout",
+        )
+    )
+    assert emitted[-1]["session_context_tokens"] == 24481
+    assert emitted[-1]["context_tokens"] == 24481
+    snapshot = merge_turn_status(snapshot, emitted[-1])
+    assert snapshot["session_context_tokens"] == 24481
+
+
+async def test_a_new_session_without_a_real_reading_emits_absent_ctx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-2 + absent ≠ zero: with no real reading yet, the ctx group is absent, not 0/max."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="t-1",
+            session_id="s-new",
+            tool_iteration=1,
+            tool_iteration_max=25,
+            context_tokens=None,
+            context_max=_CTX_MAX,
+            topology="primary",
+        )
+    )
+
+    assert emitted[-1]["context_max"] is None
+    assert emitted[-1]["tool_iteration"] == 1

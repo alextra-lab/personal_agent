@@ -405,13 +405,13 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
           tool_name: string;
           result: string;
         };
-        updateTools((prev) =>
-          prev.map((t) =>
-            t.name === tool_name
-              ? { ...t, status: 'completed', result }
-              : t,
-          ),
-        );
+        // FRE-1547: the end carries only the tool name, so it closes the first row of
+        // that name still running — a turn that calls web_search twice keeps two rows.
+        updateTools((prev) => {
+          const i = prev.findIndex((t) => t.name === tool_name && t.status === 'running');
+          if (i === -1) return prev;
+          return prev.map((t, j) => (j === i ? { ...t, status: 'completed', result } : t));
+        });
         break;
       }
 

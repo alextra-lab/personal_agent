@@ -1050,9 +1050,10 @@ class TurnProgressEvent(EventBase):
         tool_iteration: Current tool-execution iteration count.
         tool_iteration_max: Resolved per-turn tool-iteration cap.
         context_tokens: The latest completed primary model call's real,
-            provider-reported input-token count (FRE-1326); falls back to the
-            ``estimate_messages_tokens`` heuristic only before the turn's first model
-            call has resolved with usage data.
+            provider-reported input-token count (FRE-1326), or ``None`` before the
+            turn's first primary call has resolved with usage data. ``None`` is not an
+            estimate: the pre-call heuristic under-counts by an order of magnitude and
+            must never replace the session's last real reading (FRE-1547).
         context_max: Resolved context-window token budget.
         topology: Active topology label when known.
     """
@@ -1063,7 +1064,7 @@ class TurnProgressEvent(EventBase):
     session_id: str
     tool_iteration: int
     tool_iteration_max: int
-    context_tokens: int
+    context_tokens: int | None = None
     context_max: int
     topology: str | None = None
 

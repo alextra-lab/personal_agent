@@ -97,9 +97,9 @@ class RouteTraceRow:
         error_type: Exception class name if the turn errored, else ``None``.
         error_class: Classified-error category if available, else ``None``.
         effective_tool_iteration_ceiling: The post-grant ceiling ``_resolve_max_
-            iterations`` last computed for this turn — ``base + tool_iteration_bonus
-            + grounding_retrieval_grant``, not the configured per-type or global
-            setting. Populated whenever that resolver ran at least once, which
+            iterations`` last computed for this turn — ``orchestrator_max_tool_
+            iterations + tool_iteration_bonus + grounding_retrieval_grant``, not the
+            configured global setting alone. Populated whenever that resolver ran at least once, which
             includes turns whose tool loop never executed (the resolver also backs
             the Captain's Log reflection-cadence check); ``None`` only for a turn
             that failed before reaching that logic (ADR-0142 AC-1, FRE-1391).

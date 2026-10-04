@@ -174,9 +174,8 @@ def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:
 def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     """Return the effective max-tool-iterations ceiling for this request.
 
-    Uses the per-TaskType limit from settings when the gateway classified a
-    task type, falling back to the global orchestrator_max_tool_iterations.
-    The global value is the hard upper bound for the *base* ceiling; any
+    The base ceiling is ``orchestrator_max_tool_iterations`` for every turn: the
+    task type does not allocate capability (ADR-0142 D1, FRE-1394). Any
     ``tool_iteration_bonus`` granted by a user "Continue" decision at a
     constraint pause (ADR-0076) is added on top, since the user explicitly
     opted to proceed past the original limit.
@@ -185,14 +184,11 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     D3 and D5 (FRE-1509) nothing adds to it: the grounding retry cites and cannot call a
     tool, and pre-generation forcing is withdrawn, so it stays 0.
     """
-    global_max = settings.orchestrator_max_tool_iterations
-    base = global_max
-    if ctx.gateway_output is not None:
-        task_type_val = ctx.gateway_output.intent.task_type.value
-        by_type = settings.orchestrator_max_tool_iterations_by_task_type
-        if task_type_val in by_type:
-            base = min(by_type[task_type_val], global_max)
-    resolved = base + ctx.tool_iteration_bonus + ctx.grounding_retrieval_grant
+    resolved = (
+        settings.orchestrator_max_tool_iterations
+        + ctx.tool_iteration_bonus
+        + ctx.grounding_retrieval_grant
+    )
     # ADR-0142 (FRE-1391): stamp the post-grant value actually used, so the route-trace
     # ledger records what ran rather than what was configured (AC-1). Re-stamped on
     # every call — including the reflection-cadence check on a tool-free turn — so the
@@ -6803,7 +6799,7 @@ async def step_llm_call(
                 iteration=ctx.tool_iteration_count,
             )
 
-        # Budget warning: when 2 calls from the per-TaskType limit, ask the LLM to wrap up
+        # Budget warning: when 2 calls from the turn's ceiling, ask the LLM to wrap up
         elif (
             not is_synthesizing
             and not cite_only_retry
@@ -7489,14 +7485,11 @@ async def step_tool_execution(
 
     # ADR-0142 D2/D3 (FRE-1393): ask once when spend crosses a threshold below the
     # ceiling — the drift control for a turn whose iteration count would otherwise
-    # run unchecked to the ceiling with no chance for the user to intervene. Must
-    # sit strictly below the turn's EFFECTIVE ceiling: the still-live per-task-type
-    # cap (orchestrator_max_tool_iterations_by_task_type, removed only by FRE-1394)
-    # can put that ceiling at or below the configured threshold, in which case the
-    # ordinary tool_iteration_limit check below remains the sole control.
+    # run unchecked to the ceiling with no chance for the user to intervene. The
+    # threshold always sits below the ceiling: AppConfig refuses a threshold at or
+    # above orchestrator_max_tool_iterations, and a grant only raises the ceiling.
     if (
         not ctx.spend_pause_raised
-        and settings.orchestrator_spend_threshold < _max_iters
         and ctx.tool_iteration_count >= settings.orchestrator_spend_threshold
     ):
         ctx.spend_pause_raised = True

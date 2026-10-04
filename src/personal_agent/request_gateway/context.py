@@ -14,7 +14,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
@@ -29,9 +28,14 @@ from personal_agent.captains_log.turn_evidence import (
     memory_item_identity,
 )
 from personal_agent.config import settings
-from personal_agent.config.calibration import ENTITY_MATCH_RELEVANCE_BOUND_FILE
+from personal_agent.config.calibration import (
+    BROAD_RECALL_RELEVANCE_BOUND_FILE,
+    ENTITY_MATCH_RELEVANCE_BOUND_FILE,
+    calibrated_reranker_model,
+)
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
+from personal_agent.memory.relevance_gate import relevance_verdict
 from personal_agent.request_gateway.memory_status import (
     MemoryStatusReport,
     RecallOutcome,
@@ -187,20 +191,12 @@ def _freshness_score_modifier(last_accessed_at: datetime | None) -> float:
     return 1.0
 
 
-@lru_cache(maxsize=4)
 def _calibrated_reranker_model(filename: str | None = None) -> str | None:
     """The reranker one path's configured bound was calibrated against (FRE-1479/1480).
 
-    Cached: the artifact is committed repository state, read once per process, exactly as
-    ``AppConfig`` itself is. Without the cache this would be a file read on every
-    ``MEMORY_RECALL`` turn. A newly committed calibration takes effect on the next restart,
-    which is the same lifecycle every other configured value already has.
-
-    Read from the committed calibration artifact rather than from the serving role, so
-    the gate compares a score's producer against **what was measured**, not against what
-    happens to be configured now. Those differ exactly when a bound has gone stale, which
-    is the case ``config_guard.check_broad_recall_bound_calibration`` reports and this
-    function must not paper over.
+    Delegates to :func:`personal_agent.config.calibration.calibrated_reranker_model`
+    (FRE-1545 moved the cached read there so the proactive path shares it). The name stays
+    here because the gate call sites and their tests bind to it.
 
     Args:
         filename: The path's committed artifact filename. None reads the broad-recall
@@ -208,25 +204,9 @@ def _calibrated_reranker_model(filename: str | None = None) -> str | None:
 
     Returns:
         The calibrated model identifier, or None when no artifact stands behind the
-        configured bound. None disables only the producer check — the bound comparison
-        still applies — because a missing artifact is already a ``config_guard`` finding
-        and must not silently widen admission here as well.
+        configured bound.
     """
-    from personal_agent.config.calibration import (  # noqa: PLC0415 — avoid import cycle
-        BROAD_RECALL_RELEVANCE_BOUND_FILE,
-        load_reranker_calibration,
-        repository_root,
-    )
-
-    try:
-        calibration = load_reranker_calibration(
-            repository_root(), filename or BROAD_RECALL_RELEVANCE_BOUND_FILE
-        )
-    except ValueError:
-        # A malformed artifact is config_guard's finding to raise, not this path's to
-        # fail a turn on. The bound comparison still binds.
-        return None
-    return None if calibration is None else calibration.component.model
+    return calibrated_reranker_model(filename or BROAD_RECALL_RELEVANCE_BOUND_FILE)
 
 
 def _relevance_verdict(
@@ -250,25 +230,9 @@ def _relevance_verdict(
     the moment either changed, which is the argument FRE-1479's own harness made when it
     imported ``choose_bound`` rather than copying it.
 
-    Three conditions must all hold before a score is a relevance value at all, and the
-    first two are not formalities:
-
-    * A score exists. ``_rerank_fused_items`` leaves it None for a disabled reranker, a
-      blank query, a one-item set, a raising call, an empty response, an index the
-      response omitted, and the whole legacy single-path branch.
-    * A model produced it. ``rerank()`` never raises and never returns empty — it
-      degrades to a passthrough whose "scores" are ``1 / (i + 1)``, rank order wearing
-      the score field. Comparing that against a calibrated bound would decide admission
-      on rank position, which is the defect this gate exists to remove.
-    * That model is the one the bound was calibrated against. A primary outage falls back
-      to a different reranker whose real scores sit on a different scale; FRE-695
-      measured those scales as "arbitrary and not comparable across arms", so the bound
-      says nothing about them. This case is the ordinary one on an outage, not an edge.
-
-    Failing the last check is deliberately reported as UNAVAILABLE rather than as a
-    bound rejection: the path did not establish that the item is irrelevant, only that it
-    cannot tell. Conflating the two would let a silently degraded reranker read as a
-    corpus holding nothing relevant (FRE-1170).
+    The predicate itself is :func:`personal_agent.memory.relevance_gate.relevance_verdict`
+    (FRE-1545 moved it there so the proactive path, inside ``memory``, applies the same
+    rule). This wrapper reads the score and its producer off a recall payload.
 
     Args:
         item: One entity or episode payload from a recall result.
@@ -280,20 +244,13 @@ def _relevance_verdict(
     Returns:
         The drop reason, or None when the item is admitted.
     """
-    score = item.get("relevance_score")
-    model = item.get("relevance_model")
-    # A missing calibration leaves the gate inert and never defaults to zero (ADR-0148
-    # D4). Checked before anything else, so an unconfigured deployment behaves exactly as
-    # it did before this gate landed.
-    if bound is None or not gate_enabled:
-        return None
-    if not isinstance(score, (int, float)) or isinstance(score, bool) or model is None:
-        return DropReason.RECALL_RELEVANCE_UNAVAILABLE
-    if calibrated_model is not None and model != calibrated_model:
-        return DropReason.RECALL_RELEVANCE_UNAVAILABLE
-    # Below the bound is rejected — the `>=` convention the dense arm already uses at
-    # memory/service.py:5020, matched rather than fought (ADR-0148 D4).
-    return None if float(score) >= bound else DropReason.RECALL_RELEVANCE_BOUND
+    return relevance_verdict(
+        item.get("relevance_score"),
+        item.get("relevance_model"),
+        bound=bound,
+        gate_enabled=gate_enabled,
+        calibrated_model=calibrated_model,
+    )
 
 
 def _format_broad_recall_context(
@@ -765,6 +722,12 @@ async def _query_memory_for_intent(
             # it — the turn still did not establish what the proactive population held.
             if suggestions.failed:
                 failure_causes.append(suggestions.failure_cause or "proactive_recall_failed")
+            # ADR-0148 D4 (FRE-1545): a proactive candidate the reranker gate could not
+            # measure leaves the path unable to say what its population held. Held across
+            # the fall-through like a failure, so every return below composes UNAVAILABLE
+            # -- a fully discarded proactive result must not read as NOTHING_RELEVANT.
+            if unavailable := _unavailable_cause(discards):
+                failure_causes.append(unavailable)
             if suggestions.candidates:
                 # FRE-1004: the payload is returned unchanged — the score rides a
                 # sibling map rather than the item, so nothing the model sees or the

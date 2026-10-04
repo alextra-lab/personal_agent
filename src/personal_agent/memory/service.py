@@ -1031,7 +1031,9 @@ class MemoryService:
                 entering at the noise-guard baseline score. Proactive keeps its own
                 cosine scoring and min-score/budget gates — it is deliberately NOT
                 run through the rerank/operating point (proactive is not the AC-5
-                "no prior discussions" surface). None / flag off = unchanged.
+                "no prior discussions" surface). FRE-1545 reranks the candidates
+                afterwards, in the adapter, for the relevance gate only; ordering and
+                scoring here are unchanged. None / flag off = unchanged.
 
         Returns:
             Row dicts for :func:`personal_agent.memory.proactive.build_proactive_suggestions`.
@@ -5624,11 +5626,9 @@ class MemoryService:
         # rank position alone (reranker.py::_passthrough). Admitting it here would let a
         # silently degraded reranker supply "relevance" that is really rank order — the
         # FRE-1170 pathology — so an unattributed result orders but never scores.
-        scored: dict[int, tuple[float, str]] = {
-            rr.index: (rr.score, rr.model_id)
-            for rr in rerank_results
-            if 0 <= rr.index < len(items) and rr.model_id is not None
-        }
+        from personal_agent.memory.reranker import measured_scores  # noqa: PLC0415
+
+        scored = measured_scores(rerank_results, len(items))
         ordering: dict[int, float] = {
             rr.index: rr.score for rr in rerank_results if 0 <= rr.index < len(items)
         }
@@ -5636,7 +5636,7 @@ class MemoryService:
         unscored_order = [i for i in range(len(items)) if i not in ordering]
         return [
             (
-                replace(items[i], rerank_score=scored[i][0], rerank_model=scored[i][1])
+                replace(items[i], rerank_score=scored[i].score, rerank_model=scored[i].model)
                 if i in scored
                 else items[i]
             )

@@ -26,6 +26,7 @@ import structlog
 from personal_agent.config import get_settings
 from personal_agent.config.settings import AppConfig
 from personal_agent.llm_client.cost_tracker import record_vendor_cost
+from personal_agent.memory.models import RelevanceValue
 from personal_agent.security import create_guarded_http_client
 
 log = structlog.get_logger(__name__)
@@ -525,6 +526,31 @@ def _log_reranker_applied(
         provider=provider,
         cost_usd=cost_usd,
     )
+
+
+def measured_scores(results: Sequence[RerankResult], count: int) -> dict[int, RelevanceValue]:
+    """Keep only the results a model actually scored, keyed by input index (ADR-0148 D4).
+
+    A passthrough result carries ``model_id=None`` and a score that is a function of rank
+    position alone (:func:`_passthrough`). Admitting it would let a silently degraded
+    reranker supply "relevance" that is really rank order -- the FRE-1170 pathology -- so
+    an unattributed result is dropped here. So is an index outside the input list, which
+    no candidate could own. Shared by every consumer that gates on a reranker score
+    (FRE-1479 broad recall, FRE-1545 proactive), so the rule is stated once.
+
+    Args:
+        results: What :func:`rerank` returned.
+        count: How many documents were sent.
+
+    Returns:
+        Each measured input index mapped to its score and the model that produced it. An
+        index absent from the mapping was not measured.
+    """
+    return {
+        r.index: RelevanceValue(score=r.score, model=r.model_id)
+        for r in results
+        if 0 <= r.index < count and r.model_id is not None
+    }
 
 
 def _passthrough(documents: Sequence[str]) -> list[RerankResult]:

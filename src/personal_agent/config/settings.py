@@ -2272,13 +2272,40 @@ class AppConfig(BaseSettings):
             "defaults to zero."
         ),
     )
+    # --- Reranker relevance bound (ADR-0148 D4, FRE-1545) ------------------------
+    #
+    # The embedder bound above has no admissible value: FRE-1477 measured that the serving
+    # embedder does not separate the two populations at D4's rate. D4 names the response --
+    # "a reranker-side bound" -- and this is it. Its space is the SERVING RERANKER's own,
+    # NOT comparable to the embedder bound (FRE-695). It binds the same candidates the
+    # embedder bound does -- zero entity overlap and zero topic hits -- ahead of the score
+    # combination. Measured on the proactive path's own candidate population, not copied
+    # from broad recall: same scorer, different population. Measured 2026-10-04 against
+    # Voyage rerank-2.5 over the FRE-670 probe set: it rejects the negative median
+    # (0.337891) and admits 93.6% of the 110 labelled positives (entity 93.0%, episode
+    # 94.3%). See docs/research/2026-10-04-fre-1545-proactive-reranker-calibration.md.
+    proactive_memory_rerank_relevance_bound: float | None = Field(
+        default=0.338891,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "ADR-0148 D4: minimum reranker score for a proactive candidate with zero "
+            "entity overlap and zero topic hits. Calibrated against the serving reranker "
+            "-- the committed source is "
+            "config/calibration/proactive_rerank_relevance_bound.json, and config_guard's "
+            "proactive_rerank_bound_calibration check binds this value to it. None means "
+            "no calibration is in force and the gate does not fire; it never silently "
+            "defaults to zero."
+        ),
+    )
     proactive_memory_relevance_gate_enabled: bool = Field(
         default=True,
         description=(
-            "ADR-0148 D4: apply the proactive relevance bound. Off restores the "
-            "pre-FRE-1477 admission behaviour exactly, which is what makes the gate's "
-            "own tests able to fail (the criterion that a test passing both before and "
-            "after a change proves nothing)."
+            "ADR-0148 D4: apply the proactive relevance bounds (the embedder bound and "
+            "the reranker bound). Off restores the pre-FRE-1477 admission behaviour "
+            "exactly, which is what makes the gate's own tests able to fail (the "
+            "criterion that a test passing both before and after a change proves "
+            "nothing)."
         ),
     )
     proactive_memory_max_tokens: int = Field(

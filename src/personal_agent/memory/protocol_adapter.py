@@ -17,7 +17,7 @@ import structlog
 from personal_agent.events import AccessContext
 from personal_agent.memory.embeddings import generate_embedding
 from personal_agent.memory.models import MemoryQuery, MemoryQueryResult
-from personal_agent.memory.proactive import build_proactive_suggestions
+from personal_agent.memory.proactive import build_proactive_suggestions, score_proactive_relevance
 from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 from personal_agent.memory.protocol import (
     BroadRecallResult,
@@ -400,6 +400,15 @@ class MemoryServiceAdapter:
                 )
                 return ProactiveMemorySuggestions(candidates=[], query_embedding_ms=emb_ms)
 
+            # ADR-0148 D4 (FRE-1545): the reranker score is the proactive relevance value.
+            # Computed here, where the query and the rows are both in hand, so the
+            # selection logic below stays synchronous. No call when the gate is unarmed.
+            relevance = await score_proactive_relevance(
+                raw,
+                user_message,
+                trace_id=trace_id,
+                session_id=current_session_id or None,
+            )
             suggestions = build_proactive_suggestions(
                 raw,
                 merged,
@@ -407,6 +416,7 @@ class MemoryServiceAdapter:
                 trace_id,
                 emb_ms,
                 mentioned_entity_names=mentioned_entity_names,
+                relevance=relevance,
             )
             if not suggestions.candidates:
                 log.info(

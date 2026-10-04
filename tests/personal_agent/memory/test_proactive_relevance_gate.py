@@ -35,6 +35,9 @@ from personal_agent.config.config_guard import repo_root
 from personal_agent.memory.proactive import _normalize_vector_score, build_proactive_suggestions
 from personal_agent.memory.service import MemoryService
 
+# FRE-1545: these tests exercise the path's other gates, not the reranker bound.
+pytestmark = pytest.mark.usefixtures("proactive_rerank_gate_off")
+
 
 def _make_service_with_mock() -> tuple[MemoryService, AsyncMock]:
     """A MemoryService bypassing __init__, with its Neo4j session mocked.

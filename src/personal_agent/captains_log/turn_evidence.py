@@ -167,7 +167,8 @@ class DropReason(StrEnum):
     # describe". A path in that condition has established nothing, so it may neither
     # admit the item nor report its absence -- D3's rule one level down.
     #
-    # It fires on the broad-recall path when the reranker was disabled, when the response
+    # FRE-1545 adds the proactive path, for a candidate its reranker bound binds. It fires
+    # on the broad-recall path when the reranker was disabled, when the response
     # omitted the item, when the call degraded to a passthrough whose scores are rank
     # order, and when a primary outage produced real scores from the *fallback* model,
     # whose scale the bound does not describe (FRE-695). Merging it into the bound member

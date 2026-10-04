@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -13,12 +14,19 @@ import structlog
 
 from personal_agent.captains_log.turn_evidence import DropReason, mark_truncated
 from personal_agent.config import settings
+from personal_agent.config.calibration import (
+    PROACTIVE_RERANK_RELEVANCE_BOUND_FILE,
+    calibrated_reranker_model,
+)
+from personal_agent.memory.models import RelevanceValue
 from personal_agent.memory.proactive_types import (
     ProactiveMemoryCandidate,
     ProactiveMemoryDiscard,
     ProactiveMemorySuggestions,
     ProactiveScoreComponents,
 )
+from personal_agent.memory.relevance_gate import relevance_verdict
+from personal_agent.memory.reranker import measured_scores, rerank
 
 log = structlog.get_logger(__name__)
 
@@ -163,6 +171,67 @@ def _below_relevance_bound(
     return not measured or embedding_term < bound
 
 
+CandidateIdentity = tuple[str, str]
+"""Kind-qualified candidate identity, as :func:`_candidate_identity` builds it."""
+
+
+def rerank_gate_armed() -> bool:
+    """Whether the proactive reranker bound is in force (ADR-0148 D4, FRE-1545).
+
+    Returns:
+        True when a calibrated bound is configured and the path's relevance gate is on.
+        False means no score is consulted, so :func:`score_proactive_relevance` makes no
+        reranker call at all and an unarmed deployment pays nothing for it.
+    """
+    return (
+        settings.proactive_memory_rerank_relevance_bound is not None
+        and settings.proactive_memory_relevance_gate_enabled
+    )
+
+
+def _rerank_verdict(
+    identity: CandidateIdentity,
+    overlap: float,
+    topic: float,
+    relevance: Mapping[CandidateIdentity, RelevanceValue] | None,
+) -> DropReason | None:
+    """Whether the reranker bound rejects this candidate (ADR-0148 D4, FRE-1545).
+
+    The same placement and the same binding condition as :func:`_below_relevance_bound`:
+    ahead of :func:`_combine_scores`, so recency cannot compensate, and only for a
+    candidate with no relevance evidence of any other kind -- zero entity overlap and zero
+    topic hits. That condition is ADR-0148 D4's proactive clause. What changes is the
+    relevance value: the reranker's own score for this candidate, because FRE-1477 measured
+    that the embedder cannot separate relevant from irrelevant at D4's rate.
+
+    The predicate is the one broad recall and entity match apply
+    (:func:`~personal_agent.memory.relevance_gate.relevance_verdict`). A candidate with no
+    score, or a score from a model other than the calibrated one, is UNAVAILABLE rather
+    than rejected: the path cannot tell, which is a different fact from "irrelevant", and
+    it must not admit on order alone either (ADR-0148 D4's no-score rule).
+
+    Args:
+        identity: The candidate's kind-qualified identity.
+        overlap: The entity-overlap subscore.
+        topic: The topic-coherence subscore.
+        relevance: Reranker values keyed by identity, from
+            :func:`score_proactive_relevance`. None means nothing was scored.
+
+    Returns:
+        The drop reason, or None when the candidate passes this gate.
+    """
+    if overlap > 0.0 or topic > 0.0:
+        return None
+    value = relevance.get(identity) if relevance is not None else None
+    return relevance_verdict(
+        value.score if value is not None else None,
+        value.model if value is not None else None,
+        bound=settings.proactive_memory_rerank_relevance_bound,
+        gate_enabled=settings.proactive_memory_relevance_gate_enabled,
+        calibrated_model=calibrated_reranker_model(PROACTIVE_RERANK_RELEVANCE_BOUND_FILE),
+    )
+
+
 def _combine_scores(
     emb: float,
     overlap: float,
@@ -281,6 +350,151 @@ def _candidate_identity(kind: str, payload: dict[str, Any]) -> tuple[str, str]:
     return (kind, str(payload.get("conversation_id") or ""))
 
 
+_SplitItem = tuple[_CandidateKind, dict[str, Any], dict[str, Any]]
+
+
+def _deduped_candidates(raw_rows: Sequence[dict[str, Any]]) -> tuple[list[_SplitItem], int]:
+    """Split every raw row into its candidates, then collapse shared identities (FRE-1061).
+
+    One loop, shared by :func:`build_proactive_suggestions` and
+    :func:`score_proactive_relevance`, so the identity a score is keyed by is the identity
+    the gate looks it up by (FRE-1545, codex plan-review). Collapses per kind: episodes on
+    ``conversation_id``, entities on ``name``. The old row-level turn-id dedupe silently
+    erased a *distinct entity* whose best turn collided with a higher-ranked entity's
+    (29→13 on the melon turn); at candidate level only the genuinely shared episode
+    collapses.
+
+    Args:
+        raw_rows: Rows from ``MemoryService.suggest_proactive_raw()``.
+
+    Returns:
+        ``(items, split_count)`` -- the deduplicated ``(kind, payload, row)`` triples in
+        first-seen order, and how many candidates the split produced before the collapse.
+    """
+    split_items: list[_SplitItem] = [
+        (kind, payload, row) for row in raw_rows for kind, payload in _split_row_payloads(row)
+    ]
+    seen: set[CandidateIdentity] = set()
+    items: list[_SplitItem] = []
+    for kind, payload, row in split_items:
+        key = _candidate_identity(kind, payload)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append((kind, payload, row))
+    return items, len(split_items)
+
+
+def _rerank_document(kind: _CandidateKind, row: dict[str, Any]) -> str:
+    """The document the reranker scores for one candidate (FRE-1545).
+
+    Byte-identical to ``MemoryService._resolve_item_texts``, the document builder broad
+    recall reranks with and FRE-1479 calibrated: ``coalesce(name, '') + ' ' +
+    coalesce(description, '')`` for an entity, ``coalesce(summary, user_message, '')`` for
+    a turn. Built from the **raw row**, not the episode payload: the payload replaces a
+    falsey summary with a truncated user message, which ``coalesce`` does not do.
+
+    Args:
+        kind: The candidate's kind.
+        row: The raw row the candidate was split from.
+
+    Returns:
+        The document text, possibly empty.
+    """
+    if kind == "entity":
+        return f"{row.get('name') or ''} {row.get('description') or ''}"
+    summary = row.get("summary")
+    if summary is not None:
+        return str(summary)
+    user_message = row.get("user_message")
+    return "" if user_message is None else str(user_message)
+
+
+async def score_proactive_relevance(
+    raw_rows: Sequence[dict[str, Any]],
+    query_text: str,
+    *,
+    trace_id: str,
+    session_id: str | None = None,
+) -> dict[CandidateIdentity, RelevanceValue]:
+    """Score every proactive candidate with the serving reranker (ADR-0148 D4, FRE-1545).
+
+    Computed upstream of :func:`build_proactive_suggestions`, which stays synchronous and
+    pure: the async adapter already holds the query and the raw rows, and one reranker
+    call over the deduplicated candidates is the whole I/O. Uses the one reranker client
+    (:func:`~personal_agent.memory.reranker.rerank`) and the provenance rule broad recall
+    uses (:func:`~personal_agent.memory.reranker.measured_scores`).
+
+    Skipped, at no cost, when the gate is not armed. Two kinds of candidate are not sent:
+    an entity with an empty description (FRE-1114 drops it before the gate anyway) and an
+    empty document (nothing to score). Neither is scored, so if the gate binds one it is
+    UNAVAILABLE, never admitted on order.
+
+    ``rerank()`` degrades rather than raises, but the call is guarded the way
+    ``_rerank_fused_items`` guards it: a raise yields no scores, which the gate reports as
+    UNAVAILABLE.
+
+    Args:
+        raw_rows: Rows from ``MemoryService.suggest_proactive_raw()``.
+        query_text: The user message the candidates were retrieved for.
+        trace_id: Request trace id (ADR-0074).
+        session_id: Session id, threaded with ``trace_id``.
+
+    Returns:
+        Each measured candidate's reranker score and the model that produced it, keyed by
+        kind-qualified identity. A candidate absent from the mapping was not measured.
+    """
+    if not rerank_gate_armed() or not query_text.strip():
+        return {}
+    identities: list[CandidateIdentity] = []
+    documents: list[str] = []
+    items, _ = _deduped_candidates(raw_rows)
+    for kind, payload, row in items:
+        if kind == "entity" and not (payload.get("description") or "").strip():
+            continue
+        document = _rerank_document(kind, row)
+        if not document.strip():
+            continue
+        identities.append(_candidate_identity(kind, payload))
+        documents.append(document)
+    if not documents:
+        return {}
+
+    started = time.perf_counter()
+    try:
+        results = await rerank(
+            query=query_text,
+            documents=documents,
+            # Every candidate needs a score: rerank()'s own default is reranker_top_k (10),
+            # which would leave the rest unscored and therefore UNAVAILABLE.
+            top_k=len(documents),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+    except Exception as exc:
+        log.warning(
+            "proactive_rerank_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+            error=str(exc),
+            candidate_count=len(documents),
+        )
+        return {}
+    rerank_ms = (time.perf_counter() - started) * 1000.0
+
+    values = {identities[i]: value for i, value in measured_scores(results, len(documents)).items()}
+    log.info(
+        "proactive_memory_reranked",
+        trace_id=trace_id,
+        session_id=session_id,
+        candidate_count=len(documents),
+        scored_count=len(values),
+        models=sorted({v.model for v in values.values()}),
+        rerank_ms=round(rerank_ms, 1),
+    )
+    return values
+
+
 def _discard_candidate(
     candidate: ProactiveMemoryCandidate, reason: DropReason
 ) -> ProactiveMemoryDiscard:
@@ -320,6 +534,7 @@ def build_proactive_suggestions(
     trace_id: str,
     query_embedding_ms: float | None,
     mentioned_entity_names: Sequence[str] | None = None,
+    relevance: Mapping[CandidateIdentity, RelevanceValue] | None = None,
 ) -> ProactiveMemorySuggestions:
     """Score raw Neo4j rows; apply the empty-description filter, threshold, caps, budget.
 
@@ -333,6 +548,10 @@ def build_proactive_suggestions(
             mentions (FRE-1041 resolver output, graph casing). Feeds the FRE-1062
             mentioned-entity pin — distinct from ``session_entity_names``, which only
             nudges the overlap subscore. None or empty pins nothing.
+        relevance: Reranker values keyed by candidate identity, from
+            :func:`score_proactive_relevance` (FRE-1545). None means nothing was scored:
+            when the reranker gate is armed, a candidate it binds is then UNAVAILABLE,
+            so a caller that forgets the mapping fails safe rather than open.
 
     Returns:
         ProactiveMemorySuggestions with trimmed, ranked candidates **and** every
@@ -344,14 +563,8 @@ def build_proactive_suggestions(
     cfg = settings
     retrieved_count = len(raw_rows)
     # FRE-1061: split every (entity, best-turn) pair row into its candidates, then
-    # collapse shared identities per kind — episodes on conversation_id, entities on
-    # name. The old row-level turn-id dedupe silently erased a *distinct entity* whose
-    # best turn collided with a higher-ranked entity's (29→13 on the melon turn); at
-    # candidate level only the genuinely shared episode collapses.
-    split_items: list[tuple[_CandidateKind, dict[str, Any], dict[str, Any]]] = [
-        (kind, payload, row) for row in raw_rows for kind, payload in _split_row_payloads(row)
-    ]
-    split_count = len(split_items)
+    # collapse shared identities per kind (see _deduped_candidates).
+    #
     # A dedupe collapse is deliberately NOT recorded as a discard (owner call,
     # 2026-07-30, on a confirmed code-review finding — the rationale survives the
     # FRE-1061 restatement from rows to candidates). The collapsed candidate shares its
@@ -360,14 +573,7 @@ def build_proactive_suggestions(
     # asserting that a memory was lost when that very memory reached the model, and the
     # FRE-1021 census would over-report recall loss. The delta stays visible as the
     # split_candidate_count/deduped_candidate_count pair on the event below.
-    seen: set[tuple[str, str]] = set()
-    items: list[tuple[_CandidateKind, dict[str, Any], dict[str, Any]]] = []
-    for kind, payload, row in split_items:
-        key = _candidate_identity(kind, payload)
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append((kind, payload, row))
+    items, split_count = _deduped_candidates(raw_rows)
     deduped_count = len(items)
     discarded: list[ProactiveMemoryDiscard] = []
     scored: list[ProactiveMemoryCandidate] = []
@@ -405,6 +611,22 @@ def build_proactive_suggestions(
                     # which keeps the existing FRE-1114 record shape byte-for-byte.
                     relevance_score=_combine_scores(vector_score, overlap, recency, topic),
                     drop_reason=DropReason.RECALL_EMPTY_DESCRIPTION,
+                )
+            )
+            continue
+
+        # ADR-0148 D4 (FRE-1545): the reranker bound, ahead of the combination, so recency
+        # cannot compensate. relevance_score stays None for the same reason as below.
+        rerank_verdict = _rerank_verdict(
+            _candidate_identity(kind, payload), overlap, topic, relevance
+        )
+        if rerank_verdict is not None:
+            discarded.append(
+                ProactiveMemoryDiscard(
+                    kind=kind,
+                    payload=payload,
+                    relevance_score=None,
+                    drop_reason=rerank_verdict,
                 )
             )
             continue

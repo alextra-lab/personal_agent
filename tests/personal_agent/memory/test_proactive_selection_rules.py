@@ -35,6 +35,9 @@ import personal_agent.memory.proactive as proactive_mod
 from personal_agent.captains_log.turn_evidence import DropReason
 from personal_agent.memory.proactive import build_proactive_suggestions
 
+# FRE-1545: these tests exercise the path's other gates, not the reranker bound.
+pytestmark = pytest.mark.usefixtures("proactive_rerank_gate_off")
+
 
 @pytest.fixture
 def deployed_scoring(monkeypatch: pytest.MonkeyPatch) -> None:

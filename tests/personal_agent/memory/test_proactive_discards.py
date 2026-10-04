@@ -40,6 +40,9 @@ import personal_agent.memory.proactive as proactive_mod
 from personal_agent.captains_log.turn_evidence import DropReason
 from personal_agent.memory.proactive import build_proactive_suggestions
 
+# FRE-1545: these tests exercise the path's other gates, not the reranker bound.
+pytestmark = pytest.mark.usefixtures("proactive_rerank_gate_off")
+
 #: ``0.45 * max(0, 2 * vector_score - 1) + 0.20`` under the fixture below — stated so a
 #: reader can check a case's expectations without running the scorer. Any vector_score
 #: at or below 0.5 (no positive embedding evidence) clamps to the flat 0.20 floor.

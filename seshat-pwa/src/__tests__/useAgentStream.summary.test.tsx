@@ -232,3 +232,23 @@ describe('useAgentStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () 
     expect(assistant).toBeUndefined();
   });
 });
+
+describe('useAgentStream — live tool rows (FRE-1547)', () => {
+  it('a TOOL_CALL_END completes only the first running row of that name', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent(toolStart('web_search'));
+    pushEvent(toolStart('web_search'));
+    pushEvent(toolEnd('web_search', ''));
+
+    expect(hook.result.current.activeTools.map((t) => t.status)).toEqual(['completed', 'running']);
+
+    pushEvent(toolEnd('web_search', 'failed'));
+
+    expect(hook.result.current.activeTools).toEqual([
+      { name: 'web_search', status: 'completed', result: '' },
+      { name: 'web_search', status: 'completed', result: 'failed' },
+    ]);
+  });
+});

@@ -97,12 +97,14 @@ async def test_report_turn_progress_prefers_last_prompt_tokens_over_estimate(
 
 
 @pytest.mark.asyncio
-async def test_report_turn_progress_falls_back_to_estimate_before_first_model_call(
+async def test_report_turn_progress_sends_no_reading_before_first_model_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """FRE-1326: before any model call has resolved this turn (``last_prompt_tokens``
+    """FRE-1547 AC-2: before the turn's first primary call resolves (``last_prompt_tokens``
 
-    still 0), the pre-call heuristic estimate is the only value available and is used.
+    still 0), no ctx reading is sent. The pre-call estimate excludes the system prompt and
+    under-counts by an order of magnitude (FRE-1326), so it must never replace the real
+    reading the session lane already holds.
     """
     bus = AsyncMock()
     monkeypatch.setattr(events_pkg, "get_event_bus", lambda: bus)
@@ -121,7 +123,5 @@ async def test_report_turn_progress_falls_back_to_estimate_before_first_model_ca
     )
     await executor_mod._report_turn_progress(ctx)  # type: ignore[arg-type]
 
-    from personal_agent.orchestrator.context_window import estimate_messages_tokens
-
     event = bus.publish.await_args.args[1]
-    assert event.context_tokens == estimate_messages_tokens(messages)
+    assert event.context_tokens is None

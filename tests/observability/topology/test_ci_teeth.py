@@ -16,7 +16,7 @@ from uuid import uuid4
 
 import pytest
 
-from personal_agent.events.models import TurnDegradedEvent
+from personal_agent.events.models import TopologyEnteredEvent, TurnDegradedEvent
 from personal_agent.observability.topology import current_topology, observe_topology
 from personal_agent.observability.topology import seam as seam_mod
 from personal_agent.observability.topology.projector import TurnObservationProjector
@@ -114,6 +114,8 @@ async def test_forced_fallback_raises_turn_status_degraded(
     monkeypatch.setattr(projector_mod, "emit_turn_status", _fake_emit)
     proj = TurnObservationProjector()
 
+    # FRE-1547: only a user turn emits; the decompose planner runs inside the seam.
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="decompose"))
     await proj.handle(
         TurnDegradedEvent(
             trace_id="t-1",

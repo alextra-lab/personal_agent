@@ -5,6 +5,7 @@ The executor coordinates task execution through explicit state transitions.
 """
 
 import asyncio
+import functools
 import json
 import re
 import time
@@ -352,14 +353,14 @@ async def _report_turn_progress(ctx: "ExecutionContext") -> None:
     ``turn_status`` directly (ADR-0088 D4). Live cost is carried separately on
     ``turn.model_call_completed`` from the cost boundary (D3).
 
-    FRE-1326: ``context_tokens`` prefers ``ctx.last_prompt_tokens`` — the real,
-    provider-reported input-token count of the latest completed primary model call —
-    over the pre-call ``estimate_messages_tokens`` heuristic, which excludes the
-    assembled system prompt and so under-counts by an order of magnitude. The estimate
-    is used only before the first primary model call of the turn resolves — including
-    the reports emitted around HYBRID/DECOMPOSE expansion, whose planner/sub-agent
-    calls never touch ``last_prompt_tokens``, so the estimate still applies there until
-    the primary's own synthesis call resolves.
+    FRE-1326: ``context_tokens`` is ``ctx.last_prompt_tokens`` — the real,
+    provider-reported input-token count of the latest completed primary model call.
+    FRE-1547: before the turn's first primary call resolves it is ``None``, never the
+    pre-call ``estimate_messages_tokens`` heuristic, which excludes the assembled system
+    prompt and under-counts by an order of magnitude. On a HYBRID/DECOMPOSE turn the
+    planner and sub-agent calls never touch ``last_prompt_tokens``, so the reports sent
+    around the expansion carry ``None`` until the primary's synthesis call resolves, and
+    the session lane keeps its last real reading meanwhile.
 
     Best-effort: a telemetry emission must never break the execution loop.
 
@@ -379,7 +380,7 @@ async def _report_turn_progress(ctx: "ExecutionContext") -> None:
                 session_id=str(ctx.session_id),
                 tool_iteration=ctx.tool_iteration_count,
                 tool_iteration_max=_resolve_max_iterations(ctx),
-                context_tokens=ctx.last_prompt_tokens or estimate_messages_tokens(ctx.messages),
+                context_tokens=ctx.last_prompt_tokens or None,
                 context_max=_resolve_context_max(),
                 topology=ctx.topology,
             ),
@@ -1177,7 +1178,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.orchestrator.constraint_options import ConstraintDecision
     from personal_agent.orchestrator.sub_agent_types import SubAgentResult
     from personal_agent.service.repositories.session_repository import SessionRepository
-    from personal_agent.transport.events import ConstraintName
+    from personal_agent.transport.events import ConstraintName, ToolEndEvent, ToolStartEvent
 
 _mcp_adapter: "MCPGatewayAdapter | None" = None
 
@@ -7445,6 +7446,65 @@ async def step_llm_call(
         return TaskState.FAILED
 
 
+async def _dispatch_announced(
+    dispatch: Callable[[], Awaitable[dict[str, Any]]],
+    *,
+    tool_name: str,
+    session_id: str | None,
+    trace_id: str,
+) -> dict[str, Any]:
+    """Run one tool dispatch between a ``TOOL_CALL_START`` and its ``TOOL_CALL_END``.
+
+    ADR-0123 §2 derives the tool rows of the live panel from these events, and the turn's
+    stored call history (FRE-1543) reads the same envelopes, so both show the tool
+    (FRE-1547). The end fires on every exit, so a raising dispatch never leaves a row
+    spinning. Arguments are not sent: the panel never shows them, and tool arguments
+    (file content, commands) must not be copied into ``session_events``.
+
+    Args:
+        dispatch: Zero-arg factory for the dispatch coroutine.
+        tool_name: The tool being called.
+        session_id: The turn's session, or ``None`` (no panel, no events).
+        trace_id: The turn's trace id, for logs.
+
+    Returns:
+        The dispatch result.
+    """
+    if not session_id:
+        return await dispatch()
+    from personal_agent.transport.events import ToolEndEvent, ToolStartEvent  # noqa: PLC0415
+
+    await _emit_tool_event(
+        ToolStartEvent(tool_name=tool_name, args={}, session_id=session_id), trace_id=trace_id
+    )
+    summary = "failed"
+    try:
+        result = await dispatch()
+        if result.get("success"):
+            summary = ""
+        return result
+    finally:
+        await _emit_tool_event(
+            ToolEndEvent(tool_name=tool_name, result_summary=summary, session_id=session_id),
+            trace_id=trace_id,
+        )
+
+
+async def _emit_tool_event(event: "ToolStartEvent | ToolEndEvent", *, trace_id: str) -> None:
+    """Send a tool lifecycle event to the turn's session (best-effort, FRE-1547)."""
+    from personal_agent.transport.agui.transport import AGUITransport  # noqa: PLC0415
+
+    try:
+        await AGUITransport().send_tool_event(event, event.session_id)
+    except Exception:
+        log.debug(
+            "tool_event_emit_failed",
+            trace_id=trace_id,
+            session_id=event.session_id,
+            tool_name=event.tool_name,
+        )
+
+
 async def step_tool_execution(
     ctx: ExecutionContext, session_manager: SessionManager, trace_ctx: TraceContext
 ) -> TaskState:
@@ -7756,18 +7816,24 @@ async def step_tool_execution(
         raw_dispatch = list(
             await asyncio.gather(
                 *[
-                    dispatch_tool_call(
-                        tool_call_id=p["tool_call_id"],
+                    _dispatch_announced(
+                        functools.partial(
+                            dispatch_tool_call,
+                            tool_call_id=p["tool_call_id"],
+                            tool_name=p["tool_name"],
+                            arguments=p["arguments"],
+                            tool_layer=tool_layer,
+                            trace_ctx=trace_ctx,
+                            trace_id=ctx.trace_id,
+                            session_id=ctx.session_id,
+                            loaded_skills=ctx.loaded_skills,
+                            args_hash=p["args_hash"],
+                            gate_result=p["gate_result"],
+                            loop_policy=p["loop_policy"],
+                        ),
                         tool_name=p["tool_name"],
-                        arguments=p["arguments"],
-                        tool_layer=tool_layer,
-                        trace_ctx=trace_ctx,
-                        trace_id=ctx.trace_id,
                         session_id=ctx.session_id,
-                        loaded_skills=ctx.loaded_skills,
-                        args_hash=p["args_hash"],
-                        gate_result=p["gate_result"],
-                        loop_policy=p["loop_policy"],
+                        trace_id=ctx.trace_id,
                     )
                     for p in allowed_plans
                 ],

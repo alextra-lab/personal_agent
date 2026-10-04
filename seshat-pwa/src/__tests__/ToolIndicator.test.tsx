@@ -7,7 +7,7 @@
 
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { ToolIndicator } from '@/components/ToolIndicator';
 import type { ToolCall } from '@/lib/types';
@@ -75,5 +75,21 @@ describe('ToolIndicator', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('read_file')).toBeInTheDocument();
     expect(screen.getByText('run_python')).toBeInTheDocument();
+  });
+
+  it('FRE-1547: renders each call of a repeated tool as its own row, with no key clash', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(
+      <ToolIndicator
+        tools={[tool({ name: 'web_search' }), tool({ name: 'web_search' })]}
+      />,
+    );
+
+    await user.click(screen.getByRole('button'));
+
+    expect(screen.getAllByText('web_search')).toHaveLength(2);
+    expect(errors.mock.calls.some((c) => String(c[0]).includes('same key'))).toBe(false);
+    errors.mockRestore();
   });
 });

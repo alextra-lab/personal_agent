@@ -64,6 +64,28 @@ own, or to statements about what you searched for or found this turn.
 
 
 # ============================================================================
+# Reasoning discipline (FRE-1549, supersedes FRE-1402's delivery path)
+#
+# Unconditional and STATIC — spliced into the cached system prompt right after
+# the grounding contract, so it holds on every primary turn with no keyword and
+# no classifier. The text is the nudge of docs/skills/sequential-thinking.md;
+# that skill stays for depth. Native thinking already plans out of sight, so the
+# rule only asks for the visible part: a real false start, never an invented one
+# (FRE-1327's confabulation shape). Not added to the planner prompt (ADR-0154 D7).
+# ============================================================================
+
+REASONING_DISCIPLINE_PROMPT = """## Reasoning
+For anything beyond a simple question, work out the steps before you answer. Keep that \
+working to yourself: an ordinary linear chain of reasoning stays invisible, and a short or \
+conversational reply gets no numbered steps and no scaffold.
+When the obvious first approach to the problem really fails, show it in the answer in one \
+short line: the step you tried, and what was wrong with it, before the approach that works.
+Show a false start only if you actually took one in your own reasoning. Never invent a \
+wrong step you did not take: a manufactured one is confabulation, and showing none is better.
+"""
+
+
+# ============================================================================
 # Current Date & Time (FRE-1298)
 #
 # Unconditional, VOLATILE-tail-only (ADR-0081 D1) — never spliced into

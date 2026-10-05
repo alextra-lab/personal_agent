@@ -23,6 +23,11 @@ nudge: |
 > `mcp_sequentialthinking` "Not a real tool — prompt technique", recommendation 5 said to remove
 > it, and FRE-1358 executed that removal. This skill replaces the discipline the removed tool's
 > instruction text imposed, without re-adding a tool ADR-0028 already ruled against.
+>
+> **Delivery (FRE-1549):** this skill reached the model only on a keyword match or a `read_skill`
+> call, and `route_traces` recorded 0 loads in 1,128 turns. The standing rule now lives in the
+> primary system prompt (`REASONING_DISCIPLINE_PROMPT`, `orchestrator/prompts.py`) on every turn.
+> This file stays for depth and for the keyword path.
 
 ## What this replaces
 

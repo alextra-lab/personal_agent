@@ -305,3 +305,18 @@ def test_an_end_with_no_open_row_is_ignored() -> None:
     events = [_tool_end("web_search", "zzz"), _tool("fetch_url", "a"), _tool_end("fetch_url", "a")]
 
     assert _statuses(build_turn_summary(events, now=NOW)) == [("fetch_url", "completed")]
+
+
+def test_an_empty_call_id_counts_as_no_id() -> None:
+    """A provider that sends no ids gives ``""``; calls of different tools still pair by name."""
+    events = [
+        _tool("web_search", ""),
+        _tool("fetch_url", ""),
+        _tool_end("fetch_url", "", result="failed"),
+        _tool_end("web_search", ""),
+    ]
+
+    assert _statuses(build_turn_summary(events, now=NOW)) == [
+        ("web_search", "completed"),
+        ("fetch_url", "failed"),
+    ]

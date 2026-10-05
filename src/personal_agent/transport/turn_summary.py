@@ -119,7 +119,7 @@ def _close_call(
 ) -> None:
     """Mark the open call that a ``TOOL_CALL_END`` closes; ignore an end with no open call."""
     name = data.get("tool_name")
-    call_id = _optional_str(data.get("tool_call_id"))
+    call_id = _optional_str(data.get("tool_call_id")) or None
     for i, (open_id, open_name, status) in enumerate(calls):
         if status != "unfinished":
             continue
@@ -184,7 +184,7 @@ def build_turn_summary(
         elif kind == "TOOL_CALL_START":
             name = data.get("tool_name")
             if isinstance(name, str) and name:
-                calls.append((_optional_str(data.get("tool_call_id")), name, "unfinished"))
+                calls.append((_optional_str(data.get("tool_call_id")) or None, name, "unfinished"))
         elif kind == "TOOL_CALL_END":
             _close_call(calls, data)
 

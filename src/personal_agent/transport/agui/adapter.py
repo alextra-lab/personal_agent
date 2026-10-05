@@ -61,7 +61,7 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                 "data": {"tool_name": name, "args": dict(args)},
                 "session_id": sid,
             }
-            if call_id is not None:
+            if call_id:
                 envelope["data"]["tool_call_id"] = call_id
         case ToolEndEvent(
             tool_name=name, result_summary=summary, session_id=sid, tool_call_id=call_id
@@ -71,7 +71,7 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                 "data": {"tool_name": name, "result": summary},
                 "session_id": sid,
             }
-            if call_id is not None:
+            if call_id:
                 envelope["data"]["tool_call_id"] = call_id
         case PhaseStartEvent(
             phase=phase,

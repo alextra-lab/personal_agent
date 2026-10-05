@@ -15,7 +15,10 @@ The derivation mirrors the PWA's ``buildTurnSummary`` (``seshat-pwa/src/lib/phas
 
 * phases in first-start order; ``PHASE_END.ok`` decides ``completed`` / ``error``; a phase with
   no end takes the turn's terminal state;
-* tools are the ``TOOL_CALL_START`` names, deduplicated, first-seen order;
+* tools are the calls, one row per ``TOOL_CALL_START`` in start order (FRE-1551). An end closes
+  the open row with its ``tool_call_id``, or, for an event with no id, the first open row of
+  its name. ``result == "failed"`` marks the row ``failed``, any other end ``completed``, and
+  a row with no end stays ``unfinished``;
 * the terminal state is ``cancelled`` after a ``CANCELLED`` event, else ``error`` after a
   ``RUN_ERROR``, else ``completed``.
 
@@ -34,6 +37,7 @@ from pydantic import BaseModel, ConfigDict
 
 PhaseState = Literal["completed", "cancelled", "error"]
 TerminalState = Literal["completed", "cancelled", "error"]
+ToolStatus = Literal["completed", "failed", "unfinished"]
 
 
 class TurnSummaryPhase(BaseModel):
@@ -58,19 +62,34 @@ class TurnSummaryPhase(BaseModel):
     parent_id: str | None
 
 
+class TurnSummaryTool(BaseModel):
+    """One tool call row of the folded call history.
+
+    Attributes:
+        name: The tool name.
+        status: ``completed`` or ``failed`` once the call ended, ``unfinished`` if the turn
+            stopped before its end event.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    status: ToolStatus
+
+
 class TurnSummaryRecord(BaseModel):
     """The folded call history of one turn, stored on its assistant message.
 
     Attributes:
         phases: Phase rows in first-start order.
-        tools: Tool names used in the turn, deduplicated, first-seen order.
+        tools: The turn's tool calls, one row per call, in start order.
         terminal_state: How the turn ended.
     """
 
     model_config = ConfigDict(frozen=True)
 
     phases: list[TurnSummaryPhase]
-    tools: list[str]
+    tools: list[TurnSummaryTool]
     terminal_state: TerminalState
 
 
@@ -95,6 +114,23 @@ def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _close_call(
+    calls: list[tuple[str | None, str, ToolStatus]], data: Mapping[str, object]
+) -> None:
+    """Mark the open call that a ``TOOL_CALL_END`` closes; ignore an end with no open call."""
+    name = data.get("tool_name")
+    call_id = _optional_str(data.get("tool_call_id")) or None
+    for i, (open_id, open_name, status) in enumerate(calls):
+        if status != "unfinished":
+            continue
+        matches = open_id == call_id if call_id is not None else open_name == name
+        if matches:
+            # The executor sends ``"failed"`` as the result of a failed dispatch (FRE-1547).
+            ended: ToolStatus = "failed" if data.get("result") == "failed" else "completed"
+            calls[i] = (open_id, open_name, ended)
+            return
+
+
 def build_turn_summary(
     events: Sequence[Mapping[str, object]], *, now: datetime
 ) -> TurnSummaryRecord | None:
@@ -113,7 +149,7 @@ def build_turn_summary(
     """
     starts: dict[str, tuple[str, str | None, datetime, str | None]] = {}
     ends: dict[str, tuple[PhaseState, datetime | None]] = {}
-    tools: list[str] = []
+    calls: list[tuple[str | None, str, ToolStatus]] = []
     cancelled = False
     errored = False
 
@@ -147,10 +183,12 @@ def build_turn_summary(
                 ends[phase_id] = (state, _parse_time(data.get("ended_at")))
         elif kind == "TOOL_CALL_START":
             name = data.get("tool_name")
-            if isinstance(name, str) and name and name not in tools:
-                tools.append(name)
+            if isinstance(name, str) and name:
+                calls.append((_optional_str(data.get("tool_call_id")) or None, name, "unfinished"))
+        elif kind == "TOOL_CALL_END":
+            _close_call(calls, data)
 
-    if not starts and not tools:
+    if not starts and not calls:
         return None
 
     terminal: TerminalState = "cancelled" if cancelled else "error" if errored else "completed"
@@ -168,7 +206,11 @@ def build_turn_summary(
                 parent_id=parent_id,
             )
         )
-    return TurnSummaryRecord(phases=phases, tools=tools, terminal_state=terminal)
+    return TurnSummaryRecord(
+        phases=phases,
+        tools=[TurnSummaryTool(name=name, status=status) for _, name, status in calls],
+        terminal_state=terminal,
+    )
 
 
 class TurnRecorder:

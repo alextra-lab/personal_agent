@@ -56,14 +56,18 @@ describe('buildTurnSummary', () => {
     expect(summary.phases[0].durationMs).toBe(9000);
   });
 
-  it('dedupes tool names, preserving first-seen order', () => {
+  it('FRE-1551: keeps one entry per call, in call order, with its status', () => {
     const tools: ToolCall[] = [
-      { name: 'perplexity_query', status: 'completed', result: 'a' },
-      { name: 'run_python', status: 'completed', result: 'b' },
-      { name: 'perplexity_query', status: 'completed', result: 'c' },
+      { name: 'perplexity_query', status: 'completed', result: '' },
+      { name: 'run_python', status: 'completed', result: 'failed' },
+      { name: 'perplexity_query', status: 'running' },
     ];
     const summary = buildTurnSummary([], tools, 'completed');
-    expect(summary.tools).toEqual(['perplexity_query', 'run_python']);
+    expect(summary.tools).toEqual([
+      { name: 'perplexity_query', status: 'completed' },
+      { name: 'run_python', status: 'failed' },
+      { name: 'perplexity_query', status: 'unfinished' },
+    ]);
   });
 
   it('sets terminalState on the summary', () => {
@@ -148,7 +152,7 @@ describe('parseTurnSummary (FRE-1543)', () => {
           { phase_id: 'p1', phase: 'planning', detail: null, duration_ms: 2500, state: 'completed', parent_id: null },
           { phase_id: 'c1', phase: 'sub_agent', detail: 'w1', duration_ms: 10, state: 'error', parent_id: 'p1' },
         ],
-        tools: ['web_search'],
+        tools: [{ name: 'web_search', status: 'failed' }],
         terminal_state: 'cancelled',
       }),
     ).toEqual({
@@ -156,7 +160,7 @@ describe('parseTurnSummary (FRE-1543)', () => {
         { phaseId: 'p1', phase: 'planning', detail: null, durationMs: 2500, state: 'completed', parentId: null },
         { phaseId: 'c1', phase: 'sub_agent', detail: 'w1', durationMs: 10, state: 'error', parentId: 'p1' },
       ],
-      tools: ['web_search'],
+      tools: [{ name: 'web_search', status: 'failed' }],
       terminalState: 'cancelled',
     });
   });
@@ -169,17 +173,42 @@ describe('parseTurnSummary (FRE-1543)', () => {
         { phase_id: 'y', phase: 'planning', detail: null, duration_ms: 'slow', state: 'completed', parent_id: null },
         { phase_id: 'p1', phase: 'planning', detail: null, duration_ms: 5, state: 'completed', parent_id: null },
       ],
-      tools: ['ok', 3],
+      tools: [{ name: 'ok', status: 'completed' }, 3, { name: 'x', status: 'exploded' }, { status: 'completed' }],
       terminal_state: 'completed',
     });
     expect(parsed?.phases.map((p) => p.phaseId)).toEqual(['p1']);
-    expect(parsed?.tools).toEqual(['ok']);
+    expect(parsed?.tools).toEqual([{ name: 'ok', status: 'completed' }]);
+  });
+
+  it('FRE-1551: every stored call is a row, repeats included', () => {
+    const parsed = parseTurnSummary({
+      phases: [],
+      tools: [
+        { name: 'web_search', status: 'completed' },
+        { name: 'web_search', status: 'failed' },
+        { name: 'fetch_url', status: 'unfinished' },
+      ],
+      terminal_state: 'completed',
+    });
+    expect(parsed?.tools).toEqual([
+      { name: 'web_search', status: 'completed' },
+      { name: 'web_search', status: 'failed' },
+      { name: 'fetch_url', status: 'unfinished' },
+    ]);
+  });
+
+  it('FRE-1551: a history stored before per-call rows (plain names) still renders, with unknown status', () => {
+    const parsed = parseTurnSummary({ phases: [], tools: ['web_search', 'fetch_url'], terminal_state: 'completed' });
+    expect(parsed?.tools).toEqual([
+      { name: 'web_search', status: 'unknown' },
+      { name: 'fetch_url', status: 'unknown' },
+    ]);
   });
 
   it('returns undefined for an absent, malformed or empty record', () => {
     expect(parseTurnSummary(undefined)).toBeUndefined();
     expect(parseTurnSummary('nope')).toBeUndefined();
     expect(parseTurnSummary({ phases: [], tools: [], terminal_state: 'completed' })).toBeUndefined();
-    expect(parseTurnSummary({ phases: [], tools: ['t'], terminal_state: 'exploded' })).toBeUndefined();
+    expect(parseTurnSummary({ phases: [], tools: [{ name: 't', status: 'completed' }], terminal_state: 'exploded' })).toBeUndefined();
   });
 });

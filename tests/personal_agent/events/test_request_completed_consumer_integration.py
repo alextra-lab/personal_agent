@@ -116,7 +116,11 @@ async def test_turn_summary_survives_the_bus_and_is_stored_on_the_message() -> N
     The record goes through the real serialisation (``model_dump(mode="json")`` → Redis →
     ``ConsumerRunner`` parse), so a field the bus drops or a shape it mangles fails here.
     """
-    from personal_agent.transport.turn_summary import TurnSummaryPhase, TurnSummaryRecord
+    from personal_agent.transport.turn_summary import (
+        TurnSummaryPhase,
+        TurnSummaryRecord,
+        TurnSummaryTool,
+    )
 
     summary = TurnSummaryRecord(
         phases=[
@@ -129,7 +133,7 @@ async def test_turn_summary_survives_the_bus_and_is_stored_on_the_message() -> N
                 parent_id=None,
             )
         ],
-        tools=["web_search"],
+        tools=[TurnSummaryTool(name="web_search", status="completed")],
         terminal_state="completed",
     )
     event = RequestCompletedEvent(
@@ -181,7 +185,7 @@ async def test_turn_summary_survives_the_bus_and_is_stored_on_the_message() -> N
                 "parent_id": None,
             }
         ],
-        "tools": ["web_search"],
+        "tools": [{"name": "web_search", "status": "completed"}],
         "terminal_state": "completed",
     }
 

@@ -89,12 +89,16 @@ export interface TextDeltaData {
 export interface ToolCallStartData {
   tool_name: string;
   args: Record<string, unknown>;
+  /** The call's id (FRE-1551); absent on events from an emitter that sends none. */
+  tool_call_id?: string;
 }
 
 /** TOOL_CALL_END payload — tool invocation completed. */
 export interface ToolCallEndData {
   tool_name: string;
   result: string;
+  /** The id of the call that ended (FRE-1551); absent when the start carried none. */
+  tool_call_id?: string;
 }
 
 /**
@@ -207,6 +211,8 @@ export interface ToolApprovalRequestData {
 export interface ToolCall {
   /** Tool name as reported by the backend. */
   name: string;
+  /** The call's id, when the backend sent one (FRE-1551). Pairs an end with its own start. */
+  callId?: string;
   /** ``running`` while executing; ``completed`` once TOOL_CALL_END received. */
   status: 'running' | 'completed';
   /** Human-readable result summary (populated on completion). */
@@ -267,6 +273,16 @@ export interface PhaseSummaryEntry {
 }
 
 /**
+ * One tool call in a collapsed per-turn summary (FRE-1551). `unfinished` is a call whose
+ * end never arrived; `unknown` is a call read from a history stored before the outcome
+ * was kept (the server never writes it).
+ */
+export interface ToolSummaryEntry {
+  name: string;
+  status: 'completed' | 'failed' | 'unfinished' | 'unknown';
+}
+
+/**
  * The collapsed, persistent record of a completed/cancelled/failed turn's
  * phase surface (ADR-0123 §7, T4/FRE-937) — attached to the turn's ChatMessage
  * once it terminates. Derived entirely from already-persisted, sequenced
@@ -274,8 +290,8 @@ export interface PhaseSummaryEntry {
  */
 export interface TurnSummary {
   phases: PhaseSummaryEntry[];
-  /** Deduped tool names used during the turn, first-seen order. */
-  tools: string[];
+  /** One entry per tool call in the turn, in call order (FRE-1551). */
+  tools: ToolSummaryEntry[];
   terminalState: 'completed' | 'cancelled' | 'error';
 }
 

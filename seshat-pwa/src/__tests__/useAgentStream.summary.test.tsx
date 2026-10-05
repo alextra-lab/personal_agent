@@ -73,12 +73,12 @@ function phaseEnd(seq: number, opts: { phase_id: string; phase?: string; ok?: bo
   };
 }
 
-function toolStart(tool_name: string): object {
-  return { type: 'TOOL_CALL_START', data: { tool_name } };
+function toolStart(tool_name: string, tool_call_id?: string): object {
+  return { type: 'TOOL_CALL_START', data: { tool_name, ...(tool_call_id ? { tool_call_id } : {}) } };
 }
 
-function toolEnd(tool_name: string, result = 'ok'): object {
-  return { type: 'TOOL_CALL_END', data: { tool_name, result } };
+function toolEnd(tool_name: string, result = 'ok', tool_call_id?: string): object {
+  return { type: 'TOOL_CALL_END', data: { tool_name, result, ...(tool_call_id ? { tool_call_id } : {}) } };
 }
 
 beforeEach(() => {
@@ -112,12 +112,33 @@ describe('useAgentStream — collapsed turn summary (ADR-0123 T4, FRE-937)', () 
     expect(assistant?.phaseSummary?.phases).toEqual([
       { phaseId: 'p1', phase: 'planning', detail: null, durationMs: 5000, state: 'completed', parentId: null },
     ]);
-    expect(assistant?.phaseSummary?.tools).toEqual(['perplexity_query']);
+    expect(assistant?.phaseSummary?.tools).toEqual([{ name: 'perplexity_query', status: 'completed' }]);
 
     // Design change (codex review): live state is NOT cleared — it resolves
     // in place exactly as useAgentStream.phases.test.tsx already asserts.
     expect(hook.result.current.phases).toHaveLength(1);
     expect(hook.result.current.phases[0].state).toBe('completed');
+  });
+
+  it('FRE-1551: parallel calls of one tool are separate rows, and an end closes its own call by id', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent({ type: 'TEXT_DELTA', data: { text: 'hi' }, seq: 1 });
+    pushEvent(toolStart('web_search', 'a'));
+    pushEvent(toolStart('web_search', 'b'));
+    pushEvent(toolEnd('web_search', 'failed', 'b'));
+    pushEvent(toolEnd('web_search', '', 'a'));
+    pushEvent(toolStart('fetch_url', 'c'));
+    pushEvent(toolEnd('fetch_url', '', 'c'));
+    pushEvent({ type: 'DONE', seq: null });
+
+    const assistant = hook.result.current.messages.find((m) => m.role === 'assistant');
+    expect(assistant?.phaseSummary?.tools).toEqual([
+      { name: 'web_search', status: 'completed' },
+      { name: 'web_search', status: 'failed' },
+      { name: 'fetch_url', status: 'completed' },
+    ]);
   });
 
   it('DONE with phase events but zero TEXT_DELTA (artifact-only turn) appends a placeholder assistant message, marked complete', async () => {

@@ -55,18 +55,24 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
     match event:
         case TextDeltaEvent(text=text, session_id=sid):
             envelope = {"type": "TEXT_DELTA", "data": {"text": text}, "session_id": sid}
-        case ToolStartEvent(tool_name=name, args=args, session_id=sid):
+        case ToolStartEvent(tool_name=name, args=args, session_id=sid, tool_call_id=call_id):
             envelope = {
                 "type": "TOOL_CALL_START",
                 "data": {"tool_name": name, "args": dict(args)},
                 "session_id": sid,
             }
-        case ToolEndEvent(tool_name=name, result_summary=summary, session_id=sid):
+            if call_id:
+                envelope["data"]["tool_call_id"] = call_id
+        case ToolEndEvent(
+            tool_name=name, result_summary=summary, session_id=sid, tool_call_id=call_id
+        ):
             envelope = {
                 "type": "TOOL_CALL_END",
                 "data": {"tool_name": name, "result": summary},
                 "session_id": sid,
             }
+            if call_id:
+                envelope["data"]["tool_call_id"] = call_id
         case PhaseStartEvent(
             phase=phase,
             phase_id=phase_id,

@@ -12,7 +12,8 @@ import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 
 import { TurnSummaryPanel } from '@/components/TurnSummaryPanel';
-import type { TurnSummary } from '@/lib/types';
+import { buildTurnSummary, parseTurnSummary } from '@/lib/phase-summary';
+import type { ToolCall, TurnSummary } from '@/lib/types';
 
 function summary(overrides: Partial<TurnSummary>): TurnSummary {
   return {
@@ -27,7 +28,7 @@ function summary(overrides: Partial<TurnSummary>): TurnSummary {
         parentId: null,
       },
     ],
-    tools: ['perplexity_query'],
+    tools: [{ name: 'perplexity_query', status: 'completed' }],
     terminalState: 'completed',
     ...overrides,
   };
@@ -167,5 +168,38 @@ describe('TurnSummaryPanel', () => {
       <TurnSummaryPanel summary={summary({ phases: [], tools: [], terminalState: 'completed' })} />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('FRE-1551 AC-2: the panel built from the stored summary has the same tool rows as the live one', () => {
+    const live: ToolCall[] = [
+      { name: 'web_search', status: 'completed', result: '' },
+      { name: 'web_search', status: 'completed', result: 'failed' },
+      { name: 'fetch_url', status: 'completed', result: '' },
+    ];
+    const fromLive = buildTurnSummary([], live, 'completed');
+    // What the server stores for the same turn (turn_summary.py, snake_case JSON).
+    const fromStored = parseTurnSummary({
+      phases: [],
+      tools: [
+        { name: 'web_search', status: 'completed' },
+        { name: 'web_search', status: 'failed' },
+        { name: 'fetch_url', status: 'completed' },
+      ],
+      terminal_state: 'completed',
+    });
+
+    const rows = (s: TurnSummary | undefined) => {
+      const { unmount } = render(<TurnSummaryPanel summary={s} />);
+      const found = screen.getAllByTestId('turn-summary-tool').map((el) => [el.textContent, el.getAttribute('data-status')]);
+      const header = screen.getByTestId('turn-summary-header').textContent;
+      unmount();
+      return { found, header };
+    };
+
+    const liveRows = rows(fromLive);
+    const storedRows = rows(fromStored);
+    expect(liveRows.found).toHaveLength(3);
+    expect(storedRows).toEqual(liveRows);
+    expect(storedRows.header).toContain('3 tools');
   });
 });

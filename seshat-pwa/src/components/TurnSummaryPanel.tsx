@@ -101,12 +101,19 @@ export function TurnSummaryPanel({ summary }: TurnSummaryPanelProps) {
         })}
         {summary.tools.length > 0 && (
           <div className="flex flex-wrap gap-1">
-            {summary.tools.map((name) => (
+            {summary.tools.map((tool, i) => (
               <span
-                key={name}
-                className="inline-flex items-center text-xs px-2 py-0.5 rounded-full font-mono bg-surface text-ink-muted border border-line"
+                // One chip per call (FRE-1551): a name can repeat, so the key is the position.
+                key={i}
+                data-testid="turn-summary-tool"
+                data-status={tool.status}
+                className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-mono bg-surface border ${
+                  tool.status === 'failed'
+                    ? 'text-red-600 dark:text-red-400 border-red-600 dark:border-red-400'
+                    : 'text-ink-muted border-line'
+                }`}
               >
-                {name}
+                {tool.name}
               </span>
             ))}
           </div>

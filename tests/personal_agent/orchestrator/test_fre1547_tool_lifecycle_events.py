@@ -158,7 +158,49 @@ async def test_two_tool_rounds_reach_the_live_panel_and_the_stored_history(
 
     summary = build_turn_summary(recorder.events, now=datetime.now(UTC))
     assert summary is not None
-    assert summary.tools == _names(live, "TOOL_CALL_START")
+    assert [t.name for t in summary.tools] == _names(live, "TOOL_CALL_START")
+    assert [t.status for t in summary.tools] == ["completed", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_parallel_calls_of_one_tool_are_separate_stored_rows_with_their_own_outcome(
+    session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FRE-1551: two parallel ``web_search`` calls, the first one finishing last and failing."""
+
+    async def _slow_first(*, tool_call_id: str, tool_name: str, **rest: Any) -> dict[str, Any]:
+        result = _ok_result(tool_call_id, tool_name, **rest)
+        if tool_call_id == "tc-1":
+            await asyncio.sleep(0.05)
+            result["success"] = False
+        return result
+
+    monkeypatch.setattr(ex, "dispatch_tool_call", _slow_first)
+    recorder = start_turn_recording()
+    try:
+        ctx = _ctx(session_id)
+        ctx.messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "tc-1", "function": {"name": "web_search", "arguments": "{}"}},
+                    {"id": "tc-2", "function": {"name": "web_search", "arguments": "{}"}},
+                    {"id": "tc-3", "function": {"name": "fetch_url", "arguments": "{}"}},
+                ],
+            }
+        ]
+        await ex.step_tool_execution(ctx, MagicMock(), TraceContext(trace_id="t"))
+    finally:
+        stop_turn_recording()
+
+    summary = build_turn_summary(recorder.events, now=datetime.now(UTC))
+    assert summary is not None
+    assert [(t.name, t.status) for t in summary.tools] == [
+        ("web_search", "failed"),
+        ("web_search", "completed"),
+        ("fetch_url", "completed"),
+    ]
 
 
 @pytest.mark.asyncio

@@ -92,11 +92,14 @@ class ToolStartEvent:
         tool_name: Name of the tool being invoked.
         args: Arguments passed to the tool.
         session_id: Target session identifier.
+        tool_call_id: The LLM's id for this call. It pairs the start with its end when
+            several calls of one tool run at once (FRE-1551). ``None`` when unknown.
     """
 
     tool_name: str
     args: Mapping[str, Any]
     session_id: str
+    tool_call_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,11 +110,13 @@ class ToolEndEvent:
         tool_name: Name of the tool that finished.
         result_summary: Human-readable summary of the tool result.
         session_id: Target session identifier.
+        tool_call_id: The id of the call that ended (see :class:`ToolStartEvent`).
     """
 
     tool_name: str
     result_summary: str
     session_id: str
+    tool_call_id: str | None = None
 
 
 @dataclass(frozen=True)

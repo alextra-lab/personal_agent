@@ -49,6 +49,22 @@ class TestToAguiEvent:
         assert result["data"]["result"] == "5 results"
         assert result["session_id"] == "s3"
 
+    def test_tool_events_carry_the_call_id_when_given(self) -> None:
+        start = to_agui_event(
+            ToolStartEvent(tool_name="t", args={}, session_id="s", tool_call_id="c1")
+        )
+        end = to_agui_event(
+            ToolEndEvent(tool_name="t", result_summary="", session_id="s", tool_call_id="c1")
+        )
+        assert start["data"]["tool_call_id"] == "c1"
+        assert end["data"]["tool_call_id"] == "c1"
+
+    def test_tool_events_without_a_call_id_omit_the_key(self) -> None:
+        start = to_agui_event(ToolStartEvent(tool_name="t", args={}, session_id="s"))
+        end = to_agui_event(ToolEndEvent(tool_name="t", result_summary="", session_id="s"))
+        assert "tool_call_id" not in start["data"]
+        assert "tool_call_id" not in end["data"]
+
     def test_state_update(self) -> None:
         event = StateUpdateEvent(key="mode", value="HYBRID", session_id="s4")
         result = to_agui_event(event)

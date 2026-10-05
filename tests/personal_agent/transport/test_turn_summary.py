@@ -14,6 +14,7 @@ import pytest
 from personal_agent.transport.turn_summary import (
     TurnSummaryPhase,
     TurnSummaryRecord,
+    TurnSummaryTool,
     build_turn_summary,
 )
 
@@ -48,8 +49,18 @@ def _end(phase_id: str, ended_at: str, *, ok: bool = True) -> dict[str, object]:
     return {"type": "PHASE_END", "data": {"phase_id": phase_id, "ok": ok, "ended_at": ended_at}}
 
 
-def _tool(name: str) -> dict[str, object]:
-    return {"type": "TOOL_CALL_START", "data": {"tool_name": name, "args": {}}}
+def _tool(name: str, call_id: str | None = None) -> dict[str, object]:
+    data: dict[str, object] = {"tool_name": name, "args": {}}
+    if call_id is not None:
+        data["tool_call_id"] = call_id
+    return {"type": "TOOL_CALL_START", "data": data}
+
+
+def _tool_end(name: str, call_id: str | None = None, *, result: str = "") -> dict[str, object]:
+    data: dict[str, object] = {"tool_name": name, "result": result}
+    if call_id is not None:
+        data["tool_call_id"] = call_id
+    return {"type": "TOOL_CALL_END", "data": data}
 
 
 def test_two_round_turn_holds_phases_in_order_with_server_durations() -> None:
@@ -87,7 +98,11 @@ def test_two_round_turn_holds_phases_in_order_with_server_durations() -> None:
                 parent_id=None,
             ),
         ],
-        tools=["web_search", "read_url"],
+        tools=[
+            TurnSummaryTool(name="web_search", status="unfinished"),
+            TurnSummaryTool(name="web_search", status="unfinished"),
+            TurnSummaryTool(name="read_url", status="unfinished"),
+        ],
         terminal_state="completed",
     )
 
@@ -220,3 +235,73 @@ def test_an_event_outside_any_turn_is_not_recorded() -> None:
     from personal_agent.transport.turn_summary import record_turn_event
 
     record_turn_event(_start("x", "planning", T0))  # no recorder in this context: a no-op
+
+
+def _statuses(record: TurnSummaryRecord | None) -> list[tuple[str, str]]:
+    assert record is not None
+    return [(t.name, t.status) for t in record.tools]
+
+
+def test_every_call_is_a_row_in_start_order_with_its_own_status() -> None:
+    """FRE-1551 AC-1: two parallel calls of one tool plus one of another store 3 rows."""
+    events = [
+        _tool("web_search", "a"),
+        _tool("web_search", "b"),
+        _tool_end("web_search", "a"),
+        _tool_end("web_search", "b"),
+        _tool("fetch_url", "c"),
+        _tool_end("fetch_url", "c"),
+    ]
+
+    record = build_turn_summary(events, now=NOW)
+
+    assert _statuses(record) == [
+        ("web_search", "completed"),
+        ("web_search", "completed"),
+        ("fetch_url", "completed"),
+    ]
+
+
+def test_parallel_same_name_calls_ending_in_reverse_order_keep_their_own_outcome() -> None:
+    """The second call fails first; the first call's row must not take that outcome."""
+    events = [
+        _tool("web_search", "a"),
+        _tool("web_search", "b"),
+        _tool_end("web_search", "b", result="failed"),
+        _tool_end("web_search", "a"),
+    ]
+
+    assert _statuses(build_turn_summary(events, now=NOW)) == [
+        ("web_search", "completed"),
+        ("web_search", "failed"),
+    ]
+
+
+def test_a_call_with_no_end_is_unfinished() -> None:
+    events = [_tool("web_search", "a"), _tool("fetch_url", "b"), _tool_end("fetch_url", "b")]
+
+    assert _statuses(build_turn_summary(events, now=NOW)) == [
+        ("web_search", "unfinished"),
+        ("fetch_url", "completed"),
+    ]
+
+
+def test_events_without_a_call_id_pair_by_name_in_order() -> None:
+    """An emitter that sends no id still gets one row per call."""
+    events = [
+        _tool("web_search"),
+        _tool("web_search"),
+        _tool_end("web_search", result="failed"),
+        _tool_end("web_search"),
+    ]
+
+    assert _statuses(build_turn_summary(events, now=NOW)) == [
+        ("web_search", "failed"),
+        ("web_search", "completed"),
+    ]
+
+
+def test_an_end_with_no_open_row_is_ignored() -> None:
+    events = [_tool_end("web_search", "zzz"), _tool("fetch_url", "a"), _tool_end("fetch_url", "a")]
+
+    assert _statuses(build_turn_summary(events, now=NOW)) == [("fetch_url", "completed")]

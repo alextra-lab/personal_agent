@@ -7449,6 +7449,7 @@ async def _dispatch_announced(
     dispatch: Callable[[], Awaitable[dict[str, Any]]],
     *,
     tool_name: str,
+    tool_call_id: str,
     session_id: str | None,
     trace_id: str,
 ) -> dict[str, Any]:
@@ -7463,6 +7464,8 @@ async def _dispatch_announced(
     Args:
         dispatch: Zero-arg factory for the dispatch coroutine.
         tool_name: The tool being called.
+        tool_call_id: The LLM's id for this call. Both events carry it, so a panel can pair
+            an end with its start when parallel calls of one tool finish out of order.
         session_id: The turn's session, or ``None`` (no panel, no events).
         trace_id: The turn's trace id, for logs.
 
@@ -7474,7 +7477,10 @@ async def _dispatch_announced(
     from personal_agent.transport.events import ToolEndEvent, ToolStartEvent  # noqa: PLC0415
 
     await _emit_tool_event(
-        ToolStartEvent(tool_name=tool_name, args={}, session_id=session_id), trace_id=trace_id
+        ToolStartEvent(
+            tool_name=tool_name, args={}, session_id=session_id, tool_call_id=tool_call_id
+        ),
+        trace_id=trace_id,
     )
     summary = "failed"
     try:
@@ -7484,7 +7490,12 @@ async def _dispatch_announced(
         return result
     finally:
         await _emit_tool_event(
-            ToolEndEvent(tool_name=tool_name, result_summary=summary, session_id=session_id),
+            ToolEndEvent(
+                tool_name=tool_name,
+                result_summary=summary,
+                session_id=session_id,
+                tool_call_id=tool_call_id,
+            ),
             trace_id=trace_id,
         )
 
@@ -7828,6 +7839,7 @@ async def step_tool_execution(
                             loop_policy=p["loop_policy"],
                         ),
                         tool_name=p["tool_name"],
+                        tool_call_id=p["tool_call_id"],
                         session_id=ctx.session_id,
                         trace_id=ctx.trace_id,
                     )

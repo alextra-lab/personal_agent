@@ -7,7 +7,15 @@
  */
 
 import { PHASE_LABELS } from './phase-labels';
-import type { ChatMessage, PhaseName, PhaseNode, PhaseSummaryEntry, ToolCall, TurnSummary } from './types';
+import type {
+  ChatMessage,
+  PhaseName,
+  PhaseNode,
+  PhaseSummaryEntry,
+  ToolCall,
+  ToolSummaryEntry,
+  TurnSummary,
+} from './types';
 
 /**
  * Derive a TurnSummary from a turn's resolved phase nodes and the tools that ran.
@@ -34,16 +42,14 @@ export function buildTurnSummary(
     parentId: p.parentId,
   }));
 
-  const seen = new Set<string>();
-  const toolNames: string[] = [];
-  for (const t of tools) {
-    if (!seen.has(t.name)) {
-      seen.add(t.name);
-      toolNames.push(t.name);
-    }
-  }
+  // One entry per call, as the live ToolIndicator shows them (FRE-1551). The executor
+  // sends the result "failed" for a failed dispatch.
+  const toolEntries: ToolSummaryEntry[] = tools.map((t) => ({
+    name: t.name,
+    status: t.status === 'running' ? 'unfinished' : t.result === 'failed' ? 'failed' : 'completed',
+  }));
 
-  return { phases: summaryPhases, tools: toolNames, terminalState };
+  return { phases: summaryPhases, tools: toolEntries, terminalState };
 }
 
 /**
@@ -87,6 +93,8 @@ export function isTurnCollapsed(messages: readonly ChatMessage[]): boolean {
 const SUMMARY_STATES: ReadonlySet<string> = new Set(['completed', 'cancelled', 'error']);
 
 const isString = (v: unknown): v is string => typeof v === 'string';
+const TOOL_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'unfinished']);
+
 const isNullableString = (v: unknown): v is string | null => v === null || typeof v === 'string';
 
 /**
@@ -94,7 +102,7 @@ const isNullableString = (v: unknown): v is string | null => v === null || typeo
  * (`turn_summary`, snake_case) to the `TurnSummary` the panel renders.
  *
  * Defensive: the value comes from the network. A malformed record, or an
- * individual malformed or unknown-phase row, is dropped — the panel then
+ * individual malformed tool row or malformed or unknown-phase row, is dropped — the panel then
  * renders less, never throws. A record left with no phases and no tools is
  * `undefined`, the same "no panel" outcome as a live trivial turn.
  *
@@ -132,7 +140,18 @@ export function parseTurnSummary(raw: unknown): TurnSummary | undefined {
       parentId: r.parent_id,
     });
   }
-  const toolNames = Array.isArray(tools) ? tools.filter(isString) : [];
-  if (entries.length === 0 && toolNames.length === 0) return undefined;
-  return { phases: entries, tools: toolNames, terminalState: terminal as TurnSummary['terminalState'] };
+  const toolEntries: ToolSummaryEntry[] = [];
+  for (const row of Array.isArray(tools) ? tools : []) {
+    if (isString(row)) {
+      // A history stored before per-call rows: a name, no outcome (FRE-1551).
+      toolEntries.push({ name: row, status: 'unknown' });
+    } else if (row !== null && typeof row === 'object') {
+      const r = row as Record<string, unknown>;
+      if (isString(r.name) && isString(r.status) && TOOL_STATUSES.has(r.status)) {
+        toolEntries.push({ name: r.name, status: r.status as ToolSummaryEntry['status'] });
+      }
+    }
+  }
+  if (entries.length === 0 && toolEntries.length === 0) return undefined;
+  return { phases: entries, tools: toolEntries, terminalState: terminal as TurnSummary['terminalState'] };
 }

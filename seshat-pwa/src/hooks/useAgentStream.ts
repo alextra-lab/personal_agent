@@ -26,6 +26,8 @@ import type {
   PhaseStartData,
   ResolvedConstraint,
   ToolApprovalRequestData,
+  ToolCallEndData,
+  ToolCallStartData,
   ToolCall,
   TurnStatus,
   TurnSummary,
@@ -392,23 +394,25 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
       }
 
       case 'TOOL_CALL_START': {
-        const { tool_name } = event.data as { tool_name: string };
+        const { tool_name, tool_call_id } = event.data as unknown as ToolCallStartData;
         updateTools((prev) => [
           ...prev,
-          { name: tool_name, status: 'running' },
+          { name: tool_name, status: 'running', ...(tool_call_id ? { callId: tool_call_id } : {}) },
         ]);
         break;
       }
 
       case 'TOOL_CALL_END': {
-        const { tool_name, result } = event.data as {
-          tool_name: string;
-          result: string;
-        };
-        // FRE-1547: the end carries only the tool name, so it closes the first row of
-        // that name still running — a turn that calls web_search twice keeps two rows.
+        const { tool_name, result, tool_call_id } = event.data as unknown as ToolCallEndData;
+        // FRE-1551: parallel calls of one tool can end in a different order than they
+        // started, so an end with a call id closes the row with that id. An end without
+        // one (FRE-1547) closes the first row of that name still running.
         updateTools((prev) => {
-          const i = prev.findIndex((t) => t.name === tool_name && t.status === 'running');
+          const i = prev.findIndex(
+            (t) =>
+              t.status === 'running' &&
+              (tool_call_id ? t.callId === tool_call_id : t.name === tool_name),
+          );
           if (i === -1) return prev;
           return prev.map((t, j) => (j === i ? { ...t, status: 'completed', result } : t));
         });

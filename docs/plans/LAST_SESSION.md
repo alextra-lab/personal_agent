@@ -1,85 +1,69 @@
-# Last session — master, 2026-10-03 08:00 UTC to 15:00 UTC
+# Last session — master, 2026-10-03 15:00 UTC to 2026-10-05 12:10 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The owner asked for "all recommendations" to be followed; cc-master was then restarted (`-c`).
-FRE-1540 merged and its daemons restarted; its AC-4 waits for a natural alert. The owner
-accepted ADR-0154 and approved its chain at 13:01: the build streams now run it (FRE-1537 holds
-the record). FRE-1512 deployed at 14:15; its AC-2/AC-3 live halves need the first 20 turns.
-FRE-1511 (the planner probe) merged and is Done: 11/11 D7 thresholds on the local binding. FRE-1541
-is next on build2; it must switch the probe to the production digest builder (comment on it).
-FRE-1471 (the digest) merged and deployed 14:56; its live check is the next owner memory turn.
-On build1, FRE-1472 runs next, then FRE-1543 (owner: "leave order as is"). Master accepted
-FRE-1471's choice that digest lines are renderer-line prefixes with no kind label (FRE-1472 tests it).
-The Awaiting Deploy sweep closed six tickets. The rest wait on the owner decisions listed below.
+Both build streams are busy: build1 on FRE-1551 (stored history keeps one row per tool call),
+build2 on FRE-1550 (an alert when master itself is stuck), then FRE-1548 (Sonnet planner
+schema). The owner chose an ntfy-style webhook for FRE-1550. After it merges, the owner must
+put the ntfy URL in `/opt/seshat/.env`. Until then the alert logs an error and defers, as today.
+FRE-1515 is parked on purpose: re-add `stream:build1` around 2026-10-13, so its PR meets the
+AC-5 date (merge not before 2026-10-17 14:15 UTC).
 
 ## What was decided and why
 
-**ES retention: a monthly index keeps the current month plus 3 full months (owner rule).** ILM has
-no month unit, so delete `min_age` is 123d (July to October). The guard test enforces it. Three
-`*-2026-07-05` indices had entered the delete phase before the policy PUT, and master moved them
-back with `_ilm/move`. A policy change does not stop a delete in progress.
+**The planner chain (ADR-0154) is half done.** FRE-1541, FRE-1472 and FRE-1516 shipped. The live
+planner prompt hash is `feeeeac6…` (no decline rule before FRE-1515); the probe hash, which
+includes the decline rule, is `6947c986…`. Any planner prompt change needs a new D7 probe run
+before it ships, because the `planner` mode is live on qwen3.8-flash-next.
 
-**Correction: September logs are not lost.** Master told the owner they were. Only the ES copy is
-gone. The gateway's disk log (`current.jsonl*` in the telemetry volume) covers 2026-07-30 onward.
+**OVH 27B missed D7 (expand 37/48), and the owner accepted the miss:** OVH keeps today's routing.
+claude_sonnet missed on one malformed JSON in 81; FRE-1548 adds a schema and re-runs once
+(2 USD cap). The owner asked whether D7 demands an impossible perfect score: only the
+zero-parse-failure bar does, and a schema makes zero reachable by construction.
 
-**Status bar (owner):** tools reset at the next send. ctx resets only at compaction or a new
-session ("I need to know how much headroom I have"). This replaces FRE-1401's rule that ctx is
-never restored, for the same session only. The cross-session guard stays.
+**FRE-1514 is a measured negative (Canceled).** Its counting rule saturated at 100% in both arms,
+and the rule did not narrow the briefs by eye either. The planner prompt is probably not the
+lever; FRE-1487 (researcher prompt and rounds) is.
 
-**Approval on production harness turns: no bypass (owner).** A harness turn has no PWA socket, so
-an approval tool is denied. FRE-1539 marks such a turn invalid. Tools that need approval run on the
-eval stack (opt-out plus `bash` as `nobody`). Master's first FRE-1539 probe used `echo`, which is on
-the bash auto-approve list and ran. Use a command outside that list, such as `pwd`.
+**Sequential thinking moved into the primary prompt (FRE-1549, Done).** The skill never loaded
+(0 of 1,128 turns). AC-3 was accepted on its guard half by the owner: production stores only
+`reasoning_content_chars`, never the raw reasoning text, so a shown false start cannot be
+checked against reasoning in production.
 
-**`AGENT_ENABLE_SECOND_BRAIN=false` does pause consolidation.** The event consumer stays
-subscribed, but `scheduler.on_request_captured` checks the flag first (`scheduler.py:348`).
-`/health` still reports `second_brain: running`. That shows only that the scheduler is up, so prove
-the pause with the graph count.
+**The relevance bound moved to the reranker (FRE-1545, Done; FRE-1477 Done).** The owner: "use
+reranker too. We tested multiple embedders." The bound equals broad recall's 0.338891 by
+measurement, not copy.
 
-**The dispatch channel never worked until today.** Seats started by `cc-sessions` lacked the port,
-the secret and `--channels`, so every trigger fell back to `send-keys`. Fixed in `~/cc-env`
-(commit 5fff3b4, port column plus `cc-seat-exec`), and all three worker seats were restarted.
-cc-master has no channel by design. The owner said: "Fix the discovered root cause".
+**FRE-1122 re-scoped:** a pre-FRE-1118 baseline is no longer possible (ADR-0148 work shipped).
+It is now a current-state measurement, blocked by FRE-1515. **FRE-1398 Done** (the cause was an
+unread stderr pipe in slm_server, fixed in 7693220). **FRE-1473 Done**; the owner called the
+30-day/10-turn values arbitrary, and master agreed: they cap volume, they are not a boundary.
 
-**A stale draft in a seat's input blocks the watcher.** cc-1build held an old unsent "Master
-bounced PR #1161" text. The watcher read the seat as busy for 2.5 h. FRE-1540 makes such a stall
-reach the owner.
+**September ES logs were reloaded** from the gateway disk log (owner "go"): 1,587,276 docs into
+`agent-logs-2026-07/08/09`, INFO and above only, retention dates set at month start. The disk
+archive is in `telemetry/log_archive/2026-10-03/` (git-ignored). FRE-1359 window 1: `notes_write`
+crossed the threshold; read window 2 on 2026-10-11.
 
-**The 09:01 searxng outage repeated FRE-1344**, whose `required: false` fix did not hold.
-FRE-1542 (Done) made `make eval-infra-up/down` safe: eval services only, `--no-deps`, a pinned
-project name and a dry-run plan guard. A hand-typed `docker compose -p seshat … up` is still unsafe.
+**The master input box can block the watcher.** On 2026-10-04 an unsent `/master 1218` draft
+in cc-master stalled the gate for about 5 hours, and the stall alert was routed to the stuck
+master. FRE-1550 fixes the alert path. Until it lands: if the board looks still, look at
+cc-master's input box first.
 
-**FRE-1538's tools half failed live; the server option replaces it (owner: "yes").** On return
-after several app switches, ctx showed 19K (correct) but tools showed —/— (should be 2/25). The
-folded call-history panel was also gone: it is built in page memory at DONE and was never stored on
-the server, so any iPadOS reload loses it — this predates FRE-1538. FRE-1543 stores the call
-history with the message and sends a status snapshot on connect. FRE-1538 closed on its ctx half.
-
-**`first_token_ms` is the time to the whole reply.** Nothing streams token by token today, so
-FRE-1512's field is not a true first token. The FRE-1515 baseline still compares like with like.
-FRE-1515 may not merge before 2026-10-17 14:15 UTC (14 days, plus 20 qualifying turns).
+**Permissions:** the owner added allow rules (`.claude/settings.local.json`) for the gateway/PWA
+rebuild and single-command checks. The deploy hook has no sentinel since 2026-08-16. The
+auto-mode classifier still reviews compound commands, so run deploy checks one at a time.
 
 ## Worktrees — anything special
-- The eval stack is up (gateways :9002 and :9003, substrates `*-eval`) under project `seshat`.
-  Start and stop it only with the make targets. The test stack (`seshat-*-test-1`) shows as orphans
-  of that project, so never pass `--remove-orphans`.
-- Untracked `*.bak*` files are the owner's.
+- build2's worktree has `docker/searxng/settings.yml.example` flagged assume-unchanged and stale;
+  it fails `test_exa_content_mode_and_length` locally only. CI is unaffected.
+- Untracked `*.bak*` files at the root are the owner's.
 
 ## Answers for the fresh start
-- **State:** use `next_resolver`, Linear and `telemetry/dispatch_state.json`. None of it is copied here.
-- **Owner decisions pending** (each recorded on its ticket by the sweep, or still to be asked):
-  FRE-1473, confirm the 30-day and 10-item ceilings · FRE-1477, pick a course (reranker bound,
-  another embedder, or a lower 90% bar) · FRE-1359, accept window 1 read from the disk log as the
-  AC-3 source · FRE-1398, retitle or close in favour of the slm_server stderr-pipe defect ·
-  FRE-1122, authorize the baseline run · FRE-1402, three owner turns (confirm the skill really
-  loads: `skills_loaded` has never shown `sequential-thinking`) · FRE-1514, approved but
-  unlabeled: its criteria cite ADR-0152 D6 and call the measure open; the owner or the adr seat
-  must restate them against ADR-0154 D7 before it can be queued.
-- **Also open:** FRE-1485 (AC-2 and AC-3), FRE-1527 (AC-5) and FRE-1382 (AC-1) need a natural or
-  authorized live turn. FRE-1474 needs its generation check turned on, in an SLM window on the
-  owner's Mac. FRE-1503 needs an eval run. FRE-1372 waits on FRE-1506.
-- **Forced-synthesis overflow (FRE-1485 finding):** on 91b57b5c, keeping 25 tools in the forced
-  synthesis pushed a 120k prompt past the window. Not ticketed yet.
-- **cc-explore is the owner's seat.** Do not message it. Master restarted it at 13:43 on the
-  owner's word ("restart it"), with context kept. All five seats now run Claude Code 2.1.288.
-- **A seat restarted outside `cc-sessions` loses the channel.** Check with `ss -ltn | grep 879`.
+- **State:** `next_resolver`, Linear and `telemetry/dispatch_state.json`. Nothing copied here.
+- **Owner decisions pending:** FRE-1546 item 6 (keep or delete the agent-inferred `LOCATED_IN`
+  link; master leans delete), item 7 (teardown for live-check identities, then purge 21 test
+  identities; counts are on FRE-1546), item 2 (when to start the typed-link recall ADR).
+- **Long live windows:** FRE-1394 AC-1/AC-5 (about 4 weeks of turns; baseline on the ticket),
+  FRE-1512 (first 20 qualifying turns), FRE-1359 window 2 (2026-10-11).
+- **FRE-1471** stays Awaiting Deploy, but FRE-1472's live turn 24a46192 shows its digest working
+  (4 items, longest line 69): check its criteria and close it.
+- **cc-explore is the owner's seat.** Reply when it asks; do not task it.

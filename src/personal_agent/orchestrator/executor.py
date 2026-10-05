@@ -6437,10 +6437,13 @@ async def step_llm_call(
     # rather than living behind the "if tools" branch below with the tool-use rules.
     from personal_agent.orchestrator.prompts import (
         GROUNDING_CONTRACT_PROMPT,
+        REASONING_DISCIPLINE_PROMPT,
         render_current_datetime_block,
     )
 
-    system_prompt: str | None = GROUNDING_CONTRACT_PROMPT
+    # FRE-1549: the reasoning discipline rides the same static seed, so it sits in the
+    # cached prefix on every primary turn. Not behind a skill keyword.
+    system_prompt: str | None = f"{GROUNDING_CONTRACT_PROMPT}\n{REASONING_DISCIPLINE_PROMPT}"
 
     # Inject deployment context so the model doesn't try to access host-only paths.
     # Tool-name hints are appended later, only when tools are actually being passed

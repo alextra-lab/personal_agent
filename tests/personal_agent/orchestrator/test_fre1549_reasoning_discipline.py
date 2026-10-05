@@ -23,7 +23,6 @@ import pytest
 import yaml
 
 from personal_agent.config import settings
-
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import execute_task_safe

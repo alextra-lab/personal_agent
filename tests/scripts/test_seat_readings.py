@@ -332,7 +332,17 @@ def test_read_mod_report_is_none_without_a_file(tmp_path: Path) -> None:
     assert read_mod_report("cc-2build", state_dir=tmp_path) is None
 
 
-@pytest.mark.parametrize("text", ["not json", "[]", '{"state": "idle"}', '{"heartbeat_at": "x"}'])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "not json",
+        "[]",
+        '{"state": "idle"}',
+        '{"heartbeat_at": "x"}',
+        # A huge integer heartbeat overflows float().
+        '{"state": "idle", "draft_present": false, "heartbeat_at": ' + "9" * 400 + "}",
+    ],
+)
 def test_read_mod_report_is_none_for_a_malformed_file(tmp_path: Path, text: str) -> None:
     (tmp_path / "cc-2build.json").write_text(text, encoding="utf-8")
     assert read_mod_report("cc-2build", state_dir=tmp_path) is None
@@ -395,3 +405,15 @@ def test_an_unreadable_registry_still_logs_every_seat(tmp_path: Path) -> None:
     )
     assert [r.rc_state for r in readings] == ["unknown", "unknown"]
     assert [r.pane for r in readings] == ["idle", "absent"]
+
+
+def test_undecodable_registry_output_reads_as_an_unreadable_registry(tmp_path: Path) -> None:
+    class _BadBytes(_Runner):
+        def __call__(self, argv: Sequence[str]) -> _Result:
+            if tuple(argv)[:2] == ("claude", "agents"):
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+            return super().__call__(argv)
+
+    runner = _BadBytes(panes={"cc-1build": _IDLE_PANE})
+    assert _gate(runner, tmp_path) is False
+    assert seat_busy_state("cc-1build", runner) == "idle"  # the pane fallback

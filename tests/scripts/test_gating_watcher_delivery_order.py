@@ -14,9 +14,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from scripts.dispatch import gating_watcher, launcher, seat_readings, trigger_ledger
+from scripts.dispatch import gating_watcher, launcher, seat_readings
 from scripts.dispatch.gating_watcher import (
     MASTER_SESSION,
+    ContextReading,
     PullRequest,
     run_once,
 )
@@ -483,15 +484,47 @@ def test_observed_seats_are_the_five_adr_0155_seats() -> None:
     }
 
 
-# --- the shared ledger still names one trigger id per delivery ----------------
+# --- every typing path obeys the gate ------------------------------------------
 
 
-def test_the_send_keys_gate_serves_the_context_pressure_nudge_too(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Every typing path obeys the gate, not only the PR triggers."""
+def test_the_context_pressure_nudge_obeys_the_send_gate() -> None:
+    """The nudge types into master, so a held draft there must stop it."""
     runner = _SeatRunner({"cc-master": _DRAFT_PANE}, {"cc-master": "idle"})
-    outcome = gating_watcher.send_to_session("cc-master", "hello", runner)
-    assert outcome == "busy"
+    logger = _Logger()
+    run_once(
+        {},
+        now=_T0,
+        board_fetcher=lambda: [],
+        session_resolver=_resolve_build2,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=logger,
+        execute=True,
+        ledger={},
+        context_reader=lambda: [ContextReading(session="cc-master", ctx=900_000, model="m")],
+    )
+    assert logger.events("context_pressure_skip") != []  # the nudge was refused...
+    assert not runner.any_keys_to(_MASTER_PANE)  # ...and nothing was typed
+
+
+def test_the_context_pressure_nudge_lands_when_master_is_idle_with_an_empty_draft() -> None:
+    runner = _SeatRunner({"cc-master": _IDLE_PANE}, {"cc-master": "idle"})
+    run_once(
+        {},
+        now=_T0,
+        board_fetcher=lambda: [],
+        session_resolver=_resolve_build2,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_Logger(),
+        execute=True,
+        ledger={},
+        context_reader=lambda: [ContextReading(session="cc-master", ctx=900_000, model="m")],
+    )
+    assert len(runner.typed(_MASTER_PANE)) == 1
+
+
+def test_send_to_session_refuses_a_held_draft_even_when_rc_reads_idle() -> None:
+    runner = _SeatRunner({"cc-master": _DRAFT_PANE}, {"cc-master": "idle"})
+    assert gating_watcher.send_to_session("cc-master", "hello", runner) == "busy"
     assert not runner.any_keys_to(_MASTER_PANE)
-    assert trigger_ledger is not None  # the module is part of the shared import surface

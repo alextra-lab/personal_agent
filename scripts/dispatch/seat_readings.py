@@ -178,10 +178,10 @@ def rc_state_for(session: str, agents: Sequence[Mapping[str, object]] | None) ->
 
 
 def _registry(runner: CommandRunner) -> list[dict[str, object]] | None:
-    """Read the Remote Control registry. A missing ``claude`` binary reads as unreadable."""
+    """Read the Remote Control registry. A missing binary or undecodable output reads as unreadable."""
     try:
         return _rc_agents(runner)
-    except OSError:
+    except (OSError, ValueError):
         return None
 
 
@@ -206,25 +206,25 @@ def read_mod_report(seat: str, *, state_dir: Path | None = None) -> ModReport | 
     """
     if not _SEAT_NAME_RE.fullmatch(seat):
         return None
+    folder = DEFAULT_SEAT_STATE_DIR if state_dir is None else state_dir
     try:
-        folder = DEFAULT_SEAT_STATE_DIR if state_dir is None else state_dir
         raw: object = json.loads((folder / f"{seat}.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if not isinstance(raw, dict):
+            return None
+        state, draft, beat = raw.get("state"), raw.get("draft_present"), raw.get("heartbeat_at")
+        if not isinstance(state, str) or not isinstance(draft, bool):
+            return None
+        if isinstance(beat, bool) or not isinstance(beat, int | float):
+            return None
+        return ModReport(
+            state=state,
+            draft_present=draft,
+            disabled=raw.get("disabled") is True,
+            engine_version=str(raw.get("engine_version") or ""),
+            heartbeat_at=float(beat),
+        )
+    except (OSError, ValueError, OverflowError):
         return None
-    if not isinstance(raw, dict):
-        return None
-    state, draft, beat = raw.get("state"), raw.get("draft_present"), raw.get("heartbeat_at")
-    if not isinstance(state, str) or not isinstance(draft, bool):
-        return None
-    if isinstance(beat, bool) or not isinstance(beat, int | float):
-        return None
-    return ModReport(
-        state=state,
-        draft_present=draft,
-        disabled=raw.get("disabled") is True,
-        engine_version=str(raw.get("engine_version") or ""),
-        heartbeat_at=float(beat),
-    )
 
 
 def mod_report_fresh(

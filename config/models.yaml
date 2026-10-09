@@ -351,6 +351,55 @@ models:
     tool_calling_strategy: "native"
     endpoint: "https://slm.example.com/v1"
 
+  # ── Gemma study deployment (FRE-1517, stage 2) ──────────────────
+  # Owner, 2026-10-09: "Only gemma. then we decide", and "I am only interested in
+  # gemma alone". Gemma runs ALONE: Flash-Next and Gemma do not fit in the MBP's GPU
+  # memory together (a co-residency test that day ended in a Metal out-of-memory
+  # error on Flash-Next). slm_server serves it by swap window, gated through master,
+  # so at most one of this entry and qwen3.8-flash-next answers at a time. A session
+  # selects it through /chat's `model` parameter. No role binding points here.
+  #
+  # Stage-1 screen (slm_server, 2026-10-09, build 11521): tg256 47.6 t/s against
+  # Flash-Next's 21.4, and +39% to +76% aggregate against Flash-Next with MTP in
+  # every server cell. Two findings for stage 2: with thinking off it answered the
+  # arithmetic probe wrongly, and the thinking-off branch with tools and a system
+  # prompt is untested. Results: the FRE-1517 comment of 2026-10-09.
+  #
+  # The dialect is the provider's llamacpp_qwen. Gemma's chat template reads the same
+  # `enable_thinking` variable (default false), so the modes below steer it.
+  gemma-4-26b-a4b:
+    provider: slm_local
+    id: "unsloth/gemma-4-26B-A4B-it"
+    context_length: 131072       # served --ctx-size 131072 (native 262144), as qwen3.8-flash-next
+    quantization: "Q8_0"         # unsloth/gemma-4-26B-A4B-it-GGUF, 26.9 GB
+    min_concurrency: 1
+    max_concurrency: 3           # slm_server's production slot count
+    default_timeout: 600
+    default_mode: default
+    modes:
+      # Sampling per the Gemma 4 model card (temperature 1.0, top_p 0.95, top_k 64).
+      default:
+        enable_thinking: true
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 64
+        min_p: 0.0
+        presence_penalty: 0.0
+        repeat_penalty: 1.0
+      worker:
+        enable_thinking: false
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 64
+        min_p: 0.0
+        presence_penalty: 0.0
+        repeat_penalty: 1.0
+    supports_function_calling: true
+    supports_vision: false        # served text-only (no mmproj); the study sends no images
+    supports_pdf_document: false
+    tool_calling_strategy: "native"
+    endpoint: "https://slm.example.com/v1"
+
   # ── Managed Qwen (OVH AI Endpoints) ─────────────────────────────
   qwen3.8-27b-ovh:
     # Owner-directed 2026-08-05, moved to the 3.8 generation 2026-09-06 at the

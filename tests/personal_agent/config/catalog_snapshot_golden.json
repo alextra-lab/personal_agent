@@ -18,6 +18,10 @@
           "active": 0,
           "limit": 10
         },
+        "gemma-4-26b-a4b": {
+          "active": 0,
+          "limit": 3
+        },
         "qwen3.6-35b-thinking": {
           "active": 0,
           "limit": 3

@@ -192,6 +192,14 @@ One explicit delta, hand-edited rather than regenerated:
    because the committed probe passed on it (the result is on FRE-1541). **No role
    binding, resolved key, existing mode body, timeout or price changed.**
 
+**Rebaselined a ninth time, deliberately, for FRE-1517 stage 2 (owner decision 2026-10-09).**
+One explicit delta, hand-edited rather than regenerated:
+
+1. **One model semaphore added:** ``gemma-4-26b-a4b``, ``limit`` 3 (slm_server's slot
+   count). It is a study deployment that a session selects through ``/chat``'s ``model``
+   parameter, served alone by swap window. **No role binding, resolved definition or
+   price changed.**
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

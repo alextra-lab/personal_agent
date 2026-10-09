@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import structlog
 
 from personal_agent.security import (
     _BUNDLED_BLOCKLIST,
@@ -603,3 +604,239 @@ class TestFre1552EquivalentSpellings:
 
         sent = str(httpx.Request("GET", "http://b\u00fccher.example/other").url)
         assert g.check_url(sent).allowed is False
+
+
+# ---------------------------------------------------------------------------
+# FRE-1560 — a failed refresh keeps the best list available
+# ---------------------------------------------------------------------------
+
+
+def _write_cache(path: Path, domains: list[str], age: timedelta) -> None:
+    """Write a disk cache that was cached *age* ago."""
+    cached_at = (datetime.now(timezone.utc) - age).isoformat()
+    path.write_text(
+        json.dumps({"cached_at": cached_at, "domain_count": len(domains), "domains": domains})
+    )
+
+
+def _event(logs: list[dict[str, object]], name: str) -> dict[str, object]:
+    """Return the single captured log entry named *name*; fail if there is not exactly one."""
+    matches = [entry for entry in logs if entry["event"] == name]
+    assert len(matches) == 1, [entry["event"] for entry in logs]
+    return matches[0]
+
+
+class TestFre1560FailedRefreshKeepsBestList:
+    @pytest.mark.asyncio
+    async def test_ac1_failed_fetch_keeps_the_in_memory_list(self, tmp_path: Path) -> None:
+        """A list loaded from the feed survives a later fetch that raises."""
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"feed-evil.net"})):
+            await g._refresh()
+        assert g.check_url("https://feed-evil.net/x").allowed is False
+
+        # Expire the TTL and the disk cache, so only the in-memory list can answer.
+        g._last_loaded = datetime.now(timezone.utc) - timedelta(hours=2)
+        _write_cache(tmp_path / "blocklist.json", ["other.net"], timedelta(hours=2))
+        failing = AsyncMock(side_effect=ConnectionError("down"))
+        with (
+            patch.object(g, "_fetch_urlhaus", new=failing),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+
+        assert g.check_url("https://feed-evil.net/x").allowed is False
+        assert g._blocklist >= _BUNDLED_BLOCKLIST
+        event = _event(logs, "domain_guard_using_fallback")
+        assert event["source"] == "memory"
+        assert isinstance(event["age_seconds"], float)
+        assert event["age_seconds"] == pytest.approx(0, abs=60)  # the list is seconds old
+
+    @pytest.mark.asyncio
+    async def test_a_second_failed_refresh_still_reports_the_age_of_the_list(
+        self, tmp_path: Path
+    ) -> None:
+        """The age counts from when the list was produced, not from the last failed attempt."""
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"feed-evil.net"})):
+            await g._refresh()
+        g._blocklist_as_of = datetime.now(timezone.utc) - timedelta(hours=5)
+        _write_cache(tmp_path / "blocklist.json", ["other.net"], timedelta(hours=5))
+
+        failing = AsyncMock(side_effect=ConnectionError("down"))
+        for _ in range(2):
+            with (
+                patch.object(g, "_fetch_urlhaus", new=failing),
+                structlog.testing.capture_logs() as logs,
+            ):
+                await g._refresh()
+            event = _event(logs, "domain_guard_using_fallback")
+            assert event["source"] == "memory"
+            assert event["age_seconds"] == pytest.approx(5 * 3600, abs=60)
+
+    @pytest.mark.asyncio
+    async def test_ac2_cold_start_uses_the_stale_disk_cache(self, tmp_path: Path) -> None:
+        """With nothing in memory, a cache older than the TTL still feeds the guard."""
+        cache_path = tmp_path / "blocklist.json"
+        _write_cache(cache_path, ["old-evil.net"], timedelta(hours=2))
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+
+        with (
+            patch.object(g, "_fetch_urlhaus", new=AsyncMock(side_effect=ConnectionError("down"))),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+
+        assert g.check_url("https://old-evil.net/x").allowed is False
+        assert g._blocklist >= _BUNDLED_BLOCKLIST
+        event = _event(logs, "domain_guard_using_fallback")
+        assert event["source"] == "stale_cache"
+        assert event["age_seconds"] == pytest.approx(2 * 3600, abs=60)
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_fallback_drops_a_pre_fre1552_platform_host(
+        self, tmp_path: Path
+    ) -> None:
+        """The stale cache keeps dedicated hosts but not a whole shared platform."""
+        cache_path = tmp_path / "blocklist.json"
+        _write_cache(cache_path, ["github.com", "old-evil.net"], timedelta(hours=2))
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(side_effect=ConnectionError("down"))):
+            await g._refresh()
+
+        assert g.check_url("https://old-evil.net/x").allowed is False
+        assert g.check_url("https://github.com/vllm-project/vllm").allowed is True
+
+    @pytest.mark.asyncio
+    async def test_no_memory_and_no_cache_falls_back_to_bundled(self, tmp_path: Path) -> None:
+        """With no feed list and no cache file, the bundled list is the last resort."""
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        with (
+            patch.object(g, "_fetch_urlhaus", new=AsyncMock(side_effect=ConnectionError("down"))),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+
+        assert g._blocklist == _BUNDLED_BLOCKLIST
+        event = _event(logs, "domain_guard_using_fallback")
+        assert event["source"] == "bundled"
+        assert event["age_seconds"] is None
+
+    @pytest.mark.asyncio
+    async def test_unreadable_stale_cache_falls_back_to_bundled(self, tmp_path: Path) -> None:
+        """A corrupt cache file is not a source: the bundled list answers."""
+        cache_path = tmp_path / "blocklist.json"
+        cache_path.write_text("{not json")
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+
+        with (
+            patch.object(g, "_fetch_urlhaus", new=AsyncMock(side_effect=ConnectionError("down"))),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+
+        assert g._blocklist == _BUNDLED_BLOCKLIST
+        assert _event(logs, "domain_guard_using_fallback")["source"] == "bundled"
+
+    @pytest.mark.asyncio
+    async def test_ac3_failed_cache_write_keeps_the_fetched_list(self, tmp_path: Path) -> None:
+        """A write error after a good fetch must not replace the list with the bundled one."""
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+
+        with (
+            patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"feed-evil.net"})),
+            patch.object(g, "_save_to_disk_cache", side_effect=OSError("disk full")),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+
+        assert g.check_url("https://feed-evil.net/x").allowed is False
+        assert g._blocklist >= _BUNDLED_BLOCKLIST
+        event = _event(logs, "domain_guard_cache_write_failed")
+        assert "disk full" in str(event["error"])
+        assert not [e for e in logs if e["event"] == "domain_guard_using_fallback"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("feed_text", ["", "# only a comment\n\n"])
+    async def test_an_empty_feed_response_keeps_the_list_and_the_cache(
+        self, tmp_path: Path, feed_text: str
+    ) -> None:
+        """A 200 response with no entries is a failed fetch, not an empty blocklist."""
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"feed-evil.net"})):
+            await g._refresh()
+        domains_before = json.loads((tmp_path / "blocklist.json").read_text())["domains"]
+        g._last_loaded = datetime.now(timezone.utc) - timedelta(hours=2)
+        (tmp_path / "blocklist.json").unlink()
+
+        response = httpx.Response(200, text=feed_text, request=httpx.Request("GET", "http://feed"))
+        with (
+            patch("httpx.AsyncClient.get", new=AsyncMock(return_value=response)),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+
+        assert g.check_url("https://feed-evil.net/x").allowed is False
+        assert _event(logs, "domain_guard_using_fallback")["source"] == "memory"
+        assert not (tmp_path / "blocklist.json").exists(), "an empty feed must not write the cache"
+        assert set(domains_before) >= {"feed-evil.net"}  # the first load did write the cache
+
+    @pytest.mark.asyncio
+    async def test_a_cache_timestamp_without_a_timezone_is_unreadable_not_a_crash(
+        self, tmp_path: Path
+    ) -> None:
+        """A naive ``cached_at`` makes the cache unusable instead of raising TypeError."""
+        cache_path = tmp_path / "blocklist.json"
+        cache_path.write_text(
+            json.dumps(
+                {"cached_at": "2026-10-09T10:00:00", "domain_count": 1, "domains": ["x.net"]}
+            )
+        )
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(side_effect=ConnectionError("down"))):
+            await g._refresh()
+
+        assert g._blocklist == _BUNDLED_BLOCKLIST
+
+    @pytest.mark.asyncio
+    async def test_an_as_of_time_in_the_future_reports_an_age_of_zero(self, tmp_path: Path) -> None:
+        """Clock skew never yields a negative age in the fallback log."""
+        g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"feed-evil.net"})):
+            await g._refresh()
+        g._blocklist_as_of = datetime.now(timezone.utc) + timedelta(hours=3)
+        (tmp_path / "blocklist.json").unlink()  # a fresh cache would answer before the fetch
+
+        with (
+            patch.object(g, "_fetch_urlhaus", new=AsyncMock(side_effect=ConnectionError("down"))),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await g._refresh()
+        event = _event(logs, "domain_guard_using_fallback")
+        assert event["source"] == "memory"
+        assert event["age_seconds"] == 0.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "content",
+        [
+            '["not", "a", "mapping"]',
+            '{"cached_at": null, "domains": []}',
+            '{"cached_at": "2026-10-09T10:00:00+00:00", "domains": null}',
+        ],
+    )
+    async def test_a_cache_file_of_the_wrong_shape_is_unreadable_not_a_crash(
+        self, tmp_path: Path, content: str
+    ) -> None:
+        """A cache that parses but has the wrong shape lets the refresh reach the feed."""
+        cache_path = tmp_path / "blocklist.json"
+        cache_path.write_text(content)
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"feed-evil.net"})):
+            await g._refresh()
+
+        assert g.check_url("https://feed-evil.net/x").allowed is False

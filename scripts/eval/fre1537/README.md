@@ -107,6 +107,11 @@ uv run python -m scripts.eval.fre1537.score    --run-dir $RUN --tag $D-planner
 - The request is the production one. The probe calls `LiteLLMClient.respond` the way the planner call does,
   so the dialect parameters, the provider's base URL and the Anthropic cache blocks are the gateway's.
   It never calls `litellm` directly (ADR-0141 AC-6).
+- The `response_format` is the production one (FRE-1548). `planner_response_format(provider, admit_single=True)` builds it.
+  On `anthropic` it is the plan JSON schema, and litellm sends it as `output_format`. On any other provider it is
+  `{"type": "json_object"}`. The schema admits `SINGLE`, because the probe prompt carries the decline rule. The
+  fingerprint records `response_format_sha256`, so a change of the schema needs a new run. A run directory from
+  before FRE-1548 holds a different configuration for `claude_sonnet` and cannot resume.
 - `respond` reserves and records cost through the `CostGate` (ADR-0065). The probe registers a real gate. It
   refuses to start unless `AGENT_DATABASE_URL` is the eval Postgres, so no cost row reaches production
   (FRE-375). `make eval-infra-up` starts that database.

@@ -205,6 +205,79 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
     return f"{prompt}\n{briefing_rules}"
 
 
+# FRE-1548: the providers whose planner request carries the plan schema. litellm sends a
+# bare ``json_object`` request to Anthropic as nothing at all, so there the JSON shape rests
+# on the prompt alone. Every other provider keeps the request it was qualified on: the local
+# binding qualified on ``json_object`` (FRE-1541), and the OVH deployment is left as it is.
+_SCHEMA_PROVIDERS = frozenset({"anthropic"})
+
+
+def planner_plan_schema(*, admit_single: bool = False) -> dict[str, Any]:
+    """Build the JSON schema of the plan that the planner returns (FRE-1548).
+
+    It is the shape ``_validate_plan_json`` checks and the system prompt asks for. The enums
+    come from the registries the prompt renders from, so the three cannot drift apart.
+    Every object forbids extra keys, which Anthropic's structured output requires.
+
+    Args:
+        admit_single: Whether ``SINGLE`` is a valid strategy (the decline of ADR-0154 D2).
+            The production prompt does not offer it yet. The probe prompt does.
+
+    Returns:
+        A new schema dict on every call.
+    """
+    task = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "goal": {"type": "string"},
+            "constraints": {"type": "array", "items": {"type": "string"}},
+            "type": {"type": "string", "enum": [t.value for t in WORKER_TYPES]},
+            "thoroughness": {"type": "string", "enum": list(THOROUGHNESS_LEVELS)},
+        },
+        "required": ["name", "goal", "type"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "strategy": {
+                "type": "string",
+                "enum": ["SINGLE", "HYBRID", "DECOMPOSE"]
+                if admit_single
+                else ["HYBRID", "DECOMPOSE"],
+            },
+            "tasks": {"type": "array", "items": task},
+            "memory_relevance": {"type": "string", "enum": ["used", "none_relevant"]},
+        },
+        "required": ["strategy", "tasks"],
+        "additionalProperties": False,
+    }
+
+
+def planner_response_format(provider: str | None, *, admit_single: bool = False) -> dict[str, Any]:
+    """Return the ``response_format`` of the planner request for a provider (FRE-1548).
+
+    Args:
+        provider: The provider of the planner client, ``None`` for a client without one.
+        admit_single: See :func:`planner_plan_schema`.
+
+    Returns:
+        A ``json_schema`` request for a provider in ``_SCHEMA_PROVIDERS``. The unchanged
+        ``{"type": "json_object"}`` for every other provider.
+    """
+    if provider not in _SCHEMA_PROVIDERS:
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "planner_plan",
+            "strict": True,
+            "schema": planner_plan_schema(admit_single=admit_single),
+        },
+    }
+
+
 def _render_planner_history(messages: list[dict[str, Any]], max_chars: int) -> str:
     """Render conversation history as plain role-labelled text (FRE-1521).
 
@@ -381,16 +454,75 @@ def _planner_mode_name(llm_client: Any) -> str | None:
     return mode if isinstance(mode, str) else None
 
 
-def _planner_reasoning_chars(response: Mapping[str, Any]) -> int:
-    """Count the reasoning characters that a planner response carried (ADR-0154 D4).
+@dataclass(frozen=True)
+class PlannerReasoning:
+    """The reasoning that a planner response carried (ADR-0154 D4, D6).
+
+    Attributes:
+        chars: Reasoning characters. The largest of the client's ``reasoning_trace``, the
+            provider's ``reasoning_content`` and the thinking blocks. A redacted block
+            counts its payload, because its text is withheld.
+        thinking_blocks: Thinking blocks in the provider message, redacted ones included.
+        tokens: The reasoning tokens that the provider reported, ``None`` when it reported none.
+    """
+
+    chars: int
+    thinking_blocks: int
+    tokens: int | None
+
+
+def _provider_message(response: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return the provider message inside ``response["raw"]``, or an empty mapping."""
+    raw = response.get("raw")
+    choices = raw.get("choices") if isinstance(raw, Mapping) else None
+    first = choices[0] if isinstance(choices, list) and choices else None
+    message = first.get("message") if isinstance(first, Mapping) else None
+    return message if isinstance(message, Mapping) else {}
+
+
+def _planner_reasoning(response: Mapping[str, Any]) -> PlannerReasoning:
+    """Read the reasoning that a planner response carried (ADR-0154 D4, D6, FRE-1548).
+
+    The cloud client sets ``reasoning_trace`` to ``None`` whatever the model did, so the
+    evidence is also read from the provider message that the client keeps in ``raw``. The
+    client's own contract does not change: the executor copies a non-empty ``reasoning_trace``
+    into the next assistant message.
 
     Args:
         response: The normalised ``LLMResponse`` of the planner call.
 
     Returns:
-        The length of ``reasoning_trace``, 0 when the response carries none.
+        The reasoning characters, thinking blocks and reasoning tokens. All are zero or
+        ``None`` when the response carries none.
     """
-    return len(response.get("reasoning_trace") or "")
+    message = _provider_message(response)
+    blocks = message.get("thinking_blocks")
+    block_list = [b for b in blocks if isinstance(b, Mapping)] if isinstance(blocks, list) else []
+    block_chars = sum(len(str(b.get("thinking") or b.get("data") or "")) for b in block_list)
+    usage = response.get("usage")
+    tokens = usage.get("reasoning_tokens") if isinstance(usage, Mapping) else None
+    return PlannerReasoning(
+        chars=max(
+            len(response.get("reasoning_trace") or ""),
+            len(str(message.get("reasoning_content") or "")),
+            block_chars,
+        ),
+        thinking_blocks=len(block_list),
+        tokens=tokens if isinstance(tokens, int) and tokens >= 0 else None,
+    )
+
+
+def _planner_provider(llm_client: Any) -> str | None:
+    """Return the provider that the planner client dispatches to (FRE-1548).
+
+    Args:
+        llm_client: The client of the planner call.
+
+    Returns:
+        The client's ``provider``, or ``None`` for a client without one (a stub).
+    """
+    provider = getattr(llm_client, "provider", None)
+    return provider if isinstance(provider, str) else None
 
 
 def _planner_deployment(llm_client: Any) -> str | None:
@@ -1047,7 +1179,10 @@ class ExpansionController:
                     # mid-reasoning. Omitting the kwarg defers to the resolved
                     # client's own catalog ceiling, exactly like every other
                     # `.respond()` call in the orchestrator's main turn loop.
-                    response_format={"type": "json_object"},
+                    # FRE-1548: a provider that does not enforce JSON on its own gets the
+                    # plan schema. Every other provider keeps the bare request it was
+                    # qualified on.
+                    response_format=planner_response_format(_planner_provider(llm_client)),
                     trace_ctx=TraceContext(
                         trace_id=trace_id,
                         user_id=user_id,
@@ -1065,7 +1200,8 @@ class ExpansionController:
             # FRE-501: capture planner-call cost so the executor can roll it into
             # the live turn meter. Paid/cloud calls populate cost_usd; 0.0 otherwise.
             result.planner_cost_usd = float(raw_response.get("cost_usd") or 0.0)
-            reasoning_chars = _planner_reasoning_chars(raw_response)
+            reasoning = _planner_reasoning(raw_response)
+            reasoning_chars = reasoning.chars
             plan = _validate_plan_json(
                 raw_response["content"], strategy, max_tasks=expansion_budget
             )
@@ -1094,6 +1230,10 @@ class ExpansionController:
                     # first turn a mode stops disabling thinking.
                     planner_mode=_planner_mode_name(llm_client),
                     planner_reasoning_chars=reasoning_chars,
+                    # FRE-1548: what a managed provider reports (the cloud client keeps no
+                    # reasoning_trace), so ADR-0154 D6 shows the truth on any deployment.
+                    planner_thinking_blocks=reasoning.thinking_blocks,
+                    planner_reasoning_tokens=reasoning.tokens,
                     planner_input_chars=input_chars,
                     planner_input_total_chars=planner_input.total_chars,
                     trace_id=trace_id,

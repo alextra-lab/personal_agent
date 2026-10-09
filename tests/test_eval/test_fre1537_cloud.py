@@ -216,7 +216,7 @@ def test_a_session_registers_the_catalog_pricing(stack: dict[str, Any]) -> None:
 def test_an_unpriced_response_still_meters_a_cost(
     stack: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """litellm prices an unknown model at 0. The cap must not believe that."""
+    """Litellm prices an unknown model at 0. The cap must not believe that."""
     import litellm
 
     monkeypatch.setattr(cloud, "register_model_pricing", lambda config: 0)
@@ -559,6 +559,26 @@ def test_the_cap_counts_a_call_that_is_in_flight(tmp_path: Path) -> None:
         budget.check(target(OVH), "S", "x" * 300, pending=0.5)
 
 
+def test_the_sonnet_probe_sends_the_production_schema_that_admits_single(
+    stack: dict[str, Any],
+) -> None:
+    """FRE-1548: the probe measures the request that the planner call sends, not a bare json_object."""
+    from personal_agent.orchestrator.expansion_controller import (
+        planner_plan_schema,
+        planner_response_format,
+    )
+
+    with cloud.CloudSession(target(SONNET), gate=stack["gate"]) as session:
+        session.call("SYS", "USER")
+    (kwargs,) = stack["calls"]
+    sent = kwargs["response_format"]
+    assert sent == planner_response_format("anthropic", admit_single=True)
+    assert "SINGLE" in sent["json_schema"]["schema"]["properties"]["strategy"]["enum"]
+    assert (
+        sent["json_schema"]["schema"] != planner_plan_schema()
+    )  # production does not admit it yet
+
+
 # ── The fingerprint ──────────────────────────────────────────────────────────
 
 
@@ -588,6 +608,23 @@ def test_a_different_served_model_is_a_different_configuration(tmp_path: Path) -
     other["engine"]["served_model"] = "served-model-2"  # type: ignore[index]
     with pytest.raises(SystemExit, match="different configuration"):
         fingerprint.ensure_compatible(paths, other)
+
+
+def test_a_different_response_format_is_a_different_configuration(tmp_path: Path) -> None:
+    """FRE-1548: a change of the schema is a routing change (ADR-0154 D7 requalification)."""
+    paths, inputs = make_inputs(tmp_path)
+    fp = fingerprint.build_cloud_fingerprint(target(SONNET), inputs, paths, None)
+    fingerprint.ensure_compatible(paths, fp)
+    other = {**fp, "response_format_sha256": "0" * 64}
+    with pytest.raises(SystemExit, match="different configuration"):
+        fingerprint.ensure_compatible(paths, other)
+
+
+def test_the_two_providers_hash_different_requests(tmp_path: Path) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    sonnet = fingerprint.build_cloud_fingerprint(target(SONNET), inputs, paths, None)
+    ovh = fingerprint.build_cloud_fingerprint(target(OVH), inputs, paths, None)
+    assert sonnet["response_format_sha256"] != ovh["response_format_sha256"]
 
 
 def _catalog_with_planner(spec: Mapping[str, object]):  # type: ignore[no-untyped-def]

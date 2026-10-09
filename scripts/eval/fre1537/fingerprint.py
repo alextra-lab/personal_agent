@@ -37,6 +37,7 @@ _IDENTITY_PATHS = (
     ("model", "quant"),
     ("planner_mode",),
     ("system_prompt_sha256",),
+    ("response_format_sha256",),
     ("digest_sha256",),
 )
 
@@ -226,6 +227,8 @@ def build_cloud_fingerprint(
     Returns:
         The fingerprint. The credential is not in it.
     """
+    from scripts.eval.fre1537.cloud import response_format_of  # lazy: cloud imports the client
+
     fingerprint: dict[str, object] = {
         "engine": {
             "name": target.provider,
@@ -242,6 +245,10 @@ def build_cloud_fingerprint(
         },
         "planner_mode": {"name": target.mode_name, "params": dict(target.declared)},
         "system_prompt_sha256": inputs.prompts["prompt_hash"],
+        # FRE-1548: the schema is part of the request, so a change of it is a routing change.
+        "response_format_sha256": hashlib.sha256(
+            json.dumps(response_format_of(target), sort_keys=True).encode()
+        ).hexdigest(),
         "captured_primary": _captured_summary(paths, inputs),
         "client": {"litellm": importlib.metadata.version("litellm")},
         "git_head": _git_head(),

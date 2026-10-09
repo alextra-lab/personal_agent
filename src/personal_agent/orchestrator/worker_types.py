@@ -39,6 +39,7 @@ __all__ = [
     "WorkerReport",
     "WorkerType",
     "WorkerTypeSpec",
+    "render_prompt_block",
     "render_report_instruction",
     "render_worker_report_body",
     "render_worker_report_findings",
@@ -270,7 +271,7 @@ def render_worker_report_summary(report: WorkerReport) -> str:
 #     voluntary-stop report-writing call. Without it the completed path returns
 #     the reply itself as the report, so an obedient worker would report "DONE".
 #     T3 replaces "Then write your report." with the ADR's two sentences.
-_RESEARCHER_BLOCK = (
+_RESEARCHER_BODY = (
     "You research one bounded question on the open web.\n"
     "Prefer primary sources: the organiser, the venue, the official listing, the "
     "publisher. A news article that names its source is second. An aggregator is "
@@ -283,9 +284,23 @@ _RESEARCHER_BLOCK = (
     "A report that something is absent, naming what you searched and where, is "
     "complete for that part. It needs no apology and no substitute answer. Absence "
     "you did not search for is not a finding.\n"
+)
+_RESEARCHER_STOP_RULE = (
     "Stop searching when your last two searches returned the same facts. To finish, "
     "reply with the single word DONE and no tool calls. You will then be asked for "
     "your report."
+)
+_RESEARCHER_BLOCK = _RESEARCHER_BODY + _RESEARCHER_STOP_RULE
+
+# FRE-1561: the variant sits between the body and the stop rule. It names `standard`
+# because the system prompt is shared by every thoroughness level (ADR-0150): the level
+# is in the task message, and a flat minimum would also bind `quick` workers. A "round"
+# is the budget's own unit (one reply that calls tools), so the worker reads one unit.
+_RESEARCHER_MIN_ROUNDS_RULE = (
+    "When your thoroughness is standard, you must make at least {n} rounds of "
+    "searches before you apply the stop rule below, unless your budget ends first. "
+    "Use a different query in each round. A first search that looks complete is not "
+    "a reason to stop.\n"
 )
 
 WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
@@ -312,6 +327,30 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
         ),
     }
 )
+
+
+def render_prompt_block(worker_type: WorkerType, researcher_min_search_rounds: int = 0) -> str:
+    """The type block appended to the shared base prompt for this type (ADR-0150 D5).
+
+    With ``researcher_min_search_rounds`` at 0 this is the registry's block, byte for
+    byte. Above 0, the researcher block gains a minimum-rounds rule before its stop rule
+    (FRE-1561). Other types ignore the number.
+
+    Args:
+        worker_type: The registry type running the task.
+        researcher_min_search_rounds: The minimum search rounds a ``standard`` researcher
+            makes before it applies its stop rule. 0 leaves the block unchanged.
+
+    Returns:
+        The prompt block text. Empty for a type with no block.
+    """
+    if worker_type is WorkerType.RESEARCHER and researcher_min_search_rounds > 0:
+        return (
+            _RESEARCHER_BODY
+            + _RESEARCHER_MIN_ROUNDS_RULE.format(n=researcher_min_search_rounds)
+            + _RESEARCHER_STOP_RULE
+        )
+    return WORKER_TYPES[worker_type].prompt_block
 
 
 def worker_types_declaring(tool_name: str) -> tuple[WorkerType, ...]:

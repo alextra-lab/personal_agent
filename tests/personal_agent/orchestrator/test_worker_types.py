@@ -13,6 +13,7 @@ from personal_agent.orchestrator.worker_types import (
     Gap,
     WorkerReport,
     WorkerType,
+    render_prompt_block,
     render_report_instruction,
     render_worker_report_body,
     render_worker_report_summary,
@@ -89,6 +90,62 @@ class TestResearcherBlock:
             "To finish, reply with the single word DONE and no tool calls. "
             "You will then be asked for your report." in block
         )
+
+
+# Today's researcher block, copied from origin/main before FRE-1561 (AC-1). A change to
+# any byte of the default prompt must fail here, not in review.
+_RESEARCHER_BLOCK_ON_MAIN = (
+    "You research one bounded question on the open web.\n"
+    "Prefer primary sources: the organiser, the venue, the official listing, the "
+    "publisher. A news article that names its source is second. An aggregator is "
+    "last, and never the only source for a claim.\n"
+    "Record a claim only when a fetched result states it. Quote a source's exact "
+    "words only when the wording is load-bearing. Do not recap pages you merely read.\n"
+    "If you find nothing for part of the task, say so and say what you searched — a "
+    "report that names nothing you looked for is indistinguishable from never having "
+    "looked.\n"
+    "A report that something is absent, naming what you searched and where, is "
+    "complete for that part. It needs no apology and no substitute answer. Absence "
+    "you did not search for is not a finding.\n"
+    "Stop searching when your last two searches returned the same facts. To finish, "
+    "reply with the single word DONE and no tool calls. You will then be asked for "
+    "your report."
+)
+_MIN_ROUNDS_PARAGRAPH = (
+    "When your thoroughness is standard, you must make at least {n} rounds of "
+    "searches before you apply the stop rule below, unless your budget ends first. "
+    "Use a different query in each round. A first search that looks complete is not "
+    "a reason to stop.\n"
+)
+_STOP_RULE = (
+    "Stop searching when your last two searches returned the same facts. To finish, "
+    "reply with the single word DONE and no tool calls. You will then be asked for "
+    "your report."
+)
+
+
+class TestMinSearchRoundsVariant:
+    """FRE-1561 AC-1 and AC-2 (unit level): the setting selects the researcher's stop rule."""
+
+    def test_default_researcher_block_is_byte_identical_to_main(self) -> None:
+        assert WORKER_TYPES[WorkerType.RESEARCHER].prompt_block == _RESEARCHER_BLOCK_ON_MAIN
+        assert render_prompt_block(WorkerType.RESEARCHER) == _RESEARCHER_BLOCK_ON_MAIN
+
+    def test_zero_leaves_every_type_unchanged(self) -> None:
+        for worker_type in WorkerType:
+            assert render_prompt_block(worker_type, 0) == WORKER_TYPES[worker_type].prompt_block
+
+    def test_variant_adds_the_rule_before_the_stop_rule(self) -> None:
+        block = render_prompt_block(WorkerType.RESEARCHER, 5)
+        body = _RESEARCHER_BLOCK_ON_MAIN.removesuffix(_STOP_RULE)
+        assert block == body + _MIN_ROUNDS_PARAGRAPH.format(n=5) + _STOP_RULE
+
+    def test_variant_renders_the_setting_value(self) -> None:
+        assert "at least 3 rounds" in render_prompt_block(WorkerType.RESEARCHER, 3)
+        assert "at least 5 rounds" in render_prompt_block(WorkerType.RESEARCHER, 5)
+
+    def test_variant_does_not_touch_the_general_type(self) -> None:
+        assert render_prompt_block(WorkerType.GENERAL, 5) == ""
 
 
 class TestTypesDeclaring:

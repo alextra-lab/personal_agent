@@ -98,6 +98,7 @@ from personal_agent.orchestrator.worker_types import (
     WORKER_REPORT_SCHEMA_NAME,
     WORKER_TYPES,
     WorkerReport,
+    render_prompt_block,
     render_report_instruction,
     render_worker_report_summary,
 )
@@ -859,7 +860,8 @@ def _terminal_error(outcome: "_ToolLoopOutcome", state: "_ToolLoopState") -> str
 def _build_sub_agent_system_prompt(spec: SubAgentSpec) -> str:
     """Build the worker's system prompt: base, budget mechanism, type block (ADR-0150 D5).
 
-    A function of the worker's type and ``spec.skill_index_block``, which no
+    A function of the worker's type, ``settings.sub_agent_researcher_min_search_rounds``
+    (a process constant, 0 by default: FRE-1561) and ``spec.skill_index_block``, which no
     dispatch path sets today (measured at 0 characters on every worker, ADR-0150
     Context). Nothing per-task is rendered here — not the date (ADR-0149 move 2),
     not the round budget (ADR-0150 D3) — so every worker of one type has the same
@@ -875,7 +877,9 @@ def _build_sub_agent_system_prompt(spec: SubAgentSpec) -> str:
         The complete system prompt.
     """
     parts = [_SUB_AGENT_SYSTEM_PROMPT, _BUDGET_MECHANISM]
-    type_block = WORKER_TYPES[spec.worker_type].prompt_block
+    type_block = render_prompt_block(
+        spec.worker_type, settings.sub_agent_researcher_min_search_rounds
+    )
     if type_block:
         parts.append(type_block)
     if spec.skill_index_block:

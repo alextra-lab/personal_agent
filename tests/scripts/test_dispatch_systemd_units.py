@@ -54,3 +54,11 @@ def test_gating_watcher_unit_preflights_before_starting() -> None:
     unit = _read("seshat-gating-watcher.service")
     assert "--preflight" in unit
     assert "ExecStartPre" in unit
+
+
+def test_gating_watcher_unit_can_find_the_claude_binary() -> None:
+    """FRE-1556: the watcher shells out to `claude agents`; a bare systemd PATH lacks ~/.local/bin."""
+    unit = _read("seshat-gating-watcher.service")
+    path_lines = [line for line in unit.splitlines() if line.startswith("Environment=PATH=")]
+    assert len(path_lines) == 1
+    assert "/.local/bin:" in path_lines[0]

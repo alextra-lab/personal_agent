@@ -11,6 +11,7 @@ cannot recur; AC-4 asserts no call site hand-rolls a raw target again.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -127,7 +128,16 @@ def test_ac3_send_keys_never_delivers_into_a_name_extension_seat() -> None:
 
 def test_ac3_idle_guard_reads_the_right_pane() -> None:
     """capture-pane must be an exact PANE target, not a bare session."""
-    runner = _Recorder(returncode=0, stdout="")
+
+    class _RegisteredIdle(_Recorder):
+        def __call__(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+            if argv[:2] == ["claude", "agents"]:  # FRE-1556: the gate reads RC before the pane
+                self.calls.append(list(argv))
+                agent = [{"name": _DEAD_SEAT, "cwd": "/x", "kind": "x", "status": "idle"}]
+                return subprocess.CompletedProcess(argv, 0, json.dumps(agent), "")
+            return super().__call__(argv)
+
+    runner = _RegisteredIdle(returncode=0, stdout="")
     send_to_session(_DEAD_SEAT, "/build FRE-1", runner, require_idle=True)
 
     capture = [argv for argv in runner.calls if "capture-pane" in argv]

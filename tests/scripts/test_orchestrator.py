@@ -3351,8 +3351,19 @@ _IDLE_MASTER_PANE = Path("tests/fixtures/gating_watcher_real_idle_pane.txt").rea
 _ALERT_EVENT = "dispatch-notify:dispatch_seat_wedged:build1"
 
 
+_MASTER_REGISTERED_IDLE = json.dumps(
+    [{"name": "cc-master", "cwd": "/opt/seshat", "kind": "interactive", "status": "idle"}]
+)
+
+
 def _master_runner(master_pane: str = _IDLE_MASTER_PANE) -> _RecordingRunner:
-    return _RecordingRunner({"capture-pane": _FakeRunResult(stdout=master_pane)})
+    """Master is registered idle with Remote Control (FRE-1556: a send needs RC ``idle``)."""
+    return _RecordingRunner(
+        {
+            "capture-pane": _FakeRunResult(stdout=master_pane),
+            "agents": _FakeRunResult(stdout=_MASTER_REGISTERED_IDLE),
+        }
+    )
 
 
 def _alert_texts(runner: _RecordingRunner) -> list[str]:

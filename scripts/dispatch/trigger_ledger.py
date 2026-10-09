@@ -35,8 +35,9 @@ the caller's own resolution pass owns it (``gating_watcher.resolve_queued_trigge
 which checks the entry's precondition for obsolescence first (so a target that
 resolved the underlying decision some other way, e.g. master gating a PR through
 its own scan, never receives a stale command at all), then re-offers into an
-idle pane, and — only past a bounded age — force-delivers regardless of pane
-state so a persistently busy target still cannot drop the dispatch outright.
+seat that the send gate allows (FRE-1556), and — only past a bounded age — alerts.
+It never types into a busy seat or a held draft: the entry stays queued until the
+seat is idle with an empty draft, so the dispatch is never dropped and never forced.
 
 ``queued_at`` is written **at the same point the deferral decision is made**,
 before returning to the caller — there is no keystroke on this path to sequence

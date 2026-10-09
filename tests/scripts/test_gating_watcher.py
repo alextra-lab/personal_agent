@@ -51,8 +51,8 @@ from scripts.dispatch.gating_watcher import (
     run_once,
     send_to_session,
     session_for_labels,
-    session_is_idle,
 )
+from scripts.dispatch.pane_state import session_is_idle
 from scripts.dispatch.tmux_target import exact_pane
 from scripts.dispatch.trigger_ledger import snapshot_unconsumed
 
@@ -68,8 +68,32 @@ class _FakeRunResult:
         self.stdout = stdout
 
 
+_WORKTREES = "/opt/seshat/.claude/worktrees"
+# Every seat that these tests address, registered idle with Remote Control (FRE-1556): a send
+# needs RC ``idle``. A dispatch stream's seat registers with its worktree as cwd.
+_RC_CWD = {
+    "cc-master": "/opt/seshat",
+    "cc-1build": f"{_WORKTREES}/build",
+    "cc-2build": f"{_WORKTREES}/build2",
+    "cc-adrs": f"{_WORKTREES}/adrs",
+    "cc-worker": "/opt/seshat",
+    "cc-x": "/opt/seshat",
+}
+
+
+def _idle_registry() -> _FakeRunResult:
+    agents = [
+        {"name": name, "cwd": cwd, "kind": "interactive", "status": "idle"}
+        for name, cwd in _RC_CWD.items()
+    ]
+    return _FakeRunResult(stdout=json.dumps(agents))
+
+
 class _RecordingRunner:
-    """Records argv calls; returns a canned result by first-arg + subcommand."""
+    """Records argv calls; returns a canned result by first-arg + subcommand.
+
+    ``claude agents`` answers with every seat idle unless a test overrides it.
+    """
 
     def __init__(self, results: dict[tuple[str, ...], _FakeRunResult] | None = None) -> None:
         self.calls: list[tuple[str, ...]] = []
@@ -81,6 +105,8 @@ class _RecordingRunner:
         for prefix, result in self._results.items():
             if argv_t[: len(prefix)] == prefix:
                 return result
+        if argv_t[:2] == ("claude", "agents"):
+            return _idle_registry()
         return _FakeRunResult()
 
 
@@ -775,8 +801,13 @@ def test_run_once_uses_only_tmux_and_gh_never_claude() -> None:
         logger=_NullLogger(),
         execute=True,
     )
-    # AC-6: the watcher never launches a Claude session; actuation is tmux only.
-    assert all(call[0] != "claude" for call in runner.calls)
+    # AC-6: the watcher never launches a Claude session; actuation is tmux only. Its one
+    # ``claude`` call is the read-only Remote Control registry (FRE-1556).
+    assert all(
+        call == ("claude", "agents", "--json", "--all")
+        for call in runner.calls
+        if call[0] == "claude"
+    )
     assert any(call[:2] == ("tmux", "send-keys") for call in runner.calls)
 
 
@@ -1120,8 +1151,8 @@ def test_run_once_master_holds_when_busy_session_no_keys_sent() -> None:
 
     The no-permanent-drop guarantee (FRE-845) no longer lives in "inject
     blind at first attempt" — it lives in ``resolve_queued_triggers``'s
-    idle-gated re-offer plus its bounded age-escalation force-deliver
-    fallback, covered separately below.
+    gated re-offer plus its bounded age-escalation alert (FRE-1556: no
+    force-delivery), covered separately below.
     """
     runner = _RecordingRunner(
         {
@@ -1546,7 +1577,10 @@ class _FakeHttpResponse:
 
 
 def _run_master_tick(
-    poster: _FakeChannelPoster, runner: _RecordingRunner, ledger: dict, secret: str | None = "s3cret"
+    poster: _FakeChannelPoster,
+    runner: _RecordingRunner,
+    ledger: dict,
+    secret: str | None = "s3cret",
 ) -> None:
     run_once(
         {},
@@ -2360,10 +2394,9 @@ def test_queued_busy_reoffer_sends_no_keys() -> None:
 def test_queued_escalates_once_naming_pr() -> None:
     """AC-2: surfaced exactly once past the threshold, naming the PR.
 
-    FRE-1271: the same tick that crosses the threshold also force-delivers —
-    ``_busy_runner()``'s pane always reads busy, but ``has-session`` succeeds,
-    so the entry is sent+consumed on that tick (proven below), and the third
-    tick neither re-alerts nor re-sends because the entry is already resolved.
+    FRE-1556: crossing the threshold only alerts. ``_busy_runner()``'s pane always
+    reads busy, and the entry stays queued, so no tick ever types into the seat
+    (ADR-0155 D7: the last resort is an alert, never a typed injection).
     """
     ledger = _queued_entry(created_at=100.0)
     escalated: set[str] = set()
@@ -2398,15 +2431,15 @@ def test_queued_escalates_once_naming_pr() -> None:
     assert len(fired) == 1
     assert fired[0]["pr"] == "412"
     assert fired[0]["session"] == MASTER_SESSION
-    # ...and force-delivered on that same tick, past the threshold.
+    # ...and nothing is typed: the entry stays queued, not sent.
     entry = ledger["master:412:abc1234def5678"]
-    assert entry.sent_at == 1900.0
-    assert entry.consumed_at is not None
-    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412") in runner2.calls
+    assert entry.sent_at is None
+    assert entry.consumed_at is None
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner2.calls)
 
     logger3, runner3 = _tick(now=5000.0)
     assert _alerts(logger3) == []  # latched — never a second alert
-    assert not any(c[:2] == ("tmux", "send-keys") for c in runner3.calls)  # already consumed
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner3.calls)  # still no force
 
 
 def test_queued_age_clock_not_reset_by_reoffer() -> None:
@@ -2414,9 +2447,9 @@ def test_queued_age_clock_not_reset_by_reoffer() -> None:
 
     ``created_at`` is written once by ``record_pending``; nothing on the
     re-offer path rewrites it, so the escalation still fires on the ORIGINAL
-    clock after several busy re-offer attempts. The final (escalating) tick
-    also force-delivers (FRE-1271) — proven below via the ledger and the
-    keystroke count on that last tick's runner.
+    clock after several busy re-offer attempts. The escalating tick only alerts
+    (FRE-1556) — proven below via the ledger and the keystroke count on that
+    last tick's runner.
     """
     ledger = _queued_entry(created_at=100.0)
     escalated: set[str] = set()
@@ -2444,17 +2477,15 @@ def test_queued_age_clock_not_reset_by_reoffer() -> None:
     assert len(fired) == 1
     assert fired[0]["age_s"] == 1800.0
     entry = ledger["master:412:abc1234def5678"]
-    assert entry.sent_at == 1900.0  # force-delivered on the escalating tick
-    assert entry.consumed_at is not None
-    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412") in runner.calls
+    assert entry.sent_at is None  # the escalating tick alerts and types nothing
+    assert entry.consumed_at is None
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
 
 
 def test_queued_not_force_delivered_before_escalation_threshold() -> None:
-    """Regression pin: the bounded fallback must not quietly become unconditional.
+    """A pane that reads busy forever costs zero keystrokes under ``escalation_s``.
 
-    A pane that reads busy forever costs zero keystrokes for as long as the
-    entry is under ``escalation_s`` — only crossing the threshold unlocks the
-    force-deliver fallback (proven by the sibling test below).
+    Crossing the threshold alerts and still types nothing (the sibling test below).
     """
     ledger = _queued_entry(created_at=100.0)
     runner = _busy_runner()
@@ -2477,16 +2508,15 @@ def test_queued_not_force_delivered_before_escalation_threshold() -> None:
     assert entry.consumed_at is None
 
 
-def test_queued_force_delivers_after_escalation_when_pane_never_goes_idle() -> None:
-    """Directly refutes the codex-flagged gap: a permanently-busy pane still delivers.
+def test_queued_is_never_force_delivered_after_escalation_when_pane_never_goes_idle() -> None:
+    """FRE-1556 AC-3: a permanently-busy seat is alerted about, never typed into.
 
-    The pre-FRE-1271 guarantee was "always eventually send"; the pure-log
-    escalation alone would have downgraded that to "eventually log a warning".
-    This proves delivery itself — not just the warning — still happens, bounded
-    to ``escalation_s`` rather than immediate.
+    The FRE-1271 fallback typed into the pane after 30 minutes, whatever it held. ADR-0155 D7
+    ends it. The entry stays queued, so the trigger still lands when the seat frees up.
     """
     ledger = _queued_entry(created_at=100.0)
     runner = _busy_runner()  # pane reads busy on every tick; has-session succeeds
+    logger = _CapturingLogger()
     run_once(
         {},
         now=1900.0,  # created_at=100.0, so age=1800s -- exactly at the threshold
@@ -2494,17 +2524,17 @@ def test_queued_force_delivers_after_escalation_when_pane_never_goes_idle() -> N
         session_resolver=_no_session,
         runner=runner,
         persist=lambda _s: None,
-        logger=_NullLogger(),
+        logger=logger,
         execute=True,
         ledger=ledger,
         ledger_persist=ledger.update,
         queued_escalation_s=1800.0,
     )
     entry = ledger["master:412:abc1234def5678"]
-    assert entry.sent_at == 1900.0
-    assert entry.consumed_at is not None
-    assert snapshot_unconsumed(ledger) == ()
-    assert ("tmux", "send-keys", "-t", "=cc-master:0.0", "-l", "/master 412") in runner.calls
+    assert entry.sent_at is None
+    assert entry.consumed_at is None
+    assert [e for e, _ in logger.warnings].count("gating_trigger_unconfirmed_too_long") == 1
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
 
 
 # --- FRE-939 codex review #1: obsolescence needs an authoritative read ------
@@ -2744,10 +2774,17 @@ def _send_keys_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
 
 
 def _busy_seat_runner() -> _RecordingRunner:
+    agents = [
+        {"name": name, "cwd": cwd, "kind": "interactive", "status": "busy"}
+        if name == "cc-2build"
+        else {"name": name, "cwd": cwd, "kind": "interactive", "status": "idle"}
+        for name, cwd in _RC_CWD.items()
+    ]
     return _RecordingRunner(
         {
             ("tmux", "has-session"): _FakeRunResult(returncode=0),
             ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+            ("claude", "agents"): _FakeRunResult(stdout=json.dumps(agents)),
         }
     )
 
@@ -2864,6 +2901,8 @@ def _absent_seat_runner() -> _RecordingRunner:
                 if "=cc-master:0.0" in argv_t:
                     return _FakeRunResult(stdout=_REAL_IDLE_PANE)
                 return _FakeRunResult(returncode=1)
+            if argv_t[:2] == ("claude", "agents"):
+                return _idle_registry()
             return _FakeRunResult()
 
     return _Runner()
@@ -2990,6 +3029,8 @@ class _PaneRunner(_RecordingRunner):
         self.calls.append(argv_t)
         if argv_t[:2] == ("tmux", "capture-pane"):
             return _FakeRunResult(stdout=self.panes[argv_t[3]])
+        if argv_t[:2] == ("claude", "agents"):
+            return _idle_registry()
         return _FakeRunResult()
 
 

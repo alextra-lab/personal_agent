@@ -499,31 +499,33 @@ class TestFre1552SharedPlatformUrlLevelBlock:
         assert g.check_url("http://203.0.113.9:8080/other-path").allowed is False
 
     @pytest.mark.asyncio
-    async def test_legacy_cache_that_blocks_a_whole_platform_is_discarded(
+    async def test_legacy_cache_loses_the_platform_host_but_keeps_dedicated_hosts(
         self, tmp_path: Path
     ) -> None:
-        """A cache written before FRE-1552 holds the bare host ``github.com``; it must not load.
+        """A cache written before FRE-1552 holds the bare host ``github.com``.
 
-        Loading it would keep every github.com page blocked until the TTL runs out.
+        Only that platform entry is dropped. The dedicated hosts stay blocked, also when the
+        feed fetch fails right after the restart, so the guard never falls back to the bundled
+        list alone.
         """
         cache_path = tmp_path / "blocklist.json"
         cache_path.write_text(
             json.dumps(
                 {
                     "cached_at": datetime.now(timezone.utc).isoformat(),
-                    "domain_count": 2,
-                    "domains": ["github.com", "evil.com"],
+                    "domain_count": 3,
+                    "domains": ["github.com", "dedicated-malware.example", "203.0.113.9"],
                 }
             )
         )
         g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
-        response = httpx.Response(
-            200, text=_FEED_SAMPLE, request=httpx.Request("GET", "http://feed")
-        )
-        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=response)):
+        fetch_mock = AsyncMock(side_effect=ConnectionError("feed down"))
+        with patch.object(g, "_fetch_urlhaus", new=fetch_mock):
             await g._refresh()
 
         assert g.check_url("https://github.com/vllm-project/vllm/releases").allowed is True
+        assert g.check_url("http://dedicated-malware.example/any/path").allowed is False
+        assert g.check_url("http://203.0.113.9/x").allowed is False
 
     @pytest.mark.asyncio
     async def test_cache_round_trip_keeps_url_entries(self, tmp_path: Path) -> None:

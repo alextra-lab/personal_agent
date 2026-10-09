@@ -322,12 +322,11 @@ class DomainGuard:
             cached_at = datetime.fromisoformat(data["cached_at"])
             if (datetime.now(timezone.utc) - cached_at).total_seconds() >= self._ttl:
                 return None
-            entries = frozenset(data["domains"])
-            if entries & _SHARED_PLATFORM_HOSTS:
-                # Written before FRE-1552: it blocks a whole platform by hostname. Loading
-                # it would keep that block until the TTL runs out, so fetch the feed again.
-                return None
-            return entries
+            # A cache written before FRE-1552 names a whole platform by hostname. Drop only
+            # those entries and keep the dedicated hosts: if the next feed fetch fails, the
+            # guard must not fall back to the bundled list alone. The next refresh replaces
+            # the dropped platforms with URL entries.
+            return frozenset(data["domains"]) - _SHARED_PLATFORM_HOSTS
         except (json.JSONDecodeError, KeyError, ValueError, OSError):
             return None
 

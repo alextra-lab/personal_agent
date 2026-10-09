@@ -1565,10 +1565,10 @@ def _run_master_tick(
 
 
 def test_run_once_master_channel_delivery_sends_no_keys() -> None:
-    # FRE-1555 AC-1 (offline half): a held draft makes the pane read busy, so a
-    # delivered master trigger must not touch tmux at all.
+    # FRE-1555 AC-1 (offline half): a held draft makes the pane read busy. A
+    # delivered master trigger must still count as sent, and must not touch tmux.
     ledger: dict = {}
-    runner = _idle_runner()
+    runner = _busy_runner()
     poster = _FakeChannelPoster(outcome="delivered")
     _run_master_tick(poster, runner, ledger)
     assert [c for c in runner.calls if c[0] == "tmux"] == []

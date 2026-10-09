@@ -156,8 +156,8 @@ class LedgerEntry:
         alerted_at: When master was alerted about this episode (FRE-1540). Set
             once; never cleared by a retry.
         trigger_id: The one stable id of this trigger (FRE-1555, ADR-0155 D8).
-            ``record_pending`` creates it with the row. A retry of the same
-            episode keeps it. Every transport reads it from here, so the channel
+            ``record_pending`` and ``record_surfaced`` create it with the
+            row. A retry or a renotify of the same episode keeps it. Every transport reads it from here, so the channel
             payload and the ledger always name the same id. Empty on a row
             written before FRE-1555.
     """
@@ -335,10 +335,11 @@ def record_surfaced(
     starts a new episode.
     """
     existing = ledger.get(event_id)
-    created_at, alerted_at = now, None
+    created_at, alerted_at, trigger_id = now, None, new_trigger_id()
     if existing is not None and existing.consumed_at is None:
-        # Same open episode (FRE-1540): keep its start and its alert latch.
+        # Same open episode (FRE-1540): keep its start, its alert latch and its id.
         created_at, alerted_at = existing.created_at, existing.alerted_at
+        trigger_id = existing.trigger_id or trigger_id
     updated = dict(ledger)
     updated[event_id] = LedgerEntry(
         event_id=event_id,
@@ -350,6 +351,7 @@ def record_surfaced(
         created_at=created_at,
         surfaced_at=now,
         alerted_at=alerted_at,
+        trigger_id=trigger_id,
     )
     return updated
 

@@ -42,10 +42,12 @@ suppressed iff ``now - last_sent < ttl(kind)``:
 - **worker** triggers require idle (``session_is_idle`` over ``capture-pane``) —
   a busy worker is mid-build and must not be interrupted; a busy target is
   skipped + logged, retried next tick.
-- **master** triggers defer, never drop, on a busy pane (FRE-1271; see below) —
-  ``/master <id>`` sends immediately when the pane reads idle; a busy read holds
-  the command rather than injecting it into Claude Code's queue, so a stale
-  command can never fire against a PR master has since gated some other way.
+- **master** triggers go to master's channel first (FRE-1555) and never read the pane
+  when the channel delivers. Only the ``send-keys`` fallback applies the rule here:
+  they defer, never drop, on a busy pane (FRE-1271; see below) — ``/master <id>``
+  sends immediately when the pane reads idle; a busy read holds the command rather
+  than injecting it into Claude Code's queue, so a stale command can never fire
+  against a PR master has since gated some other way.
 
 **Deferred delivery (FRE-939, FRE-1271).** A master trigger used to send
 unconditionally regardless of pane state — "Claude Code queues it" was a hope,

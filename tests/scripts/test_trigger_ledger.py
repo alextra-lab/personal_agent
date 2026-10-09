@@ -1101,3 +1101,25 @@ def test_cli_json_includes_the_trigger_id(
     assert main(["--all", "--json", "--ledger-file", str(path)]) == 0
     rows = json.loads(capsys.readouterr().out)
     assert rows[0]["trigger_id"] == ledger[_KEY].trigger_id
+
+
+def test_a_surfaced_entry_gets_a_trigger_id_and_an_open_renotify_keeps_it() -> None:
+    def surface(ledger: dict[str, LedgerEntry], now: float) -> dict[str, LedgerEntry]:
+        return record_surfaced(
+            ledger,
+            event_id="stall:cc-2build",
+            source="stall",
+            target_pane="cc-2build",
+            ticket="FRE-1",
+            preconditions={},
+            now=now,
+        )
+
+    first = surface({}, 100.0)["stall:cc-2build"]
+    assert len(first.trigger_id) == 32
+    again = surface({"stall:cc-2build": first}, 160.0)["stall:cc-2build"]
+    assert again.trigger_id == first.trigger_id
+    closed = dataclasses.replace(first, consumed_at=200.0)
+    assert surface({"stall:cc-2build": closed}, 300.0)["stall:cc-2build"].trigger_id != (
+        first.trigger_id
+    )

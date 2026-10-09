@@ -106,3 +106,36 @@ arms:
     launch_flags: not applicable (managed endpoint)
     fan_mode: n/a (cloud)
     thermal_snapshot: n/a (cloud)
+  # ── Stage 2 (owner, 2026-10-09: "Only gemma. then we decide"; Flash-Next control approved in the
+  # explore session the same day). Both arms run s1_trip on the same gateway build, one engine at a
+  # time: Gemma and Flash-Next do not fit in the Mac's GPU memory together (slm_server, 2026-10-09).
+  # The 2026-09-15 arms above stay as they were run. Values from slm_server's stage-1 comment on
+  # FRE-1517 (2026-10-09), relayed by master, are marked UNVERIFIED.
+  stage2_flash_next:
+    order_label: stage 2 control
+    deployment_key: qwen3.8-flash-next
+    engine: llama.cpp (llama-server)
+    served_model_id: unsloth/qwen3.8-flash-next
+    telemetry_model: unsloth/qwen3.8-flash-next
+    models_endpoint: http://localhost:8600/v1/models
+    pack: UNVERIFIED — the catalog names only the quantization
+    quant: UD-IQ4_XS
+    context_length: 131072
+    reasoning: "primary thinks (default mode); planner mode thinking off (ADR-0154 D4); workers enable_thinking false"
+    launch_flags: "llama.cpp build 11521, MTP depth 2, 3 slots (UNVERIFIED)"
+    fan_mode: apple_auto (UNVERIFIED)
+    thermal_snapshot: not recorded for llama.cpp arms
+  stage2_gemma:
+    order_label: stage 2 candidate
+    deployment_key: gemma-4-26b-a4b
+    engine: llama.cpp (llama-server)
+    served_model_id: unsloth/gemma-4-26B-A4B-it
+    telemetry_model: unsloth/gemma-4-26B-A4B-it
+    models_endpoint: http://localhost:8600/v1/models
+    pack: unsloth/gemma-4-26B-A4B-it-GGUF (catalog comment)
+    quant: Q8_0
+    context_length: 131072
+    reasoning: "primary thinks (default mode); the planner keeps the default mode, thinking on, because the entry declares no planner mode (a code reading of executor.py, measured per turn in the run); workers enable_thinking false"
+    launch_flags: "llama.cpp build 11521, no MTP, 3 slots, ctx 131072 (UNVERIFIED)"
+    fan_mode: apple_auto (UNVERIFIED)
+    thermal_snapshot: not recorded for llama.cpp arms

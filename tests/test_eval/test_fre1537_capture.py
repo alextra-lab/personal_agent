@@ -141,3 +141,31 @@ def test_capture_of_a_single_turn_fixture_makes_one_request(tmp_path: Path) -> N
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         capture.capture_fixture(client, "http://gw.test/chat", paths, fx, settle=0)
     assert seen == ["How is your day going?"]
+
+
+def test_capture_sends_the_model_on_both_turns_only_when_set(tmp_path: Path) -> None:
+    paths = RunPaths(tmp_path)
+    seen: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        seen.append(params)
+        write_call(
+            paths.stub_out / "calls",
+            len(seen),
+            {"tools": TOOLS, "messages": [{"role": "user", "content": params["message"]}]},
+        )
+        return httpx.Response(200, json={"session_id": "sid-1"})
+
+    fx = Fixture(
+        label="boiler_decline",
+        message="Which is cheapest?",
+        expected="decline",
+        history="boiler",
+        history_user="Options?",
+        history_assistant="Three options.",
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        capture.capture_fixture(client, "http://gw.test/chat", paths, fx, settle=0, model="m-key")
+        capture.capture_fixture(client, "http://gw.test/chat", paths, fx, settle=0)
+    assert [p.get("model") for p in seen] == ["m-key", "m-key", None, None]

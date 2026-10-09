@@ -85,6 +85,81 @@ _DEFAULT_MAX_CHARS = 10_000
 _MAX_CHARS_CAP = 50_000
 _TIMEOUT = 20.0
 
+# FRE-1554: the tool fetches pages the user asked for, as `Claude-User` does, so it says
+# so. No "bot": topgear.com refuses any UA that contains it. Not browser-shaped on
+# purpose — the owner chose honesty over the extra sites a browser UA would reach.
+_USER_AGENT = "Seshat-User/0.1 (personal research assistant; user-initiated)"
+
+# FRE-1554: the response headers that name a site's bot protection. An allowlist, never
+# the whole header set, so the log cannot carry a cookie or a token.
+_PROTECTION_HEADERS = ("server", "cf-mitigated", "x-datadome", "cf-ray")
+
+
+def _protection_headers(headers: httpx.Headers) -> dict[str, str]:
+    """Return the bot-protection headers present on a response.
+
+    Args:
+        headers: Response headers (case-insensitive; a repeated field is comma-joined).
+
+    Returns:
+        Map of header name to value, for the ``_PROTECTION_HEADERS`` that are present.
+    """
+    return {name: headers[name] for name in _PROTECTION_HEADERS if name in headers}
+
+
+def _header_tokens(headers: httpx.Headers, name: str) -> frozenset[str]:
+    """Return the lower-case, comma-split tokens of every value of one header.
+
+    ``httpx.Headers.get`` joins a repeated field (``"nginx, AkamaiGHost"``), so a rule
+    must match a token, never the whole string and never a prefix.
+
+    Args:
+        headers: Response headers.
+        name: Header name (any case).
+
+    Returns:
+        The set of tokens. Empty if the header is absent.
+    """
+    return frozenset(
+        token.strip().lower()
+        for value in headers.get_list(name)
+        for token in value.split(",")
+        if token.strip()
+    )
+
+
+def _bot_protection_cause(status: int, headers: httpx.Headers) -> str | None:
+    """Name the bot protection behind a 403, if the headers identify one.
+
+    Only a 403 is classified: Akamai and Cloudflare also put ``server`` on a temporary
+    5xx, where "retrying will not help" would be false.
+
+    Args:
+        status: HTTP status of the response.
+        headers: Response headers.
+
+    Returns:
+        A sentence that names the cause, or ``None`` when the status is not 403 or no
+        header identifies a protection. ``cf-ray`` and ``server: cloudflare`` also sit on
+        an origin 403 (for example a revoked signed link), so that case is hedged and
+        does not promise that a retry fails.
+    """
+    if status != 403:
+        return None
+    server = _header_tokens(headers, "server")
+    protection = None
+    if "challenge" in _header_tokens(headers, "cf-mitigated"):
+        protection = "Cloudflare challenge"
+    elif "x-datadome" in headers:
+        protection = "DataDome"
+    elif "akamaighost" in server:
+        protection = "Akamai"
+    if protection:
+        return f"blocked by the site's bot protection ({protection}). Retrying will not help."
+    if "cloudflare" in server or "cf-ray" in headers:
+        return "the site is behind Cloudflare and may use its bot protection."
+    return None
+
 
 async def _resolves_to_private_or_internal(hostname: str) -> bool:
     """Whether ``hostname`` resolves to a loopback/private/link-local/reserved address.
@@ -309,14 +384,21 @@ async def fetch_url_executor(
         async with create_guarded_http_client(
             timeout=_TIMEOUT,
             follow_redirects=True,
-            headers={"User-Agent": "personal-agent/0.1 (research bot)"},
+            headers={"User-Agent": _USER_AGENT},
             event_hooks={"request": [_reject_private_targets]},
         ) as client:
             resp = await client.get(url)
             if resp.is_error:
                 msg = f"HTTP {resp.status_code} fetching {url}"
+                cause = _bot_protection_cause(resp.status_code, resp.headers)
+                if cause:
+                    msg = f"{msg}: {cause}"
                 log.error(
-                    "fetch_url_http_error", trace_id=trace_id, status=resp.status_code, url=url
+                    "fetch_url_http_error",
+                    trace_id=trace_id,
+                    status=resp.status_code,
+                    url=url,
+                    response_headers=_protection_headers(resp.headers),
                 )
                 raise ToolExecutionError(msg)
 

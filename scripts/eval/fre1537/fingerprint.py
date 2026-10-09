@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 MANAGED_BUILD = "managed (provider reports no build)"
 MANAGED_QUANT = "managed (not reported)"
+BARE_RESPONSE_FORMAT = {"type": "json_object"}
 _QUANT = re.compile(r"(?:UD-)?(?:I?Q\d(?:_[A-Z0-9]+)+|BF16|F16|F32)", re.IGNORECASE)
 # The fields whose change makes two runs different configurations.
 _IDENTITY_PATHS = (
@@ -37,6 +38,7 @@ _IDENTITY_PATHS = (
     ("model", "quant"),
     ("planner_mode",),
     ("system_prompt_sha256",),
+    ("response_format_sha256",),
     ("digest_sha256",),
 )
 
@@ -226,6 +228,8 @@ def build_cloud_fingerprint(
     Returns:
         The fingerprint. The credential is not in it.
     """
+    from scripts.eval.fre1537.cloud import response_format_of  # lazy: cloud imports the client
+
     fingerprint: dict[str, object] = {
         "engine": {
             "name": target.provider,
@@ -246,6 +250,14 @@ def build_cloud_fingerprint(
         "client": {"litellm": importlib.metadata.version("litellm")},
         "git_head": _git_head(),
     }
+    # FRE-1548: the schema is part of the request, so a change of it is a routing change. The bare
+    # `json_object` request has no entry, so a run directory of a provider that never took the schema
+    # (OVH) still resumes.
+    response_format = response_format_of(target)
+    if response_format != BARE_RESPONSE_FORMAT:
+        fingerprint["response_format_sha256"] = hashlib.sha256(
+            json.dumps(response_format, sort_keys=True).encode()
+        ).hexdigest()
     if digest:
         fingerprint["digest_sha256"] = hashlib.sha256(digest.encode()).hexdigest()
     return fingerprint

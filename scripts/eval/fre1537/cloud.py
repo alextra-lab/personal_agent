@@ -51,6 +51,7 @@ from personal_agent.llm_client.models import (
 )
 from personal_agent.llm_client.pricing import register_model_pricing
 from personal_agent.llm_client.types import LLMClientError, ModelRole
+from personal_agent.orchestrator.expansion_controller import planner_response_format
 from personal_agent.telemetry.trace import SystemTraceContext
 
 MODE_NAMES = ("planner", "default")
@@ -191,6 +192,21 @@ def resolve_target(
     )
 
 
+def response_format_of(target: CloudTarget) -> dict[str, Any]:
+    """Return the ``response_format`` of the planner request on a managed deployment (FRE-1548).
+
+    It is the production builder, so the probe sends what the planner call sends. The probe prompt
+    admits ``SINGLE`` (the decline rule of ADR-0154 D2), so the schema admits it too.
+
+    Args:
+        target: The managed deployment.
+
+    Returns:
+        The ``response_format`` of the request.
+    """
+    return planner_response_format(target.provider, admit_single=True)
+
+
 def assert_eval_database(url: str) -> None:
     """Refuse a database that is not the eval Postgres (FRE-375).
 
@@ -323,7 +339,7 @@ class CloudSession:
                             {"role": "system", "content": system},
                             {"role": "user", "content": user},
                         ],
-                        response_format={"type": "json_object"},
+                        response_format=response_format_of(self.target),
                         trace_ctx=self._ctx,
                     ),
                     timeout=REQUEST_TIMEOUT_S,

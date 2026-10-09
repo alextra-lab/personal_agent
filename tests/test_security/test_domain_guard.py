@@ -781,7 +781,7 @@ class TestFre1560FailedRefreshKeepsBestList:
         assert g.check_url("https://feed-evil.net/x").allowed is False
         assert _event(logs, "domain_guard_using_fallback")["source"] == "memory"
         assert not (tmp_path / "blocklist.json").exists(), "an empty feed must not write the cache"
-        assert "feed-evil.net" in domains_before  # the first load did write the cache
+        assert set(domains_before) >= {"feed-evil.net"}  # the first load did write the cache
 
     @pytest.mark.asyncio
     async def test_a_cache_timestamp_without_a_timezone_is_unreadable_not_a_crash(

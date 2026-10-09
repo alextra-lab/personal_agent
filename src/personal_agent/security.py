@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
 
 import httpx
 
@@ -73,6 +72,16 @@ _SHARED_PLATFORM_HOSTS: frozenset[str] = frozenset(
         "files.pythonhosted.org",
     }
 )
+
+_PERCENT_ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def _canonical_escape(match: re.Match[str]) -> str:
+    """Decode an escaped unreserved character; upper-case the hex of any other escape."""
+    char = chr(int(match.group(1), 16))
+    return char if char in _UNRESERVED else f"%{match.group(1).upper()}"
+
 
 # URLhaus plaintext feed URL (CC0 licence, no key required).
 _URLHAUS_FEED = "https://urlhaus.abuse.ch/downloads/text/"
@@ -221,12 +230,17 @@ class DomainGuard:
 
     @staticmethod
     def _extract_hostname(url: str) -> str:
-        """Return the lowercased hostname from a URL, or '' on parse failure."""
+        """Return the lowercased ASCII hostname from a URL, or '' on parse failure.
+
+        Parsed with ``httpx.URL`` (FRE-1552), the parser that builds the request the hook
+        sees: an IDN host is returned in its punycode form, a Unicode dot is mapped to
+        ``.`` and a terminal dot is dropped. A feed line and a request therefore agree on one spelling.
+        """
         try:
-            h = urlparse(url).hostname
-            return h.lower() if h else ""
-        except Exception:
+            host = httpx.URL(url).raw_host.decode("ascii")
+        except (httpx.InvalidURL, ValueError):
             return ""
+        return host.lower().rstrip(".")
 
     def _domain_in_set(self, hostname: str, domain_set: frozenset[str]) -> str | None:
         """Return the matching entry if *hostname* or any parent domain is in *domain_set*."""
@@ -243,18 +257,17 @@ class DomainGuard:
 
         The key is built from ``httpx.URL`` so a feed line and the request the hook later
         sees (already normalised by httpx: dot segments removed, unsafe characters
-        percent-encoded) map to one entry. The scheme, port, userinfo and fragment are
-        dropped. Path and query are compared as written: a differently spelled path, extra
-        query parameters or a reordered query is a different resource to this guard.
-        Returns '' when *url* cannot be parsed.
+        percent-encoded) map to one entry. Spellings of the same octets also map to one
+        entry: the case of a percent escape, an escaped unreserved character and an empty
+        query. The scheme, port, userinfo and fragment are dropped. Anything else in the
+        path or query is compared as written: extra query parameters or a reordered query
+        is a different resource to this guard. Returns '' when *url* cannot be parsed.
         """
-        try:
-            parsed = httpx.URL(url)
-        except httpx.InvalidURL:
+        host = DomainGuard._extract_hostname(url)
+        if not host:
             return ""
-        if not parsed.host:
-            return ""
-        return f"{parsed.host.lower()}{parsed.raw_path.decode('ascii')}"
+        raw_path = httpx.URL(url).raw_path.decode("ascii").removesuffix("?")
+        return f"{host}{_PERCENT_ESCAPE.sub(_canonical_escape, raw_path)}"
 
     def _check_blocklist(self, hostname: str, url: str) -> GuardResult:
         url_entry = self._url_entry(url)

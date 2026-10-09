@@ -499,14 +499,13 @@ class TestFre1552SharedPlatformUrlLevelBlock:
         assert g.check_url("http://203.0.113.9:8080/other-path").allowed is False
 
     @pytest.mark.asyncio
-    async def test_legacy_cache_loses_the_platform_host_but_keeps_dedicated_hosts(
+    async def test_fresh_legacy_cache_loses_the_platform_host_but_keeps_dedicated_hosts(
         self, tmp_path: Path
     ) -> None:
-        """A cache written before FRE-1552 holds the bare host ``github.com``.
+        """A fresh cache written before FRE-1552 holds the bare host ``github.com``.
 
-        Only that platform entry is dropped. The dedicated hosts stay blocked, also when the
-        feed fetch fails right after the restart, so the guard never falls back to the bundled
-        list alone.
+        Only that platform entry is dropped. The dedicated hosts stay blocked, and the
+        guard does not depend on a feed fetch to keep them: a fresh cache never fetches.
         """
         cache_path = tmp_path / "blocklist.json"
         cache_path.write_text(
@@ -523,6 +522,7 @@ class TestFre1552SharedPlatformUrlLevelBlock:
         with patch.object(g, "_fetch_urlhaus", new=fetch_mock):
             await g._refresh()
 
+        fetch_mock.assert_not_awaited()
         assert g.check_url("https://github.com/vllm-project/vllm/releases").allowed is True
         assert g.check_url("http://dedicated-malware.example/any/path").allowed is False
         assert g.check_url("http://203.0.113.9/x").allowed is False
@@ -562,3 +562,44 @@ class TestFre1552FeedKeyMatchesWhatHttpxSends:
             sent = str(httpx.Request("GET", listed).url)
             assert g.check_url(sent).allowed is False, sent
             assert g.check_url(listed).allowed is False, listed
+
+
+class TestFre1552EquivalentSpellings:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "variant",
+        [
+            "https://github.com/bad/a%2fb/x.exe",  # lowercase escape of a reserved character
+            "https://github.com/bad/%61/x.exe",  # escaped unreserved character
+            "https://github.com/bad/a/x.exe?",  # empty query
+            "https://github.com./bad/a/x.exe",  # fully qualified host
+            "https://GITHUB.com/bad/a/x.exe",
+        ],
+    )
+    async def test_equivalent_spellings_of_a_listed_url_stay_blocked(
+        self, tmp_path: Path, variant: str
+    ) -> None:
+        """Spellings that name the same octets or the same host as a listed URL are blocked."""
+        feed = "https://github.com/bad/a%2Fb/x.exe\nhttps://github.com/bad/a/x.exe\n"
+        g = await _guard_loaded_from_feed(tmp_path, feed)
+
+        assert g.check_url(variant).allowed is False, variant
+        assert g.check_url(str(httpx.Request("GET", variant).url)).allowed is False, variant
+
+    @pytest.mark.asyncio
+    async def test_unicode_dot_in_a_feed_host_still_names_the_platform(
+        self, tmp_path: Path
+    ) -> None:
+        """A feed line spelling the host with a fullwidth dot is the same URL once httpx sends it."""
+        g = await _guard_loaded_from_feed(tmp_path, "https://github\u3002com/bad/x.exe\n")
+
+        assert g.check_url("https://github.com/bad/x.exe").allowed is False
+        assert g.check_url("https://github.com/vllm-project/vllm/releases").allowed is True
+
+    @pytest.mark.asyncio
+    async def test_idn_dedicated_host_is_blocked_as_httpx_sends_it(self, tmp_path: Path) -> None:
+        """An IDN host from the feed matches the punycode host the request hook sees."""
+        g = await _guard_loaded_from_feed(tmp_path, "http://b\u00fccher.example/x\n")
+
+        sent = str(httpx.Request("GET", "http://b\u00fccher.example/other").url)
+        assert g.check_url(sent).allowed is False

@@ -22,6 +22,7 @@ codex plan-review findings folded into the revised plan:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 from scripts.dispatch.launcher import topology_for
@@ -47,8 +48,24 @@ class _FakeRunResult:
         self.stdout = stdout
 
 
+_WORKTREES = "/opt/seshat/.claude/worktrees"
+# Every seat registered idle with Remote Control (FRE-1556): a send needs RC ``idle``. A
+# dispatch stream's seat registers with its worktree as cwd.
+_IDLE_REGISTRY = json.dumps(
+    [
+        {"name": "cc-1build", "cwd": f"{_WORKTREES}/build", "kind": "x", "status": "idle"},
+        {"name": "cc-2build", "cwd": f"{_WORKTREES}/build2", "kind": "x", "status": "idle"},
+        {"name": "cc-adrs", "cwd": f"{_WORKTREES}/adrs", "kind": "x", "status": "idle"},
+        {"name": "cc-master", "cwd": "/opt/seshat", "kind": "x", "status": "idle"},
+    ]
+)
+
+
 class _RecordingRunner:
-    """Records argv calls; returns a canned result by first-arg + subcommand."""
+    """Records argv calls; returns a canned result by first-arg + subcommand.
+
+    ``claude agents`` answers with every seat idle unless a test overrides it.
+    """
 
     def __init__(self, results: dict[tuple[str, ...], _FakeRunResult] | None = None) -> None:
         self.calls: list[tuple[str, ...]] = []
@@ -60,6 +77,8 @@ class _RecordingRunner:
         for prefix, result in self._results.items():
             if argv_t[: len(prefix)] == prefix:
                 return result
+        if argv_t[:2] == ("claude", "agents"):
+            return _FakeRunResult(stdout=_IDLE_REGISTRY)
         return _FakeRunResult()
 
 
@@ -78,6 +97,8 @@ class _RaisingRunner:
             return _FakeRunResult(returncode=0)
         if argv_t[:2] == ("tmux", "capture-pane"):
             return _FakeRunResult(returncode=0, stdout=_REAL_IDLE_PANE)
+        if argv_t[:2] == ("claude", "agents"):
+            return _FakeRunResult(stdout=_IDLE_REGISTRY)
         return _FakeRunResult()
 
 

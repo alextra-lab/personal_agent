@@ -387,28 +387,49 @@ Each tick, every `queued` entry is resolved in this order:
    re-offer *is* idle-gated, so a still-busy master costs **zero** keystrokes — there is no retry
    loop and no backoff timer.
 3. **Still unconfirmed past `--queued-escalation-timeout`** (default 30 min, measured from the first
-   attempt and unresettable by later ones) → surfaced once as `gating_trigger_unconfirmed_too_long`,
-   naming the PR, **and** delivered anyway, ignoring pane state — logged `gating_queued_forced_after_escalation`.
-   This is the liveness bound: a persistently busy (or persistently misread) pane gets a full 30
-   minutes of idle-gated, obsolescence-checked attempts before the watcher falls back to the
-   pre-FRE-1271 unconditional send. Unlike the warning, the force-attempt is **not** one-shot — it
-   retries every tick past the threshold, not just once, until it succeeds or the entry resolves via
-   step 1.
+   attempt and unresettable by later ones) → alerted once as `gating_trigger_unconfirmed_too_long`,
+   naming the PR. **Nothing is typed.** FRE-1556 removed the old force-delivery (ADR-0155 D7). The
+   entry stays `queued`, and step 2 goes on every tick, so the trigger lands as soon as the seat is
+   idle with an empty draft.
 
-**What to check when you see that alert.** `journalctl -u seshat-gating-watcher | grep
-gating_trigger_unconfirmed_too_long` for the PR, then
-`/opt/seshat/.venv/bin/python -m scripts.dispatch.trigger_ledger --unconsumed` — a `[queued]` row
-names the PR and target seat. The usual cause is a master seat that has been busy or wedged since the
-first attempt. By the time you see the alert, delivery has very likely already been forced (check for
-a paired `gating_queued_forced_after_escalation` log line, or `--all` — see below); if not, freeing the
-seat lets the next idle-gated re-offer land immediately, ahead of the next forced attempt. Nothing
-needs to be replayed by hand, and the entry must not be deleted from the ledger — deleting it is the
-one action that reintroduces the silent drop.
+**What to check when you see that alert.** Run `journalctl -u seshat-gating-watcher | grep
+gating_trigger_unconfirmed_too_long` for the PR. Then run
+`/opt/seshat/.venv/bin/python -m scripts.dispatch.trigger_ledger --unconsumed`. A `[queued]` row
+names the PR and the target seat. The usual cause is a master seat that is busy, waits on a
+permission prompt, or holds an unsent draft. The trigger is NOT delivered yet. Free the seat (answer
+the prompt, or send or clear the draft), and the next re-offer lands within one tick. Do not delete
+the entry from the ledger. Deleting it is the one action that brings back the silent drop.
 
 The alert latch is **in-memory**: exactly once per daemon run, and a restart may re-alert an entry
-still past its threshold. That is deliberate (the FRE-922/924 lesson — a persisted crossing state can
-be first-observed already past its trigger and silently lose the alert forever). The force-deliver
-retry is **not** latched — a restart must not lose the one guarantee that actually matters here.
+still past its threshold. That is deliberate (the FRE-922/924 lesson: a persisted crossing state can
+be first-observed already past its trigger and silently lose the alert forever).
+
+## The send gate and the seat readings (FRE-1556, ADR-0155 D7)
+
+Every `tmux send-keys` from the watcher, the orchestrator's alert to master, and the whitelist goes
+through one gate (`seat_readings.draft_known_empty`). The gate allows typing only when:
+
+1. Remote Control (RC) status of the seat reads `idle` (`claude agents --json --all`). A stream seat is
+   matched by working directory, any other seat by name. `busy`, `running`, `waiting` and `pending`
+   all refuse. A seat with no live entry reads `ended` and refuses. An unreadable or ambiguous
+   registry reads `unknown` and refuses.
+2. The draft is known empty. A fresh mod report decides when one exists (none exists until FRE-1558).
+   Otherwise the pane must show a bare empty prompt. A pane that shows a draft refuses.
+
+A refused trigger is not typed. It waits, and it alerts: a worker trigger alerts `cc-master` after 15
+minutes, and a master trigger logs `gating_trigger_unconfirmed_too_long` after 30 minutes. The
+channel is tried first for every seat and does not use the gate.
+
+**Per-tick readings.** Every tick logs one `gating_seat_readings` event per seat: `seat`, `pane`,
+`rc_status` (raw), `rc_state` (mapped), `mod_state`, `mod_fresh`. The seats are `cc-master`,
+`cc-1build`, `cc-2build`, `cc-adrs` and `cc-explore`. A held draft shows as `pane=busy` with
+`rc_state=idle`: that pair is the disagreement ADR-0155 phase 1 measures.
+
+Check after deploy: run `journalctl -u seshat-gating-watcher --since "1 hour ago" | grep
+gating_seat_readings | grep -c "rc_state=unknown"`. The expected count is 0. A non-zero count means
+the watcher cannot read the registry. Check that `Environment=PATH=` in
+`infrastructure/systemd/seshat-gating-watcher.service` names the service user's `.local/bin`
+folder, because `claude` lives there. While the registry is unreadable, the gate refuses and nothing is typed.
 
 **Was this `/master N` from the watcher or the owner? (FRE-1271)**
 `python -m scripts.dispatch.trigger_ledger --all --json` shows every entry, including consumed ones —

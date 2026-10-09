@@ -18,6 +18,10 @@ Type=simple
 User=debian
 Group=debian
 WorkingDirectory=/opt/seshat
+# systemd runs with a bare PATH. The watcher reads seat busy state from Remote Control
+# (`claude agents --json`, FRE-1556), and `claude` lives under the debian user's ~/.local/bin.
+# Without this line every Remote Control reading is `unknown` and the watcher reads the pane only.
+Environment=PATH=/home/debian/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Fail fast at start if the Linear key is missing or gh is unavailable.
 ExecStartPre=/opt/seshat/.venv/bin/python -m scripts.dispatch.gating_watcher --preflight
 # The daemon poll loop; --execute actually sends keys (the guardrails keep it safe).

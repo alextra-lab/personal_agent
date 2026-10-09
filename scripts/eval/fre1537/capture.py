@@ -44,6 +44,7 @@ def turn(
     reply: str,
     session_id: str | None,
     settle: float = SETTLE_SECONDS,
+    model: str | None = None,
 ) -> tuple[str, list[Path]]:
     """Run one gateway turn and return the stub calls that it caused.
 
@@ -56,6 +57,8 @@ def turn(
         session_id: The session of a second turn, else ``None``.
         settle: Seconds to wait for post-turn background calls, so that they are not credited to the
             next turn.
+        model: A catalog key sent as ``/chat``'s ``model``, so that the primary request carries that
+            deployment's sampling. ``None`` keeps the primary binding.
 
     Returns:
         The session id and the new stub call files, oldest first.
@@ -67,6 +70,8 @@ def turn(
     params = {"message": message, "profile": "local", "channel": "EVAL"}
     if session_id:
         params["session_id"] = session_id
+    if model:
+        params["model"] = model
     response = client.post(chat_url, params=params, timeout=600)
     response.raise_for_status()
     time.sleep(settle)
@@ -102,6 +107,7 @@ def capture_fixture(
     paths: RunPaths,
     fx: Fixture,
     settle: float = SETTLE_SECONDS,
+    model: str | None = None,
 ) -> dict[str, object]:
     """Capture one fixture and return its record.
 
@@ -111,6 +117,7 @@ def capture_fixture(
         paths: The run paths.
         fx: The fixture.
         settle: Seconds to wait after each turn.
+        model: A catalog key for both turns, else ``None`` (the primary binding).
 
     Returns:
         ``label``, ``expected``, ``history``, ``message`` and the primary's request ``body``.
@@ -118,9 +125,9 @@ def capture_fixture(
     session_id = None
     if fx.history_user is not None and fx.history_assistant is not None:
         session_id, _ = turn(
-            client, chat_url, paths, fx.history_user, fx.history_assistant, None, settle
+            client, chat_url, paths, fx.history_user, fx.history_assistant, None, settle, model
         )
-    _, files = turn(client, chat_url, paths, fx.message, "OK", session_id, settle)
+    _, files = turn(client, chat_url, paths, fx.message, "OK", session_id, settle, model)
     return {
         "label": fx.label,
         "expected": fx.expected,
@@ -142,6 +149,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--chat-url", default=DEFAULT_CHAT_URL)
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="catalog key sent as /chat's model (FRE-1517 stage 2); default is the primary binding",
+    )
     args = parser.parse_args(argv)
     paths = RunPaths(args.run_dir)
     paths.captured.mkdir(parents=True, exist_ok=True)
@@ -150,7 +162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             target = paths.captured / f"{fx.label}.json"
             if target.exists():
                 continue
-            record = capture_fixture(client, args.chat_url, paths, fx)
+            record = capture_fixture(client, args.chat_url, paths, fx, model=args.model)
             target.write_text(json.dumps(record))
             body = record["body"]
             assert isinstance(body, dict)

@@ -1,5 +1,8 @@
 """FRE-1517 blind export — s1_trip turns 1-5 of the named production sessions. Read-only.
 
+Stage 2 (2026-10-09): ``--run LABEL=PATH`` (repeatable) replaces the default run list,
+``--last-turn`` sets the turn range, and ``--out-dir`` keeps a new export apart from an old one.
+
 Writes one sheet per session under a random four-letter code, in random order, to
 ``out/blind/sheets.md``. The mapping from code to run goes to ``out/blind/key.json``, and the
 script prints only the key's SHA-256, so the operator can post the hash before any scoring and
@@ -10,6 +13,7 @@ any fan-out trailer, because the user saw both. Run labels, model ids, timings a
 removed.
 """
 
+import argparse
 import hashlib
 import json
 import random
@@ -37,24 +41,32 @@ LAST_TURN = 5
 
 def main() -> int:
     """Write the coded sheets and the key, and print the codes and the key's SHA-256."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--run", action="append", default=[], help="LABEL=PATH of a run's JSONL")
+    parser.add_argument("--last-turn", type=int, default=LAST_TURN)
+    parser.add_argument("--out-dir", type=Path, default=OUT / "blind")
+    args = parser.parse_args()
+    runs = dict(r.split("=", 1) for r in args.run) if args.run else RUNS
+    runs = {label: Path(path) for label, path in runs.items()}
+    last_turn = args.last_turn
     rng = random.SystemRandom()
     codes: set[str] = set()
-    while len(codes) < len(RUNS):
+    while len(codes) < len(runs):
         codes.add("".join(secrets.choice(string.ascii_uppercase) for _ in range(4)))
-    labels = list(RUNS)
+    labels = list(runs)
     rng.shuffle(labels)
     key = dict(zip(sorted(codes), labels, strict=True))
 
-    blind = OUT / "blind"
-    blind.mkdir(exist_ok=True)
+    blind = args.out_dir
+    blind.mkdir(parents=True, exist_ok=True)
     parts = []
     for code in sorted(key):
         rows = [
-            json.loads(line) for line in RUNS[key[code]].read_text().splitlines() if line.strip()
+            json.loads(line) for line in runs[key[code]].read_text().splitlines() if line.strip()
         ]
-        turns = {r["turn"]: r for r in rows if r["turn"] <= LAST_TURN}
+        turns = {r["turn"]: r for r in rows if r["turn"] <= last_turn}
         parts.append(f"# Sheet {code}\n")
-        for n in range(1, LAST_TURN + 1):
+        for n in range(1, last_turn + 1):
             r = turns[n]
             parts.append(
                 f"## {code} — turn {n}\n\n**User:** {r['message']}\n\n**Reply:**\n\n{r.get('reply') or '(empty)'}\n"

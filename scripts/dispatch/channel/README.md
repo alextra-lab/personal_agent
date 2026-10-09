@@ -17,6 +17,16 @@ not new authority** — the seat reasons over the event and pushes fixes to its 
 | `plugins/seshat-dispatch/.mcp.json` | Registers `node webhook.mjs` as the `seshat-dispatch` MCP server. |
 | `managed-settings.template.json` | The `channelsEnabled` + `allowedChannelPlugins` policy master writes at deploy. |
 
+## Server instructions by seat (FRE-1555)
+
+The plugin advertises one of two instruction texts, selected by the `SESHAT_SEAT` environment variable
+(`instructionsFor` in `server.mjs`). The exact value `cc-master` gets the master text. Master merges, so the
+worker prohibition does not apply. Every other value, an unset variable and an empty variable get the worker
+text, which forbids merging. `cc-sessions` sets `SESHAT_SEAT=<seat>` on the launch line. The master text gives
+no authority: master acts under its skill and the trust ladder. `webhook.test.mjs` starts the entrypoint once per
+seat value and reads the advertised text. The payload `trigger_id` field is the id of the ledger row
+(`scripts/dispatch/trigger_ledger.py`).
+
 ## Security model
 
 An ungated inbound channel is a prompt-injection vector (ADR-0116). Two gates, both fail closed:

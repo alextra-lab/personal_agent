@@ -21,6 +21,20 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from scripts.dispatch.gating_watcher import (
+    _POKE_ESCALATION_REASON,
+    PullRequest,
+    build_master_channel_payload,
+)
+
+_PR = PullRequest(
+    number=1,
+    head_ref="x",
+    head_sha="a" * 40,
+    mergeable="MERGEABLE",
+    ci="success",
+    comment_bodies=(),
+)
 
 _CHANNEL_DIR = (
     Path(__file__).resolve().parents[2]
@@ -55,15 +69,33 @@ def _node_major() -> int | None:
     (_node_major() or 0) < 18, reason="node >= 18 (node:test + global fetch) not available"
 )
 def test_channel_gate_js_suite_passes() -> None:
-    """The ``server.test.mjs`` gate suite (403 on bad/missing secret, localhost bind) passes."""
-    result = subprocess.run(  # noqa: S603 - fixed argv, no shell, trusted local test file
-        [shutil.which("node") or "node", "--test", "server.test.mjs"],
+    """The ``server.test.mjs`` gate suite (403 on bad/missing secret, localhost bind) passes.
+
+    ``webhook.test.mjs`` (FRE-1555, AC-2: the instructions match the seat) runs in the
+    same call. It skips itself when the MCP SDK is not installed.
+    """
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell, trusted local test files
+        [shutil.which("node") or "node", "--test", "server.test.mjs", "webhook.test.mjs"],
         cwd=_CHANNEL_DIR,
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0, f"node --test failed:\n{result.stdout}\n{result.stderr}"
+
+
+def test_master_instructions_name_every_event_type_the_watcher_sends() -> None:
+    """The master text must name each ``event_type`` value, or master takes no action on it."""
+    server = (_CHANNEL_DIR / "server.mjs").read_text()
+    start = server.index("export const MASTER_INSTRUCTIONS")
+    master_text = server[start : server.index("export function instructionsFor")]
+    event_types = {
+        build_master_channel_payload(_PR, reason, "x")["event_type"]
+        for reason in ("master-ready", _POKE_ESCALATION_REASON)
+    }
+    assert event_types == {"master-ready", "worker-poke-ineffective"}
+    for event_type in event_types:
+        assert f'"{event_type}"' in master_text, event_type
 
 
 def test_plugin_manifest_is_well_formed() -> None:

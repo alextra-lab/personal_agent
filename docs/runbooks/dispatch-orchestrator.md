@@ -500,6 +500,55 @@ for the PR trigger `/master <n>`.
 - **Find an alert after the fact.** `grep -E 'gating_alert_(sent|deferred)|dispatch_alert_(sent|deferred)'`
   in the daemon journal, or read `alerted_at` and `attempts` in `python -m scripts.dispatch.trigger_ledger --all --json`.
 
+### cc-master channel and `trigger_id` (FRE-1555, ADR-0155 D2 track A)
+
+The watcher sends every master trigger to the `cc-master` channel first (port `MASTER_CHANNEL_PORT` in
+`scripts/dispatch/launcher.py`, 8789). A held draft in master's box does not matter to a channel
+delivery, because the watcher does not read the pane. If the POST fails, the old path runs unchanged:
+`send-keys`, with the busy-pane `queued` rules. The context-pressure nudge stays on `send-keys`.
+
+The master payload holds only fields that the daemon builds: `event_type`, `pr`, `head_sha`, `reason`,
+`command`, `trigger_id`. It never holds a check name, a URL or a branch name, because GitHub controls them.
+
+Every ledger row has a `trigger_id` (32 hex characters). `record_pending` creates it. A retry of the same
+episode keeps it. The channel payload carries the same id. Read it with
+`python -m scripts.dispatch.trigger_ledger --all --json`. The `send-keys` text does not carry the id.
+
+**Deploy order.** Master does these steps in order. The order matters.
+1. Deploy this change. The plugin loads from the checkout.
+2. Apply the host diff. In `~/.claude/cc-sessions.conf`, set column 4 of the `cc-master` row to `8789`.
+   In `~/cc-env/cc-sessions`, in `_cmd`, prefix the `cc-seat-exec` launch with `SESHAT_SEAT=$n `.
+3. Run `cc-sessions restart cc-master` from another seat. The Node process reads `SESHAT_SEAT` once, at start.
+4. Run the live check below.
+
+If step 3 runs before step 1, cc-master loads the worker text, which forbids merging. Restart it again.
+
+**Live check (AC-1).** Start with `ss -ltn | grep 8789`. A listener must show.
+1. In cc-master, read the `seshat-dispatch` server instructions (`/mcp`). They must name the master skill and
+   must not say "Never push to, merge".
+2. The owner types a draft in the cc-master box and leaves it.
+3. Master sends one synthetic trigger through the real `run_once`, with a throw-away state and ledger.
+   Use a PR that is already merged, so the master skill finds nothing to merge:
+
+   ```
+   cd /opt/seshat && uv run python - <<'PY'
+   import time, structlog
+   from scripts.dispatch import gating_watcher as g, launcher
+   ledger: dict = {}
+   pr = g.PullRequest(number=1223, head_ref="synthetic", head_sha="0" * 40,
+                      mergeable="MERGEABLE", ci="success", comment_bodies=())
+   g.run_once({}, now=time.time(), board_fetcher=lambda: [pr], session_resolver=lambda t: None,
+              runner=launcher.subprocess_runner, persist=lambda s: None,
+              logger=structlog.get_logger("ac1"), execute=True, ledger=ledger,
+              ledger_persist=ledger.update, channel_secret=g.load_channel_secret())
+   for e in ledger.values():
+       print(e.event_id, e.trigger_id, e.transport)
+   PY
+   ```
+
+4. Expect `transport` = `channel`, a 32-hex `trigger_id`, a turn in cc-master within 5 minutes, and the
+   draft still in the box. The log of this process must show `gating_send` and no `send-keys`.
+
 ### send-keys whitelist wrapper (FRE-831) — not yet wired into any live sender
 
 `scripts/dispatch/send_keys_whitelist.py` is the mechanically-enforced boundary ADR-0113 §2 calls

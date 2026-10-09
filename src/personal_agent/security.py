@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
@@ -88,6 +88,10 @@ _URLHAUS_FEED = "https://urlhaus.abuse.ch/downloads/text/"
 # Fetch timeout for the feed refresh call.
 _FEED_TIMEOUT_SECONDS = 15.0
 
+# Where the live blocklist came from (FRE-1560), and which list a failed refresh kept.
+_BlocklistSource = Literal["bundled", "cache", "feed"]
+_FallbackSource = Literal["memory", "stale_cache", "bundled"]
+
 
 class GuardMode(str, Enum):
     """Egress URL guard operating mode."""
@@ -117,7 +121,8 @@ class DomainGuard:
     """Egress URL guard — checks outbound HTTP requests against a domain blocklist.
 
     Loads its blocklist from the URLhaus feed (CC0) and caches it to disk.
-    Falls back to a bundled list when the network is unavailable. Reloads
+    When a refresh fails it keeps the best list it has (the in-memory list, then the
+    stale disk cache, then the bundled list; FRE-1560). Reloads
     automatically when the cache TTL expires.
 
     The blocklist holds two kinds of entry (FRE-1552). A bare hostname blocks that
@@ -145,6 +150,8 @@ class DomainGuard:
         self._mode = mode
         self._allowlist = allowlist
         self._blocklist: frozenset[str] = _BUNDLED_BLOCKLIST
+        self._blocklist_source: _BlocklistSource = "bundled"
+        self._blocklist_as_of: datetime | None = None
         self._last_loaded: datetime | None = None
         self._refresh_lock: asyncio.Lock = asyncio.Lock()
         self._logged_stale: bool = False
@@ -289,8 +296,24 @@ class DomainGuard:
         self._last_loaded = datetime.now(timezone.utc)
         self._logged_stale = False
 
+    def _install(
+        self, domains: frozenset[str], source: _BlocklistSource, as_of: datetime | None
+    ) -> None:
+        """Make *domains* the live blocklist, always unioned with ``_BUNDLED_BLOCKLIST``.
+
+        Args:
+            domains: Entries from the feed or the disk cache (empty for the bundled list).
+            source: Where *domains* came from.
+            as_of: When *domains* was produced: the fetch time, or the cache file's
+                ``cached_at``. ``None`` for the bundled list.
+        """
+        self._blocklist = domains | _BUNDLED_BLOCKLIST
+        self._blocklist_source = source
+        self._blocklist_as_of = as_of
+        self._mark_loaded()
+
     async def _refresh(self) -> None:
-        """Reload blocklist: disk cache → URLhaus feed → bundled fallback."""
+        """Reload blocklist: disk cache → URLhaus feed → best list still available."""
         cached = self._load_from_disk_cache()
         if cached is not None:
             # Union with _BUNDLED_BLOCKLIST (FRE-1330) — the disk cache holds only the last
@@ -298,48 +321,98 @@ class DomainGuard:
             # (e.g. this deploy's new targeted block) would otherwise silently drop that entry
             # for up to ttl_seconds, until the next network refresh. The fetch-feed branch
             # below already does this union; this branch must match it.
-            self._blocklist = cached | _BUNDLED_BLOCKLIST
-            self._mark_loaded()
+            cached_domains, cached_at = cached
+            self._install(cached_domains, "cache", cached_at)
             log.debug("domain_guard_loaded_from_cache", count=len(self._blocklist))
             return
 
         try:
-            domains = await self._fetch_urlhaus()
-            self._blocklist = frozenset(domains) | _BUNDLED_BLOCKLIST
-            self._mark_loaded()
-            self._save_to_disk_cache(self._blocklist)
-            log.info(
-                "domain_guard_refreshed",
-                source="urlhaus",
-                count=len(self._blocklist),
-            )
+            fetched = await self._fetch_urlhaus()
+            if not fetched:
+                # A 200 response with no usable line must not replace a real list (FRE-1560).
+                raise ValueError("feed returned no entries")
         except Exception as exc:
             log.warning(
                 "domain_guard_feed_unavailable",
                 error=str(exc),
                 fallback_count=len(_BUNDLED_BLOCKLIST),
             )
-            self._blocklist = _BUNDLED_BLOCKLIST
-            self._mark_loaded()
-            log.warning(
-                "domain_guard_using_bundled_fallback",
-                count=len(_BUNDLED_BLOCKLIST),
-            )
+            self._fall_back()
+            return
 
-    def _load_from_disk_cache(self) -> frozenset[str] | None:
-        """Return cached entries if the cache file exists and is within TTL."""
+        self._install(frozenset(fetched), "feed", datetime.now(timezone.utc))
+        # The fetched list is already live. A cache write error costs only the next cold
+        # start, so it must not discard the list (FRE-1560).
+        try:
+            self._save_to_disk_cache(self._blocklist)
+        except OSError as exc:
+            log.warning(
+                "domain_guard_cache_write_failed",
+                error=str(exc),
+                path=str(self._cache_path),
+                count=len(self._blocklist),
+            )
+        log.info(
+            "domain_guard_refreshed",
+            source="urlhaus",
+            count=len(self._blocklist),
+        )
+
+    def _fall_back(self) -> None:
+        """Keep the best blocklist available after a failed feed fetch (FRE-1560).
+
+        Order: the in-memory list when it came from the feed or the cache, then the disk
+        cache with its TTL ignored, then the bundled list. Logs which source was used and,
+        when the list is not the bundled one, its age.
+        """
+        now = datetime.now(timezone.utc)
+        source: _FallbackSource
+        if self._blocklist_source != "bundled" and self._blocklist_as_of is not None:
+            source, as_of = "memory", self._blocklist_as_of
+            self._mark_loaded()
+        elif (stale := self._load_from_disk_cache(allow_stale=True)) is not None:
+            domains, as_of = stale
+            source = "stale_cache"
+            self._install(domains, "cache", as_of)
+        else:
+            source, as_of = "bundled", None
+            self._install(frozenset(), "bundled", None)
+        log.warning(
+            "domain_guard_using_fallback",
+            source=source,
+            count=len(self._blocklist),
+            age_seconds=max(0.0, (now - as_of).total_seconds()) if as_of else None,
+        )
+
+    def _load_from_disk_cache(
+        self, *, allow_stale: bool = False
+    ) -> tuple[frozenset[str], datetime] | None:
+        """Return the cached entries and their ``cached_at`` if the cache file is usable.
+
+        Args:
+            allow_stale: When True, ignore the TTL (used after a failed feed fetch).
+
+        Returns:
+            ``(entries, cached_at)``, or None when the file is missing, unreadable, or
+            older than the TTL and *allow_stale* is False.
+        """
         if not self._cache_path.exists():
             return None
         try:
             data = json.loads(self._cache_path.read_text())
             cached_at = datetime.fromisoformat(data["cached_at"])
-            if (datetime.now(timezone.utc) - cached_at).total_seconds() >= self._ttl:
+            if cached_at.tzinfo is None:
+                return None  # this module writes aware timestamps; a naive one is not ours
+            if (
+                not allow_stale
+                and (datetime.now(timezone.utc) - cached_at).total_seconds() >= self._ttl
+            ):
                 return None
             # A cache written before FRE-1552 names a whole platform by hostname. Drop only
             # those entries and keep the dedicated hosts: if the next feed fetch fails, the
             # guard must not fall back to the bundled list alone. The next refresh replaces
             # the dropped platforms with URL entries.
-            return frozenset(data["domains"]) - _SHARED_PLATFORM_HOSTS
+            return frozenset(data["domains"]) - _SHARED_PLATFORM_HOSTS, cached_at
         except (json.JSONDecodeError, KeyError, ValueError, OSError):
             return None
 

@@ -80,9 +80,11 @@ flag — the watcher then POSTs a structured PR-state payload
 (``build_channel_payload``) to the seat's ``seshat-dispatch`` channel instead of
 ``tmux send-keys``, and the send-keys/idle-scrape path is skipped entirely for
 that delivery. A failed or unconfigured channel delivery falls back to send-keys
-for that event within the same tick. No seat is cut over by this module today —
-every ``StreamTopology`` defaults to ``send_keys`` mode (the actual per-seat
-cutover is a separate, ask-first deploy). A dependabot-authored PR is never a
+for that event within the same tick. ``cc-master`` is always channel-first
+(FRE-1555, ADR-0155 D2 track A): its payload is ``build_master_channel_payload``,
+and the same fallback applies. Every ``StreamTopology`` defaults to ``send_keys``
+mode (the per-seat cutover of a worker is a separate, ask-first deploy).
+A dependabot-authored PR is never a
 **worker** candidate (``classify_pr``'s boundary guard) — the gateway
 structurally cannot hand any seat an instruction whose natural completion is
 pushing to a branch it does not own. It can still be a **master-ready**
@@ -117,6 +119,7 @@ import structlog
 
 from scripts.dispatch import context_probe, master_alert, trigger_ledger
 from scripts.dispatch.launcher import (
+    MASTER_CHANNEL_PORT,
     CommandRunner,
     stream_for_tmux_session,
     subprocess_runner,
@@ -305,13 +308,13 @@ class Trigger:
         dedup_key: The dedup key to record on a successful send.
         ttl_s: The suppression TTL for this trigger kind.
         mode: The target seat's delivery mode (FRE-872, ADR-0116) —
-            ``"channel"`` or ``"send_keys"``. Always ``"send_keys"`` for a
-            master trigger (master has no ``StreamTopology`` entry in this
-            ticket) or an unroutable worker trigger.
+            ``"channel"`` or ``"send_keys"``. Always ``"channel"`` for a master
+            trigger (FRE-1555). ``"send_keys"`` for an unroutable worker trigger.
         channel_port: The target seat's channel port, only set when
             ``mode == "channel"``.
-        channel_payload: The structured PR-state payload for a channel-mode
-            delivery, only set when ``mode == "channel"``.
+        channel_payload: The structured payload for a channel-mode delivery,
+            only set when ``mode == "channel"``. It lacks ``trigger_id``:
+            ``run_once`` adds the ledger's id when it posts.
         worker_session: The owning worker seat — the target of a worker
             trigger, or the seat an ineffective-poke escalation is about
             (FRE-1499). ``None`` for a master-ready trigger.
@@ -504,6 +507,33 @@ def build_channel_payload(pr: PullRequest) -> dict[str, object]:
             for check in pr.checks
         ],
         "dependabot": pr.is_dependabot,
+    }
+
+
+def build_master_channel_payload(pr: PullRequest, reason: str, command: str) -> dict[str, object]:
+    """Build the payload of a trigger sent to the ``cc-master`` channel (FRE-1555).
+
+    Master can merge and deploy, so this payload carries only fields that the
+    daemon builds itself. A check name, a details URL and a branch name come from
+    GitHub, and an attacker can shape them, so none of them is sent. Master
+    re-reads the live PR state through its own skill.
+
+    Args:
+        pr: The PR snapshot. Only its number and head SHA are used.
+        reason: The trigger reason (``master-ready`` or ``worker-poke-ineffective``).
+            The master instructions in the channel plugin name both strings.
+        command: The daemon-built command text. It is built from the PR number,
+            the head SHA and a seat name.
+
+    Returns:
+        A JSON-serializable dict.
+    """
+    return {
+        "event_type": reason,
+        "pr": pr.number,
+        "head_sha": pr.head_sha,
+        "reason": reason,
+        "command": command,
     }
 
 
@@ -734,6 +764,12 @@ def decide(
                 mode = "channel"
                 channel_port = topology.channel_port
                 channel_payload = build_channel_payload(pr)
+        if candidate.kind == "master" and session is not None:
+            # Master is channel-first (FRE-1555). The mode does not depend on a
+            # worker stream. A failed POST falls back to send-keys in run_once.
+            mode = "channel"
+            channel_port = MASTER_CHANNEL_PORT
+            channel_payload = build_master_channel_payload(pr, candidate.reason, command)
         triggers.append(
             Trigger(
                 kind=candidate.kind,
@@ -1507,8 +1543,8 @@ def run_once(
             no context-pressure behavior at all.
         context_pressure_threshold: Percent threshold for the master nudge.
         context_pressure_ttl_s: Suppression TTL for the context-pressure nudge.
-        channel_poster: Delivers a channel-mode worker trigger (FRE-872,
-            ADR-0116). Injectable for tests.
+        channel_poster: Delivers a channel-mode trigger, a worker's (FRE-872,
+            ADR-0116) or master's (FRE-1555). Injectable for tests.
         channel_secret: The gateway-side shared secret for channel delivery
             (``load_channel_secret()`` in production). ``None`` falls back to
             send-keys for every channel-mode trigger this tick, exactly like
@@ -1729,8 +1765,13 @@ def run_once(
                 channel_failure = "channel_secret_missing"
             else:
                 assert trigger.channel_port is not None
+                # The ledger owns the id (FRE-1555): every transport reads it from there.
+                posted = {
+                    **(trigger.channel_payload or {}),
+                    "trigger_id": tick_ledger[trigger.dedup_key].trigger_id,
+                }
                 channel_result = channel_poster(
-                    trigger.channel_port, channel_secret, json.dumps(trigger.channel_payload)
+                    trigger.channel_port, channel_secret, json.dumps(posted)
                 )
             if channel_result == "delivered":
                 # The ONLY place transport ever becomes "channel" -- called

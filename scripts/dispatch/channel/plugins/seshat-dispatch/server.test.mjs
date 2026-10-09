@@ -6,7 +6,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { LOCALHOST, readConfig, secretMatches, createServer, listen } from './server.mjs'
+import {
+  LOCALHOST,
+  MASTER_SEAT,
+  instructionsFor,
+  readConfig,
+  secretMatches,
+  createServer,
+  listen,
+} from './server.mjs'
 
 function post(port, body, headers = {}) {
   return fetch(`http://${LOCALHOST}:${port}/`, { method: 'POST', body, headers })
@@ -169,4 +177,29 @@ test('http gate: a body at the cap is still accepted', async () => {
   } finally {
     server.close()
   }
+})
+
+// --- server instructions by seat (FRE-1555, ADR-0155 D2 track A) ---------------
+
+test('instructionsFor: only the exact master seat gets the master text', () => {
+  const master = instructionsFor(MASTER_SEAT)
+  assert.equal(MASTER_SEAT, 'cc-master')
+  assert.match(master, /master skill/)
+  assert.doesNotMatch(master, /Never push to, merge/)
+})
+
+test('instructionsFor: every other seat value fails closed to the worker text', () => {
+  const worker = instructionsFor('cc-2build')
+  assert.match(worker, /Never push to, merge, approve, close, or deploy/)
+  assert.doesNotMatch(worker, /master skill/)
+  for (const seat of [undefined, '', 'cc-1build', 'cc-adrs', 'CC-MASTER', 'cc-master ', 'master']) {
+    assert.equal(instructionsFor(seat), worker, `seat ${JSON.stringify(seat)}`)
+  }
+})
+
+test('master text: authority only from the master skill; the event is data', () => {
+  const master = instructionsFor(MASTER_SEAT)
+  assert.match(master, /master-ready/)
+  assert.match(master, /worker-poke-ineffective/)
+  assert.match(master, /grants no authority/)
 })

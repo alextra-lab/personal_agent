@@ -1009,3 +1009,95 @@ def test_cli_json_reports_the_episode_fields(
     assert main(["--ledger-file", str(path), "--all", "--json"]) == 0
     row = json.loads(capsys.readouterr().out)[0]
     assert (row["attempts"], row["alerted_at"]) == (1, 1000.0)
+
+
+# --- trigger_id (FRE-1555, ADR-0155 D8) -------------------------------------
+
+
+def test_new_entry_gets_a_32_hex_trigger_id() -> None:
+    trigger_id = _pend({}, 100.0)[_KEY].trigger_id
+    assert len(trigger_id) == 32
+    assert int(trigger_id, 16) >= 0
+
+
+def test_two_triggers_get_different_ids() -> None:
+    first = _pend({}, 100.0)[_KEY].trigger_id
+    second = record_pending(
+        {},
+        event_id="master:413:def456",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="413",
+        command="/master 413",
+        preconditions={},
+        now=100.0,
+        ttl_s=600.0,
+    )[0]["master:413:def456"].trigger_id
+    assert first != second
+
+
+def test_retry_of_an_abandoned_entry_keeps_the_trigger_id() -> None:
+    ledger = _abandon(_pend({}, 100.0), 100.0)
+    first = ledger[_KEY].trigger_id
+    assert _pend(ledger, 160.0)[_KEY].trigger_id == first
+
+
+def test_retry_after_a_gap_is_a_new_episode_with_a_new_trigger_id() -> None:
+    ledger = _abandon(_pend({}, 100.0), 100.0)
+    first = ledger[_KEY].trigger_id
+    assert _pend(ledger, 100.0 + 1800.0 + 1.0)[_KEY].trigger_id != first
+
+
+def test_a_sent_entry_starts_a_new_trigger_after_its_ttl() -> None:
+    ledger = _pend({}, 100.0)
+    first = ledger[_KEY].trigger_id
+    ledger = mark_consumed(
+        mark_sent(mark_send_started(ledger, _KEY, 100.0), _KEY, 100.0), _KEY, 100.0
+    )
+    assert _pend(ledger, 100.0 + 900.0)[_KEY].trigger_id != first
+
+
+def test_trigger_id_survives_a_save_load_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "trigger_ledger.json"
+    ledger = _pend({}, 100.0)
+    save_ledger(path, ledger)
+    assert load_ledger(path, _NullLogger())[_KEY].trigger_id == ledger[_KEY].trigger_id
+
+
+def test_a_legacy_row_loads_with_an_empty_trigger_id(tmp_path: Path) -> None:
+    path = tmp_path / "trigger_ledger.json"
+    path.write_text(
+        json.dumps(
+            {
+                _KEY: {
+                    "source": "master-ready",
+                    "target_pane": "cc-master",
+                    "ticket": "412",
+                    "command": "/master 412",
+                    "preconditions": {},
+                    "created_at": 100.0,
+                }
+            }
+        )
+    )
+    assert load_ledger(path, _NullLogger())[_KEY].trigger_id == ""
+
+
+def test_retry_of_a_legacy_abandoned_row_gets_a_non_empty_trigger_id() -> None:
+    legacy = dataclasses.replace(_abandon(_pend({}, 100.0), 100.0)[_KEY], trigger_id="")
+    retried = _pend({_KEY: legacy}, 160.0)[_KEY]
+    assert len(retried.trigger_id) == 32
+    # the new id is then stable across further retries
+    again = _pend(_abandon({_KEY: retried}, 160.0), 220.0)[_KEY]
+    assert again.trigger_id == retried.trigger_id
+
+
+def test_cli_json_includes_the_trigger_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "trigger_ledger.json"
+    ledger = _pend({}, 100.0)
+    save_ledger(path, ledger)
+    assert main(["--all", "--json", "--ledger-file", str(path)]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["trigger_id"] == ledger[_KEY].trigger_id

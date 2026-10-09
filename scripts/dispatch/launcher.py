@@ -290,6 +290,12 @@ class StreamTopology:
 #
 # Only the seat field changes. Stream keys, Linear ``stream:`` labels, worktree
 # directories and channel ports are all unchanged.
+#
+# The channel port of ``cc-master`` (FRE-1555, ADR-0155 D2 track A). Master is not a
+# dispatch stream, so it has no ``StreamTopology``. This port must match the
+# ``cc-master`` row of ``~/.claude/cc-sessions.conf`` (column 4).
+MASTER_CHANNEL_PORT = 8789
+
 _TOPOLOGY: dict[str, StreamTopology] = {
     "build1": StreamTopology(
         "build1",

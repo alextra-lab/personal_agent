@@ -14,14 +14,16 @@
 // notification and fails closed on config (readConfig throws on a missing port or
 // secret) before ever binding the port.
 //
-// The runtime behavioral boundary named in `instructions` below is normatively
-// owned by .claude/skills/lifecycle-rules.md § Session boundary (per that file's
-// own single-source rule) — restated here only as the in-session reminder a
-// channel-triggered turn reads, not as a second source of truth.
+// The `instructions` text depends on the seat (FRE-1555): cc-master gets the master
+// text, every other seat gets the worker text. The launcher sets SESHAT_SEAT; see
+// `instructionsFor` in ./server.mjs. The runtime behavioral boundary named in the
+// worker text is normatively owned by .claude/skills/lifecycle-rules.md § Session
+// boundary (per that file's own single-source rule) — restated there only as the
+// in-session reminder a channel-triggered turn reads, not as a second source of truth.
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
-import { readConfig, createServer, listen, LOCALHOST } from './server.mjs'
+import { readConfig, createServer, listen, instructionsFor, LOCALHOST } from './server.mjs'
 
 const { port, secret } = readConfig(process.env)
 
@@ -30,13 +32,7 @@ const mcp = new Server(
   {
     // Presence of this experimental key is what registers the channel listener.
     capabilities: { experimental: { 'claude/channel': {} } },
-    instructions:
-      'Events from the seshat-dispatch channel arrive as ' +
-      '<channel source="seshat-dispatch" ...> and carry a dispatch gating event ' +
-      '(typically a pull-request CI-state payload). Read the event and act within ' +
-      'THIS session only: author and push any fix to this session’s own worker ' +
-      'branch/PR. Never push to, merge, approve, close, or deploy a branch/PR you do ' +
-      'not own. One-way channel: no reply is expected.',
+    instructions: instructionsFor(process.env.SESHAT_SEAT),
   },
 )
 

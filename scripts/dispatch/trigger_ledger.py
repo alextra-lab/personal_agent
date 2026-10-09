@@ -82,6 +82,7 @@ import dataclasses
 import json
 import os
 import sys
+import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol
@@ -154,6 +155,11 @@ class LedgerEntry:
             e.g. ``busy`` or ``channel_delivery_failed+busy``. Empty if none.
         alerted_at: When master was alerted about this episode (FRE-1540). Set
             once; never cleared by a retry.
+        trigger_id: The one stable id of this trigger (FRE-1555, ADR-0155 D8).
+            ``record_pending`` creates it with the row. A retry of the same
+            episode keeps it. Every transport reads it from here, so the channel
+            payload and the ledger always name the same id. Empty on a row
+            written before FRE-1555.
     """
 
     event_id: str
@@ -172,9 +178,15 @@ class LedgerEntry:
     attempts: int = 0
     last_failure: str = ""
     alerted_at: float | None = None
+    trigger_id: str = ""
 
 
 Ledger = dict[str, LedgerEntry]
+
+
+def new_trigger_id() -> str:
+    """Return a fresh trigger id: 32 lowercase hex characters (FRE-1555)."""
+    return uuid.uuid4().hex
 
 
 def record_pending(
@@ -209,7 +221,7 @@ def record_pending(
         again right now.
     """
     existing = ledger.get(event_id)
-    created_at, attempts, alerted_at = now, 1, None
+    created_at, attempts, alerted_at, trigger_id = now, 1, None, new_trigger_id()
     if existing is not None:
         if existing.consumed_at is None:
             return ledger, "duplicate"
@@ -221,6 +233,8 @@ def record_pending(
             if (now - existing.consumed_at) <= EPISODE_GAP_S:
                 created_at = existing.created_at
                 attempts = existing.attempts + 1
+                # A row written before FRE-1555 has no id: give it one now.
+                trigger_id = existing.trigger_id or trigger_id
     updated = dict(ledger)
     updated[event_id] = LedgerEntry(
         event_id=event_id,
@@ -232,6 +246,7 @@ def record_pending(
         created_at=created_at,
         attempts=attempts,
         alerted_at=alerted_at,
+        trigger_id=trigger_id,
     )
     return updated, "new"
 
@@ -498,6 +513,7 @@ def load_ledger(path: Path, logger: Logger) -> Ledger:
             attempts=int(fields.get("attempts") or 0),
             last_failure=str(fields.get("last_failure") or ""),
             alerted_at=fields.get("alerted_at"),
+            trigger_id=str(fields.get("trigger_id") or ""),
         )
     return entries
 
@@ -578,6 +594,7 @@ def _entry_to_json(entry: LedgerEntry) -> dict[str, object]:
         "attempts": entry.attempts,
         "last_failure": entry.last_failure,
         "alerted_at": entry.alerted_at,
+        "trigger_id": entry.trigger_id,
     }
 
 

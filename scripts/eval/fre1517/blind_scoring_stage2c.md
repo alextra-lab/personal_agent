@@ -24,7 +24,7 @@ its research turns (2, 5 and 8) better.
    turn, the `web_search` count. The control's values: workers 3, 1 · 1, 3 · 1, 4, 1. Web searches
    3 · 6 · 6.
 2. **The variant reaches the worker (AC-2, live).** Each `standard` researcher capture of the variant
-   arm shows a `system_prompt_chars` larger than the control's by the variant's length (220 chars at
+   arm shows a `system_prompt_chars` larger than the control's by the variant's length (246 chars at
    n=5). Read from `sub_agent_captures.system_prompt_chars`.
 3. **Delivery and time (AC-4).** Part 1 delivered, and wall time, per turn.
 4. **Quality (AC-5).** One blind pool of five sheets, new codes, two new scorers: the variant, the

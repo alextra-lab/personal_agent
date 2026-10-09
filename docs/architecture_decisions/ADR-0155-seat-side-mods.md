@@ -107,7 +107,7 @@ The reason is lifetime. A daemon is a supervised system service. A mod lives ins
    - every `$.fs.write` call has, as its path, the module's single path function `statePath()` or `inboxPath()`;
    - every `$.prompt.submit` call passes an object literal without an `asUser` key;
    - every `ui.render` registration names the matcher `{ component: 'AbovePrompt' }` literally.
-3. **Runtime guard.** `statePath()` and `inboxPath()` accept only a seat name matching `^cc-[a-z0-9]+$` and an id matching `^[A-Za-z0-9_-]{1,64}$`. Each resolves the result with `$.fs.stat(path, { resolve: true })`, and refuses any `realPath` outside `/opt/seshat/telemetry/seat_state/` or `/opt/seshat/telemetry/seat_inbox/`. A test drives both functions with traversal and link inputs.
+3. **Runtime guard.** `statePath()` and `inboxPath()` accept only a seat name matching `^cc-[a-z0-9]+$` and an id matching `^[A-Za-z0-9_-]{1,64}$`. Each resolves the **parent folder** with `$.fs.stat(dir, { resolve: true })`, refuses any `realPath` outside `/opt/seshat/telemetry/seat_state/` or `/opt/seshat/telemetry/seat_inbox/<seat>/`, and then appends the validated file name. If the file already exists, it is resolved too, so a link planted at the file name is refused. The seat setup creates both folders, so the parent always exists. A test drives both functions with traversal, link and missing-file inputs.
 
 The check runs in pre-commit and in the promotion script (D5). The promotion run is the binding one: no version reaches a seat without it.
 
@@ -129,7 +129,7 @@ The check runs in pre-commit and in the promotion script (D5). The promotion run
   2. runs the D3 check and the tests against that directory;
   3. writes the new entry module to a temporary file, and renames it over `hooks/register.ts`. A file rename is atomic, so a seat loads either the old release or the new one, never a mix.
   
-  Promotion completes only when every loading seat's heartbeat reports the new `MOD_VERSION` within 3 minutes. `MOD_VERSION` comes from the loaded module itself, not from a file. If a seat does not report it in time, the script renames the previous entry module back, which is an automatic rollback.
+  Promotion completes only when every loading seat's heartbeat reports the new `MOD_VERSION` within 3 minutes. "Every loading seat" means every seat that `cc-sessions.conf` marks for the mod and that Remote Control lists as present. An offline seat loads the current entry module when it starts, and is not waited for. `promote_mod.py --dest <folder>` promotes into another folder, for tests. `MOD_VERSION` comes from the loaded module itself, not from a file. If a seat does not report it in time, the script renames the previous entry module back, which is an automatic rollback.
 - **Who.** Promotion is master's action, in the stricter deploy class.
 - **Rollback.** Promote the previous SHA. Its release directory is still present, so rollback is a single entry rename. Releases are deleted only when they are two versions old.
 - **Kill switch.** While the file `~/.claude/seshat-mods/seat-agent.disabled` exists, every hook passes through, and the heartbeat records `disabled: true`.
@@ -142,18 +142,27 @@ On cc-2build, `seat-agent` writes `/opt/seshat/telemetry/seat_state/cc-2build.js
 |---|---|
 | `seat`, `session_id` | `SESHAT_SEAT`, and `$.session.id()` at the write |
 | `state` | `idle`, `turn` or `ended` |
+| `engine_version` | `$.session.version().version` |
 | `turn_started_at`, `turn_completed_at` | from `turn.start` and `turn.complete` |
 | `draft_present`, `draft_changed_at` | from polling `$.prompt.read()` every 5 s. The draft text is never written. |
-| `engine_version`, `mod_version`, `disabled` | `$.session.version()`, the loaded `MOD_VERSION`, the kill switch |
+| `mod_version`, `disabled` | the loaded `MOD_VERSION`, the kill switch |
 | `heartbeat_at` | the last write |
 
 **After a `/clear`.** `session.end` with reason `clear` sets `state` to `ended`. No `session.start` follows. On the next heartbeat, the mod reads `$.session.id()`. If the id differs from the one recorded, it sets `state` to `idle` under the new id.
 
+**The state mapping.** `claude agents --json` reports a session's status as one of the values of the API's `AgentStatus`. For comparison, the report maps them to the mod's states:
+
+| Remote Control status | Mod state |
+|---|---|
+| `idle` | `idle` |
+| `running`, `waiting` (a permission prompt or a question inside a turn), `pending` | `turn` |
+| `completed`, `failed`, `killed`, or the session absent from the list | `ended` |
+
 **Observation only.** The watcher logs on every tick, for the seat: its pane reading, the Remote Control status, and the mod file's `state`. `scripts/dispatch/seat_state_report.py` compares the three. No daemon makes a decision from the mod's file in phase 1.
 
-### D7 — In phase 2, a silent mod returns dispatch to track A, and the last resort is an alert
+### D7 — The delivery order, and the last resort is an alert
 
-D7 applies from phase 2. In phase 1 the watcher only logs which path D7 would have chosen.
+D7 applies to track A as soon as track A deploys. Its inbox branch (point 1 below) is observation-only in phase 1: the watcher logs that it would have used the inbox, and uses the channel. The inbox branch becomes active in phase 2.
 
 A daemon treats a seat as having no mod when any of these holds:
 - the heartbeat is older than 90 s;
@@ -163,7 +172,7 @@ A daemon treats a seat as having no mod when any of these holds:
 The delivery order for a trigger is then:
 1. the seat's inbox (D8), while the mod is present;
 2. the seat's channel (track A), with no typing;
-3. `send-keys`, but only while Remote Control status reads idle **and** the mod or the pane shows no draft;
+3. `send-keys`, but only while Remote Control status reads `idle` **and** the draft is known to be empty. A fresh mod report (heartbeat inside 90 s, engine version on the list) decides whether a draft exists. Without one, the pane must show a bare empty prompt. A disagreement between the readings, or an unknown reading, counts as "not known empty";
 4. otherwise, **an alert to master and the owner**, never a typed injection into a busy seat, a held draft or a permission wait.
 
 This replaces the 30-minute force-delivery for any seat on track A or track B.
@@ -182,7 +191,7 @@ Phase 2 starts only when the owner records approval on FRE-1553, with the AC-4 r
 | `claimed` | the mod | before it calls `$.prompt.submit` |
 | `started` | the mod | when the submit resolves, which is when its turn starts |
 
-- **Fallback rule.** The daemon moves a trigger to the next transport only while it is still `pending`, 5 minutes after it was placed.
+- **No re-send from the inbox.** A trigger placed in the inbox is never sent on another transport, because a re-send could race the mod's claim. If it is still `pending` 5 minutes after it was placed, the daemon alerts. The daemon places a trigger in the inbox only while the mod is present (D7), so a trigger left `pending` means the mod failed after the placement.
 - **Claimed but not started.** This is normal while the seat waits on a permission prompt or a running turn. The daemon never re-sends a claimed trigger. If it is not `started` within 30 minutes, the daemon alerts.
 - **The ambiguous case.** A crash between `claimed` and `started` cannot be resolved: the submit may or may not have queued. The daemon reports such a trigger as ambiguous and alerts. It never re-sends it.
 - **Draft hold (owner, 2026-10-09).** Before it claims a trigger, the mod holds it while the owner's draft changed in the last 2 minutes, for at most 10 minutes. While it holds, a band above the prompt names the waiting trigger. A draft unchanged for 2 minutes never holds a trigger.
@@ -350,7 +359,7 @@ If commands do not run, the orchestrator's reuse path launches a fresh seat in p
 
 These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-5 and AC-8 to AC-9 are adjudicated after phase 1 and track A. AC-6 and AC-7 are adjudicated after phase 2.
 
-- **AC-1 — The rule check refuses every forbidden shape.** · **Check:** fixture mods, each with one forbidden use, go through `promote_mod.py`:
+- **AC-1 — The rule check refuses every forbidden shape.** · **Check:** fixture mods, each with one forbidden use, go through `promote_mod.py --dest <temporary folder>`, never the live runtime folder:
   - a `tool.check` hook, a `tool.call` hook, a `session.receive` hook, a `prompt.submit` hook;
   - a `$.prompt.fill` call, an event or call outside the phase's allow-list, an environment read other than `SESHAT_SEAT`;
   - a `ui.render` matcher other than `AbovePrompt`;
@@ -368,7 +377,7 @@ These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-
 - **AC-3 — The owner's Remote Control path is intact.** · **Check:** during phase 1, the owner sends at least 3 prompts to cc-2build by Remote Control, and answers at least 1 permission prompt there. For each prompt, the transcript records the `bridge`-origin row and the turn it starts. For the permission prompt, it records the request and the owner's answer. · *Fails if*:
   - any prompt's stored text differs from what the owner sent;
   - any prompt starts no turn within 60 s of the seat being idle;
-  - the permission prompt does not appear, or the tool runs against the owner's answer.
+  - the permission prompt does not appear, or, when the owner answers it with a deny, the tool runs.
 
 - **AC-4 — The mod's state agrees with the engine across every transition.** · **Check:** `seat_state_report.py` over phase 1, timestamped from the mod's file, the Remote Control status and the pane reading. The window must contain at least these transitions:
   - turn start and turn end, at least 20 of each;
@@ -378,7 +387,7 @@ These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-
   - a held draft for more than 5 minutes;
   - a permission wait.
   
-  · *Fails if* any listed transition is absent, or the mod's `state` differs from Remote Control status for longer than 35 s (one heartbeat plus one poll) at any transition. It also fails if, after a `/clear`, the mod does not report `idle` under the new session id within 35 s. Disagreements with the pane reading are listed by type, and a held draft that the pane reads as busy is the expected type.
+  · *Fails if* any listed transition is absent, or the mod's `state` differs from the mapped Remote Control status (D6's table) for longer than 35 s (one heartbeat plus one poll) at any transition. It also fails if, after a `/clear`, the mod does not report `idle` under the new session id within 35 s. Disagreements with the pane reading are listed by type, and a held draft that the pane reads as busy is the expected type.
 
 - **AC-5 — In phase 1, the fallback decision is logged correctly.** · **Check:** on cc-2build, create the kill-switch file; later, promote a version that does not load. Then place a synthetic trigger with a known `trigger_id`. · *Fails if*, within 3 minutes of each change (90 s stale threshold plus a 60 s poll, with margin), the watcher's log does not record the D7 path for the seat, or the synthetic trigger is delivered on anything but exactly one transport.
 
@@ -394,7 +403,8 @@ These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-
   2. a draft unchanged for 5 minutes;
   3. no draft;
   4. a pending permission prompt when the trigger arrives;
-  5. the mod reloaded between `claimed` and `started`.
+  5. the mod reloaded between `claimed` and `started`;
+  6. the mod stopped (kill switch) after the trigger is placed and before it is claimed, so it stays `pending` past 5 minutes.
   
   · *Fails if*:
   - any draft changes;
@@ -402,6 +412,7 @@ These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-
   - case 2 is held at all;
   - case 4 is re-sent on another transport;
   - case 5 is re-sent instead of alerted as ambiguous;
+  - case 6 is sent on another transport instead of alerted;
   - any submit carries `asUser`;
   - any trigger starts more than one turn.
 
@@ -444,4 +455,4 @@ These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-
 
 ### 2026-10-09 - Proposed
 **Changed By:** `adr` seat (FRE-1553)
-**Reason:** Drafted on the owner's "craft it" after the exploration and the owner's answers on the direction, the draft policy and the pilot seat. Codex round 1 (6 blocking): the rule check became argument-sensitive, with a stated threat model; a single `trigger_id` protocol with a receiver-side record replaced the acknowledgement timeout; promotion became an atomic entry-module rename with heartbeat confirmation and automatic rollback; the `/clear` timer claim was corrected and the heartbeat now detects a new session id; D7 became phase-2 only, with an alert as the last resort; Option 3 (a channel sidecar) was added.
+**Reason:** Drafted on the owner's "craft it" after the exploration and the owner's answers on the direction, the draft policy and the pilot seat. Codex round 1 (6 blocking): the rule check became argument-sensitive, with a stated threat model; a single `trigger_id` protocol with a receiver-side record replaced the acknowledgement timeout; promotion became an atomic entry-module rename with heartbeat confirmation and automatic rollback; the `/clear` timer claim was corrected and the heartbeat now detects a new session id; D7 became phase-2 only, with an alert as the last resort; Option 3 (a channel sidecar) was added. Codex round 2 (5 blocking): the path guard resolves the parent folder, so a first write succeeds; a pending inbox trigger is never re-sent, so no claim race exists; D7 applies to track A at once, with its inbox branch observation-only in phase 1; a defined precedence makes conflicting draft readings alert; and a mapping from Remote Control status to the mod's states makes AC-4 decidable.

@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
 
 import httpx
 
@@ -46,6 +45,43 @@ _BUNDLED_BLOCKLIST: frozenset[str] = frozenset(
         "routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com",
     }
 )
+
+# FRE-1552: multi-tenant platforms that URLhaus lists by the malicious file, not by the host.
+# Blocking such a hostname blocks every legitimate page on it (github.com, 2,516 feed URLs),
+# so the guard blocks only the exact URLs the feed lists for these hosts. Any other host,
+# including every bare IP, stays blocked as a whole. A shared host missing from this set
+# is still blocked as a whole: add it here when a legitimate page on it is refused.
+_SHARED_PLATFORM_HOSTS: frozenset[str] = frozenset(
+    {
+        "github.com",
+        "raw.githubusercontent.com",
+        "codeload.github.com",
+        "gist.githubusercontent.com",
+        "gitlab.com",
+        "bitbucket.org",
+        "drive.google.com",
+        "docs.google.com",
+        "firebasestorage.googleapis.com",
+        "web.archive.org",
+        "www.dropbox.com",
+        "dl.dropboxusercontent.com",
+        "cdn.discordapp.com",
+        "media.discordapp.net",
+        "res.cloudinary.com",
+        "img1.wsimg.com",
+        "files.pythonhosted.org",
+    }
+)
+
+_PERCENT_ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def _canonical_escape(match: re.Match[str]) -> str:
+    """Decode an escaped unreserved character; upper-case the hex of any other escape."""
+    char = chr(int(match.group(1), 16))
+    return char if char in _UNRESERVED else f"%{match.group(1).upper()}"
+
 
 # URLhaus plaintext feed URL (CC0 licence, no key required).
 _URLHAUS_FEED = "https://urlhaus.abuse.ch/downloads/text/"
@@ -83,6 +119,10 @@ class DomainGuard:
     Loads its blocklist from the URLhaus feed (CC0) and caches it to disk.
     Falls back to a bundled list when the network is unavailable. Reloads
     automatically when the cache TTL expires.
+
+    The blocklist holds two kinds of entry (FRE-1552). A bare hostname blocks that
+    host and its subdomains. A URL entry (``host/path?query``, no scheme) blocks
+    only that exact resource and is used for hosts in ``_SHARED_PLATFORM_HOSTS``.
 
     Args:
         cache_path: JSON file used to persist the fetched blocklist.
@@ -171,7 +211,7 @@ class DomainGuard:
         if self._mode is GuardMode.ALLOWLIST:
             return self._check_allowlist(hostname)
 
-        return self._check_blocklist(hostname)
+        return self._check_blocklist(hostname, url)
 
     async def refresh(self) -> None:
         """Force a feed refresh regardless of TTL (e.g. from brainstem job)."""
@@ -190,12 +230,17 @@ class DomainGuard:
 
     @staticmethod
     def _extract_hostname(url: str) -> str:
-        """Return the lowercased hostname from a URL, or '' on parse failure."""
+        """Return the lowercased ASCII hostname from a URL, or '' on parse failure.
+
+        Parsed with ``httpx.URL`` (FRE-1552), the parser that builds the request the hook
+        sees: an IDN host is returned in its punycode form, a Unicode dot is mapped to
+        ``.`` and a terminal dot is dropped. A feed line and a request therefore agree on one spelling.
+        """
         try:
-            h = urlparse(url).hostname
-            return h.lower() if h else ""
-        except Exception:
+            host = httpx.URL(url).raw_host.decode("ascii")
+        except (httpx.InvalidURL, ValueError):
             return ""
+        return host.lower().rstrip(".")
 
     def _domain_in_set(self, hostname: str, domain_set: frozenset[str]) -> str | None:
         """Return the matching entry if *hostname* or any parent domain is in *domain_set*."""
@@ -206,7 +251,28 @@ class DomainGuard:
                 return candidate
         return None
 
-    def _check_blocklist(self, hostname: str) -> GuardResult:
+    @staticmethod
+    def _url_entry(url: str) -> str:
+        """Return the scheme-less ``host/path?query`` form of *url* used for URL entries.
+
+        The key is built from ``httpx.URL`` so a feed line and the request the hook later
+        sees (already normalised by httpx: dot segments removed, unsafe characters
+        percent-encoded) map to one entry. Spellings of the same octets also map to one
+        entry: the case of a percent escape, an escaped unreserved character and an empty
+        query. The scheme, port, userinfo and fragment are dropped. Anything else in the
+        path or query is compared as written: extra query parameters or a reordered query
+        is a different resource to this guard. Returns '' when *url* cannot be parsed.
+        """
+        host = DomainGuard._extract_hostname(url)
+        if not host:
+            return ""
+        raw_path = httpx.URL(url).raw_path.decode("ascii").removesuffix("?")
+        return f"{host}{_PERCENT_ESCAPE.sub(_canonical_escape, raw_path)}"
+
+    def _check_blocklist(self, hostname: str, url: str) -> GuardResult:
+        url_entry = self._url_entry(url)
+        if url_entry in self._blocklist:
+            return GuardResult(allowed=False, reason="blocklist_url_match", matched_entry=url_entry)
         matched = self._domain_in_set(hostname, self._blocklist)
         if matched:
             return GuardResult(allowed=False, reason="blocklist_match", matched_entry=matched)
@@ -261,7 +327,7 @@ class DomainGuard:
             )
 
     def _load_from_disk_cache(self) -> frozenset[str] | None:
-        """Return cached domains if the cache file exists and is within TTL."""
+        """Return cached entries if the cache file exists and is within TTL."""
         if not self._cache_path.exists():
             return None
         try:
@@ -269,7 +335,11 @@ class DomainGuard:
             cached_at = datetime.fromisoformat(data["cached_at"])
             if (datetime.now(timezone.utc) - cached_at).total_seconds() >= self._ttl:
                 return None
-            return frozenset(data["domains"])
+            # A cache written before FRE-1552 names a whole platform by hostname. Drop only
+            # those entries and keep the dedicated hosts: if the next feed fetch fails, the
+            # guard must not fall back to the bundled list alone. The next refresh replaces
+            # the dropped platforms with URL entries.
+            return frozenset(data["domains"]) - _SHARED_PLATFORM_HOSTS
         except (json.JSONDecodeError, KeyError, ValueError, OSError):
             return None
 
@@ -284,20 +354,29 @@ class DomainGuard:
         self._cache_path.write_text(json.dumps(data, indent=2))
 
     async def _fetch_urlhaus(self) -> set[str]:
-        """Download the URLhaus plaintext feed and extract unique hostnames."""
+        """Download the URLhaus plaintext feed and extract blocklist entries.
+
+        Returns:
+            One entry per feed line: the hostname, or the URL entry when the host is a
+            shared platform (see ``_SHARED_PLATFORM_HOSTS``).
+        """
         async with httpx.AsyncClient(timeout=_FEED_TIMEOUT_SECONDS) as client:
             resp = await client.get(_URLHAUS_FEED)
             resp.raise_for_status()
 
-        domains: set[str] = set()
+        entries: set[str] = set()
         for line in resp.text.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             hostname = self._extract_hostname(line)
-            if hostname:
-                domains.add(hostname)
-        return domains
+            if not hostname:
+                continue
+            if hostname in _SHARED_PLATFORM_HOSTS:
+                entries.add(self._url_entry(line))
+            else:
+                entries.add(hostname)
+        return entries
 
 
 # ---------------------------------------------------------------------------

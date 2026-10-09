@@ -241,18 +241,20 @@ class DomainGuard:
     def _url_entry(url: str) -> str:
         """Return the scheme-less ``host/path?query`` form of *url* used for URL entries.
 
-        The scheme, port, userinfo and fragment are dropped so the same resource over
-        http or https, or with a fragment, maps to one entry. Returns '' on parse failure.
+        The key is built from ``httpx.URL`` so a feed line and the request the hook later
+        sees (already normalised by httpx: dot segments removed, unsafe characters
+        percent-encoded) map to one entry. The scheme, port, userinfo and fragment are
+        dropped. Path and query are compared as written: a differently spelled path, extra
+        query parameters or a reordered query is a different resource to this guard.
+        Returns '' when *url* cannot be parsed.
         """
         try:
-            parts = urlparse(url)
-            host = parts.hostname
-        except ValueError:
+            parsed = httpx.URL(url)
+        except httpx.InvalidURL:
             return ""
-        if not host:
+        if not parsed.host:
             return ""
-        query = f"?{parts.query}" if parts.query else ""
-        return f"{host.lower()}{parts.path or '/'}{query}"
+        return f"{parsed.host.lower()}{parsed.raw_path.decode('ascii')}"
 
     def _check_blocklist(self, hostname: str, url: str) -> GuardResult:
         url_entry = self._url_entry(url)

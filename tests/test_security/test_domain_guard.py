@@ -538,3 +538,25 @@ class TestFre1552SharedPlatformUrlLevelBlock:
         listed = g2.check_url("https://github.com/badactor/repo/releases/download/x/payload.exe")
         assert listed.allowed is False
         assert g2.check_url("https://github.com/vllm-project/vllm/releases").allowed is True
+
+
+class TestFre1552FeedKeyMatchesWhatHttpxSends:
+    @pytest.mark.asyncio
+    async def test_feed_line_httpx_would_rewrite_is_still_blocked(self, tmp_path: Path) -> None:
+        """The request hook sees httpx's normalised URL; the feed key must match that form.
+
+        A feed line with a space or a dot segment is sent as ``a%20b.exe`` / without the
+        ``..`` segment. If the key keeps the raw spelling, the listed URL stops being blocked.
+        """
+        feed = "\n".join(
+            [
+                "https://github.com/bad/repo/a b.exe",
+                "https://github.com/bad/x/../repo/c.exe",
+            ]
+        )
+        g = await _guard_loaded_from_feed(tmp_path, feed)
+
+        for listed in ("https://github.com/bad/repo/a b.exe", "https://github.com/bad/repo/c.exe"):
+            sent = str(httpx.Request("GET", listed).url)
+            assert g.check_url(sent).allowed is False, sent
+            assert g.check_url(listed).allowed is False, listed

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from personal_agent.security import (
@@ -421,3 +422,119 @@ class TestFre1330NamedBucketBlock:
         result = g.check_url("https://routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com/x")
         assert result.allowed is False
         assert result.reason == "blocklist_match"
+
+
+# ---------------------------------------------------------------------------
+# 7. FRE-1552: a shared platform is blocked per malicious URL, not per hostname
+# ---------------------------------------------------------------------------
+
+_FEED_SAMPLE = "\n".join(
+    [
+        "################ URLhaus ################",
+        "# url",
+        "https://github.com/badactor/repo/releases/download/x/payload.exe",
+        "https://raw.githubusercontent.com/badactor/repo/main/dropper.sh",
+        "http://203.0.113.9:8080/bin.sh",
+        "http://dedicated-malware.example/a.exe",
+        "http://dedicated-malware.example/other/b.exe",
+        "",
+    ]
+)
+
+
+async def _guard_loaded_from_feed(tmp_path: Path, feed_text: str = _FEED_SAMPLE) -> DomainGuard:
+    """Return a guard whose blocklist came from parsing *feed_text* via ``_fetch_urlhaus``."""
+    g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+    response = httpx.Response(200, text=feed_text, request=httpx.Request("GET", "http://feed"))
+    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=response)):
+        await g._refresh()
+    return g
+
+
+class TestFre1552SharedPlatformUrlLevelBlock:
+    @pytest.mark.asyncio
+    async def test_ac1_listed_url_blocked_and_platform_page_allowed(self, tmp_path: Path) -> None:
+        """AC-1: the exact listed github.com URL is blocked; a releases page is not."""
+        g = await _guard_loaded_from_feed(tmp_path)
+
+        listed = g.check_url("https://github.com/badactor/repo/releases/download/x/payload.exe")
+        assert listed.allowed is False
+
+        page = g.check_url("https://github.com/vllm-project/vllm/releases")
+        assert page.allowed is True
+
+    @pytest.mark.asyncio
+    async def test_other_github_hosts_stay_reachable(self, tmp_path: Path) -> None:
+        """api.github.com and a different raw.githubusercontent.com path are allowed."""
+        g = await _guard_loaded_from_feed(tmp_path)
+
+        assert g.check_url("https://api.github.com/repos/ggml-org/llama.cpp/releases").allowed
+        assert g.check_url(
+            "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/R.md"
+        ).allowed
+        listed = g.check_url("https://raw.githubusercontent.com/badactor/repo/main/dropper.sh")
+        assert listed.allowed is False
+
+    @pytest.mark.asyncio
+    async def test_listed_url_blocked_across_scheme_fragment_and_default_port(
+        self, tmp_path: Path
+    ) -> None:
+        """The same resource over http, with a fragment, or on port 443 is still blocked."""
+        g = await _guard_loaded_from_feed(tmp_path)
+
+        for variant in (
+            "http://github.com/badactor/repo/releases/download/x/payload.exe",
+            "https://GitHub.com/badactor/repo/releases/download/x/payload.exe#frag",
+            "https://github.com:443/badactor/repo/releases/download/x/payload.exe",
+        ):
+            assert g.check_url(variant).allowed is False, variant
+
+    @pytest.mark.asyncio
+    async def test_ac2_dedicated_hosts_stay_blocked_for_every_path(self, tmp_path: Path) -> None:
+        """AC-2: a dedicated hostname and a bare IP are blocked on paths the feed never listed."""
+        g = await _guard_loaded_from_feed(tmp_path)
+
+        assert g.check_url("http://dedicated-malware.example/never/listed.txt").allowed is False
+        assert g.check_url("http://dedicated-malware.example/").allowed is False
+        assert g.check_url("http://203.0.113.9:8080/other-path").allowed is False
+
+    @pytest.mark.asyncio
+    async def test_legacy_cache_that_blocks_a_whole_platform_is_discarded(
+        self, tmp_path: Path
+    ) -> None:
+        """A cache written before FRE-1552 holds the bare host ``github.com``; it must not load.
+
+        Loading it would keep every github.com page blocked until the TTL runs out.
+        """
+        cache_path = tmp_path / "blocklist.json"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "cached_at": datetime.now(timezone.utc).isoformat(),
+                    "domain_count": 2,
+                    "domains": ["github.com", "evil.com"],
+                }
+            )
+        )
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+        response = httpx.Response(
+            200, text=_FEED_SAMPLE, request=httpx.Request("GET", "http://feed")
+        )
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=response)):
+            await g._refresh()
+
+        assert g.check_url("https://github.com/vllm-project/vllm/releases").allowed is True
+
+    @pytest.mark.asyncio
+    async def test_cache_round_trip_keeps_url_entries(self, tmp_path: Path) -> None:
+        """A second guard that loads the saved cache blocks the same URL and allows the page."""
+        await _guard_loaded_from_feed(tmp_path)
+
+        g2 = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
+        with patch.object(g2, "_fetch_urlhaus", new=AsyncMock()) as fetch_mock:
+            await g2._refresh()
+
+        fetch_mock.assert_not_called()
+        listed = g2.check_url("https://github.com/badactor/repo/releases/download/x/payload.exe")
+        assert listed.allowed is False
+        assert g2.check_url("https://github.com/vllm-project/vllm/releases").allowed is True

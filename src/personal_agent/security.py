@@ -47,6 +47,33 @@ _BUNDLED_BLOCKLIST: frozenset[str] = frozenset(
     }
 )
 
+# FRE-1552: multi-tenant platforms that URLhaus lists by the malicious file, not by the host.
+# Blocking such a hostname blocks every legitimate page on it (github.com, 2,516 feed URLs),
+# so the guard blocks only the exact URLs the feed lists for these hosts. Any other host,
+# including every bare IP, stays blocked as a whole. A shared host missing from this set
+# is still blocked as a whole: add it here when a legitimate page on it is refused.
+_SHARED_PLATFORM_HOSTS: frozenset[str] = frozenset(
+    {
+        "github.com",
+        "raw.githubusercontent.com",
+        "codeload.github.com",
+        "gist.githubusercontent.com",
+        "gitlab.com",
+        "bitbucket.org",
+        "drive.google.com",
+        "docs.google.com",
+        "firebasestorage.googleapis.com",
+        "web.archive.org",
+        "www.dropbox.com",
+        "dl.dropboxusercontent.com",
+        "cdn.discordapp.com",
+        "media.discordapp.net",
+        "res.cloudinary.com",
+        "img1.wsimg.com",
+        "files.pythonhosted.org",
+    }
+)
+
 # URLhaus plaintext feed URL (CC0 licence, no key required).
 _URLHAUS_FEED = "https://urlhaus.abuse.ch/downloads/text/"
 # Fetch timeout for the feed refresh call.
@@ -83,6 +110,10 @@ class DomainGuard:
     Loads its blocklist from the URLhaus feed (CC0) and caches it to disk.
     Falls back to a bundled list when the network is unavailable. Reloads
     automatically when the cache TTL expires.
+
+    The blocklist holds two kinds of entry (FRE-1552). A bare hostname blocks that
+    host and its subdomains. A URL entry (``host/path?query``, no scheme) blocks
+    only that exact resource and is used for hosts in ``_SHARED_PLATFORM_HOSTS``.
 
     Args:
         cache_path: JSON file used to persist the fetched blocklist.
@@ -171,7 +202,7 @@ class DomainGuard:
         if self._mode is GuardMode.ALLOWLIST:
             return self._check_allowlist(hostname)
 
-        return self._check_blocklist(hostname)
+        return self._check_blocklist(hostname, url)
 
     async def refresh(self) -> None:
         """Force a feed refresh regardless of TTL (e.g. from brainstem job)."""
@@ -206,7 +237,27 @@ class DomainGuard:
                 return candidate
         return None
 
-    def _check_blocklist(self, hostname: str) -> GuardResult:
+    @staticmethod
+    def _url_entry(url: str) -> str:
+        """Return the scheme-less ``host/path?query`` form of *url* used for URL entries.
+
+        The scheme, port, userinfo and fragment are dropped so the same resource over
+        http or https, or with a fragment, maps to one entry. Returns '' on parse failure.
+        """
+        try:
+            parts = urlparse(url)
+            host = parts.hostname
+        except ValueError:
+            return ""
+        if not host:
+            return ""
+        query = f"?{parts.query}" if parts.query else ""
+        return f"{host.lower()}{parts.path or '/'}{query}"
+
+    def _check_blocklist(self, hostname: str, url: str) -> GuardResult:
+        url_entry = self._url_entry(url)
+        if url_entry in self._blocklist:
+            return GuardResult(allowed=False, reason="blocklist_url_match", matched_entry=url_entry)
         matched = self._domain_in_set(hostname, self._blocklist)
         if matched:
             return GuardResult(allowed=False, reason="blocklist_match", matched_entry=matched)
@@ -261,7 +312,7 @@ class DomainGuard:
             )
 
     def _load_from_disk_cache(self) -> frozenset[str] | None:
-        """Return cached domains if the cache file exists and is within TTL."""
+        """Return cached entries if the cache file exists and is within TTL."""
         if not self._cache_path.exists():
             return None
         try:
@@ -269,7 +320,12 @@ class DomainGuard:
             cached_at = datetime.fromisoformat(data["cached_at"])
             if (datetime.now(timezone.utc) - cached_at).total_seconds() >= self._ttl:
                 return None
-            return frozenset(data["domains"])
+            entries = frozenset(data["domains"])
+            if entries & _SHARED_PLATFORM_HOSTS:
+                # Written before FRE-1552: it blocks a whole platform by hostname. Loading
+                # it would keep that block until the TTL runs out, so fetch the feed again.
+                return None
+            return entries
         except (json.JSONDecodeError, KeyError, ValueError, OSError):
             return None
 
@@ -284,20 +340,29 @@ class DomainGuard:
         self._cache_path.write_text(json.dumps(data, indent=2))
 
     async def _fetch_urlhaus(self) -> set[str]:
-        """Download the URLhaus plaintext feed and extract unique hostnames."""
+        """Download the URLhaus plaintext feed and extract blocklist entries.
+
+        Returns:
+            One entry per feed line: the hostname, or the URL entry when the host is a
+            shared platform (see ``_SHARED_PLATFORM_HOSTS``).
+        """
         async with httpx.AsyncClient(timeout=_FEED_TIMEOUT_SECONDS) as client:
             resp = await client.get(_URLHAUS_FEED)
             resp.raise_for_status()
 
-        domains: set[str] = set()
+        entries: set[str] = set()
         for line in resp.text.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             hostname = self._extract_hostname(line)
-            if hostname:
-                domains.add(hostname)
-        return domains
+            if not hostname:
+                continue
+            if hostname in _SHARED_PLATFORM_HOSTS:
+                entries.add(self._url_entry(line))
+            else:
+                entries.add(hostname)
+        return entries
 
 
 # ---------------------------------------------------------------------------

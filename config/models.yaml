@@ -394,6 +394,21 @@ models:
         min_p: 0.0
         presence_penalty: 0.0
         repeat_penalty: 1.0
+      # FRE-1517 stage 2b, STUDY-ONLY — NOT an ADR-0154 D7 qualification. Gemma scored 10 of 11
+      # on D7 (decline-correct 27/30). Owner, 2026-10-09: "apples to apples - test the gemma with
+      # a thinking off setting", so a Gemma session plans with thinking off as qwen3.8-flash-next
+      # does. This is the `default` mode's sampling with thinking off (ADR-0154 D4), the exact
+      # configuration the D7 run measured. No role binds this deployment, and D2 routing is not
+      # live (FRE-1515), so production routing does not change. Remove this mode if Gemma is not
+      # chosen; keep it only after a passing D7 run or an owner-approved ADR-0154 amendment.
+      planner:
+        enable_thinking: false
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 64
+        min_p: 0.0
+        presence_penalty: 0.0
+        repeat_penalty: 1.0
     supports_function_calling: true
     supports_vision: false        # served text-only (no mmproj); the study sends no images
     supports_pdf_document: false

@@ -139,3 +139,37 @@ arms:
     launch_flags: "llama.cpp build 11521, no MTP, 3 slots, ctx 131072 (UNVERIFIED)"
     fan_mode: apple_auto (UNVERIFIED)
     thermal_snapshot: not recorded for llama.cpp arms
+  stage2_gemma_planner_off:
+    # Owner, 2026-10-09 in the explore session: "apples to apples - test the gemma with a thinking off
+    # setting". The planner runs thinking off, as Flash-Next's `planner` mode does. The primary keeps its
+    # default mode, which thinks (the engine side turns thinking on, research F4).
+    order_label: stage 2b candidate
+    deployment_key: gemma-4-26b-a4b
+    engine: llama.cpp (llama-server)
+    served_model_id: unsloth/gemma-4-26B-A4B-it
+    telemetry_model: unsloth/gemma-4-26B-A4B-it
+    models_endpoint: http://localhost:8600/v1/models
+    pack: unsloth/gemma-4-26B-A4B-it-GGUF (catalog comment)
+    quant: Q8_0
+    context_length: 131072
+    reasoning: "primary thinks (default mode); planner mode thinking off with the card sampling (catalog, stage 2b); workers enable_thinking false"
+    launch_flags: "llama.cpp build 11521, no MTP, 3 slots, ctx 131072 (UNVERIFIED)"
+    fan_mode: apple_auto (UNVERIFIED)
+    thermal_snapshot: not recorded for llama.cpp arms
+  stage2c_gemma_min5:
+    # FRE-1561 variant arm, run under FRE-1517 as stage 2c (master, 2026-10-09). Identical to
+    # stage2_gemma_planner_off except the gateway runs AGENT_SUB_AGENT_RESEARCHER_MIN_SEARCH_ROUNDS=5
+    # (PR #1232), which adds the minimum-rounds rule to the researcher block for `standard` workers.
+    order_label: stage 2c variant
+    deployment_key: gemma-4-26b-a4b
+    engine: llama.cpp (llama-server)
+    served_model_id: unsloth/gemma-4-26B-A4B-it
+    telemetry_model: unsloth/gemma-4-26B-A4B-it
+    models_endpoint: http://localhost:8600/v1/models
+    pack: unsloth/gemma-4-26B-A4B-it-GGUF (catalog comment)
+    quant: Q8_0
+    context_length: 131072
+    reasoning: "primary thinks (default mode); planner mode thinking off; workers enable_thinking false; researcher minimum 5 search rounds at standard (FRE-1561 variant)"
+    launch_flags: "llama.cpp build 11521, no MTP, 3 slots, ctx 131072 (UNVERIFIED)"
+    fan_mode: apple_auto (UNVERIFIED)
+    thermal_snapshot: not recorded for llama.cpp arms

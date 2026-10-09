@@ -41,7 +41,8 @@ The facts below are from the API declaration of build 2.1.289 and its `reference
   - `$.prompt.read()` returns the owner's current draft.
 - **A trigger that does not type.**
   - `$.prompt.submit` queues a prompt that starts its own turn once the session is idle. It never folds into a running turn.
-  - The call resolves when that turn **starts**, not when the prompt is queued.
+  - The call resolves when its turn starts, **or** when the prompt is queued behind a running turn. Its resolution therefore does not prove that the turn started.
+  - `turn.start` carries the turn's text and its `turnId`.
   - The box operation is a separate call, `$.prompt.fill`. The declaration does not state that a submit leaves the draft byte-identical, so that is a fact to verify on a live seat.
   - A submit may carry `asUser: true`. The model then reads the text as the person's own words.
 - **What a validator sees.** `claude plugin validate` scans a module before it loads. It lists:
@@ -189,13 +190,14 @@ Phase 2 starts only when the owner records approval on FRE-1553, with the AC-4 r
 |---|---|---|
 | `pending` | the daemon | the trigger is placed |
 | `claimed` | the mod | before it calls `$.prompt.submit` |
-| `started` | the mod | when the submit resolves, which is when its turn starts |
+| `submitted` | the mod | when the submit resolves: its turn started, or it is queued behind a running turn |
+| `started` | the mod | on the `turn.start` whose text carries the trigger's marker `[trigger:<trigger_id>]`, with that `turnId` |
 
 - **No re-send from the inbox.** A trigger placed in the inbox is never sent on another transport, because a re-send could race the mod's claim. If it is still `pending` 5 minutes after it was placed, the daemon alerts. The daemon places a trigger in the inbox only while the mod is present (D7), so a trigger left `pending` means the mod failed after the placement.
-- **Claimed but not started.** This is normal while the seat waits on a permission prompt or a running turn. The daemon never re-sends a claimed trigger. If it is not `started` within 30 minutes, the daemon alerts.
+- **Claimed or submitted, but not started.** This is normal while the seat waits on a permission prompt or a running turn. The daemon never re-sends such a trigger. If it is not `started` within 30 minutes, the daemon alerts.
 - **The ambiguous case.** A crash between `claimed` and `started` cannot be resolved: the submit may or may not have queued. The daemon reports such a trigger as ambiguous and alerts. It never re-sends it.
 - **Draft hold (owner, 2026-10-09).** Before it claims a trigger, the mod holds it while the owner's draft changed in the last 2 minutes, for at most 10 minutes. While it holds, a band above the prompt names the waiting trigger. A draft unchanged for 2 minutes never holds a trigger.
-- **Submit.** The mod calls `$.prompt.submit` with the trigger's text, framed as the plugin's message (no `asUser`).
+- **Submit.** The mod calls `$.prompt.submit` with the trigger's text, prefixed with the marker `[trigger:<trigger_id>]`, framed as the plugin's message (no `asUser`). The marker lets the mod match the turn exactly. An owner's prompt that starts a turn first never marks the trigger `started`.
 
 **Two facts to verify before phase 2 ships:**
 - that a submit leaves the owner's draft byte-identical;
@@ -407,6 +409,9 @@ These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-
   6. the mod stopped (kill switch) after the trigger is placed and before it is claimed, so it stays `pending` past 5 minutes.
   
   · *Fails if*:
+  - cases 1 to 4 do not each end with exactly one turn whose text carries the trigger's marker, recorded `started` with its `turnId`: case 1 within 11.5 minutes of placement, cases 2 and 3 within 1 minute, case 4 within 1 minute after the owner answers the permission prompt and its turn ends;
+  - case 5 does not raise an ambiguity alert within 3 minutes;
+  - case 6 does not raise a pending alert between 5 and 7 minutes after placement;
   - any draft changes;
   - case 1 is not held, or held less than 9.5 minutes or more than 10.5 minutes, or shows no band;
   - case 2 is held at all;
@@ -414,7 +419,7 @@ These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-
   - case 5 is re-sent instead of alerted as ambiguous;
   - case 6 is sent on another transport instead of alerted;
   - any submit carries `asUser`;
-  - any trigger starts more than one turn.
+  - any trigger starts more than one turn, or is marked `started` from a turn that does not carry its marker.
 
 - **AC-8 — Master's triggers no longer stall behind a draft (track A).** · **Check:** after track A deploys, the owner leaves a draft in cc-master's box, and a synthetic trigger with a known `trigger_id` is placed. Then, over 14 days of normal use, the watcher's trigger ledger for cc-master records each trigger's transport and delivery time. · *Fails if*:
   - the synthetic trigger does not start a master turn within 5 minutes while the draft stays;
@@ -455,4 +460,4 @@ These criteria belong to this ADR. They are adjudicated on FRE-1553. AC-1 to AC-
 
 ### 2026-10-09 - Proposed
 **Changed By:** `adr` seat (FRE-1553)
-**Reason:** Drafted on the owner's "craft it" after the exploration and the owner's answers on the direction, the draft policy and the pilot seat. Codex round 1 (6 blocking): the rule check became argument-sensitive, with a stated threat model; a single `trigger_id` protocol with a receiver-side record replaced the acknowledgement timeout; promotion became an atomic entry-module rename with heartbeat confirmation and automatic rollback; the `/clear` timer claim was corrected and the heartbeat now detects a new session id; D7 became phase-2 only, with an alert as the last resort; Option 3 (a channel sidecar) was added. Codex round 2 (5 blocking): the path guard resolves the parent folder, so a first write succeeds; a pending inbox trigger is never re-sent, so no claim race exists; D7 applies to track A at once, with its inbox branch observation-only in phase 1; a defined precedence makes conflicting draft readings alert; and a mapping from Remote Control status to the mod's states makes AC-4 decidable.
+**Reason:** Drafted on the owner's "craft it" after the exploration and the owner's answers on the direction, the draft policy and the pilot seat. Codex round 1 (6 blocking): the rule check became argument-sensitive, with a stated threat model; a single `trigger_id` protocol with a receiver-side record replaced the acknowledgement timeout; promotion became an atomic entry-module rename with heartbeat confirmation and automatic rollback; the `/clear` timer claim was corrected and the heartbeat now detects a new session id; D7 became phase-2 only, with an alert as the last resort; Option 3 (a channel sidecar) was added. Codex round 2 (5 blocking): the path guard resolves the parent folder, so a first write succeeds; a pending inbox trigger is never re-sent, so no claim race exists; D7 applies to track A at once, with its inbox branch observation-only in phase 1; a defined precedence makes conflicting draft readings alert; and a mapping from Remote Control status to the mod's states makes AC-4 decidable. Codex round 3 (2 blocking): a submit that resolves may only be queued, so a `submitted` state was added and `started` is written only on the `turn.start` that carries the trigger's marker; AC-7 now fails on silent loss, a missing ambiguity alert or a missing pending alert. The round budget is exhausted at three.

@@ -620,11 +620,22 @@ def test_a_different_response_format_is_a_different_configuration(tmp_path: Path
         fingerprint.ensure_compatible(paths, other)
 
 
-def test_the_two_providers_hash_different_requests(tmp_path: Path) -> None:
+def test_a_provider_on_the_bare_request_keeps_the_fingerprint_of_before(tmp_path: Path) -> None:
+    """FRE-1548: an OVH run directory from before the schema still resumes."""
     paths, inputs = make_inputs(tmp_path)
-    sonnet = fingerprint.build_cloud_fingerprint(target(SONNET), inputs, paths, None)
     ovh = fingerprint.build_cloud_fingerprint(target(OVH), inputs, paths, None)
-    assert sonnet["response_format_sha256"] != ovh["response_format_sha256"]
+    sonnet = fingerprint.build_cloud_fingerprint(target(SONNET), inputs, paths, None)
+    assert "response_format_sha256" not in ovh
+    assert len(str(sonnet["response_format_sha256"])) == 64
+    fingerprint.ensure_compatible(paths, ovh)  # stored without the key
+    assert fingerprint._same_configuration(json.loads(paths.fingerprint.read_text()), ovh)
+
+
+def test_a_sonnet_run_from_before_the_schema_is_a_different_configuration(tmp_path: Path) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    fp = fingerprint.build_cloud_fingerprint(target(SONNET), inputs, paths, None)
+    before = {k: v for k, v in fp.items() if k != "response_format_sha256"}
+    assert not fingerprint._same_configuration(before, fp)
 
 
 def _catalog_with_planner(spec: Mapping[str, object]):  # type: ignore[no-untyped-def]

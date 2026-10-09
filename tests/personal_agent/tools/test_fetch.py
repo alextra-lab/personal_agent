@@ -48,7 +48,7 @@ def _mock_html_response(
     return resp
 
 
-def _mock_client(response: MagicMock) -> AsyncMock:
+def _mock_client(response: MagicMock | httpx.Response) -> AsyncMock:
     client = AsyncMock()
     client.get = AsyncMock(return_value=response)
     client.__aenter__ = AsyncMock(return_value=client)
@@ -598,3 +598,191 @@ async def test_fre1330_novelty_tracker_failure_is_fail_open() -> None:
         result = await fetch_url_executor(url="https://example.com/page", ctx=_CTX)
 
     assert "hi" in result["text"]
+
+
+# ── FRE-1554: name the cause of a bot-protection 403; honest User-Agent ────
+#
+# These tests use a real ``httpx.Response`` rather than ``_mock_html_response``: its
+# ``headers`` are case-insensitive and keep repeated fields, which the cause rules must
+# survive (``Headers.get`` joins repeated values: ``"nginx, AkamaiGHost"``).
+
+_PROTECTED_URL = "https://protected.example/page"
+_PLAIN_403 = f"HTTP 403 fetching {_PROTECTED_URL}"
+_EXPECTED_USER_AGENT = "Seshat-User/0.1 (personal research assistant; user-initiated)"
+
+
+def _error_response(status: int, headers: list[tuple[str, str]]) -> httpx.Response:
+    return httpx.Response(
+        status,
+        headers=headers,
+        request=httpx.Request("GET", _PROTECTED_URL),
+    )
+
+
+async def _fetch_error(status: int, headers: list[tuple[str, str]]) -> str:
+    """Run the executor against an error response and return the error text."""
+    resp = _error_response(status, headers)
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        with pytest.raises(ToolExecutionError) as excinfo:
+            await fetch_url_executor(url=_PROTECTED_URL, ctx=_CTX)
+    return str(excinfo.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "protection"),
+    [
+        ([("cf-mitigated", "challenge")], "Cloudflare challenge"),
+        ([("server", "AkamaiGHost")], "Akamai"),
+        ([("x-datadome", "protected")], "DataDome"),
+    ],
+)
+async def test_fre1554_403_firm_protection_names_it_and_says_retry_will_not_help(
+    headers: list[tuple[str, str]], protection: str
+) -> None:
+    """AC-1: a protected 403 names the protection AND says a retry will not help."""
+    msg = await _fetch_error(403, headers)
+
+    assert msg.startswith(_PLAIN_403)
+    assert protection in msg
+    assert "bot protection" in msg
+    assert "Retrying will not help" in msg
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "protection"),
+    [
+        ([("cf-mitigated", "challenge"), ("cf-mitigated", "challenge")], "Cloudflare challenge"),
+        ([("server", "nginx"), ("server", "AkamaiGHost")], "Akamai"),
+        ([("Server", "nginx, AkamaiGHost")], "Akamai"),
+    ],
+)
+async def test_fre1554_403_repeated_or_listed_header_values_still_match(
+    headers: list[tuple[str, str]], protection: str
+) -> None:
+    """AC-1: ``Headers.get`` joins repeated values, so the rules must match a token."""
+    msg = await _fetch_error(403, headers)
+
+    assert protection in msg
+    assert "Retrying will not help" in msg
+
+
+@pytest.mark.asyncio
+async def test_fre1554_403_server_token_must_match_exactly() -> None:
+    """AC-1 (seeded negative): a ``server`` value that merely starts like Akamai's token
+    is not Akamai.
+    """
+    msg = await _fetch_error(403, [("server", "AkamaiGHostile")])
+
+    assert msg == _PLAIN_403
+
+
+@pytest.mark.asyncio
+async def test_fre1554_403_without_protection_headers_claims_no_protection() -> None:
+    """AC-1 (seeded negative): a plain 403 stays the bare message and claims nothing."""
+    msg = await _fetch_error(403, [("server", "nginx"), ("content-type", "text/html")])
+
+    assert msg == _PLAIN_403
+
+
+@pytest.mark.asyncio
+async def test_fre1554_403_behind_cloudflare_without_challenge_is_hedged() -> None:
+    """AC-1: ``server: cloudflare`` and ``cf-ray`` also sit on an origin 403 (a revoked
+    signed link), so the text must not assert a protection or promise a retry fails.
+    """
+    msg = await _fetch_error(403, [("server", "cloudflare"), ("cf-ray", "8a1b2c3d4e5f-CDG")])
+
+    assert msg.startswith(_PLAIN_403)
+    assert "Cloudflare" in msg
+    assert "may use" in msg
+    assert "Retrying will not help" not in msg
+
+
+@pytest.mark.asyncio
+async def test_fre1554_non_403_keeps_plain_message_even_with_protection_headers() -> None:
+    """A temporary 5xx from an Akamai edge must not read as a permanent block."""
+    msg = await _fetch_error(503, [("server", "AkamaiGHost"), ("cf-mitigated", "challenge")])
+
+    assert msg == f"HTTP 503 fetching {_PROTECTED_URL}"
+
+
+@pytest.mark.asyncio
+async def test_fre1554_http_error_log_carries_protection_headers() -> None:
+    """AC-2: ``fetch_url_http_error`` logs the protection headers that were present,
+    and only those.
+    """
+    resp = _error_response(
+        403,
+        [
+            ("server", "AkamaiGHost"),
+            ("x-datadome", "protected"),
+            ("set-cookie", "session=secret"),
+            ("content-type", "text/html"),
+        ],
+    )
+    with (
+        patch(
+            "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+        ),
+        patch("personal_agent.tools.fetch.log") as mock_log,
+        pytest.raises(ToolExecutionError),
+    ):
+        await fetch_url_executor(url=_PROTECTED_URL, ctx=_CTX)
+
+    calls = [c for c in mock_log.error.call_args_list if c.args[0] == "fetch_url_http_error"]
+    assert len(calls) == 1
+    assert calls[0].kwargs["status"] == 403
+    assert calls[0].kwargs["url"] == _PROTECTED_URL
+    assert calls[0].kwargs["response_headers"] == {
+        "server": "AkamaiGHost",
+        "x-datadome": "protected",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fre1554_http_error_log_without_protection_headers_is_empty() -> None:
+    """AC-2 (negative): no protection header present, nothing is logged for it."""
+    resp = _error_response(404, [("content-type", "text/html"), ("set-cookie", "a=b")])
+    with (
+        patch(
+            "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+        ),
+        patch("personal_agent.tools.fetch.log") as mock_log,
+        pytest.raises(ToolExecutionError),
+    ):
+        await fetch_url_executor(url=_PROTECTED_URL, ctx=_CTX)
+
+    calls = [c for c in mock_log.error.call_args_list if c.args[0] == "fetch_url_http_error"]
+    assert len(calls) == 1
+    assert calls[0].kwargs["response_headers"] == {}
+
+
+@pytest.mark.asyncio
+async def test_fre1554_user_agent_is_honest_and_not_browser_shaped() -> None:
+    """AC-3: the User-Agent the client actually sends names Seshat, says user-initiated,
+    has no "bot" in any case, and is not browser-shaped.
+    """
+    loop = asyncio.get_running_loop()
+    seen: list[str] = []
+
+    async def _capture(self: object, request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["user-agent"])
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=b"<html><body><p>Hello</p></body></html>",
+            request=request,
+        )
+
+    with (
+        patch.object(loop, "getaddrinfo", AsyncMock(return_value=_addrinfo("93.184.216.34"))),
+        patch.object(httpx.AsyncHTTPTransport, "handle_async_request", _capture),
+    ):
+        await fetch_url_executor(url="https://docs.exa.ai/quickstart", ctx=_CTX)
+
+    assert seen == [_EXPECTED_USER_AGENT]
+    assert "bot" not in seen[0].lower()
+    assert "mozilla" not in seen[0].lower()

@@ -6,7 +6,7 @@ one. These checks use production's own shapes instead:
 
     synth_primary     the forced synthesis (``executor.py``, "You have reached the tool call limit"):
                       a tool result already in the history, tools retained, ``tool_choice`` "none",
-                      the primary's default mode (thinking on)
+                      the primary's request as the gateway sends it (no chat_template_kwargs)
     synth_worker      the same shape with thinking off, as a worker's own forced synthesis
     worker_tool_call  the worker path: production's worker system prompt and task message
                       (``sub_agent._build_sub_agent_system_prompt`` and ``_build_task_message``),
@@ -76,13 +76,15 @@ def _tool_named(body: Mapping[str, Any], name: str) -> dict[str, Any]:
     raise SystemExit(f"the captured body has no {name} tool")
 
 
-def synth_body(captured: Mapping[str, Any], model: str, thinking: bool) -> dict[str, Any]:
+def synth_body(captured: Mapping[str, Any], model: str, thinking: bool | None) -> dict[str, Any]:
     """Build a forced-synthesis request on the captured primary body.
 
     Args:
         captured: The captured primary request body.
         model: The served model id.
-        thinking: The value of ``enable_thinking``.
+        thinking: The value of ``enable_thinking``. ``None`` sends the captured body's own
+            ``chat_template_kwargs`` (none, on 2026-10-09), so the engine side decides, as in
+            production.
 
     Returns:
         The request body.
@@ -100,10 +102,11 @@ def synth_body(captured: Mapping[str, Any], model: str, thinking: bool) -> dict[
         {"role": "user", "content": FORCED_SYNTHESIS},
     ]
     body.update(model=model, stream=False, tool_choice="none", max_tokens=4096)
-    body["chat_template_kwargs"] = {
-        **body.get("chat_template_kwargs", {}),
-        "enable_thinking": thinking,
-    }
+    if thinking is not None:
+        body["chat_template_kwargs"] = {
+            **body.get("chat_template_kwargs", {}),
+            "enable_thinking": thinking,
+        }
     return body
 
 
@@ -197,7 +200,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     captured = json.loads(args.captured.read_text())["body"]
     bodies = {
-        "synth_primary": synth_body(captured, args.model, thinking=True),
+        "synth_primary": synth_body(captured, args.model, thinking=None),
         "synth_worker": synth_body(captured, args.model, thinking=False),
         "worker_tool_call": worker_body(captured, args.model),
     }
@@ -212,7 +215,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 len(body["tools"]),
                 "chars",
                 len(json.dumps(body)),
-                body["chat_template_kwargs"],
+                body.get("chat_template_kwargs"),
                 body.get("tool_choice"),
                 sampling,
             )

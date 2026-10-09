@@ -54,3 +54,12 @@ Ticket: FRE-1548. Backing design: ADR-0154 D4, D6, D7. Tier: Standard (touches `
 - The local and OVH requests stay byte-identical, because only provider `anthropic` takes the schema.
 - `response["raw"]` must be read defensively. The code uses `isinstance` checks and `.get`.
 - `response_format_sha256` is part of the fingerprint identity. A run directory from before this change cannot resume. The README says so.
+
+## Probe result (2026-10-09)
+
+The one authorized run on `claude_sonnet`, mode `planner` (effort low), with the schema: FAIL, 9 of 11 thresholds. The cost was 0.9373 USD of the 2 USD cap.
+
+- The goal of the ticket is met: 0 invalid plans in 81 draws (FRE-1516 had 1).
+- Decline-correct 27 of 30, below 28. Sonnet expanded 3 draws of `susan_3_thought_i_asked` and `susan_4_build_and_run`.
+- Reasoning: 0 characters, 0 reasoning tokens, but 7 empty thinking blocks. The threshold fails on any block.
+- No `planner` mode is added to `config/models.yaml`. A further run needs the owner.

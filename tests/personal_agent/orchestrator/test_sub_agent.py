@@ -2008,6 +2008,78 @@ class TestTypedPrefix:
         assert "You research one bounded question" not in general["messages"][0]["content"]
 
 
+# FRE-1561 AC-1: the full default system prompt (base, budget mechanism, type block and the
+# separators between them), as unchanged origin/main code produced it.
+_MAIN_SYSTEM_PROMPT_FINGERPRINT = {
+    WorkerType.RESEARCHER: (
+        2116,
+        "de436dddc4114227473fa8c4246f62e1c9b765beb06bfe85b4a0ee46493a1538",
+    ),
+    WorkerType.GENERAL: (
+        1180,
+        "00b9e9dc3206ee6cae3a99c24d65c0b74de5dfb79eb6afea8686e6a55a7bbed7",
+    ),
+}
+
+
+class TestResearcherMinSearchRounds:
+    """FRE-1561: ``sub_agent_researcher_min_search_rounds`` selects the researcher's stop rule."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("worker_type", list(WorkerType))
+    async def test_default_system_prompt_is_todays_bytes(
+        self, monkeypatch: pytest.MonkeyPatch, worker_type: WorkerType
+    ) -> None:
+        import hashlib
+
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_researcher_min_search_rounds", 0)
+        call = await _first_call(_typed_spec(worker_type, "standard"))
+
+        content = call["messages"][0]["content"]
+        length, digest = _MAIN_SYSTEM_PROMPT_FINGERPRINT[worker_type]
+        assert len(content) == length
+        assert hashlib.sha256(content.encode()).hexdigest() == digest
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_holds_the_variant_when_the_setting_is_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_researcher_min_search_rounds", 3)
+        call = await _first_call(_typed_spec(WorkerType.RESEARCHER, "standard"))
+
+        content = call["messages"][0]["content"]
+        assert "you must make at least 3 rounds of searches" in content
+        assert content.endswith("You will then be asked for your report.")
+
+    @pytest.mark.asyncio
+    async def test_variant_is_the_same_bytes_at_every_level(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_researcher_min_search_rounds", 5)
+        contents = {
+            level: (await _first_call(_typed_spec(WorkerType.RESEARCHER, level)))["messages"][0][
+                "content"
+            ]
+            for level in ("quick", "standard", "thorough")
+        }
+        assert len(set(contents.values())) == 1
+
+    @pytest.mark.asyncio
+    async def test_general_worker_ignores_the_setting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_researcher_min_search_rounds", 5)
+        call = await _first_call(_typed_spec(WorkerType.GENERAL, "standard"))
+
+        assert "rounds of searches" not in call["messages"][0]["content"]
+
+
 class TestThoroughnessBinds:
     """FRE-1493 AC-2 (ADR-0150 AC-6): the level's budget binds the loop."""
 

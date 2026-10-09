@@ -292,6 +292,17 @@ class AppConfig(BaseSettings):
             "numbers are FRE-1487's to set, on the owner's decision."
         ),
     )
+    sub_agent_researcher_min_search_rounds: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "FRE-1561: when above 0, the researcher worker's system prompt tells a "
+            "standard-level worker to make at least this many rounds of searches before it "
+            "applies its stop rule. 0 (the default) leaves the prompt byte-identical to "
+            "today's. A prompt instruction, not an enforced floor. Env form: "
+            "AGENT_SUB_AGENT_RESEARCHER_MIN_SEARCH_ROUNDS=5."
+        ),
+    )
     sub_agent_context_reserve_tokens: int = Field(
         default=16000,
         ge=0,

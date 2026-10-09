@@ -818,3 +818,25 @@ class TestFre1560FailedRefreshKeepsBestList:
         event = _event(logs, "domain_guard_using_fallback")
         assert event["source"] == "memory"
         assert event["age_seconds"] == 0.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "content",
+        [
+            '["not", "a", "mapping"]',
+            '{"cached_at": null, "domains": []}',
+            '{"cached_at": "2026-10-09T10:00:00+00:00", "domains": null}',
+        ],
+    )
+    async def test_a_cache_file_of_the_wrong_shape_is_unreadable_not_a_crash(
+        self, tmp_path: Path, content: str
+    ) -> None:
+        """A cache that parses but has the wrong shape lets the refresh reach the feed."""
+        cache_path = tmp_path / "blocklist.json"
+        cache_path.write_text(content)
+        g = DomainGuard(cache_path=cache_path, ttl_seconds=3600.0)
+
+        with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"feed-evil.net"})):
+            await g._refresh()
+
+        assert g.check_url("https://feed-evil.net/x").allowed is False

@@ -120,10 +120,10 @@ class GuardResult:
 class DomainGuard:
     """Egress URL guard — checks outbound HTTP requests against a domain blocklist.
 
-    Loads its blocklist from the URLhaus feed (CC0) and caches it to disk.
-    When a refresh fails it keeps the best list it has (the in-memory list, then the
-    stale disk cache, then the bundled list; FRE-1560). Reloads
-    automatically when the cache TTL expires.
+    Loads its blocklist from the URLhaus feed (CC0) and caches it to disk. Reloads
+    automatically when the cache TTL expires. When a refresh fails it keeps the best
+    list it has: the in-memory list, then the stale disk cache, then the bundled
+    list (FRE-1560).
 
     The blocklist holds two kinds of entry (FRE-1552). A bare hostname blocks that
     host and its subdomains. A URL entry (``host/path?query``, no scheme) blocks
@@ -332,11 +332,7 @@ class DomainGuard:
                 # A 200 response with no usable line must not replace a real list (FRE-1560).
                 raise ValueError("feed returned no entries")
         except Exception as exc:
-            log.warning(
-                "domain_guard_feed_unavailable",
-                error=str(exc),
-                fallback_count=len(_BUNDLED_BLOCKLIST),
-            )
+            log.warning("domain_guard_feed_unavailable", error=str(exc))
             self._fall_back()
             return
 
@@ -413,7 +409,8 @@ class DomainGuard:
             # guard must not fall back to the bundled list alone. The next refresh replaces
             # the dropped platforms with URL entries.
             return frozenset(data["domains"]) - _SHARED_PLATFORM_HOSTS, cached_at
-        except (json.JSONDecodeError, KeyError, ValueError, OSError):
+        except (json.JSONDecodeError, KeyError, ValueError, OSError, TypeError):
+            # TypeError: the file parses but has the wrong shape (a list, a null field).
             return None
 
     def _save_to_disk_cache(self, domains: frozenset[str]) -> None:

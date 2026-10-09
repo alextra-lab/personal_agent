@@ -767,7 +767,7 @@ class TestFre1560FailedRefreshKeepsBestList:
         g = DomainGuard(cache_path=tmp_path / "blocklist.json", ttl_seconds=3600.0)
         with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value={"feed-evil.net"})):
             await g._refresh()
-        cache_before = (tmp_path / "blocklist.json").read_text()
+        domains_before = json.loads((tmp_path / "blocklist.json").read_text())["domains"]
         g._last_loaded = datetime.now(timezone.utc) - timedelta(hours=2)
         (tmp_path / "blocklist.json").unlink()
 
@@ -781,7 +781,7 @@ class TestFre1560FailedRefreshKeepsBestList:
         assert g.check_url("https://feed-evil.net/x").allowed is False
         assert _event(logs, "domain_guard_using_fallback")["source"] == "memory"
         assert not (tmp_path / "blocklist.json").exists(), "an empty feed must not write the cache"
-        assert "feed-evil.net" in cache_before
+        assert "feed-evil.net" in domains_before  # the first load did write the cache
 
     @pytest.mark.asyncio
     async def test_a_cache_timestamp_without_a_timezone_is_unreadable_not_a_crash(

@@ -174,6 +174,12 @@ class AppConfig(BaseSettings):
         """Resolve relative paths to absolute."""
         return resolve_path(v)
 
+    @field_validator("extra_permission_rules_path", mode="before")
+    @classmethod
+    def resolve_optional_path(cls, v: Path | str | None) -> Path | None:
+        """Resolve a relative optional path to absolute; keep an unset value unset."""
+        return None if v in (None, "") else resolve_path(v)
+
     # LLM Client
     slm_base_url: str | None = Field(
         default=None,
@@ -1142,6 +1148,14 @@ class AppConfig(BaseSettings):
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(
         default=Path("config/governance"), description="Path to governance config directory"
+    )
+    extra_permission_rules_path: Path | None = Field(
+        default=None,
+        description=(
+            "A second permission rules file whose deny, ask and allow lists are added after "
+            "permissions.yaml (ADR-0156 D8.5). The eval stack sets it to its own rules file. "
+            "Env var: AGENT_EXTRA_PERMISSION_RULES_PATH"
+        ),
     )
 
     # Service Configuration

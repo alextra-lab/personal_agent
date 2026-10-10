@@ -66,6 +66,11 @@ The adr seat posted a decision brief on FRE-1573 (2026-10-10 16:41 UTC, addendum
 - item 10: the proposed bounds, and the G2 and G3 runs are allowed as tool measurements while model testing is stopped;
 - 8b: "Refuse it (Recommended)": fail closed, and amend ADR-0063 Amendment A row A3.
 
+At the PR gate, the owner answered two more points (FRE-1573, 2026-10-10 18:40 UTC, relayed by master):
+
+- D8.2: `python3`, `awk`, `sed` and `env` ask: "Yes, they ask (Recommended)";
+- O1: the three MCP tools that overlap native ones: "Remove the MCP copies (Recommended)".
+
 ---
 
 ## Decision
@@ -137,7 +142,7 @@ The migration table gives the verdict for each file.
 4. **Every result has a size bound.** A result over its bound is truncated with text that names the next call, as `read` does today. No result exceeds 25,000 tokens (S4: "For Claude Code, we restrict tool responses to 25,000 tokens by default").
 5. **Every description follows S5:** "at least 3–4 sentences", what the tool does, when to use it and when not, what each parameter means, and its limits. It holds 1–3 example calls in the text.
    - `input_examples` (S5) is an Anthropic API field. The default primary runs on llama.cpp, so the examples go in the description text.
-6. **MCP tools** keep their transport. The MCP client maps `isError: true` and the error text onto the D6.1 shape.
+6. **MCP tools** keep their transport. The MCP client maps `isError: true` and the error text onto the D6.1 shape. After D7.5, no MCP server is enabled. The mapping stays in the client, for a later server that ADR-0028 justifies.
 
 ### D7 — The tool set (S4, S7)
 
@@ -145,6 +150,10 @@ The migration table gives the verdict for each file.
 2. **The primary gets `query_telemetry`.** The tool loses `worker_only=True` (`tools/telemetry_query.py:470`). Evidence: 42 primary calls of `bash` + `curl` against a stale skill (G3 #1a).
 3. **No new MCP server.** ADR-0028's tier order stays: native, then CLI with a skill, then MCP. We copy S8's tool shape, not its transport.
 4. **A narrow tool replaces a shell recipe** where the audit shows repeated shell work. `query_telemetry` (D7.2) is the first case. No other case is decided here.
+5. **The MCP copies of native tools are removed (owner, 2026-10-10).** `mcp_query-docs` and `mcp_resolve-library-id` copy `get_library_docs` (Context7), and `mcp_sequentialthinking` copies the `sequential-thinking` skill. S4 warns against overlapping tools.
+   - The `context7` and `sequentialthinking` servers leave the MCP server set (`DEFAULT_SERVERS` in `docker/mcp/run-gateway.sh:33`).
+   - No MCP server remains, so the MCP gateway is turned off: `mcp_gateway_enabled` is false. Production sets `AGENT_MCP_GATEWAY_ENABLED=true` today (`.env` line 222). Master changes it at the deploy of T3, because master owns the production `.env`.
+   - `get_library_docs` and the `sequential-thinking` skill stay.
 
 ### D8 — One permission model (S6)
 
@@ -164,7 +173,7 @@ The migration table gives the verdict for each file.
    - A command that the parser cannot parse fully asks.
    - A function definition, a heredoc, and process substitution (`<(…)`, `>(…)`) are not simple commands, so they ask.
    - An indirect-execution word can be allowed only by an allow rule whose pattern names the word and the full inner command, for example `Bash(timeout 30 git status)`. A rule of the form `Bash(<indirect word> *)` is rejected when the rules load.
-   - **Migrating `auto_approve_prefixes` is not a copy.** A prefix that can run another program does not become an allow rule: today's list holds `env`, `awk`, `sed` and `python3` (`config/governance/tools.yaml:648-691`). They ask. `curl` stays allowed only when no argument sends a local file (`-d @…`, `--data*` with `@`, `-F …=@…`, `-T`, `--upload-file`, `-K`, `--config`). Otherwise it asks. T2 lists every prefix of today with its outcome in the PR.
+   - **Migrating `auto_approve_prefixes` is not a copy.** A prefix that can run another program does not become an allow rule: today's list holds `env`, `awk`, `sed` and `python3` (`config/governance/tools.yaml:648-691`). They ask. This is the owner's decision of 2026-10-10 (FRE-1573, 18:40 UTC: "Yes, they ask"). It reverses the owner's earlier choice in the FRE-1572 build seat that `python3` stays auto-approved. `curl` stays allowed only when no argument sends a local file (`-d @…`, `--data*` with `@`, `-F …=@…`, `-T`, `--upload-file`, `-K`, `--config`). Otherwise it asks. T2 lists every prefix of today with its outcome in the PR.
 3. **No match asks the user.** The approval card (FRE-1461, ADR-0063 Amendment A) shows the tool, the exact arguments, and the worker when a worker asks. The card offers "allow once" and "allow for this session".
    - "Allow for this session" adds a session allow rule for the exact tool and arguments of the call.
    - It is offered only when the call asks because no rule matched. A call that matches an explicit `ask` rule (for example `run_python` with `network: true`) offers "allow once" only. The order of D8.1 holds: an explicit ask rule is never overridden by an allow rule.
@@ -274,15 +283,15 @@ Source: `tools/__init__.py:86-183`, and the startup log of the running gateway o
 | `bash` | Per-subcommand rules (D8.2), on FRE-1572. Description takes `bash` and `list-directory` | T2, T3 |
 | `run_python` | `network: true` is an ask rule (D8.6). Description takes `run-python` | T2, T3 |
 | `read_skill` | Rewritten as `read_skill(name, path?)` with an enum (D3) | T5 |
-| `mcp_query-docs` | D6.6 mapping. Overlaps `get_library_docs` (Context7): open question O1 | T2, T3 |
-| `mcp_resolve-library-id` | D6.6 mapping. Overlaps `get_library_docs`: O1 | T2, T3 |
-| `mcp_sequentialthinking` | D6.6 mapping. Overlaps the `sequential-thinking` skill: O1 | T2, T3 |
+| `mcp_query-docs` | **Remove** (D7.5). `get_library_docs` stays | T3 |
+| `mcp_resolve-library-id` | **Remove** (D7.5). `get_library_docs` stays | T3 |
+| `mcp_sequentialthinking` | **Remove** (D7.5). The `sequential-thinking` skill stays | T3 |
 | `expand_tool_result` | **Not registered in production** (see below). Contract only, and the AC-1 test covers it | T2, T3 |
 | `edit` | **New** (D7.1). Built on the contract and the rules from the start | T4 |
 
 **Not registered in production:** `expand_tool_result` registers only with `tool_result_compression_enabled`, which is off (ADR-0085 is parked). It stays in the table and in the AC-1 test, so that it conforms if it returns. The `mcp_browser_*` entries in `tools.yaml` have governance rows, but the gateway did not discover those tools.
 
-**Open question O1 (for the owner, not decided here).** Three MCP tools overlap native ones. S4 warns against overlapping tools. Removing them changes the MCP server set, which the owner did not decide in this brief. Until the owner decides, they stay under the contract.
+**O1, decided (owner, 2026-10-10 18:40 UTC):** "Remove the MCP copies". The three MCP tools that overlap native ones are removed (D7.5). After T3, the gateway can register 25 tools: the 28 rows minus the 3 removed.
 
 ---
 
@@ -388,7 +397,7 @@ Source: `tools/__init__.py:86-183`, and the startup log of the running gateway o
 |---|---|---|---|
 | T1 | FRE-1572 (exists) | The live bash bypass fix. Its splitter becomes D8.2's matcher | — |
 | T2 (FRE-1574) | Permission model | D8 (including the fail-closed load and the bash parser rules), D4 (`known_bad_patterns` to deny rules), the eval rules file | T1 |
-| T3 (FRE-1575) | Tool contract | D6, and the 8 skills folded into descriptions (D5.6) | T2 |
+| T3 (FRE-1575) | Tool contract | D6, the 8 skills folded into descriptions (D5.6), and the MCP copies removed (D7.5) | T2 |
 | T4 (FRE-1576) | `edit` tool, and `query_telemetry` for the primary | D7.1, D7.2 | T3 |
 | T5 (FRE-1577) | Skill loader and layout | D1, D2, D3, D4, D5.7, D5.8: every file moved, deleted or replaced | T3 |
 | T6 (FRE-1578) | Conversion: telemetry and host skills | D5.1–D5.5 for 8 skills | T4, T5, FRE-1568 |
@@ -423,7 +432,7 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
     - a success section and a recovery section in each agent skill (D5.1);
     - an `evals.yaml` with at least 3 scenarios in each agent skill (D5.2);
     - that every command in a body or a script comes out allow, or an ask that the skill documents, under the D8 rules (D8.7).
-  - **Tools.** A contract test builds the registry with every registration flag on, so that conditional tools are included. It fails if the registry and the 28 rows of the migration table differ. For each tool it asserts:
+  - **Tools.** A contract test builds the registry with every registration flag on, so that conditional tools are included. It fails if the registry differs from the 25 rows of the migration table that are not removed, or if a removed tool is registered. For each tool it asserts:
     - the success shape and the failure shape of D6.1;
     - a failure can only be built from the tool's error-code type, so an undeclared code cannot be returned (a type check, not a declaration that the test trusts);
     - every line that builds a failure is executed by a test, shown by a coverage report over those lines. One test per code is not enough when several paths share a code;

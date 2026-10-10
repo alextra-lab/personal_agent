@@ -455,7 +455,7 @@ def build_planner_user_message(
     # leaves the user message and reaches the planner as a tool result
     # (planner_request_messages). The bound above still counts it.
     content = _join_planner_blocks(history_text, "", tail)
-    digest_block = f"{_DIGEST_HEADER}{digest_text}" if digest_text else ""
+    digest_block = _planner_digest_block(digest_text)
     return PlannerUserMessage(
         content=content,
         history_text=history_text,
@@ -464,6 +464,40 @@ def build_planner_user_message(
         message_chars=len(tail),
         total_chars=len(content) + len(digest_block),
         digest_block=digest_block,
+    )
+
+
+def _planner_digest_block(digest_text: str) -> str:
+    """The titled digest, as the planner reads it (FRE-1472 title). Empty for no digest."""
+    return f"{_DIGEST_HEADER}{digest_text}" if digest_text else ""
+
+
+def planner_digest_exchange(digest_text: str, *, trace_id: str) -> list[dict[str, object]]:
+    """Return the harness tool exchange that carries a planner digest (FRE-1360).
+
+    The one place the exchange is built, so the D7 probe (``scripts/eval/fre1537``)
+    qualifies the request that ships.
+
+    Args:
+        digest_text: The digest lines, untitled. Empty for no digest.
+        trace_id: The turn's trace id, for the exchange's call id.
+
+    Returns:
+        The assistant tool call and the ``memory_recall`` tool result, or an empty list.
+    """
+    return _digest_block_exchange(_planner_digest_block(digest_text), trace_id)
+
+
+def _digest_block_exchange(digest_block: str, trace_id: str) -> list[dict[str, object]]:
+    """The ``memory_recall`` exchange carrying a titled digest; empty for no digest."""
+    if not digest_block:
+        return []
+    return list(
+        harness_tool_exchange(
+            call_id=harness_call_id("mem", trace_id),
+            tool_name=MEMORY_RECALL_TOOL,
+            content=digest_block,
+        )
     )
 
 
@@ -489,14 +523,7 @@ def planner_request_messages(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": planner_input.content},
     ]
-    if planner_input.digest_block:
-        messages.extend(
-            harness_tool_exchange(
-                call_id=harness_call_id("mem", trace_id),
-                tool_name=MEMORY_RECALL_TOOL,
-                content=planner_input.digest_block,
-            )
-        )
+    messages.extend(_digest_block_exchange(planner_input.digest_block, trace_id))
     return messages
 
 
@@ -1167,8 +1194,9 @@ class ExpansionController:
                 and the digest alone exceed it, the planner is not called and
                 the attempt takes the failure path with reason
                 ``input_too_large``.
-            memory_digest: The memory digest (ADR-0154 D5). Its text goes in the user
-                message after the history and before the query. ``None`` gives no digest.
+            memory_digest: The memory digest (ADR-0154 D5). Its text reaches the planner
+                as a ``memory_recall`` tool result after the user message (FRE-1360).
+                ``None`` gives no digest.
 
         Returns:
             An ExpansionPlan — either LLM-generated or fallback. Exactly one

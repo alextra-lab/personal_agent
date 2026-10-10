@@ -192,6 +192,7 @@ def planner_request(
     sampling_source: Mapping[str, object],
     mode: PlannerMode,
     max_tokens: int,
+    digest: str | None = None,
 ) -> dict[str, object]:
     """Build a design A planner request body.
 
@@ -201,12 +202,18 @@ def planner_request(
         sampling_source: A captured primary request body, for the sampling.
         mode: The planner mode.
         max_tokens: The completion budget.
+        digest: Optional memory digest lines. Since FRE-1360 they follow the user message as
+            the production ``memory_recall`` tool result.
 
     Returns:
         The request body.
     """
     return {
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+            *render.digest_exchange(digest),
+        ],
         "response_format": {"type": "json_object"},
         "max_tokens": max_tokens,
         **sampling(sampling_source),
@@ -214,21 +221,19 @@ def planner_request(
     }
 
 
-def planner_user(inputs: Inputs, label: str, digest: str | None = None) -> str:
-    """Build the planner user message of one fixture.
+def planner_user(inputs: Inputs, label: str) -> str:
+    """Return the planner user message of one fixture, rendered inside the gateway.
+
+    A digest run reuses it: since FRE-1360 the digest is not in the user message.
 
     Args:
         inputs: The run inputs.
         label: Fixture label.
-        digest: Optional memory digest text. It goes after the history and before the query.
 
     Returns:
         The user message.
     """
-    fx = inputs.fixture(label)
-    if digest:
-        return render.build_user_message(str(fx["history"]), digest, str(fx["query"]))
-    return str(fx["user"])
+    return str(inputs.fixture(label)["user"])
 
 
 def planner_body(
@@ -240,13 +245,13 @@ def planner_body(
         inputs: The run inputs.
         label: Fixture label.
         mode: The planner mode.
-        digest: Optional memory digest text. It goes after the history and before the query.
+        digest: Optional memory digest lines, carried as a tool result (FRE-1360).
 
     Returns:
         The request body.
     """
     return planner_request(
-        inputs.system, planner_user(inputs, label, digest), inputs.body(label), mode, 16384
+        inputs.system, planner_user(inputs, label), inputs.body(label), mode, 16384, digest
     )
 
 

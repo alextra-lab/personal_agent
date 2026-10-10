@@ -324,6 +324,12 @@ class TestAc2DeclaredClasses:
         )
         messages = planner_request_messages("PLANNER SYSTEM", built, trace_id="a" * 32)
         _assert_marker_only_in_tool_results(messages, _MEMORY_MARKER, tool_name=MEMORY_RECALL_TOOL)
+        # The D7 probe builds its exchange with planner_digest_exchange: same bytes as production.
+        from personal_agent.orchestrator.expansion_controller import planner_digest_exchange
+
+        assert messages[2:] == planner_digest_exchange(
+            f"- the owner prefers trains {_MEMORY_MARKER}", trace_id="a" * 32
+        )
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
         assert "Plan my trip" in messages[1]["content"]

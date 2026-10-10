@@ -24,6 +24,9 @@ import sys
 from collections.abc import Mapping, Sequence
 
 PROMPTS_PREFIX = "FRE1537_PROMPTS="
+# The trace id of the probe's harness exchanges. Production derives the call id from the turn's
+# trace id; the probe uses one fixed id, so every request of a run is byte-identical across draws.
+PROBE_TRACE_ID = "fre1537probe"
 
 _SCHEMA_ANCHOR = '"strategy": "HYBRID|DECOMPOSE"'
 _SCHEMA_REPLACEMENT = '"strategy": "SINGLE|HYBRID|DECOMPOSE"'
@@ -70,16 +73,16 @@ def prompt_hash(system_prompt: str) -> str:
     return hashlib.sha256(system_prompt.encode()).hexdigest()
 
 
-def build_user_message(history: str, digest: str | None, query: str) -> str:
-    """Build the planner user message: history, then digest, then query.
+def build_user_message(history: str, query: str) -> str:
+    """Build the planner user message: history, then query.
 
     A thin wrapper over the production framing in ``expansion_controller``, for a caller that
     holds a rendered history and no messages. The stable parts come first, so a change in the
-    digest or the query never breaks the cached history before it (ADR-0154 D1).
+    query never breaks the cached history before it (ADR-0154 D1). Since FRE-1360 the digest
+    is not in this message: it rides a tool result (:func:`digest_exchange`).
 
     Args:
         history: Rendered conversation history. Empty for a first turn.
-        digest: Memory digest text, or ``None``.
         query: The current message.
 
     Returns:
@@ -90,7 +93,24 @@ def build_user_message(history: str, digest: str | None, query: str) -> str:
         _join_planner_blocks,
     )
 
-    return _join_planner_blocks(history, digest or "", _frame_planner_query(query, "HYBRID"))
+    return _join_planner_blocks(history, "", _frame_planner_query(query, "HYBRID"))
+
+
+def digest_exchange(digest: str | None) -> list[dict[str, object]]:
+    """Return the production ``memory_recall`` exchange for a digest, after the user message.
+
+    FRE-1360: production carries the planner's memory digest as a harness tool result, never
+    as user text. This calls the production builder, so a digest run qualifies that request.
+
+    Args:
+        digest: The digest lines, untitled, or ``None``.
+
+    Returns:
+        The assistant tool call and the tool result, or an empty list for no digest.
+    """
+    from personal_agent.orchestrator.expansion_controller import planner_digest_exchange
+
+    return planner_digest_exchange(digest or "", trace_id=PROBE_TRACE_ID)
 
 
 def build_planner_request(
@@ -133,7 +153,7 @@ def build_planner_request(
     return {
         # FRE-1360: the production request — a digest rides a tool result after the user
         # message, never the user text.
-        "messages": planner_request_messages(system_prompt, built, trace_id="fre1537probe"),
+        "messages": planner_request_messages(system_prompt, built, trace_id=PROBE_TRACE_ID),
         "history": built.history_text,
         "history_chars": built.history_chars,
     }

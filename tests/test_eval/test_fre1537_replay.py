@@ -141,12 +141,19 @@ def test_planner_body_thinking_off_and_sampling(tmp_path: Path) -> None:
     assert off["messages"][1]["content"] == "Q-greeting"
 
 
-def test_planner_body_digest_goes_between_history_and_query(tmp_path: Path) -> None:
+def test_planner_body_digest_rides_the_production_tool_result(tmp_path: Path) -> None:
+    """FRE-1360: the digest follows the user message as the production memory_recall result."""
+    from personal_agent.orchestrator.expansion_controller import planner_digest_exchange
+
     _, inputs = make_inputs(tmp_path)
     body = llama.planner_body(inputs, "boiler_expand", llama.MODES["thinking_off"], digest="DIGEST")
-    user = body["messages"][1]["content"]
-    assert user.index("assistant: hello") < user.index("DIGEST") < user.index("Query: research it")
-    assert body["messages"][0]["content"] == "SYSTEM PROMPT"
+    messages = body["messages"]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool"]
+    assert messages[0]["content"] == "SYSTEM PROMPT"
+    assert "DIGEST" not in messages[1]["content"]
+    assert messages[2:] == planner_digest_exchange("DIGEST", trace_id=render.PROBE_TRACE_ID)
+    plain = llama.planner_body(inputs, "boiler_expand", llama.MODES["thinking_off"])
+    assert plain["messages"][1] == messages[1]
 
 
 def test_primary_and_prime_bodies(tmp_path: Path) -> None:
@@ -301,6 +308,22 @@ def test_fingerprint_records_engine_model_mode_and_prompt_hash(tmp_path: Path) -
     assert fp["captured_primary"]["tool_count"] == 2  # type: ignore[index]
 
 
+def test_a_digest_run_fingerprint_names_the_tool_result_carrier(tmp_path: Path) -> None:
+    """FRE-1360: a digest run from before the move is a different configuration."""
+    paths, inputs = make_inputs(tmp_path)
+    with client_for(props_handler()) as client:
+        with_digest = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, "DIGEST"
+        )
+        without = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, None
+        )
+    assert with_digest["digest_carrier"] == "tool_result"
+    assert "digest_carrier" not in without
+    old = {k: v for k, v in with_digest.items() if k != "digest_carrier"}
+    assert fingerprint._identity(old) != fingerprint._identity(with_digest)
+
+
 def test_fingerprint_overrides_fill_what_the_engine_does_not_report(tmp_path: Path) -> None:
     paths, inputs = make_inputs(tmp_path)
     with client_for(lambda req: httpx.Response(404)) as client:
@@ -341,14 +364,15 @@ def test_reasoning_written_inline_in_the_content_counts_as_reasoning() -> None:
     assert res["reasoning_chars"] == 5
 
 
-def test_timing_arm_sends_the_digest_between_history_and_query(tmp_path: Path) -> None:
+def test_timing_arm_sends_the_digest_as_a_tool_result(tmp_path: Path) -> None:
+    """FRE-1360: the timing arm's planner request carries the digest the production way."""
     paths, inputs = make_inputs(tmp_path)
-    users: list[str] = []
+    requests: list[list[dict[str, object]]] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
         body = json.loads(req.content)
         if body.get("response_format"):
-            users.append(body["messages"][1]["content"])
+            requests.append(body["messages"])
         return sse_response(content=DECLINE)
 
     with client_for(handler) as client:
@@ -362,8 +386,10 @@ def test_timing_arm_sends_the_digest_between_history_and_query(tmp_path: Path) -
             ["boiler_expand"],
             digest="DIGEST",
         )
-    (user,) = users
-    assert user.index("assistant: hello") < user.index("DIGEST") < user.index("Query: research it")
+    (messages,) = requests
+    # The fixture's own rendered user message, unchanged: the digest is not in it.
+    assert messages[1]["content"] == inputs.fixture("boiler_expand")["user"]
+    assert messages[-1]["role"] == "tool" and "DIGEST" in str(messages[-1]["content"])
 
 
 def sse_with_fingerprint(build: str) -> httpx.Response:

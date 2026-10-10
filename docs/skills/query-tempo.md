@@ -1,13 +1,19 @@
 ---
 name: query-tempo
-description: Query Tempo traces by ID, search for spans, and inspect trace-level span hierarchies. Use when investigating latency, span relationships, or turn-by-turn execution traces.
-when_to_use: When you need to read a trace end-to-end with span timing and nesting, investigate latency patterns by span type, or examine root-span to leaf-span causality chains.
+description: Query Tempo traces by ID, search for spans, and inspect trace-level span hierarchies. Use when investigating latency (model-call p50/p90 by role and model, see Pattern 5), span relationships, or turn-by-turn execution traces.
+when_to_use: When you need model-call latency by role or model over a window, to read a trace end-to-end with span timing and nesting, investigate latency patterns by span type, or examine root-span to leaf-span causality chains.
 tools: [bash]
 nudge: "These results must come from a live Tempo query — never answer from training-data priors about what the trace might contain."
 keywords:
   # Natural user phrasing
   - trace
   - latency
+  - latencies
+  - p50
+  - p90
+  - p95
+  - percentile
+  - response time
   - span
   - timing
   - what took so long
@@ -210,16 +216,17 @@ Returns:
 
 ### Pattern 1: Read a complete trace end-to-end (with spans and timing)
 
+Replace the trace id in the URL with the one you need. Write it as a literal: a shell variable or `$(…)` makes the command ask for approval.
+
 ```bash
-trace_id="1bc849bf94ebf80162af9c97b9ee91c3"
-curl -s "http://tempo:3200/api/v2/traces/${trace_id}" | jq '.trace.resourceSpans[0].scopeSpans[0].spans | 
+curl -s "http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3" | jq '.trace.resourceSpans[0].scopeSpans[0].spans | 
   map({
     name,
     spanId,
     startTimeUnixNano: (.startTimeUnixNano | tonumber),
     endTimeUnixNano: (.endTimeUnixNano | tonumber),
     durationNano: ((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)),
-    attributes: (.attributes | map({(.key): .value.stringValue // .value.intValue}) | add)
+    attributes: ((.attributes // []) | map({(.key): (.value.stringValue // .value.intValue)}) | add)
   }) | 
   sort_by(.startTimeUnixNano)'
 ```
@@ -253,8 +260,7 @@ curl -s 'http://tempo:3200/api/search?limit=100' | jq '.traces | unique_by(.root
 ### Pattern 3: Calculate span duration in milliseconds
 
 ```bash
-trace_id="1bc849bf94ebf80162af9c97b9ee91c3"
-curl -s "http://tempo:3200/api/v2/traces/${trace_id}" | jq '.trace.resourceSpans[0].scopeSpans[0].spans[] | 
+curl -s "http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3" | jq '.trace.resourceSpans[0].scopeSpans[0].spans[] | 
   {
     name,
     durationMs: (((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)) / 1000000)
@@ -263,11 +269,87 @@ curl -s "http://tempo:3200/api/v2/traces/${trace_id}" | jq '.trace.resourceSpans
 
 ### Pattern 4: Find traces by service name and time window
 
+Read the clock with two plain commands, then write the two numbers into the search. The numbers below are example values.
+
 ```bash
-start=$(date -d '1 hour ago' +%s)  # 1 hour ago in Unix seconds
-end=$(date +%s)                     # now in Unix seconds
-curl -s "http://tempo:3200/api/search?start=${start}&end=${end}&q=service.name%3Dseshat-vps&limit=20" | jq '.traces[]'
+date -d '1 hour ago' +%s
+date +%s
+curl -s 'http://tempo:3200/api/search?start=1788026891&end=1788030491&q=service.name%3Dseshat-vps&limit=20' | jq '.traces[]'
 ```
+
+### Pattern 5: Model-call latency by role and model (p50, p90, max)
+
+Use this for "how slow are model calls", "p50 and p90 by role" and any latency over a window.
+Elasticsearch holds no model-call timing (ADR-0129). Tempo does: one `model_call <model>` span
+per model call, with the role in `gen_ai.operation.name` and the model in
+`gen_ai.request.model`. The `query_telemetry` tool, action `latency`, returns the same kind of summary
+when that tool is available. This is the bash path.
+
+1. Read the clock: `date +%s` is the end, `date -d '24 hours ago' +%s` is the start. Tempo
+   refuses a window over 168 hours.
+2. Write both numbers as literals in `start` and `end`. A `$(…)` makes the command ask for approval.
+3. Keep `limit` (traces) and `--argjson limit` equal. `spss` is the spans returned per trace.
+
+```bash
+date +%s
+date -d '24 hours ago' +%s
+curl -s -G 'http://tempo:3200/api/search' \
+  --data-urlencode 'q={ span:name =~ "model_call .*" } | select(span.gen_ai.operation.name, span.gen_ai.request.model)' \
+  --data-urlencode 'start=1788000000' \
+  --data-urlencode 'end=1788086400' \
+  --data-urlencode 'limit=500' \
+  --data-urlencode 'spss=100' \
+| jq --argjson limit 500 'def pct($p): sort | .[((($p * length) | ceil) - 1)];
+def num: if type == "number" then . elif type == "string" then (tonumber? // null) else null end;
+def attr($k): ([.attributes[]? | select(.key == $k) | .value.stringValue] | first) // "unknown";
+[.traces[]? | (.spanSets // [.spanSet])[]? | select(. != null)] as $sets
+| (.metrics.totalJobs | num) as $total
+| (if $total != null then ((.metrics.completedJobs | num) // 0) else null end) as $done
+| [$sets[] | .spans[]? | select((.durationNanos | num) != null)] as $spans
+| (.traces | length) as $returned
+| ([.traces[]? | select((.spanSets // .spanSet) == null)] | length) as $noset
+| ([$sets[] | select((.matched | num) != null) | ((.matched | num) - ((.spans // []) | length)) | select(. > 0)] | add // 0) as $cut
+| ([$sets[] | select((.matched | num) == null)] | length) as $nomatch
+| ([$sets[] | .spans[]? | select((.durationNanos | num) == null)] | length) as $nodur
+| (if $done != null and $total != null and $done < $total then $total - $done else 0 end) as $unread
+| {
+    traces_returned: $returned,
+    trace_limit: $limit,
+    spans_used: ($spans | length),
+    spans_cut: $cut,
+    blocks_unread: $unread,
+    sets_without_match: $nomatch,
+    spans_without_duration: $nodur,
+    traces_without_span_set: $noset,
+    complete: ($returned < $limit and $cut == 0 and $unread == 0 and $nomatch == 0 and $nodur == 0 and $noset == 0),
+    groups: ($spans | group_by([attr("gen_ai.operation.name"), attr("gen_ai.request.model")])
+      | map({
+          role: (.[0] | attr("gen_ai.operation.name")),
+          model: (.[0] | attr("gen_ai.request.model")),
+          spans: length,
+          p50_ms: (map((.durationNanos | num) / 1000000) | pct(0.5)),
+          p90_ms: (map((.durationNanos | num) / 1000000) | pct(0.9)),
+          max_ms: (map((.durationNanos | num) / 1000000) | max)
+        })
+      | sort_by(-.spans))
+  }'
+```
+
+**Read `complete` before you report a number.** It is `false` when any of these holds:
+
+| Field | Meaning when not zero (or `traces_returned` equals `trace_limit`) |
+|-------|------------------------------------------------------------------|
+| `traces_returned` = `trace_limit` | The `limit` cut the search. More traces can match. Narrow the window or add a filter to the TraceQL. |
+| `spans_cut` | Tempo matched more spans in a trace than `spss` returned. |
+| `blocks_unread` | Tempo stopped before it read every block. |
+| `sets_without_match` | A result had no match count, so its completeness is unknown. |
+| `spans_without_duration` | A span had no duration. It is left out of the percentiles. |
+| `traces_without_span_set` | A trace came back with no span set. Its spans are not counted. |
+
+When `complete` is `false`, say the percentiles come from a sample and name the field. An empty
+`groups` means no model-call span matched in the window. It does not mean zero latency.
+Percentiles are nearest-rank over `spans_used`. A role or model with few spans gives a
+coarse p90.
 
 ---
 
@@ -277,7 +359,7 @@ curl -s "http://tempo:3200/api/search?start=${start}&end=${end}&q=service.name%3
 
 **Time format is Unix seconds only.** Unlike Elasticsearch's date-math (`now-1h`), Tempo requires explicit Unix-second timestamps for `start` and `end` parameters.
 
-**Attribute filtering is basic.** The `q` parameter supports simple `key=value` matching. Complex boolean queries (AND, OR, NOT) are not supported in this endpoint.
+**`q` takes TraceQL.** `{ span:name =~ "model_call .*" && span.gen_ai.operation.name = "primary" } | select(span.gen_ai.request.model)` works (verified live, FRE-1567). A search with a pipeline returns only the attributes named in `select(...)`. `spss` caps the spans returned per trace, and `limit` caps the traces. A reply that hits either cap is a sample, not the whole window.
 
 **Base64 encoding on IDs.** Trace and span IDs are base64-encoded in the response. To use them in subsequent queries, use them as-is (no decoding needed for another query).
 
@@ -285,7 +367,7 @@ curl -s "http://tempo:3200/api/search?start=${start}&end=${end}&q=service.name%3
 
 ## Data discipline
 
-- **Always use the gateway container.** Run commands with `docker exec cloud-sim-seshat-gateway curl ...` — Tempo is on the compose network, not reachable from the host
+- **Run `curl` from `bash` as shown.** The bash tool runs inside the gateway container, where `http://tempo:3200` resolves. `docker exec` is not an allowlisted command and asks for approval
 - **Search requires a limit.** Always include `?limit=N` in search queries; omitting it causes silent failures
 - **Timestamps are nanoseconds.** Divide by 1e9 for seconds; divide by 1e6 for milliseconds
 - **v1 API does not exist here.** Documentation says v1, but our Tempo has only the unprefixed and v2 paths
@@ -297,7 +379,7 @@ curl -s "http://tempo:3200/api/search?start=${start}&end=${end}&q=service.name%3
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `command not found: curl` | Running from the host instead of inside a container | Use `docker exec cloud-sim-seshat-gateway curl ...` to run inside the gateway container |
+| `could not resolve host: tempo` | Running from the host instead of inside the gateway container | Run the command through the `bash` tool, which runs in the gateway container |
 | Empty `[]` on `/api/search` | Missing or empty `limit` parameter | Add `?limit=10` (or any positive integer) to the query |
 | `null` results on search | Trace time window is outside recent history | Use `/api/search?limit=10` with no time filter to get recent traces |
 | HTTP 404 on `/api/v1/traces` | Attempting to use the documented Tempo v1 API | Use `/api/v2/traces/{traceID}` or `/api/traces/{traceID}` instead |

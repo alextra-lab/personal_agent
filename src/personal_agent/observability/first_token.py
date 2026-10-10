@@ -42,6 +42,19 @@ def first_token_clock_active() -> bool:
     return _received_monotonic.get() is not None
 
 
+def request_elapsed_ms() -> float | None:
+    """Return the milliseconds from request receipt to now, or ``None`` with no running clock.
+
+    The route-trace seam reads this when it writes the durable row (FRE-1568), so the row
+    carries the whole-turn time from the same start point the retired ``RequestTimer`` used.
+
+    Returns:
+        Elapsed time in milliseconds, or ``None`` when this task has no running clock.
+    """
+    received = _received_monotonic.get()
+    return None if received is None else elapsed_ms(received)
+
+
 def elapsed_ms(received: float) -> float:
     """Return the milliseconds from a receipt reading to now.
 

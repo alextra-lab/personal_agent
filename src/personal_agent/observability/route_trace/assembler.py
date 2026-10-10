@@ -208,6 +208,7 @@ def assemble_route_trace(
     created_at: datetime | None = None,
     topology: str | None = None,
     task_id: UUID | None = None,
+    latency_total_ms: float | None = None,
 ) -> RouteTraceRow:
     """Build a :class:`RouteTraceRow` from a completed turn's execution context.
 
@@ -225,6 +226,8 @@ def assemble_route_trace(
             source (see below); ``None`` is treated as ``primary``.
         task_id: Per-topology task identifier for the ``(trace_id, task_id)`` key; ``None``
             for the turn-level write.
+        latency_total_ms: Whole-turn time in ms from request receipt to this write, as the
+            caller measured it (FRE-1568); ``None`` when no receipt clock ran.
 
     Returns:
         A fully-populated, frozen :class:`RouteTraceRow`. Missing producers yield
@@ -263,10 +266,9 @@ def assemble_route_trace(
         getattr(s, "success", False) and (getattr(s, "summary", "") or "") for s in subs
     )
 
-    # ADR-0129 D3 (FRE-1067): RequestTimer is retired — these two fields have
-    # no source going forward. RouteTraceRow keeps both columns (Postgres
-    # schema change is out of scope); rows assembled from here on carry None.
-    latency_total_ms: float | None = None
+    # ADR-0129 D3 (FRE-1067) retired RequestTimer, so the phase breakdown has no source and
+    # stays None. The turn total comes from the caller (FRE-1568: the seam reads the
+    # request-receipt clock), because the assembler holds no clock of its own.
     latency_breakdown: dict[str, Any] | None = None
 
     error = getattr(ctx, "error", None)

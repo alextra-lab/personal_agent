@@ -276,6 +276,26 @@ _ES_ONLY_ARGS = ("index", "query", "aggs", "fields", "size")
 _TEMPO_ONLY_ARGS = ("span", "group_by", "role", "model", "limit")
 
 
+def _time_field_line() -> str:
+    """Say which date field ``since`` filters on, from ``FAMILY_TIME_FIELD``.
+
+    A model guessed ``@timestamp`` on a family whose date field has another name, and the
+    refusal cost a turn. The line is built from the same table the query uses, so it cannot
+    drift.
+
+    Returns:
+        One sentence naming the default field and each family that differs.
+    """
+    odd = [
+        f"{family} uses {field}"
+        for family, field in FAMILY_TIME_FIELD.items()
+        if field != "@timestamp"
+    ]
+    if not odd:
+        return "'since' filters on @timestamp."
+    return f"'since' filters on @timestamp, except {', '.join(odd)}."
+
+
 def _render_description() -> str:
     """Build the tool description from the allowlists, so the two cannot drift (AC-1).
 
@@ -296,10 +316,12 @@ def _render_description() -> str:
             *family_lines,
             "Elasticsearch holds no model-call timing: duration_ms, latency_ms and "
             "response_time_ms are not in agent-logs (retired in August 2026, ADR-0129). "
-            "agent-topology latency_total_ms is empty since 2026-08-08 (FRE-1568). "
+            "agent-topology latency_total_ms is the whole-turn time from request receipt "
+            "(FRE-1568). It is empty for turns between 2026-08-08 and that fix. "
             "Use 'latency' for model-call timing. Other timing fields depend on event_type; "
             "to find which event carries a field, use an exists query with a terms "
             "aggregation on event_type.",
+            _time_field_line(),
             "search and count: 'since' default 24h, at most 30d. Query operators: match_all, "
             "bool, term, terms, match, match_phrase, prefix, range, exists. Aggregations: "
             "terms, date_histogram, avg, sum, min, max, value_count, cardinality, stats, "

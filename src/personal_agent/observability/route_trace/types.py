@@ -86,7 +86,9 @@ class RouteTraceRow:
         pedagogical_outcomes: Nullable slot for the pedagogical-outcome layer — left
             uncomputed here (human-rubric/hybrid until the M3 layer emits; taxonomy §6).
         final_reply_chars: Length of the final user-facing reply in characters.
-        latency_total_ms: Total turn wall-clock latency in ms, when timed.
+        latency_total_ms: Whole-turn wall-clock time in ms, from request receipt to the durable
+            row write (FRE-1568). ``None`` for a segment row, for a turn with no receipt clock,
+            and for turns written between 2026-08-08 and the FRE-1568 deploy.
         latency_breakdown: Phase-bucketed latency summary (JSONB), when timed.
         cost_live_usd: Live per-loop cost accumulator value at turn end.
         cost_authoritative_usd: ``SUM(api_costs.cost_usd WHERE trace_id)`` — source of truth.

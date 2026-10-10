@@ -60,16 +60,32 @@ A tool rather than ``response_format``, following the FRE-996 finding recorded i
 ``response_format`` into a synthetic forced tool *and* overwrites the provider's
 ``stop_reason`` with ``"stop"``, which would make a truncated reply indistinguishable
 from a clean one. Truncation must stay visible — a cut-off tiling is a coverage gap, and
-layer 3 needs to see it as one.
+layer 3 needs to see it as one. ``span_extractor_truncated`` is the log line that names it.
 """
 
-MAX_OUTPUT_TOKENS = 4096
+MAX_OUTPUT_TOKENS = 16_384
 """Ceiling for one classification reply.
 
-Bounded rather than left to the deployment's own maximum: the cost gate reserves against
-whatever ceiling is declared, so an unbounded value would reserve a turn's worth of
-budget for a few hundred tokens of segments.
+Sized from the live distribution (FRE-1570). A tiling quotes every character it is given,
+so its size follows the reply's: about 1.4x the input text in tokens (p50; p90 1.6x). At
+4,096 that stopped 13% of calls — exactly the long answers, where grounding matters most.
+At 16,384 the prediction is 0 to 0.4% still cut (1.5% at the worst observed ratio), and
+the longest tiling takes about 115 s at the measured 144 tok/s. This call names no
+``timeout_s`` and the cloud path applies no catalog default, so litellm's own 600 s HTTP
+timeout is the only bound; the ceiling is what keeps a call near 115 s.
+
+Bounded rather than left to the deployment's own maximum, so a runaway reply costs a known
+amount of time and money. The ADR-0065 cost gate does *not* reserve against this value:
+:func:`personal_agent.llm_client.cost_estimator.estimate_reservation` reserves
+``min(max_tokens, lane default_output_tokens)``, and the ``span_extraction`` lane's default
+is 1,024. Raising this ceiling therefore changes what a long call *spends*, not what it
+*reserves*. ``commit()`` then adds ``actual - reserved`` to every counter without a second
+cap check, so the ceiling is also the bound on how far one admitted call can overshoot a
+cap: about USD 0.25 of output at 16,384, against about USD 0.06 at 4,096.
 """
+
+_TRUNCATION_FINISH_REASONS = frozenset({"length", "max_tokens"})
+"""``finish_reason`` values meaning the provider stopped at the output ceiling."""
 
 _LABEL_BY_WIRE = {
     "claim_exempt": SpanLabel.CLAIM_EXEMPT,
@@ -235,6 +251,25 @@ def new_delimiter_nonce() -> str:
         Eight hex characters from :mod:`secrets`.
     """
     return secrets.token_hex(4)
+
+
+def _hit_output_limit(response: Mapping[str, Any]) -> bool:
+    """Whether the reply stopped at the output ceiling rather than at its own end.
+
+    Two independent signals, as in ``session_summary._reject_if_truncated``:
+    ``finish_reason`` is the direct one, and the completion-token count backs it up for a
+    path that reports no reason or overwrites it upstream.
+
+    Args:
+        response: The client's reply.
+
+    Returns:
+        ``True`` when the model ran out of room.
+    """
+    if response.get("finish_reason") in _TRUNCATION_FINISH_REASONS:
+        return True
+    completion_tokens = (response.get("usage") or {}).get("completion_tokens")
+    return isinstance(completion_tokens, int) and completion_tokens >= MAX_OUTPUT_TOKENS
 
 
 def build_prompt(regions: Sequence[Region], user_message: str | None, *, nonce: str) -> str:
@@ -460,7 +495,25 @@ class ModelSpanExtractor:
                 count=unanchored,
                 trace_id=effective_trace.trace_id,
             )
-        return apply_policy(output, regions, spans)
+        extraction = apply_policy(output, regions, spans)
+        if _hit_output_limit(response):
+            # The tiling ends where the model ran out of room, not where the text ends.
+            # Layer 3 has already made the uncovered part non-exempt coverage gaps, so the
+            # verdict is fail-closed; this names the cause. Without it the stop reads as
+            # any other degraded extraction, and turns that did not stop degrade too.
+            log.warning(
+                "span_extractor_truncated",
+                trace_id=effective_trace.trace_id,
+                max_tokens=MAX_OUTPUT_TOKENS,
+                finish_reason=response.get("finish_reason"),
+                output_tokens=(response.get("usage") or {}).get("completion_tokens"),
+                uncovered_chars=sum(
+                    len(s.text)
+                    for s in extraction.spans
+                    if s.reason is NonExemptReason.COVERAGE_GAP
+                ),
+            )
+        return extraction
 
 
 __all__ = [

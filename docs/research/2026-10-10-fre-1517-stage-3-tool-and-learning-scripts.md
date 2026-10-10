@@ -262,10 +262,11 @@ inferred.
 - **Runaway repetition** is the most widely reported failure on 31B and 26B-A4B. It runs until the budget
   is gone, gets worse with long context, and happens with thinking on and off. google-deepmind/gemma #622,
   opened 2026-04-11 and still open in September 2026 (opened by explore).
-- **A template fix** of 2026-07-09 removed reasoning re-injection in multi-turn tool use, and cured the
-  12B model (1/576 → 0/576). A tester then wrote that 26B was "still failing with runaway and rumination
-  especially on the thinking channel". huggingface.co/google/gemma-4-12B-it/discussions/38 (opened by
-  explore).
+- **A template fix** removed reasoning re-injection in multi-turn tool use: PR #47 on the 26B-A4B repo,
+  merged 2026-07-15 (commit `35b4173cf6`, header date 2026-07-09). In the open bug report
+  huggingface.co/google/gemma-4-12B-it/discussions/38 (opened by explore), a tester measured the fixed
+  template on 12B at 1/576 → 0/576 failures, then wrote that 26B was "still failing with runaway and
+  rumination especially on the thinking channel".
 - **Tool-call markup in content** on llama.cpp: llama.cpp #22786, llama-cpp-python #2227.
 - **Weaker with thinking off:** huggingface.co/google/gemma-4-26B-A4B-it/discussions/10.
 - **Premature stopping in agent loops:** github.com/HazAT/pi-interactive-subagents/issues/22.
@@ -275,9 +276,29 @@ inferred.
 - **Not found:** reports on over-decomposition as a planner, or on restating re-queried data as an earlier
   report.
 
-**Open question for this study:** the date of the chat template embedded in our GGUF, and the Gemma fixes
-in llama.cpp build `b11521` (PRs #21326, #21418, #21661 per the reports). Both are UNVERIFIABLE from the
-Seshat side. The slm_server seat can read them.
+### F10 — Our Gemma setup already carries every published fix. One reasoning path remains a hypothesis
+
+**Verdict: POSITIVE** (slm_server's read-only check, relayed by master on 2026-10-10, plus a code reading).
+
+**Output:**
+- **The GGUF is Unsloth's re-upload of 2026-07-17** (commit `c099eb48e6`, "Added Gemma official chat
+  template update"), and its sha256 matches. The embedded template has similarity 0.967 to Google's fixed
+  revision (`35b4173cf6` and later), and 0.890 or less to every earlier revision. Unsloth's two edits do
+  not reach llama-server's rendering. So a rerun "with the fixed template" would run the same template.
+- **llama.cpp `b11521` (`b42b7e6d3`) contains PRs #21326, #21418 and #21661.** Each merge commit is an
+  ancestor of the build.
+- **llama-server renders the GGUF's embedded template**, with no override. `enable_thinking` passes
+  through `--chat-template-kwargs`, and `preserve_thinking` is not set.
+- **Hypothesis H1, unverified:** the fixed template renders the reasoning of every assistant message
+  after the last user message (`loop.index0 > last_user_idx`), even with `preserve_thinking` false. On
+  the Seshat side, `executor.py:6286-6288` copies each step's `reasoning_trace` into the assistant message
+  as `reasoning_content`. Its comment assumes that "the template ignores it". So within one agentic turn,
+  every earlier step's reasoning returns to Gemma's prompt. Qwen's template does the same in tool loops,
+  so Flash-Next receives it too.
+
+**Whether H1 drives the runaways is UNVERIFIABLE from our records,** because no stream text was kept (F3).
+The test is a Gemma s2 rerun where `reasoning_content` is not sent back within a turn. That needs a code
+setting (a build ticket) and the owner's go.
 
 ---
 
@@ -306,9 +327,10 @@ At most ten. Each is for master's disposition and the owner's decision. None was
    by design.
 8. **In future production studies, do not test `memory`-window recall while consolidation is paused.**
    Either leave those back-refs out, or let the study identity consolidate into a disposable store (F6a).
-9. **Before more Gemma work, have slm_server read the GGUF's embedded template date and the llama.cpp
-   build's Gemma fixes.** If the template predates 2026-07-09, rerun Gemma s2 once with the fixed template.
-   That shows how much of F3 is the template.
+9. **Test H1 before more Gemma work** (F10). Add a setting that stops sending `reasoning_content` back
+   within a turn, with the default unchanged, then rerun Gemma s2 once under the same protocol. The
+   template check is done: our setup already has every published fix, so a template rerun would repeat
+   stage 3.
 
 ## Filed tickets
 

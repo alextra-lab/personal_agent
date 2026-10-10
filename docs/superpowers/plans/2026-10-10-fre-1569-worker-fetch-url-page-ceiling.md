@@ -64,12 +64,14 @@ not in this PR. AC-4 is the test of this finding.
    - `tests/personal_agent/governance/test_sub_agent_tools.py`
      - the shipped `fetch_url` decision carries `max_chars` equal to the tool default
      - the shipped config clamps a request for the tool maximum
-   - `tests/personal_agent/orchestrator/test_tool_dispatch.py` (AC-1, AC-2), real config, real
-     `fetch_url_executor`, stub transport
-     - sub-agent asks for 50,000: the executor receives 10,000 and the event fires
-     - primary asks for 50,000: the executor receives 50,000 and no event fires
-   - `tests/personal_agent/orchestrator/test_sub_agent.py` (AC-3): a researcher run through
-     7 pages of 50,000 characters, real clamp and real executor, stub HTTP: ends `completed`
+   - `tests/personal_agent/orchestrator/test_worker_fetch_url_ceiling.py` (new file), real
+     config, real `fetch_url_executor`, stub HTTP, a fake tool layer that validates arguments
+     against the tool schema as the real layer does
+     - AC-1: sub-agent asks for 50,000: the executor receives 10,000 and the event fires
+     - AC-2: primary asks for 50,000: the executor receives 50,000 and no event fires
+     - AC-3: a researcher run through 7 pages of 50,000 characters ends `completed`
+     - seeded negatives: the same calls with the ceiling removed return 50,000, and the
+       researcher stops on `context_reserve`
 2. Run the new tests. Confirm they fail.
 3. `config/governance/tools.yaml`: add `param_ceilings: {max_chars: 10000}` to `fetch_url`, and
    extend its `reason` with the FRE-1569 note.

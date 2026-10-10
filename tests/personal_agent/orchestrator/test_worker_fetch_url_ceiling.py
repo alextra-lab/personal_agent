@@ -92,9 +92,17 @@ def _fetch_tool_layer(config: GovernanceConfig) -> MagicMock:
                 error="; ".join(errors),
                 latency_ms=0.0,
             )
-        with patch(
-            "personal_agent.tools.fetch.create_guarded_http_client",
-            return_value=_stub_http_client(),
+        # The novelty tracker keeps a cwd-relative cache file; a test must not write to it.
+        tracker = MagicMock()
+        tracker.check_and_record = AsyncMock(
+            return_value=SimpleNamespace(novel=False, registrable_domain="example.com")
+        )
+        with (
+            patch(
+                "personal_agent.tools.fetch.create_guarded_http_client",
+                return_value=_stub_http_client(),
+            ),
+            patch("personal_agent.tools.fetch.get_novelty_tracker", return_value=tracker),
         ):
             output = await fetch_url_executor(ctx=ctx, **filtered)
         return ToolResult(

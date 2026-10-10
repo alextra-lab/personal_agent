@@ -542,6 +542,11 @@ class ExecutionContext:
     # block. Recorded on the capture so the mechanism is auditable without persisting the
     # user's location, pronouns, role or languages into a text-indexed telemetry store.
     operator_assertion: str = ""
+    # FRE-1566: the :Person profile facts (location, pronouns, role, languages). Graph
+    # content is untrusted (ADR-0140 T2), so step_llm_call prepends this to the memory
+    # section, which reaches the model as the memory_recall tool result — never the system
+    # prompt the stanza sits in.
+    operator_profile: str = ""
 
     # --- Expansion controller state (Slice 3, ADR-0036) ---
     expansion_strategy: str | None = None

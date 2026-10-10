@@ -212,10 +212,11 @@ LEAF_PROMPTS: list[ConstantEntry | FunctionEntry | ClassDocEntry] = [
         "get_owner_identity",
         "SEMI_STATIC",
         (
-            "Async function. Renders a compact Markdown stanza with the owner's "
-            "known profile fields (name, location, pronouns, role, languages) from "
-            "Neo4j. Content varies per connected user — queried every turn via a "
-            "sub-millisecond Neo4j MERGE. Cannot be extracted statically."
+            "Async function. Renders the operator stanza: the authenticated user's "
+            "name and the FRE-1150 identity-precedence rule. No Neo4j content — the "
+            ":Person profile fields (location, pronouns, role, languages) ride the "
+            "memory_recall tool result instead (FRE-1566, ADR-0140 T2). Content varies "
+            "per connected user. Cannot be extracted statically."
         ),
     ),
     ClassDocEntry(
@@ -252,7 +253,7 @@ ORCHESTRATOR_COMPONENTS = [
         "SEMI_STATIC",
         "executor.py",
         "1852–1858",
-        "Owner identity + instructions from Neo4j profile (see operator_stanza leaf prompt).",
+        "Authenticated user identity + precedence rule (see operator_stanza leaf prompt).",
     ),
     (
         "skill_index",

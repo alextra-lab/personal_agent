@@ -2449,6 +2449,7 @@ async def _populate_operator_identity(
     ctx.operator_stanza = identity.stanza
     ctx.operator_name = identity.name
     ctx.operator_assertion = identity.assertion
+    ctx.operator_profile = identity.profile
 
 
 def _inline_volatile_with_outcome(
@@ -7078,6 +7079,17 @@ async def step_llm_call(
         if _memory_state is not MemoryStatus.POPULATED:
             _state_line = MEMORY_STATE_LINES[_memory_state]
             memory_section = f"{memory_section}\n\n{_state_line}" if memory_section else _state_line
+
+        # FRE-1566 (ADR-0140 T2): the user's :Person profile facts are knowledge-graph
+        # content, so they ride the memory_recall tool result with the rest of the graph's
+        # output, never the system prompt the operator stanza sits in. They head the
+        # section: who the user is, then what was recalled.
+        if ctx.operator_profile:
+            memory_section = (
+                f"{ctx.operator_profile}\n\n{memory_section}"
+                if memory_section
+                else ctx.operator_profile
+            )
 
         # If we are passing tools (native or prompt-injected), include tool-use guidance
         # in the system prompt to reduce malformed tool calls and looping (ADR-0032).

@@ -52,17 +52,6 @@ CONSTRAINT_OPTIONS: dict[str, list[ConstraintOption]] = {
         ConstraintOption(action_id="proceed_cloud", label="Proceed on cloud"),
         ConstraintOption(action_id="keep_local", label="Keep local / free"),
     ],
-    # FRE-1461: a sub-agent asking to use a governed tool. The safe default (last)
-    # is deny — no unattended worker runs an approval-gated tool because nobody
-    # answered. The label says "for this turn" because that is exactly what the
-    # answer covers: one prompt per distinct tool name, reused by every sibling in
-    # the same fan-out (see orchestrator/sub_agent_approval.py). The card must
-    # state its own scope, or an owner approving one worker would be surprised to
-    # find they approved six.
-    "sub_agent_tool_approval": [
-        ConstraintOption(action_id="approve_sub_agent_tool", label="Allow for this turn"),
-        ConstraintOption(action_id="deny_sub_agent_tool", label="Deny"),
-    ],
     # ADR-0149 D4 / FRE-1484: a sub-agent fan-out returned with a failed landing
     # (a worker that did not finish, or a task the turn's budget never reached).
     # The safe default (last) is stop_and_show — no confident answer is composed

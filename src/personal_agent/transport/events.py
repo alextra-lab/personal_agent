@@ -49,10 +49,8 @@ class Phase(str, Enum):
 #: the pre-existing ``attachment_cost`` drift: that constraint was already passed
 #: at the executor's attachment-cost gate yet was absent from the literal, riding a
 #: ``# type: ignore[arg-type]`` at the pause helper. Both are now first-class.
-#: FRE-1461 adds ``sub_agent_tool_approval``: the first constraint raised from the
-#: SUB-AGENT path rather than the primary's own loop. Added here rather than passed
-#: with a ``type: ignore`` at the pause helper, which is exactly the drift FRE-881
-#: closed for ``attachment_cost``.
+#: FRE-1461 added ``sub_agent_tool_approval``; FRE-1574 (ADR-0156 D8.3) removed it: a
+#: worker's ask now shows the tool approval card per call.
 #: ADR-0149 D4 / FRE-1484 adds ``sub_agent_fanout_incomplete``: raised when a
 #: sub-agent fan-out returns with a failed landing, before the primary
 #: synthesizes an answer over it.
@@ -65,7 +63,6 @@ ConstraintName = Literal[
     "context_compression",
     "attachment_cost",
     "artifact_builder",
-    "sub_agent_tool_approval",
     "sub_agent_fanout_incomplete",
     "spend_threshold",
 ]
@@ -224,6 +221,9 @@ class ToolApprovalRequestEvent:
         risk_level: Qualitative risk label for the PWA to display.
         reason: Human-readable explanation of why approval is required.
         expires_at: ISO-8601 UTC timestamp after which the request times out.
+        worker: The worker type that asks, or ``None`` for the primary (ADR-0156 D8.3).
+        session_option: Whether the card offers "allow for this session". Only a call
+            that matched no rule offers it (ADR-0156 D8.3).
     """
 
     request_id: str
@@ -234,6 +234,8 @@ class ToolApprovalRequestEvent:
     risk_level: Literal["low", "medium", "high"]
     reason: str
     expires_at: str  # ISO-8601 UTC
+    worker: str | None = None
+    session_option: bool = False
 
 
 @dataclass(frozen=True)

@@ -34,19 +34,6 @@ keywords:
   - critical path
 canonical_patterns:
   - "trace_id"
-known_bad_patterns:
-  - pattern: "api/v1/"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "Tempo v1 API endpoints do not exist in our deployment. Documented Tempo API (upstream) uses v1, but our deployment (Tempo v2.10.7) has only the unprefixed and v2 APIs."
-    suggestion: "Use '/api/traces/{traceID}' or '/api/v2/traces/{traceID}' for trace retrieval, '/api/search' for search. Never '/api/v1/*'."
-  - pattern: "api/status"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "/api/status returns 404. The correct endpoint for Tempo status is /status (not /api/status)."
-    suggestion: "Use '/status' or '/api/echo' for status checks."
 ---
 
 # query-tempo — Query Tempo traces, read span hierarchies, and investigate latency
@@ -54,6 +41,13 @@ known_bad_patterns:
 **Status:** Primary path (FRE-1321, 2026-08-29). Tempo v2.10.7 deployed with OTLP ingress (ADR-0129).
 
 **Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); reachability limited to compose network
+
+## Known mistakes
+
+These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
+
+- `api/v1/`: Tempo v1 API endpoints do not exist in our deployment. Documented Tempo API (upstream) uses v1, but our deployment (Tempo v2.10.7) has only the unprefixed and v2 APIs. Use '/api/traces/{traceID}' or '/api/v2/traces/{traceID}' for trace retrieval, '/api/search' for search. Never '/api/v1/*'.
+- `api/status`: /api/status returns 404. The correct endpoint for Tempo status is /status (not /api/status). Use '/status' or '/api/echo' for status checks.
 
 ## Reachability
 

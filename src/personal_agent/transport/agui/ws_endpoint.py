@@ -207,11 +207,13 @@ class ApprovalDecision:
     """Result of a HITL approval round-trip.
 
     Attributes:
-        decision: Outcome of the approval request.
+        decision: Outcome of the approval request. ``approve`` allows the call once;
+            ``approve_session`` also adds a session allow rule (ADR-0156 D8.3). Any value
+            other than these two denies.
         reason: Optional human-supplied explanation for the decision.
     """
 
-    decision: Literal["approve", "deny", "timeout", "connection_lost"]
+    decision: Literal["approve", "approve_session", "deny", "timeout", "connection_lost"]
     reason: str | None = None
 
 

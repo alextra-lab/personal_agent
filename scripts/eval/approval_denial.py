@@ -20,8 +20,8 @@ Verdicts: ``invalid`` (a denial was seen), ``valid`` (the evidence proves a clea
 
 Limits that remain:
 
-- The approval-capable tool set comes from this checkout's ``config/governance/tools.yaml``, not
-  from the deployed copy.
+- The approval-capable tool set comes from this checkout's
+  ``config/governance/permissions.yaml`` (FRE-1574), not from the deployed copy.
 - A lost sub-agent capture is detected only when ``sub_agent_start`` events outnumber the sub-agent
   capture documents. Lost log events can hide that gap.
 
@@ -52,11 +52,14 @@ DENIAL_ERROR_PREFIX = "Permission denied: "
 #: Every approval reason ``PermissionResult`` returns starts with this.
 APPROVAL_REASON_PREFIX = "approval_"
 
-#: Log events that record a denial. The first three come from ``tools/executor.py``, the last from
-#: ``orchestrator/sub_agent.py`` (the sub-agent owner's gate, FRE-1461).
+#: Log events that record a denial. The first four come from ``tools/executor.py``. The last came
+#: from the FRE-1461 sub-agent gate, which FRE-1574 removed; it stays for traces older than that.
+#: Since FRE-1574 (ADR-0063 Amendment B) an ask on a deployment with the approval UI off, such
+#: as the eval stack, is denied and logs ``approval_ui_disabled_denied``.
 LOG_EVENT_APPROVAL_DENIED = "approval_denied"
 LOG_EVENT_NO_SESSION_ID = "approval_denied_no_session_id"
 LOG_EVENT_NO_TRANSPORT = "approval_denied_no_transport"
+LOG_EVENT_UI_DISABLED = "approval_ui_disabled_denied"
 LOG_EVENT_SUB_AGENT_DENIED = "sub_agent_tool_approval_denied"
 LOG_EVENT_SUB_AGENT_START = "sub_agent_start"
 DENIAL_LOG_EVENTS = frozenset(
@@ -64,6 +67,7 @@ DENIAL_LOG_EVENTS = frozenset(
         LOG_EVENT_APPROVAL_DENIED,
         LOG_EVENT_NO_SESSION_ID,
         LOG_EVENT_NO_TRANSPORT,
+        LOG_EVENT_UI_DISABLED,
         LOG_EVENT_SUB_AGENT_DENIED,
     }
 )
@@ -75,7 +79,9 @@ LOGS_INDEX = "agent-logs-*"
 SUBAGENT_CAPTURES_INDEX = "agent-captains-captures-subagents-*"
 CAPTURES_INDEX = f"agent-captains-captures-*,-{SUBAGENT_CAPTURES_INDEX}"
 
-DEFAULT_TOOLS_YAML = Path(__file__).resolve().parents[2] / "config" / "governance" / "tools.yaml"
+DEFAULT_TOOLS_YAML = (
+    Path(__file__).resolve().parents[2] / "config" / "governance" / "permissions.yaml"
+)
 
 #: A turn no check was run on (a re-read of an older pass). It stays in the rates it was in.
 UNASSESSED = "unassessed"
@@ -205,8 +211,8 @@ def denials_from_events(events: Sequence[Mapping[str, object]]) -> tuple[Approva
         events: Log events for one trace.
 
     Returns:
-        One denial per denial event. ``approval_ui_disabled_proceeding`` is the eval opt-out. The
-        tool ran, so it is not a denial and not in the result.
+        One denial per denial event. ``approval_ui_disabled_proceeding`` (before FRE-1574) was the
+        eval opt-out: the tool ran, so it is not a denial and not in the result.
     """
     found: list[ApprovalDenial] = []
     for event in events:
@@ -218,6 +224,8 @@ def denials_from_events(events: Sequence[Mapping[str, object]]) -> tuple[Approva
             reason = f"{APPROVAL_REASON_PREFIX}no_session_id"
         elif name == LOG_EVENT_NO_TRANSPORT:
             reason = f"{APPROVAL_REASON_PREFIX}no_transport"
+        elif name == LOG_EVENT_UI_DISABLED:
+            reason = f"{APPROVAL_REASON_PREFIX}ui_disabled"
         elif name == LOG_EVENT_SUB_AGENT_DENIED:
             reason = f"sub_agent_{_text(event.get('reason')) or 'unknown'}"
         else:
@@ -229,27 +237,37 @@ def denials_from_events(events: Sequence[Mapping[str, object]]) -> tuple[Approva
 def approval_capable_tools(tools_yaml: Path | None = None) -> frozenset[str]:
     """Return the tools that can need approval, in any mode.
 
-    The set is a superset on purpose: a mode change at the gateway then cannot hide a tool.
+    The set is a superset on purpose: a mode change at the gateway then cannot hide a tool. A tool
+    can ask when an ask rule names it, or when its allow rules do not cover every call in every
+    mode (a parameter or bash pattern, or a mode list): a call outside them asks (ADR-0156 D8.1).
 
     Args:
-        tools_yaml: The governance tool policy file. ``None`` reads :data:`DEFAULT_TOOLS_YAML`.
+        tools_yaml: The permission rules file. ``None`` reads :data:`DEFAULT_TOOLS_YAML`.
 
     Returns:
-        Every tool with ``requires_approval: true`` or a non-empty ``requires_approval_in_modes``.
+        Every tool named by an ask rule or by an allow rule narrower than the bare tool name.
 
     Raises:
         OSError: If the file cannot be read.
         yaml.YAMLError: If the file is not valid YAML.
-        KeyError: If the file has no ``tools`` mapping.
-        TypeError: If the file is empty.
+        AttributeError: If the file is not a mapping.
+        TypeError: If an item has no ``rule`` text.
     """
     path = tools_yaml if tools_yaml is not None else DEFAULT_TOOLS_YAML
-    tools = yaml.safe_load(path.read_text())["tools"]
-    return frozenset(
-        name
-        for name, policy in tools.items()
-        if policy.get("requires_approval") or policy.get("requires_approval_in_modes")
-    )
+    document = yaml.safe_load(path.read_text())
+
+    def tool_of(item: Mapping[str, object]) -> str:
+        return str(item["rule"]).split("(", 1)[0].strip()
+
+    asks = {tool_of(item) for item in document.get("ask") or []}
+    allows = document.get("allow") or []
+    every_call = {
+        str(item["rule"]).strip()
+        for item in allows
+        if "(" not in str(item["rule"]) and not item.get("modes")
+    }
+    narrow = {tool_of(item) for item in allows} - every_call
+    return frozenset(asks | narrow)
 
 
 def _dedupe(denials: Sequence[ApprovalDenial]) -> tuple[ApprovalDenial, ...]:

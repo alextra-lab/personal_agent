@@ -1,25 +1,20 @@
 """Sandboxed bash command executor primitive tool.
 
-Provides a ``bash`` tool that executes shell commands in the agent's container
-with an allowlist-based approval model and hard-deny patterns for truly
-dangerous commands.
+Provides a ``bash`` tool that executes shell commands in the agent's container.
 
 Security model
 --------------
-* Hard-deny regex patterns are checked *before* any subprocess is spawned.
-  Even if governance config is misconfigured, these patterns prevent the most
-  catastrophic commands from executing.
+* Whether a command runs, asks or is refused is decided before this executor is
+  called, by the permission rules (``config/governance/permissions.yaml``, ADR-0156
+  D8) in ``ToolExecutionLayer._check_permissions``. The command is parsed with a
+  shell parser, and each subcommand must match an allow rule as a plain command; any
+  other command asks the user. The former ``hard_deny_patterns`` are deny rules there
+  (FRE-1574).
 * Commands run via ``/bin/bash -o pipefail -c <command>`` — shell semantics are
   fully supported: pipes (``|``), logical operators (``&&``, ``||``), command
   separators (``;``), redirects, glob expansion, and env substitution all work.
   This is safe because no user-visible string is interpolated into the shell
   invocation itself; the command is passed as a single ``-c`` argument.
-* Auto-approve logic (``_check_segment_allowlist``, in ``bash_allowlist.py``)
-  splits the command into the commands bash would run and verifies each against
-  the per-mode ``auto_approve_prefixes`` from ``tools.yaml``. A segment holding a
-  substitution, a non-scratch output redirection or a run-a-command option of an
-  allowlisted binary needs approval (FRE-1572). It is evaluated by the
-  ``_check_permissions`` layer in ``tools/executor.py``, not by the executor.
 * Timeout is clamped to [1, 120] seconds.
 * Output is capped at 50 KiB (combined stdout + stderr); overflow is written to
   a scratch file and the path is returned.
@@ -34,28 +29,18 @@ Security model
   ``user``/``group``/``extra_groups`` spawn kwargs (FRE-1518).
 
 FRE-261 Step 4 · FRE-283 (real shell contract) · FRE-1505 (eval credential isolation) ·
-FRE-1518 (isolation on the served event loop).
+FRE-1518 (isolation on the served event loop) · FRE-1574 (one permission model).
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-import re
 from pathlib import Path
 from typing import Any
 
-from personal_agent.config import load_governance_config, settings
-from personal_agent.config.governance_loader import GovernanceConfigError
+from personal_agent.config import settings
 from personal_agent.telemetry import TraceContext, get_logger
-
-# Re-exported under their pre-FRE-1572 names: tools/executor.py and the tests import them here.
-from personal_agent.tools.primitives.bash_allowlist import (  # noqa: F401
-    check_segment_allowlist as _check_segment_allowlist,
-)
-from personal_agent.tools.primitives.bash_allowlist import (  # noqa: F401
-    split_command_segments as _split_command_segments,
-)
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
@@ -73,19 +58,6 @@ _MAX_TIMEOUT = 120
 # (``head``, ``grep -q``, …) closes the pipe early and the upstream producer
 # is killed.  That is benign early-exit behavior, not a command failure. FRE-470.
 _SIGPIPE_EXIT_CODE = 141
-
-# Fallback deny-patterns used when governance config is unavailable.
-# Belt-and-suspenders: the authoritative list lives in tools.yaml.
-_FALLBACK_DENY: list[str] = [
-    r"\brm\s+-rf\b",
-    r"\bdd\s+if=",
-    r"\bmkfs\b",
-    r"\bsudo\b",
-    r"\bwget\b",
-    r"\bssh\b",
-    r"\bnc\s+-l\b",
-    r":\(\)\s*\{\s*:\|:&\s*\};:",
-]
 
 # FRE-1505: identity and environment of the bash child on an eval deployment.
 # 65534 is ``nobody``/``nogroup`` in the Debian-based gateway image.
@@ -120,9 +92,12 @@ bash_tool = ToolDefinition(
     description=(
         "Execute a shell command in the agent's container via /bin/bash. "
         "Pipes (|), &&, ||, ;, redirects, globs, and env expansion all work. "
-        "Hard-deny patterns refuse catastrophic commands before the shell sees them. "
-        "Commands whose every pipeline segment matches the auto-approve allowlist run "
-        "without prompting; others require user approval via the PWA."
+        "A command runs without asking only when every subcommand is a plain command "
+        "(literal words, no $ expansion, glob, substitution, or redirection except to "
+        "/dev/null) that an allow rule covers, such as ls, grep, cat, curl, jq, head or "
+        "git log. Any other command asks the user on an approval card; a refusal names "
+        "the subcommand and the rule. Some commands (rm -rf, sudo, wget, ssh, dd) are "
+        "always refused."
     ),
     category="system_dangerous",
     parameters=[
@@ -156,43 +131,6 @@ bash_tool = ToolDefinition(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _load_deny_patterns(*, trace_id: str | None = None) -> list[str]:
-    """Load hard_deny_patterns from governance config, falling back to _FALLBACK_DENY.
-
-    Args:
-        trace_id: Originating request trace_id, threaded onto the
-            governance-load failure log for §I3 identity threading.
-
-    Returns:
-        List of regex pattern strings that, if matched, hard-deny the command.
-    """
-    try:
-        governance = load_governance_config()
-        policy = governance.tools.get("bash")
-        if policy is not None and policy.hard_deny_patterns:
-            return policy.hard_deny_patterns
-    except GovernanceConfigError as exc:
-        # Config directory missing, YAML parse error, or Pydantic validation failure.
-        log.warning("bash_governance_load_error", error=str(exc), trace_id=trace_id)
-    return _FALLBACK_DENY
-
-
-def _is_hard_denied(command: str, patterns: list[str]) -> str | None:
-    """Return the first matching hard-deny pattern, or None if command is clean.
-
-    Args:
-        command: Raw command string to test.
-        patterns: List of regex patterns (IGNORECASE applied).
-
-    Returns:
-        Matched pattern string if any pattern matches, else None.
-    """
-    for pattern in patterns:
-        if re.search(pattern, command, re.IGNORECASE):
-            return pattern
-    return None
 
 
 def _has_top_level_pipe(command: str) -> bool:
@@ -292,21 +230,20 @@ async def bash_executor(
     *,
     ctx: TraceContext,
 ) -> dict[str, Any]:
-    """Execute a shell command via ``/bin/bash`` with hard-deny guards and output capping.
+    """Execute a shell command via ``/bin/bash`` with output capping.
 
-    Security guards fire in this order:
-    1. Hard-deny regex check on the raw command string (never reaches the shell on match).
-    2. Empty-command guard.
-    3. Subprocess via ``/bin/bash -o pipefail -c <command>`` with timeout.
-    4. Output cap (50 KiB; overflow written to scratch).
+    Guards fire in this order:
+    1. Empty-command guard.
+    2. Subprocess via ``/bin/bash -o pipefail -c <command>`` with timeout.
+    3. Output cap (50 KiB; overflow written to scratch).
 
     Pipes (``|``), logical operators (``&&``, ``||``), separators (``;``),
     redirects, glob expansion, and env substitution all work because the
     command is passed to a real ``/bin/bash`` process as a single ``-c``
     argument — nothing is interpolated into the invocation string itself.
 
-    Auto-approve enforcement (``_check_segment_allowlist``) runs in the
-    ``_check_permissions`` layer in ``tools/executor.py`` before this is called.
+    The permission rules run in ``ToolExecutionLayer._check_permissions`` before this is
+    called (ADR-0156 D8).
 
     Args:
         command: Shell command string to execute via ``/bin/bash -c``.
@@ -329,29 +266,10 @@ async def bash_executor(
           reinterpreted as success, else None.
 
         On guard failures, returns a dict with ``success=False`` and an
-        ``error`` key set to one of: ``hard_denied``, ``empty_command``, ``timeout``,
+        ``error`` key set to one of: ``empty_command``, ``timeout``,
         ``credential_isolation_unavailable`` (eval deployment, gateway not root).
     """
     trace_id = ctx.trace_id
-
-    # ------------------------------------------------------------------
-    # 1. Hard-deny check (belt-and-suspenders before any subprocess)
-    # ------------------------------------------------------------------
-    deny_patterns = _load_deny_patterns(trace_id=trace_id)
-    matched = _is_hard_denied(command, deny_patterns)
-    if matched is not None:
-        log.warning(
-            "bash_hard_denied",
-            trace_id=trace_id,
-            command=command,
-            pattern=matched,
-        )
-        return {
-            "success": False,
-            "error": "hard_denied",
-            "pattern": matched,
-            "command": command,
-        }
 
     # ------------------------------------------------------------------
     # 2. Empty-command guard

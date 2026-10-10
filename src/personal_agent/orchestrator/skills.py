@@ -3,7 +3,7 @@
 Loads skill documentation files from ``docs/skills/`` via glob discovery.
 Each skill file must have YAML frontmatter with at minimum ``name``,
 ``description``, and ``when_to_use``.  Optional fields: ``tools``,
-``keywords``, ``canonical_patterns``, ``known_bad_patterns``.
+``keywords``, ``canonical_patterns``.
 
 Routing: ``get_skill_block`` always injects the ``bash`` skill plus any
 skills whose ``keywords`` match the user message (substring, case-insensitive).
@@ -58,7 +58,6 @@ class SkillDoc:
     tools: tuple[str, ...]
     keywords: tuple[str, ...]
     canonical_patterns: tuple[str, ...]
-    known_bad_patterns: tuple[dict[str, Any], ...]
     body: str
     nudge: str | None = None
 
@@ -141,7 +140,6 @@ def _load_all_skills(skills_dir: Path) -> _SkillCache:
             tools=tuple(fm.get("tools") or []),
             keywords=tuple(fm.get("keywords") or []),
             canonical_patterns=tuple(fm.get("canonical_patterns") or []),
-            known_bad_patterns=tuple(fm.get("known_bad_patterns") or []),
             body=body,
             nudge=str(_nudge_raw).strip() if _nudge_raw is not None else None,
         )
@@ -444,8 +442,7 @@ def find_skills_for_tool(tool_name: str) -> list[SkillDoc]:
     """Return all skills that list *tool_name* in their ``tools`` field.
 
     Multiple skills can declare the same tool (e.g. bash.md, query-elasticsearch.md,
-    and fetch-url.md all list ``bash``).  The Phase B.5 reactive guard must check
-    ``known_bad_patterns`` across ALL of them, not just the first match.
+    and fetch-url.md all list ``bash``).
 
     Args:
         tool_name: Registered tool name (e.g. ``"bash"``).

@@ -68,9 +68,8 @@ class TestActionIdRegistry:
         Runtime proof the pre-existing ``attachment_cost`` drift is closed (it was
         passed at the executor but absent from the closed literal), that the
         computed-options constraint ``artifact_builder`` is admitted, that
-        FRE-1461's ``sub_agent_tool_approval`` — the first constraint raised from the
-        sub-agent path rather than the primary's own loop — is admitted too, that
-        ADR-0149 D4 / FRE-1484's ``sub_agent_fanout_incomplete`` is admitted, and that
+        FRE-1461's ``sub_agent_tool_approval`` is gone (FRE-1574: a worker's ask uses the
+        tool approval card per call), that ADR-0149 D4 / FRE-1484's ``sub_agent_fanout_incomplete`` is admitted, and that
         ADR-0142 D2/D3 / FRE-1393's ``spend_threshold`` is admitted. The removal of
         the executor's ``# type: ignore[arg-type]`` is proven separately by ``mypy``.
 
@@ -88,7 +87,6 @@ class TestActionIdRegistry:
             "context_compression",
             "attachment_cost",
             "artifact_builder",
-            "sub_agent_tool_approval",
             "sub_agent_fanout_incomplete",
             "spend_threshold",
         }
@@ -96,8 +94,7 @@ class TestActionIdRegistry:
     def test_every_literal_member_has_options_or_is_computed(self) -> None:
         """A registered name must resolve to a card, not a KeyError at pause time.
 
-        ``sub_agent_tool_approval`` is static, so it must appear in
-        ``CONSTRAINT_OPTIONS``; ``artifact_builder``'s options are computed from the
+        A static constraint must appear in ``CONSTRAINT_OPTIONS``; ``artifact_builder``'s options are computed from the
         ADR-0121 catalog instead, so it is exempt by membership of
         ``COMPUTED_OPTION_CONSTRAINTS`` rather than by being named here.
         """

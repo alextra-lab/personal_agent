@@ -1,24 +1,18 @@
-"""Whether a bash command may skip the approval prompt (FRE-283, FRE-1572).
+"""FRE-1572's bash scanner and option rules: the second check of the bash matcher.
 
-``auto_approve_prefixes`` in ``config/governance/tools.yaml`` lists the commands that run
-without the owner's approval. A command qualifies only when every command bash would run
-starts with an allowlisted prefix, and no allowlisted binary is asked, through its own
-options, to run another command or write a file outside scratch space.
+ADR-0156 D8.2 (FRE-1574) moved the decision to ``governance/bash_matcher.py``, which parses
+the command with ``tree-sitter-bash``. This module supplies two parts of that decision:
 
-FRE-1572 closed the gaps. The old splitter split only on ``;``, ``|``, ``||`` and ``&&``, so a
-newline, a single ``&``, ``$(…)`` and backticks hid a second command behind an allowlisted
-first word. Allowlisted binaries could also run a command or write a file through their own
-options (``find -exec``, ``env CMD``, ``awk 'system(…)'``, ``curl -d @file``).
+- :func:`scan_segments` splits a command line on text and marks a segment that holds a
+  construct it does not look into. The matcher asks when this scanner marks a segment unsafe
+  or counts a different number of commands, so that two independent parsers must agree
+  before a command runs without the user.
+- :func:`option_hazard` finds an option through which an allowed binary runs another
+  command, reads a local file into a request, or writes a file outside scratch space
+  (``find -delete``, ``curl -d @file``, ``sort --compress-program``, ``rg --pre``).
 
-The design refuses rather than parses. A segment holding a construct the checker does not
-look into is not auto-approvable: it goes to the normal approval flow (a card in the PWA, a
-denial in a CLI turn), and it is not blocked. A recursive bash parser would be a second,
-partial bash, and each gap in it would be a bypass. A refusal costs one card.
-
-Owner decisions of 2026-10-10 (FRE-1572): ``python3`` stays auto-approved, recorded as
-accepted; the option rules below catch the run-a-command and write-a-file options; ``curl``'s
-file-read, upload and write options need approval, and ``psql -c`` and ``redis-cli`` leave the
-NORMAL allowlist.
+FRE-1572 closed the gaps of the old first-word splitter: a newline, a single ``&``, ``$(…)``
+and backticks hid a second command behind an allowlisted first word.
 """
 
 from __future__ import annotations
@@ -900,53 +894,3 @@ def option_hazard(words: Sequence[str]) -> str | None:
         case _:
             return None
     return None
-
-
-def check_segment_allowlist(command: str, allowlist: Sequence[str]) -> str | None:
-    """Return the first segment that needs approval, or ``None`` to auto-approve.
-
-    Multi-word allowlist entries (e.g. ``"docker ps"``) match when the segment begins with
-    those exact words in order.
-
-    Args:
-        command: Raw shell command string.
-        allowlist: Allowed prefix strings for the current mode.
-
-    Returns:
-        The first segment that is unsafe, unparseable, not allowlisted, or whose options run a
-        command or write a non-scratch file. ``None`` when every segment passes, so the command
-        may be auto-approved.
-    """
-    for segment in scan_segments(command):
-        if segment.unsafe is not None:
-            return segment.text
-        try:
-            words = shlex.split(segment.text)
-        except ValueError:
-            return segment.text
-        if not words:
-            continue
-        matched = any(
-            words[: len(prefix_words)] == prefix_words
-            for entry in allowlist
-            if (prefix_words := entry.split())
-        )
-        if not matched or option_hazard(words) is not None:
-            return segment.text
-        # An expansion's value is read by bash, not by the option rules: `$X` can become
-        # `-exec`. So a binary with option rules auto-approves only with literal arguments.
-        if words[0] in _OPTION_RULE_BINARIES and segment.unquoted_expansion:
-            return segment.text
-    return None
-
-
-def split_command_segments(command: str) -> list[str]:
-    """Split a command line into the commands bash would run.
-
-    Args:
-        command: Raw shell command string.
-
-    Returns:
-        Non-empty, stripped segment strings, without comments and here-doc bodies.
-    """
-    return [segment.text for segment in scan_segments(command)]

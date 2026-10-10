@@ -7,8 +7,8 @@ loop (`orchestrator.sub_agent.run_sub_agent`), so it does not re-implement
 tool permissions, action-boundary governance (ADR-0063), and per-call
 telemetry/``trace_id`` threading (ADR-0074) — all inherited from
 `ToolExecutionLayer.execute_tool`; this function adds only parameter
-validation, known-bad-pattern pre-checks, skill-load dedup, per-principal
-parameter clamping (FRE-1473), and error formatting.
+validation, skill-load dedup, per-principal parameter clamping (FRE-1473), and
+error formatting.
 
 The function takes the few request primitives it needs (``trace_id``,
 ``session_id``, ``loaded_skills``) rather than an ``ExecutionContext`` so a
@@ -48,14 +48,20 @@ def get_shared_tool_execution_layer() -> "ToolExecutionLayer":
     underlying stateless registry/governance config, so having two instances
     changes no correctness guarantee.
 
+    The layer carries an AG-UI transport, like the primary's, so that a worker's ask
+    reaches the same approval card per call (ADR-0156 D8.3, D9.3).
+
     Returns:
         ToolExecutionLayer instance with the default tool registry.
     """
     global _tool_execution_layer
     if _tool_execution_layer is None:
         from personal_agent.tools import ToolExecutionLayer, get_default_registry  # noqa: PLC0415
+        from personal_agent.transport.agui.transport import AGUITransport  # noqa: PLC0415
 
-        _tool_execution_layer = ToolExecutionLayer(get_default_registry())
+        _tool_execution_layer = ToolExecutionLayer(
+            get_default_registry(), transport=AGUITransport()
+        )
     return _tool_execution_layer
 
 
@@ -73,12 +79,11 @@ async def dispatch_tool_call(
     gate_result: GateResult | None = None,
     loop_policy: ToolLoopPolicy | None = None,
     principal: Literal["primary", "sub_agent"] = "primary",
-    approved_upstream: bool = False,
+    worker: str | None = None,
 ) -> dict[str, Any]:
     """Execute one validated tool call and return its result payload.
 
-    This coroutine handles param validation, known-bad-pattern guards, skill
-    dedup, tool execution (with full governance via ``execute_tool``), and error
+    This coroutine handles param validation, skill dedup, tool execution (with full governance via ``execute_tool``), and error
     formatting. It does NOT mutate any loop-gate state — gate FSM mutations stay
     sequential in the primary's ``step_tool_execution``.
 
@@ -103,10 +108,9 @@ async def dispatch_tool_call(
             reduction. Defaults to ``"primary"``, which never calls the clamp
             function at all — the primary's own tool policy is untouched by
             this parameter's existence, not merely by its value.
-        approved_upstream: True only when the sub-agent approval broker approved
-            this exact call (FRE-1461, FRE-1535). It satisfies the layer's approval
-            step. It is separate from ``principal`` because the broker's set is
-            frozen at spawn while the layer reads the mode per call.
+        worker: The worker type that makes the call, or ``None`` for the primary.
+            An ask from a worker shows the same approval card, per call, with the
+            worker named (ADR-0156 D8.3, D9.3).
 
     Returns:
         A dict with keys: ``tool_call_id``, ``tool_name``, ``content``,
@@ -165,64 +169,6 @@ async def dispatch_tool_call(
                 "tool_layer_error": "missing_required_params",
             }
 
-    # Pre-execution guard — check known_bad_patterns across all linked skills.
-    # Data-driven from docs/skills/*.md frontmatter; new failure modes require
-    # only a frontmatter edit, no code changes here. Multiple skills can declare
-    # the same tool, so we check all of them.
-    from personal_agent.orchestrator.skills import find_skills_for_tool  # noqa: PLC0415
-
-    for linked_skill in find_skills_for_tool(tool_name):
-        for bad in linked_skill.known_bad_patterns:
-            pattern = str(bad.get("pattern", ""))
-            if not pattern:
-                continue
-            applies_to: dict[str, Any] = bad.get("applies_to") or {}
-            applies_tool: str | None = applies_to.get("tool") or None
-            applies_fields: list[str] = list(applies_to.get("fields") or [])
-
-            # Only fire for the declared applies_to.tool (defaults to all tools in skill.tools)
-            if applies_tool is not None and applies_tool != tool_name:
-                continue
-
-            # Search declared fields; fall back to all string-valued arguments
-            search_fields = applies_fields or [
-                k for k, v in arguments.items() if isinstance(v, str)
-            ]
-
-            matched_field: str | None = None
-            for fname in search_fields:
-                val = arguments.get(fname)
-                if isinstance(val, str) and pattern in val:
-                    matched_field = fname
-                    break
-
-            if matched_field is not None:
-                reason = str(bad.get("reason", "Known bad pattern."))
-                suggestion = str(bad.get("suggestion", ""))
-                error_msg = f"{reason} {suggestion}".strip()
-                log.warning(
-                    "tool_call_blocked_known_bad_pattern",
-                    trace_id=trace_id,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                    pattern=pattern,
-                    field=matched_field,
-                    linked_skill=linked_skill.name,
-                )
-                return {
-                    "tool_call_id": tool_call_id,
-                    "tool_name": tool_name,
-                    "content": json.dumps({"status": "error", "hint": error_msg}),
-                    "success": False,
-                    "latency_ms": 0,
-                    "output_hash": None,
-                    "gate_result": gate_result,
-                    "args_hash": args_hash,
-                    "loop_policy": loop_policy,
-                    "tool_layer_output": None,
-                    "tool_layer_error": "known_bad_pattern",
-                }
-
     # Skill dedup: if read_skill has already loaded this skill, return marker.
     if tool_name == "read_skill":
         _skill_name_arg = str(arguments.get("name", ""))
@@ -258,7 +204,7 @@ async def dispatch_tool_call(
             arguments,
             trace_ctx,
             session_id=session_id,
-            approved_upstream=approved_upstream,
+            worker=worker,
         )
 
         if result.success:
@@ -296,6 +242,11 @@ async def dispatch_tool_call(
                         linked_skill=_hint_skill.name,
                         trace_id=trace_id,
                     )
+        elif result.metadata.get("permission_error") is not None:
+            # ADR-0156 D8.4: a permission refusal names the refused subcommand and the
+            # rule, bounded at 2,000 characters by the executor. It is not clipped.
+            content = json.dumps({"ok": False, "error": result.metadata["permission_error"]})
+            output_hash = None
         else:
             # ADR-0125 D5: this "hint" is the tool-role message content sent back
             # to the model (assembled context) — the full error is separately

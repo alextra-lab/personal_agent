@@ -40,37 +40,6 @@ canonical_patterns:
   - "agent-logs-*"
   - "agent-captains-captures-*"
   - "agent-captains-reflections-*"
-known_bad_patterns:
-  - pattern: "/logs-*"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "Generic '/logs-*' index does not exist in Seshat telemetry."
-    suggestion: "Use '/agent-logs-*' — the correct index family starts with 'agent-'."
-  - pattern: "agent-events-*"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "Index 'agent-events-*' does not exist."
-    suggestion: "Use 'agent-logs-*' for events; filter by 'event_type' field."
-  - pattern: "agent-traces-*"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "Index 'agent-traces-*' does not exist."
-    suggestion: "Use 'agent-logs-*'; traces are logged events filtered by fields."
-  - pattern: "agent-telemetry-*"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "Index 'agent-telemetry-*' does not exist."
-    suggestion: "Use 'agent-logs-*' for all structured telemetry."
-  - pattern: "litellm_request_complete"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "Event 'litellm_request_complete' was removed in FRE-376 Phase 3 — 0 docs in agent-logs-*. Cost/tokens for cloud AND local model calls are unified on 'model_call_completed'."
-    suggestion: "Use event_type == \"model_call_completed\" (has cost_usd, role, provider) or \"api_cost_recorded\" (parallel ledger, no role)."
 ---
 
 # query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
@@ -80,6 +49,15 @@ known_bad_patterns:
 **Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); `run_python` auto-approved (NORMAL/ALERT/DEGRADED)
 
 **Latency is not here.** Model-call timing lives on OTel spans in Tempo, not in these logs (ADR-0129, FRE-1219: `duration_ms` and `latency_ms` are retired from `agent-logs-*`). For latency, p50/p90 or "what was slow", use the `query-tempo` skill (Pattern 5) or the `query_telemetry` tool, action `latency`.
+
+## Known mistakes
+
+These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
+
+- `/logs-*`: Generic '/logs-*' index does not exist in Seshat telemetry. Use '/agent-logs-*' — the correct index family starts with 'agent-'.
+- `agent-events-*`: Index 'agent-events-*' does not exist. Use 'agent-logs-*' for events; filter by 'event_type' field.
+- `agent-traces-*`: Index 'agent-traces-*' does not exist. Use 'agent-logs-*'; traces are logged events filtered by fields.
+- `agent-telemetry-*`: Index 'agent-telemetry-*' does not exist. Use 'agent-logs-*' for all structured telemetry.
 
 ## Actual indices (families verified 2026-04-28; date shapes verified 2026-07-31)
 
@@ -476,7 +454,7 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
 | Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp >= now-24h` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index. |
 | Empty `_source` filter | Omit `_source` to get the full doc (it's small). Or list explicit fields to keep results small. |
 | Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `api_cost_recorded`, `embedding_generated`, `reranker_applied`, `budget_counter_snapshot`, `history_sanitised`. |
-| Assuming a separate cloud-only cost event exists | See `known_bad_patterns` above — the legacy per-provider event name was removed (FRE-376 Phase 3). Cost/tokens for **both** cloud and local model calls are unified on `model_call_completed` (has `role`). |
+| Assuming a separate cloud-only cost event exists | The legacy per-provider event name was removed (FRE-376 Phase 3). Cost/tokens for **both** cloud and local model calls are unified on `model_call_completed` (has `role`). |
 | Using `model_call_completed` alone for TOTAL spend | It's LLM-completions only — it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost, which route through the unified ledger instead. Use `api_cost_recorded` for total spend across every provider (FRE-974/979); keep `model_call_completed` for by-role/by-model LLM-only breakdowns. |
 
 ## Governance

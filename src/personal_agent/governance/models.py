@@ -10,7 +10,42 @@ This module defines the schema for governance policies including:
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+#: Approval keys that ADR-0156 D8 (FRE-1574) retired. ``config/governance/permissions.yaml``
+#: decides whether a call runs, asks or is refused. A tools.yaml entry that still holds one is
+#: rejected, so that a stale key cannot read as if it still governed anything.
+RETIRED_APPROVAL_KEYS: frozenset[str] = frozenset(
+    {
+        "requires_approval",
+        "requires_approval_in_modes",
+        "auto_approve_prefixes",
+        "hard_deny_patterns",
+    }
+)
+
+
+def _reject_retired_approval_keys(data: object, owner: str) -> object:
+    """Reject the approval keys that permissions.yaml replaced.
+
+    Args:
+        data: The raw mapping before validation.
+        owner: The model name, for the error message.
+
+    Returns:
+        The data unchanged.
+
+    Raises:
+        ValueError: When a retired key is present.
+    """
+    if isinstance(data, dict):
+        retired = sorted(RETIRED_APPROVAL_KEYS & set(data))
+        if retired:
+            raise ValueError(
+                f"{owner}: {retired} retired by ADR-0156 D8; write a rule in "
+                "config/governance/permissions.yaml instead"
+            )
+    return data
 
 
 class Mode(str, Enum):
@@ -88,13 +123,16 @@ class ToolCategory(BaseModel):
 
     description: str = Field(..., description="Description of the tool category")
     risk_level: str = Field(..., description="Risk level: low, medium, high")
-    requires_approval_in_modes: list[str] = Field(
-        default_factory=list, description="Modes requiring approval for this category"
-    )
     requires_outbound_gateway: bool = Field(
         False, description="Whether outbound gateway is required"
     )
     examples: list[str] = Field(default_factory=list, description="Example tool names")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_retired_keys(cls, data: object) -> object:
+        """Reject the approval keys that permissions.yaml replaced (FRE-1574)."""
+        return _reject_retired_approval_keys(data, "tool category")
 
 
 class ToolPolicy(BaseModel):
@@ -102,13 +140,9 @@ class ToolPolicy(BaseModel):
 
     category: str = Field(..., description="Tool category")
     allowed_in_modes: list[str] = Field(..., description="Modes where tool is allowed")
-    requires_approval_in_modes: list[str] = Field(
-        default_factory=list, description="Modes requiring approval"
-    )
     forbidden_in_modes: list[str] = Field(
         default_factory=list, description="Modes where tool is forbidden"
     )
-    requires_approval: bool = Field(False, description="Whether tool always requires approval")
     max_file_size_mb: int | None = Field(
         None, ge=0, description="Maximum file size in MB (for file tools)"
     )
@@ -153,21 +187,12 @@ class ToolPolicy(BaseModel):
             "guessing wrong index names, bash retrying unknown commands). Default False preserves ADR-0063 §D5."
         ),
     )
-    auto_approve_prefixes: dict[str, list[str]] = Field(
-        default_factory=dict,
-        description=(
-            "Per-mode list of command prefixes (first word or 'first two words') that bypass "
-            "the PWA approval prompt. Key is mode name (e.g. 'NORMAL'), value is list of "
-            "prefix strings (e.g. ['curl', 'git log'])."
-        ),
-    )
-    hard_deny_patterns: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Regex patterns (IGNORECASE) that hard-deny a command before execution. "
-            "Evaluated at executor level as belt-and-suspenders against misconfigured governance."
-        ),
-    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_retired_keys(cls, data: object) -> object:
+        """Reject the approval keys that permissions.yaml replaced (FRE-1574)."""
+        return _reject_retired_approval_keys(data, "tool policy")
 
 
 class ModelRoleConstraints(BaseModel):

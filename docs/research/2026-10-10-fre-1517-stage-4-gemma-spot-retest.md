@@ -14,7 +14,7 @@ D7 planner probe.
 |---|---|---|---|
 | A — s3 t4, telemetry task | Not delivered (888 s, 20 researcher `web_search` rounds) | Delivered (501 s). No researcher web search | **PASS** on routing. The latency half is confounded (reading note) |
 | B — s2 t7 | Runaway: sub_agent at 8,192, then the primary for 600 s | Not delivered (817 s): a researcher filled its context with `fetch_url` pages | **NOT PASS.** The runaway did not recur. New cause: FRE-1569 |
-| B — s2 t13 | Runaway: the primary for 600 s | Delivered (168 s). Gemma's largest output 4,650 tokens | **PASS on intent, FAIL on the literal rule** (G5). The owner rules |
+| B — s2 t13 | Runaway: the primary for 600 s | Delivered (168 s). Gemma's largest output 4,650 tokens | **PASS** (owner ruling, 2026-10-10, G5) |
 | C — D7 | 10/11, decline-correct 27/30 | 10/11, decline-correct 24/30 | **FAIL.** `susan_3` 0/3 again, and `tool_logs` 3/3 → 0/3 |
 
 The runaways did not recur in 13 turns. That is weak evidence: at the stage-3 rate, 13 clean turns happen
@@ -161,7 +161,7 @@ is not a Gemma call.
 | Literal, as written | **FAIL** |
 | By the rule's intent: Gemma runaways, F3 | **PASS** |
 
-The explore seat does not choose. The owner rules.
+The explore seat did not choose. **The owner ruled PASS (2026-10-10).**
 
 ### G6 — `span_extraction` stops at 4,096 on long replies, in both stages
 
@@ -257,8 +257,7 @@ turns do not carry the retired-field confound. They do share the long, stale `qu
 
 At most ten. Each is for master's disposition and the owner's decision. None was executed by this seat.
 
-1. **The owner rules on s2 t13** (G5): the literal reading (FAIL, a cloud `span_extraction` call at
-   4,096) or the intended reading (PASS, Gemma clean). Future pre-registrations name the roles that a limit
+1. **s2 t13 is a PASS** (G5, owner ruling 2026-10-10). Future pre-registrations name the roles that a limit
    rule covers.
 2. **Do not qualify Gemma as planner** on the production prompt `9cf3c233` (G7). Decline-correct is 24/30,
    and Flash-Next is 30/30 on the same prompt. This supports stage-3 proposal 2: remove the study-only
@@ -269,7 +268,8 @@ At most ten. Each is for master's disposition and the owner's decision. None was
 4. **Triage the `span_extraction` 4,096 cap** (G6). It hits on 16 of 97 turns over stages 3 and 4, in both
    models' sessions. Find out whether the grounding extraction loses claims on long replies.
 5. **Fix the telemetry path before any further telemetry turn is scored** (reading note). FRE-1568 is filed
-   and approved. FRE-1567 is rewritten. Giving workers a Tempo read is the owner's decision.
+   and approved. FRE-1567 is rewritten. **The owner ruled on 2026-10-10 that workers may read Tempo.** The
+   build needs a read-only, allowlisted Tempo route for workers, under the same rules as `query_telemetry`.
 
 ## Filed tickets
 

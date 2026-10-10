@@ -47,7 +47,7 @@ _LONG_WITH_ARG = frozenset(
 _DATA_OPTIONS = frozenset({"--data", "--data-raw", "--data-binary", "--data-urlencode"})
 _ONCE_ONLY = frozenset({"--request", "--output"})
 
-_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+_NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 _ALLOWED_HEADERS = frozenset({"content-type", "accept"})
 #: ``--output`` targets: the response stays on the terminal or is dropped. No file is written.
 _OUTPUT_TARGETS = frozenset({"/dev/null", "/dev/stdout"})
@@ -138,6 +138,8 @@ def _parse_url(url: str) -> tuple[str, str] | CurlRefusal:
     path = match.group("path") or "/"
     if not _PATH_CHARS.fullmatch(path):
         return CurlRefusal(f"URL path {path!r} holds a character that is not allowed")
+    if "//" in path:
+        return CurlRefusal(f"URL path {path!r} has an empty segment")
     if len(path) > 1 and path.endswith("/"):
         path = path[:-1]
     segments = path.split("/")[1:]

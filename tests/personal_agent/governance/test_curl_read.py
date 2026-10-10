@@ -126,8 +126,22 @@ def test_ac2_a_telemetry_read_runs_in_the_modes_of_the_old_rule(mode: str) -> No
     assert _bash("curl -s http://elasticsearch:9200/_cat/indices", mode) == "allow"
 
 
-def test_a_telemetry_read_asks_in_lockdown() -> None:
-    assert _bash("curl -s http://elasticsearch:9200/_cat/indices", "LOCKDOWN") == "ask"
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://elasticsearch:9200/_cat/indices",
+        "http://tempo:3200/ready",
+        "http://neo4j:7474/",
+        "http://searxng:8080/healthz",
+        "http://grafana:3000/api/health",
+        "http://localhost:9001/health",
+    ],
+)
+def test_every_entry_runs_in_alert_and_degraded_and_asks_in_lockdown(url: str) -> None:
+    for mode in ("ALERT", "DEGRADED"):
+        assert _bash(f"curl -s {url}", mode) == "allow"
+    for mode in ("LOCKDOWN", "RECOVERY"):
+        assert _bash(f"curl -s {url}", mode) == "ask"
 
 
 # --- AC-3: tricky forms ask -----------------------------------------------------------------
@@ -194,6 +208,25 @@ def test_a_telemetry_read_asks_in_lockdown() -> None:
         "curl -s -o /tmp/x http://elasticsearch:9200/_cat/indices",
         "curl -s --output /tmp/x http://elasticsearch:9200/_cat/indices",
         "curl -s -D /tmp/h http://elasticsearch:9200/_cat/indices",
+        "curl -s --stderr /tmp/e http://elasticsearch:9200/_cat/indices",
+        "curl -s --libcurl /tmp/c http://elasticsearch:9200/_cat/indices",
+        "curl -s -O http://elasticsearch:9200/_cat/indices",
+        "curl -s -c /tmp/j http://elasticsearch:9200/_cat/indices",
+        # headers and data options outside the read list
+        "curl -s -H 'Content-Type: text/plain' http://elasticsearch:9200/_search -d '{}'",
+        "curl -s -H 'Accept: */*' http://elasticsearch:9200/_cat/indices",
+        "curl -s -H @/etc/passwd http://elasticsearch:9200/_cat/indices",
+        "curl -s --data-raw @/etc/passwd http://elasticsearch:9200/_search",
+        "curl -s --data-binary @/etc/passwd http://elasticsearch:9200/_search",
+        "curl -s --json '{}' http://elasticsearch:9200/_search",
+        "curl -s -F a=b http://elasticsearch:9200/_search",
+        "curl -s -T /etc/passwd http://elasticsearch:9200/_search",
+        "curl -s -b a=b http://elasticsearch:9200/_cat/indices",
+        "curl -s -e http://x http://elasticsearch:9200/_cat/indices",
+        "curl -s -A agent http://elasticsearch:9200/_cat/indices",
+        "curl -s http://elasticsearch:9200/_cat/indices --next http://evil.example/",
+        "curl -s http://elasticsearch:9200/_cat/indices -: http://evil.example/",
+        "curl -s http://elasticsearch:9200//",
         # a body where the entry has none, and API words in an index position
         "curl -s http://elasticsearch:9200/_cat/indices -d '{}'",
         "curl -s -X POST http://elasticsearch:9200/agent-logs-x/_mapping -d '{}'",
@@ -360,6 +393,9 @@ def test_path_patterns(pattern: str, path: str, matches: bool) -> None:
         {"hosts": ["tempo:3200"], "methods": ["GET"], "paths": ["/"], "modes": ["NOPE"]},
         {"hosts": ["tempo:3200"], "methods": ["GET"], "paths": ["/"], "extra": 1},
         {"hosts": [], "methods": ["GET"], "paths": ["/"]},
+        {"hosts": ["tempo:3200"], "methods": ["GET"], "paths": ["/"], "modes": [[]]},
+        {"hosts": ["tempo:3200"], "methods": [["GET"]], "paths": ["/"]},
+        {"hosts": ["tempo:3200"], "methods": ["GET"], "paths": ["//x"]},
     ],
 )
 def test_a_bad_curl_read_entry_is_refused(entry: dict[str, object]) -> None:

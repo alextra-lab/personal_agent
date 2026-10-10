@@ -93,7 +93,7 @@ _ITEM_KEYS = frozenset({"rule", "modes", "reason"})
 _CURL_READ_KEY = "curl_read"
 _CURL_READ_KEYS = frozenset({"hosts", "methods", "paths", "body", "modes", "reason"})
 _CURL_HOST = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*:[0-9]+")
-_CURL_PATH = re.compile(r"/(?:[A-Za-z0-9._,-]+|\*)?(?:/(?:[A-Za-z0-9._,-]+|\*))*")
+_CURL_PATH = re.compile(r"/|(?:/(?:[A-Za-z0-9._,-]+|\*))+")
 _VALID_MODES = frozenset(mode.value for mode in Mode)
 
 
@@ -529,9 +529,7 @@ def _parse_curl_read(item: object, *, source: str) -> CurlReadRule:
     if not isinstance(body, bool):
         raise PermissionRuleError(f"{source}: curl_read body must be true or false")
     modes = item.get("modes")
-    if modes is not None and (
-        not isinstance(modes, list) or not modes or set(modes) - _VALID_MODES
-    ):
+    if modes is not None and (_string_list(modes) is None or set(modes) - _VALID_MODES):
         raise PermissionRuleError(
             f"{source}: curl_read modes must be a list of {sorted(_VALID_MODES)}"
         )

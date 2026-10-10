@@ -98,14 +98,20 @@ async def _run(ctx: object, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return client
 
 
-def _dispatched_user_text(client: MagicMock) -> str:
-    """The text of the last user message actually dispatched to the provider."""
+def _dispatched_memory_text(client: MagicMock) -> str:
+    """The recalled-memory text actually dispatched to the provider.
+
+    FRE-1360: memory rides the ``memory_recall`` tool result, never a user message
+    (ADR-0140 T2), so this reads that result and checks it is the only carrier.
+    """
     messages = client.respond.call_args.kwargs["messages"]
-    for msg in reversed(messages):
+    results = [m for m in messages if m.get("role") == "tool" and m.get("name") == "memory_recall"]
+    assert len(results) == 1, [m.get("role") for m in messages]
+    content = str(results[0].get("content"))
+    for msg in messages:
         if msg.get("role") == "user":
-            content = msg.get("content")
-            return content if isinstance(content, str) else str(content)
-    return ""
+            assert content not in str(msg.get("content")), "memory reached a user message"
+    return content
 
 
 def _episode(ident: str, summary: str) -> dict[str, Any]:
@@ -166,7 +172,7 @@ class TestAcceptanceAtTheSeam:
         )
         client = await _run(ctx, monkeypatch)
 
-        assert melon in _dispatched_user_text(client)
+        assert melon in _dispatched_memory_text(client)
 
     @pytest.mark.asyncio
     async def test_no_item_is_dropped_for_position_alone(
@@ -181,7 +187,7 @@ class TestAcceptanceAtTheSeam:
         )
         client = await _run(ctx, monkeypatch)
 
-        text = _dispatched_user_text(client)
+        text = _dispatched_memory_text(client)
         for i in range(5):
             assert f"summary number {i}" in text
         evidence = ctx.turn_evidence  # type: ignore[attr-defined]
@@ -202,7 +208,7 @@ class TestAcceptanceAtTheSeam:
         )
         client = await _run(ctx, monkeypatch)
 
-        text = _dispatched_user_text(client)
+        text = _dispatched_memory_text(client)
         assert "Sorbet" in text
         assert "an icy dessert" in text
         # The empty-bullet signature: a numbered marker with nothing after it.
@@ -233,14 +239,15 @@ class TestAcceptanceAtTheSeam:
         assert ghost.drop_reason is DropReason.NOT_RENDERED
 
     @pytest.mark.asyncio
-    async def test_section_rides_the_user_turn_not_the_system_prompt(
+    async def test_section_rides_a_tool_result_not_the_system_prompt(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """ADR-0081 §D2: the section is the volatile tail of the current user turn.
+        """The section follows the current user turn as a tool result (FRE-1360).
 
-        Pinned because the opposite assumption — that it lands in the system prompt —
-        implies a prompt-cache erosion risk that does not exist: every cache
-        breakpoint precedes this content.
+        ADR-0081 §D2 put it in the volatile tail of the current user turn; ADR-0140 T2
+        moved it to a tool result right after that turn. Pinned because the opposite
+        assumption — that it lands in the system prompt — implies a prompt-cache erosion
+        risk that does not exist: every cache breakpoint precedes this content.
         """
         from personal_agent.captains_log.turn_evidence import build_recall_candidates
 
@@ -251,7 +258,7 @@ class TestAcceptanceAtTheSeam:
         )
         client = await _run(ctx, monkeypatch)
 
-        assert marker in _dispatched_user_text(client)
+        assert marker in _dispatched_memory_text(client)
         assert marker not in (client.respond.call_args.kwargs.get("system_prompt") or "")
 
     @pytest.mark.asyncio
@@ -276,7 +283,7 @@ class TestAcceptanceAtTheSeam:
         ctx.source_registry = SourceRegistry(turn_id=ctx.trace_id)  # type: ignore[attr-defined]
         client = await _run(ctx, monkeypatch)
 
-        text = _dispatched_user_text(client)
+        text = _dispatched_memory_text(client)
         match = re.search(r"\[(S\d+@[0-9a-f]+)\]", text)
         assert match is not None, text
         assert ctx.source_registry.resolve(match.group(1)) is not None  # type: ignore[attr-defined]

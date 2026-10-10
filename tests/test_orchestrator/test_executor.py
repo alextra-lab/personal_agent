@@ -30,6 +30,7 @@ from personal_agent.orchestrator.executor import (
 )
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import AttachmentRef, ExecutionContext, TaskState
+from personal_agent.orchestrator.untrusted_channel import is_harness_tool_result
 from personal_agent.telemetry.trace import TraceContext
 from tests.test_orchestrator.conftest import configure_mock_llm_client_model_configs
 
@@ -744,7 +745,11 @@ class TestToolUsingFlow:
         if mock_client.respond.call_count >= 2:
             second_call = mock_client.respond.call_args_list[1]
             messages = second_call.kwargs.get("messages", [])
-            tool_messages = [m for m in messages if m.get("role") == "tool"]
+            # FRE-1360: the recalled-memory harness result is a tool message too; this
+            # test counts the real tool runs.
+            tool_messages = [
+                m for m in messages if m.get("role") == "tool" and not is_harness_tool_result(m)
+            ]
             assert len(tool_messages) == 2
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
@@ -872,7 +877,9 @@ class TestToolUsingFlow:
         assert mock_client.respond.call_count >= 2
         second_call = mock_client.respond.call_args_list[1]
         messages = second_call.kwargs.get("messages", [])
-        tool_messages = [m for m in messages if m.get("role") == "tool"]
+        tool_messages = [
+            m for m in messages if m.get("role") == "tool" and not is_harness_tool_result(m)
+        ]
         assert len(tool_messages) >= 1
         content = tool_messages[0].get("content", "")
         assert "matched_turns" in content or "entity_match" in content
@@ -2931,10 +2938,16 @@ class TestPrimaryContextWindowRejectionRecovery:
 
         retry_call = mock_client.respond.call_args_list[3]
         retry_messages = retry_call.kwargs["messages"]
-        tool_messages = [m for m in retry_messages if m.get("role") == "tool"]
+        # FRE-1360: the recalled-memory harness result is never stubbed; it is checked
+        # separately below.
+        tool_messages = [
+            m for m in retry_messages if m.get("role") == "tool" and not is_harness_tool_result(m)
+        ]
         assert len(tool_messages) == 2
         assert "[stubbed:" in tool_messages[0]["content"]
         assert "[stubbed:" not in tool_messages[1]["content"]
+        harness = [m for m in retry_messages if is_harness_tool_result(m)]
+        assert harness and all("[stubbed:" not in m["content"] for m in harness)
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
     @pytest.mark.asyncio

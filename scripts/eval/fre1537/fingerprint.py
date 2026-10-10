@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 MANAGED_BUILD = "managed (provider reports no build)"
 MANAGED_QUANT = "managed (not reported)"
 BARE_RESPONSE_FORMAT = {"type": "json_object"}
+DIGEST_CARRIER = "tool_result"  # FRE-1360: the planner digest rides a memory_recall tool result
 _QUANT = re.compile(r"(?:UD-)?(?:I?Q\d(?:_[A-Z0-9]+)+|BF16|F16|F32)", re.IGNORECASE)
 # The fields whose change makes two runs different configurations.
 _IDENTITY_PATHS = (
@@ -40,6 +41,7 @@ _IDENTITY_PATHS = (
     ("system_prompt_sha256",),
     ("response_format_sha256",),
     ("digest_sha256",),
+    ("digest_carrier",),
 )
 
 
@@ -143,6 +145,9 @@ def build_fingerprint(
     }
     if digest:
         fingerprint["digest_sha256"] = hashlib.sha256(digest.encode()).hexdigest()
+        # FRE-1360: the digest moved from the user text to a tool result, so a digest run
+        # from before the move is a different configuration and must not resume.
+        fingerprint["digest_carrier"] = DIGEST_CARRIER
     return fingerprint
 
 
@@ -260,6 +265,7 @@ def build_cloud_fingerprint(
         ).hexdigest()
     if digest:
         fingerprint["digest_sha256"] = hashlib.sha256(digest.encode()).hexdigest()
+        fingerprint["digest_carrier"] = DIGEST_CARRIER
     return fingerprint
 
 

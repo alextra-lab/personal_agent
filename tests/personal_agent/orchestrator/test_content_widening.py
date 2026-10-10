@@ -368,8 +368,16 @@ async def test_fre1137_attachment_turn_carries_memory_section_in_wire_form(
     fence_block = last_user_content[0]
     assert fence_block["type"] == "text"
     assert fence_block["text"].startswith("<turn_context>")
-    assert "Fre1137MarkerEntity" in fence_block["text"]
-    assert "vintage telescopes" in fence_block["text"]
+    # FRE-1360: on an attachment turn too, the memory section rides a tool result right
+    # after the block-form user message, never the fence (ADR-0140 T2).
+    assert "Fre1137MarkerEntity" not in fence_block["text"]
+    memory_results = [
+        m for m in request_messages if m.get("role") == "tool" and m.get("name") == "memory_recall"
+    ]
+    assert len(memory_results) == 1
+    assert request_messages.index(memory_results[0]) == request_messages.index(user_messages[-1]) + 2
+    assert "Fre1137MarkerEntity" in memory_results[0]["content"]
+    assert "vintage telescopes" in memory_results[0]["content"]
     # The attachment blocks still ride along, untouched, after the fence.
     assert _IMAGE_BLOCK in last_user_content
     assert _TEXT_BLOCK in last_user_content

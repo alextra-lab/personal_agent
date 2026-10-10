@@ -136,8 +136,11 @@ configuration" when the catalog differs from the run that passed.
 
 ## A digest run (ADR-0154 AC-8)
 
-`replay --digest-file <file>` inserts the file's text after the history and before the query. The system prompt
-does not change. The tag is `<mode>-digest` unless `--tag` is set, and the fingerprint records the digest hash.
+`replay --digest-file <file>` sends the file's text the way production does since FRE-1360: as a `memory_recall`
+tool result after the user message, never inside it (ADR-0140 T2). The probe builds that exchange with the
+production `planner_digest_exchange`. The system prompt and the user message do not change. The tag is
+`<mode>-digest` unless `--tag` is set, and the fingerprint records the digest hash and `digest_carrier:
+tool_result`, so a digest run directory from before FRE-1360 (digest in the user text) does not resume.
 The message framing and the total bound are production code (FRE-1541). The block title ("What memory already
 holds, most relevant first:") is also production framing (FRE-1472), so the file holds the digest lines only, with
 no title. Build the lines with the production builder, `executor._build_planner_memory_digest` (FRE-1471).

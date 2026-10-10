@@ -611,6 +611,12 @@ an upstream document.
   (`orchestrator/executor.py:5752-5763`), so graph content — agent-writable, and FRE-1338's own
   channel — reaches the model as user text today. T2 is a declaration until this closes; the closing
   change is **FRE-1360**, and this criterion is how we know it landed rather than being described.
+  > **Closed by FRE-1360 (2026-10-10).** Recalled memory, HYBRID worker reports and the HYBRID
+  > planner's memory digest each ride a harness tool exchange — an assistant tool call plus the
+  > tool result answering it (`orchestrator/untrusted_channel.py`). The four per-class probes and
+  > the two HYBRID probes are in
+  > `tests/personal_agent/orchestrator/test_fre1360_untrusted_input_channel.py`. Tool results, fetched
+  > web content and MCP responses were already tool results; their probes now guard that.
 
 - **AC-5 — The cost stayed visible.** Compliance continues to be reported over `citable` turns with
   the **`uncitable` class published beside it**, per ADR-0139 D1 — classified and counted, never

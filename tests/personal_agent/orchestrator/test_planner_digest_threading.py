@@ -145,6 +145,14 @@ def _system_prompt(client: AsyncMock) -> str:
     return str(client.respond.call_args.kwargs["messages"][0]["content"])
 
 
+def _digest_result(client: AsyncMock) -> str:
+    """FRE-1360: the digest reaches the planner as a ``memory_recall`` tool result."""
+    messages = client.respond.call_args.kwargs["messages"]
+    results = [m for m in messages if m.get("role") == "tool" and m.get("name") == "memory_recall"]
+    assert len(results) == 1, [m.get("role") for m in messages]
+    return str(results[0]["content"])
+
+
 class TestAC1DigestReachesThePlannerCall:
     """AC-1 — the recorded planner input contains the digest block."""
 
@@ -166,10 +174,13 @@ class TestAC1DigestReachesThePlannerCall:
                 memory_digest=digest,
             )
 
-        user = _user_message(client)
+        # FRE-1360: the digest is untrusted input, so it rides a tool result, never the
+        # user message.
+        result = _digest_result(client)
         assert digest.text
-        assert digest.text in user
-        assert _COINED in user
+        assert digest.text in result
+        assert _COINED in result
+        assert _COINED not in _user_message(client)
 
     @pytest.mark.asyncio
     async def test_no_digest_leaves_no_memory_block(self) -> None:
@@ -181,10 +192,14 @@ class TestAC1DigestReachesThePlannerCall:
 
 
 class TestAC3PlacementKeepsTheCache:
-    """AC-3 — history, then digest, then query; the system prompt is byte-identical."""
+    """AC-3 — history, then query, then digest; the system prompt is byte-identical.
+
+    FRE-1360 moved the digest after the user message, as a tool result. The stable history
+    still comes first, so a change in the digest never breaks the cached history before it.
+    """
 
     @pytest.mark.asyncio
-    async def test_history_then_digest_then_query(self) -> None:
+    async def test_history_then_query_then_digest(self) -> None:
         digest = _digest(f"The family dog is called {_COINED}.")
         client = _client(_plan_json())
         messages = [
@@ -197,9 +212,11 @@ class TestAC3PlacementKeepsTheCache:
 
         user = _user_message(client)
         history_at = user.index("An older question about trains")
-        digest_at = user.index(_COINED)
         query_at = user.index("Query: Plan lunch")
-        assert history_at < digest_at < query_at
+        assert history_at < query_at
+        roles = [m.get("role") for m in client.respond.call_args.kwargs["messages"]]
+        assert roles == ["system", "user", "assistant", "tool"]
+        assert _COINED in _digest_result(client)
 
     @pytest.mark.asyncio
     async def test_the_system_prompt_is_identical_with_and_without_a_digest(self) -> None:

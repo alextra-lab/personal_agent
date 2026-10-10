@@ -57,6 +57,11 @@ from personal_agent.orchestrator.fallback_planner import generate_fallback_plan
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 from personal_agent.orchestrator.tool_dispatch import get_shared_tool_execution_layer
+from personal_agent.orchestrator.untrusted_channel import (
+    MEMORY_RECALL_TOOL,
+    harness_call_id,
+    harness_tool_exchange,
+)
 from personal_agent.orchestrator.worker_types import (
     THOROUGHNESS_LEVELS,
     WORKER_TYPES,
@@ -333,6 +338,16 @@ def planner_history_text(messages: list[dict[str, Any]] | None, query: str, max_
     history_source = messages or []
     if history_source and get_text_content(history_source[-1].get("content", "")) == query:
         history_source = history_source[:-1]
+    # FRE-1360 (ADR-0140 T2): this render becomes user text, so tool traffic never enters
+    # it — a tool result (real, or a harness exchange carrying recalled memory or worker
+    # reports) is untrusted input and reaches a model only as a tool result. An assistant
+    # message that only issued tool calls has no text of its own to render.
+    history_source = [
+        m
+        for m in history_source
+        if m.get("role") != "tool"
+        and not (m.get("tool_calls") and not get_text_content(m.get("content", "")).strip())
+    ]
     return _render_planner_history(history_source, max_chars)
 
 
@@ -346,14 +361,17 @@ class PlannerUserMessage:
     """The planner's user message and the size of each input in it (ADR-0154 D1).
 
     Attributes:
-        content: The complete user message: history, then digest, then query.
+        content: The planner's user message: history, then the framed query. Since
+            FRE-1360 the memory digest is not in it.
         history_chars: Characters of the rendered history (0 when none fits).
         digest_chars: Characters of the digest text (0 when there is none).
         history_text: The rendered history that went into ``content`` (empty when none fits).
         message_chars: Characters of the framed query, ``Strategy: …`` to the closing
             instruction. The query is never cut.
-        total_chars: ``len(content)``: the three inputs plus the history header and the
-            separators between the blocks. This is the figure the bound applies to.
+        total_chars: ``len(content) + len(digest_block)``: every input character the
+            planner receives. This is the figure the bound applies to.
+        digest_block: The titled digest, carried to the planner as a ``memory_recall``
+            tool result (FRE-1360, ADR-0140 T2). Empty when there is no digest.
     """
 
     content: str
@@ -362,6 +380,7 @@ class PlannerUserMessage:
     digest_chars: int
     message_chars: int
     total_chars: int
+    digest_block: str = ""
 
 
 def _frame_planner_query(query: str, strategy: str) -> str:
@@ -373,7 +392,9 @@ def _join_planner_blocks(history_text: str, digest_text: str, tail: str) -> str:
     """Join the planner user message: history, then digest, then the framed query.
 
     The one place the message is assembled, so the committed probe (``scripts/eval/fre1537``)
-    qualifies the text that ships.
+    qualifies the text that ships. Production passes an empty digest since FRE-1360: the
+    digest reaches the planner as a tool result (:func:`planner_request_messages`). The
+    digest argument remains for the FRE-1537 study's design-A rendering.
     """
     parts = []
     if history_text:
@@ -416,9 +437,9 @@ def build_planner_user_message(
             ``input_max_chars``.
     """
     tail = _frame_planner_query(query, strategy)
-    fixed_chars = len(tail) + (
-        len(_DIGEST_HEADER) + len(digest_text) + len(_BLOCK_SEPARATOR) if digest_text else 0
-    )
+    # FRE-1360: the titled digest is a tool result of its own, so it brings no separator
+    # into the user message — the bound counts its header and text, nothing more.
+    fixed_chars = len(tail) + (len(_DIGEST_HEADER) + len(digest_text) if digest_text else 0)
     if fixed_chars > input_max_chars:
         raise PlannerInputTooLargeError(
             message_chars=len(tail), digest_chars=len(digest_text), max_chars=input_max_chars
@@ -430,15 +451,80 @@ def build_planner_user_message(
     history_text = (
         planner_history_text(messages, query, history_budget) if history_budget > 0 else ""
     )
-    content = _join_planner_blocks(history_text, digest_text, tail)
+    # FRE-1360: the digest is recalled memory — untrusted input (ADR-0140 T2) — so it
+    # leaves the user message and reaches the planner as a tool result
+    # (planner_request_messages). The bound above still counts it.
+    content = _join_planner_blocks(history_text, "", tail)
+    digest_block = _planner_digest_block(digest_text)
     return PlannerUserMessage(
         content=content,
         history_text=history_text,
         history_chars=len(history_text),
         digest_chars=len(digest_text),
         message_chars=len(tail),
-        total_chars=len(content),
+        total_chars=len(content) + len(digest_block),
+        digest_block=digest_block,
     )
+
+
+def _planner_digest_block(digest_text: str) -> str:
+    """The titled digest, as the planner reads it (FRE-1472 title). Empty for no digest."""
+    return f"{_DIGEST_HEADER}{digest_text}" if digest_text else ""
+
+
+def planner_digest_exchange(digest_text: str, *, trace_id: str) -> list[dict[str, object]]:
+    """Return the harness tool exchange that carries a planner digest (FRE-1360).
+
+    The one place the exchange is built, so the D7 probe (``scripts/eval/fre1537``)
+    qualifies the request that ships.
+
+    Args:
+        digest_text: The digest lines, untitled. Empty for no digest.
+        trace_id: The turn's trace id, for the exchange's call id.
+
+    Returns:
+        The assistant tool call and the ``memory_recall`` tool result, or an empty list.
+    """
+    return _digest_block_exchange(_planner_digest_block(digest_text), trace_id)
+
+
+def _digest_block_exchange(digest_block: str, trace_id: str) -> list[dict[str, object]]:
+    """The ``memory_recall`` exchange carrying a titled digest; empty for no digest."""
+    if not digest_block:
+        return []
+    return list(
+        harness_tool_exchange(
+            call_id=harness_call_id("mem", trace_id),
+            tool_name=MEMORY_RECALL_TOOL,
+            content=digest_block,
+        )
+    )
+
+
+def planner_request_messages(
+    system_prompt: str, planner_input: PlannerUserMessage, *, trace_id: str
+) -> list[dict[str, object]]:
+    """Build the planner request: system, user, and the digest as a tool result (FRE-1360).
+
+    The digest is recalled memory. ADR-0140 T2 declares graph content untrusted, and
+    untrusted input reaches a model only through a tool-result channel, so it rides a
+    harness tool exchange after the user message — the last context before the planner
+    generates. No digest, no exchange.
+
+    Args:
+        system_prompt: The planner system prompt.
+        planner_input: From :func:`build_planner_user_message`.
+        trace_id: The turn's trace id, for the exchange's call id.
+
+    Returns:
+        The message list for the planner call.
+    """
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": planner_input.content},
+    ]
+    messages.extend(_digest_block_exchange(planner_input.digest_block, trace_id))
+    return messages
 
 
 def _planner_mode_name(llm_client: Any) -> str | None:
@@ -722,7 +808,13 @@ class ExpansionResult:
     Attributes:
         plan: The expansion plan (LLM-generated or fallback).
         sub_agent_results: Results from all dispatched sub-agents.
-        synthesis_context: Formatted string for the synthesis LLM call.
+        synthesis_context: The rendered worker reports for the synthesis LLM call —
+            worker-derived, so untrusted; they reach the model as a tool result
+            (FRE-1360).
+        synthesis_directives: The harness's own notes and closing instruction for
+            the synthesis call (failed and skipped tasks, the completion count). They
+            are trusted text and ride the synthesis instruction's user message
+            (FRE-1360).
         phase_results: Timing and success data for each phase.
         degraded: True if graceful degradation was triggered.
         degradation_reason: Why degradation occurred, if applicable.
@@ -751,6 +843,7 @@ class ExpansionResult:
     plan: ExpansionPlan | None = None
     sub_agent_results: list[SubAgentResult] = field(default_factory=list)
     synthesis_context: str = ""
+    synthesis_directives: str = ""
     phase_results: list[PhaseResult] = field(default_factory=list)
     degraded: bool = False
     degradation_reason: str | None = None
@@ -1029,8 +1122,8 @@ class ExpansionController:
                 )
 
         # --- Build synthesis context ---
-        result.synthesis_context = self._build_synthesis_context(
-            plan=plan,
+        result.synthesis_context = self._build_synthesis_context(plan=plan, sub_results=sub_results)
+        result.synthesis_directives = self._build_synthesis_directives(
             sub_results=sub_results,
             skipped_tasks=result.skipped_tasks,
             skip_reason=result.skip_reason,
@@ -1101,8 +1194,9 @@ class ExpansionController:
                 and the digest alone exceed it, the planner is not called and
                 the attempt takes the failure path with reason
                 ``input_too_large``.
-            memory_digest: The memory digest (ADR-0154 D5). Its text goes in the user
-                message after the history and before the query. ``None`` gives no digest.
+            memory_digest: The memory digest (ADR-0154 D5). Its text reaches the planner
+                as a ``memory_recall`` tool result after the user message (FRE-1360).
+                ``None`` gives no digest.
 
         Returns:
             An ExpansionPlan — either LLM-generated or fallback. Exactly one
@@ -1155,10 +1249,9 @@ class ExpansionController:
                 digest=planner_input.digest_chars,
                 message=planner_input.message_chars,
             )
-            planner_messages = [
-                {"role": "system", "content": planner_system_prompt},
-                {"role": "user", "content": planner_input.content},
-            ]
+            planner_messages = planner_request_messages(
+                planner_system_prompt, planner_input, trace_id=trace_id
+            )
 
             from personal_agent.telemetry.trace import TraceContext
 
@@ -1851,29 +1944,22 @@ class ExpansionController:
         self,
         plan: ExpansionPlan,
         sub_results: list[SubAgentResult],
-        skipped_tasks: list[str] | None = None,
-        skip_reason: SkipReason | None = None,
     ) -> str:
-        """Build the synthesis context string from sub-agent results.
+        """Build the rendered worker reports from sub-agent results.
+
+        Worker-derived text only — report bodies, gaps, error strings — so it is
+        untrusted input and reaches the model as a tool result (FRE-1360, ADR-0140 T2).
+        The harness's own notes and instruction are :meth:`_build_synthesis_directives`.
 
         Args:
             plan: The expansion plan used for this run.
             sub_results: Results from all dispatched sub-agents.
-            skipped_tasks: Plan task names never dispatched because the turn's
-                budget ran out first (FRE-1397) or the model server failed
-                (FRE-1501) — distinct from a failure: these produced no result
-                at all, so they get their own note rather than being silently
-                absent.
-            skip_reason: Why ``skipped_tasks`` were not dispatched. ``None``
-                reads as the turn budget, the only reason before FRE-1501.
 
         Returns:
-            Formatted synthesis context string for the parent agent.
+            The rendered reports for the parent agent.
         """
         parts = [f"## Expansion Results (strategy: {plan.strategy})\n\n"]
 
-        n_ok = 0
-        n_ledger = 0
         # ADR-0150 D4: every worker's gaps are combined into one `Not found`
         # section at the end of the turn's context, each attributed to its own
         # task, rather than repeated per worker.
@@ -1904,10 +1990,6 @@ class ExpansionController:
                     f"*Tool access denied:* {', '.join(r.denied_tools)} was requested "
                     "but not granted to sub-agents; this sub-task ran without it.\n\n"
                 )
-            if r.success:
-                n_ok += 1
-            elif r.report_kind == "ledger":
-                n_ledger += 1
 
         if all_gaps:
             parts.append("### Not found\n")
@@ -1916,6 +1998,38 @@ class ExpansionController:
                 for task_name, looked_for, where in all_gaps
             )
             parts.append("\n")
+
+        return "".join(parts)
+
+    def _build_synthesis_directives(
+        self,
+        sub_results: list[SubAgentResult],
+        skipped_tasks: list[str] | None = None,
+        skip_reason: SkipReason | None = None,
+    ) -> str:
+        """Build the harness's notes and closing instruction for the synthesis call.
+
+        FRE-1360 (ADR-0140 T2): the worker reports are untrusted and reach the model as
+        a tool result, where it reads instructions with scepticism. These notes are the
+        harness's own instructions, so they stay trusted text in the synthesis
+        instruction's user message rather than riding inside the reports.
+
+        Args:
+            sub_results: Results from all dispatched sub-agents.
+            skipped_tasks: Plan task names never dispatched because the turn's
+                budget ran out first (FRE-1397) or the model server failed
+                (FRE-1501) — distinct from a failure: these produced no result
+                at all, so they get their own note rather than being silently
+                absent.
+            skip_reason: Why ``skipped_tasks`` were not dispatched. ``None``
+                reads as the turn budget, the only reason before FRE-1501.
+
+        Returns:
+            The notes and closing instruction. Empty when there is nothing to say.
+        """
+        parts: list[str] = []
+        n_ok = sum(1 for r in sub_results if r.success)
+        n_ledger = sum(1 for r in sub_results if not r.success and r.report_kind == "ledger")
 
         if any(not r.success for r in sub_results):
             failed = [r.spec_task for r in sub_results if not r.success]

@@ -114,11 +114,15 @@ async def _assembled_system_prompt(*, with_tools: bool) -> str:
     return kwargs.get("system_prompt", "") or ""
 
 
-async def _last_user_message(*, with_tools: bool) -> str:
-    """The volatile last-user-message content, where memory_section actually rides."""
+async def _memory_result(*, with_tools: bool) -> str:
+    """The ``memory_recall`` tool result, where memory_section actually rides (FRE-1360)."""
     kwargs = await _dispatched_call_kwargs(with_tools=with_tools)
     messages = kwargs.get("messages") or []
-    return next(m["content"] for m in reversed(messages) if m.get("role") == "user")
+    return next(
+        m["content"]
+        for m in messages
+        if m.get("role") == "tool" and m.get("name") == "memory_recall"
+    )
 
 
 class TestProhibitionDeletedFRE1150Survives:
@@ -126,14 +130,14 @@ class TestProhibitionDeletedFRE1150Survives:
 
     @pytest.mark.asyncio
     async def test_prohibition_absent_from_assembled_prompt(self) -> None:
-        last_user_message = await _last_user_message(with_tools=False)
-        assert _MEMORY_MARKER in last_user_message, "fixture assumption: memory did render"
-        assert _PROHIBITION not in last_user_message
+        memory_result = await _memory_result(with_tools=False)
+        assert _MEMORY_MARKER in memory_result, "fixture assumption: memory did render"
+        assert _PROHIBITION not in memory_result
 
     @pytest.mark.asyncio
     async def test_fre_1150_wording_survives(self) -> None:
-        last_user_message = await _last_user_message(with_tools=False)
-        assert "not who you are speaking with" in last_user_message
+        memory_result = await _memory_result(with_tools=False)
+        assert "not who you are speaking with" in memory_result
 
 
 class TestRecencyNoLongerGatesSearch:

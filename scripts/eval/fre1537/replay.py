@@ -70,7 +70,7 @@ def run_decide(
         paths: The run paths.
         inputs: The run inputs.
         mode: The planner mode.
-        digest: Optional digest text inserted after the history and before the query.
+        digest: Optional digest text, sent as the production memory_recall tool result.
         labels: Fixture labels to run.
         trials: Draws per fixture.
         cloud: A managed-deployment session. When set, the call goes through the production client
@@ -94,11 +94,13 @@ def run_decide(
             }
             try:
                 if cloud is not None:
-                    user = planner_user(inputs, label, digest)
+                    user = planner_user(inputs, label)
                     row["cost_usd"] = (
-                        budget.check(cloud.target, inputs.system, user) if budget else 0.0
+                        budget.check(cloud.target, inputs.system, f"{user}\n{digest or ''}")
+                        if budget
+                        else 0.0
                     )
-                    result = cloud.call(inputs.system, user)
+                    result = cloud.call(inputs.system, user, digest)
                     fp_mod.fill_served_model(paths, result.get("served_model"))
                 else:
                     result = stream(client, url, model, planner_body(inputs, label, mode, digest))
@@ -144,7 +146,7 @@ def run_timing(
         inputs: The run inputs.
         mode: The planner mode.
         labels: Fixture labels to run.
-        digest: Optional digest text inserted after the history and before the query.
+        digest: Optional digest text, sent as the production memory_recall tool result.
     """
     seen = done_keys(paths.timing)
     for label in labels:

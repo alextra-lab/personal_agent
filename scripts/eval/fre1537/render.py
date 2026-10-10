@@ -24,6 +24,9 @@ import sys
 from collections.abc import Mapping, Sequence
 
 PROMPTS_PREFIX = "FRE1537_PROMPTS="
+# The trace id of the probe's harness exchanges. Production derives the call id from the turn's
+# trace id; the probe uses one fixed id, so every request of a run is byte-identical across draws.
+PROBE_TRACE_ID = "fre1537probe"
 
 _SCHEMA_ANCHOR = '"strategy": "HYBRID|DECOMPOSE"'
 _SCHEMA_REPLACEMENT = '"strategy": "SINGLE|HYBRID|DECOMPOSE"'
@@ -71,26 +74,53 @@ def prompt_hash(system_prompt: str) -> str:
 
 
 def build_user_message(history: str, digest: str | None, query: str) -> str:
-    """Build the planner user message: history, then digest, then query.
+    """Build the planner user message: history, then query.
 
     A thin wrapper over the production framing in ``expansion_controller``, for a caller that
     holds a rendered history and no messages. The stable parts come first, so a change in the
-    digest or the query never breaks the cached history before it (ADR-0154 D1).
+    query never breaks the cached history before it (ADR-0154 D1). Since FRE-1360 the digest
+    is not in this message: it rides a tool result (:func:`digest_exchange`). The ``digest``
+    argument stays so existing callers keep their signature, and must be ``None``.
 
     Args:
         history: Rendered conversation history. Empty for a first turn.
-        digest: Memory digest text, or ``None``.
+        digest: Must be ``None``. Pass a digest to :func:`digest_exchange` instead.
         query: The current message.
 
     Returns:
         The user message text.
+
+    Raises:
+        ValueError: If a digest is given — production no longer puts it in the user text.
     """
+    if digest:
+        raise ValueError(
+            "FRE-1360: the planner digest rides a memory_recall tool result; "
+            "send it with digest_exchange(), not in the user message"
+        )
     from personal_agent.orchestrator.expansion_controller import (
         _frame_planner_query,
         _join_planner_blocks,
     )
 
-    return _join_planner_blocks(history, digest or "", _frame_planner_query(query, "HYBRID"))
+    return _join_planner_blocks(history, "", _frame_planner_query(query, "HYBRID"))
+
+
+def digest_exchange(digest: str | None) -> list[dict[str, object]]:
+    """Return the production ``memory_recall`` exchange for a digest, after the user message.
+
+    FRE-1360: production carries the planner's memory digest as a harness tool result, never
+    as user text. This calls the production builder, so a digest run qualifies that request.
+
+    Args:
+        digest: The digest lines, untitled, or ``None``.
+
+    Returns:
+        The assistant tool call and the tool result, or an empty list for no digest.
+    """
+    from personal_agent.orchestrator.expansion_controller import planner_digest_exchange
+
+    return planner_digest_exchange(digest or "", trace_id=PROBE_TRACE_ID)
 
 
 def build_planner_request(
@@ -111,10 +141,14 @@ def build_planner_request(
             oldest end.
 
     Returns:
-        ``{"messages": [system, user], "history": str, "history_chars": int}``.
+        ``{"messages": [system, user, (assistant, tool when a digest is given)],
+        "history": str, "history_chars": int}``.
     """
     from personal_agent.config import settings
-    from personal_agent.orchestrator.expansion_controller import build_planner_user_message
+    from personal_agent.orchestrator.expansion_controller import (
+        build_planner_user_message,
+        planner_request_messages,
+    )
 
     # The production builder, so the probe qualifies the message that ships: the same bound,
     # the same fill order, the same framing (FRE-1541). It drops the trailing query message.
@@ -127,10 +161,9 @@ def build_planner_request(
         input_max_chars=settings.planner_input_max_chars,
     )
     return {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": built.content},
-        ],
+        # FRE-1360: the production request — a digest rides a tool result after the user
+        # message, never the user text.
+        "messages": planner_request_messages(system_prompt, built, trace_id=PROBE_TRACE_ID),
         "history": built.history_text,
         "history_chars": built.history_chars,
     }

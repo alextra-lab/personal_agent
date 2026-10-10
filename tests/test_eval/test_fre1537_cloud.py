@@ -160,6 +160,17 @@ def test_the_ovh_candidate_reaches_the_provider_as_thinking_off(stack: dict[str,
     assert row["usage"]["completion_tokens"] == 13  # type: ignore[index]
 
 
+def test_a_digest_reaches_the_provider_as_a_tool_result(stack: dict[str, Any]) -> None:
+    """FRE-1360: a managed digest run sends the production memory_recall exchange."""
+    with cloud.CloudSession(target(OVH), gate=stack["gate"]) as session:
+        session.call("SYS", "USER", "DIGEST-LINE")
+    (kwargs,) = stack["calls"]
+    roles = [m["role"] for m in kwargs["messages"]]
+    assert roles == ["system", "user", "assistant", "tool"]
+    assert kwargs["messages"][1]["content"] == "USER"
+    assert "DIGEST-LINE" in str(kwargs["messages"][3]["content"])
+
+
 def test_the_sonnet_candidate_reaches_the_provider_as_low_effort(stack: dict[str, Any]) -> None:
     with cloud.CloudSession(target(SONNET), gate=stack["gate"]) as session:
         session.call("SYS", "USER")
@@ -404,7 +415,7 @@ class FakeSession:
         self.fail = fail
         self.calls: list[tuple[str, str]] = []
 
-    def call(self, system: str, user: str) -> dict[str, object]:
+    def call(self, system: str, user: str, digest: str | None = None) -> dict[str, object]:
         self.calls.append((system, user))
         if self.fail:
             raise cloud.CloudCallError("boom")
@@ -533,11 +544,11 @@ def test_a_failed_extended_call_keeps_the_cold_call_cost_and_is_retried(tmp_path
     paths, inputs = start(tmp_path, session)
     real_call = session.call
 
-    def fail_second(system: str, user: str) -> dict[str, object]:
+    def fail_second(system: str, user: str, digest: str | None = None) -> dict[str, object]:
         if len(session.calls) == 1:
             session.calls.append((system, user))
             raise cloud.CloudCallError("timeout")
-        return real_call(system, user)
+        return real_call(system, user, digest)
 
     session.call = fail_second  # type: ignore[method-assign]
     args = (None, "", "", paths, inputs, llama.PlannerMode("planner", session.target.declared))

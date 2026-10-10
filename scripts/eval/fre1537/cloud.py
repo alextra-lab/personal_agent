@@ -30,6 +30,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from scripts.eval.fre1537 import render
 from scripts.eval.fre1537.common import read_jsonl
 
 from personal_agent.config import load_model_config
@@ -315,12 +316,14 @@ class CloudSession:
             SystemTraceContext.new("fre1516_planner_probe"), session_id=str(uuid4())
         )
 
-    def call(self, system: str, user: str) -> dict[str, object]:
+    def call(self, system: str, user: str, digest: str | None = None) -> dict[str, object]:
         """Send one planner request and record what the scorer reads.
 
         Args:
             system: The planner system prompt.
             user: The planner user message.
+            digest: Optional memory digest lines, carried as the production ``memory_recall``
+                tool result (FRE-1360).
 
         Returns:
             The row of :func:`row_from_response`.
@@ -338,6 +341,7 @@ class CloudSession:
                         messages=[
                             {"role": "system", "content": system},
                             {"role": "user", "content": user},
+                            *render.digest_exchange(digest),
                         ],
                         response_format=response_format_of(self.target),
                         trace_ctx=self._ctx,

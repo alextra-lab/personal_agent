@@ -141,12 +141,19 @@ def test_planner_body_thinking_off_and_sampling(tmp_path: Path) -> None:
     assert off["messages"][1]["content"] == "Q-greeting"
 
 
-def test_planner_body_digest_goes_between_history_and_query(tmp_path: Path) -> None:
+def test_planner_body_digest_rides_the_production_tool_result(tmp_path: Path) -> None:
+    """FRE-1360: the digest follows the user message as the production memory_recall result."""
+    from personal_agent.orchestrator.expansion_controller import planner_digest_exchange
+
     _, inputs = make_inputs(tmp_path)
     body = llama.planner_body(inputs, "boiler_expand", llama.MODES["thinking_off"], digest="DIGEST")
-    user = body["messages"][1]["content"]
-    assert user.index("assistant: hello") < user.index("DIGEST") < user.index("Query: research it")
-    assert body["messages"][0]["content"] == "SYSTEM PROMPT"
+    messages = body["messages"]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool"]
+    assert messages[0]["content"] == "SYSTEM PROMPT"
+    assert "DIGEST" not in messages[1]["content"]
+    assert messages[2:] == planner_digest_exchange("DIGEST", trace_id=render.PROBE_TRACE_ID)
+    plain = llama.planner_body(inputs, "boiler_expand", llama.MODES["thinking_off"])
+    assert plain["messages"][1] == messages[1]
 
 
 def test_primary_and_prime_bodies(tmp_path: Path) -> None:
@@ -160,6 +167,56 @@ def test_primary_and_prime_bodies(tmp_path: Path) -> None:
     }  # single-turn: system-only prefix
     assert prime["max_tokens"] == 1
     assert prime["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def _with_memory_tail(inputs: llama.Inputs, label: str, *, multi_turn: bool) -> None:
+    """Give a fixture the FRE-1360 primary tail: the turn's user message, then the
+    harness memory exchange (assistant tool call, memory_recall tool result)."""
+    history = (
+        [{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "answer"}]
+        if multi_turn
+        else []
+    )
+    inputs.captured[label]["body"] = {
+        **inputs.captured[label]["body"],
+        "messages": [
+            {"role": "system", "content": "S"},
+            *history,
+            {"role": "user", "content": "u"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_mem_x",
+                        "type": "function",
+                        "function": {"name": "memory_recall", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_mem_x", "name": "memory_recall", "content": "m"},
+        ],
+    }
+
+
+@pytest.mark.parametrize("multi_turn", [False, True])
+def test_prime_cuts_back_to_the_last_user_message(tmp_path: Path, multi_turn: bool) -> None:
+    """FRE-1360: the primary request no longer ends on the user turn.
+
+    The prime is the previous turn's prefix, so it ends before this turn's user message —
+    never on the harness tool call, which llama.cpp rejects with 400 (the D7 timing arm,
+    2026-10-10).
+    """
+    _, inputs = make_inputs(tmp_path)
+    _with_memory_tail(inputs, "greeting", multi_turn=multi_turn)
+    prime = llama.prime_body(inputs, "greeting")
+    roles = [m["role"] for m in prime["messages"]]
+    assert all(not m.get("tool_calls") for m in prime["messages"])
+    if multi_turn:
+        assert roles == ["system", "user", "assistant"]
+    else:
+        assert prime["messages"][-1] == {"role": "user", "content": "."}
+        assert roles == ["system", "user"]
 
 
 def test_run_decide_writes_rows_and_resumes(tmp_path: Path) -> None:
@@ -258,6 +315,43 @@ def test_long_history_arm_builds_each_size_and_extends_the_history(tmp_path: Pat
     assert cold["messages"][0]["content"] == "SYSTEM PROMPT"
 
 
+@pytest.mark.parametrize("digest", [None, "DIGEST-LINE"])
+def test_long_history_arm_sends_the_digest_as_replay_does(
+    tmp_path: Path, digest: str | None
+) -> None:
+    """FRE-1360: with --digest-file, both planner calls carry the production memory_recall
+    exchange after the unchanged user message; without it, the request is unchanged."""
+    from personal_agent.orchestrator.expansion_controller import planner_digest_exchange
+
+    paths, inputs = make_inputs(tmp_path)
+    bodies: list[dict[str, object]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(req.content))
+        return sse_response(content=DECLINE)
+
+    with client_for(handler) as client:
+        longhist.run_longhist(
+            client,
+            URL,
+            "m",
+            paths,
+            inputs,
+            llama.MODES["thinking_off"],
+            sizes=(2000,),
+            digest=digest,
+        )
+    cold, _primary, extended = bodies
+    for planner in (cold, extended):
+        messages = planner["messages"]  # type: ignore[index]
+        if digest is None:
+            assert [m["role"] for m in messages] == ["system", "user"]
+        else:
+            assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool"]
+            assert messages[2:] == planner_digest_exchange(digest, trace_id=render.PROBE_TRACE_ID)
+            assert digest not in messages[1]["content"]
+
+
 def test_long_history_arm_resumes(tmp_path: Path) -> None:
     paths, inputs = make_inputs(tmp_path)
     with client_for(lambda req: sse_response(content=DECLINE)) as client:
@@ -301,6 +395,22 @@ def test_fingerprint_records_engine_model_mode_and_prompt_hash(tmp_path: Path) -
     assert fp["captured_primary"]["tool_count"] == 2  # type: ignore[index]
 
 
+def test_a_digest_run_fingerprint_names_the_tool_result_carrier(tmp_path: Path) -> None:
+    """FRE-1360: a digest run from before the move is a different configuration."""
+    paths, inputs = make_inputs(tmp_path)
+    with client_for(props_handler()) as client:
+        with_digest = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, "DIGEST"
+        )
+        without = fingerprint.build_fingerprint(
+            client, URL, "m", llama.MODES["thinking_off"], inputs, paths, None, None, None
+        )
+    assert with_digest["digest_carrier"] == "tool_result"
+    assert "digest_carrier" not in without
+    old = {k: v for k, v in with_digest.items() if k != "digest_carrier"}
+    assert fingerprint._identity(old) != fingerprint._identity(with_digest)
+
+
 def test_fingerprint_overrides_fill_what_the_engine_does_not_report(tmp_path: Path) -> None:
     paths, inputs = make_inputs(tmp_path)
     with client_for(lambda req: httpx.Response(404)) as client:
@@ -341,14 +451,15 @@ def test_reasoning_written_inline_in_the_content_counts_as_reasoning() -> None:
     assert res["reasoning_chars"] == 5
 
 
-def test_timing_arm_sends_the_digest_between_history_and_query(tmp_path: Path) -> None:
+def test_timing_arm_sends_the_digest_as_a_tool_result(tmp_path: Path) -> None:
+    """FRE-1360: the timing arm's planner request carries the digest the production way."""
     paths, inputs = make_inputs(tmp_path)
-    users: list[str] = []
+    requests: list[list[dict[str, object]]] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
         body = json.loads(req.content)
         if body.get("response_format"):
-            users.append(body["messages"][1]["content"])
+            requests.append(body["messages"])
         return sse_response(content=DECLINE)
 
     with client_for(handler) as client:
@@ -362,8 +473,10 @@ def test_timing_arm_sends_the_digest_between_history_and_query(tmp_path: Path) -
             ["boiler_expand"],
             digest="DIGEST",
         )
-    (user,) = users
-    assert user.index("assistant: hello") < user.index("DIGEST") < user.index("Query: research it")
+    (messages,) = requests
+    # The fixture's own rendered user message, unchanged: the digest is not in it.
+    assert messages[1]["content"] == inputs.fixture("boiler_expand")["user"]
+    assert messages[-1]["role"] == "tool" and "DIGEST" in str(messages[-1]["content"])
 
 
 def sse_with_fingerprint(build: str) -> httpx.Response:
@@ -553,7 +666,9 @@ def test_the_long_history_step_runs_the_mode_that_prepare_resolved(
     seen: list[llama.PlannerMode] = []
     monkeypatch.setattr(longhist, "prepare", lambda args, client: (paths, inputs, sentinel, None))
     monkeypatch.setattr(
-        longhist, "run_longhist", lambda client, url, model, p, i, mode: seen.append(mode)
+        longhist,
+        "run_longhist",
+        lambda client, url, model, p, i, mode, digest=None: seen.append(mode),
     )
     longhist.main(["--run-dir", str(tmp_path), "--mode", "planner"])
     assert seen == [sentinel]

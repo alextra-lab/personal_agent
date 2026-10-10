@@ -53,8 +53,12 @@ def test_system_prompt_hash_is_stable() -> None:
     assert render.prompt_hash(a) == render.prompt_hash(b) == hashlib.sha256(a.encode()).hexdigest()
 
 
-def test_digest_goes_between_history_and_query() -> None:
-    """AC-4: history, then digest, then query; the system prompt does not change."""
+def test_digest_follows_the_query_as_a_tool_result() -> None:
+    """AC-4: history, then query, then the digest; the system prompt does not change.
+
+    FRE-1360: the probe renders the production request, where the digest is a
+    ``memory_recall`` tool result after the user message, never user text.
+    """
     system = render.render_system_prompt(SURFACE)
     without = render.build_planner_request(
         system, HISTORY, QUERY, digest=None, history_max_chars=60000
@@ -65,9 +69,11 @@ def test_digest_goes_between_history_and_query() -> None:
 
     user = with_digest["messages"][1]["content"]
     history_at = user.index("assistant: Three options.")
-    digest_at = user.index(DIGEST)
     query_at = user.index(f"Strategy: HYBRID\nQuery: {QUERY}")
-    assert history_at < digest_at < query_at
+    assert history_at < query_at
+    assert DIGEST not in user
+    assert [m["role"] for m in with_digest["messages"]] == ["system", "user", "assistant", "tool"]
+    assert DIGEST in with_digest["messages"][3]["content"]
 
     assert with_digest["messages"][0]["role"] == "system"
     assert (
@@ -79,12 +85,13 @@ def test_digest_goes_between_history_and_query() -> None:
     )
 
 
-def test_digest_without_history_still_precedes_the_query() -> None:
+def test_digest_without_history_still_rides_a_tool_result() -> None:
     system = render.render_system_prompt(SURFACE)
     req = render.build_planner_request(system, [], QUERY, digest=DIGEST, history_max_chars=60000)
     user = req["messages"][1]["content"]
     assert "Conversation so far" not in user
-    assert user.index(DIGEST) < user.index("Strategy: HYBRID")
+    assert DIGEST not in user
+    assert DIGEST in req["messages"][-1]["content"]
 
 
 def test_history_is_trimmed_from_the_oldest_end_by_the_production_function() -> None:
@@ -102,3 +109,10 @@ def test_missing_rule_anchor_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(render, "_production_system_prompt", lambda surface: "no schema here")
     with pytest.raises(RuntimeError, match="anchor"):
         render.render_system_prompt(SURFACE)
+
+
+def test_build_user_message_refuses_a_digest() -> None:
+    """FRE-1360: a digest in the user text is the retired shape; the probe must not send it."""
+    assert "Query: q" in render.build_user_message("", None, "q")
+    with pytest.raises(ValueError, match="tool result"):
+        render.build_user_message("", "DIGEST", "q")

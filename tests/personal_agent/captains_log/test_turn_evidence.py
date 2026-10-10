@@ -28,8 +28,28 @@ from personal_agent.captains_log.turn_evidence import (
 
 TURN_CONTEXT_OPEN = "<turn_context>"
 
+# FRE-1360: recalled memory rides this turn's harness tool result, and is admitted on that
+# result reaching the wire. The fence now gates the skill bodies only.
+_MEM_ID = "call_mem_tcur"
 
-def _wire(fenced: bool = True, extra: list[dict] | None = None) -> list[dict]:
+
+def _memory_exchange(call_id: str = _MEM_ID) -> list[dict]:
+    """This turn's recalled-memory exchange, as the executor appends it."""
+    return [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": call_id, "type": "function", "function": {"name": "memory_recall"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": call_id, "name": "memory_recall", "content": "m"},
+    ]
+
+
+def _wire(
+    fenced: bool = True, extra: list[dict] | None = None, memory_result: bool = True
+) -> list[dict]:
     """Build a minimal wire-form message list, optionally carrying the volatile fence."""
     user_content = f"{TURN_CONTEXT_OPEN}\nblock\n</turn_context>\n\nhello" if fenced else "hello"
     return [
@@ -41,11 +61,15 @@ def _wire(fenced: bool = True, extra: list[dict] | None = None) -> list[dict]:
             "trace_id": "t-cur",
             "timestamp": "2026-07-27T10:00:00Z",
         },
+        *(_memory_exchange() if memory_result else []),
     ]
 
 
 def _wire_block(
-    fenced: bool = True, has_attachment: bool = True, user_text: str | None = "hello"
+    fenced: bool = True,
+    has_attachment: bool = True,
+    user_text: str | None = "hello",
+    memory_result: bool = True,
 ) -> list[dict]:
     """Build a minimal block-form (attachment-turn) wire message list."""
     blocks: list[dict] = []
@@ -63,6 +87,7 @@ def _wire_block(
             "trace_id": "t-cur",
             "timestamp": "2026-07-27T10:00:00Z",
         },
+        *(_memory_exchange() if memory_result else []),
     ]
 
 
@@ -78,6 +103,7 @@ def _evidence(
     candidate_population: CandidatePopulation = CandidatePopulation.POST_SELECTION,
     memory_state: str = "unavailable",
     memory_state_cause: str | None = None,
+    memory_result_call_id: str | None = _MEM_ID,
 ):
     return build_turn_evidence(
         candidates=candidates,
@@ -93,6 +119,7 @@ def _evidence(
         candidate_population=candidate_population,
         memory_state=memory_state,
         memory_state_cause=memory_state_cause,
+        memory_result_call_id=memory_result_call_id,
     )
 
 
@@ -247,13 +274,18 @@ class TestAdmissionAgainstFinalInput:
         assert ghost.drop_reason is DropReason.NOT_RENDERED
 
     def test_rendered_but_never_inlined_is_not_admitted(self) -> None:
-        """The block was built but the inliner had no target (executor.py:1219)."""
+        """The block was built but the inliner had no target (executor.py:1219).
+
+        FRE-1360: the memory exchange is appended only once the fence lands, so a turn
+        with no target carries no memory result and no call id either.
+        """
         candidates = build_recall_candidates([_entity("Paris")], {})
         ev = _evidence(
             candidates,
             rendered=("Paris",),
             inline_outcome=InlineOutcome.NO_TARGET,
-            wire=_wire(fenced=False),
+            wire=_wire(fenced=False, memory_result=False),
+            memory_result_call_id=None,
         )
 
         item = ev.recall.items[0]
@@ -261,20 +293,49 @@ class TestAdmissionAgainstFinalInput:
         assert item.drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
 
     def test_inlined_but_fence_absent_from_wire_is_not_admitted(self) -> None:
-        """A structural check on the wire form, not a search of rendered content."""
+        """A structural check on the wire form, not a search of rendered content.
+
+        FRE-1360: memory rides its own tool result, so the check is that result's
+        presence; the fence's absence drops the skill bodies the fence carries.
+        """
         candidates = build_recall_candidates([_entity("Paris")], {})
-        ev = _evidence(candidates, rendered=("Paris",), wire=_wire(fenced=False))
+        ev = _evidence(
+            candidates,
+            rendered=("Paris",),
+            wire=_wire(fenced=False, memory_result=False),
+            skill_bodies=("bash",),
+        )
 
         assert ev.recall.items[0].admitted is False
         assert ev.recall.items[0].drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
+        assert ev.assembled_context.skill_bodies == []
 
-    def test_already_wrapped_at_call_zero_means_our_block_did_not_land(self) -> None:
+    def test_memory_follows_its_own_result_not_the_fence(self) -> None:
+        """FRE-1360: a missing fence drops the skills; memory whose result landed is admitted."""
         candidates = build_recall_candidates([_entity("Paris")], {})
         ev = _evidence(
-            candidates, rendered=("Paris",), inline_outcome=InlineOutcome.ALREADY_WRAPPED
+            candidates, rendered=("Paris",), wire=_wire(fenced=False), skill_bodies=("bash",)
         )
 
-        assert ev.recall.items[0].drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
+        assert ev.recall.items[0].admitted is True
+        assert ev.assembled_context.skill_bodies == []
+
+    def test_already_wrapped_at_call_zero_means_our_block_did_not_land(self) -> None:
+        """The fence that is there is not ours, so the skills are not recorded.
+
+        FRE-1360: memory no longer rides that fence. The executor still appends this
+        turn's memory exchange, and it is admitted on that result alone.
+        """
+        candidates = build_recall_candidates([_entity("Paris")], {})
+        ev = _evidence(
+            candidates,
+            rendered=("Paris",),
+            inline_outcome=InlineOutcome.ALREADY_WRAPPED,
+            skill_bodies=("bash",),
+        )
+
+        assert ev.assembled_context.skill_bodies == []
+        assert ev.recall.items[0].admitted is True
 
     def test_block_form_wire_with_fence_is_admitted(self) -> None:
         """FRE-1137: an attachment turn's block-form wire content is now readable."""
@@ -285,10 +346,16 @@ class TestAdmissionAgainstFinalInput:
 
     def test_block_form_wire_without_fence_is_not_admitted(self) -> None:
         candidates = build_recall_candidates([_entity("Paris")], {})
-        ev = _evidence(candidates, rendered=("Paris",), wire=_wire_block(fenced=False))
+        ev = _evidence(
+            candidates,
+            rendered=("Paris",),
+            wire=_wire_block(fenced=False, memory_result=False),
+            skill_bodies=("bash",),
+        )
 
         assert ev.recall.items[0].admitted is False
         assert ev.recall.items[0].drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
+        assert ev.assembled_context.skill_bodies == []
 
     def test_block_form_image_only_turn_with_fence_is_admitted(self) -> None:
         """Image-only turn (empty user_message, no caption text block) still reads."""
@@ -365,11 +432,24 @@ class TestAssembledContextRecord:
         ac = ev.assembled_context
 
         assert ac.state is EvidenceState.PRESENT
-        assert [m.origin_trace_id for m in ac.conversation_slice] == [None, "t-prev", "t-cur"]
-        assert [m.role for m in ac.conversation_slice] == ["system", "assistant", "user"]
+        # FRE-1360: this turn's memory exchange follows the user message.
+        assert [m.origin_trace_id for m in ac.conversation_slice] == [
+            None,
+            "t-prev",
+            "t-cur",
+            None,
+            None,
+        ]
+        assert [m.role for m in ac.conversation_slice] == [
+            "system",
+            "assistant",
+            "user",
+            "assistant",
+            "tool",
+        ]
         assert ac.skill_bodies == ["bash", "query-elasticsearch"]
         assert ac.memory_identities == ["Paris"]
-        assert ac.message_count == 3
+        assert ac.message_count == 5
         assert ac.system_prompt_chars == 3
 
     def test_resolves_finer_than_the_nine_category_prompt_taxonomy(self) -> None:
@@ -447,7 +527,14 @@ class TestAdmissionRequiresWireForm:
                 kind=MemoryItemKind.ENTITY, identity="x", score=1.0, source=source
             ),
         )
-        ev = _evidence(cands, rendered=("x",), inline_outcome=InlineOutcome.EMPTY_BLOCK)
+        # FRE-1360: an empty block never lands, so no memory exchange is appended.
+        ev = _evidence(
+            cands,
+            rendered=("x",),
+            inline_outcome=InlineOutcome.EMPTY_BLOCK,
+            wire=_wire(memory_result=False),
+            memory_result_call_id=None,
+        )
 
         assert ev.recall.items[0].admitted is False
         assert ev.recall.items[0].drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
@@ -664,11 +751,12 @@ class TestFenceScopingCannotOverClaim:
             {"role": "assistant", "content": "older answer"},
         ]
         candidates = build_recall_candidates([_entity("Paris")], {})
-        ev = _evidence(candidates, rendered=("Paris",), wire=wire)
+        ev = _evidence(candidates, rendered=("Paris",), wire=wire, skill_bodies=("bash",))
 
         assert ev.recall.items[0].admitted is False
         assert ev.recall.items[0].drop_reason is DropReason.ABSENT_FROM_FINAL_INPUT
         assert ev.assembled_context.memory_identities == []
+        assert ev.assembled_context.skill_bodies == []
 
     def test_current_turn_fence_on_the_last_user_message_admits(self) -> None:
         prior_plain = {"role": "user", "content": "older question", "trace_id": "t-old"}
@@ -678,14 +766,16 @@ class TestFenceScopingCannotOverClaim:
             {"role": "assistant", "content": "older answer"},
             {
                 "role": "user",
-                "content": f"{TURN_CONTEXT_OPEN}\nmem\n</turn_context>\n\nhello",
+                "content": f"{TURN_CONTEXT_OPEN}\nskills\n</turn_context>\n\nhello",
                 "trace_id": "t-cur",
             },
+            *_memory_exchange(),
         ]
         candidates = build_recall_candidates([_entity("Paris")], {})
-        ev = _evidence(candidates, rendered=("Paris",), wire=wire)
+        ev = _evidence(candidates, rendered=("Paris",), wire=wire, skill_bodies=("bash",))
 
         assert ev.recall.items[0].admitted is True
+        assert ev.assembled_context.skill_bodies == ["bash"]
 
 
 class TestCollidingIdentitiesCannotOverClaim:

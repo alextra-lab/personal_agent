@@ -94,9 +94,15 @@ async def test_memory_stays_out_of_static_prefix_under_frozen_layout(
     last_user_content = next(
         m["content"] for m in reversed(sent_messages) if m.get("role") == "user"
     )
-    assert _MEMORY_MARKER in last_user_content, (
-        "memory_section must ride the volatile current user turn under the "
-        "frozen layout (ADR-0081 D2)."
+    memory_result = next(
+        m["content"]
+        for m in sent_messages
+        if m.get("role") == "tool" and m.get("name") == "memory_recall"
+    )
+    assert _MEMORY_MARKER not in last_user_content
+    assert _MEMORY_MARKER in memory_result, (
+        "memory_section must ride the tool result after the current user turn "
+        "(ADR-0081 D2 as amended by FRE-1360, ADR-0140 T2)."
     )
 
 

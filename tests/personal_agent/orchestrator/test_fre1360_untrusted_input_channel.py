@@ -14,7 +14,6 @@ provider-neutral list both LLM clients serialize — never the executor's own li
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -40,6 +39,7 @@ _WORKER_MARKER = "FRE1360-WORKER-MARKER-K2"
 _NATIVE_MARKER = "FRE1360-NATIVE-TOOL-MARKER-B8"
 _WEB_MARKER = "FRE1360-FETCHED-PAGE-MARKER-H4"
 _MCP_MARKER = "FRE1360-MCP-RESPONSE-MARKER-V1"
+_DIRECTIVE = "Synthesize from these results only. Where a sub-task did not complete, say so."
 
 # AC-3's baseline, recorded on unchanged main (85ea515a) with the same three episodes and
 # the same extraction (marker position across every non-system message, in wire order):
@@ -94,7 +94,7 @@ def _memory_ctx(memory: list[dict[str, Any]] | None, *, hybrid: bool = False) ->
         from personal_agent.orchestrator.executor import _append_synthesis_exchange
 
         _append_synthesis_exchange(
-            ctx, f"## Sub-agent results\n- worker 1: found it. {_WORKER_MARKER}\n"
+            ctx, f"## Sub-agent results\n- worker 1: found it. {_WORKER_MARKER}\n", _DIRECTIVE
         )
     return ctx
 
@@ -293,6 +293,21 @@ class TestAc2DeclaredClasses:
         _assert_marker_only_in_tool_results(wires[0], _WORKER_MARKER, tool_name=WORKER_REPORTS_TOOL)
         _assert_marker_only_in_tool_results(wires[0], _MEMORY_MARKER, tool_name=MEMORY_RECALL_TOOL)
 
+    @pytest.mark.asyncio
+    async def test_harness_synthesis_directives_stay_trusted_user_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Code-review fold-in: the harness's own instruction must not ride the tool result.
+
+        The model reads instructions inside a tool result with scepticism, so the
+        ADR-0149 D4 closing instruction stays in the synthesis user message.
+        """
+        wires = await _drive_loop(_memory_ctx(None, hybrid=True), 1, monkeypatch)
+        holders = [m for m in wires[0] if _DIRECTIVE in _message_text(m)]
+        assert [m.get("role") for m in holders] == ["user"]
+        (reports,) = [m for m in wires[0] if m.get("name") == WORKER_REPORTS_TOOL]
+        assert _DIRECTIVE not in reports["content"]
+
     def test_ac2_planner_memory_digest_reaches_only_a_tool_result(self) -> None:
         from personal_agent.orchestrator.expansion_controller import (
             build_planner_user_message,
@@ -356,25 +371,38 @@ class TestAc2DeclaredClasses:
         assert "earlier answer" in text
 
     def test_ac2_every_declared_class_is_probed(self) -> None:
-        """ADR-0140 AC-4 fails if fewer than all four classes are probed."""
+        """ADR-0140 AC-4 fails if fewer than all four classes are probed.
+
+        Each T2 class maps to a probe that exists AND asserts its own marker's placement
+        through :func:`_assert_marker_only_in_tool_results` — a probe that only exists,
+        or that checks another class's marker, does not count.
+        """
+        import inspect
+
         probes = {
-            "knowledge_graph_recall": "test_ac1_recalled_memory_marker_reaches_only_a_tool_result",
-            "tool_results": "test_ac2_native_tool_result_marker_reaches_only_a_tool_result",
-            "fetched_web_content": "test_ac2_fetched_web_content_marker_reaches_only_a_tool_result",
-            "mcp_server_responses": "test_ac2_mcp_response_marker_reaches_only_a_tool_result",
+            "knowledge_graph_recall": (
+                TestAc1RecalledMemory.test_ac1_recalled_memory_marker_reaches_only_a_tool_result,
+                "_MEMORY_MARKER",
+            ),
+            "tool_results": (
+                TestAc2DeclaredClasses.test_ac2_native_tool_result_marker_reaches_only_a_tool_result,
+                "_NATIVE_MARKER",
+            ),
+            "fetched_web_content": (
+                TestAc2DeclaredClasses.test_ac2_fetched_web_content_marker_reaches_only_a_tool_result,
+                "_WEB_MARKER",
+            ),
+            "mcp_server_responses": (
+                TestAc2DeclaredClasses.test_ac2_mcp_response_marker_reaches_only_a_tool_result,
+                "_MCP_MARKER",
+            ),
         }
-        module = sys.modules[__name__]
-        defined = {
-            name for cls in (TestAc1RecalledMemory, TestAc2DeclaredClasses) for name in vars(cls)
-        } | set(vars(module))
-        assert set(probes) == {
-            "knowledge_graph_recall",
-            "tool_results",
-            "fetched_web_content",
-            "mcp_server_responses",
-        }
-        for cls_name, test_name in probes.items():
-            assert test_name in defined, f"no probe for {cls_name}"
+        markers = {marker for _, marker in probes.values()}
+        assert len(markers) == 4, "each class needs its own marker"
+        for cls_name, (probe, marker) in probes.items():
+            source = inspect.getsource(probe)
+            assert "_assert_marker_only_in_tool_results(" in source, f"{cls_name}: no assertion"
+            assert marker in source, f"{cls_name}: probe does not use its own marker"
 
 
 # ── AC-3: recall still works, and still ranks the same ──────────────────────────
@@ -520,6 +548,21 @@ class TestContextRetryTrim:
         assert trimmed[4] == mem_result
         assert trimmed[6]["content"] != "R" * 50  # the older real result is stubbed
         assert trimmed[8]["content"] == "R" * 50  # the newest is kept
+
+
+class TestContextWindowEviction:
+    def test_a_harness_result_quoting_error_keywords_is_not_evicted(self) -> None:
+        """Recalled text may quote '"error"'; that never makes the memory result an error."""
+        from personal_agent.orchestrator.context_window import _is_tool_error_message
+
+        _, mem_result = harness_tool_exchange(
+            call_id=harness_call_id("mem", "f" * 32),
+            tool_name=MEMORY_RECALL_TOOL,
+            content='the owner once saw {"error": "timeout"} in a log',
+        )
+        real = {"role": "tool", "tool_call_id": "call_t0_0_x", "content": '{"error": "x"}'}
+        assert not _is_tool_error_message(mem_result)
+        assert _is_tool_error_message(real)
 
 
 class TestTurnEvidenceAdmission:

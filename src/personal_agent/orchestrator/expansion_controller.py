@@ -781,7 +781,13 @@ class ExpansionResult:
     Attributes:
         plan: The expansion plan (LLM-generated or fallback).
         sub_agent_results: Results from all dispatched sub-agents.
-        synthesis_context: Formatted string for the synthesis LLM call.
+        synthesis_context: The rendered worker reports for the synthesis LLM call —
+            worker-derived, so untrusted; they reach the model as a tool result
+            (FRE-1360).
+        synthesis_directives: The harness's own notes and closing instruction for
+            the synthesis call (failed and skipped tasks, the completion count). They
+            are trusted text and ride the synthesis instruction's user message
+            (FRE-1360).
         phase_results: Timing and success data for each phase.
         degraded: True if graceful degradation was triggered.
         degradation_reason: Why degradation occurred, if applicable.
@@ -810,6 +816,7 @@ class ExpansionResult:
     plan: ExpansionPlan | None = None
     sub_agent_results: list[SubAgentResult] = field(default_factory=list)
     synthesis_context: str = ""
+    synthesis_directives: str = ""
     phase_results: list[PhaseResult] = field(default_factory=list)
     degraded: bool = False
     degradation_reason: str | None = None
@@ -1088,8 +1095,8 @@ class ExpansionController:
                 )
 
         # --- Build synthesis context ---
-        result.synthesis_context = self._build_synthesis_context(
-            plan=plan,
+        result.synthesis_context = self._build_synthesis_context(plan=plan, sub_results=sub_results)
+        result.synthesis_directives = self._build_synthesis_directives(
             sub_results=sub_results,
             skipped_tasks=result.skipped_tasks,
             skip_reason=result.skip_reason,
@@ -1909,29 +1916,22 @@ class ExpansionController:
         self,
         plan: ExpansionPlan,
         sub_results: list[SubAgentResult],
-        skipped_tasks: list[str] | None = None,
-        skip_reason: SkipReason | None = None,
     ) -> str:
-        """Build the synthesis context string from sub-agent results.
+        """Build the rendered worker reports from sub-agent results.
+
+        Worker-derived text only — report bodies, gaps, error strings — so it is
+        untrusted input and reaches the model as a tool result (FRE-1360, ADR-0140 T2).
+        The harness's own notes and instruction are :meth:`_build_synthesis_directives`.
 
         Args:
             plan: The expansion plan used for this run.
             sub_results: Results from all dispatched sub-agents.
-            skipped_tasks: Plan task names never dispatched because the turn's
-                budget ran out first (FRE-1397) or the model server failed
-                (FRE-1501) — distinct from a failure: these produced no result
-                at all, so they get their own note rather than being silently
-                absent.
-            skip_reason: Why ``skipped_tasks`` were not dispatched. ``None``
-                reads as the turn budget, the only reason before FRE-1501.
 
         Returns:
-            Formatted synthesis context string for the parent agent.
+            The rendered reports for the parent agent.
         """
         parts = [f"## Expansion Results (strategy: {plan.strategy})\n\n"]
 
-        n_ok = 0
-        n_ledger = 0
         # ADR-0150 D4: every worker's gaps are combined into one `Not found`
         # section at the end of the turn's context, each attributed to its own
         # task, rather than repeated per worker.
@@ -1962,10 +1962,6 @@ class ExpansionController:
                     f"*Tool access denied:* {', '.join(r.denied_tools)} was requested "
                     "but not granted to sub-agents; this sub-task ran without it.\n\n"
                 )
-            if r.success:
-                n_ok += 1
-            elif r.report_kind == "ledger":
-                n_ledger += 1
 
         if all_gaps:
             parts.append("### Not found\n")
@@ -1974,6 +1970,38 @@ class ExpansionController:
                 for task_name, looked_for, where in all_gaps
             )
             parts.append("\n")
+
+        return "".join(parts)
+
+    def _build_synthesis_directives(
+        self,
+        sub_results: list[SubAgentResult],
+        skipped_tasks: list[str] | None = None,
+        skip_reason: SkipReason | None = None,
+    ) -> str:
+        """Build the harness's notes and closing instruction for the synthesis call.
+
+        FRE-1360 (ADR-0140 T2): the worker reports are untrusted and reach the model as
+        a tool result, where it reads instructions with scepticism. These notes are the
+        harness's own instructions, so they stay trusted text in the synthesis
+        instruction's user message rather than riding inside the reports.
+
+        Args:
+            sub_results: Results from all dispatched sub-agents.
+            skipped_tasks: Plan task names never dispatched because the turn's
+                budget ran out first (FRE-1397) or the model server failed
+                (FRE-1501) — distinct from a failure: these produced no result
+                at all, so they get their own note rather than being silently
+                absent.
+            skip_reason: Why ``skipped_tasks`` were not dispatched. ``None``
+                reads as the turn budget, the only reason before FRE-1501.
+
+        Returns:
+            The notes and closing instruction. Empty when there is nothing to say.
+        """
+        parts: list[str] = []
+        n_ok = sum(1 for r in sub_results if r.success)
+        n_ledger = sum(1 for r in sub_results if not r.success and r.report_kind == "ledger")
 
         if any(not r.success for r in sub_results):
             failed = [r.spec_task for r in sub_results if not r.success]

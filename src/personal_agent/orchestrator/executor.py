@@ -2540,24 +2540,32 @@ _SYNTHESIS_INSTRUCTION = (
 )
 
 
-def _append_synthesis_exchange(ctx: ExecutionContext, synthesis_context: str) -> None:
+def _append_synthesis_exchange(
+    ctx: ExecutionContext, synthesis_context: str, synthesis_directives: str = ""
+) -> None:
     """Append a HYBRID turn's synthesis instruction, then the worker reports (FRE-1360).
 
     The worker reports are built from pages and tool output the workers read, so ADR-0140
     T2 declares them untrusted: they ride a harness tool exchange, never user text. The
-    instruction stays a ``user`` message and is the turn's volatile-fence carrier
-    (FRE-1529) — the role fixer merges it into the query, as it did before.
+    instruction — with the harness's own notes on failed and skipped tasks and the
+    ADR-0149 D4 closing instruction — stays trusted text in a ``user`` message, which is
+    the turn's volatile-fence carrier (FRE-1529); the role fixer merges it into the
+    query, as it did before.
 
     Args:
         ctx: Execution context. ``ctx.messages`` is extended in place.
         synthesis_context: The expansion controller's rendered worker reports.
+        synthesis_directives: The expansion controller's notes and closing instruction.
     """
+    instruction = _SYNTHESIS_INSTRUCTION
+    if synthesis_directives.strip():
+        instruction = f"{instruction}\n\n{synthesis_directives.strip()}"
     call, result = harness_tool_exchange(
         call_id=harness_call_id("wrk", ctx.trace_id),
         tool_name=WORKER_REPORTS_TOOL,
         content=synthesis_context,
     )
-    ctx.messages.extend([{"role": "user", "content": _SYNTHESIS_INSTRUCTION}, call, result])
+    ctx.messages.extend([{"role": "user", "content": instruction}, call, result])
 
 
 def _frozen_backend() -> str:
@@ -5679,7 +5687,11 @@ async def step_init(
             # primary never learns dispatch produced nothing, and the "not
             # run" report from AC-3 would be silently discarded here.
             if expansion_result.sub_agent_results or expansion_result.skipped_tasks:
-                _append_synthesis_exchange(ctx, expansion_result.synthesis_context)
+                _append_synthesis_exchange(
+                    ctx,
+                    expansion_result.synthesis_context,
+                    expansion_result.synthesis_directives,
+                )
                 ctx.synthesis_appended = True  # ADR-0154 D6 (FRE-1512)
 
             log.info(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from personal_agent.orchestrator.untrusted_channel import is_harness_tool_result
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -299,8 +300,13 @@ _ERROR_KEYWORDS = frozenset({"error", "retry", "failed", "status"})
 
 
 def _is_tool_error_message(message: dict[str, Any]) -> bool:
-    """Return True if *message* is a tool-role message carrying an error/retry hint."""
-    if message.get("role") != "tool":
+    """Return True if *message* is a tool-role message carrying an error/retry hint.
+
+    A harness tool result (FRE-1360: recalled memory, worker reports) is never an error
+    message, even when the recalled text quotes one of the keywords — evicting it would
+    silently cut the turn's recall.
+    """
+    if message.get("role") != "tool" or is_harness_tool_result(message):
         return False
     content = message.get("content", "")
     if not isinstance(content, str):

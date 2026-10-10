@@ -135,6 +135,18 @@ it again. The messages are never rewritten afterwards, so the sequence stays a f
 | 7 | 16-character id prefix | **Fixed** — the id keeps 31 characters of the trace id (40 total). |
 | 8 | Proof-table gaps | **Fixed** — tests added for the planner digest, planner history, the Anthropic transform, both trim exemptions, a non-populated memory state, role fixer + sanitiser over the HYBRID sequence, the Anthropic cache breakpoints, and a second turn replayed over persisted history. Qwen suffix: not tested (setting off). |
 
+### Self-review dispositions (2026-10-10)
+
+`security-review`: no findings. `feature-dev:code-reviewer`: no finding at or above its
+threshold. Its four low-confidence notes:
+
+| # | Note | Disposition |
+|---|---|---|
+| 1 | The harness's own synthesis instructions moved into the `worker_reports` tool result, where the model reads instructions sceptically | **Fixed.** `_build_synthesis_context` now renders only worker-derived text. A new `_build_synthesis_directives` renders the failed and skipped notes and the ADR-0149 D4 closing instruction. They ride the trusted synthesis user message. |
+| 2 | `_is_tool_error_message` can evict a harness result whose text quotes `"error"` | **Fixed.** Harness results are never error messages. |
+| 3 | The class-count probe only checked that four test names exist | **Fixed.** It now checks that each probe asserts its own class's marker. |
+| 4 | `_CALL_ID_PREFIXES` was hand-synced with `HarnessCallKind` | **Fixed.** The prefixes derive from `HarnessCallKind`. |
+
 ### Out of scope
 
 - `operator_stanza` (owner name from `:Person` facts) sits in the system prompt. Owner decision

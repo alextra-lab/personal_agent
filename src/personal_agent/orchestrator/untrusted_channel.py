@@ -19,7 +19,7 @@ that tries to call one gets the ordinary unknown-tool result.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Literal
+from typing import Literal, get_args
 
 MEMORY_RECALL_TOOL = "memory_recall"
 """Tool name on the exchange that carries the turn's recalled memory."""
@@ -29,7 +29,7 @@ WORKER_REPORTS_TOOL = "worker_reports"
 
 HarnessCallKind = Literal["mem", "wrk"]
 
-_CALL_ID_PREFIXES: tuple[str, ...] = ("call_mem_", "call_wrk_")
+_CALL_ID_PREFIXES: tuple[str, ...] = tuple(f"call_{kind}_" for kind in get_args(HarnessCallKind))
 
 
 def harness_call_id(kind: HarnessCallKind, trace_id: str) -> str:

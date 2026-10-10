@@ -617,6 +617,10 @@ class TestGracefulDegradation:
         assert "FAILED" in result.synthesis_context
         assert "Redis is fast" in result.synthesis_context
         assert "Hazelcast scales" in result.synthesis_context
+        # FRE-1360: the failure note is the harness's own instruction — trusted text in
+        # the directives, never inside the worker reports.
+        assert "The following sub-tasks failed" in result.synthesis_directives
+        assert "The following sub-tasks failed" not in result.synthesis_context
 
 
 class TestExpansionPhaseEvents:
@@ -1220,12 +1224,16 @@ class TestTurnBudgetBound:
         assert plan is not None
         results = [_make_sub_agent_result("task_0")]
 
-        context = controller._build_synthesis_context(
-            plan=plan, sub_results=results, skipped_tasks=["task_1"]
+        # FRE-1360: the note is a harness instruction, so it is in the directives (the
+        # trusted user message), not in the reports (the untrusted tool result).
+        directives = controller._build_synthesis_directives(
+            sub_results=results, skipped_tasks=["task_1"]
         )
+        reports = controller._build_synthesis_context(plan=plan, sub_results=results)
 
-        assert "task_1" in context
-        assert "not run" in context.lower()
+        assert "task_1" in directives
+        assert "not run" in directives.lower()
+        assert "not run" not in reports.lower()
 
 
 class TestSynthesisContextTerminalFacts:
@@ -1282,12 +1290,16 @@ class TestSynthesisContextTerminalFacts:
             ),
         ]
 
-        context = controller._build_synthesis_context(plan=plan, sub_results=results)
+        # FRE-1360: the closing instruction is the harness's own, in the directives.
+        context = controller._build_synthesis_directives(sub_results=results)
 
         assert "The sub-tasks above have been completed" not in context
         assert "1 of 3 sub-tasks completed" in context
         assert "1 stopped at their budget and wrote a partial report" in context
         assert "1 stopped without a report" in context
+        assert "rather than filling the gap from memory" in context
+        reports = controller._build_synthesis_context(plan=plan, sub_results=results)
+        assert "sub-tasks completed" not in reports
 
     def test_no_closing_sentence_when_no_results_dispatched(
         self, controller: ExpansionController
@@ -1296,9 +1308,7 @@ class TestSynthesisContextTerminalFacts:
         plan = _validate_plan_json(_make_plan_json(1))
         assert plan is not None
 
-        context = controller._build_synthesis_context(
-            plan=plan, sub_results=[], skipped_tasks=["task_0"]
-        )
+        context = controller._build_synthesis_directives(sub_results=[], skipped_tasks=["task_0"])
 
         assert "sub-tasks completed" not in context
 
@@ -2522,8 +2532,8 @@ class TestOriginErrorStopsDispatch:
         assert expansion_result.skipped_tasks == ["task_1", "task_2"]
         assert expansion_result.skip_reason == "origin_error"
 
-        context = ExpansionController()._build_synthesis_context(
-            plan=plan,
+        # FRE-1360: the skip note is a harness instruction, carried in the directives.
+        context = ExpansionController()._build_synthesis_directives(
             sub_results=results,
             skipped_tasks=expansion_result.skipped_tasks,
             skip_reason=expansion_result.skip_reason,

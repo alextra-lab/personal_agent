@@ -277,11 +277,11 @@ async def _check_permissions(
         mode_prefixes: list[str] = tool_policy.auto_approve_prefixes.get(mode_str, [])
         command: str = arguments.get("command", "")
         if mode_prefixes and command.strip():
-            from personal_agent.tools.primitives.bash import (
-                _check_segment_allowlist,  # noqa: PLC0415
+            from personal_agent.tools.primitives.bash_allowlist import (  # noqa: PLC0415
+                check_segment_allowlist,
             )
 
-            bad_segment = _check_segment_allowlist(command, mode_prefixes)
+            bad_segment = check_segment_allowlist(command, mode_prefixes)
             if bad_segment is None:
                 log.info(
                     "bash_auto_approved",

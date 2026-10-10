@@ -186,9 +186,9 @@ arms:
     telemetry_model: unsloth/gemma-4-26B-A4B-it
     models_endpoint: http://localhost:8600/v1/models
     pack: unsloth/gemma-4-26B-A4B-it-GGUF (catalog comment)
-    quant: TBD
+    quant: "UD-Q8_K_XL (served /v1/models, 13:42 UTC 2026-10-10)"
     context_length: 131072
     reasoning: "primary thinks (default mode); planner mode thinking off; workers enable_thinking false; catalog max_tokens 12288 (FRE-1562)"
-    launch_flags: TBD
+    launch_flags: "MTP depth 2 (master's relay, UNVERIFIED); llama.cpp build, slots and ctx UNVERIFIED, slm_server's report not yet received at start"
     fan_mode: apple_auto (UNVERIFIED)
     thermal_snapshot: not recorded for llama.cpp arms

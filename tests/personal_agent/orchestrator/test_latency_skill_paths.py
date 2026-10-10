@@ -20,13 +20,19 @@ from typing import Any
 
 import pytest
 
-from personal_agent.config.governance_loader import load_governance_config
-from personal_agent.tools.primitives.bash_allowlist import check_segment_allowlist
+from personal_agent.governance.permissions import evaluate_permission, load_permission_rules
 
 _SKILLS = Path(__file__).resolve().parents[3] / "docs" / "skills"
 _ELASTICSEARCH = (_SKILLS / "query-elasticsearch.md").read_text(encoding="utf-8")
 _TEMPO = (_SKILLS / "query-tempo.md").read_text(encoding="utf-8")
-_NORMAL = load_governance_config().tools["bash"].auto_approve_prefixes["NORMAL"]
+_RULES = load_permission_rules()
+
+
+def _refused(command: str) -> str | None:
+    """The refused subcommand under the production rules in NORMAL mode, or ``None`` (FRE-1574)."""
+    decision = evaluate_permission("bash", {"command": command}, "NORMAL", _RULES)
+    return None if decision.decision == "allow" else decision.refused
+
 
 _RETIRED_FIELDS = ("duration_ms", "latency_ms", "elapsed_ms", "elapsed_s", "response_time_ms")
 _RECIPE_HEADING = "### Pattern 5: Model-call latency by role and model"
@@ -45,7 +51,9 @@ def _retired_field_lines(text: str) -> list[str]:
 def _recipe_block() -> str:
     """Return the bash block under the model-call latency heading of ``query-tempo.md``."""
     start = _TEMPO.index(_RECIPE_HEADING)
-    ends = [i for i in (_TEMPO.find("\n### ", start + 1), _TEMPO.find("\n## ", start + 1)) if i != -1]
+    ends = [
+        i for i in (_TEMPO.find("\n### ", start + 1), _TEMPO.find("\n## ", start + 1)) if i != -1
+    ]
     section = _TEMPO[start : min(ends) if ends else len(_TEMPO)]
     blocks = _FENCE.findall(section)
     assert len(blocks) == 1, "the recipe section holds exactly one bash block"
@@ -97,24 +105,24 @@ def test_tempo_skill_keeps_the_latency_keyword() -> None:
 
 
 def test_tempo_recipe_is_auto_approved() -> None:
-    """No ``bash_allowlist_miss``: the real NORMAL allowlist accepts the whole recipe."""
-    assert check_segment_allowlist(_recipe_block(), _NORMAL) is None
+    """The production permission rules allow the whole recipe in NORMAL mode (no card)."""
+    assert _refused(_recipe_block()) is None
 
 
 def test_allowlist_check_rejects_the_old_tempo_forms() -> None:
     """Seeded negative: the two forms the skill held before FRE-1568 need approval."""
     docker_exec = "docker exec cloud-sim-seshat-gateway curl -s 'http://tempo:3200/status'"
     substitution = "start=$(date -d '1 hour ago' +%s)"
-    assert check_segment_allowlist(docker_exec, _NORMAL) is not None
-    assert check_segment_allowlist(substitution, _NORMAL) is not None
+    assert _refused(docker_exec) is not None
+    assert _refused(substitution) is not None
 
 
 def test_every_tempo_skill_bash_block_is_auto_approved() -> None:
-    """Every command the skill shows passes the real NORMAL allowlist (no approval prompt)."""
+    """Every command the skill shows is allowed by the production rules (no approval card)."""
     blocks = _FENCE.findall(_TEMPO)
     assert blocks
     for block in blocks:
-        assert check_segment_allowlist(block, _NORMAL) is None, block
+        assert _refused(block) is None, block
 
 
 def test_tempo_recipe_names_both_caps_and_they_agree() -> None:

@@ -17,10 +17,12 @@ import pytest
 from scripts.eval import approval_denial
 from scripts.eval.approval_denial import (
     CAPTURES_INDEX,
+    ApprovalDenial,
     ApprovalVerdict,
     approval_capable_tools,
     assess,
     check_turn,
+    denials_from_events,
     merge,
 )
 
@@ -288,3 +290,9 @@ def test_check_turn_an_empty_policy_file_is_unverified_and_does_not_raise(
     verdict = check_turn("t-1", es_url="http://es", client=_es([_capture()]), wait_s=0)
     assert verdict.validity == "unverified"
     assert verdict.unverified_reason == "tools_yaml_unreadable"
+
+
+def test_ui_disabled_denial_event_is_a_denial() -> None:
+    """FRE-1574 (ADR-0063 Amendment B): with the UI off, an ask is denied and logged."""
+    events = [{"event_type": "approval_ui_disabled_denied", "tool_name": "bash"}]
+    assert denials_from_events(events) == (ApprovalDenial("bash", "approval_ui_disabled", "log"),)

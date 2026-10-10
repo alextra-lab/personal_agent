@@ -56,6 +56,7 @@ All gateway commands strip ANSI colour first: `sed -r 's/\x1b\[[0-9;]*m//g'`. Co
 ### 0. Find the trace (if not given)
 
 ```bash
+# ask: sed can run a program, so this asks for approval (ADR-0156 D8.2).
 docker logs cloud-sim-seshat-gateway --since=30m 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' \
   | grep -E "task_failed|model_call_completed" | grep -oE "trace_id=\S+" | sort | uniq -c | sort -rn | head
 ```
@@ -63,6 +64,7 @@ docker logs cloud-sim-seshat-gateway --since=30m 2>&1 | sed -r 's/\x1b\[[0-9;]*m
 ### 1. Per-call timeline + context attribution (the core)
 
 ```bash
+# ask: the shell expands $TRACE here, so this is not a plain command and asks for approval.
 TRACE=<trace_id>
 docker logs cloud-sim-seshat-gateway --since=40m 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' \
   | grep "$TRACE" | grep -E "model_call_completed|tool_call_started|artifact_draft_sub_agent_complete" \
@@ -86,6 +88,7 @@ Read the `in=` column down the primary calls. A big step up = context bloat; the
 ### 2. What the PWA received (Postgres `session_events`)
 
 ```bash
+# ask: no allow rule covers docker exec, so this asks for approval.
 docker exec cloud-sim-postgres psql -U agent -d personal_agent -c \
  "select seq, event_type, payload->'data'->>'category' as cat, created_at \
   from session_events where session_id='<session_id>' order by seq desc limit 20;"
@@ -94,6 +97,7 @@ docker exec cloud-sim-postgres psql -U agent -d personal_agent -c \
 ### 3. Artifact bytes (if the turn wrote one)
 
 ```bash
+# ask: no allow rule covers docker exec, so this asks for approval.
 docker exec cloud-sim-postgres psql -U agent -d personal_agent -t -c \
  "select r2_key from artifacts where id='<artifact_id>';"
 docker exec cloud-sim-seshat-gateway sh -c 'cd /app && /app/.venv/bin/python -c "
@@ -108,6 +112,7 @@ tagged with the harness's `X-Span-Id` / `X-Trace-Id` headers (FRE-411). Join on
 `span_id` for per-call granularity or `trace_id` for the whole turn:
 
 ```bash
+# ask: the shell expands $TRACE here, so this is not a plain command and asks for approval.
 TRACE=<trace_id>
 # All SLM request_complete docs for this turn
 curl -s -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \

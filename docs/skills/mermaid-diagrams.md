@@ -234,6 +234,7 @@ The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed. **Valida
 Write the diagram body to a temp file (no fence), run `mmdc`, check the output file:
 
 ```bash
+# ask: a here-doc written to a file is not a plain command, so this asks for approval.
 cat > /tmp/m.mmd <<'EOF'
 flowchart LR
     A[Open PR] --> B{CI passes?}

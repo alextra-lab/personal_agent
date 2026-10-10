@@ -1,0 +1,135 @@
+# One permission model for every tool call (ADR-0156 D8, FRE-1574).
+#
+# Order: deny, then ask, then allow. The first match in that order decides. A call that matches
+# no rule asks the user, and a tool with no rule at all asks. Nothing runs by default.
+# The grammar is in src/personal_agent/governance/permissions.py:
+#   tool                    every call of the tool
+#   bash(<words>)           a subcommand whose words equal <words>
+#   bash(<words> *)         a subcommand whose words start with <words>
+#   tool(k=v, ...)          a call where every named parameter matches (v* is a prefix)
+# Each item: {rule, modes (optional, default every mode), reason (required for deny)}.
+#
+# A bash subcommand can match an allow rule only if it is a plain command: literal words, no
+# expansion or glob, no assignment, no -exec, and no redirection except to /dev/null or 2>&1
+# (D8.2). Deny and ask rules also apply inside subshells, substitutions and loop bodies.
+#
+# Whether a tool is available in a mode stays in tools.yaml (allowed_in_modes,
+# forbidden_in_modes). This file decides only whether an available call runs, asks or is refused.
+#
+# No approval surface means deny (ADR-0063 Amendment B): with AGENT_APPROVAL_UI_ENABLED false,
+# no session, no transport or no PWA client, an "ask" is refused. The eval stack adds its own
+# allow rules from permissions.eval.yaml (D8.5).
+
+deny:
+  # Migrated from bash hard_deny_patterns (FRE-1574). These run with no prompt today and were
+  # refused even with approval; they stay refused. The fork-bomb pattern is dropped: a function
+  # definition is not a plain command, so it asks, and the user sees it.
+  - rule: "bash(rm -rf *)"
+    reason: "Recursive forced delete is refused (former hard_deny_patterns)."
+  - rule: "bash(rm -fr *)"
+    reason: "Recursive forced delete is refused (former hard_deny_patterns)."
+  - rule: "bash(dd *)"
+    reason: "Raw block copy is refused (former hard_deny_patterns: dd if=)."
+  - rule: "bash(mkfs *)"
+    reason: "Creating a filesystem is refused (former hard_deny_patterns)."
+  - rule: "bash(sudo *)"
+    reason: "Privilege escalation is refused (former hard_deny_patterns)."
+  - rule: "bash(wget *)"
+    reason: "wget is refused (former hard_deny_patterns). Use curl or fetch_url."
+  - rule: "bash(ssh *)"
+    reason: "Remote shells are refused (former hard_deny_patterns)."
+  - rule: "bash(nc -l *)"
+    reason: "A listening socket is refused (former hard_deny_patterns)."
+
+ask:
+  # D8.6: network access from the sandbox asks in every mode (FRE-1517 evidence G7).
+  - rule: "run_python(network=true)"
+    reason: "run_python with network attaches the sandbox to the compose network, which reaches the data stores and the internet (ADR-0156 D8.6)."
+  # Migrated from requires_approval_in_modes.
+  - rule: "run_python"
+    modes: [ALERT, DEGRADED]
+    reason: "Code execution asks outside NORMAL mode."
+  - rule: "write"
+    modes: [ALERT, DEGRADED, RECOVERY]
+    reason: "File writes ask outside NORMAL mode."
+  - rule: "artifact_write"
+    modes: [ALERT, DEGRADED]
+    reason: "Artifact writes ask outside NORMAL mode."
+  - rule: "artifact_draft"
+    modes: [ALERT, DEGRADED]
+    reason: "Artifact drafts ask outside NORMAL mode."
+  # ADR-0156 migration table: a write to Linear asks.
+  - rule: "create_linear_issue"
+    reason: "Creates a Linear issue (an external write)."
+  - rule: "create_linear_project"
+    reason: "Creates a Linear project (an external write)."
+
+allow:
+  # Read-only and native tools that ran without approval before FRE-1574.
+  - rule: "search_memory"
+  - rule: "recall_personal_history"
+  - rule: "web_search"
+  - rule: "perplexity_query"
+  - rule: "get_library_docs"
+  - rule: "fetch_url"
+  - rule: "query_telemetry"
+  - rule: "find_linear_issues"
+  - rule: "list_linear_projects"
+  - rule: "notes_write"
+  - rule: "notes_search"
+  - rule: "artifact_list"
+  - rule: "artifact_read"
+  - rule: "expand_tool_result"
+  - rule: "get_location"
+  - rule: "read"
+  - rule: "read_skill"
+  - rule: "write"
+  - rule: "run_python"
+  - rule: "artifact_write"
+  - rule: "artifact_draft"
+  # The MCP tools that the gateway discovers today (T3 removes them, ADR-0156 D7.5).
+  - rule: "mcp_query-docs"
+  - rule: "mcp_resolve-library-id"
+  - rule: "mcp_sequentialthinking"
+
+  # bash: migrated from auto_approve_prefixes (D8.2). Not migrated, because they can run
+  # another program, so they ask (owner, 2026-10-10, FRE-1573): env, awk, sed, python3.
+  # curl stays allowed only when no argument sends or writes a local file (FRE-1572 option
+  # rules); find, sort, uniq, rg, git and mmdc keep their FRE-1572 option rules too.
+  - {rule: "bash(curl *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(grep *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(ls *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(cat *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(ps *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(top *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(free *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(df *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(uname *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(echo *)", modes: [NORMAL, ALERT, DEGRADED]}
+  - {rule: "bash(ss *)", modes: [NORMAL, ALERT]}
+  - {rule: "bash(netstat *)", modes: [NORMAL, ALERT]}
+  - {rule: "bash(pgrep *)", modes: [NORMAL, ALERT]}
+  - {rule: "bash(date *)", modes: [NORMAL, ALERT]}
+  - {rule: "bash(find *)", modes: [NORMAL]}
+  - {rule: "bash(jq *)", modes: [NORMAL]}
+  - {rule: "bash(docker ps *)", modes: [NORMAL]}
+  - {rule: "bash(docker logs *)", modes: [NORMAL]}
+  - {rule: "bash(git log *)", modes: [NORMAL]}
+  - {rule: "bash(git status *)", modes: [NORMAL]}
+  - {rule: "bash(git diff *)", modes: [NORMAL]}
+  - {rule: "bash(uptime *)", modes: [NORMAL]}
+  - {rule: "bash(wc *)", modes: [NORMAL]}
+  - {rule: "bash(rg *)", modes: [NORMAL]}
+  - {rule: "bash(vmstat *)", modes: [NORMAL]}
+  - {rule: "bash(iostat *)", modes: [NORMAL]}
+  - {rule: "bash(lsof *)", modes: [NORMAL]}
+  - {rule: "bash(pg_isready *)", modes: [NORMAL]}
+  - {rule: "bash(tr *)", modes: [NORMAL]}
+  - {rule: "bash(sort *)", modes: [NORMAL]}
+  - {rule: "bash(uniq *)", modes: [NORMAL]}
+  - {rule: "bash(head *)", modes: [NORMAL]}
+  - {rule: "bash(tail *)", modes: [NORMAL]}
+  - {rule: "bash(du *)", modes: [NORMAL]}
+  - {rule: "bash(id *)", modes: [NORMAL]}
+  - {rule: "bash(which *)", modes: [NORMAL]}
+  - {rule: "bash(mmdc *)", modes: [NORMAL]}  # FRE-315: mermaid-cli for diagram validation

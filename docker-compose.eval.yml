@@ -220,6 +220,8 @@ services:
     <<: *seshat-gateway-eval-base
     container_name: cloud-sim-seshat-gateway-control
     environment:
+      # FRE-1574 (ADR-0156 D8.5): the eval stack's own allow rules, added after permissions.yaml.
+      AGENT_EXTRA_PERMISSION_RULES_PATH: config/governance/permissions.eval.yaml
       # Infrastructure wiring — eval substrate (isolated from prod)
       # App connects as the restricted `seshat_app` role (FRE-808); internal eval
       # stack falls back to the init.sql dev password when the secret is unset.
@@ -484,7 +486,9 @@ services:
       AGENT_MCP_GATEWAY_ENABLED: "false"
       AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
       AGENT_PREFER_PRIMITIVES: "true"
-      # Required: without this, bash commands block indefinitely for PWA approval
+      # FRE-1574 (ADR-0063 Amendment B): with the approval UI off, a call that asks is denied,
+      # not run. The calls the eval scripts need run on allow rules: permissions.yaml plus
+      # permissions.eval.yaml (AGENT_EXTRA_PERMISSION_RULES_PATH below, ADR-0156 D8.5).
       #
       # FRE-1505: with no human gate, a model-chosen bash call could read this container's
       # credentials (printenv, /proc/1/environ). On AGENT_DEPLOYMENT_PROFILE=eval the bash
@@ -495,6 +499,7 @@ services:
       # because uvloop rejects the spawn identity kwargs (FRE-1518). Proof, on uvloop:
       # scripts/eval/probe_bash_credential_isolation.py.
       AGENT_APPROVAL_UI_ENABLED: "false"
+      AGENT_EXTRA_PERMISSION_RULES_PATH: config/governance/permissions.eval.yaml
       AGENT_CLOUD_WEEKLY_BUDGET_USD: "50.0"
       # FRE-1376: production defaults delegation off (no adapter wired). The eval
       # harness's CP-05 path (dataset.py) exercises real DelegationPackage

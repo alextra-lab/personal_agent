@@ -57,37 +57,25 @@ canonical_patterns:
   - "model_call_completed"
   - "agent-captains-captures-*"
   - "agent-captains-reflections-*"
-known_bad_patterns:
-  - pattern: "from personal_agent"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "run_python sandbox has no project source installed — 'from personal_agent import ...' raises ImportError."
-    suggestion: "Use bash+curl to the ES REST API instead."
-  - pattern: "cache_read_input_tokens"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "On 'model_call_completed' the ES field is 'cache_read_tokens', not 'cache_read_input_tokens' (internal usage object name)."
-    suggestion: "Use 'cache_read_tokens' when querying 'model_call_completed'."
-  - pattern: "litellm_request_complete"
-    applies_to:
-      tool: bash
-      fields: [command]
-    reason: "'litellm_request_complete' was removed in FRE-376 Phase 3 — it no longer exists in agent-logs-* (0 docs). Cost and token telemetry for BOTH cloud and local model calls is unified on 'model_call_completed'."
-    suggestion: "Use event_type == \"model_call_completed\" for per-call cost/tokens, or \"api_cost_recorded\" for the parallel cost ledger."
 ---
 
 # self-telemetry — Agent self-introspection via ES + Captain's Log
 
 **Primary path:** `bash curl` to `http://elasticsearch:9200`. **No `run_python` project imports.**
 
+## Known mistakes
+
+These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
+
+- `from personal_agent`: run_python sandbox has no project source installed — 'from personal_agent import ...' raises ImportError. Use bash+curl to the ES REST API instead.
+- `cache_read_input_tokens`: On 'model_call_completed' the ES field is 'cache_read_tokens', not 'cache_read_input_tokens' (internal usage object name). Use 'cache_read_tokens' when querying 'model_call_completed'.
+
 ## Event types and what they cover
 
 | `event_type` | Path | Key fields |
 |---|---|---|
 | `api_cost_recorded` | **Total-spend source (FRE-979).** Unified per-call cost ledger (Postgres `api_costs` mirror) — every priced call lands here regardless of provider: `anthropic`/`openai` (LLM), `ovh` (managed embedding), `voyage` (reranker). Always carries `cost_usd`, no `role`. | `provider`, `model`, `cost_usd`, `latency_ms`, `record_id`, `trace_id`, `session_id`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
-| `model_call_completed` | **LLM-completions only.** Cloud (`LiteLLMClient`) AND local (`LocalLLMClient`) both emit this since FRE-376 Phase 3 (see `known_bad_patterns` above for the retired per-provider name). Has the `role` dimension, so keep it for by-role/by-model LLM breakdowns — but it **excludes embedding and rerank cost**; do not use it alone for total spend. | `model`, `provider`, `role`, `endpoint`, `latency_ms`, `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cost_usd` (present on cloud/priced calls) |
+| `model_call_completed` | **LLM-completions only.** Cloud (`LiteLLMClient`) AND local (`LocalLLMClient`) both emit this since FRE-376 Phase 3 (the per-provider event name was retired). Has the `role` dimension, so keep it for by-role/by-model LLM breakdowns — but it **excludes embedding and rerank cost**; do not use it alone for total spend. | `model`, `provider`, `role`, `endpoint`, `latency_ms`, `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cost_usd` (present on cloud/priced calls) |
 | `embedding_generated` | Managed-embedding call (FRE-974) — provider `ovh` only today | `provider` (`ovh`), `model`, `tokens`, `cost_usd`, `latency_ms`, `trace_id`, `session_id` |
 | `reranker_applied` | Reranker call, primary + fallback paths (FRE-851/974) — `cost_usd` is `None` for the free local fallback (`slm_local`) or a Voyage response with no reported usage | `provider` (`voyage` or `slm_local`), `model_id`, `cost_usd`, `duration_ms`, `fallback` |
 | `budget_counter_snapshot` | Cap-utilization gauge, one doc per configured budget-role cap every 60s (FRE-547) | `role` (the **budget-role** key, e.g. `main_inference`, `entity_extraction`, `artifact_builder` — already groups factory roles like `primary`/`sub_agent`/`compressor` via `cost_gate.budget_role_for()`), `time_window` (`daily`/`weekly`), `window_start`, `running_total`, `cap_usd`, `utilization_ratio` |

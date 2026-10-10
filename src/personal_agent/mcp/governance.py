@@ -108,22 +108,20 @@ class MCPGovernanceManager:
         """
         description = tool_schema.get("description", "")
 
-        # Determine modes based on risk level
+        # Determine modes based on risk level. Whether a call runs or asks is decided by
+        # config/governance/permissions.yaml (ADR-0156 D8): a new tool has no rule there, so
+        # it asks until someone adds one.
         if inferred_risk_level == "high":
             allowed_modes = ["NORMAL"]
-            requires_approval = True
         elif inferred_risk_level == "medium":
             allowed_modes = ["NORMAL", "DEGRADED"]
-            requires_approval = False
         else:  # low
             allowed_modes = ["NORMAL", "ALERT", "DEGRADED"]
-            requires_approval = False
 
         return {
             "category": "mcp",
             "allowed_in_modes": allowed_modes,
             "risk_level": inferred_risk_level,
-            "requires_approval": requires_approval,
             "_auto_discovered": datetime.now().isoformat(),
             "_description": description,
         }
@@ -153,7 +151,6 @@ class MCPGovernanceManager:
             f.write(f'    category: "{template["category"]}"\n')
             f.write(f"    allowed_in_modes: {template['allowed_in_modes']}\n")
             f.write(f'    risk_level: "{template["risk_level"]}"\n')
-            f.write(f"    requires_approval: {str(template['requires_approval']).lower()}\n")
 
             # Add commented customization hints
             f.write("    # Customize as needed:\n")

@@ -13,6 +13,7 @@ from personal_agent.telemetry import TraceContext
 from personal_agent.tools.executor import ToolExecutionLayer
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
+from tests._helpers.permissions import use_rules
 
 
 @pytest.fixture
@@ -52,6 +53,23 @@ def registry() -> ToolRegistry:
 
     reg.register(tool_def, test_executor)
     return reg
+
+
+@pytest.fixture(autouse=True)
+def _allow_probe_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fake tools of this module run without a card (FRE-1574: no rule would ask)."""
+    use_rules(
+        monkeypatch,
+        allow=[
+            "test_tool",
+            "failing_tool",
+            "failing_tool_2",
+            "terminal_tool",
+            "restricted_file_tool",
+            "fre_1358_probe_disabled",
+            "mcp_fre_1358_probe_mcp",
+        ],
+    )
 
 
 @pytest.fixture
@@ -380,15 +398,16 @@ async def test_check_permissions_mcp_tool_uses_policy_not_hardcoded_default(
 
 
 @pytest.mark.asyncio
-async def test_approval_ui_disabled_warning(governance_config) -> None:
-    """approval_ui_disabled_proceeding is logged and the call is allowed when UI is off."""
+async def test_approval_ui_disabled_denies_an_ask(governance_config, monkeypatch) -> None:
+    """ADR-0063 Amendment B row A3 (FRE-1574): with the UI off, an ask is denied, not run."""
     from unittest.mock import MagicMock, patch
 
-    from personal_agent.governance.models import Mode, ToolPolicy
+    from personal_agent.governance.models import Mode
     from personal_agent.tools.executor import _check_permissions
     from personal_agent.tools.types import ToolDefinition, ToolParameter
     from tests._helpers.trace import make_test_ctx
 
+    use_rules(monkeypatch)  # no rule: the call asks
     tool_def = ToolDefinition(
         name="bash",
         description="Bash execution",
@@ -398,11 +417,6 @@ async def test_approval_ui_disabled_warning(governance_config) -> None:
         ],
         risk_level="high",
         allowed_modes=["NORMAL", "ALERT", "DEGRADED"],
-    )
-    governance_config.tools["bash"] = ToolPolicy(
-        category="shell_execution",
-        allowed_in_modes=["NORMAL", "ALERT", "DEGRADED"],
-        requires_approval=True,
     )
 
     mock_settings = MagicMock()
@@ -420,18 +434,17 @@ async def test_approval_ui_disabled_warning(governance_config) -> None:
                 trace_ctx=make_test_ctx("approval_ui_disabled"),
             )
 
-    assert result.allowed is True
-    # FRE-376 Phase 3 (ADR-0074 §I3): log carries trace_id from trace_ctx.
+    assert result.allowed is False
+    assert result.reason == "approval_ui_disabled"
     mock_log.warning.assert_called_once()
     call_args = mock_log.warning.call_args
-    assert call_args.args[0] == "approval_ui_disabled_proceeding"
+    assert call_args.args[0] == "approval_ui_disabled_denied"
     assert call_args.kwargs["tool_name"] == "bash"
-    assert call_args.kwargs["mode"] == "NORMAL"
-    assert (
-        call_args.kwargs["message"]
-        == "Approval required but AGENT_APPROVAL_UI_ENABLED=false — proceeding without prompt"
-    )
+    assert call_args.kwargs["refused"] == "ls"
     assert "trace_id" in call_args.kwargs
+    assert result.error is not None
+    assert "`ls`" in str(result.error["message"])
+    assert "connection_lost" not in str(result.error["message"])
 
 
 def test_get_default_registry() -> None:

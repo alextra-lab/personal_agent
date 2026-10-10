@@ -5,12 +5,17 @@ the splitter split only on ``;``, ``|``, ``||`` and ``&&``. A newline, a single 
 and backticks hid a second command behind an allowlisted first word. Allowlisted binaries
 could also run a command or write a file through their own options.
 
-AC-1: every bypass form needs approval (the check returns a segment, not ``None``).
+AC-1: every bypass form needs approval.
 AC-2: normal allowlisted commands still auto-approve.
+
+FRE-1574 (ADR-0156 D8.2) moved the decision to the permission rules and the tree-sitter bash
+matcher. These tests now evaluate each command against the production rules
+(``config/governance/permissions.yaml``) in NORMAL mode. Some AC-2 commands ask since then, by
+design: see ``_NOW_ASK``.
 AC-4: the seeded negative — the old checker (a verbatim copy of origin/main's code, below)
     returns ``None`` for every AC-1 form, so these tests fail on the old code.
 
-Every test uses the real NORMAL allowlist from ``config/governance/tools.yaml``.
+Every test uses the production rules from ``config/governance/permissions.yaml``.
 """
 
 from __future__ import annotations
@@ -21,13 +26,20 @@ import pytest
 
 from personal_agent.config.governance_loader import load_governance_config
 from personal_agent.governance.models import Mode
+from personal_agent.governance.permissions import evaluate_permission, load_permission_rules
 from personal_agent.telemetry.trace import TraceContext
-from personal_agent.tools.primitives.bash import (
-    _check_segment_allowlist,
-    _split_command_segments,
-)
+from personal_agent.tools.primitives.bash_allowlist import scan_segments
 
-_NORMAL = load_governance_config().tools["bash"].auto_approve_prefixes["NORMAL"]
+_RULES = load_permission_rules()
+
+
+def _needs_approval(command: str) -> bool:
+    """Report whether the production rules do not allow a command outright in NORMAL mode."""
+    return evaluate_permission("bash", {"command": command}, "NORMAL", _RULES).decision != "allow"
+
+
+def _split_command_segments(command: str) -> list[str]:
+    return [segment.text for segment in scan_segments(command)]
 
 
 # --------------------------------------------------------------------------------------
@@ -122,7 +134,19 @@ def _old_check(command: str, allowlist: list[str]) -> str | None:
 
 
 # The old NORMAL list held these two. The seeded negative for their removal uses it.
-_OLD_NORMAL = [*_NORMAL, "psql -c", "redis-cli"]
+# The NORMAL auto_approve_prefixes list before FRE-1572 (tools.yaml), for the seeded negative.
+_OLD_NORMAL = [
+    *"curl grep ls cat find jq".split(),
+    "docker ps",
+    "docker logs",
+    "git log",
+    "git status",
+    "git diff",
+    *"ps top free df uptime wc rg awk sed ss vmstat iostat lsof netstat uname".split(),
+    *"pgrep pg_isready tr sort uniq head tail echo date du id env which python3 mmdc".split(),
+    "psql -c",
+    "redis-cli",
+]
 
 
 # --------------------------------------------------------------------------------------
@@ -251,15 +275,16 @@ class TestEveryBypassNeedsApproval:
 
     @pytest.mark.parametrize("command", list(_BYPASSES.values()), ids=list(_BYPASSES))
     def test_the_form_needs_approval(self, command: str) -> None:
-        assert _check_segment_allowlist(command, _NORMAL) is not None
+        assert _needs_approval(command)
 
     @pytest.mark.parametrize("command", list(_REMOVED.values()), ids=list(_REMOVED))
     def test_psql_and_redis_cli_need_approval(self, command: str) -> None:
-        assert _check_segment_allowlist(command, _NORMAL) is not None
+        assert _needs_approval(command)
 
     def test_the_governance_list_no_longer_holds_them(self) -> None:
-        assert "psql -c" not in _NORMAL
-        assert "redis-cli" not in _NORMAL
+        first_words = {rule.bash_words[0] for rule in _RULES.allow if rule.bash_words}
+        assert "psql" not in first_words
+        assert "redis-cli" not in first_words
 
     @pytest.mark.parametrize(
         "command",
@@ -289,7 +314,7 @@ class TestEveryBypassNeedsApproval:
     )
     def test_wrappers_and_shell_forms_were_already_caught_and_still_are(self, command: str) -> None:
         """Scope item 3: these are caught because their first word is not allowlisted."""
-        assert _check_segment_allowlist(command, _NORMAL) is not None
+        assert _needs_approval(command)
 
 
 # The old splitter caught this form by accident: it split `>|` at the `|`, so the file name
@@ -333,9 +358,6 @@ _NORMAL_USE = [
     "ls > /dev/null 2>&1",
     "ls 2>/dev/null",
     "ls &>/dev/null",
-    "echo done > /tmp/out.txt",
-    "echo more >> /tmp/sub/out.txt",
-    'echo "$HOME"',
     "echo '$(not run)'",
     "echo 'a & b ; c | d'",
     'echo "a & b"',
@@ -346,14 +368,7 @@ _NORMAL_USE = [
     "curl -s -o /dev/stdout -w '\\n--- HTTP %{http_code} ---\\n' -L https://example.com",
     "curl -s -o /dev/null https://example.com",
     "curl -X POST -H 'Content-Type: application/json' -d '{\"a\": 1}' http://localhost:9200/x/_search",
-    'curl -H "Authorization: Bearer $SESHAT_API_TOKEN" https://example.com',
     "curl -sSL https://example.com | jq .",
-    "sed -n '1,10p' f",
-    "sed 's/a/b/g' f",
-    "sed -e 's/x/y/' -e 's/we/us/' f",
-    "sed -r 's/\\x1b\\[[0-9;]*m//g' f",
-    "awk '$3 > 5 {print $1}' f",
-    "awk -F, '{print $2}' f",
     "find /app/src -name '*.py'",
     "find . -type f -newer x -print",
     "sort -rn f",
@@ -366,20 +381,12 @@ _NORMAL_USE = [
     "git status --short",
     "docker ps -a",
     "docker logs --tail 50 seshat-gateway",
-    "env",
-    "env | grep AGENT_ | wc -l",
-    'python3 -c "print(1)"',
-    "python3 - <<'EOF'\nimport os\nprint(os.getcwd())\nEOF",
-    "cat <<'EOF'\n$(not run)\nEOF",
-    "cat <<EOF\nplain text $HOME\nEOF",
     "mmdc -i /tmp/m.mmd -o /tmp/m.svg 2>&1",
     "ps aux | sort -rk3 | head",
     "df -h; free -m; uptime",
     "tail -n 100 /app/telemetry/logs/x.log",
-    "ls ${HOME}",
     "find . -name '*.{py,md}'",
     "rg -g '*.py' pattern",
-    "cat <<EOF\n\\$(not run)\nEOF",
     "sort -o /dev/stdout f",
     "sort -o /tmp/sorted.txt f",
     "uniq f /tmp/out.txt",
@@ -389,12 +396,46 @@ _NORMAL_USE = [
 ]
 
 
+# FRE-1574 (ADR-0156 D8.2): these were auto-approved under FRE-1572 and ask now. A subcommand
+# can match an allow rule only as a plain command (literal words, no expansion, no here-doc, no
+# redirection except to /dev/null or 2>&1). env, awk, sed and python3 can run another program,
+# so they ask by the owner's decision of 2026-10-10 (FRE-1573).
+_NOW_ASK = {
+    "echo done > /tmp/out.txt": "redirect to a file",
+    "echo more >> /tmp/sub/out.txt": "redirect to a file",
+    'echo "$HOME"': "parameter expansion",
+    'curl -H "Authorization: Bearer $SESHAT_API_TOKEN" https://example.com': "parameter expansion",
+    "sed -n '1,10p' f": "sed can run a program (owner, 2026-10-10)",
+    "sed 's/a/b/g' f": "sed can run a program (owner, 2026-10-10)",
+    "sed -e 's/x/y/' -e 's/we/us/' f": "sed can run a program (owner, 2026-10-10)",
+    "sed -r 's/\\x1b\\[[0-9;]*m//g' f": "sed can run a program (owner, 2026-10-10)",
+    "awk '$3 > 5 {print $1}' f": "awk can run a program (owner, 2026-10-10)",
+    "awk -F, '{print $2}' f": "awk can run a program (owner, 2026-10-10)",
+    "env": "env is an indirect-execution word",
+    "env | grep AGENT_ | wc -l": "env is an indirect-execution word",
+    'python3 -c "print(1)"': "python3 can run a program (owner, 2026-10-10)",
+    "python3 - <<'EOF'\nimport os\nprint(os.getcwd())\nEOF": "python3, and a here-doc",
+    "cat <<'EOF'\n$(not run)\nEOF": "a here-doc is not a plain command",
+    "cat <<EOF\nplain text $HOME\nEOF": "a here-doc is not a plain command",
+    "ls ${HOME}": "parameter expansion",
+    "cat <<EOF\n\\$(not run)\nEOF": "a here-doc is not a plain command",
+}
+
+
+class TestNowAsksByDesign:
+    """FRE-1574: the commands that moved from auto-approve to ask, each with its reason."""
+
+    @pytest.mark.parametrize("command", list(_NOW_ASK), ids=list(_NOW_ASK.values()))
+    def test_the_command_asks(self, command: str) -> None:
+        assert _needs_approval(command)
+
+
 class TestNormalUseStillAutoApproves:
     """AC-2."""
 
     @pytest.mark.parametrize("command", _NORMAL_USE)
     def test_the_command_auto_approves(self, command: str) -> None:
-        assert _check_segment_allowlist(command, _NORMAL) is None
+        assert not _needs_approval(command)
 
 
 class TestTheSplitter:

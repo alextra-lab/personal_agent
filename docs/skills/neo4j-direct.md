@@ -49,6 +49,7 @@ Neo4j graph state directly — entity counts, relationships, schema, recent node
 ## Primary path — bash python3 (1 tool call)
 
 ```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 - <<'EOF'
 from neo4j import GraphDatabase
 import os
@@ -121,6 +122,7 @@ s.run(
 Use only if the Python driver is unavailable. Requires Basic auth:
 
 ```bash
+# ask: the shell expands ${AGENT_NEO4J_USER} and ${AGENT_NEO4J_PASSWORD} here, so this is not a plain command and asks for approval.
 curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \

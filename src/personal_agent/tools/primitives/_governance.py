@@ -163,17 +163,30 @@ def _check_path_governance(
 
     Returns:
         An error dict (with ``success=False``) when the path is rejected,
-        or ``None`` when the path is permitted.
+        or ``None`` when the path is permitted. A governance load error and a
+        missing policy both reject (ADR-0156 D8.1, FRE-1574): a path check that
+        cannot run does not permit.
     """
     try:
         governance = load_governance_config()
-    except Exception as exc:  # noqa: BLE001 — surface as tool error
+    except Exception as exc:  # noqa: BLE001 — any load failure must refuse, never permit
         log.warning("governance_load_error", tool=tool_name, error=str(exc), trace_id=trace_id)
-        return None  # fail open: let the executor proceed
+        return {
+            "success": False,
+            "error": "governance_unavailable",
+            "path": str(resolved),
+            "detail": f"The path rules could not be loaded, so {tool_name!r} refuses: {exc}",
+        }
 
     policy = governance.tools.get(tool_name)
     if policy is None:
-        return None  # no policy → permitted
+        log.warning("path_governance_no_policy", tool=tool_name, trace_id=trace_id)
+        return {
+            "success": False,
+            "error": "no_path_policy",
+            "path": str(resolved),
+            "detail": f"No path policy exists for {tool_name!r}, so the path is refused.",
+        }
 
     path_str = str(resolved)
 

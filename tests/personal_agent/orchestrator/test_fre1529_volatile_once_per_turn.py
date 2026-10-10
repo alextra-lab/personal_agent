@@ -318,7 +318,6 @@ class TestModelDecidedBodiesBounded:
                 tools=(),
                 keywords=(),
                 canonical_patterns=(),
-                known_bad_patterns=(),
                 body=name.upper() * size,
             )
 

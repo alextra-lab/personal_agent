@@ -25,7 +25,6 @@ from personal_agent.governance.sub_agent_tools import (
     ParamClamp,
     clamp_sub_agent_tool_params,
     evaluate_sub_agent_tool_grant,
-    sub_agent_tool_requires_approval,
 )
 
 
@@ -151,72 +150,6 @@ class TestAlertAndDegradedDenyEverything:
         config = _config(["run_python"])
         grant = evaluate_sub_agent_tool_grant(["run_python"], Mode.NORMAL, config)
         assert grant.granted == ("run_python",)
-
-
-class TestApprovalRequirementPredicate:
-    """FRE-1461 — whether a granted tool needs the owner's word before it runs.
-
-    The predicate must read the same two policy fields, in the same way, as the
-    primary's own gate (``tools/executor.py``). A divergence here would mean the
-    sub-agent asks about a different set of tools than the primary does.
-    """
-
-    def test_tool_with_no_policy_entry_needs_no_approval(self) -> None:
-        config = _config(["run_python"])
-        assert sub_agent_tool_requires_approval("run_python", Mode.NORMAL, config) is False
-
-    def test_always_requires_approval_flag_is_honoured_in_every_mode(self) -> None:
-        config = _config_with_policy(
-            "run_python",
-            ToolPolicy(
-                category="compute",
-                allowed_in_modes=["NORMAL"],
-                requires_approval=True,
-            ),
-        )
-        assert sub_agent_tool_requires_approval("run_python", Mode.NORMAL, config) is True
-
-    def test_mode_listed_in_requires_approval_in_modes_needs_approval(self) -> None:
-        config = _config_with_policy(
-            "run_python",
-            ToolPolicy(
-                category="compute",
-                allowed_in_modes=["NORMAL", "ALERT"],
-                requires_approval_in_modes=["ALERT"],
-            ),
-        )
-        assert sub_agent_tool_requires_approval("run_python", Mode.ALERT, config) is True
-
-    def test_mode_outside_requires_approval_in_modes_needs_none(self) -> None:
-        """The seeded negative — a real policy that simply does not name this mode."""
-        config = _config_with_policy(
-            "run_python",
-            ToolPolicy(
-                category="compute",
-                allowed_in_modes=["NORMAL", "ALERT"],
-                requires_approval_in_modes=["ALERT"],
-            ),
-        )
-        assert sub_agent_tool_requires_approval("run_python", Mode.NORMAL, config) is False
-
-    def test_shipped_run_python_policy_needs_no_approval_in_normal(self) -> None:
-        """Against the real config: today's grant is inert in NORMAL (FRE-1461 §1).
-
-        ``run_python`` requires approval in exactly ALERT and DEGRADED, which are
-        exactly the modes where a sub-agent holds no tools at all. This asserts the
-        circularity the ticket describes, so a later config edit that makes the
-        mechanism live in NORMAL cannot pass unnoticed.
-        """
-        from personal_agent.config.governance_loader import load_governance_config
-
-        config = load_governance_config()
-        assert sub_agent_tool_requires_approval("run_python", Mode.NORMAL, config) is False
-        assert sub_agent_tool_requires_approval("run_python", Mode.ALERT, config) is True
-
-
-# --------------------------------------------------------------------------------------
-# FRE-1463 — the grant is a per-tool decision record, not a list of names.
-# --------------------------------------------------------------------------------------
 
 
 class TestADecisionRecordCarriesItsReason:

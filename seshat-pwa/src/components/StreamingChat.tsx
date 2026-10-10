@@ -282,6 +282,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         <ApprovalModal
           data={pendingApproval}
           onApprove={() => handleApprovalDecision('approve')}
+          onApproveSession={() => handleApprovalDecision('approve_session')}
           onDeny={() => handleApprovalDecision('deny')}
         />
       )}

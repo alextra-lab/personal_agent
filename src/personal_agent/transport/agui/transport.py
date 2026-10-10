@@ -801,6 +801,8 @@ class AGUITransport:
         risk_level: Literal["low", "medium", "high"],
         reason: str,
         timeout_seconds: float = 60.0,
+        worker: str | None = None,
+        session_option: bool = False,
     ) -> ApprovalDecision:
         """Push an approval request event and await the human's decision.
 
@@ -818,6 +820,8 @@ class AGUITransport:
             risk_level: Qualitative risk label for the PWA approval card.
             reason: Human-readable explanation of why approval is required.
             timeout_seconds: Seconds before auto-returning a timeout decision.
+            worker: The worker type that asks, or ``None`` for the primary.
+            session_option: Whether the card offers "allow for this session".
 
         Returns:
             ApprovalDecision with the human's verdict or a timeout/disconnect.
@@ -835,6 +839,8 @@ class AGUITransport:
                     risk_level=risk_level,
                     reason=reason,
                     expires_at=expires_at,
+                    worker=worker,
+                    session_option=session_option,
                 ),
                 session_id,
             )

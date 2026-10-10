@@ -4,6 +4,7 @@ This module provides the ToolExecutionLayer class that handles tool invocation
 with permission checks, argument validation, execution, and telemetry.
 """
 
+import asyncio
 import os
 import time
 from collections.abc import Mapping
@@ -60,15 +61,75 @@ class ApproveFn(Protocol):
 class PermissionResult:
     """Result of a permission check."""
 
-    def __init__(self, allowed: bool, reason: str = "") -> None:
+    def __init__(
+        self, allowed: bool, reason: str = "", error: dict[str, object] | None = None
+    ) -> None:
         """Initialize permission result.
 
         Args:
             allowed: Whether permission is granted.
             reason: Reason for denial (if not allowed).
+            error: For a refusal by the permission rules (ADR-0156 D8), the error the model
+                gets: ``code``, ``message``, ``retryable`` and ``next_action`` (the D6 shape).
         """
         self.allowed = allowed
         self.reason = reason
+        self.error = error
+
+
+#: One approval card at a time per session. The PWA shows a single card, and a round's tool
+#: calls (and a fan-out's workers) can ask at the same moment: without this a second card
+#: would replace the first, which would then time out unanswered (FRE-1574 review).
+_APPROVAL_LOCKS: dict[str, asyncio.Lock] = {}
+
+#: Longest model-facing permission message (ADR-0156 D6.2 bound).
+_PERMISSION_MESSAGE_LIMIT = 2000
+
+
+def _permission_refusal(
+    *,
+    tool_name: str,
+    reason: str,
+    code: str,
+    message: str,
+    next_action: str,
+) -> PermissionResult:
+    """Build a refusal whose error tells the model what was refused and what to do next.
+
+    Args:
+        tool_name: The refused tool.
+        reason: Short machine-readable reason, logged and kept in ``ToolResult.error``.
+        code: Stable error code for the model.
+        message: What was refused, by which rule, and why. Bounded at 2,000 characters.
+        next_action: The next call that can work, or that none exists.
+
+    Returns:
+        A refused :class:`PermissionResult`.
+    """
+    text = f"{tool_name}: {message}"
+    if len(text) > _PERMISSION_MESSAGE_LIMIT:
+        text = text[: _PERMISSION_MESSAGE_LIMIT - 15] + " [truncated]"
+    return PermissionResult(
+        allowed=False,
+        reason=reason,
+        error={"code": code, "message": text, "retryable": False, "next_action": next_action},
+    )
+
+
+def _quote(text: str | None, limit: int = 600) -> str:
+    """Quote a refused subcommand or argument set for a message.
+
+    Args:
+        text: The refused text.
+        limit: Longest text kept.
+
+    Returns:
+        The text in backticks, cut to ``limit`` characters.
+    """
+    value = text or ""
+    if len(value) > limit:
+        value = value[:limit] + "…"
+    return f"`{value}`"
 
 
 class ToolExecutionError(Exception):
@@ -181,6 +242,8 @@ async def _request_approval(
     reason: str,
     session_id: str,
     trace_ctx: TraceContext,
+    worker: str | None = None,
+    session_option: bool = False,
 ) -> "ApprovalDecision":
     """Send one approval request through the AG-UI transport and wait for the decision.
 
@@ -194,6 +257,9 @@ async def _request_approval(
         reason: Human-readable reason shown on the card.
         session_id: Session the request belongs to.
         trace_ctx: Trace context of this invocation.
+        worker: The worker type that asks, or ``None`` for the primary (ADR-0156 D8.3).
+        session_option: Whether the card offers "allow for this session". Only a call that
+            matched no rule offers it (D8.3).
 
     Returns:
         The owner's decision, or a timeout or connection-lost decision.
@@ -204,7 +270,11 @@ async def _request_approval(
 
     # ADR-0123 §1 (FRE-934): the turn is blocked on the user's approval —
     # an explicit WAITING_FOR_CHOICE phase (excluded from the AC-2 clock).
-    async with phase_span(session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=tool_name):
+    lock = _APPROVAL_LOCKS.setdefault(session_id, asyncio.Lock())
+    async with (
+        lock,
+        phase_span(session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=tool_name),
+    ):
         return await transport.request_tool_approval(
             request_id=str(uuid4()),
             trace_id=trace_ctx.trace_id,
@@ -214,6 +284,8 @@ async def _request_approval(
             risk_level="high",  # primitives will pass the real level later
             reason=reason,
             timeout_seconds=settings.approval_timeout_seconds,
+            worker=worker,
+            session_option=session_option,
         )
 
 
@@ -227,14 +299,16 @@ async def _check_permissions(
     session_id: str | None = None,
     *,
     trace_ctx: TraceContext,
-    approved_upstream: bool = False,
+    worker: str | None = None,
 ) -> PermissionResult:
-    """Check if tool execution is permitted, requesting UI approval if required.
+    """Check whether a call may run: mode, arguments, then the permission rules.
 
-    An approval-required tool follows ADR-0063 Amendment A (FRE-1535). With
-    ``approval_ui_enabled`` false the call proceeds: an explicit opt-out. With it true,
-    the call is denied unless the owner approves through the transport. No session id,
-    no transport, a timeout, a denial and a lost connection all deny.
+    The permission rules (ADR-0156 D8, ``config/governance/permissions.yaml``) decide deny,
+    ask or allow. An ask shows the approval card and runs only on the user's yes. With no
+    approval surface (``approval_ui_enabled`` false, no session id, no transport, no PWA
+    client) an ask is denied (D8.4, ADR-0063 Amendment B). A rule-load error or an evaluation
+    error denies (D8.1). Every refusal carries an error that names the refused subcommand and
+    the rule, so the model can choose its next call.
 
     Args:
         tool_name: Name of the tool.
@@ -242,17 +316,23 @@ async def _check_permissions(
         arguments: Tool arguments.
         current_mode: Current operational mode.
         governance_config: Governance configuration.
-        transport: Optional AG-UI transport for interactive approval round-trips.
-            When ``None`` and the approval UI is enabled, approval-required tools
-            are denied.
+        transport: AG-UI transport for the approval card, or ``None``.
         session_id: Session identifier forwarded to the approval waiter.
         trace_ctx: Trace context for telemetry correlation in approval events.
-        approved_upstream: True when the sub-agent approval broker already approved
-            this exact call (FRE-1461). The approval step is then satisfied.
+        worker: The worker type that makes the call, or ``None`` for the primary. Shown on
+            the card (D8.3).
 
     Returns:
         PermissionResult indicating if execution is allowed.
     """
+    # Imported here: the rules import the bash matcher, which imports a tools module, and
+    # this module is imported while ``personal_agent.tools`` initialises.
+    from personal_agent.governance.permissions import decide_permission  # noqa: PLC0415
+    from personal_agent.governance.session_rules import (  # noqa: PLC0415
+        add_session_rule,
+        session_rules,
+    )
+
     # 1. Mode check. The governance policy's allowed_in_modes is authoritative when a
     # policy is configured for this tool (ADR-0063 §D1, FRE-1358) — an empty list means
     # "allowed nowhere", not "unset". tool_def.allowed_modes is the fallback for tools
@@ -269,102 +349,173 @@ async def _check_permissions(
     if tool_policy and mode_str in tool_policy.forbidden_in_modes:
         return PermissionResult(allowed=False, reason=f"Tool forbidden in {mode_str} mode")
 
-    # 1.5. Bash auto-approve shortcut (FRE-283 — wires auto_approve_prefixes from tools.yaml).
-    # If every pipeline segment's first word is in the per-mode allowlist, skip the
-    # approval round-trip entirely.  This runs BEFORE the general approval check so
-    # fully-safe bash commands never prompt the user.
-    if tool_name == "bash" and tool_policy:
-        mode_prefixes: list[str] = tool_policy.auto_approve_prefixes.get(mode_str, [])
-        command: str = arguments.get("command", "")
-        if mode_prefixes and command.strip():
-            from personal_agent.tools.primitives.bash_allowlist import (  # noqa: PLC0415
-                check_segment_allowlist,
-            )
-
-            bad_segment = check_segment_allowlist(command, mode_prefixes)
-            if bad_segment is None:
-                log.info(
-                    "bash_auto_approved",
-                    mode=mode_str,
-                    command=command,
-                    trace_id=trace_ctx.trace_id,
-                )
-                return PermissionResult(allowed=True)
-            log.debug(
-                "bash_allowlist_miss",
-                mode=mode_str,
-                bad_segment=bad_segment,
-                trace_id=trace_ctx.trace_id,
-            )
-            # Fall through to normal approval flow with the bad segment as context.
-
-    # 2. Approval check (ADR-0063 Amendment A, FRE-1535)
-    if tool_policy and (
-        mode_str in tool_policy.requires_approval_in_modes or tool_policy.requires_approval
-    ):
-        if approved_upstream:
-            log.info(
-                "approval_satisfied_upstream",
-                tool_name=tool_name,
-                mode=mode_str,
-                trace_id=trace_ctx.trace_id,
-            )
-        elif not settings.approval_ui_enabled:
-            # Explicit opt-out (the eval stack sets it on purpose, FRE-1505).
-            log.warning(
-                "approval_ui_disabled_proceeding",
-                tool_name=tool_name,
-                mode=mode_str,
-                message="Approval required but AGENT_APPROVAL_UI_ENABLED=false — proceeding without prompt",
-                trace_id=trace_ctx.trace_id,
-            )
-        elif not session_id:
-            # A waiter registered with an empty session_id can never be resolved.
-            log.warning(
-                "approval_denied_no_session_id",
-                tool_name=tool_name,
-                mode=mode_str,
-                message="Approval required but session_id is empty; denying",
-                trace_id=trace_ctx.trace_id,
-            )
-            return PermissionResult(allowed=False, reason="approval_no_session_id")
-        elif transport is None:
-            log.warning(
-                "approval_denied_no_transport",
-                tool_name=tool_name,
-                mode=mode_str,
-                message="Approval required but no approval transport is attached; denying",
-                trace_id=trace_ctx.trace_id,
-            )
-            return PermissionResult(allowed=False, reason="approval_no_transport")
-        else:
-            decision = await _request_approval(
-                transport=transport,
-                tool_name=tool_name,
-                args=arguments,
-                reason=f"Tool '{tool_name}' requires approval in {mode_str} mode",
-                session_id=session_id,
-                trace_ctx=trace_ctx,
-            )
-            if decision.decision != "approve":
-                log.warning(
-                    "approval_denied",
-                    tool_name=tool_name,
-                    mode=mode_str,
-                    decision=decision.decision,
-                    trace_id=trace_ctx.trace_id,
-                )
-                return PermissionResult(allowed=False, reason=f"approval_{decision.decision}")
-
-    # 3. Rate limit check (for MVP, we skip - Phase 2 will implement)
-    # TODO: Implement rate limiting via telemetry query
-
-    # 4. Argument validation
+    # 2. Argument validation, before the card: never ask the user about a call that a path
+    # rule refuses anyway.
     validation_result = _validate_tool_arguments(tool_name, arguments, governance_config)
     if not validation_result.allowed:
         return validation_result
 
-    return PermissionResult(allowed=True)
+    # 3. The permission rules (ADR-0156 D8).
+    decision = decide_permission(
+        tool_name, arguments, mode_str, session_rules=session_rules(session_id)
+    )
+    log.info(
+        "permission_evaluated",
+        tool_name=tool_name,
+        mode=mode_str,
+        decision=decision.decision,
+        rule=decision.rule,
+        refused=decision.refused,
+        reason=decision.reason,
+        explicit_ask=decision.explicit,
+        worker=worker,
+        trace_id=trace_ctx.trace_id,
+        session_id=session_id,
+    )
+    if decision.decision == "allow":
+        return PermissionResult(allowed=True)
+    if decision.decision == "deny":
+        return _permission_refusal(
+            tool_name=tool_name,
+            reason="permission_deny_rule" if decision.rule else "permission_rules_error",
+            code="permission_denied" if decision.rule else "permission_rules_unavailable",
+            message=(
+                f"refused {_quote(decision.refused)}. Rule: {decision.rule or 'none'}. "
+                f"{decision.reason}"
+            ),
+            next_action=(
+                "Do not retry this call. Use another tool or a different command."
+                if decision.rule
+                else "No call can run until the permission rules load. Tell the user."
+            ),
+        )
+
+    # 4. Ask: the card, or a denial when there is no approval surface (D8.4).
+    asked = (
+        f"{_quote(decision.refused)} needs the user's approval "
+        f"({decision.reason}; rule: {decision.rule or 'no rule allows it'})"
+    )
+    unanswered_next = (
+        "Do not retry the same call. Use a command or tool that the allow rules cover, "
+        "or tell the user what you need to run and why."
+    )
+
+    def unanswered(cause: str, event: str, reason: str) -> PermissionResult:
+        log.warning(
+            event,
+            tool_name=tool_name,
+            mode=mode_str,
+            refused=decision.refused,
+            rule=decision.rule,
+            worker=worker,
+            trace_id=trace_ctx.trace_id,
+            session_id=session_id,
+        )
+        return _permission_refusal(
+            tool_name=tool_name,
+            reason=reason,
+            code="approval_unavailable",
+            message=f"{asked}, and {cause}. It did not run.",
+            next_action=unanswered_next,
+        )
+
+    if not settings.approval_ui_enabled:
+        return unanswered(
+            "the approval UI is disabled on this deployment",
+            "approval_ui_disabled_denied",
+            "approval_ui_disabled",
+        )
+    if not session_id:
+        return unanswered(
+            "this call has no session to ask in",
+            "approval_denied_no_session_id",
+            "approval_no_session_id",
+        )
+    if transport is None:
+        return unanswered(
+            "no approval channel is attached",
+            "approval_denied_no_transport",
+            "approval_no_transport",
+        )
+
+    answer = await _request_approval(
+        transport=transport,
+        tool_name=tool_name,
+        args=arguments,
+        reason=decision.reason if decision.explicit else f"{decision.reason}: {decision.refused}",
+        session_id=session_id,
+        trace_ctx=trace_ctx,
+        worker=worker,
+        session_option=not decision.explicit,
+    )
+    if answer.decision == "approve":
+        log.info(
+            "approval_granted",
+            tool_name=tool_name,
+            scope="once",
+            worker=worker,
+            trace_id=trace_ctx.trace_id,
+            session_id=session_id,
+        )
+        return PermissionResult(allowed=True)
+    if answer.decision == "approve_session":
+        # Only an unmatched call may add a session rule; an explicit ask is never
+        # overridden (D8.3). A session answer to an explicit ask runs this call once.
+        scope = "once"
+        if not decision.explicit:
+            rule_text = add_session_rule(session_id, tool_name, arguments)
+            scope = "session"
+            log.info(
+                "approval_session_rule_added",
+                tool_name=tool_name,
+                rule=rule_text,
+                worker=worker,
+                trace_id=trace_ctx.trace_id,
+                session_id=session_id,
+            )
+        log.info(
+            "approval_granted",
+            tool_name=tool_name,
+            scope=scope,
+            worker=worker,
+            trace_id=trace_ctx.trace_id,
+            session_id=session_id,
+        )
+        return PermissionResult(allowed=True)
+
+    outcome = {
+        "deny": ("the user denied it", "approval_denied_by_user", "denied_by_user"),
+        "timeout": (
+            "the card timed out with no answer",
+            "approval_timeout",
+            "approval_timed_out",
+        ),
+        "connection_lost": (
+            "no PWA client is connected to answer",
+            "approval_no_client",
+            "approval_unavailable",
+        ),
+    }.get(
+        answer.decision,
+        ("the answer was not an approval", "approval_not_approved", "denied_by_user"),
+    )
+    log.warning(
+        "approval_denied",
+        tool_name=tool_name,
+        mode=mode_str,
+        decision=answer.decision,
+        refused=decision.refused,
+        worker=worker,
+        trace_id=trace_ctx.trace_id,
+        session_id=session_id,
+    )
+    return _permission_refusal(
+        tool_name=tool_name,
+        reason=outcome[1],
+        code=outcome[2],
+        message=f"{asked}, and {outcome[0]}. It did not run.",
+        next_action=unanswered_next,
+    )
 
 
 class ToolExecutionLayer:
@@ -457,7 +608,7 @@ class ToolExecutionLayer:
         arguments: dict[str, Any],
         trace_ctx: TraceContext,
         session_id: str | None = None,
-        approved_upstream: bool = False,
+        worker: str | None = None,
     ) -> ToolResult:
         """Execute a tool with full governance and observability.
 
@@ -473,9 +624,9 @@ class ToolExecutionLayer:
             session_id: Optional session identifier forwarded to the approval
                 waiter so that approval requests are scoped to the originating
                 session.
-            approved_upstream: True only when the sub-agent approval broker
-                approved this exact call (FRE-1461).  The generic approval step
-                is then satisfied.  Never derive it from the caller's identity.
+            worker: The worker type that makes the call, or ``None`` for the
+                primary.  An ask from a worker shows the same card, per call,
+                with the worker named (ADR-0156 D8.3, D9.3).
 
         Returns:
             ToolResult with execution outcome.
@@ -513,7 +664,7 @@ class ToolExecutionLayer:
             transport=self.transport,
             session_id=session_id,
             trace_ctx=trace_ctx,
-            approved_upstream=approved_upstream,
+            worker=worker,
         )
 
         if not permission.allowed:
@@ -530,6 +681,9 @@ class ToolExecutionLayer:
                 output={},
                 error=f"Permission denied: {permission.reason}",
                 latency_ms=0.0,
+                metadata=(
+                    {"permission_error": permission.error} if permission.error is not None else {}
+                ),
             )
 
         # 3. Validate and filter arguments to match tool definition

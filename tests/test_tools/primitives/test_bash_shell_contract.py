@@ -15,13 +15,15 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from personal_agent.telemetry.trace import TraceContext
-from personal_agent.tools.primitives.bash import (
-    _check_segment_allowlist,
-    _has_top_level_pipe,
-    _split_command_segments,
-    bash_executor,
+from personal_agent.governance.permissions import (
+    PermissionRules,
+    evaluate_permission,
+    load_permission_rules,
+    parse_rule,
 )
+from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.primitives.bash import _has_top_level_pipe, bash_executor
+from personal_agent.tools.primitives.bash_allowlist import scan_segments
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -33,6 +35,17 @@ _CTX = TraceContext.new_trace()
 
 def run(coro):  # type: ignore[no-untyped-def]
     return asyncio.run(coro)
+
+
+def _split_command_segments(command: str) -> list[str]:
+    return [segment.text for segment in scan_segments(command)]
+
+
+def _check_segment_allowlist(command: str, allowlist: list[str]) -> str | None:
+    """The refused subcommand under ``bash(<entry> *)`` allow rules, or ``None`` (FRE-1574)."""
+    rules = PermissionRules(allow=tuple(parse_rule(f"bash({entry} *)") for entry in allowlist))
+    decision = evaluate_permission("bash", {"command": command}, "NORMAL", rules)
+    return None if decision.decision == "allow" else decision.refused
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +124,9 @@ class TestCheckSegmentAllowlist:
         result = _check_segment_allowlist("docker logs mycontainer", allowlist)
         assert result is not None  # "docker logs" not in allowlist
 
-    def test_empty_command_passes(self) -> None:
-        assert _check_segment_allowlist("", self.ALLOWLIST) is None
+    def test_empty_command_is_not_allowed(self) -> None:
+        # FRE-1574: an empty command has no subcommand that an allow rule could match.
+        assert _check_segment_allowlist("", self.ALLOWLIST) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -189,11 +203,16 @@ class TestBashShellContractExecution:
         assert result["success"] is False
         assert result["exit_code"] == 1
 
-    def test_hard_deny_still_fires_in_pipeline(self) -> None:
-        # rm -rf should be hard-denied even inside a pipeline.
-        result = run(bash_executor("ls /tmp && rm -rf /tmp/nonexistent-test-target", ctx=_CTX))
-        assert result["success"] is False
-        assert result["error"] == "hard_denied"
+    def test_deny_rule_still_fires_in_pipeline(self) -> None:
+        # rm -rf is refused even inside a list (FRE-1574: a deny rule, not a regex).
+        decision = evaluate_permission(
+            "bash",
+            {"command": "ls /tmp && rm -rf /tmp/nonexistent-test-target"},
+            "NORMAL",
+            load_permission_rules(),
+        )
+        assert decision.decision == "deny"
+        assert decision.refused == "rm -rf /tmp/nonexistent-test-target"
 
     def test_empty_command_guard(self) -> None:
         result = run(bash_executor("   ", ctx=_CTX))

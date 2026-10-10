@@ -1,9 +1,12 @@
 /**
  * ApprovalModal — full-screen overlay for primitive tool-approval decisions.
  *
- * Rendered when the backend emits a ``tool_approval_request`` event.
- * The agent is paused; this modal collects an approve/deny decision and
- * POSTs it to the backend via ``handleApprovalDecision`` from useAgentStream.
+ * Rendered when the backend emits a ``tool_approval_request`` event: a call that
+ * the permission rules ask about (ADR-0156 D8). The agent is paused; this modal
+ * shows the tool, the exact arguments and the worker that asks, and sends the
+ * decision over the WebSocket via ``handleApprovalDecision`` from useAgentStream.
+ * "Allow for this session" appears only when the backend offers it: a call that
+ * matched no rule. An explicit ask rule is never overridden (D8.3).
  *
  * MANUAL TEST PLAN
  * ================
@@ -18,11 +21,14 @@
  *    - medium → yellow chip
  *    - high   → red chip
  *
- * 3. Expand the "Arguments" collapsible — verify pretty-printed JSON.
+ * 3. The exact arguments are shown as pretty-printed JSON; for a worker the
+ *    "Asked by worker" line names it.
  *
  * 4. Watch the countdown timer tick down each second toward 0.
  *
- * 5. Click Approve — modal dismisses, agent continues execution.
+ * 5. Click Allow once — modal dismisses, agent continues execution. For an
+ *    unmatched call, "Allow for this session" lets the same call run again
+ *    without a card.
  *    Expected: the stream resumes, response appears in chat.
  *
  * 6. Repeat step 1, click Deny — modal dismisses, agent aborts the tool.
@@ -49,6 +55,7 @@ import type { ToolApprovalRequestData } from '@/lib/types';
 interface ApprovalModalProps {
   data: ToolApprovalRequestData;
   onApprove: () => void;
+  onApproveSession: () => void;
   onDeny: () => void;
 }
 
@@ -87,10 +94,16 @@ function riskChipClasses(risk: ToolApprovalRequestData['risk_level']): string {
  *
  * Args:
  *   data:      The ``tool_approval_request`` event payload.
- *   onApprove: Called when the user clicks Approve.
- *   onDeny:    Called when the user clicks Deny or the countdown expires.
+ *   onApprove:        Called when the user clicks Allow once.
+ *   onApproveSession: Called when the user clicks Allow for this session.
+ *   onDeny:           Called when the user clicks Deny or the countdown expires.
  */
-export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): React.JSX.Element {
+export function ApprovalModal({
+  data,
+  onApprove,
+  onApproveSession,
+  onDeny,
+}: ApprovalModalProps): React.JSX.Element {
   const denyRef = useRef<HTMLButtonElement>(null);
 
   // Countdown seconds — ticks once per second, auto-denies at 0.
@@ -153,22 +166,24 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
           {data.reason}
         </p>
 
-        {/* Collapsible args */}
-        <details className="group">
-          <summary className="cursor-pointer text-xs font-medium text-ink-muted hover:text-ink transition-colors select-none list-none flex items-center gap-1.5">
-            <svg
-              className="w-3 h-3 transition-transform group-open:rotate-90"
-              viewBox="0 0 12 12"
-              fill="currentColor"
-            >
-              <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            Arguments
-          </summary>
-          <pre className="mt-2 p-3 rounded-lg bg-bg text-xs text-ink-muted overflow-x-auto font-mono leading-relaxed">
+        {/* Worker that asks (ADR-0156 D8.3) */}
+        {data.worker !== null && (
+          <p className="text-sm text-ink-muted">
+            Asked by worker:{' '}
+            <span className="font-mono text-ink">{data.worker}</span>
+          </p>
+        )}
+
+        {/* Exact arguments — always shown, so the user decides on what will run */}
+        <div>
+          <p className="text-xs font-medium text-ink-muted">Arguments</p>
+          <pre
+            aria-label="Tool arguments"
+            className="mt-2 p-3 rounded-lg bg-bg text-xs text-ink overflow-auto max-h-64 font-mono leading-relaxed whitespace-pre-wrap break-all"
+          >
             {prettyArgs}
           </pre>
-        </details>
+        </div>
 
         {/* Countdown */}
         <p className="text-xs text-ink-muted text-right">
@@ -179,7 +194,7 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
         </p>
 
         {/* Action buttons */}
-        <div className="flex gap-3 justify-end">
+        <div className="flex gap-3 justify-end flex-wrap">
           <button
             ref={denyRef}
             onClick={onDeny}
@@ -187,11 +202,19 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
           >
             Deny
           </button>
+          {data.session_option && (
+            <button
+              onClick={onApproveSession}
+              className="px-4 py-2 rounded-lg text-sm font-semibold border border-green-700 text-green-800 dark:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/30 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-surface transition-colors"
+            >
+              Allow for this session
+            </button>
+          )}
           <button
             onClick={onApprove}
             className="px-4 py-2 rounded-lg text-sm font-semibold bg-green-700 text-white hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-surface transition-colors"
           >
-            Approve
+            Allow once
           </button>
         </div>
       </div>

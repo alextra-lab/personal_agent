@@ -160,6 +160,7 @@ async def _run_turn_calling(tool_name: str, registry: Any) -> list[list[dict[str
         The wire form of every model call, in order.
     """
     from personal_agent.governance.models import Mode
+    from personal_agent.governance.permissions import PermissionRules, parse_rule
     from personal_agent.orchestrator import Channel, Orchestrator
     from personal_agent.orchestrator.executor import build_wire_messages
     from personal_agent.tools.executor import ToolExecutionLayer
@@ -203,6 +204,11 @@ async def _run_turn_calling(tool_name: str, registry: Any) -> list[list[dict[str
         patch(
             "personal_agent.orchestrator.executor._get_tool_execution_layer",
             return_value=ToolExecutionLayer(registry),
+        ),
+        # FRE-1574: the probe tool runs without a card, as fetch_url does in production.
+        patch(
+            "personal_agent.governance.permissions.load_permission_rules",
+            return_value=PermissionRules(allow=(parse_rule(tool_name),)),
         ),
     ):
         await Orchestrator().handle_user_request(

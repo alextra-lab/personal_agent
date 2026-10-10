@@ -5,18 +5,11 @@ frontmatter satisfies the schema contract defined in the plan:
 
   Required fields:  name, description, when_to_use
   Optional fields:  tools (list[str]), keywords (list[str]),
-                    canonical_patterns (list[str], ≤3),
-                    known_bad_patterns (list[dict], ≤5)
+                    canonical_patterns (list[str], ≤3)
 
-  known_bad_pattern schema:
-    pattern (str, required)
-    reason  (str, required)
-    suggestion (str, required)
-    applies_to (dict, optional):
-      tool   (str)   — must resolve to a registered tool
-      fields (list[str]) — must be valid parameter names of that tool
+  known_bad_patterns left the skills (ADR-0156 D4, FRE-1574): no skill may hold it.
 
-  tools[] and applies_to.tool must resolve to registered tool names.
+  tools[] must resolve to registered tool names.
 """
 
 from __future__ import annotations
@@ -25,9 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
-from personal_agent.orchestrator.skills import _parse_frontmatter, get_all_skills
+from personal_agent.orchestrator.skills import _parse_frontmatter
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -96,28 +88,6 @@ def _all_tool_names() -> set[str]:
     }
 
 
-def _tool_parameter_names(tool_name: str) -> set[str]:
-    """Return parameter names for a known tool by direct ToolDefinition lookup."""
-    from personal_agent.tools.primitives.bash import bash_tool
-    from personal_agent.tools.primitives.read import read_tool
-    from personal_agent.tools.primitives.run_python import run_python_tool
-    from personal_agent.tools.primitives.write import write_tool
-
-    known = {
-        t.name: t
-        for t in [bash_tool, read_tool, write_tool, run_python_tool]
-    }
-    tool_def = known.get(tool_name)
-    if tool_def is not None:
-        return {p.name for p in tool_def.parameters}
-    return set()
-
-
-# ---------------------------------------------------------------------------
-# Contract tests
-# ---------------------------------------------------------------------------
-
-
 class TestRequiredFrontmatter:
     """Every skill file with frontmatter has the three required fields."""
 
@@ -151,7 +121,7 @@ class TestToolsFieldIntegrity:
 
 
 class TestBoundedPatternFields:
-    """canonical_patterns ≤ 3 entries; known_bad_patterns ≤ 5 entries."""
+    """canonical_patterns ≤ 3 entries; no known_bad_patterns (FRE-1574)."""
 
     @pytest.mark.parametrize("filename,fm", _load_frontmatters())
     def test_canonical_patterns_bounded(self, filename: str, fm: dict[str, Any]) -> None:
@@ -161,73 +131,6 @@ class TestBoundedPatternFields:
         )
 
     @pytest.mark.parametrize("filename,fm", _load_frontmatters())
-    def test_known_bad_patterns_bounded(self, filename: str, fm: dict[str, Any]) -> None:
-        patterns: list[Any] = fm.get("known_bad_patterns") or []
-        assert len(patterns) <= 5, (
-            f"{filename}: known_bad_patterns has {len(patterns)} entries (max 5)"
-        )
-
-
-class TestKnownBadPatternSchema:
-    """Each known_bad_pattern entry has required fields and valid applies_to."""
-
-    def _all_bad_patterns(self) -> list[tuple[str, dict[str, Any]]]:
-        """Return (filename, entry) for every known_bad_pattern entry."""
-        results = []
-        for filename, fm in _load_frontmatters():
-            for entry in fm.get("known_bad_patterns") or []:
-                results.append((filename, entry))
-        return results
-
-    def test_all_bad_patterns_have_pattern(self) -> None:
-        """Every known_bad_pattern entry has a non-empty 'pattern' string."""
-        for filename, entry in self._all_bad_patterns():
-            assert isinstance(entry.get("pattern"), str) and entry["pattern"], (
-                f"{filename}: known_bad_pattern entry missing 'pattern': {entry}"
-            )
-
-    def test_all_bad_patterns_have_reason(self) -> None:
-        """Every known_bad_pattern entry has a non-empty 'reason' string."""
-        for filename, entry in self._all_bad_patterns():
-            assert isinstance(entry.get("reason"), str) and entry["reason"], (
-                f"{filename}: known_bad_pattern entry missing 'reason': {entry}"
-            )
-
-    def test_all_bad_patterns_have_suggestion(self) -> None:
-        """Every known_bad_pattern entry has a non-empty 'suggestion' string."""
-        for filename, entry in self._all_bad_patterns():
-            assert isinstance(entry.get("suggestion"), str) and entry["suggestion"], (
-                f"{filename}: known_bad_pattern entry missing 'suggestion': {entry}"
-            )
-
-    def test_applies_to_tool_is_registered(self) -> None:
-        """If applies_to.tool is set, it must resolve to a registered tool."""
-        registered = _all_tool_names()
-        for filename, entry in self._all_bad_patterns():
-            applies_to: dict[str, Any] = entry.get("applies_to") or {}
-            tool_name: str | None = applies_to.get("tool")
-            if tool_name is None:
-                continue
-            assert tool_name in registered, (
-                f"{filename}: known_bad_pattern applies_to.tool '{tool_name}' "
-                f"is not a registered tool. Registered: {sorted(registered)}"
-            )
-
-    def test_applies_to_fields_are_valid_parameters(self) -> None:
-        """If applies_to.fields is set, each field must be a parameter of applies_to.tool."""
-        for filename, entry in self._all_bad_patterns():
-            applies_to: dict[str, Any] = entry.get("applies_to") or {}
-            tool_name: str | None = applies_to.get("tool")
-            fields: list[str] = applies_to.get("fields") or []
-            if not tool_name or not fields:
-                continue
-            valid_params = _tool_parameter_names(tool_name)
-            if not valid_params:
-                # Tool is registered but parameter introspection not available — skip
-                continue
-            for field_name in fields:
-                assert field_name in valid_params, (
-                    f"{filename}: known_bad_pattern applies_to.fields['{field_name}'] "
-                    f"is not a parameter of tool '{tool_name}'. "
-                    f"Valid params: {sorted(valid_params)}"
-                )
+    def test_no_known_bad_patterns(self, filename: str, fm: dict[str, Any]) -> None:
+        """ADR-0156 D4 / FRE-1574 AC-7: the field left the skills with the global check."""
+        assert "known_bad_patterns" not in fm, f"{filename}: known_bad_patterns is retired"

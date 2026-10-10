@@ -47,6 +47,7 @@ curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | jq .
 HTML responses need script/style removal and block-tag newline injection to be readable:
 
 ```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | python3 -c "
 import sys, re
 from html.parser import HTMLParser

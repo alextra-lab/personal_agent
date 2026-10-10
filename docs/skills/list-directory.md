@@ -56,6 +56,7 @@ Single call, correct count across all subdirectories. Pipes work (FRE-283).
 bash ls -la /path/to/dir
 
 # Shell auto-expands ~ and $HOME
+# ask: the shell expands ~ here, so this is not a plain command and asks for approval.
 bash ls -la ~/
 bash ls -la /app/agent_workspace/
 ```

@@ -26,7 +26,6 @@ def _skill(name: str, nudge: str | None = None) -> SkillDoc:
         tools=("bash",),
         keywords=(name,),
         canonical_patterns=(),
-        known_bad_patterns=(),
         body=f"# {name} body",
         nudge=nudge,
     )

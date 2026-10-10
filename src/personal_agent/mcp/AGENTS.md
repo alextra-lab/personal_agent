@@ -51,10 +51,10 @@ mcp_github_search:
   category: "mcp"
   allowed_in_modes: ["NORMAL", "DEGRADED"]
   risk_level: "low"
-  requires_approval: false
 ```
 
-Users can then customize these entries as needed.
+Users can then customize these entries as needed. A discovered tool has no rule in
+`config/governance/permissions.yaml`, so every call asks until a rule is added (ADR-0156 D8).
 
 ## Tool Execution
 

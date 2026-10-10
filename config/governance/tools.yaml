@@ -1,5 +1,10 @@
 # Tool permissions and risk classifications
 # See ADR-0005 for detailed semantics
+#
+# FRE-1574 (ADR-0156 D8): whether an available call runs, asks or is refused is decided by
+# permissions.yaml. This file keeps availability (allowed_in_modes, forbidden_in_modes), paths
+# and loop limits. requires_approval, requires_approval_in_modes, auto_approve_prefixes and
+# hard_deny_patterns are retired: the loader rejects them.
 
 # FRE-1388: sub-agent tool principal. A sub-agent is a distinct governance
 # principal from the primary, not a subset of it — this block is the ONLY
@@ -212,7 +217,6 @@ tool_categories:
   system_write:
     description: "Tools that modify system state"
     risk_level: "high"
-    requires_approval_in_modes: ["ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
     examples: ["write_file", "execute_shell_command", "modify_config"]
 
   network:
@@ -232,7 +236,6 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 15
     rate_limit_per_hour: 120
 
@@ -240,7 +243,6 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL", "ALERT"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 10
     rate_limit_per_hour: 60
 
@@ -254,14 +256,12 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "medium"
-    requires_approval: false
     timeout_seconds: 30
     rate_limit_per_hour: 100
 
   write_file:
     category: "system_write"
     allowed_in_modes: ["NORMAL"]
-    requires_approval_in_modes: ["ALERT", "DEGRADED", "RECOVERY"]
     forbidden_in_modes: ["LOCKDOWN"]
     allowed_paths:
       - "$HOME/**/personal_agent/**"
@@ -278,7 +278,6 @@ tools:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
     risk_level: "low"
-    requires_approval: false
     requires_sandbox: false
     rate_limit_per_hour: null
     description: "FRE-343 — personal time-window retrieval scoped to ctx.user_id"
@@ -310,7 +309,6 @@ tools:
     category: "system_write"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     forbidden_in_modes: ["LOCKDOWN"]
-    requires_approval_in_modes: ["ALERT", "DEGRADED", "RECOVERY"]
     unattended_paths:
       - "/app/agent_workspace/sandbox/**"
       - "/tmp/**"
@@ -333,7 +331,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -346,7 +343,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -359,7 +355,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: [NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -372,7 +367,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -385,7 +379,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -398,7 +391,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -411,7 +403,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -424,7 +415,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -437,7 +427,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -450,7 +439,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -463,7 +451,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -476,7 +463,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -489,7 +475,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -502,7 +487,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -515,7 +499,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -528,7 +511,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -541,7 +523,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -554,7 +535,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -567,7 +547,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -580,7 +559,6 @@ tools:
     allowed_in_modes: []
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -593,7 +571,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -606,7 +583,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -619,7 +595,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -630,8 +605,6 @@ tools:
     category: "system_dangerous"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     forbidden_in_modes: ["LOCKDOWN", "RECOVERY"]
-    requires_approval: false
-    requires_approval_in_modes: ["ALERT", "DEGRADED"]
     timeout_seconds: 60
     rate_limit_per_hour: 60
     loop_max_per_signature: 5
@@ -639,96 +612,11 @@ tools:
     loop_consecutive_terminal: true  # FRE-279: syntax errors → 400s; terminate instead of indefinite retry
 
   # FRE-261 Step 4: sandboxed bash executor with allowlist-based approval model
+  # FRE-1574 (ADR-0156 D8): which commands run, ask or are refused is in permissions.yaml.
   bash:
     category: "system_dangerous"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     forbidden_in_modes: ["LOCKDOWN", "RECOVERY"]
-    requires_approval: true
-    auto_approve_prefixes:
-      # FRE-283: extended to cover all binaries referenced in skill docs.
-      # FRE-1572: a prefix match is not enough. Each command bash would run must match, and
-      # a substitution, a non-scratch output redirection or an option that runs a command
-      # or writes a file needs approval (tools/primitives/bash_allowlist.py). python3 stays
-      # here by the owner's decision of 2026-10-10, recorded as accepted: it runs any code.
-      NORMAL:
-        - "curl"
-        - "grep"
-        - "ls"
-        - "cat"
-        - "find"
-        - "jq"
-        - "docker ps"
-        - "docker logs"
-        - "git log"
-        - "git status"
-        - "git diff"
-        # FRE-1572 (owner decision, 2026-10-10): "psql -c" and "redis-cli" removed. Plain
-        # arguments change a store (psql -c 'DELETE ...', redis-cli FLUSHALL), so they ask.
-        - "ps"
-        - "top"
-        - "free"
-        - "df"
-        - "uptime"
-        - "wc"
-        - "rg"
-        - "awk"
-        - "sed"
-        - "ss"
-        - "vmstat"
-        - "iostat"
-        - "lsof"
-        - "netstat"
-        - "uname"
-        - "pgrep"
-        - "pg_isready"
-        - "tr"
-        - "sort"
-        - "uniq"
-        - "head"
-        - "tail"
-        - "echo"
-        - "date"
-        - "du"
-        - "id"
-        - "env"
-        - "which"
-        - "python3"
-        - "mmdc"  # FRE-315: mermaid-cli for diagram syntax validation
-      ALERT:
-        - "curl"
-        - "grep"
-        - "ls"
-        - "cat"
-        - "ps"
-        - "top"
-        - "free"
-        - "df"
-        - "ss"
-        - "netstat"
-        - "uname"
-        - "pgrep"
-        - "echo"
-        - "date"
-      DEGRADED:
-        - "curl"
-        - "grep"
-        - "ls"
-        - "cat"
-        - "ps"
-        - "top"
-        - "free"
-        - "df"
-        - "uname"
-        - "echo"
-    hard_deny_patterns:
-      - 'rm\s+-rf'
-      - 'dd\s+if='
-      - 'mkfs'
-      - 'sudo'
-      - 'wget'
-      - 'ssh'
-      - 'nc\s+-l'
-      - ':\(\)\s*\{\s*:\|:&\s*\};:'
     timeout_seconds: 30
     rate_limit_per_hour: 200
     loop_max_per_signature: 5
@@ -741,7 +629,6 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "medium"
-    requires_approval: false
     timeout_seconds: 120
     rate_limit_per_hour: 50
 
@@ -750,7 +637,6 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 40
     rate_limit_per_hour: 60
 
@@ -760,7 +646,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -772,7 +657,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -791,7 +675,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -804,7 +687,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -816,7 +698,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -828,7 +709,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -840,7 +720,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -852,7 +731,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -864,7 +742,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -876,7 +753,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -888,7 +764,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -900,7 +775,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "high"
-    requires_approval: true
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -913,7 +787,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -926,7 +799,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -939,7 +811,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -952,7 +823,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -965,7 +835,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -978,7 +847,6 @@ tools:
     category: "mcp"
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -991,7 +859,6 @@ tools:
     #allowed_in_modes: ['NORMAL']
     allowed_in_modes: []
     risk_level: "high"
-    requires_approval: true
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1004,7 +871,6 @@ tools:
     #allowed_in_modes: ['NORMAL']
     allowed_in_modes: []
     risk_level: "high"
-    requires_approval: true
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1016,7 +882,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL']
     risk_level: "high"
-    requires_approval: true
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1029,7 +894,6 @@ tools:
     #allowed_in_modes: ['NORMAL']
     allowed_in_modes: []
     risk_level: "high"
-    requires_approval: true
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1041,7 +905,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL']
     risk_level: "high"
-    requires_approval: true
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1054,7 +917,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1067,7 +929,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1080,7 +941,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1092,7 +952,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1104,7 +963,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1116,7 +974,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1128,7 +985,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1141,7 +997,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1154,7 +1009,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1166,7 +1020,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1179,7 +1032,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1191,7 +1043,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1203,7 +1054,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1215,7 +1065,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1227,7 +1076,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1239,7 +1087,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1251,7 +1098,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1263,7 +1109,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1276,7 +1121,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1289,7 +1133,6 @@ tools:
     #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     allowed_in_modes: []
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1301,7 +1144,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1313,7 +1155,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1325,7 +1166,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1337,7 +1177,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1349,7 +1188,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1361,7 +1199,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
-    requires_approval: false
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -1372,7 +1209,6 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL"]
     risk_level: "medium"
-    requires_approval: false
     timeout_seconds: 30
     rate_limit_per_hour: 20
     loop_max_per_signature: 1
@@ -1383,7 +1219,6 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 15
     rate_limit_per_hour: 100
 
@@ -1392,7 +1227,6 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL", "DEGRADED"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 15
     rate_limit_per_hour: 60
 
@@ -1401,7 +1235,6 @@ tools:
     category: "network"
     allowed_in_modes: ["NORMAL"]
     risk_level: "medium"
-    requires_approval: false
     timeout_seconds: 15
     rate_limit_per_hour: 10
 
@@ -1413,7 +1246,6 @@ tools:
     category: "artifact_write"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "medium"
-    requires_approval: false
     timeout_seconds: 20
     rate_limit_per_hour: 60
     loop_max_per_signature: 3
@@ -1425,7 +1257,6 @@ tools:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 20
     rate_limit_per_hour: 120
 
@@ -1434,7 +1265,6 @@ tools:
     category: "memory_read"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 10
     rate_limit_per_hour: 200
 
@@ -1447,8 +1277,6 @@ tools:
     category: "artifact_write"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "medium"
-    requires_approval: false
-    requires_approval_in_modes: ["ALERT", "DEGRADED"]
     timeout_seconds: 30
     rate_limit_per_hour: 30
     loop_max_per_signature: 3
@@ -1460,8 +1288,6 @@ tools:
     category: "artifact_write"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
     risk_level: "medium"
-    requires_approval: false
-    requires_approval_in_modes: ["ALERT", "DEGRADED"]
     timeout_seconds: 120
     rate_limit_per_hour: 20
     loop_max_per_signature: 3
@@ -1472,7 +1298,6 @@ tools:
     category: "memory_read"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 10
     rate_limit_per_hour: 200
 
@@ -1481,7 +1306,6 @@ tools:
     category: "memory_read"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 10
     rate_limit_per_hour: 60
 
@@ -1490,7 +1314,6 @@ tools:
     category: "memory_read"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"
-    requires_approval: false
     timeout_seconds: 10
     rate_limit_per_hour: 120
 
@@ -1500,7 +1323,6 @@ tools:
     category: "mcp"
     allowed_in_modes: ['NORMAL']
     risk_level: "high"
-    requires_approval: true
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []

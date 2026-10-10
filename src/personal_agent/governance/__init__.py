@@ -57,7 +57,6 @@ from personal_agent.governance.sub_agent_tools import (
     SUB_AGENT_DENIED_MODES,
     SubAgentToolGrant,
     evaluate_sub_agent_tool_grant,
-    sub_agent_tool_requires_approval,
 )
 
 __all__ = [
@@ -88,5 +87,4 @@ __all__ = [
     "SubAgentToolDecision",
     "SubAgentToolGrant",
     "evaluate_sub_agent_tool_grant",
-    "sub_agent_tool_requires_approval",
 ]

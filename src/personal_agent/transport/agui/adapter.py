@@ -132,6 +132,8 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
             risk_level=risk_level,
             reason=reason,
             expires_at=expires_at,
+            worker=worker,
+            session_option=session_option,
         ):
             envelope = {
                 "type": "tool_approval_request",
@@ -142,6 +144,8 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                 "risk_level": risk_level,
                 "reason": reason,
                 "expires_at": expires_at,
+                "worker": worker,
+                "session_option": session_option,
             }
         case ConstraintPauseEvent(
             request_id=request_id,

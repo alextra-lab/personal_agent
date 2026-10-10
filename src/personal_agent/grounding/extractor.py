@@ -500,7 +500,7 @@ class ModelSpanExtractor:
             # The tiling ends where the model ran out of room, not where the text ends.
             # Layer 3 has already made the uncovered part non-exempt coverage gaps, so the
             # verdict is fail-closed; this names the cause. Without it the stop reads as
-            # any other degraded extraction, which is 46% of turns that did not stop.
+            # any other degraded extraction, and turns that did not stop degrade too.
             log.warning(
                 "span_extractor_truncated",
                 trace_id=effective_trace.trace_id,

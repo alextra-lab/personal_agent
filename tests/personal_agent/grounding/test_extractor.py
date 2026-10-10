@@ -9,12 +9,11 @@ nonsense must produce *more* citation obligations, never fewer.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
 import pytest
-import structlog
-import structlog.testing
 
 from personal_agent.grounding.code_regions import RegionKind, partition_output
 from personal_agent.grounding.extractor import (
@@ -32,6 +31,7 @@ from personal_agent.grounding.spans import NonExemptReason, SpanLabel
 from personal_agent.llm_client.cost_estimator import estimate_reservation
 from personal_agent.telemetry.trace import SystemTraceContext
 from tests._helpers.budget_config import load_budget_config_for_tests
+from tests._helpers.log_capture import capture_log_records
 
 
 class StubClient:
@@ -315,8 +315,8 @@ _THREE_CLAIMS = (
 )
 
 
-def _truncation_events(captured: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [e for e in captured if e["event"] == "span_extractor_truncated"]
+def _truncation_events(captured: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [e for e in captured if e.get("event") == "span_extractor_truncated"]
 
 
 def test_ceiling_is_above_the_measured_cut_off() -> None:
@@ -355,20 +355,22 @@ def test_reservation_does_not_depend_on_the_ceiling() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stop_at_the_limit_leaves_the_tail_as_a_logged_gap() -> None:
+@pytest.mark.parametrize("finish_reason", ["length", "max_tokens"])
+async def test_stop_at_the_limit_leaves_the_tail_as_a_logged_gap(finish_reason: str) -> None:
     """AC-1: a reply that stops mid-tiling must not read as a complete one.
 
     The provider returns a parseable, partial tiling — live, ``payload_unparseable`` fired
     0 times in 30 days. Layer 3 turns the uncovered tail into a coverage gap, which is
     non-exempt, and the extractor now says *why* the tail is uncovered.
     """
+    first = "Ortiz is a Spanish brand."
     client = StubClient(
-        [{"region": 0, "quote": "Ortiz is a Spanish brand.", "label": "claim_non_exempt"}],
-        finish_reason="length",
+        [{"region": 0, "quote": first, "label": "claim_non_exempt"}],
+        finish_reason=finish_reason,
         completion_tokens=MAX_OUTPUT_TOKENS,
     )
     trace_ctx = SystemTraceContext.new("fre1570")
-    with structlog.testing.capture_logs() as captured:
+    with capture_log_records() as captured:
         extraction = await ModelSpanExtractor(client).extract(_THREE_CLAIMS, trace_ctx=trace_ctx)
 
     assert extraction.degraded
@@ -380,8 +382,9 @@ async def test_stop_at_the_limit_leaves_the_tail_as_a_logged_gap() -> None:
     (event,) = _truncation_events(captured)
     assert event["trace_id"] == trace_ctx.trace_id
     assert event["max_tokens"] == MAX_OUTPUT_TOKENS
-    assert event["finish_reason"] == "length"
-    assert event["uncovered_chars"] == sum(len(s.text) for s in tail)
+    assert event["finish_reason"] == finish_reason
+    # Everything after the one segment the model got to, leading space included.
+    assert event["uncovered_chars"] == len(_THREE_CLAIMS) - len(first)
 
 
 @pytest.mark.asyncio
@@ -389,7 +392,7 @@ async def test_cut_off_json_is_a_whole_reply_gap_and_logged() -> None:
     """AC-1: a payload cut mid-segment is unparseable, so every claim is a gap — logged."""
     cut = '{"segments": [{"region": 0, "quote": "Ortiz is a Spanish brand.", "label": "claim_no'
     client = StubClient(raw=cut, finish_reason="length")
-    with structlog.testing.capture_logs() as captured:
+    with capture_log_records() as captured:
         extraction = await ModelSpanExtractor(client).extract(_THREE_CLAIMS)
 
     assert extraction.degraded
@@ -399,18 +402,20 @@ async def test_cut_off_json_is_a_whole_reply_gap_and_logged() -> None:
 
 
 @pytest.mark.asyncio
-async def test_token_count_at_the_ceiling_counts_as_a_stop() -> None:
-    """A provider that reports no ``finish_reason`` is still caught by the token count.
+@pytest.mark.parametrize("finish_reason", [None, "stop"])
+async def test_token_count_at_the_ceiling_counts_as_a_stop(finish_reason: str | None) -> None:
+    """The token count catches a stop the ``finish_reason`` does not report.
 
     Same two-signal rule as ``session_summary._reject_if_truncated``: the direct signal
-    can be overwritten upstream, the count cannot.
+    can be missing, or overwritten with ``"stop"`` upstream, and the count cannot. The
+    ``"stop"`` case is the one that justifies the second signal.
     """
-    client = StubClient([], completion_tokens=MAX_OUTPUT_TOKENS)
-    with structlog.testing.capture_logs() as captured:
+    client = StubClient([], finish_reason=finish_reason, completion_tokens=MAX_OUTPUT_TOKENS)
+    with capture_log_records() as captured:
         await ModelSpanExtractor(client).extract(_THREE_CLAIMS)
 
     (event,) = _truncation_events(captured)
-    assert event["finish_reason"] is None
+    assert event["finish_reason"] == finish_reason
     assert event["output_tokens"] == MAX_OUTPUT_TOKENS
 
 
@@ -424,7 +429,7 @@ async def test_a_complete_reply_is_not_reported_as_truncated(
 ) -> None:
     """Seeded negative: a clean stop, or one token under the ceiling, raises no alarm."""
     client = StubClient([], finish_reason=finish_reason, completion_tokens=completion_tokens)
-    with structlog.testing.capture_logs() as captured:
+    with capture_log_records() as captured:
         await ModelSpanExtractor(client).extract(_THREE_CLAIMS)
 
     assert _truncation_events(captured) == []
@@ -447,7 +452,7 @@ async def test_a_long_reply_is_tiled_completely() -> None:
     assert len(payload) // 4 <= MAX_OUTPUT_TOKENS
 
     client = StubClient(segments, finish_reason="tool_calls", completion_tokens=len(payload) // 4)
-    with structlog.testing.capture_logs() as captured:
+    with capture_log_records() as captured:
         extraction = await ModelSpanExtractor(client).extract(output)
 
     (call,) = client.calls

@@ -121,7 +121,7 @@ New tests:
 | `test_cut_off_json_is_a_whole_reply_gap_and_logged` | AC-1. A stub returns JSON cut mid-segment with `finish_reason="length"`. No span is trusted, all text is a gap, truncation is logged. |
 | `test_token_count_at_the_ceiling_counts_as_a_stop` | `finish_reason` is absent, `usage.completion_tokens == MAX_OUTPUT_TOKENS`. Truncation is logged (second signal, as in `session_summary._reject_if_truncated`). |
 | `test_a_complete_reply_is_not_reported_as_truncated` | Seeded negative. `finish_reason="tool_calls"` or `"stop"`, tokens below the ceiling: no `span_extractor_truncated` event. |
-| `test_a_long_reply_is_tiled_completely` | AC-2. A reply of about 6,000 words and a stub that tiles it fully. The extraction covers every character, `degraded` is false, and the request carried a ceiling above 4,096. |
+| `test_a_long_reply_is_tiled_completely` | AC-2. A reply of 600 sentences and a stub that tiles it fully (the tiling is about 12,000 tokens, above the old ceiling and below the new one). The extraction covers every character, `degraded` is false, and the request carried a ceiling above 4,096. |
 
 Run: `make test-file FILE=tests/personal_agent/grounding/test_extractor.py`. Expected: the
 truncation tests fail (no event, constant is 4,096).

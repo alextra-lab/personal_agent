@@ -115,6 +115,23 @@ hours…") in both sessions.
 A researcher's only tool is `web_search` (ADR-0150), so both plans route the task to a worker that cannot
 do it.
 
+**Why both planners did it** (added 2026-10-10, ES `agent-logs-*` on both traces):
+- The fan-out was decided before the planner. On both traces `intent_classified` reads `task_type:
+  analysis, signals: [analysis_pattern]`. `decomposition_assessed` reads `strategy: hybrid, reason:
+  analysis_moderate_hybrid`. The planner then received "Strategy: HYBRID", and the decline path is
+  FRE-1515, which is parked.
+- **No worker type can read our telemetry.** `WORKER_TYPES` grants `researcher` only `web_search`, and
+  `general` grants `run_python`, `search_memory` and `recall_personal_history`. Every worker capture
+  shows `skill_index_block_chars: 0`, so workers get no skills.
+- **The primaries did use the skills,** inlined by keyword match without a `read_skill` call.
+  `skill_index_assembled` shows `query-elasticsearch` (28,749 chars) on s3 t1, and
+  `infrastructure-health` (8,908) on t3, in both sessions. Both primaries then queried Elasticsearch with
+  `curl` through `bash`, as the skill shows. `read_skill` was called once in all 80 turns (Flash-Next s3
+  t4, `self-telemetry`).
+
+So F4 is a routing and capability gap, not a model failure. Flash-Next's primary redid the work itself,
+and Gemma's did not.
+
 ### F5 — Blind quality: Flash-Next leads both 20-turn scripts by 7.5 to 8 points, with both scorers
 
 **Verdict: POSITIVE.**
@@ -151,6 +168,40 @@ Key hashes `da59bd39…` (s2) and `47722a35…` (s3), posted on FRE-1517 before 
 Both scorers: Fabricated. Flash-Next's t16 denied any check that day and pointed to a May check. Both
 scorers marked it Wrong, and B noted it as borderline.
 
+### F6a — The recall turns that decide the veto were unanswerable by the study's own design
+
+**Verdict: POSITIVE.** Added 2026-10-10, after the owner asked whether the routing failure provoked
+Gemma's hallucinations.
+
+**Query:** the scripts' `back_refs` labels, and each session's tools and reply on those turns.
+
+**Output:**
+- s3 t16 → t1 and s2 t19 → t1 both carry `window: memory`. The content sits beyond the 20-message live
+  history (`AGENT_CONVERSATION_MAX_HISTORY_MESSAGES=20`), so only memory recall can reach it. **The study
+  paused consolidation** (`AGENT_ENABLE_SECOND_BRAIN=false`), so no session content reached memory. Neither
+  model could see turn 1.
+- How each model handled the gap:
+
+| Turn | Flash-Next | Gemma |
+|---|---|---|
+| s3 t16 | `recall_personal_history` ×2, `search_memory` ×2, `bash` ×1. "I have no record of a log check this morning" | `bash` ×5, no memory search. Presents a fresh 24-hour count ("104 errors") as its earlier report |
+| s2 t19 | memory tools ×2, then reads the rules back from its own file's docstring ("rule #1") | memory tools ×2. Presents the owner's real stored preferences as the session's two rules |
+
+**Reading:** the routing failure of F4 did not cause the fabrications. The study's memory pause did, by
+making the answer unreachable. The difference in **gap handling** is real: Gemma fills the gap with
+something plausible, and Flash-Next admits it or finds another route. But the V1 veto (F7) rests on two
+turns that no model could answer correctly.
+
+**The quality gap without the `memory`-window turns** (s2: t18, t19. s3: t16, t18, t19), per scorer:
+
+| Script | Scorer A: Flash-Next / Gemma (gap) | Scorer B: Flash-Next / Gemma (gap) |
+|---|---|---|
+| s2, 18 turns | 60 / 58 (+2) | 63 / 59 (+4) |
+| s3, 17 turns | 68 / 63 (+5) | 75 / 65 (+10) |
+
+Flash-Next still leads on both scripts with both scorers. The s2 lead shrinks to 2–4 points, and it still
+includes Gemma's two runaway turns (Q 1 each, F3).
+
 ### F7 — The approved veto over three scripts: Gemma is vetoed under one scorer's reading
 
 **Verdict: POSITIVE** (the counts are stated).
@@ -170,6 +221,8 @@ scorer.
 - **The deciding item for Gemma is s2 t19.** Asked "Remind me what two rules I gave you at the very
   beginning", it gave two stored preferences from memory ("artifacts only on request", "plain text by
   default"), not the session's rules. A scored it Wrong, B Fabricated. Both gave Q 1.
+- **Read F7 with F6a.** Both of Gemma's V1 items are `memory`-window recalls made unanswerable by the
+  memory pause. The veto still measures gap handling, but not the ability to recall.
 - **Flash-Next crosses V2 only under scorer A's strict reading of I4.** If its throwaway patch scripts
   count as a second code file, it reaches 8/38 = 21%. Scorer A chose the lenient reading and flagged it.
   Scorer B did not raise it.
@@ -200,15 +253,42 @@ session, and `ls -la /app/agent_workspace` in the gateway container.
   files date from 2026-09-16, from the owner's own sessions. It then wrote `nfl_helper.py`.
 - Neither session touched the other's file.
 
+### External reports — what others see with Gemma 4 26B-A4B (web, not measured here)
+
+Collected on 2026-10-10 by a research subagent. The explore seat opened the first two sources itself.
+Reddit was unreachable for the search tool, two articles returned 403, and some Hugging Face dates are
+inferred.
+
+- **Runaway repetition** is the most widely reported failure on 31B and 26B-A4B. It runs until the budget
+  is gone, gets worse with long context, and happens with thinking on and off. google-deepmind/gemma #622,
+  opened 2026-04-11 and still open in September 2026 (opened by explore).
+- **A template fix** of 2026-07-09 removed reasoning re-injection in multi-turn tool use, and cured the
+  12B model (1/576 → 0/576). A tester then wrote that 26B was "still failing with runaway and rumination
+  especially on the thinking channel". huggingface.co/google/gemma-4-12B-it/discussions/38 (opened by
+  explore).
+- **Tool-call markup in content** on llama.cpp: llama.cpp #22786, llama-cpp-python #2227.
+- **Weaker with thinking off:** huggingface.co/google/gemma-4-26B-A4B-it/discussions/10.
+- **Premature stopping in agent loops:** github.com/HazAT/pi-interactive-subagents/issues/22.
+- **Agentic benchmarks:** Tau2 68.2 against 81.2 for Qwen3.6-35B-A3B
+  (openrouter.ai/compare/google/gemma-4-26b-a4b-it/qwen/qwen3.6-35b-a3b).
+- **Speed:** 63.9 tok/s on an M3 Max with llama.cpp (hiesch.eu/blog/llamacpp-benchmarks-speculative-decoding).
+- **Not found:** reports on over-decomposition as a planner, or on restating re-queried data as an earlier
+  report.
+
+**Open question for this study:** the date of the chat template embedded in our GGUF, and the Gemma fixes
+in llama.cpp build `b11521` (PRs #21326, #21418, #21661 per the reports). Both are UNVERIFIABLE from the
+Seshat side. The slm_server seat can read them.
+
 ---
 
 ## Proposals
 
 At most ten. Each is for master's disposition and the owner's decision. None was executed by this seat.
 
-1. **On this evidence, keep Flash-Next as primary.** Gemma ties on the trip script and trails by 7.5–8
-   points on tool building and on logs plus learning (F5). It has two runaways (F3), and the veto falls on
-   it under one scorer (F7). Its advantages are speed (2.1–2.3× less wall time, F1) and memory.
+1. **On this evidence, keep Flash-Next as primary.** Gemma ties on the trip script and trails on tool
+   building and on logs plus learning: by 7.5–8 points on all turns (F5), and by 2–10 points without the
+   unanswerable `memory` turns (F6a). It has two runaways (F3). The veto (F7) is weaker evidence than it
+   looked (F6a). Its advantages are speed (2.1–2.3× less wall time, F1) and memory.
 2. **Remove the study-only Gemma planner mode** (#1231), as its own catalog comment says when Gemma is not
    chosen. D7 is 10/11 twice, and the miss is systematic (F8).
 3. **Bound every local primary generation.** Either an explicit `max_tokens` on primary calls, or a lower
@@ -216,12 +296,19 @@ At most ten. Each is for master's disposition and the owner's decision. None was
    the turn (F3). This applies to any local model, not only Gemma.
 4. **Keep the tail of a cancelled stream at the router** (the last few KB, and the reasoning and content
    byte counts). Then the next runaway shows whether it loops, and in which channel (F3).
-5. **Teach the planner that internal telemetry is not web research.** Both models routed a log query to a
-   `web_search`-only worker (F4). Flash-Next recovered only because its primary redid the work.
+5. **Close the telemetry routing gap (F4).** A task over our own data must not fan out to workers that
+   cannot reach it. Two ways: the planner may decline (FRE-1515), or a worker type gets the telemetry
+   tools and skills. Flash-Next recovered only because its primary redid the work.
 6. **Give each study session its own agent workspace,** or clear it at session start. A shared
    `/app/agent_workspace` lets an arm build on files another session wrote (F9).
-7. **The owner adjudicates the two borderline items that decide the veto:** Gemma s2 t19 (Wrong or
-   Fabricated), and Flash-Next's patch scripts under I4 (F7).
+7. **The owner adjudicates the borderline items, and reads the veto with F6a.** Gemma s2 t19 (Wrong or
+   Fabricated), and Flash-Next's patch scripts under I4 (F7). Both of Gemma's V1 items were unanswerable
+   by design.
+8. **In future production studies, do not test `memory`-window recall while consolidation is paused.**
+   Either leave those back-refs out, or let the study identity consolidate into a disposable store (F6a).
+9. **Before more Gemma work, have slm_server read the GGUF's embedded template date and the llama.cpp
+   build's Gemma fixes.** If the template predates 2026-07-09, rerun Gemma s2 once with the fixed template.
+   That shows how much of F3 is the template.
 
 ## Filed tickets
 

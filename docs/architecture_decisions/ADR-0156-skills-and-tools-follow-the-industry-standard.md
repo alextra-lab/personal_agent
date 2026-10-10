@@ -149,7 +149,7 @@ The migration table gives the verdict for each file.
 ### D8 — One permission model (S6)
 
 1. **Rules.** Governance holds `deny`, `ask` and `allow` lists of `Tool(pattern)` rules for every tool. The order is "deny, then ask, then allow. The first match in that order determines the outcome" (S6). Mode-specific rules from `config/governance/tools.yaml` stay, as rules scoped to a mode.
-   - **The pattern grammar.** For `Bash`, `Bash(<words>)` matches a subcommand whose argument list equals `<words>`, and `Bash(<words> *)` matches one whose argument list starts with `<words>`. For every other tool, the pattern names one parameter and its value, with the same exact or `*` prefix forms. T2 writes the grammar into `config/governance/` with a test per form.
+   - **The pattern grammar.** For `Bash`, `Bash(<words>)` matches a subcommand whose argument list equals `<words>`, and `Bash(<words> *)` matches one whose argument list starts with `<words>`. For every other tool, `Tool(p1=v1, p2=v2 …)` matches a call only if every named parameter matches, each with the same exact or `*` prefix forms. Parameters that the pattern does not name are free. A session rule (D8.3) uses the complete form `Tool(=<arguments>)`: it matches only a call whose full argument set, as canonical JSON, is equal. T2 writes the grammar into `config/governance/` with a test per form.
    - **The rules fail closed.** If the rules cannot be loaded, or the evaluation of a call raises an error, the call is denied with a D6 error. A tool with no rule at all, and a call that matches no rule, ask (D8.3). Nothing runs by default.
    - This replaces the fail-open branches of the path check: `_check_path_governance` returns "permitted" on a load error and on a missing policy (`tools/primitives/_governance.py:168-176`). After T2, a load error denies.
 2. **Bash.** A command is split on "`&&`, `||`, `;`, `|`, `|&`, `&`, and newlines. A rule must match each subcommand independently" (S6). Deny and ask rules also apply to a command inside a subshell, a command substitution or a control-flow body (S6). FRE-1572's splitter becomes this matcher. The `auto_approve_prefixes` lists become allow rules. Where S6 leaves the parsing open, these rules apply:
@@ -159,10 +159,12 @@ The migration table gives the verdict for each file.
      - every word of it is a literal after quote removal: no parameter, arithmetic or command expansion, and no glob;
      - its first word is not an indirect-execution word: `eval`, `source`, `.`, `exec`, `command`, `builtin`, `env`, `nohup`, `timeout`, `nice`, `stdbuf`, `time`, `sudo`, `xargs`, or a shell (`bash`, `sh`, `zsh`, `dash`) with `-c`;
      - no argument is `-exec`, `-execdir`, `-ok` or `-okdir`;
-     - it has no output redirection to a file other than `/dev/null`.
+     - no variable assignment stands in front of it (for example `PATH=/x ls`);
+     - it has no redirection, except output or errors to `/dev/null` and `2>&1`. An input redirection from a file asks, because it feeds a local file to the command.
    - A command that the parser cannot parse fully asks.
    - A function definition, a heredoc, and process substitution (`<(…)`, `>(…)`) are not simple commands, so they ask.
-   - An indirect-execution word can be allowed only by an allow rule whose pattern starts with that word, for example `Bash(timeout 30 curl *)`. Such a rule is reviewed like code.
+   - An indirect-execution word can be allowed only by an allow rule whose pattern names the word and the full inner command, for example `Bash(timeout 30 git status)`. A rule of the form `Bash(<indirect word> *)` is rejected when the rules load.
+   - **Migrating `auto_approve_prefixes` is not a copy.** A prefix that can run another program does not become an allow rule: today's list holds `env`, `awk`, `sed` and `python3` (`config/governance/tools.yaml:648-691`). They ask. `curl` stays allowed only when no argument sends a local file (`-d @…`, `--data*` with `@`, `-F …=@…`, `-T`, `--upload-file`, `-K`, `--config`). Otherwise it asks. T2 lists every prefix of today with its outcome in the PR.
 3. **No match asks the user.** The approval card (FRE-1461, ADR-0063 Amendment A) shows the tool, the exact arguments, and the worker when a worker asks. The card offers "allow once" and "allow for this session".
    - "Allow for this session" adds a session allow rule for the exact tool and arguments of the call.
    - It is offered only when the call asks because no rule matched. A call that matches an explicit `ask` rule (for example `run_python` with `network: true`) offers "allow once" only. The order of D8.1 holds: an explicit ask rule is never overridden by an allow rule.
@@ -424,7 +426,7 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
   - **Tools.** A contract test builds the registry with every registration flag on, so that conditional tools are included. It fails if the registry and the 28 rows of the migration table differ. For each tool it asserts:
     - the success shape and the failure shape of D6.1;
     - a failure can only be built from the tool's error-code type, so an undeclared code cannot be returned (a type check, not a declaration that the test trusts);
-    - each code of that type is driven once;
+    - every line that builds a failure is executed by a test, shown by a coverage report over those lines. One test per code is not enough when several paths share a code;
     - a result over the tool's bound is truncated with next-call text, and no result exceeds 25,000 tokens (D6.4);
     - the description has at least 3 sentences and at least 1 example call (D6.5).
   - **Dispatch.** The failure paths outside the tools give the D6.1 shape: an unknown tool, a missing parameter, a governance refusal, a permission deny, a timeout and an exception in the executor.
@@ -441,13 +443,18 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
   - With a PWA client, a call that matches no rule shows the card with the exact arguments. It runs on "allow once" and is refused on deny. *Fails if* the card is not shown, or the call runs before the answer.
   - In each case of D8.4 (`approval_ui_enabled=False`, no session id, no transport, a transport whose PWA client is gone), the same call is denied with a D6 error. *Fails if* it runs.
   - If the rules fail to load, or the evaluation raises, the call is denied. A tool with no rule asks. *Fails if* either runs without an ask.
-  - After "allow for this session" on an unmatched call, the same call runs without a card. A call that matches an explicit ask rule still shows the card after an earlier "allow once". *Fails if* either differs.
+  - After "allow for this session" on an unmatched call, the same call runs without a card.
+  - A call that matches an explicit ask rule offers no "allow for this session". The test then adds a session rule that equals that call, and runs the call again: the card is still shown.
+
+  *Fails if* any of these differs.
 
   Seeded negative: restoring row A3's branch makes the second test fail.
 - **AC-6 — the bash matcher allows only plain commands.** **Check:** a table test under the allow rule `Bash(ls *)` only. The table has one row for each of:
   - each separator: `&&`, `||`, `;`, `|`, `|&`, `&`, newline, each followed by `rm x`;
   - each FRE-1572 form, and `rm x` inside a subshell, a command substitution, backticks, and an `if`, `for` and `while` body;
-  - each failed condition of D8.2: an expansion in a word, a glob, every listed indirect-execution word in front of `rm x`, each `-exec` form, an output redirection to a file, a function definition, a heredoc, both process substitutions;
+  - each failed condition of D8.2: an expansion in a word, a glob, a variable assignment (`PATH=/x ls`), an output redirection to a file, an input redirection from a file (`ls < /etc/passwd`), a function definition, a heredoc, both process substitutions, and `find . -exec`, `-execdir`, `-ok` and `-okdir` under an added allow rule `Bash(find *)`;
+  - every listed indirect-execution word in front of `ls` (for example `env ls`, `timeout 5 ls`, `command ls`). These rows test the guard: a matcher that strips the wrapper and matches `ls` would allow them;
+  - the rules loader, given `Bash(env *)`, `Bash(timeout *)` and `Bash(awk *)`, rejects each one;
   - one input that the parser cannot parse.
 
   Where the form permits it, a row starts with `ls`.
@@ -462,7 +469,13 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
   - a read after the named file is replaced by a symlink to another file;
   - a read of a directory named in `read_paths`;
   - a read through a hard link to the named file at another path;
-  - a read of the named file after the task ends.
+  - a read of the named file after the task ends;
+  - a read after the named file is replaced by another regular file at the same path (a rename over it).
+- **AC-10 — each worker type sees its own catalog.** **Check:** a test builds the first-call prompt and the tool list of each worker type. *Fails if* any of these holds:
+  - a type's catalog lists a skill whose `metadata.requires-tools` that type lacks;
+  - a type's catalog omits a skill whose tools it holds;
+  - any type, the researcher included, lacks `read_skill`;
+  - the researcher's `read_skill` returns a file outside the skill folders.
 
 ---
 

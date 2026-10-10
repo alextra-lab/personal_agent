@@ -301,3 +301,15 @@ Linear write tools.
 - `ToolExecutionLayer` injects an `approve` callable into async executors that declare an `approve`
   parameter (ADR-0153 D7). The name is reserved. With no channel the callable returns `deny`.
 - The code default of the flag is still false. A deployment that does not set it true stays open.
+
+## Amendment B — An "ask" without an approval surface is denied (ADR-0156, 2026-10-10)
+
+**Status**: Accepted. The owner approved it on FRE-1573 (2026-10-10, brief item 8b: "Refuse it").
+
+| # | Change |
+|---|--------|
+| A3 | **Replaced.** With `AGENT_APPROVAL_UI_ENABLED` false, a call that needs approval is **denied**, not run. The log event is `approval_ui_disabled_denied`. The eval stack lists the calls that it runs as allow rules in its own rules file. See ADR-0156 D8.4 and D8.5. |
+| A4 | **Granularity changed for workers.** A worker call that matches an "ask" rule asks per call, with the exact arguments and the worker named. One approval no longer covers the tool for the rest of the turn. See ADR-0156 D9.3. |
+| A5 | **Replaced** by ADR-0156 D8: the deny, ask and allow rules decide which calls prompt. |
+
+The last consequence of Amendment A ("A deployment that does not set it true stays open") no longer holds after ADR-0156's T2 ships.

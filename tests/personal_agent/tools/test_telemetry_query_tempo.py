@@ -573,6 +573,23 @@ async def test_a_tempo_rejection_becomes_a_short_error() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [500, 502, 403, 404])
+async def test_a_tempo_error_body_is_echoed_only_for_a_query_error(status: int) -> None:
+    """Only 400 and 422 describe the tool-built query; any other body is not ours to pass on."""
+    rec = _Recorder(lambda _r: httpx.Response(status, text="SECRET proxy or server page"))
+    with pytest.raises(ToolExecutionError, match=f"HTTP {status}") as err:
+        await _run(rec, action="latency", since="24h")
+    assert "SECRET" not in str(err.value)
+
+
+@pytest.mark.asyncio
+async def test_a_whole_number_float_limit_is_accepted() -> None:
+    rec = _Recorder()
+    await _run(rec, action="latency", since="24h", limit=200.0)
+    assert rec.params()["limit"] == "200"
+
+
+@pytest.mark.asyncio
 async def test_a_connection_failure_becomes_a_tool_error() -> None:
     def boom(_r: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down")

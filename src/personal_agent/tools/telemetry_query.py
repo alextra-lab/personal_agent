@@ -268,6 +268,7 @@ _TEMPO_MAX_SINCE_MINUTES = 7 * 24 * 60
 _TEMPO_MAX_BYTES = 16 * 1024 * 1024
 _TEMPO_MAX_SPANS = _TEMPO_MAX_LIMIT * _TEMPO_SPANS_PER_SET
 _TEMPO_MAX_GROUPS = 50
+_TEMPO_QUERY_ERROR_STATUSES = frozenset({400, 422})
 # A filter value, and a group label read back from Tempo, must look like a role or model id.
 # No quote or backslash can enter the TraceQL, and no free text can come back.
 _LABEL_RE = re.compile(r"[A-Za-z0-9._/:-]{1,100}")
@@ -1007,8 +1008,8 @@ def _build_tempo_request(
 
     if limit is None:
         traces = _TEMPO_DEFAULT_LIMIT
-    elif _is_int(limit) and 1 <= limit <= _TEMPO_MAX_LIMIT:
-        traces = limit
+    elif _is_number(limit) and float(limit).is_integer() and 1 <= limit <= _TEMPO_MAX_LIMIT:
+        traces = int(limit)
     else:
         raise _refuse(f"limit must be an integer from 1 to {_TEMPO_MAX_LIMIT}")
 
@@ -1293,7 +1294,12 @@ async def _read_tempo(
         raise ToolExecutionError("Tempo request failed.") from exc
 
     if response.is_error:
-        reason = bytes(body[:_ERROR_CHARS]).decode("utf-8", errors="replace")
+        # A 400 or 422 describes the query, which the tool built. Any other body (a proxy
+        # page, a server error) is not checked text, so the model gets the status only.
+        if response.status_code in _TEMPO_QUERY_ERROR_STATUSES:
+            reason = bytes(body[:_ERROR_CHARS]).decode("utf-8", errors="replace")
+        else:
+            reason = "no detail passed on for this status"
         log.warning(
             "query_telemetry_tempo_rejected",
             trace_id=trace_id,

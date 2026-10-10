@@ -173,3 +173,22 @@ arms:
     launch_flags: "llama.cpp build 11521, no MTP, 3 slots, ctx 131072 (UNVERIFIED)"
     fan_mode: apple_auto (UNVERIFIED)
     thermal_snapshot: not recorded for llama.cpp arms
+  stage4_gemma_spot:
+    # FRE-1517 spot retest after FRE-1564, FRE-1360, FRE-1566 and FRE-1562 (owner "Go", relayed by master,
+    # 2026-10-10). Identical to stage2_gemma_planner_off except the served pack. slm_server serves
+    # UD-Q8_K_XL with MTP under the same id, while the catalog still names Q8_0. The quant and the launch
+    # flags come from slm_server's ready report, not from models.yaml, so they stay TBD until then and the
+    # runner refuses to start.
+    order_label: stage 4 spot retest
+    deployment_key: gemma-4-26b-a4b
+    engine: llama.cpp (llama-server)
+    served_model_id: unsloth/gemma-4-26B-A4B-it
+    telemetry_model: unsloth/gemma-4-26B-A4B-it
+    models_endpoint: http://localhost:8600/v1/models
+    pack: unsloth/gemma-4-26B-A4B-it-GGUF (catalog comment)
+    quant: "UD-Q8_K_XL (gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf; slm_server ready report 13:42 UTC, and /v1/models)"
+    context_length: 131072
+    reasoning: "primary thinks (default mode); planner mode thinking off; workers enable_thinking false; catalog max_tokens 12288 (FRE-1562)"
+    launch_flags: "llama.cpp b11521-b42b7e6d3, MTP draft-mtp depth 2 (spec-draft-n-max 2, head mtp-gemma-4-26B-A4B-it-Q8_0.gguf), --parallel 3, --ctx-size 131072 unified KV (slm_server ready report, 13:42 UTC)"
+    fan_mode: apple_auto (UNVERIFIED)
+    thermal_snapshot: not recorded for llama.cpp arms

@@ -209,6 +209,11 @@ _BYPASSES: dict[str, str] = {
     "sed_in_place_abbreviated": "sed --in-p=.bak 's/a/b/' f",
     "curl_etag_save": "curl --etag-save /app/x https://example.com",
     "sort_temporary_directory": "sort -T /app f",
+    # Found by the automated commit security review of 2026-10-10.
+    "quoted_parameter_transformation": 'echo "${x@P}"',
+    "quoted_parameter_operator_option": 'find . "${X:--exec}" chmod 777 {} ;',
+    "continuation_after_a_quoted_heredoc": "cat <<'EOF'\nit's\nEOF\necho $\\\n(id)",
+    "continuation_after_a_comment_quote": "ls # it's\necho $\\\n(id)",
     "control_character": "ls\rchmod 777 x",
     "mmdc_puppeteer_config": "mmdc -i /tmp/m.mmd -o /tmp/m.svg -p /tmp/p.json",
     # curl
@@ -286,7 +291,14 @@ class TestEveryBypassNeedsApproval:
 
 # The old splitter caught this form by accident: it split `>|` at the `|`, so the file name
 # became a segment whose first word is not allowlisted.
-_OLD_CAUGHT_BY_ACCIDENT = {"clobber_to_file"}
+#
+# The two continuation forms attack this branch's own continuation join, not the old code,
+# which refused them for other reasons. They stay in AC-1, out of the seeded negative.
+_OLD_CAUGHT_BY_ACCIDENT = {
+    "clobber_to_file",
+    "continuation_after_a_quoted_heredoc",
+    "continuation_after_a_comment_quote",
+}
 
 
 class TestTheSeededNegative:

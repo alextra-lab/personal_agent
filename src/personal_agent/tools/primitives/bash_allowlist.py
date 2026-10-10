@@ -203,6 +203,10 @@ def scan_segments(command: str) -> list[_Segment]:
     Returns:
         The segments in order. Empty segments are dropped.
     """
+    # The join below tracks quotes but not comments or here-doc bodies, where a quote
+    # character is literal. With either present, a quote there could desync the join from
+    # the scan, so a command that also holds a continuation is refused outright.
+    desync_risk = "\\\n" in command and ("<<" in command or "#" in command)
     command = _join_continuations(command)
     segments: list[_Segment] = []
     current: list[str] = []
@@ -317,7 +321,7 @@ def scan_segments(command: str) -> list[_Segment]:
                 flag("arithmetic_expansion")
             if c == "$" and dq_word_start and current and current[-1] == '"':
                 unquoted_expansion = True  # "$X" as a whole word can still be an option
-            elif c == "$" and nxt == "{":
+            if c == "$" and nxt == "{":
                 check_parameter_expansion(i)
             elif c == '"':
                 in_double = False
@@ -430,6 +434,8 @@ def scan_segments(command: str) -> list[_Segment]:
             current.append(c)
             i += 1
 
+    if desync_risk:
+        flag("continuation_with_heredoc_or_comment")
     if in_single or in_double:
         flag("unterminated_quote")
     if heredocs:

@@ -25,13 +25,14 @@ curl here only when `fetch_url` cannot do the job — a non-GET request, a reque
 custom headers/auth, or a response `fetch_url`'s extraction mangles — and note in your
 answer that the result is not citable.
 
-**Category:** `network_read` · **Risk:** low · **Approval:** `curl` auto-approved (NORMAL/ALERT/DEGRADED); not available in LOCKDOWN
+**Category:** `network_read` · **Risk:** low · **Approval:** every `curl` in this skill asks the user: `curl` runs without asking only for a read of internal telemetry (FRE-1583). `fetch_url` runs without asking.
 
 ## Default recipe — status + body together
 
 Always get the HTTP status alongside the body so you can confirm the request succeeded:
 
 ```bash
+# ask: curl to an outside host asks for approval (FRE-1583, ADR-0156 D8.2).
 # Status code on first line, then body — works for JSON and text
 curl -s -o /dev/stdout -w '\n--- HTTP %{http_code} ---\n' -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url>
 ```
@@ -39,6 +40,7 @@ curl -s -o /dev/stdout -w '\n--- HTTP %{http_code} ---\n' -L -A 'personal-agent/
 Or: pipe to `jq` for JSON APIs and the exit code tells you if it failed:
 
 ```bash
+# ask: curl to an outside host asks for approval (FRE-1583, ADR-0156 D8.2).
 curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | jq .
 ```
 
@@ -47,7 +49,7 @@ curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | jq .
 HTML responses need script/style removal and block-tag newline injection to be readable:
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+# ask: curl to an outside host and python3 ask for approval (FRE-1583, ADR-0156 D8.2).
 curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | python3 -c "
 import sys, re
 from html.parser import HTMLParser
@@ -78,21 +80,25 @@ print(re.sub(r'\n{3,}', '\n\n', ''.join(p.text)).strip()[:10000])
 Cap raw output at 50 KB to avoid truncation:
 
 ```bash
+# ask: curl to an outside host asks for approval (FRE-1583, ADR-0156 D8.2).
 curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | head -c 50000
 ```
 
 ## Common patterns
 
 ```bash
+# ask: curl to an outside host asks for approval (FRE-1583, ADR-0156 D8.2).
 # Fetch a GitHub raw file
 curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
   'https://raw.githubusercontent.com/org/repo/main/README.md'
 
+# ask: curl to an outside host asks for approval (FRE-1583, ADR-0156 D8.2).
 # Fetch JSON API with specific header
 curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
   -H 'Accept: application/json' \
   'https://api.example.com/v1/status' | jq .
 
+# ask: curl to an outside host asks for approval (FRE-1583, ADR-0156 D8.2).
 # Follow redirects (included by default with -L)
 curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
   'https://t.co/shortened-link'
@@ -100,12 +106,10 @@ curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
 
 ## Governance
 
-- `curl` is auto-approved in NORMAL, ALERT, and DEGRADED modes — no PWA prompt.
-- Not available in LOCKDOWN or RECOVERY.
+- `curl` to an outside host asks the user every time, in every mode (owner, 2026-10-10, FRE-1583). Use `fetch_url` when it can do the job: it runs without asking.
+- Without an approval surface (no PWA client), an ask is refused.
 - Max content to surface to the model: 10,000–50,000 chars. The HTML stripper above caps at 10,000; increase the slice (`:10000`) if more is needed, up to 50,000.
 - Always use `--max-time 20` to prevent hanging on slow hosts.
 - Hard-denied: `wget` is blocked by the bash governance layer — always use `curl`.
-
-**ALERT-mode note:** `bash curl` is auto-approved in ALERT mode — unlike the native `fetch_url` tool (not allowed in ALERT mode, only NORMAL/DEGRADED), primitive `curl` has no ALERT-mode restriction. Be aware outbound network calls continue in degraded states.
 
 See also: [bash — Shell Command Executor](bash.md)

@@ -40,7 +40,7 @@ canonical_patterns:
 
 **Status:** Primary path (FRE-1321, 2026-08-29). Tempo v2.10.7 deployed with OTLP ingress (ADR-0129).
 
-**Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); reachability limited to compose network
+**Category:** `system_read` · **Risk:** low · **Approval:** a `bash curl` `GET` of `/api/traces/*`, `/api/v2/traces/*`, `/api/search*`, `/api/v2/search/*`, `/api/metrics/*`, `/api/echo`, `/ready` and `/status` runs without asking in NORMAL/ALERT/DEGRADED (FRE-1583). Any other path or method asks. Reachability is limited to the compose network
 
 ## Known mistakes
 
@@ -63,7 +63,8 @@ These calls fail. Until FRE-1574 a global check refused any bash command that he
 **Preferred: `/api/v2/traces/{traceID}` (standard OpenTelemetry proto format)**
 
 ```bash
-curl -s 'http://tempo:3200/api/v2/traces/{traceID}' | jq '.trace.resourceSpans[0].scopeSpans[0].spans'
+# Put your trace id in place of the example id. Do not write {traceID}: curl expands braces.
+curl -s 'http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '.trace.resourceSpans[0].scopeSpans[0].spans'
 ```
 
 Returns standard OTel resourceSpans format:
@@ -114,7 +115,7 @@ Returns standard OTel resourceSpans format:
 **Alternative: `/api/traces/{traceID}` (Tempo-native batches format)**
 
 ```bash
-curl -s 'http://tempo:3200/api/traces/{traceID}' | jq '.batches[0].scopeSpans[0].spans'
+curl -s 'http://tempo:3200/api/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '.batches[0].scopeSpans[0].spans'
 ```
 
 Returns Tempo's batches format (similar structure, different root key). Both endpoints work; v2 is the standard.

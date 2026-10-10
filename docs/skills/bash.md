@@ -16,7 +16,7 @@ tools: [bash]
 The `bash` tool gives the agent direct shell access inside the seshat-gateway container. It is the escape hatch for operations not covered by specialised native tools: inspecting logs, querying local services, running one-off diagnostics, or piping commands together.
 
 Use it for:
-- `curl` to call local services (Elasticsearch, Postgres, Redis, Neo4j)
+- `curl` to read local telemetry (Elasticsearch, Tempo) and health endpoints. Other `curl` calls ask
 - `grep` / `find` to search source files and application paths
 - `ps` / `top` / `free` / `vmstat` for process and memory diagnostics
 - `ss` / `lsof` for network and file-handle diagnostics
@@ -54,7 +54,7 @@ bash command="curl -s http://elasticsearch:9200/_cluster/health | jq .status"
 
 `bash` runs commands via `/bin/bash -o pipefail -c <command>`. Pipes (`|`), logical operators (`&&`, `||`), separators (`;`), redirects (`>`, `>>`), globs, and env substitution all work — the command is passed as a single argument to the shell.
 
-The permission check parses the command and judges every subcommand on its own (ADR-0156 D8.2). `curl … | grep foo | wc -l` runs without asking because each of `curl`, `grep` and `wc` is a plain command that an allow rule covers. A plain command has literal words only: no `$VAR` or `$(…)`, no glob such as `*.py` (quote it: `'*.py'`), no `~`, no `VAR=x` in front, no here-doc, and no redirection except `> /dev/null`, `2> /dev/null` and `2>&1`.
+The permission check parses the command and judges every subcommand on its own (ADR-0156 D8.2). `curl -s http://elasticsearch:9200/_cat/indices | grep foo | wc -l` runs without asking because each of `curl`, `grep` and `wc` is a plain command that a rule covers. A plain command has literal words only: no `$VAR` or `$(…)`, no glob such as `*.py` (quote it: `'*.py'`), no `~`, no `VAR=x` in front, no here-doc, and no redirection except `> /dev/null`, `2> /dev/null` and `2>&1`.
 
 ### SIGPIPE / exit 141 (FRE-470)
 
@@ -62,11 +62,11 @@ When a downstream pipeline consumer closes the pipe early — e.g. `find … | h
 
 ## Allow, ask and deny (`config/governance/permissions.yaml`)
 
-**Allowed in NORMAL mode** (as plain commands): `curl`, `grep`, `ls`, `cat`, `find`, `jq`, `docker ps`, `docker logs`, `git log`, `git status`, `git diff`, `ps`, `top`, `free`, `df`, `uptime`, `wc`, `rg`, `ss`, `vmstat`, `iostat`, `lsof`, `netstat`, `uname`, `pgrep`, `pg_isready`, `tr`, `sort`, `uniq`, `head`, `tail`, `echo`, `date`, `du`, `id`, `which`, `mmdc`.
+**Allowed in NORMAL mode** (as plain commands): `curl` (telemetry reads only, see below), `grep`, `ls`, `cat`, `find`, `jq`, `docker ps`, `docker logs`, `git log`, `git status`, `git diff`, `ps`, `top`, `free`, `df`, `uptime`, `wc`, `rg`, `ss`, `vmstat`, `iostat`, `lsof`, `netstat`, `uname`, `pgrep`, `pg_isready`, `tr`, `sort`, `uniq`, `head`, `tail`, `echo`, `date`, `du`, `id`, `which`, `mmdc`.
 
-**ALERT** — `curl`, `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `uname`, `echo`, `ss`, `netstat`, `pgrep`, `date`. **DEGRADED** — `curl`, `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `uname`, `echo`.
+**ALERT** — `curl` (telemetry reads only), `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `uname`, `echo`, `ss`, `netstat`, `pgrep`, `date`. **DEGRADED** — `curl` (telemetry reads only), `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `uname`, `echo`.
 
-**Ask:** every other command, and every command that is not plain. `python3`, `awk`, `sed`, `env`, `psql` and `redis-cli` always ask. `curl` asks when an option sends or writes a local file (`-d @file`, `-F f=@file`, `-T`, `-K`, `-o` outside `/tmp`). The user answers on a card; with no card available (a CLI or eval turn) the call is refused.
+**Ask:** every other command, and every command that is not plain. `python3`, `awk`, `sed`, `env`, `psql` and `redis-cli` always ask. `curl` runs without asking only for a read of internal telemetry, listed under `curl_read` in `permissions.yaml` (owner, 2026-10-10, FRE-1583): Elasticsearch `GET` of `/_cat/*`, `/_cluster/health`, `_mapping` and `_field_caps`; `GET` or `POST` with a query body to `_search`, `_count` and `_query`; Tempo `GET` of `/api/traces/*`, `/api/search*`, `/ready` and `/status`; and the `GET` health endpoints of Neo4j (`/` only), SearXNG, Grafana and the gateway. The URL must be one plain `http://host:port/path`. Every other `curl` asks: an outside host, `PUT`, `DELETE`, `PATCH`, a write endpoint, `-L`, a proxy, `--resolve`, `--url`, `-K`, any header except `Content-Type`/`Accept: application/json`, and any option that is not a listed read option. The user answers on a card; with no card available (a CLI or eval turn) the call is refused.
 
 **Deny** (refused even with approval): `rm -rf`, `rm -fr`, `dd`, `mkfs`, `sudo`, `wget`, `ssh`, `nc -l`.
 

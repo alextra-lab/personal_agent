@@ -46,7 +46,7 @@ canonical_patterns:
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `query_elasticsearch` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
 
-**Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); `run_python` runs without asking in NORMAL; with `network: true` it asks
+**Category:** `system_read` · **Risk:** low · **Approval:** a `bash curl` read runs without asking (FRE-1583): `GET` of `_cat`, `_cluster/health`, `_mapping` and `_field_caps`, and `GET` or `POST` with a query body to `_search`, `_count` and `_query`. Every write endpoint and every other method asks; `run_python` runs without asking in NORMAL; with `network: true` it asks
 
 **Latency is not here.** Model-call timing lives on OTel spans in Tempo, not in these logs (ADR-0129, FRE-1219: `duration_ms` and `latency_ms` are retired from `agent-logs-*`). For latency, p50/p90 or "what was slow", use the `query-tempo` skill (Pattern 5) or the `query_telemetry` tool, action `latency`.
 
@@ -460,7 +460,7 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
 
 ## Governance
 
-- `bash curl` to ES: auto-approved in all non-LOCKDOWN modes. No auth required — local cluster only. 30 s timeout.
+- `bash curl` to ES: the reads above run without asking in NORMAL/ALERT/DEGRADED (FRE-1583). `_bulk`, `_doc`, `_update_by_query`, `_delete_by_query`, `_settings`, `PUT`, `DELETE` and every other endpoint ask. No auth required — local cluster only. 30 s timeout.
 - LOCKDOWN: `bash` disabled. Use `read` primitive to read raw JSONL directly from log files.
 - `run_python` for self-telemetry: available in NORMAL/ALERT/DEGRADED; disabled in LOCKDOWN/RECOVERY.
 - Output cap: pipe large responses through `| head -c 50000` or use `LIMIT` in ES|QL.

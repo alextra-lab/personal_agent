@@ -50,6 +50,7 @@ from personal_agent.telemetry.spans import model_call_span
 from personal_agent.tools.executor import ToolExecutionLayer
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolDefinition
+from tests._helpers.permissions import use_rules
 from tests.test_orchestrator.conftest import configure_mock_llm_client_model_configs
 
 
@@ -66,11 +67,14 @@ def tracer(exporter: InMemorySpanExporter) -> Tracer:
 
 
 @pytest.fixture
-def fake_tool_layer() -> ToolExecutionLayer:
+def fake_tool_layer(monkeypatch: pytest.MonkeyPatch) -> ToolExecutionLayer:
     """A real ToolExecutionLayer over two trivial, always-succeeding tools —
     no external I/O, so the test is deterministic and network-free while
     still exercising the real ``execute_tool`` span-wrapping code.
+
+    FRE-1574: both tools have an allow rule, so they run without a card.
     """
+    use_rules(monkeypatch, allow=["fre1067_tool_a", "fre1067_tool_b"])
     registry = ToolRegistry()
 
     async def _tool_a(**_kwargs: object) -> dict[str, bool]:

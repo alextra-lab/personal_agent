@@ -25,13 +25,18 @@ every command node in the tree is returned, nested ones included.
 from __future__ import annotations
 
 import posixpath
+import shlex
 from dataclasses import dataclass
 from functools import lru_cache
 
 import tree_sitter_bash
 from tree_sitter import Language, Node, Parser
 
-from personal_agent.tools.primitives.bash_allowlist import option_hazard, scan_segments
+from personal_agent.tools.primitives.bash_allowlist import (
+    _command_words,
+    option_hazard,
+    scan_segments,
+)
 
 #: First words that run another program given as their arguments (D8.2). Only an exact allow
 #: rule that names the full inner command can allow one. ``coproc`` and ``trap`` are not in
@@ -459,4 +464,17 @@ def parse_bash(command: str) -> ParsedBash:
         return ParsedBash(top_level, all_commands, f"scanner:{unsafe.unsafe}", unsafe.text)
     if len(segments) != len(top_level):
         return ParsedBash(top_level, all_commands, "parser_disagreement", command)
+    for segment, sub in zip(segments, top_level, strict=True):
+        if sub.words is None:
+            continue  # not literal: it asks already
+        # The scanner joins line continuations as bash does, and shlex removes quotes as bash
+        # does. Different words mean the parsers read the command differently, for example
+        # `find . -dele\<newline>te`, which bash runs as `-delete` and tree-sitter reads as two
+        # words. A quoted word that looks like a redirection also differs here, and asks.
+        try:
+            scanner_words = tuple(_command_words(shlex.split(segment.text)))
+        except ValueError:
+            return ParsedBash(top_level, all_commands, "parser_disagreement", segment.text)
+        if scanner_words != sub.words:
+            return ParsedBash(top_level, all_commands, "parser_disagreement", segment.text)
     return ParsedBash(top_level, all_commands, None, None)

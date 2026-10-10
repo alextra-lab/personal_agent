@@ -818,15 +818,16 @@ def option_hazard(words: Sequence[str]) -> str | None:
     """Return why an allowlisted command needs approval because of its options, or ``None``.
 
     Args:
-        words: The segment's shell words, command name first.
+        words: The command name and its arguments after quote removal, with redirections
+            already removed by the parser. A word is judged as given: a quoted ``'>'`` is an
+            argument, so no word is dropped here (FRE-1574 review).
 
     Returns:
         A reason when the command runs another command or writes a non-scratch file.
     """
-    command_words = _command_words(words)
-    if not command_words:
+    if not words:
         return None
-    name, args = command_words[0], command_words[1:]
+    name, args = words[0], list(words[1:])
     # A glob in an option word expands against file names before the binary runs, so the
     # rules below would read the pattern, not the option (`find . -exe? …`).
     if name in _OPTION_RULE_BINARIES and any(

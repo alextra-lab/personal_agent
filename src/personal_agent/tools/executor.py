@@ -4,6 +4,7 @@ This module provides the ToolExecutionLayer class that handles tool invocation
 with permission checks, argument validation, execution, and telemetry.
 """
 
+import asyncio
 import os
 import time
 from collections.abc import Mapping
@@ -75,6 +76,11 @@ class PermissionResult:
         self.reason = reason
         self.error = error
 
+
+#: One approval card at a time per session. The PWA shows a single card, and a round's tool
+#: calls (and a fan-out's workers) can ask at the same moment: without this a second card
+#: would replace the first, which would then time out unanswered (FRE-1574 review).
+_APPROVAL_LOCKS: dict[str, asyncio.Lock] = {}
 
 #: Longest model-facing permission message (ADR-0156 D6.2 bound).
 _PERMISSION_MESSAGE_LIMIT = 2000
@@ -264,7 +270,11 @@ async def _request_approval(
 
     # ADR-0123 §1 (FRE-934): the turn is blocked on the user's approval —
     # an explicit WAITING_FOR_CHOICE phase (excluded from the AC-2 clock).
-    async with phase_span(session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=tool_name):
+    lock = _APPROVAL_LOCKS.setdefault(session_id, asyncio.Lock())
+    async with (
+        lock,
+        phase_span(session_id=session_id, phase=Phase.WAITING_FOR_CHOICE, detail=tool_name),
+    ):
         return await transport.request_tool_approval(
             request_id=str(uuid4()),
             trace_id=trace_ctx.trace_id,

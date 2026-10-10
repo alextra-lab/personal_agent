@@ -636,3 +636,36 @@ class TestRealTransportBlocksBash:
         assert ran_before is False
         assert ran_after is True
         assert result.success is True
+
+
+@pytest.mark.usefixtures("no_phase_events")
+class TestOneCardAtATime:
+    @pytest.mark.asyncio
+    async def test_concurrent_asks_in_one_session_reach_the_card_in_turn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The PWA shows one card; a second concurrent ask waits for the first answer."""
+        use_rules(monkeypatch)
+        open_cards = 0
+        most_open = 0
+
+        async def answer(**_kw: Any) -> ApprovalDecision:
+            nonlocal open_cards, most_open
+            open_cards += 1
+            most_open = max(most_open, open_cards)
+            await asyncio.sleep(0.05)
+            open_cards -= 1
+            return ApprovalDecision(decision="approve")
+
+        transport = MagicMock()
+        transport.request_tool_approval = AsyncMock(side_effect=answer)
+        recorder = _Recorder()
+        layer = _layer(recorder.run, transport=transport)
+        with patch("personal_agent.tools.executor.settings", _settings(ui_enabled=True)):
+            await asyncio.gather(
+                _call(layer, None, {"x": "1"}), _call(layer, "general", {"x": "2"})
+            )
+
+        assert transport.request_tool_approval.await_count == 2
+        assert most_open == 1
+        assert sorted(c["x"] for c in recorder.calls) == ["1", "2"]

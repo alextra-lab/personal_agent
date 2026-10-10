@@ -2449,6 +2449,7 @@ async def _populate_operator_identity(
     ctx.operator_stanza = identity.stanza
     ctx.operator_name = identity.name
     ctx.operator_assertion = identity.assertion
+    ctx.operator_profile = identity.profile
 
 
 def _inline_volatile_with_outcome(
@@ -7079,6 +7080,17 @@ async def step_llm_call(
             _state_line = MEMORY_STATE_LINES[_memory_state]
             memory_section = f"{memory_section}\n\n{_state_line}" if memory_section else _state_line
 
+        # FRE-1566 (ADR-0140 T2): the user's :Person profile facts are knowledge-graph
+        # content, so they ride the memory_recall tool result with the rest of the graph's
+        # output, never the system prompt the operator stanza sits in. They head the
+        # section: who the user is, then what was recalled.
+        if ctx.operator_profile:
+            memory_section = (
+                f"{ctx.operator_profile}\n\n{memory_section}"
+                if memory_section
+                else ctx.operator_profile
+            )
+
         # If we are passing tools (native or prompt-injected), include tool-use guidance
         # in the system prompt to reduce malformed tool calls and looping (ADR-0032).
         # STATIC tool rules go FIRST (primacy + cached), then SEMI-STATIC tool awareness
@@ -7214,10 +7226,15 @@ async def step_llm_call(
             model_role=model_role.value,
             message_count=len(request_messages),
             message_roles=message_roles,
+            # FRE-1566: no preview of a harness tool result. The memory result opens with
+            # the user's :Person profile (location, pronouns, role, languages), and this
+            # event ships to the text-indexed log store on every primary call.
             messages_preview=[
                 {
                     "role": msg.get("role"),
-                    "content_preview": get_text_content(msg.get("content", ""))[:100] or None,
+                    "content_preview": None
+                    if is_harness_tool_result(msg)
+                    else get_text_content(msg.get("content", ""))[:100] or None,
                     "has_tool_calls": bool(msg.get("tool_calls")),
                 }
                 for msg in request_messages

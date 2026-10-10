@@ -63,7 +63,7 @@ class TestStanzaAssertsAuthority:
     @pytest.mark.asyncio
     async def test_stanza_asserts_authority_over_recalled_claims(self) -> None:
         svc = _make_memory_service({"name": "Alex"})
-        identity = await get_owner_identity(svc, uuid4(), "a@b.com", None)
+        identity = await get_owner_identity(svc, uuid4(), "a@b.com", "Alex")
 
         assert "You are assisting Alex" in identity.stanza
         # The authority claim itself — what the incident's stanza lacked.
@@ -79,7 +79,7 @@ class TestStanzaAssertsAuthority:
         reads `stanza`; they must never be able to disagree.
         """
         svc = _make_memory_service({"name": "Alex"})
-        identity = await get_owner_identity(svc, uuid4(), "a@b.com", None)
+        identity = await get_owner_identity(svc, uuid4(), "a@b.com", "Alex")
 
         assert identity.name == "Alex"
         assert f"You are assisting {identity.name}." in identity.stanza
@@ -122,6 +122,7 @@ class TestOperatorIdentityPopulation:
         from personal_agent.orchestrator.executor import _populate_operator_identity
 
         ctx = _make_ctx(user_id=uuid4(), user_email="a@b.com")
+        ctx.user_display_name = "Alex"
         await _populate_operator_identity(ctx, _make_memory_service({"name": "Alex"}))
 
         assert ctx.operator_name == "Alex"

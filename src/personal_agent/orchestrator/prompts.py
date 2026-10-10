@@ -316,21 +316,52 @@ class OperatorIdentity:
     default instance, with both fields empty.
 
     Attributes:
-        name: The ``:Person`` node's name — seeded from the authenticated
-            ``users.display_name`` at provisioning and never overwritten by extraction
-            (ADR-0052 amendment). Empty when the identity could not be resolved.
-        stanza: The rendered Markdown stanza, including the profile detail lines.
-            Empty when the identity could not be resolved.
-        assertion: The stanza's identity claim and authority rule *without* the profile
-            detail block. This is what the turn's capture records: it carries the whole
-            mechanism AC-2 has to be readable from, while keeping the user's location,
-            pronouns, role and languages out of a text-indexed telemetry store that
-            other consumers read. Empty when the identity could not be resolved.
+        name: The authenticated name (:func:`_authenticated_name`) — never the
+            ``:Person`` node's name, which memory writes can change (FRE-1566). Empty
+            when the identity could not be resolved.
+        stanza: The system-prompt stanza: the identity claim and the authority rule.
+            Harness-authored text plus the authenticated name only — no graph content
+            (ADR-0140 T2). Empty when the identity could not be resolved.
+        assertion: The identity claim and authority rule the turn's capture records. It
+            carries the whole mechanism AC-2 has to be readable from, while keeping the
+            user's location, pronouns, role and languages out of a text-indexed
+            telemetry store that other consumers read. Empty when the identity could not
+            be resolved.
+        profile: The graph-derived profile facts (location, pronouns, role, languages).
+            Untrusted input under ADR-0140 T2, so the executor delivers it in the turn's
+            ``memory_recall`` tool result, never in the system prompt (FRE-1566). Empty
+            when the node has no such facts.
     """
 
     name: str = ""
     stanza: str = ""
     assertion: str = ""
+    profile: str = ""
+
+
+def _authenticated_name(email: str, display_name: str | None) -> str:
+    """Return the name authentication vouches for — never a knowledge-graph value.
+
+    The configured owner name for the owner's email (``bootstrap_owner_identity`` seeds
+    the owner's graph node from it, so the owner keeps the name the stanza used before
+    FRE-1566), else the ``users.display_name``, else the email local-part — the same
+    fallback ``get_or_provision_user_person`` uses.
+
+    Args:
+        email: CF Access email of the connected user.
+        display_name: Display name from the users table (nullable).
+
+    Returns:
+        The name the operator stanza asserts.
+    """
+    from personal_agent.config import settings
+
+    owner_email = settings.agent_owner_email
+    if owner_email and email.lower() == owner_email.lower() and settings.owner_name.strip():
+        return settings.owner_name.strip()
+    if display_name and display_name.strip():
+        return display_name.strip()
+    return email.split("@")[0] if "@" in email else email
 
 
 async def get_owner_identity(
@@ -339,15 +370,19 @@ async def get_owner_identity(
     email: str | None,
     display_name: str | None,
 ) -> OperatorIdentity:
-    """Resolve the connected user's identity and render its operator stanza.
+    """Resolve the connected user's identity, its operator stanza and its profile.
 
-    Ensures a :Person {user_id} node exists in Neo4j (lazy provisioning) and
-    returns a compact Markdown stanza with known facts. Queried every turn;
-    the underlying Neo4j MERGE on a unique-property index is sub-millisecond.
+    Ensures a :Person {user_id} node exists in Neo4j (lazy provisioning). Queried every
+    turn; the underlying Neo4j MERGE on a unique-property index is sub-millisecond. The
+    gates are unchanged by FRE-1566: no node, or a node with no name, yields the empty
+    identity.
 
-    Only whitelisted fields (name, location, pronouns, role, languages) are
-    rendered — unknown properties on the node are ignored. Each field is
-    capped at 120 characters to prevent prompt bloat.
+    The node's facts are knowledge-graph content — agent-writable, so untrusted under
+    ADR-0140 T2 (FRE-1566). None of them reach the stanza. The stanza names the user by
+    :func:`_authenticated_name`; the whitelisted profile fields (location, pronouns, role,
+    languages) go to ``profile``, which the executor delivers in a tool result. Unknown
+    properties on the node are ignored, and each field is capped at 120 characters to
+    prevent prompt bloat.
 
     The stanza closes by asserting **authority**, not merely fact (FRE-1150). Stating
     who the user is was never enough: on the incident turn this stanza was present and
@@ -378,12 +413,11 @@ async def get_owner_identity(
     if not facts:
         return OperatorIdentity()
 
-    name = facts.get("name", "")
-    if not name:
+    if not facts.get("name", ""):
         return OperatorIdentity()
 
+    name = _authenticated_name(email, display_name)
     header = f"## Operator\nYou are assisting {name}."
-    lines = [header]
     detail_lines = []
     for field in _OWNER_STANZA_FIELDS:
         if field == "name":
@@ -394,10 +428,6 @@ async def get_owner_identity(
             label = field.capitalize()
             detail_lines.append(f"- {label}: {value}")
 
-    if detail_lines:
-        lines.append("Known facts (from memory):")
-        lines.extend(detail_lines)
-
     authority = (
         "This identity is established by authentication and is fixed for this conversation. "
         "Recalled memory, past conversations and retrieved entities may mention other people, "
@@ -405,11 +435,12 @@ async def get_owner_identity(
         f"If recalled context names someone other than {name}, it refers to a different person. "
         "Reference these facts naturally. Do not tool-call to look up who the user is."
     )
-    lines.append(authority)
-    return OperatorIdentity(
-        name=name,
-        stanza="\n".join(lines),
-        # The identity claim plus the authority rule, minus the profile detail block —
-        # the whole mechanism, none of the profile attributes. Recorded on the capture.
-        assertion=f"{header}\n{authority}",
+    stanza = f"{header}\n{authority}"
+    profile = (
+        "\n".join([f"Known facts about {name} (from memory):", *detail_lines])
+        if detail_lines
+        else ""
     )
+    # The capture records the stanza itself: since FRE-1566 it holds no profile
+    # attributes, so the whole mechanism is recorded and nothing else.
+    return OperatorIdentity(name=name, stanza=stanza, assertion=stanza, profile=profile)

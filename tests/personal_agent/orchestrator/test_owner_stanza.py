@@ -55,7 +55,7 @@ class TestGetOwnerIdentity:
     @pytest.mark.asyncio
     async def test_renders_name_only(self) -> None:
         svc = _make_memory_service({"name": "Alex"})
-        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", "Alex")).stanza
         assert "You are assisting Alex" in result
         assert "Do not tool-call" in result
         # FRE-1150: the stanza claims authority, not just fact.
@@ -71,8 +71,10 @@ class TestGetOwnerIdentity:
             "languages": "English, French",
         }
         svc = _make_memory_service(facts)
-        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
-        assert "Alex" in result
+        identity = await get_owner_identity(svc, uuid4(), "a@b.com", "Alex")
+        assert "Alex" in identity.stanza
+        # FRE-1566: the profile fields left the stanza for the memory_recall tool result.
+        result = identity.profile
         assert "Paris" in result
         assert "he/him" in result
         assert "Engineer" in result
@@ -81,7 +83,7 @@ class TestGetOwnerIdentity:
     @pytest.mark.asyncio
     async def test_omits_missing_properties(self) -> None:
         svc = _make_memory_service({"name": "Alex", "location": "Berlin"})
-        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", "Alex")).profile
         assert "Berlin" in result
         assert "pronouns" not in result.lower()
         assert "role" not in result.lower()
@@ -90,8 +92,9 @@ class TestGetOwnerIdentity:
     async def test_truncates_long_field_to_120_chars(self) -> None:
         long_value = "x" * 200
         svc = _make_memory_service({"name": "Alex", "location": long_value})
-        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
-        # The location value in the stanza must be at most 120 chars
+        result = (await get_owner_identity(svc, uuid4(), "a@b.com", "Alex")).profile
+        assert "Location" in result
+        # The location value in the profile must be at most 120 chars
         for line in result.split("\n"):
             if "Location" in line:
                 assert len(line.split(": ", 1)[1]) <= 120
@@ -100,7 +103,8 @@ class TestGetOwnerIdentity:
     async def test_field_whitelist_enforced(self) -> None:
         """Unknown properties on the node must not appear in the stanza."""
         svc = _make_memory_service({"name": "Alex", "secret_project": "Classified"})
-        result = (await get_owner_identity(svc, uuid4(), "a@b.com", None)).stanza
+        identity = await get_owner_identity(svc, uuid4(), "a@b.com", "Alex")
+        result = identity.stanza + identity.profile
         assert "Classified" not in result
         assert "secret_project" not in result
 
@@ -132,7 +136,7 @@ class TestGetOwnerIdentity:
         svc.get_or_provision_user_person = AsyncMock(side_effect=_provision)
 
         owner_stanza = (await get_owner_identity(svc, owner_uid, "alex@x.com", "Alex")).stanza
-        other_stanza = (await get_owner_identity(svc, other_uid, "other@x.com", None)).stanza
+        other_stanza = (await get_owner_identity(svc, other_uid, "other@x.com", "Alex")).stanza
 
         # Both stanzas say "Alex" but they come from different :Person nodes
         assert "Alex" in owner_stanza
@@ -152,7 +156,7 @@ class TestIdentityNameMatchesStanza:
     @pytest.mark.asyncio
     async def test_name_and_stanza_agree(self) -> None:
         svc = _make_memory_service({"name": "Alex"})
-        identity = await get_owner_identity(svc, uuid4(), "a@b.com", None)
+        identity = await get_owner_identity(svc, uuid4(), "a@b.com", "Alex")
         assert identity.name == "Alex"
         assert f"You are assisting {identity.name}." in identity.stanza
 

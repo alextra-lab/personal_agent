@@ -617,6 +617,11 @@ an upstream document.
   > the two HYBRID probes are in
   > `tests/personal_agent/orchestrator/test_fre1360_untrusted_input_channel.py`. Tool results, fetched
   > web content and MCP responses were already tool results; their probes now guard that.
+  > **Operator stanza closed by FRE-1566 (2026-10-10).** The stanza named the user from the
+  > `:Person` node and listed its profile facts in the system prompt. It now names the user from
+  > authentication (`prompts._authenticated_name`) and keeps only the FRE-1150 precedence rule.
+  > The profile facts ride the `memory_recall` tool result. Probes:
+  > `tests/personal_agent/orchestrator/test_fre1566_operator_identity_channel.py`.
 
 - **AC-5 — The cost stayed visible.** Compliance continues to be reported over `citable` turns with
   the **`uncitable` class published beside it**, per ADR-0139 D1 — classified and counted, never

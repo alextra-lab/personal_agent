@@ -73,21 +73,31 @@ def prompt_hash(system_prompt: str) -> str:
     return hashlib.sha256(system_prompt.encode()).hexdigest()
 
 
-def build_user_message(history: str, query: str) -> str:
+def build_user_message(history: str, digest: str | None, query: str) -> str:
     """Build the planner user message: history, then query.
 
     A thin wrapper over the production framing in ``expansion_controller``, for a caller that
     holds a rendered history and no messages. The stable parts come first, so a change in the
     query never breaks the cached history before it (ADR-0154 D1). Since FRE-1360 the digest
-    is not in this message: it rides a tool result (:func:`digest_exchange`).
+    is not in this message: it rides a tool result (:func:`digest_exchange`). The ``digest``
+    argument stays so existing callers keep their signature, and must be ``None``.
 
     Args:
         history: Rendered conversation history. Empty for a first turn.
+        digest: Must be ``None``. Pass a digest to :func:`digest_exchange` instead.
         query: The current message.
 
     Returns:
         The user message text.
+
+    Raises:
+        ValueError: If a digest is given — production no longer puts it in the user text.
     """
+    if digest:
+        raise ValueError(
+            "FRE-1360: the planner digest rides a memory_recall tool result; "
+            "send it with digest_exchange(), not in the user message"
+        )
     from personal_agent.orchestrator.expansion_controller import (
         _frame_planner_query,
         _join_planner_blocks,

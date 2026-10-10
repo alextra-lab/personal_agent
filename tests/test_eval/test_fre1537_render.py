@@ -109,3 +109,10 @@ def test_missing_rule_anchor_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(render, "_production_system_prompt", lambda surface: "no schema here")
     with pytest.raises(RuntimeError, match="anchor"):
         render.render_system_prompt(SURFACE)
+
+
+def test_build_user_message_refuses_a_digest() -> None:
+    """FRE-1360: a digest in the user text is the retired shape; the probe must not send it."""
+    assert "Query: q" in render.build_user_message("", None, "q")
+    with pytest.raises(ValueError, match="tool result"):
+        render.build_user_message("", "DIGEST", "q")

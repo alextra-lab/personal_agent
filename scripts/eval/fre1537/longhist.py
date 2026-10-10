@@ -70,7 +70,7 @@ def _call(
     budget: cloud_mod.Budget | None = None,
     pending: float = 0.0,
 ) -> dict[str, object]:
-    user = render.build_user_message(history, query)
+    user = render.build_user_message(history, None, query)
     if cloud is not None:
         estimate = (
             budget.check(cloud.target, inputs.system, user, pending=pending) if budget else 0.0

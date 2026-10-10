@@ -645,7 +645,11 @@ tools:
     forbidden_in_modes: ["LOCKDOWN", "RECOVERY"]
     requires_approval: true
     auto_approve_prefixes:
-      # FRE-283: extended to cover all binaries referenced in skill docs
+      # FRE-283: extended to cover all binaries referenced in skill docs.
+      # FRE-1572: a prefix match is not enough. Each command bash would run must match, and
+      # a substitution, a non-scratch output redirection or an option that runs a command
+      # or writes a file needs approval (tools/primitives/bash_allowlist.py). python3 stays
+      # here by the owner's decision of 2026-10-10, recorded as accepted: it runs any code.
       NORMAL:
         - "curl"
         - "grep"
@@ -658,8 +662,8 @@ tools:
         - "git log"
         - "git status"
         - "git diff"
-        - "psql -c"
-        - "redis-cli"
+        # FRE-1572 (owner decision, 2026-10-10): "psql -c" and "redis-cli" removed. Plain
+        # arguments change a store (psql -c 'DELETE ...', redis-cli FLUSHALL), so they ask.
         - "ps"
         - "top"
         - "free"

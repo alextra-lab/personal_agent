@@ -36,6 +36,9 @@ _SCRATCH_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "-"})
 # Characters that end an unquoted shell word.
 _WORD_END = frozenset(" \t\n;&|<>()")
 
+# A `${…}` body that is a bare name, positional or special parameter: no operator.
+_PLAIN_PARAMETER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]")
+
 
 @dataclass(frozen=True)
 class _Segment:
@@ -164,11 +167,41 @@ def scan_segments(command: str) -> list[_Segment]:
 
     def check_parameter_expansion(at: int) -> None:
         # `at` indexes the `$` of `${`. A transformation (`${x@P}` and friends) can expand
-        # a prompt string, and prompt expansion can run a command substitution.
+        # a prompt string, and prompt expansion can run a command substitution. Any other
+        # operator (`${X:--exec}`, `${X/a/b}`) builds text the option rules never see.
         end = command.find("}", at + 2)
         body = command[at + 2 : end if end != -1 else n]
         if "@" in body:
             flag("parameter_transformation")
+        elif not _PLAIN_PARAMETER.fullmatch(body):
+            flag("parameter_operator")
+
+    def check_brace_expansion(at: int) -> None:
+        # `at` indexes an unquoted `{` that is not part of `${`. Bash expands `-ex{ec,}` to
+        # `-exec -ex` before the binary runs, so the option rules would read the wrong words.
+        quote: str | None = None
+        j = at + 1
+        seen_list = False
+        while j < n:
+            ch = command[j]
+            if quote is not None:
+                if ch == quote:
+                    quote = None
+            elif ch == "\\":
+                j += 1
+            elif ch in "'\"":
+                quote = ch
+            elif ch in _WORD_END:
+                return
+            elif ch == ",":
+                seen_list = True
+            elif ch == "." and command.startswith("..", j):
+                seen_list = True
+            elif ch == "}":
+                if seen_list:
+                    flag("brace_expansion")
+                return
+            j += 1
 
     def read_heredoc_bodies(at: int) -> int:
         # `at` is the index just after a newline. Returns the index after the last body.
@@ -245,6 +278,10 @@ def scan_segments(command: str) -> list[_Segment]:
         elif c not in "\t\n" and (ord(c) < 32 or ord(c) == 127):
             # shlex reads a control character as a separator; bash does not.
             flag("control_character")
+            current.append(c)
+            i += 1
+        elif c == "{" and not (current and current[-1] == "$"):
+            check_brace_expansion(i)
             current.append(c)
             i += 1
         elif c == "#" and (not current or current[-1] in " \t"):
@@ -382,6 +419,9 @@ def _command_words(words: Sequence[str]) -> list[str]:
     return out
 
 
+_OPTION_RULE_BINARIES = frozenset(
+    {"env", "find", "awk", "sed", "sort", "uniq", "rg", "git", "mmdc", "curl"}
+)
 _ENV_SAFE_OPTIONS = frozenset({"-i", "-0", "-", "--null", "--ignore-environment"})
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
 _FIND_ACTIONS = frozenset(
@@ -638,6 +678,12 @@ def option_hazard(words: Sequence[str]) -> str | None:
     if not command_words:
         return None
     name, args = command_words[0], command_words[1:]
+    # A glob in an option word expands against file names before the binary runs, so the
+    # rules below would read the pattern, not the option (`find . -exe? …`).
+    if name in _OPTION_RULE_BINARIES and any(
+        word.startswith("-") and any(g in word for g in "*?[") for word in args
+    ):
+        return f"{name} option holds a glob"
     match name:
         case "env":
             for word in args:

@@ -188,6 +188,11 @@ _BYPASSES: dict[str, str] = {
     "git_ext_diff": "git diff --ext-diff",
     "mmdc_output_elsewhere": "mmdc -i /tmp/m.mmd -o /app/m.svg",
     "mmdc_output_glued": "mmdc -i /tmp/m.mmd -o/app/m.svg",
+    "brace_expansion_builds_an_option": "find . -ex{ec,} chmod 777 {} ;",
+    "brace_expansion_long_option": "sort --comp{ress-program=sh,} f",
+    "brace_expansion_quoted_item": "find . -ex{ec,'x y'} chmod 777 {} ;",
+    "parameter_default_builds_an_option": "find . ${X:--exec} chmod 777 {} ;",
+    "glob_in_an_option": "find . -exe? chmod 777 {} ;",
     "control_character": "ls\rchmod 777 x",
     "mmdc_puppeteer_config": "mmdc -i /tmp/m.mmd -o /tmp/m.svg -p /tmp/p.json",
     # curl
@@ -340,6 +345,9 @@ _NORMAL_USE = [
     "ps aux | sort -rk3 | head",
     "df -h; free -m; uptime",
     "tail -n 100 /app/telemetry/logs/x.log",
+    "ls ${HOME}",
+    "find . -name '*.{py,md}'",
+    "rg -g '*.py' pattern",
 ]
 
 

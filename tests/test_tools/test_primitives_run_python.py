@@ -16,6 +16,7 @@ from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.primitives.run_python import (
     _MAX_TIMEOUT,
     _MIN_TIMEOUT,
+    RunPythonError,
     run_python_executor,
 )
 from personal_agent.tools.primitives.sandbox import SandboxResult
@@ -62,13 +63,13 @@ def _failure_result(
 
 @pytest.mark.asyncio
 async def test_run_python_no_docker() -> None:
-    """When docker binary is absent, returns sandbox_unavailable error dict."""
+    """When docker binary is absent, raises RunPythonError sandbox_unavailable."""
     with patch("shutil.which", return_value=None):
-        result = await run_python_executor(script="print('hello')", ctx=_CTX)
+        with pytest.raises(RunPythonError) as exc_info:
+            await run_python_executor(script="print('hello')", ctx=_CTX)
 
-    assert result["success"] is False
-    assert result["error"] == "sandbox_unavailable"
-    assert "docker" in result["detail"].lower()
+    assert exc_info.value.code == "sandbox_unavailable"
+    assert "docker" in exc_info.value.message.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +79,7 @@ async def test_run_python_no_docker() -> None:
 
 @pytest.mark.asyncio
 async def test_run_python_happy_path() -> None:
-    """Successful execution returns success=True and stdout."""
+    """Successful execution returns exit_code 0 and stdout."""
     sandbox_result = _success_result(stdout="42\n")
 
     with (
@@ -90,11 +91,10 @@ async def test_run_python_happy_path() -> None:
     ):
         result = await run_python_executor(script="print(42)", ctx=_CTX)
 
-    assert result["success"] is True
     assert result["exit_code"] == 0
     assert result["stdout"] == "42\n"
-    assert result["timed_out"] is False
-    assert result["oom"] is False
+    assert "timed_out" not in result
+    assert "oom" not in result
     assert result["truncated"] is False
 
 
@@ -152,7 +152,7 @@ async def test_run_python_timeout_clamp_low() -> None:
 
 @pytest.mark.asyncio
 async def test_run_python_timeout_propagated() -> None:
-    """timed_out=True from sandbox is surfaced in the executor result."""
+    """timed_out=True from sandbox is raised as RunPythonError timeout."""
     with (
         patch("shutil.which", return_value="/usr/bin/docker"),
         patch(
@@ -160,10 +160,10 @@ async def test_run_python_timeout_propagated() -> None:
             new=AsyncMock(return_value=_failure_result(timed_out=True)),
         ),
     ):
-        result = await run_python_executor(script="import time; time.sleep(999)", ctx=_CTX)
+        with pytest.raises(RunPythonError) as exc_info:
+            await run_python_executor(script="import time; time.sleep(999)", ctx=_CTX)
 
-    assert result["timed_out"] is True
-    assert result["success"] is False
+    assert exc_info.value.code == "timeout"
 
 
 @pytest.mark.asyncio
@@ -199,9 +199,10 @@ async def test_run_python_timeout_logs_terminated_event() -> None:
         ),
         patch("personal_agent.tools.primitives.run_python.log") as mock_log,
     ):
-        await run_python_executor(
-            script="import time; time.sleep(999)", timeout_seconds=42, ctx=_CTX
-        )
+        with pytest.raises(RunPythonError):
+            await run_python_executor(
+                script="import time; time.sleep(999)", timeout_seconds=42, ctx=_CTX
+            )
 
     terminated_calls = [
         call for call in mock_log.warning.call_args_list if call.args[0] == "run_python_terminated"
@@ -238,7 +239,7 @@ async def test_run_python_no_terminated_log_on_success() -> None:
 
 @pytest.mark.asyncio
 async def test_run_python_oom_propagated() -> None:
-    """oom=True from sandbox is surfaced in the executor result."""
+    """oom=True from sandbox is raised as RunPythonError out_of_memory."""
     with (
         patch("shutil.which", return_value="/usr/bin/docker"),
         patch(
@@ -246,10 +247,10 @@ async def test_run_python_oom_propagated() -> None:
             new=AsyncMock(return_value=_failure_result(exit_code=137, oom=True)),
         ),
     ):
-        result = await run_python_executor(script="x = bytearray(2**30)", ctx=_CTX)
+        with pytest.raises(RunPythonError) as exc_info:
+            await run_python_executor(script="x = bytearray(2**30)", ctx=_CTX)
 
-    assert result["oom"] is True
-    assert result["success"] is False
+    assert exc_info.value.code == "out_of_memory"
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +368,5 @@ async def test_run_python_integration() -> None:
 
     result = await run_python_executor(script="print(6 * 7)", ctx=_CTX)
 
-    assert result["success"] is True
+    assert result["exit_code"] == 0
     assert "42" in result["stdout"]
-    assert result["timed_out"] is False
-    assert result["oom"] is False

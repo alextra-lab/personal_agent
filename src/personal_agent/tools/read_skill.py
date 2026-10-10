@@ -11,14 +11,22 @@ in ``_dispatch_tool_call`` in the executor, not here.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
 from personal_agent.telemetry import TraceContext
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = structlog.get_logger(__name__)
+
+ReadSkillCode = Literal["missing_name", "unknown_skill"]
+
+
+class ReadSkillError(ToolError[ReadSkillCode]):
+    """A ``read_skill`` failure (ADR-0156 D6.1)."""
+
 
 # ---------------------------------------------------------------------------
 # ToolDefinition
@@ -27,9 +35,13 @@ log = structlog.get_logger(__name__)
 read_skill_tool = ToolDefinition(
     name="read_skill",
     description=(
-        "Load the full guidance for a skill by name. "
-        "Use when the skill index mentions a skill relevant to your current task. "
-        "Returns the complete skill doc body as text."
+        "Load the full guidance of one skill by its name and return the skill body as text. "
+        "Use it when the skill index lists a skill that fits the current task, before you "
+        "start that task. "
+        "Do not use it for a skill already loaded in this conversation, or to read other "
+        "files (use read). "
+        "The name must match the index exactly; an unknown name returns the list of names. "
+        'Example: read_skill(name="query-elasticsearch").'
     ),
     category="read_only",
     parameters=[
@@ -48,6 +60,7 @@ read_skill_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=5,
     rate_limit_per_hour=None,
+    error_codes=error_codes(ReadSkillError),
 )
 
 
@@ -72,8 +85,10 @@ async def read_skill_executor(
         ctx: Telemetry trace context (passed as 'ctx' by the tool executor layer).
 
     Returns:
-        Dict with ``skill_name``, ``body``, and ``status``.
-        On unknown or empty name, returns ``status: "error"`` with an explanatory ``hint``.
+        Dict with ``skill_name`` and ``body``.
+
+    Raises:
+        ReadSkillError: ``missing_name`` or ``unknown_skill``; the message lists the names.
     """
     from personal_agent.orchestrator.skills import get_all_skills  # noqa: PLC0415
 
@@ -81,15 +96,16 @@ async def read_skill_executor(
     known = sorted(all_skills.keys())
 
     if not name:
-        return {
-            "status": "error",
-            "hint": f"name is required. Available skills: {', '.join(known)}",
-        }
+        raise ReadSkillError(
+            "missing_name",
+            f"name is required. Available skills: {', '.join(known)}",
+            retryable=True,
+            next_action="Call read_skill again with one of the listed names.",
+        )
 
     skill = all_skills.get(name)
 
     if skill is None:
-        hint = f"Unknown skill '{name}'. Available skills: {', '.join(known)}"
         log.warning(
             "missing_skill_requested",
             trace_id=ctx.trace_id,
@@ -98,7 +114,12 @@ async def read_skill_executor(
             available_skills=known,
             known_count=len(known),
         )
-        return {"status": "error", "hint": hint}
+        raise ReadSkillError(
+            "unknown_skill",
+            f"Unknown skill '{name}'. Available skills: {', '.join(known)}",
+            retryable=False,
+            next_action="Call read_skill with one of the listed names, or go on without it.",
+        )
 
     log.info(
         "read_skill_invoked",
@@ -108,7 +129,6 @@ async def read_skill_executor(
         trace_id=ctx.trace_id,
     )
     return {
-        "status": "ok",
         "skill_name": name,
         "body": skill.body,
     }

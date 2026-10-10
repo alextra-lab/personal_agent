@@ -1,21 +1,35 @@
 """Shared path-governance helpers for primitive tools.
 
 Provides ``_expand_path``, ``_matches_any``, and ``_check_path_governance``
-used by both :mod:`read` and :mod:`write`.
+used by both :mod:`read` and :mod:`write`. A refusal raises :class:`PathRefusalError`, whose
+codes are part of each caller's own code set (ADR-0156 D6.1).
 
-FRE-261.
+FRE-261. FRE-1575 (one tool contract).
 """
 
 import os
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
+from typing import Literal
 
 import structlog
 
 from personal_agent.config import load_governance_config
+from personal_agent.tools.contract import ToolError
 
 log = structlog.get_logger(__name__)
+
+PathCode = Literal[
+    "governance_unavailable", "no_path_policy", "forbidden_path", "path_not_allowed", "not_durable"
+]
+"""Refusals of a path by the path rules or the durability check."""
+
+
+class PathRefusalError(ToolError[PathCode]):
+    """A path refused by the path rules (``read`` and ``write``)."""
+
+
+_PATH_NEXT = "Do not retry this path. Use a path that the path rules allow."
 
 
 def _expand_path(path: str) -> str:
@@ -118,7 +132,7 @@ def _check_durability(
     tool_name: str,
     *,
     trace_id: str | None = None,
-) -> dict[str, Any] | None:
+) -> None:
     """Reject a write into the ephemeral container layer under ``/app``.
 
     Args:
@@ -126,25 +140,22 @@ def _check_durability(
         tool_name: Tool name, included in the log line for §I3 identity threading.
         trace_id: Originating request trace_id.
 
-    Returns:
-        An error dict when *resolved* is under ``/app`` but not backed by a mount,
-        else ``None``.
+    Raises:
+        PathRefusalError: ``not_durable`` — *resolved* is under ``/app`` but not backed by
+            a mount.
     """
     if _is_durable_mount(resolved):
-        return None
+        return
 
     path_str = str(resolved)
     log.warning("write_not_durable_rejected", tool=tool_name, path=path_str, trace_id=trace_id)
-    return {
-        "success": False,
-        "error": "not_durable",
-        "path": path_str,
-        "detail": (
-            f"{path_str!r} is under /app but outside a mounted volume, so it lives only in "
-            "the container's writable layer and is destroyed on the next rebuild or restart. "
-            "Write durable work to /app/agent_workspace/ or /app/telemetry/ instead."
-        ),
-    }
+    raise PathRefusalError(
+        "not_durable",
+        f"{path_str!r} is under /app but outside a mounted volume, so it lives only in "
+        "the container's writable layer and is destroyed on the next rebuild or restart.",
+        retryable=False,
+        next_action="Write durable work to /app/agent_workspace/ or /app/telemetry/ instead.",
+    )
 
 
 def _check_path_governance(
@@ -152,8 +163,11 @@ def _check_path_governance(
     tool_name: str,
     *,
     trace_id: str | None = None,
-) -> dict[str, Any] | None:
+) -> None:
     """Validate *resolved* against allowed_paths / forbidden_paths for *tool_name*.
+
+    A governance load error and a missing policy both reject (ADR-0156 D8.1, FRE-1574): a
+    path check that cannot run does not permit.
 
     Args:
         resolved: Fully resolved absolute path.
@@ -161,49 +175,45 @@ def _check_path_governance(
         trace_id: Originating request trace_id, threaded onto the
             governance-load failure log for §I3 identity threading.
 
-    Returns:
-        An error dict (with ``success=False``) when the path is rejected,
-        or ``None`` when the path is permitted. A governance load error and a
-        missing policy both reject (ADR-0156 D8.1, FRE-1574): a path check that
-        cannot run does not permit.
+    Raises:
+        PathRefusalError: The path is refused, or the rules cannot be checked.
     """
     try:
         governance = load_governance_config()
     except Exception as exc:  # noqa: BLE001 — any load failure must refuse, never permit
         log.warning("governance_load_error", tool=tool_name, error=str(exc), trace_id=trace_id)
-        return {
-            "success": False,
-            "error": "governance_unavailable",
-            "path": str(resolved),
-            "detail": f"The path rules could not be loaded, so {tool_name!r} refuses: {exc}",
-        }
+        raise PathRefusalError(
+            "governance_unavailable",
+            f"The path rules could not be loaded, so {tool_name!r} refuses {str(resolved)!r}: "
+            f"{exc}",
+            retryable=False,
+            next_action="No path can be used until the path rules load. Tell the user.",
+        ) from exc
 
     policy = governance.tools.get(tool_name)
     if policy is None:
         log.warning("path_governance_no_policy", tool=tool_name, trace_id=trace_id)
-        return {
-            "success": False,
-            "error": "no_path_policy",
-            "path": str(resolved),
-            "detail": f"No path policy exists for {tool_name!r}, so the path is refused.",
-        }
+        raise PathRefusalError(
+            "no_path_policy",
+            f"No path policy exists for {tool_name!r}, so {str(resolved)!r} is refused.",
+            retryable=False,
+            next_action="No path can be used until a path policy exists. Tell the user.",
+        )
 
     path_str = str(resolved)
 
     if policy.forbidden_paths and _matches_any(path_str, policy.forbidden_paths):
-        return {
-            "success": False,
-            "error": "forbidden_path",
-            "path": path_str,
-            "detail": f"Path {path_str!r} is in the forbidden_paths list for tool '{tool_name}'",
-        }
+        raise PathRefusalError(
+            "forbidden_path",
+            f"Path {path_str!r} is in the forbidden_paths list for tool '{tool_name}'",
+            retryable=False,
+            next_action=_PATH_NEXT,
+        )
 
     if policy.allowed_paths and not _matches_any(path_str, policy.allowed_paths):
-        return {
-            "success": False,
-            "error": "path_not_allowed",
-            "path": path_str,
-            "detail": f"Path {path_str!r} is not in the allowed_paths list for tool '{tool_name}'",
-        }
-
-    return None
+        raise PathRefusalError(
+            "path_not_allowed",
+            f"Path {path_str!r} is not in the allowed_paths list for tool '{tool_name}'",
+            retryable=False,
+            next_action=_PATH_NEXT,
+        )

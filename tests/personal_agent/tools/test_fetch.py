@@ -786,3 +786,19 @@ async def test_fre1554_user_agent_is_honest_and_not_browser_shaped() -> None:
     assert seen == [_EXPECTED_USER_AGENT]
     assert "bot" not in seen[0].lower()
     assert "mozilla" not in seen[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_unexpected_client_failure_raises_fetch_failed() -> None:
+    """FRE-1575: an exception outside the mapped httpx failures becomes ``fetch_failed``."""
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=RuntimeError("decoder broke"))
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    with patch("personal_agent.tools.fetch.create_guarded_http_client", return_value=client):
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await fetch_url_executor(url="https://example.com", ctx=_CTX)
+
+    assert exc_info.value.code == "fetch_failed"
+    assert exc_info.value.retryable is False
+    assert "RuntimeError: decoder broke" in exc_info.value.message

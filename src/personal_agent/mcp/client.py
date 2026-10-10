@@ -14,7 +14,9 @@ import asyncio
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
 
+from personal_agent.mcp.types import MCPToolError
 from personal_agent.telemetry import get_logger
+from personal_agent.tools.contract import ToolError
 
 if TYPE_CHECKING:
     from mcp import ClientSession
@@ -203,7 +205,9 @@ class MCPClientWrapper:
             Tool result (parsed from MCP content).
 
         Raises:
-            RuntimeError: If client not connected or tool execution fails.
+            RuntimeError: If the client is not connected.
+            MCPToolError: ``mcp_tool_error`` when the result has ``isError: true``; the
+                message is the tool's error text (ADR-0156 D6.6).
         """
         if not self.session:
             raise RuntimeError("MCP client not connected - use async with context manager")
@@ -221,7 +225,12 @@ class MCPClientWrapper:
             if result.isError:
                 error_msg = self._extract_error_message(result)
                 log.error("mcp_tool_returned_error", tool=name, error=error_msg, trace_id=trace_id)
-                raise RuntimeError(f"MCP tool '{name}' returned error: {error_msg}")
+                raise MCPToolError(
+                    "mcp_tool_error",
+                    f"MCP tool '{name}' returned an error: {error_msg}",
+                    retryable=False,
+                    next_action="Correct the arguments as the message states, or use another tool.",
+                )
 
             # Check structuredContent first (some tools use this)
             if result.structuredContent:
@@ -244,8 +253,8 @@ class MCPClientWrapper:
             )
             return parsed_result
 
-        except RuntimeError:
-            # Re-raise RuntimeError (tool errors) as-is
+        except (RuntimeError, ToolError):
+            # Re-raise tool errors as-is
             raise
         except Exception as e:
             log.error(

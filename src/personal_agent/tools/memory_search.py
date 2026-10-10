@@ -6,26 +6,37 @@ to retrieve past conversations, entities, or session history.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.telemetry import get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+SearchMemoryCode = Literal["memory_unavailable", "search_failed"]
+
+
+class SearchMemoryError(ToolError[SearchMemoryCode]):
+    """A ``search_memory`` failure (ADR-0156 D6.1)."""
 
 
 search_memory_tool = ToolDefinition(
     name="search_memory",
     description=(
-        "Search the personal memory graph for past conversations, entities, "
-        "and topics the user has previously discussed. "
-        "Use this when you need to recall specific history from earlier sessions "
-        "or when the user asks what they have discussed before. "
-        "Returns matching entities, turn summaries, and session context. "
-        "Also returns durable facts (claims) the user has previously asserted, "
-        "distinct from entities and turns."
+        "Search this system's shared memory graph for entities, topics, durable facts "
+        "(claims) and past turn summaries that anyone has contributed. "
+        "Use it for what the system already knows: 'what do we know about X', 'have we "
+        "discussed X', 'tell me about Y'. "
+        "When the user scopes to their own history ('we talked about', 'what did I ask', "
+        "'remind me what I said'), use recall_personal_history instead; for a fact about the "
+        "world that memory does not hold, use web_search. "
+        "Results default to the past 90 days and 10 items; set include_history=true to see "
+        "how a stance or claim changed over time. "
+        'Examples: search_memory(query_text="Acropolis"), '
+        'search_memory(query_text="travel planning", recency_days=30), '
+        'search_memory(query_text="Python async patterns", include_history=true).'
     ),
     category="memory",
     parameters=[
@@ -102,6 +113,9 @@ search_memory_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=30,
     rate_limit_per_hour=None,
+    error_codes=error_codes(SearchMemoryError),
+    max_result_tokens=15_000,
+    truncation_next_action="Call search_memory again with a lower limit or fewer recency_days.",
 )
 
 
@@ -171,7 +185,12 @@ async def search_memory_executor(
             pass
 
         if not memory_service or not memory_service.connected:
-            raise ToolExecutionError("Memory service unavailable or not connected.")
+            raise SearchMemoryError(
+                "memory_unavailable",
+                "Memory service unavailable or not connected.",
+                retryable=True,
+                next_action="Call search_memory once more later; if it fails again, tell the user.",
+            )
 
         if entity_names or not _looks_like_broad_query(query_text, entity_types):
             query = MemoryQuery(
@@ -300,7 +319,7 @@ async def search_memory_executor(
 
         return output
 
-    except ToolExecutionError:
+    except SearchMemoryError:
         raise
     except Exception as e:
         log.error(
@@ -309,7 +328,12 @@ async def search_memory_executor(
             trace_id=trace_id,
             exc_info=True,
         )
-        raise ToolExecutionError(str(e)) from e
+        raise SearchMemoryError(
+            "search_failed",
+            f"The memory search failed: {type(e).__name__}: {e}",
+            retryable=False,
+            next_action="Change query_text or the filters, or tell the user memory is failing.",
+        ) from e
 
 
 def _looks_like_broad_query(query_text: str, entity_types: list[str]) -> bool:

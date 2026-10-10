@@ -43,8 +43,10 @@ browser automation, or bidirectional communication?
 
 Every Tier 1 tool consists of:
 
-1. **`ToolDefinition`** — declares the contract (name, parameters, governance metadata)
-2. **Executor function** — `async def <name>_executor(...) -> dict[str, Any]`
+1. **`ToolDefinition`** — declares the contract (name, parameters, governance metadata,
+   `error_codes`, `max_result_tokens`)
+2. **Executor function** — `async def <name>_executor(...) -> dict[str, Any]`; it returns the
+   success payload and raises its typed error on a failure (the tool contract, below)
 3. **Registration** — added to `register_mvp_tools()` in `src/personal_agent/tools/__init__.py`
 4. **Governance entry** — in `config/governance/tools.yaml`
 5. **Unit tests** — in `tests/test_tools/test_<name>.py` with mocked httpx
@@ -60,22 +62,60 @@ src/personal_agent/tools/
 └── context7.py          ← example: library documentation
 ```
 
+### The tool contract (ADR-0156 D6, FRE-1575)
+
+The model reads every tool result in one shape:
+
+- success: `{"ok": true, ...payload}` — the layer adds `ok`; the payload never sets `ok`,
+  `success: false`, `status: "error"` or a top-level `error` (the layer refuses such a payload
+  as a `contract_violation`);
+- failure: `{"ok": false, "error": {"code", "message", "retryable", "next_action"}}`.
+
+Rules:
+
+- **Typed codes.** Each tool declares `MyCode = Literal[...]` and `class MyError(ToolError[MyCode])`,
+  and raises only `MyError`. mypy refuses an undeclared code. The definition sets
+  `error_codes=error_codes(MyError)`; the layer refuses any other code at run time. A helper
+  shared by several tools raises a shared class whose `Literal` is nested in each caller's.
+- **`retryable`** is true only when repeating the same call can succeed. **`next_action`**
+  names the next call that can work, or says that none exists.
+- **Messages** are bounded at 2,000 characters, never clipped shorter.
+- **Size.** `max_result_tokens` (at most 25,000) bounds the result; a longer one is truncated
+  with `truncation_next_action`.
+- **Telemetry.** Every call logs `tool_call_completed` once, with `success` equal to `ok` and
+  `error_code` on a failure.
+- **Description (S5).** At least 3 sentences: what it does, when to use it, when not (name the
+  better tool), its limits, and 1–3 example calls written as `my_tool(query="...")`.
+- **Coverage.** Every line that raises a failure is executed by a test
+  (`scripts/check_tool_failure_coverage.py`, run in CI). The contract test is
+  `tests/personal_agent/tools/test_tool_contract.py`.
+
 ### Minimal template
 ```python
 # src/personal_agent/tools/myservice.py
 from __future__ import annotations
-from typing import Any
+from typing import Any, Literal
 import httpx
 from personal_agent.config import settings
 from personal_agent.telemetry import TraceContext, get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
 
+MyToolCode = Literal["missing_query", "service_unavailable", "service_timeout"]
+
+
+class MyToolError(ToolError[MyToolCode]):
+    """A my_tool failure."""
+
+
 my_tool = ToolDefinition(
     name="my_tool",
-    description="What this tool does and when to use it.",
+    description=(
+        "What this tool does. When to use it. When not to use it, and which tool to use "
+        'instead. Its limits. Example: my_tool(query="...").'
+    ),
     category="network",  # or: read_only, system_write, memory
     parameters=[
         ToolParameter(name="query", type="string", description="...", required=True,
@@ -87,6 +127,7 @@ my_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=30,
     rate_limit_per_hour=100,
+    error_codes=error_codes(MyToolError),
 )
 
 async def my_tool_executor(
@@ -103,11 +144,14 @@ async def my_tool_executor(
         Plain dict — ToolExecutionLayer wraps in ToolResult.
 
     Raises:
-        ToolExecutionError: On failure.
+        MyToolError: On failure.
     """
     query = (query or "").strip()
     if not query:
-        raise ToolExecutionError("'query' is required.")
+        raise MyToolError(
+            "missing_query", "'query' is required.",
+            retryable=True, next_action="Call my_tool again with a query.",
+        )
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
     log.info("my_tool_started", trace_id=trace_id, query=query[:80])
     try:
@@ -116,11 +160,15 @@ async def my_tool_executor(
             resp.raise_for_status()
             data = resp.json()
     except httpx.ConnectError as exc:
-        raise ToolExecutionError(f"Cannot connect to my-service.") from exc
+        raise MyToolError(
+            "service_unavailable", "Cannot connect to my-service.",
+            retryable=True, next_action="Call my_tool once more; if it fails, tell the user.",
+        ) from exc
     except httpx.TimeoutException as exc:
-        raise ToolExecutionError("my-service request timed out.") from exc
-    except Exception as exc:
-        raise ToolExecutionError(str(exc)) from exc
+        raise MyToolError(
+            "service_timeout", "my-service request timed out.",
+            retryable=True, next_action="Call my_tool once more with a narrower query.",
+        ) from exc
     log.info("my_tool_completed", trace_id=trace_id)
     return {"result": data}
 ```
@@ -212,6 +260,11 @@ MCP is **reserved** for integrations that genuinely cannot be Tier 1 or Tier 2:
 - MCP tools must be added to `config/governance/tools.yaml` as `allowed_in_modes: []` initially
 - Enable modes only after verifying the tool works with `mcp_gateway_enabled: true`
 - The MCP Gateway code in `src/personal_agent/mcp/` is preserved but disabled by default
+- No MCP server is enabled by default (ADR-0156 D7.5): `docker/mcp/run-gateway.sh` has an
+  empty default server set. `context7` and `sequentialthinking` were removed because they
+  copied `get_library_docs` and the `sequential-thinking` skill
+- The MCP client maps a result with `isError: true` onto the tool contract
+  (`MCPToolError`, code `mcp_tool_error`, ADR-0156 D6.6)
 
 ### Currently preserved MCP tools (disabled, future use)
 - `mcp_browser_*` — browser automation (22 tools), reserved for future Playwright integration
@@ -246,7 +299,9 @@ Before submitting a new tool:
 - [ ] Justified the tier (Tier 1 vs 2 vs 3) in ADR or PR description
 - [ ] For Tier 3: documented why Tier 1/2 is insufficient
 - [ ] `ToolDefinition` has correct `risk_level`, `allowed_modes`, `timeout_seconds`
-- [ ] Executor raises `ToolExecutionError` (never bare exceptions) 
+- [ ] Executor raises its own typed `ToolError` subclass with a declared code, and the
+      definition sets `error_codes` (ADR-0156 D6); every raise line has a test
+- [ ] Description has at least 3 sentences, when not to use it, and an example call (D6.5)
 - [ ] Executor uses `from personal_agent.config import settings` (never `os.getenv`)
 - [ ] Executor logs `started` / `completed` events with `trace_id`
 - [ ] Registered in `register_mvp_tools()` in `tools/__init__.py`

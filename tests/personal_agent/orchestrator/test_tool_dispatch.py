@@ -7,6 +7,7 @@ callers"). These tests pin its contract independently of either caller.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -114,10 +115,8 @@ class TestDispatchToolCall:
         assert "error" in out["content"]
 
     @pytest.mark.asyncio
-    async def test_long_error_hint_is_marked_not_silently_clipped(self) -> None:
-        """ADR-0125 D5: the tool-role ``content`` hint is assembled context — a
-        long error must carry an explicit marker, not a silent 150-char clip.
-        """
+    async def test_long_error_reaches_the_model_unclipped(self) -> None:
+        """ADR-0156 D6.2: a long error reaches the model whole (no 150-char clip)."""
         long_error = "the underlying service returned a detailed diagnostic: " * 5  # > 150 chars
         result = ToolResult(
             tool_name="read",
@@ -139,8 +138,37 @@ class TestDispatchToolCall:
             loaded_skills=set(),
         )
 
-        assert "...[truncated" in out["content"]
-        assert long_error not in out["content"]
+        error = json.loads(out["content"])["error"]
+        assert error["code"] == "tool_exception"
+        assert long_error in error["message"]
+        assert "[truncated" not in error["message"]
+
+    @pytest.mark.asyncio
+    async def test_exception_from_the_layer_is_a_tool_exception_failure(self) -> None:
+        """FRE-1575: an exception escaping execute_tool becomes a ``tool_exception`` result."""
+        layer = _fake_tool_layer(
+            ToolResult(tool_name="read", success=True, output={}, error=None, latency_ms=0.0)
+        )
+        layer.execute_tool = AsyncMock(side_effect=RuntimeError("layer crashed"))
+
+        out = await dispatch_tool_call(
+            tool_call_id="tc-4",
+            tool_name="read",
+            arguments={"path": "/tmp/x"},
+            tool_layer=layer,
+            trace_ctx=_trace(),
+            trace_id="t-1",
+            session_id=None,
+            loaded_skills=set(),
+        )
+
+        assert out["success"] is False
+        assert out["tool_layer_error"] == "layer crashed"
+        content = json.loads(out["content"])
+        assert content["ok"] is False
+        assert content["error"]["code"] == "tool_exception"
+        assert content["error"]["retryable"] is False
+        assert "RuntimeError: layer crashed" in content["error"]["message"]
 
 
 class TestPrincipalAwareParamClamping:

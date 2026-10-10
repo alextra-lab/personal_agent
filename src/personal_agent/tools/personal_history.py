@@ -13,25 +13,37 @@ knowledge questions stay on search_memory.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.telemetry import get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+PersonalHistoryCode = Literal["missing_user_id", "invalid_days_ago", "memory_unavailable"]
+
+
+class PersonalHistoryError(ToolError[PersonalHistoryCode]):
+    """A ``recall_personal_history`` failure (ADR-0156 D6.1)."""
 
 
 recall_personal_history_tool = ToolDefinition(
     name="recall_personal_history",
     description=(
-        "Retrieve the connected user's own past turns within a time window. "
-        "Use ONLY when the user explicitly refers to their personal history — "
-        "phrasing like 'we talked about', 'what did I ask', 'remind me what I said', "
-        "'my conversation last week'. For general knowledge questions "
-        "('what do we know about X', 'tell me about Y'), use search_memory instead — "
-        "that searches the full shared graph."
+        "Return the connected user's own past turns within a time window. "
+        "Use it only when the user scopes to their own history: 'we talked about', 'what "
+        "did I ask', 'I told you', 'remind me what I said', 'my conversation last week'. "
+        "For a general question ('what do we know about X', 'tell me about Y') use "
+        "search_memory, which searches the whole shared graph; this tool would hide what "
+        "others contributed. "
+        "days_ago: yesterday 1, earlier this week 3, last week 7, last month 30, last "
+        "quarter 90; work out a weekday yourself (last Tuesday, seen from a Wednesday, is 8). "
+        "topic ranks matching turns first but is not a filter and not a semantic search; "
+        "for fuzzy recall use search_memory with recency_days. "
+        "Examples: recall_personal_history(days_ago=8), "
+        'recall_personal_history(days_ago=30, topic="Athens").'
     ),
     category="memory",
     parameters=[
@@ -72,6 +84,11 @@ recall_personal_history_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=30,
     rate_limit_per_hour=None,
+    error_codes=error_codes(PersonalHistoryError),
+    max_result_tokens=15_000,
+    truncation_next_action=(
+        "Call recall_personal_history again with a lower limit, fewer days_ago or a topic."
+    ),
 )
 
 
@@ -109,21 +126,29 @@ async def recall_personal_history_executor(
         Dict with turns, total, window_days, and user_id (for trace correlation).
 
     Raises:
-        ToolExecutionError: ctx.user_id missing, days_ago out of range, or
+        PersonalHistoryError: ctx.user_id missing, days_ago out of range, or
             memory service unavailable.
     """
     user_id = getattr(ctx, "user_id", None) if ctx else None
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
 
     if user_id is None:
-        raise ToolExecutionError(
+        raise PersonalHistoryError(
+            "missing_user_id",
             "missing_user_id — this is a bug; report it (FRE-343). "
-            "recall_personal_history requires ctx.user_id."
+            "recall_personal_history requires ctx.user_id.",
+            retryable=False,
+            next_action="Do not retry. Tell the user that personal history is not available.",
         )
 
     days_ago_int = int(days_ago)
     if days_ago_int < 1 or days_ago_int > 365:
-        raise ToolExecutionError(f"days_ago must be between 1 and 365, got {days_ago_int}")
+        raise PersonalHistoryError(
+            "invalid_days_ago",
+            f"days_ago must be between 1 and 365, got {days_ago_int}",
+            retryable=True,
+            next_action="Call recall_personal_history again with days_ago from 1 to 365.",
+        )
 
     effective_limit = min(max(int(limit) if limit is not None else 10, 1), 50)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days_ago_int)).isoformat()
@@ -139,7 +164,13 @@ async def recall_personal_history_executor(
 
     svc = _get_memory_service()
     if svc is None or not getattr(svc, "connected", False):
-        raise ToolExecutionError("Memory service unavailable or not connected.")
+        raise PersonalHistoryError(
+            "memory_unavailable",
+            "Memory service unavailable or not connected.",
+            retryable=True,
+            next_action="Call recall_personal_history once more later; if it fails again, "
+            "tell the user.",
+        )
 
     cypher = """
         CALL {

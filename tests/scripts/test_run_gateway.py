@@ -22,11 +22,11 @@ def test_run_gateway_script_exists() -> None:
     assert script.stat().st_mode & 0o111, f"Script not executable: {script}"
 
 
-def test_run_gateway_default_servers() -> None:
-    """When env var unset, script should pass default servers to docker.
+def test_run_gateway_default_starts_no_server() -> None:
+    """When the env var is unset, no MCP server is enabled and the script exits 1.
 
-    The default should be --servers "sequentialthinking,context7".
-    We stub docker on PATH to capture the --servers argument.
+    ADR-0156 D7.5 (FRE-1575): sequentialthinking and context7 left the default set.
+    The script must refuse to start an empty gateway and must never call docker.
     """
     script_path = Path(__file__).parent.parent.parent / "docker/mcp/run-gateway.sh"
 
@@ -54,21 +54,15 @@ def test_run_gateway_default_servers() -> None:
             },
         )
 
-        # Should succeed (stub docker exits 0)
-        assert result.returncode == 0, f"script failed: {result.stderr}"
-
-        # Verify --servers arg contains default servers
-        output = result.stdout + result.stderr
-        assert "--servers" in output, f"--servers not found in output: {output}"
-        assert "sequentialthinking,context7" in output, (
-            f"Default servers not found in output: {output}"
-        )
+        assert result.returncode == 1, f"script did not refuse: {result.stdout}"
+        assert "no MCP server is enabled" in result.stderr
+        assert "docker args" not in result.stdout, "docker was called with no server"
 
 
 def test_run_gateway_custom_servers() -> None:
     """When env var set, script should pass custom servers to docker.
 
-    We test with custom array ["sequentialthinking", "context7", "linear"].
+    We test with a custom array of three server ids.
     """
     script_path = Path(__file__).parent.parent.parent / "docker/mcp/run-gateway.sh"
 
@@ -78,7 +72,7 @@ def test_run_gateway_custom_servers() -> None:
     exit 0
     """
 
-    custom_servers = json.dumps(["sequentialthinking", "context7", "linear"])
+    custom_servers = json.dumps(["github", "notion", "linear"])
 
     with tempfile.TemporaryDirectory() as tmpdir:
         stub_path = Path(tmpdir) / "docker"
@@ -103,6 +97,4 @@ def test_run_gateway_custom_servers() -> None:
         # Verify --servers arg contains custom servers
         output = result.stdout + result.stderr
         assert "--servers" in output, f"--servers not found in output: {output}"
-        assert "sequentialthinking,context7,linear" in output, (
-            f"Custom servers not found in output: {output}"
-        )
+        assert "github,notion,linear" in output, f"Custom servers not found in output: {output}"

@@ -205,7 +205,7 @@ def _digest_bash(parsed: dict[str, Any]) -> dict[str, Any]:
         "format": "bash",
         "command": parsed.get("command"),
         "exit_code": parsed.get("exit_code"),
-        "success": parsed.get("success"),
+        "ok": parsed.get("ok"),
         "note": parsed.get("note"),
         "truncated_path": parsed.get("truncated_path"),
         "stdout": _stream_digest(str(parsed.get("stdout") or "")),

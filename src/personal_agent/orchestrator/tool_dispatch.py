@@ -23,13 +23,14 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Literal
 
-from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
 from personal_agent.governance.sub_agent_tools import clamp_sub_agent_tool_params
 from personal_agent.orchestrator.loop_gate import GateResult, ToolLoopPolicy, stable_hash
-from personal_agent.telemetry import get_logger
+from personal_agent.telemetry import TOOL_CALL_COMPLETED, get_logger
 from personal_agent.telemetry.events import SUB_AGENT_TOOL_PARAM_CLAMPED
 from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.contract import dispatch_error, failure_payload, render_content
+from personal_agent.tools.types import RESULT_TOKEN_CEILING, ToolErrorDetail
 
 if TYPE_CHECKING:
     from personal_agent.tools import ToolExecutionLayer
@@ -63,6 +64,33 @@ def get_shared_tool_execution_layer() -> "ToolExecutionLayer":
             get_default_registry(), transport=AGUITransport()
         )
     return _tool_execution_layer
+
+
+def undispatched_failure(tool_name: str, detail: ToolErrorDetail, *, trace_id: str) -> str:
+    """Log a call that failed before the execution layer, and return its content.
+
+    Covers the failures that dispatch and the tool loops build themselves: a missing
+    parameter, malformed argument JSON, a tool outside a worker's set, and a loop-gate block.
+    Each logs ``tool_call_completed`` with ``success: false`` (ADR-0156 D6.3).
+
+    Args:
+        tool_name: The tool the model called.
+        detail: The model-facing failure.
+        trace_id: Request trace identifier.
+
+    Returns:
+        The tool message content in the contract shape.
+    """
+    log.info(
+        TOOL_CALL_COMPLETED,
+        tool_name=tool_name,
+        success=False,
+        error_code=detail.code,
+        retryable=detail.retryable,
+        executed=False,
+        trace_id=trace_id,
+    )
+    return json.dumps(failure_payload(detail))
 
 
 async def dispatch_tool_call(
@@ -150,15 +178,16 @@ async def dispatch_tool_call(
                 missing_params=missing_params,
                 required_params=required_params,
             )
+            detail = dispatch_error(
+                "missing_parameter",
+                f"{tool_name} is missing required parameters: {', '.join(missing_params)}.",
+                retryable=True,
+                next_action=f"Call {tool_name} again with {', '.join(missing_params)} included.",
+            )
             return {
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "content": json.dumps(
-                    {
-                        "status": "retry",
-                        "hint": f"Missing required params: {', '.join(missing_params)}. Retry with these included.",
-                    }
-                ),
+                "content": undispatched_failure(tool_name, detail, trace_id=trace_id),
                 "success": False,
                 "latency_ms": 0,
                 "output_hash": None,
@@ -181,11 +210,12 @@ async def dispatch_tool_call(
             return {
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "content": json.dumps(
-                    {
-                        "status": "ok",
+                "content": render_content(
+                    output={
+                        "skill_name": _skill_name_arg,
                         "body": f"<skill: {_skill_name_arg} already loaded earlier this conversation>",
-                    }
+                    },
+                    error_detail=None,
                 ),
                 "success": True,
                 "latency_ms": 0,
@@ -207,11 +237,12 @@ async def dispatch_tool_call(
             worker=worker,
         )
 
+        tool_info = tool_layer.registry.get_tool(tool_name)
+        bound_def = tool_info[0] if tool_info else None
+        extra: dict[str, object] = {}
+        output_hash: str | None = None
         if result.success:
-            content = (
-                json.dumps(result.output) if isinstance(result.output, dict) else str(result.output)
-            )
-            output_hash: str | None = stable_hash(result.output)
+            output_hash = stable_hash(result.output)
 
             # Track loaded skills + post-execution hint for hybrid skill routing.
             if tool_name == "read_skill" and isinstance(result.output, dict):
@@ -223,7 +254,7 @@ async def dispatch_tool_call(
                         skill_name=_loaded_name,
                         trace_id=trace_id,
                     )
-            elif result.success and settings.skill_routing_mode == "hybrid":
+            elif settings.skill_routing_mode == "hybrid":
                 # For non-read_skill tools in hybrid mode: hint if linked skill not loaded
                 from personal_agent.orchestrator.skills import find_skills_for_tool  # noqa: PLC0415
 
@@ -232,9 +263,10 @@ async def dispatch_tool_call(
                     None,
                 )
                 if _hint_skill:
-                    content = (
-                        content
-                        + f"\n\n[hint: skill {_hint_skill.name!r} is available — call read_skill to load full guidance]"
+                    # A key, not appended text, so the content stays one JSON object.
+                    extra["skill_hint"] = (
+                        f"skill {_hint_skill.name!r} is available — call read_skill to load "
+                        "full guidance"
                     )
                     log.debug(
                         "tool_result_skill_hint_appended",
@@ -242,19 +274,30 @@ async def dispatch_tool_call(
                         linked_skill=_hint_skill.name,
                         trace_id=trace_id,
                     )
-        elif result.metadata.get("permission_error") is not None:
-            # ADR-0156 D8.4: a permission refusal names the refused subcommand and the
-            # rule, bounded at 2,000 characters by the executor. It is not clipped.
-            content = json.dumps({"ok": False, "error": result.metadata["permission_error"]})
-            output_hash = None
-        else:
-            # ADR-0125 D5: this "hint" is the tool-role message content sent back
-            # to the model (assembled context) — the full error is separately
-            # preserved in the durable tool_results record, but what the model
-            # sees here must not be silently clipped.
-            short_error = mark_truncated(result.error or "execution failed", 150)
-            content = json.dumps({"status": "error", "hint": f"{tool_name}: {short_error}"})
-            output_hash = None
+
+        # ADR-0156 D6: one shape for every result. A failure carries its full message
+        # (bounded at 2,000 characters), never a clip; a success is bounded per tool.
+        content = render_content(
+            output=result.output,
+            error_detail=(
+                None
+                if result.success
+                else result.error_detail
+                or dispatch_error(
+                    "tool_exception",
+                    f"{tool_name}: {result.error or 'execution failed'}",
+                    retryable=False,
+                    next_action="Do not repeat the same call. Use another tool.",
+                )
+            ),
+            max_result_tokens=bound_def.max_result_tokens if bound_def else RESULT_TOKEN_CEILING,
+            truncation_next_action=(
+                bound_def.truncation_next_action
+                if bound_def
+                else "Narrow the request and call again."
+            ),
+            extra=extra,
+        )
 
         return {
             "tool_call_id": tool_call_id,
@@ -286,11 +329,15 @@ async def dispatch_tool_call(
         return {
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
-            "content": json.dumps(
-                {
-                    "status": "error",
-                    "hint": f"{tool_name} failed to execute. Try a different approach or tool.",
-                }
+            "content": undispatched_failure(
+                tool_name,
+                dispatch_error(
+                    "tool_exception",
+                    f"{tool_name} failed to execute: {type(e).__name__}: {e}",
+                    retryable=False,
+                    next_action="Do not repeat the same call. Use another tool.",
+                ),
+                trace_id=trace_id,
             ),
             "success": False,
             "latency_ms": 0,

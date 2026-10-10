@@ -91,7 +91,7 @@ from personal_agent.orchestrator.loop_gate import (
 )
 from personal_agent.orchestrator.routing import is_memory_recall_query
 from personal_agent.orchestrator.session import SessionManager
-from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
+from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call, undispatched_failure
 from personal_agent.orchestrator.types import (
     ConstraintResolutionRecord,
     ExecutionContext,
@@ -137,6 +137,7 @@ from personal_agent.telemetry import (
 from personal_agent.telemetry.spans import close_step_span, open_step_span
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools import ToolExecutionLayer, get_default_registry
+from personal_agent.tools.contract import dispatch_error
 from personal_agent.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
@@ -1006,6 +1007,8 @@ def _gate_blocked_result(
     tool_call_id: str,
     tool_name: str,
     gate_result: GateResult,
+    *,
+    trace_id: str,
 ) -> dict[str, Any]:
     """Formats a tool result dict for gate-blocked calls.
 
@@ -1013,6 +1016,7 @@ def _gate_blocked_result(
         tool_call_id: The tool call ID from the LLM response.
         tool_name: The name of the blocked tool.
         gate_result: The GateResult that triggered the block.
+        trace_id: Request trace identifier.
 
     Returns:
         A tool result dict suitable for appending to ctx.messages.
@@ -1029,16 +1033,21 @@ def _gate_blocked_result(
             "Stop and synthesize from results gathered so far, or report what is missing."
         ),
     }
+    hint = hints.get(gate_result.decision, "Tool call blocked by loop gate.")
     return {
         "tool_call_id": tool_call_id,
         "role": "tool",
         "name": tool_name,
-        "content": json.dumps(
-            {
-                "status": "done",
-                "hint": hints.get(gate_result.decision, "Tool call blocked by loop gate."),
-                "gate_decision": gate_result.decision.value,
-            }
+        "content": undispatched_failure(
+            tool_name,
+            dispatch_error(
+                "loop_blocked",
+                f"{tool_name} was not run: the loop gate blocked it "
+                f"({gate_result.decision.value}).",
+                retryable=False,
+                next_action=hint,
+            ),
+            trace_id=trace_id,
         ),
     }
 
@@ -7928,11 +7937,15 @@ async def step_tool_execution(
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps(
-                        {
-                            "status": "retry",
-                            "hint": f"Arguments for {tool_name} were malformed JSON. Retry with valid JSON.",
-                        }
+                    "content": undispatched_failure(
+                        tool_name,
+                        dispatch_error(
+                            "invalid_json_arguments",
+                            f"Arguments for {tool_name} were malformed JSON.",
+                            retryable=True,
+                            next_action=f"Call {tool_name} again with valid JSON arguments.",
+                        ),
+                        trace_id=ctx.trace_id,
                     ),
                 }
             )
@@ -7965,7 +7978,9 @@ async def step_tool_execution(
             GateDecision.BLOCK_OUTPUT,
             GateDecision.BLOCK_CONSECUTIVE,
         ):
-            tool_results.append(_gate_blocked_result(tool_call_id, tool_name, gate_result))
+            tool_results.append(
+                _gate_blocked_result(tool_call_id, tool_name, gate_result, trace_id=ctx.trace_id)
+            )
             _record_undispatched_invocation(
                 ctx,
                 tool_name=tool_name,
@@ -8043,11 +8058,15 @@ async def step_tool_execution(
                     "tool_call_id": plan["tool_call_id"],
                     "role": "tool",
                     "name": plan["tool_name"],
-                    "content": json.dumps(
-                        {
-                            "status": "error",
-                            "hint": f"{plan['tool_name']} failed to execute. Try a different approach or tool.",
-                        }
+                    "content": undispatched_failure(
+                        plan["tool_name"],
+                        dispatch_error(
+                            "tool_exception",
+                            f"{plan['tool_name']} failed to execute: {type(raw).__name__}: {raw}",
+                            retryable=False,
+                            next_action="Do not repeat the same call. Use another tool.",
+                        ),
+                        trace_id=ctx.trace_id,
                     ),
                 }
             )

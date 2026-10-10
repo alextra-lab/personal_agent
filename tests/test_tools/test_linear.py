@@ -143,29 +143,33 @@ def test_find_tool_definition() -> None:
 @pytest.mark.asyncio
 async def test_create_empty_title_raises() -> None:
     """Empty title raises before any HTTP call."""
-    with pytest.raises(ToolExecutionError, match="'title' is required"):
+    with pytest.raises(ToolExecutionError, match="'title' is required") as exc_info:
         await create_linear_issue_executor(title="", description="some body", ctx=_CTX)
+    assert exc_info.value.code == "invalid_argument"
 
 
 @pytest.mark.asyncio
 async def test_create_empty_description_raises() -> None:
     """Empty description raises before any HTTP call."""
-    with pytest.raises(ToolExecutionError, match="'description' is required"):
+    with pytest.raises(ToolExecutionError, match="'description' is required") as exc_info:
         await create_linear_issue_executor(title="A title", description="", ctx=_CTX)
+    assert exc_info.value.code == "invalid_argument"
 
 
 @pytest.mark.asyncio
 async def test_create_title_too_long_raises() -> None:
     """Title over 255 chars raises before any HTTP call."""
-    with pytest.raises(ToolExecutionError, match="exceeds 255"):
+    with pytest.raises(ToolExecutionError, match="exceeds 255") as exc_info:
         await create_linear_issue_executor(title="x" * 256, description="body", ctx=_CTX)
+    assert exc_info.value.code == "invalid_argument"
 
 
 @pytest.mark.asyncio
 async def test_create_bad_priority_raises() -> None:
     """Priority outside 1-4 raises before any HTTP call."""
-    with pytest.raises(ToolExecutionError, match="priority"):
+    with pytest.raises(ToolExecutionError, match="priority") as exc_info:
         await create_linear_issue_executor(title="T", description="D", priority=5, ctx=_CTX)
+    assert exc_info.value.code == "invalid_priority"
 
 
 @pytest.mark.asyncio
@@ -174,15 +178,17 @@ async def test_create_missing_api_key_raises() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = None
         ms.linear_agent_rate_limit_per_day = 10
-        with pytest.raises(ToolExecutionError, match="API key not configured"):
+        with pytest.raises(ToolExecutionError, match="API key not configured") as exc_info:
             await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+        assert exc_info.value.code == "not_configured"
 
 
 @pytest.mark.asyncio
 async def test_find_no_query_no_state_raises() -> None:
     """Empty query with no state filter raises before any HTTP call."""
-    with pytest.raises(ToolExecutionError, match="Provide 'query'"):
+    with pytest.raises(ToolExecutionError, match="Provide 'query'") as exc_info:
         await find_linear_issues_executor(query="", state=None, ctx=_CTX)
+    assert exc_info.value.code == "invalid_argument"
 
 
 @pytest.mark.asyncio
@@ -202,8 +208,9 @@ async def test_find_missing_api_key_raises() -> None:
     """Missing API key raises ToolExecutionError before any HTTP call."""
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = None
-        with pytest.raises(ToolExecutionError, match="API key not configured"):
+        with pytest.raises(ToolExecutionError, match="API key not configured") as exc_info:
             await find_linear_issues_executor(query="something", ctx=_CTX)
+        assert exc_info.value.code == "not_configured"
 
 
 # ── dry_run tests ──────────────────────────────────────────────────────────
@@ -361,8 +368,9 @@ async def test_rate_limit_blocks_after_threshold() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 3
-        with pytest.raises(ToolExecutionError, match="Rate limit"):
+        with pytest.raises(ToolExecutionError, match="Rate limit") as exc_info:
             await create_linear_issue_executor(title="Over limit", description="body", ctx=_CTX)
+        assert exc_info.value.code == "rate_limited"
 
 
 @pytest.mark.asyncio
@@ -416,8 +424,9 @@ async def test_http_error_raises() -> None:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
-            with pytest.raises(ToolExecutionError, match="HTTP 500"):
+            with pytest.raises(ToolExecutionError, match="HTTP 500") as exc_info:
                 await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+            assert exc_info.value.code == "upstream_rejected"
 
 
 @pytest.mark.asyncio
@@ -430,8 +439,9 @@ async def test_graphql_error_raises() -> None:
         ms.linear_agent_rate_limit_per_day = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([error_response])
-            with pytest.raises(ToolExecutionError, match="not authorized"):
+            with pytest.raises(ToolExecutionError, match="not authorized") as exc_info:
                 await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+            assert exc_info.value.code == "graphql_error"
 
 
 @pytest.mark.asyncio
@@ -447,8 +457,9 @@ async def test_connect_error_raises() -> None:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
-            with pytest.raises(ToolExecutionError, match="Cannot connect"):
+            with pytest.raises(ToolExecutionError, match="Cannot connect") as exc_info:
                 await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+            assert exc_info.value.code == "upstream_unavailable"
 
 
 @pytest.mark.asyncio
@@ -461,8 +472,9 @@ async def test_unknown_team_raises() -> None:
         ms.linear_agent_rate_limit_per_day = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([data])
-            with pytest.raises(ToolExecutionError, match="team.*not found"):
+            with pytest.raises(ToolExecutionError, match="team.*not found") as exc_info:
                 await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+            assert exc_info.value.code == "team_not_found"
 
 
 # ── GraphQL type annotation tests ─────────────────────────────────────────────
@@ -547,8 +559,11 @@ async def test_create_issue_raises_when_personal_agent_label_id_not_configured()
         ms.linear_personal_agent_label_id = None
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
-            with pytest.raises(ToolExecutionError, match="PersonalAgent label ID not configured"):
+            with pytest.raises(
+                ToolExecutionError, match="PersonalAgent label ID not configured"
+            ) as exc_info:
                 await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+            assert exc_info.value.code == "label_not_configured"
 
 
 # ── Eval isolation tests ───────────────────────────────────────────────────
@@ -561,8 +576,9 @@ async def test_eval_mode_blocks_issue_creation() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
-        with pytest.raises(ToolExecutionError, match="disabled in evaluation sessions"):
+        with pytest.raises(ToolExecutionError, match="disabled in evaluation sessions") as exc_info:
             await create_linear_issue_executor(title="T", description="D", ctx=eval_ctx)
+        assert exc_info.value.code == "eval_session"
 
 
 @pytest.mark.asyncio
@@ -617,8 +633,9 @@ async def test_eval_profile_sends_no_request_to_linear(executor, kwargs) -> None
         ms.linear_personal_agent_label_id = "lbl-pa"
         ms.deployment_profile = "eval"
         with patch("personal_agent.tools.linear.create_guarded_http_client") as mock_client:
-            with pytest.raises(ToolExecutionError, match="eval deployment"):
+            with pytest.raises(ToolExecutionError, match="eval deployment") as exc_info:
                 await executor(**kwargs, ctx=_CTX)
+            assert exc_info.value.code == "eval_deployment"
     mock_client.assert_not_called()
 
 
@@ -663,10 +680,11 @@ async def test_dedup_blocks_when_similar_issue_exists() -> None:
         ms.linear_personal_agent_label_id = "lbl-pa"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
-            with pytest.raises(ToolExecutionError, match="Duplicate.*FRE-123"):
+            with pytest.raises(ToolExecutionError, match="Duplicate.*FRE-123") as exc_info:
                 await create_linear_issue_executor(
                     title="Existing similar issue", description="body", ctx=_CTX
                 )
+            assert exc_info.value.code == "duplicate_issue"
 
 
 @pytest.mark.asyncio
@@ -690,3 +708,268 @@ async def test_dedup_passes_when_no_similar_issue() -> None:
                 title="Brand new issue", description="body", ctx=_CTX
             )
     assert result["identifier"] == "FRE-999"
+
+
+# ── FRE-1575: one tool contract — every failure carries a declared code ────
+
+
+def _raising_client(exc: Exception) -> AsyncMock:
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=exc)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    return client
+
+
+def _configured(ms: MagicMock) -> None:
+    ms.linear_api_key = "lin_api_test"
+    ms.linear_agent_rate_limit_per_day = 10
+    ms.linear_personal_agent_label_id = "lbl-pa"
+
+
+def test_each_tool_declares_its_codes() -> None:
+    """Each Linear tool declares its own code set; the shared API codes are in every set."""
+    api = {
+        "eval_deployment",
+        "not_configured",
+        "egress_blocked",
+        "upstream_unavailable",
+        "upstream_timeout",
+        "upstream_rejected",
+        "graphql_error",
+    }
+    assert lm.find_linear_issues_tool.error_codes == api | {"invalid_argument"}
+    assert lm.list_linear_projects_tool.error_codes == api | {"team_not_found"}
+    assert lm.create_linear_project_tool.error_codes == api | {
+        "team_not_found",
+        "invalid_argument",
+        "bad_reply",
+    }
+    assert lm.create_linear_issue_tool.error_codes == api | {
+        "team_not_found",
+        "invalid_argument",
+        "invalid_priority",
+        "eval_session",
+        "rate_limited",
+        "state_not_found",
+        "label_not_found",
+        "label_not_configured",
+        "label_create_failed",
+        "duplicate_issue",
+        "bad_reply",
+    }
+    for tool in (
+        lm.create_linear_issue_tool,
+        lm.find_linear_issues_tool,
+        lm.list_linear_projects_tool,
+        lm.create_linear_project_tool,
+    ):
+        assert f"{tool.name}(" in tool.description
+        assert all(p.description for p in tool.parameters)
+
+
+@pytest.mark.asyncio
+async def test_timeout_and_egress_carry_codes() -> None:
+    """A timeout is retryable upstream_timeout; an egress refusal is non-retryable."""
+    from personal_agent.security import EgressBlockedError
+
+    request = httpx.Request("POST", lm._LINEAR_URL)
+    errors = []
+    for exc in (
+        httpx.TimeoutException("slow"),
+        EgressBlockedError(request, "domain not allowlisted", None),
+    ):
+        _clear_caches()
+        with patch("personal_agent.tools.linear.settings") as ms:
+            _configured(ms)
+            with patch(
+                "personal_agent.tools.linear.httpx.AsyncClient", return_value=_raising_client(exc)
+            ):
+                with pytest.raises(ToolExecutionError) as exc_info:
+                    await find_linear_issues_executor(query="q", ctx=_CTX)
+        errors.append(exc_info.value)
+    assert [(e.code, e.retryable) for e in errors] == [
+        ("upstream_timeout", True),
+        ("egress_blocked", False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_http_error_is_not_retryable() -> None:
+    """A 4xx (other than 429) is upstream_rejected and not retryable."""
+    _clear_caches()
+
+    async def bad_post(*args: object, **kwargs: object) -> MagicMock:
+        resp = MagicMock(spec=httpx.Response)
+        resp.status_code = 400
+        resp.is_error = True
+        resp.text = "Bad Request"
+        return resp
+
+    client = AsyncMock()
+    client.post = bad_post
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    with patch("personal_agent.tools.linear.settings") as ms:
+        _configured(ms)
+        with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
+            with pytest.raises(ToolExecutionError, match="HTTP 400") as exc_info:
+                await find_linear_issues_executor(query="q", ctx=_CTX)
+    assert exc_info.value.code == "upstream_rejected"
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_missing_workflow_state_is_state_not_found() -> None:
+    """A team without the Needs Approval state refuses with state_not_found."""
+    _clear_caches()
+    no_state = _gql_ok({"workflowStates": {"nodes": [{"id": "s1", "name": "Todo"}]}})
+    with patch("personal_agent.tools.linear.settings") as ms:
+        _configured(ms)
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client([_teams_response(), no_state])
+            with pytest.raises(ToolExecutionError, match="Needs Approval") as exc_info:
+                await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+    assert exc_info.value.code == "state_not_found"
+
+
+@pytest.mark.asyncio
+async def test_missing_label_without_auto_create_is_label_not_found() -> None:
+    """_get_label_id refuses a missing label when it may not create one."""
+    _clear_caches()
+    with patch("personal_agent.tools.linear.settings") as ms:
+        _configured(ms)
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client([_labels_response()])
+            with pytest.raises(ToolExecutionError) as exc_info:
+                await lm._get_label_id("team-1", "no-such-label")
+    assert exc_info.value.code == "label_not_found"
+
+
+@pytest.mark.asyncio
+async def test_label_creation_without_id_is_label_create_failed() -> None:
+    """A label creation reply without an id refuses with label_create_failed."""
+    _clear_caches()
+    no_id = _gql_ok({"issueLabelCreate": {"issueLabel": {}}})
+    with patch("personal_agent.tools.linear.settings") as ms:
+        _configured(ms)
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client(
+                [_teams_response(), _states_response(), _labels_response(), no_id]
+            )
+            with pytest.raises(ToolExecutionError) as exc_info:
+                await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+    assert exc_info.value.code == "label_create_failed"
+    assert exc_info.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_issue_creation_without_identifier_is_bad_reply() -> None:
+    """An issueCreate reply without an identifier is bad_reply and points at find_linear_issues."""
+    _clear_caches()
+    responses = [
+        _teams_response(),
+        _states_response(),
+        _labels_response([{"id": "lbl-af", "name": "agent-filed"}]),
+        _issue_search_response([]),
+        _gql_ok({"issueCreate": {"issue": {}}}),
+    ]
+    with patch("personal_agent.tools.linear.settings") as ms:
+        _configured(ms)
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client(responses)
+            with pytest.raises(ToolExecutionError) as exc_info:
+                await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+    assert exc_info.value.code == "bad_reply"
+    assert "find_linear_issues" in exc_info.value.next_action
+
+
+@pytest.mark.asyncio
+async def test_create_issue_assigns_known_project() -> None:
+    """A project name that resolves is set as projectId on the dry-run payload."""
+    _clear_caches()
+    projects = _gql_ok(
+        {"teams": {"nodes": [{"projects": {"nodes": [{"id": "proj-1", "name": "Recall"}]}}]}}
+    )
+    responses = [
+        _teams_response(),
+        _states_response(),
+        _labels_response([{"id": "lbl-af", "name": "agent-filed"}]),
+        projects,
+    ]
+    with patch("personal_agent.tools.linear.settings") as ms:
+        _configured(ms)
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client(responses)
+            result = await create_linear_issue_executor(
+                title="T", description="D", project="recall", dry_run=True, ctx=_CTX
+            )
+    assert result["payload"]["projectId"] == "proj-1"
+
+
+@pytest.mark.asyncio
+async def test_list_projects_returns_projects() -> None:
+    """list_linear_projects returns the team's projects."""
+    _clear_caches()
+    projects = _gql_ok(
+        {
+            "teams": {
+                "nodes": [
+                    {
+                        "projects": {
+                            "nodes": [
+                                {
+                                    "id": "p1",
+                                    "name": "Recall",
+                                    "description": "d",
+                                    "url": "https://linear.app/p1",
+                                    "state": {"name": "started"},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    )
+    with patch("personal_agent.tools.linear.settings") as ms:
+        _configured(ms)
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client([_teams_response(), projects])
+            result = await lm.list_linear_projects_executor(ctx=_CTX)
+    assert result["count"] == 1
+    assert result["projects"][0]["state"] == "started"
+
+
+@pytest.mark.asyncio
+async def test_create_project_validation_codes() -> None:
+    """An empty name and a missing key each refuse with their own code before any request."""
+    with pytest.raises(ToolExecutionError) as no_name:
+        await lm.create_linear_project_executor(name="  ", ctx=_CTX)
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = None
+        with pytest.raises(ToolExecutionError) as no_key:
+            await lm.create_linear_project_executor(name="P", ctx=_CTX)
+    assert (no_name.value.code, no_key.value.code) == ("invalid_argument", "not_configured")
+
+
+@pytest.mark.asyncio
+async def test_create_project_success_and_bad_reply() -> None:
+    """A project creation returns its id; a reply without an id is bad_reply."""
+    _clear_caches()
+    created = _gql_ok(
+        {"projectCreate": {"project": {"id": "p9", "name": "P", "url": "https://x/p9"}}}
+    )
+    with patch("personal_agent.tools.linear.settings") as ms:
+        _configured(ms)
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client([_teams_response(), created])
+            result = await lm.create_linear_project_executor(
+                name="P", description="About P", ctx=_CTX
+            )
+            mock_cls.return_value = _mock_http_client([_gql_ok({"projectCreate": {}})])
+            with pytest.raises(ToolExecutionError) as exc_info:
+                await lm.create_linear_project_executor(name="P", ctx=_CTX)
+    assert result == {"id": "p9", "name": "P", "url": "https://x/p9"}
+    assert exc_info.value.code == "bad_reply"
+    assert "list_linear_projects" in exc_info.value.next_action

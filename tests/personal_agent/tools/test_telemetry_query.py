@@ -15,15 +15,16 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+
+from personal_agent.security import EgressBlockedError
+from personal_agent.telemetry import TraceContext
+from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.telemetry_query import (
     ALLOWED_FIELDS,
     FAMILY_TIME_FIELD,
     query_telemetry_executor,
     query_telemetry_tool,
 )
-
-from personal_agent.telemetry import TraceContext
-from personal_agent.tools.executor import ToolExecutionError
 
 _CTX = TraceContext.new_trace()
 
@@ -661,3 +662,90 @@ async def test_a_non_finite_number_is_a_clean_refusal(bad: float) -> None:
         index="agent-logs",
         aggs={"p": {"percentiles": {"field": "latency_ms", "percents": [bad]}}},
     )
+
+
+# ── Each validator refusal, by reason (FRE-1575, ADR-0156 AC-1) ──────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    [
+        ({"query": {"match_all": {"boost": 1}}}, "match_all takes an empty object"),
+        ({"query": {"exists": {"field": "level", "x": 1}}}, "exists takes"),
+        ({"query": {"bool": {}}}, "bool takes a non-empty object"),
+        ({"query": {"bool": {"minimum_should_match": 11}}}, "minimum_should_match must be"),
+        (
+            {"query": {"match": {"message": {"query": "x", "operator": "xor"}}}},
+            "operator must be 'and' or 'or'",
+        ),
+        ({"aggs": {"a": {"terms": {"size": 5}}}}, "terms needs a field"),
+        (
+            {"aggs": {"a": {"terms": {"field": "event_type", "min_doc_count": -1}}}},
+            "min_doc_count must be",
+        ),
+        (
+            {
+                "aggs": {
+                    "a": {
+                        "terms": {"field": "event_type", "order": {"_count": "desc", "_key": "asc"}}
+                    }
+                }
+            },
+            "order names one key and a direction",
+        ),
+    ],
+    ids=[
+        "match_all_body",
+        "exists_shape",
+        "bool_empty",
+        "minimum_should_match",
+        "match_operator",
+        "agg_without_field",
+        "min_doc_count",
+        "order_two_keys",
+    ],
+)
+async def test_each_validator_refusal_names_its_reason(kwargs: dict[str, Any], reason: str) -> None:
+    rec = _Recorder()
+    with pytest.raises(ToolExecutionError) as err:
+        await _run(rec, action="search", index="agent-logs", **kwargs)
+    assert err.value.code == "refused"
+    assert err.value.retryable is False
+    assert reason in str(err.value)
+    assert rec.calls == 0, "a refused call must send no request"
+
+
+# ── Elasticsearch failure codes (FRE-1575) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_an_egress_block_becomes_store_blocked() -> None:
+    def blocked(request: httpx.Request) -> httpx.Response:
+        raise EgressBlockedError(request, "domain not allowlisted", None)
+
+    with pytest.raises(ToolExecutionError) as err:
+        await _run(_Recorder(blocked), action="search", index="agent-logs")
+    assert err.value.code == "store_blocked"
+    assert err.value.retryable is False
+    assert "Elasticsearch" in str(err.value)
+
+
+@pytest.mark.asyncio
+async def test_another_transport_failure_becomes_store_failed() -> None:
+    def broken(_r: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("peer closed connection")
+
+    with pytest.raises(ToolExecutionError) as err:
+        await _run(_Recorder(broken), action="search", index="agent-logs")
+    assert err.value.code == "store_failed"
+    assert err.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_is_not_json_is_bad_reply() -> None:
+    rec = _Recorder(lambda _r: httpx.Response(200, content=b"<html>proxy</html>"))
+    with pytest.raises(ToolExecutionError) as err:
+        await _run(rec, action="search", index="agent-logs")
+    assert err.value.code == "bad_reply"
+    assert "not JSON" in str(err.value)

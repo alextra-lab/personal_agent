@@ -78,15 +78,17 @@ def test_mode_to_model_matches_current_catalog() -> None:
 @pytest.mark.asyncio
 async def test_empty_query_raises() -> None:
     """Empty query raises ToolExecutionError before any HTTP call."""
-    with pytest.raises(ToolExecutionError, match="'query' parameter is required"):
+    with pytest.raises(ToolExecutionError, match="'query' parameter is required") as exc_info:
         await perplexity_query_executor(query="", ctx=_CTX)
+    assert exc_info.value.code == "invalid_argument"
 
 
 @pytest.mark.asyncio
 async def test_invalid_mode_raises() -> None:
     """Invalid mode raises ToolExecutionError before any HTTP call."""
-    with pytest.raises(ToolExecutionError, match="Invalid mode"):
+    with pytest.raises(ToolExecutionError, match="Invalid mode") as exc_info:
         await perplexity_query_executor(query="hello", mode="ultra", ctx=_CTX)
+    assert exc_info.value.code == "invalid_mode"
 
 
 @pytest.mark.asyncio
@@ -94,8 +96,9 @@ async def test_missing_api_key_raises() -> None:
     """Missing API key raises ToolExecutionError before any HTTP call."""
     with patch("personal_agent.tools.perplexity.settings") as mock_settings:
         mock_settings.perplexity_api_key = None
-        with pytest.raises(ToolExecutionError, match="API key not configured"):
+        with pytest.raises(ToolExecutionError, match="API key not configured") as exc_info:
             await perplexity_query_executor(query="What is Python?", ctx=_CTX)
+        assert exc_info.value.code == "not_configured"
 
 
 # ── Success path tests ─────────────────────────────────────────────────────
@@ -192,8 +195,9 @@ async def test_http_error_raises() -> None:
         mock_settings.perplexity_timeout_seconds = 90
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_client(resp)
-            with pytest.raises(ToolExecutionError, match="HTTP 401"):
+            with pytest.raises(ToolExecutionError, match="HTTP 401") as exc_info:
                 await perplexity_query_executor(query="What is Python?", ctx=_CTX)
+            assert exc_info.value.code == "upstream_rejected"
 
 
 @pytest.mark.asyncio
@@ -222,8 +226,9 @@ async def test_http_error_surfaces_api_error_body() -> None:
         mock_settings.perplexity_timeout_seconds = 90
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_client(resp)
-            with pytest.raises(ToolExecutionError, match="has been deprecated"):
+            with pytest.raises(ToolExecutionError, match="has been deprecated") as exc_info:
                 await perplexity_query_executor(query="What is Python?", ctx=_CTX)
+            assert exc_info.value.code == "upstream_rejected"
 
 
 @pytest.mark.asyncio
@@ -239,8 +244,9 @@ async def test_connect_error_raises() -> None:
         mock_settings.perplexity_timeout_seconds = 90
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = client
-            with pytest.raises(ToolExecutionError, match="Cannot connect"):
+            with pytest.raises(ToolExecutionError, match="Cannot connect") as exc_info:
                 await perplexity_query_executor(query="What is Python?", ctx=_CTX)
+            assert exc_info.value.code == "upstream_unavailable"
 
 
 # ── FRE-552: session_id threading on error events ──────────────────────────
@@ -277,8 +283,9 @@ async def test_timeout_error_logs_session_id() -> None:
             patch("personal_agent.tools.perplexity.log", mock_log),
         ):
             mock_cls.return_value = client
-            with pytest.raises(ToolExecutionError):
+            with pytest.raises(ToolExecutionError) as exc_info:
                 await perplexity_query_executor(query="What is Python?", ctx=ctx)
+            assert exc_info.value.code == "upstream_timeout"
     timeout = [kw for event, kw in calls if event == "perplexity_query_timeout"]
     assert timeout, "expected a perplexity_query_timeout event"
     assert timeout[0]["session_id"] == "sess-552"
@@ -302,8 +309,143 @@ async def test_connect_error_logs_session_id() -> None:
             patch("personal_agent.tools.perplexity.log", mock_log),
         ):
             mock_cls.return_value = client
-            with pytest.raises(ToolExecutionError):
+            with pytest.raises(ToolExecutionError) as exc_info:
                 await perplexity_query_executor(query="What is Python?", ctx=ctx)
+            assert exc_info.value.code == "upstream_unavailable"
     connect = [kw for event, kw in calls if event == "perplexity_query_connect_failed"]
     assert connect, "expected a perplexity_query_connect_failed event"
     assert connect[0]["session_id"] == "sess-552"
+
+
+# ── FRE-1575: one tool contract — every failure carries its code ───────────
+
+
+def _patched_settings(mock_settings: MagicMock) -> None:
+    mock_settings.perplexity_api_key = "test-key"
+    mock_settings.perplexity_base_url = "https://api.perplexity.ai"
+    mock_settings.perplexity_timeout_seconds = 90
+
+
+def _raising_client(exc: Exception) -> AsyncMock:
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=exc)
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    return client
+
+
+async def _run_with_client(client: AsyncMock) -> ToolExecutionError:
+    """Run one query against ``client`` and return the error it raised."""
+    with patch("personal_agent.tools.perplexity.settings") as mock_settings:
+        _patched_settings(mock_settings)
+        with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = client
+            with pytest.raises(ToolExecutionError) as exc_info:
+                await perplexity_query_executor(query="What is Python?", ctx=_CTX)
+    return exc_info.value
+
+
+def test_tool_declares_its_codes() -> None:
+    """The definition declares the closed code set of PerplexityQueryError."""
+    assert perplexity_query_tool.error_codes == frozenset(
+        {
+            "invalid_argument",
+            "invalid_mode",
+            "not_configured",
+            "egress_blocked",
+            "upstream_unavailable",
+            "upstream_timeout",
+            "upstream_failed",
+            "upstream_rejected",
+            "bad_reply",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_validation_failures_carry_codes() -> None:
+    """Empty query, bad mode and missing key each raise their own non-retryable code."""
+    with pytest.raises(ToolExecutionError) as empty:
+        await perplexity_query_executor(query="  ", ctx=_CTX)
+    with pytest.raises(ToolExecutionError) as bad_mode:
+        await perplexity_query_executor(query="hello", mode="ultra", ctx=_CTX)
+    with patch("personal_agent.tools.perplexity.settings") as mock_settings:
+        mock_settings.perplexity_api_key = None
+        with pytest.raises(ToolExecutionError) as no_key:
+            await perplexity_query_executor(query="hello", ctx=_CTX)
+
+    assert [e.value.code for e in (empty, bad_mode, no_key)] == [
+        "invalid_argument",
+        "invalid_mode",
+        "not_configured",
+    ]
+    assert not any(e.value.retryable for e in (empty, bad_mode, no_key))
+    assert "web_search" in no_key.value.next_action
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [(400, False), (401, False), (429, True), (503, True)],
+)
+async def test_http_error_code_and_retryable(status: int, retryable: bool) -> None:
+    """An HTTP error is upstream_rejected; only a 429 or 5xx is retryable."""
+    error = await _run_with_client(
+        _mock_client(_mock_response(status, {"error": {"message": "nope"}}))
+    )
+    assert error.code == "upstream_rejected"
+    assert error.retryable is retryable
+
+
+@pytest.mark.asyncio
+async def test_http_error_with_non_json_body_uses_text() -> None:
+    """A non-JSON error body falls back to the response text in the message."""
+    resp = _mock_response(502)
+    resp.json.side_effect = ValueError("not json")
+    resp.text = "<html>Bad gateway</html>"
+    error = await _run_with_client(_mock_client(resp))
+    assert error.code == "upstream_rejected"
+    assert "Bad gateway" in str(error)
+
+
+@pytest.mark.asyncio
+async def test_transport_failures_carry_codes() -> None:
+    """Connect, timeout and other transport errors are retryable with distinct codes."""
+    connect = await _run_with_client(_raising_client(httpx.ConnectError("refused")))
+    timeout = await _run_with_client(_raising_client(httpx.TimeoutException("slow")))
+    other = await _run_with_client(_raising_client(httpx.ReadError("reset")))
+
+    assert [e.code for e in (connect, timeout, other)] == [
+        "upstream_unavailable",
+        "upstream_timeout",
+        "upstream_failed",
+    ]
+    assert all(e.retryable for e in (connect, timeout, other))
+
+
+@pytest.mark.asyncio
+async def test_egress_refusal_is_not_retryable() -> None:
+    """An egress-guard refusal is egress_blocked and names web_search as the next call."""
+    from personal_agent.security import EgressBlockedError
+
+    request = httpx.Request("POST", "https://api.perplexity.ai/chat/completions")
+    error = await _run_with_client(
+        _raising_client(EgressBlockedError(request, "domain not allowlisted", None))
+    )
+    assert error.code == "egress_blocked"
+    assert error.retryable is False
+    assert "web_search" in error.next_action
+
+
+@pytest.mark.asyncio
+async def test_bad_reply_codes() -> None:
+    """A reply that is not JSON, or not a JSON object, is bad_reply."""
+    not_json = _mock_response(200)
+    not_json.json.side_effect = ValueError("Expecting value")
+    not_object = _mock_response(200)
+    not_object.json.return_value = ["a", "list"]
+
+    first = await _run_with_client(_mock_client(not_json))
+    second = await _run_with_client(_mock_client(not_object))
+    assert (first.code, second.code) == ("bad_reply", "bad_reply")
+    assert first.retryable and second.retryable

@@ -3,9 +3,21 @@
 from typing import Any, Literal, cast
 
 from personal_agent.telemetry import get_logger
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+MCPCode = Literal["mcp_tool_error", "mcp_unavailable", "mcp_call_failed"]
+"""Failure codes of every MCP tool (ADR-0156 D6.6)."""
+
+
+class MCPToolError(ToolError[MCPCode]):
+    """An MCP tool failure in the one result shape (ADR-0156 D6.6).
+
+    ``mcp_tool_error`` carries the text of a result with ``isError: true`` (S8: a tool
+    execution error is actionable feedback for the model).
+    """
 
 
 def mcp_tool_to_definition(
@@ -89,6 +101,7 @@ def mcp_tool_to_definition(
         requires_approval=risk_level == "high",  # Auto-approval for low/medium
         requires_sandbox=False,  # MCP servers already containerized
         timeout_seconds=30,
+        error_codes=error_codes(MCPToolError),
     )
 
 

@@ -99,8 +99,14 @@ jobs:
       - name: Seed budget config from the template
         run: cp -n config/governance/budget.yaml.example config/governance/budget.yaml
 
+      # ADR-0156 AC-1 (FRE-1575): coverage is measured over the tool, MCP and orchestrator
+      # packages so the next step can prove that every line building a tool failure ran.
+      # pytest-cov is a dev extra, which `uv sync` does not install, hence `--with`.
       - name: Run unit tests
-        run: uv run python -m pytest -m "not integration" -q --tb=short
+        run: >-
+          uv run --with "pytest-cov>=5.0.0" python -m pytest -m "not integration" -q --tb=short
+          --cov=src/personal_agent/tools --cov=src/personal_agent/mcp
+          --cov=src/personal_agent/orchestrator --cov-report=json:coverage-tools.json
         env:
           APP_ENV: test
           AGENT_NEO4J_URI: bolt://localhost:7688
@@ -114,6 +120,16 @@ jobs:
           # correctly. Setting it here would trigger a Postgres lookup when no
           # service container is available, causing 500 instead of 401 in auth
           # tests (test_list_artifacts_requires_auth, test_card_click_no_auth_is_401).
+
+      - name: Every tool failure line is executed by a test (ADR-0156 AC-1)
+        run: uv run python scripts/check_tool_failure_coverage.py coverage-tools.json
+        env:
+          APP_ENV: test
+          AGENT_NEO4J_URI: bolt://localhost:7688
+          AGENT_ELASTICSEARCH_URL: http://localhost:9201
+          AGENT_DATABASE_URL: postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent
+          AGENT_ELASTICSEARCH_INDEX_PREFIX: agent-logs-test
+          AGENT_CAPTAINS_LOG_INDEX_PREFIX: agent-captains-test
 
   # ── Backend integration tests (real Postgres) ───────────────────────────────
   backend-integration:

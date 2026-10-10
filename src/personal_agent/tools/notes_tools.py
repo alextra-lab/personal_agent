@@ -16,7 +16,7 @@ Architectural anchors
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -30,10 +30,40 @@ from personal_agent.storage import (
     get_artifact_store,
 )
 from personal_agent.telemetry import get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Failure codes (ADR-0156 D6.1)
+# ---------------------------------------------------------------------------
+
+NotesSharedCode = Literal["missing_identity"]
+"""Failures raised by helpers that both notes tools call."""
+
+NotesWriteCode = Literal[
+    NotesSharedCode,
+    "not_configured",
+    "invalid_mode",
+    "invalid_argument",
+    "invalid_slug",
+    "prior_not_utf8",
+    "too_large",
+]
+NotesSearchCode = Literal[NotesSharedCode, "invalid_argument"]
+
+
+class NotesError(ToolError[NotesSharedCode]):
+    """A failure in a helper shared by the notes tools."""
+
+
+class NotesWriteError(ToolError[NotesWriteCode]):
+    """A ``notes_write`` failure."""
+
+
+class NotesSearchError(ToolError[NotesSearchCode]):
+    """A ``notes_search`` failure."""
 
 
 _NOTE_CONTENT_TYPE = "text/markdown; charset=utf-8"
@@ -67,13 +97,16 @@ def _pgvector_literal(values: list[float]) -> str:
 notes_write_tool = ToolDefinition(
     name="notes_write",
     description=(
-        "Save a durable note that survives across sessions. Use for thought "
-        "trails, durable notes, ideas you want to recover later, and "
-        "knowledge that should outlive the current conversation. Notes "
-        "are indexed by an embedding and retrievable via notes_search. "
-        "Use mode='append' to grow an existing slug; mode='overwrite' to "
-        "replace it. Slugs are short kebab-case handles (e.g. "
-        "'project-x-plan')."
+        "Save a markdown note under a short kebab-case slug so it survives across sessions; "
+        "it is embedded for search with notes_search. "
+        "Use it for thought trails, plans and ideas you want to recover in a later session. "
+        "Do not use it for documents meant for the user to view (use artifact_draft or "
+        "artifact_write). "
+        "mode='append' (default) adds to the latest note with the same slug, "
+        "mode='overwrite' starts a fresh body; a note is capped at 256 KiB. "
+        'Examples: notes_write(slug="project-x-plan", content="## Next steps\\n- ..."), '
+        'notes_write(slug="project-x-plan", content="# Plan v2\\n...", mode="overwrite", '
+        'tags=["project-x"]).'
     ),
     category="artifact_write",
     parameters=[
@@ -125,16 +158,21 @@ notes_write_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=20,
     rate_limit_per_hour=60,
+    error_codes=error_codes(NotesWriteError),
 )
 
 
 notes_search_tool = ToolDefinition(
     name="notes_search",
     description=(
-        "Search the agent's durable notes by meaning. Returns metadata "
-        "(slug, title, similarity, public_url) ordered by semantic "
-        "similarity to the query. Use this to surface prior thought "
-        "trails, plans, or context the agent saved in earlier sessions."
+        "Search the notes saved with notes_write by meaning, and return their metadata "
+        "(slug, title, summary, tags, similarity, public_url), most similar first. "
+        "Use it to recover thought trails, plans or context saved in earlier sessions. "
+        "Do not use it for artifacts (use artifact_list) or for what the user said in past "
+        "conversations (use recall_personal_history). "
+        "It returns at most k results (1-25, default 5) and no note bodies. "
+        'Examples: notes_search(query="project x plan"), '
+        'notes_search(query="open questions on recall", k=10, tags=["recall"]).'
     ),
     category="memory_read",
     parameters=[
@@ -166,6 +204,7 @@ notes_search_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=10,
     rate_limit_per_hour=200,
+    error_codes=error_codes(NotesSearchError),
 )
 
 
@@ -180,10 +219,24 @@ def _resolve_user_id(ctx: Any) -> UUID:
     Refuses to fall back to the deployment owner — this is intentional:
     every gateway path populates ``ctx.user_id`` (ADR-0064 has been live
     since FRE-213). A missing id is a programming bug.
+
+    Args:
+        ctx: The orchestrator context, or ``None``.
+
+    Returns:
+        The caller's user id.
+
+    Raises:
+        NotesError: When the context carries no user id.
     """
     user_id = getattr(ctx, "user_id", None) if ctx else None
     if user_id is None:
-        raise ToolExecutionError("notes tools require ctx.user_id (set by the request gateway).")
+        raise NotesError(
+            "missing_identity",
+            "notes tools require ctx.user_id (set by the request gateway).",
+            retryable=False,
+            next_action="No notes call can work without a user identity. Tell the user.",
+        )
     return user_id if isinstance(user_id, UUID) else UUID(str(user_id))
 
 
@@ -254,20 +307,41 @@ async def notes_write_executor(
         "revision_of"}``.
 
     Raises:
-        ToolExecutionError: On missing identity, invalid slug/mode, content
-            overflow, or substrate-not-configured.
+        NotesWriteError: On an unconfigured substrate, invalid mode, empty slug or content,
+            invalid slug, a prior revision that is not UTF-8, or content overflow.
+        NotesError: On missing identity.
     """
     store = get_artifact_store()
     if store is None:
-        raise ToolExecutionError("notes substrate is not configured on this deployment.")
+        raise NotesWriteError(
+            "not_configured",
+            "notes substrate is not configured on this deployment.",
+            retryable=False,
+            next_action="Notes cannot be saved here. Keep the content in your answer instead.",
+        )
 
     if mode not in ("append", "overwrite"):
-        raise ToolExecutionError(f"mode must be 'append' or 'overwrite', got {mode!r}.")
+        raise NotesWriteError(
+            "invalid_mode",
+            f"mode must be 'append' or 'overwrite', got {mode!r}.",
+            retryable=False,
+            next_action="Call notes_write again with mode 'append' or 'overwrite'.",
+        )
 
     if not slug or not slug.strip():
-        raise ToolExecutionError("slug is required and cannot be empty.")
+        raise NotesWriteError(
+            "invalid_argument",
+            "slug is required and cannot be empty.",
+            retryable=False,
+            next_action='Call notes_write again with a kebab-case slug, e.g. slug="project-plan".',
+        )
     if not content:
-        raise ToolExecutionError("content is required.")
+        raise NotesWriteError(
+            "invalid_argument",
+            "content is required.",
+            retryable=False,
+            next_action="Call notes_write again with the markdown content to save.",
+        )
 
     user_id = _resolve_user_id(ctx)
     session_id = _resolve_session_id(ctx)
@@ -287,7 +361,15 @@ async def notes_write_executor(
             ext=_NOTE_EXT,
         )
     except ArtifactKeyError as exc:
-        raise ToolExecutionError(str(exc)) from exc
+        raise NotesWriteError(
+            "invalid_slug",
+            str(exc),
+            retryable=False,
+            next_action=(
+                "Call notes_write again with a slug that starts with a letter or digit and "
+                "uses only letters, digits, '.', '_' or '-' (max 64 chars)."
+            ),
+        ) from exc
 
     # Resolve the prior revision (may be None) only after slug validation.
     revision_of: UUID | None = None
@@ -299,16 +381,25 @@ async def notes_write_executor(
             try:
                 existing = (await store.get(prior[1], trace_id=trace_id)).decode("utf-8")
             except UnicodeDecodeError as exc:
-                raise ToolExecutionError(
-                    f"prior note {prior[0]} is not valid utf-8; refusing to append."
+                raise NotesWriteError(
+                    "prior_not_utf8",
+                    f"prior note {prior[0]} is not valid utf-8; refusing to append.",
+                    retryable=False,
+                    next_action="Call notes_write again with mode='overwrite', or a new slug.",
                 ) from exc
             final_body = existing + _APPEND_SEPARATOR + content
 
     final_bytes = final_body.encode("utf-8")
     size_bytes = len(final_bytes)
     if size_bytes > _MAX_NOTE_BYTES:
-        raise ToolExecutionError(
-            f"note exceeds {_MAX_NOTE_BYTES} bytes (have {size_bytes}); split it."
+        raise NotesWriteError(
+            "too_large",
+            f"note exceeds {_MAX_NOTE_BYTES} bytes (have {size_bytes}); split it.",
+            retryable=False,
+            next_action=(
+                "Split the content across several slugs, or call notes_write with "
+                "mode='overwrite' and a shorter body."
+            ),
         )
 
     embedding = await generate_embedding(
@@ -406,10 +497,16 @@ async def notes_search_executor(
         ``{"results": [...]}`` ordered by descending similarity.
 
     Raises:
-        ToolExecutionError: On missing identity or invalid query.
+        NotesSearchError: On an empty query.
+        NotesError: On missing identity.
     """
     if not query or not query.strip():
-        raise ToolExecutionError("query is required and cannot be empty.")
+        raise NotesSearchError(
+            "invalid_argument",
+            "query is required and cannot be empty.",
+            retryable=False,
+            next_action="Call notes_search again with a natural-language query.",
+        )
 
     user_id = _resolve_user_id(ctx)
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"

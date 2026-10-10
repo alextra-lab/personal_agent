@@ -818,7 +818,9 @@ tools:
 
   # Auto-discovered: 2026-01-18T20:34:07.034247
   # Resolves a package/product name to a Context7-compatible library ID an...
-  # DISABLED: ADR-0028 Phase 3 (use get_library_docs which resolves internally)
+  # DISABLED: ADR-0028 Phase 3 (use get_library_docs which resolves internally).
+  # REMOVED: ADR-0156 D7.5 (FRE-1575) — the context7 server left the MCP server set. This
+  # row stays as a denial in case a later server brings the tool back.
   mcp_resolve-library-id:
     category: "mcp"
     allowed_in_modes: []
@@ -843,6 +845,8 @@ tools:
   # Auto-discovered: 2026-01-18T20:34:07.050153
   # A detailed tool for dynamic and reflective problem-solving through tho...
   # DISABLED: ADR-0028 Phase 3 (prompt technique, not a tool; use chain-of-thought in system prompt)
+  # REMOVED: ADR-0156 D7.5 (FRE-1575) — the sequentialthinking server left the MCP server
+  # set. This row stays as a denial in case a later server brings the tool back.
   mcp_sequentialthinking:
     category: "mcp"
     allowed_in_modes: []

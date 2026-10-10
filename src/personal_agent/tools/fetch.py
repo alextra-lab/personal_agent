@@ -16,7 +16,7 @@ import ipaddress
 import re
 import socket
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -26,10 +26,29 @@ from personal_agent.security import (
     get_novelty_tracker,
 )
 from personal_agent.telemetry import TraceContext, get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+FetchCode = Literal[
+    "missing_url",
+    "invalid_url",
+    "private_target",
+    "http_error",
+    "blocked_by_domain_guard",
+    "connect_failed",
+    "upstream_timeout",
+    "fetch_failed",
+    "no_readable_text",
+]
+
+
+class FetchError(ToolError[FetchCode]):
+    """A ``fetch_url`` failure (ADR-0156 D6.1)."""
+
+
+_OTHER_SOURCE = "Use web_search to find another page with the same facts."
 
 # Tags whose inner content should be skipped entirely.
 #
@@ -217,9 +236,12 @@ async def _reject_private_targets(request: httpx.Request) -> None:
     """
     hostname = request.url.host
     if await _resolves_to_private_or_internal(hostname):
-        raise ToolExecutionError(
+        raise FetchError(
+            "private_target",
             f"URL host '{hostname}' resolves to a private or internal address and cannot "
-            "be fetched."
+            "be fetched.",
+            retryable=False,
+            next_action="Do not retry. fetch_url reads public web pages only.",
         )
 
 
@@ -285,12 +307,19 @@ def _extract_text(html_body: str) -> str:
 fetch_url_tool = ToolDefinition(
     name="fetch_url",
     description=(
-        "Fetch the readable text content of a specific webpage URL. Strips HTML tags, "
-        "scripts, and styles; returns clean plain text. Use when you already have a URL "
-        "and need to read its full content — the fetched page is a citable source under "
-        "the grounding contract, unlike a bash/curl fetch of the same page. For finding "
-        "information without a known URL, use web_search instead. Returns up to max_chars "
-        "characters of extracted text (default 10,000)."
+        "Fetch one web page by URL and return its readable text, with HTML tags, scripts, "
+        "navigation and footers removed. "
+        "Use it when you have a URL and need its content: the fetched page is a citable "
+        "source, and a bash curl fetch of the same page is not. "
+        "Use web_search instead when you have no URL. Use bash curl only for a non-GET "
+        "request or one that needs custom headers, and then say in the answer that the "
+        "result is not citable. "
+        "It returns at most max_chars characters (default 10,000, at most 50,000); private "
+        "and internal addresses are refused, and a site's bot protection can refuse the "
+        "fetch. "
+        'Examples: fetch_url(url="https://docs.python.org/3/library/asyncio.html"), '
+        'fetch_url(url="https://raw.githubusercontent.com/org/repo/main/README.md", '
+        "max_chars=30000)."
     ),
     category="network",
     parameters=[
@@ -327,6 +356,9 @@ fetch_url_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=30,
     rate_limit_per_hour=100,
+    error_codes=error_codes(FetchError),
+    max_result_tokens=18_000,
+    truncation_next_action="Call fetch_url again with a lower max_chars.",
     # ADR-0098 Amendment A2: fetch_url addresses exactly one external referent.
     referent_parameter="url",
 )
@@ -350,15 +382,25 @@ async def fetch_url_executor(
         and ``truncated`` (bool) keys.
 
     Raises:
-        ToolExecutionError: On invalid URL, a blocked domain, connection failure,
+        FetchError: On invalid URL, a private target, a blocked domain, connection failure,
             timeout, non-2xx HTTP response, or a successful response that yields
             no readable text content.
     """
     url = (url or "").strip()
     if not url:
-        raise ToolExecutionError("'url' parameter is required and cannot be empty.")
+        raise FetchError(
+            "missing_url",
+            "'url' parameter is required and cannot be empty.",
+            retryable=True,
+            next_action="Call fetch_url again with a full http:// or https:// URL.",
+        )
     if not url.startswith(("http://", "https://")):
-        raise ToolExecutionError(f"Invalid URL '{url}'. Must start with http:// or https://.")
+        raise FetchError(
+            "invalid_url",
+            f"Invalid URL '{url}'. Must start with http:// or https://.",
+            retryable=True,
+            next_action="Call fetch_url again with a full http:// or https:// URL.",
+        )
 
     cap = max(1, min(int(max_chars or _DEFAULT_MAX_CHARS), _MAX_CHARS_CAP))
     trace_id = ctx.trace_id
@@ -400,7 +442,17 @@ async def fetch_url_executor(
                     url=url,
                     response_headers=_protection_headers(resp.headers),
                 )
-                raise ToolExecutionError(msg)
+                temporary = resp.status_code == 429 or resp.status_code >= 500
+                raise FetchError(
+                    "http_error",
+                    msg,
+                    retryable=temporary,
+                    next_action=(
+                        "Call fetch_url once more later. " + _OTHER_SOURCE
+                        if temporary
+                        else _OTHER_SOURCE
+                    ),
+                )
 
             content_type = resp.headers.get("content-type", "")
             text = (
@@ -409,7 +461,7 @@ async def fetch_url_executor(
                 else resp.text
             )
 
-    except ToolExecutionError:
+    except FetchError:
         raise
     except EgressBlockedError as exc:
         log.warning(
@@ -420,27 +472,50 @@ async def fetch_url_executor(
             matched_entry=exc.matched_entry,
         )
         detail = f" (matched: {exc.matched_entry})" if exc.matched_entry else ""
-        raise ToolExecutionError(
-            f"URL blocked by domain guard: {url} [{exc.reason}{detail}]"
+        raise FetchError(
+            "blocked_by_domain_guard",
+            f"URL blocked by domain guard: {url} [{exc.reason}{detail}]",
+            retryable=False,
+            next_action=_OTHER_SOURCE,
         ) from exc
     except httpx.ConnectError as exc:
         msg = f"Cannot connect to {url}."
         log.error("fetch_url_connect_failed", trace_id=trace_id, url=url, error=msg)
-        raise ToolExecutionError(msg) from exc
+        raise FetchError(
+            "connect_failed",
+            msg,
+            retryable=True,
+            next_action="Check the URL and call fetch_url once more. " + _OTHER_SOURCE,
+        ) from exc
     except httpx.TimeoutException as exc:
         msg = f"Request to {url} timed out after {_TIMEOUT}s."
         log.error("fetch_url_timeout", trace_id=trace_id, url=url)
-        raise ToolExecutionError(msg) from exc
+        raise FetchError(
+            "upstream_timeout",
+            msg,
+            retryable=True,
+            next_action="Call fetch_url once more. " + _OTHER_SOURCE,
+        ) from exc
     except Exception as exc:
         log.error("fetch_url_failed", trace_id=trace_id, url=url, error=str(exc), exc_info=True)
-        raise ToolExecutionError(str(exc)) from exc
+        raise FetchError(
+            "fetch_failed",
+            f"Fetching {url} failed: {type(exc).__name__}: {exc}",
+            retryable=False,
+            next_action=_OTHER_SOURCE,
+        ) from exc
 
     if not text.strip():
         log.warning(
             "fetch_url_empty_extraction", trace_id=trace_id, url=url, status=resp.status_code
         )
-        raise ToolExecutionError(
-            f"Fetched {url} (HTTP {resp.status_code}) but extracted no readable text content."
+        raise FetchError(
+            "no_readable_text",
+            f"Fetched {url} (HTTP {resp.status_code}) but extracted no readable text content.",
+            retryable=False,
+            next_action=(
+                "The page has no readable text (it may need JavaScript). " + _OTHER_SOURCE
+            ),
         )
 
     truncated = len(text) > cap

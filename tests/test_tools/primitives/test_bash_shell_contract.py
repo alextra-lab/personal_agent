@@ -15,6 +15,8 @@ import asyncio
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from personal_agent.governance.permissions import (
     PermissionRules,
     evaluate_permission,
@@ -22,7 +24,7 @@ from personal_agent.governance.permissions import (
     parse_rule,
 )
 from personal_agent.telemetry.trace import TraceContext
-from personal_agent.tools.primitives.bash import _has_top_level_pipe, bash_executor
+from personal_agent.tools.primitives.bash import BashError, _has_top_level_pipe, bash_executor
 from personal_agent.tools.primitives.bash_allowlist import scan_segments
 
 # ---------------------------------------------------------------------------
@@ -167,24 +169,24 @@ class TestBashShellContractExecution:
 
     def test_pipe_works(self) -> None:
         result = run(bash_executor("echo hello | tr 'a-z' 'A-Z'", ctx=_CTX))
-        assert result["success"] is True
+        assert result["exit_code"] == 0
         assert "HELLO" in result["stdout"]
 
     def test_pipe_with_wc(self) -> None:
         result = run(bash_executor("printf 'a\\nb\\nc\\n' | wc -l", ctx=_CTX))
-        assert result["success"] is True
+        assert result["exit_code"] == 0
         assert result["stdout"].strip() == "3"
 
     def test_logical_and(self) -> None:
         result = run(bash_executor("true && echo ok", ctx=_CTX))
-        assert result["success"] is True
+        assert result["exit_code"] == 0
         assert "ok" in result["stdout"]
 
     def test_redirect_to_tmp(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "out.txt"
             result = run(bash_executor(f"echo written > {target}", ctx=_CTX))
-            assert result["success"] is True
+            assert result["exit_code"] == 0
             assert target.exists()
             assert "written" in target.read_text()
 
@@ -194,13 +196,12 @@ class TestBashShellContractExecution:
             (Path(tmpdir) / "b.yaml").write_text("b")
             (Path(tmpdir) / "c.txt").write_text("c")
             result = run(bash_executor(f"ls {tmpdir}/*.yaml | wc -l", ctx=_CTX))
-            assert result["success"] is True
+            assert result["exit_code"] == 0
             assert result["stdout"].strip() == "2"
 
     def test_pipefail_propagates_exit(self) -> None:
         # With pipefail, 'false | true' should exit 1, not 0.
         result = run(bash_executor("false | true", ctx=_CTX))
-        assert result["success"] is False
         assert result["exit_code"] == 1
 
     def test_deny_rule_still_fires_in_pipeline(self) -> None:
@@ -215,14 +216,13 @@ class TestBashShellContractExecution:
         assert decision.refused == "rm -rf /tmp/nonexistent-test-target"
 
     def test_empty_command_guard(self) -> None:
-        result = run(bash_executor("   ", ctx=_CTX))
-        assert result["success"] is False
-        assert result["error"] == "empty_command"
+        with pytest.raises(BashError) as exc_info:
+            run(bash_executor("   ", ctx=_CTX))
+        assert exc_info.value.code == "empty_command"
 
     def test_exit_code_propagated(self) -> None:
         result = run(bash_executor("exit 42", ctx=_CTX))
         assert result["exit_code"] == 42
-        assert result["success"] is False
 
 
 class TestBashSigpipeHandling:
@@ -232,23 +232,21 @@ class TestBashSigpipeHandling:
     ``grep -q``) takes what it needs and closes the pipe, ``yes`` is killed by
     SIGPIPE (signal 13 -> exit 128 + 13 = 141).  Under ``-o pipefail`` the shell
     surfaces 141 as the pipeline's exit code.  This is normal early-exit
-    behavior, not a failure, so the executor must report ``success: True``.
+    behavior, not a failure, so the executor returns it as a normal result with a ``note``.
     """
 
-    def test_sigpipe_head_reports_success(self) -> None:
+    def test_sigpipe_head_is_noted(self) -> None:
         result = run(bash_executor("yes | head -n 1", ctx=_CTX))
         assert result["exit_code"] == 141
-        assert result["success"] is True
         assert "y" in result["stdout"]
         assert result["note"] is not None
         assert "141" in result["note"]
 
-    def test_sigpipe_grep_q_reports_success(self) -> None:
+    def test_sigpipe_grep_q_is_noted(self) -> None:
         # grep -q produces no stdout but exits 0 on first match, closing the
         # pipe early -> upstream `yes` dies of SIGPIPE -> pipefail surfaces 141.
         result = run(bash_executor("yes | grep -q y", ctx=_CTX))
         assert result["exit_code"] == 141
-        assert result["success"] is True
         assert result["note"] is not None
 
     def test_standalone_exit_141_still_fails(self) -> None:
@@ -256,16 +254,14 @@ class TestBashSigpipeHandling:
         # a failure so genuine errors are not masked.
         result = run(bash_executor("exit 141", ctx=_CTX))
         assert result["exit_code"] == 141
-        assert result["success"] is False
         assert result["note"] is None
 
     def test_genuine_failure_still_fails(self) -> None:
         result = run(bash_executor("exit 1", ctx=_CTX))
         assert result["exit_code"] == 1
-        assert result["success"] is False
         assert result["note"] is None
 
     def test_successful_pipeline_has_no_note(self) -> None:
         result = run(bash_executor("echo hello | tr 'a-z' 'A-Z'", ctx=_CTX))
-        assert result["success"] is True
+        assert result["exit_code"] == 0
         assert result["note"] is None

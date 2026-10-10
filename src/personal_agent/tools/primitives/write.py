@@ -4,17 +4,19 @@ Writes content to a file (overwrite or append mode) with explicit path-governanc
 checks (allowed_paths / forbidden_paths / unattended_paths from
 ``config/governance/tools.yaml``).
 
-FRE-261 Step 3.
+FRE-261 Step 3. FRE-1575: one tool contract — a failure raises :class:`WriteError`.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
 from personal_agent.config import load_governance_config
 from personal_agent.telemetry import TraceContext
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.primitives._governance import (
+    PathCode,
     _check_durability,
     _check_path_governance,
     _expand_path,
@@ -25,16 +27,33 @@ from personal_agent.tools.types import ToolDefinition, ToolParameter
 log = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
+# Failure codes (ADR-0156 D6.1)
+# ---------------------------------------------------------------------------
+
+WriteCode = Literal[PathCode, "invalid_mode", "permission_denied", "io_error"]
+
+
+class WriteError(ToolError[WriteCode]):
+    """A ``write`` failure."""
+
+
+# ---------------------------------------------------------------------------
 # ToolDefinition
 # ---------------------------------------------------------------------------
 
 write_tool = ToolDefinition(
     name="write",
     description=(
-        "Write content to a file. Mode 'overwrite' replaces the file; 'append' adds to the end. "
-        "Durable storage (survives a restart): /app/agent_workspace/** and /app/telemetry/**. "
-        "Any other path under /app/ is the container's image layer and is destroyed on the "
-        "next rebuild — write work that must persist to /app/agent_workspace/ instead."
+        "Write text to a file and create its parent directories. "
+        "Mode 'overwrite' (the default) replaces the whole file; 'append' adds to its end. "
+        "Durable paths survive a restart: /app/agent_workspace/** and /app/telemetry/**. "
+        "Any other path under /app/ is refused, because a rebuild destroys it; use /tmp/ for "
+        "scratch work that need not survive. "
+        "Do not use it to read a file (use read) or to run code (use run_python). "
+        "A path outside the allowed paths is refused. "
+        'Examples: write(path="/app/agent_workspace/notes/plan.md", content="# Plan\n...", '
+        'mode="overwrite"), write(path="/tmp/run-log.md", content="\n## Step 2\n...", '
+        'mode="append").'
     ),
     category="system_write",
     parameters=[
@@ -69,6 +88,8 @@ write_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=10,
     rate_limit_per_hour=None,
+    error_codes=error_codes(WriteError),
+    max_result_tokens=1_000,
 )
 
 
@@ -134,44 +155,24 @@ async def write_executor(
         ctx: Trace context for structured logging correlation.
 
     Returns:
-        On success::
+        ``{"path": str, "bytes_written": int, "mode": str}``. When the path is outside all
+        ``unattended_paths`` an extra advisory key ``requires_approval_in_normal_mode: True``
+        is included.
 
-            {
-                "success": True,
-                "path": str,
-                "bytes_written": int,
-                "mode": str,
-            }
-
-        When the path is outside all ``unattended_paths`` an extra advisory
-        key is included::
-
-            {"requires_approval_in_normal_mode": True, ...}
-
-        On failure::
-
-            {"success": False, "error": "<error_code>", "path": str, ...}
-
-        Possible ``error`` values:
-
-        * ``"invalid_mode"`` — *mode* is not ``'overwrite'`` or ``'append'``
-        * ``"forbidden_path"`` — path matched a ``forbidden_paths`` entry
-        * ``"path_not_allowed"`` — path not in ``allowed_paths``
-        * ``"not_durable"`` — path is under ``/app`` but not backed by a mounted
-          volume, so it would not survive a container restart (FRE-1352)
-        * ``"permission_denied"`` — OS permission error
-        * ``"io_error"`` — other I/O error
+    Raises:
+        PathRefusalError: The path rules or the durability check refuse the path.
+        WriteError: ``invalid_mode``, ``permission_denied`` or ``io_error``.
     """
     trace_id = ctx.trace_id
 
     # 1. Validate mode
     if mode not in ("overwrite", "append"):
-        return {
-            "success": False,
-            "error": "invalid_mode",
-            "path": path,
-            "detail": f"mode must be 'overwrite' or 'append', got {mode!r}",
-        }
+        raise WriteError(
+            "invalid_mode",
+            f"mode must be 'overwrite' or 'append', got {mode!r}",
+            retryable=True,
+            next_action="Call write again with mode='overwrite' or mode='append'.",
+        )
 
     # 2. Resolve path
     resolved = Path(_expand_path(path)).expanduser().resolve()
@@ -180,45 +181,27 @@ async def write_executor(
     )
 
     # 3. Path governance
-    governance_error = _check_path_governance(resolved, tool_name="write", trace_id=trace_id)
-    if governance_error is not None:
+    try:
+        _check_path_governance(resolved, tool_name="write", trace_id=trace_id)
+    except ToolError as exc:
         log.warning(
             "write_path_rejected",
-            reason=governance_error.get("error"),
+            reason=exc.code,
             path=str(resolved),
             trace_id=trace_id,
         )
-        return governance_error
+        raise
 
     # 3b. Durability (FRE-1352) — refuse a write into the ephemeral container layer
     # under /app; only bind-mounted subdirectories survive a restart.
-    durability_error = _check_durability(resolved, tool_name="write", trace_id=trace_id)
-    if durability_error is not None:
-        return durability_error
+    _check_durability(resolved, tool_name="write", trace_id=trace_id)
 
     # 4. Scratch-dir / unattended detection
     unattended = _is_unattended_path(resolved, tool_name="write", trace_id=trace_id)
 
-    # 5. Create parent directories
+    # 5. Create parent directories, then write
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
-    except PermissionError as exc:
-        return {
-            "success": False,
-            "error": "permission_denied",
-            "path": str(resolved),
-            "detail": str(exc),
-        }
-    except OSError as exc:
-        return {
-            "success": False,
-            "error": "io_error",
-            "path": str(resolved),
-            "detail": str(exc),
-        }
-
-    # 6. Write
-    try:
         if mode == "overwrite":
             resolved.write_text(content, encoding="utf-8")
         else:  # append
@@ -228,20 +211,20 @@ async def write_executor(
         log.warning(
             "write_permission_denied", path=str(resolved), error=str(exc), trace_id=trace_id
         )
-        return {
-            "success": False,
-            "error": "permission_denied",
-            "path": str(resolved),
-            "detail": str(exc),
-        }
+        raise WriteError(
+            "permission_denied",
+            f"Cannot write {str(resolved)!r}: {exc}",
+            retryable=False,
+            next_action="Do not retry this path. Write under /app/agent_workspace/ or /tmp/.",
+        ) from exc
     except OSError as exc:
         log.error("write_io_error", path=str(resolved), error=str(exc), trace_id=trace_id)
-        return {
-            "success": False,
-            "error": "io_error",
-            "path": str(resolved),
-            "detail": str(exc),
-        }
+        raise WriteError(
+            "io_error",
+            f"Writing {str(resolved)!r} failed: {exc}",
+            retryable=True,
+            next_action="Call write once more; if it fails again, tell the user.",
+        ) from exc
 
     bytes_written = len(content.encode("utf-8"))
     log.info(
@@ -254,7 +237,6 @@ async def write_executor(
     )
 
     result: dict[str, Any] = {
-        "success": True,
         "path": str(resolved),
         "bytes_written": bytes_written,
         "mode": mode,

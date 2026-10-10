@@ -6,17 +6,24 @@ without sending queries to third-party AI services.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from personal_agent.config import settings
 from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+WebSearchCode = Literal["missing_query", "search_unavailable", "search_timeout", "search_failed"]
+
+
+class WebSearchError(ToolError[WebSearchCode]):
+    """A ``web_search`` failure (ADR-0156 D6.1)."""
+
 
 # Engines whose backend expects only a place name (geolocation lookup) and
 # raises ValueError on "weather <city>". When the caller targets weather
@@ -59,7 +66,12 @@ web_search_tool = ToolDefinition(
         "Search the live web when you need a fact about the real world that you are not "
         "certain of from training data — a specific brand, product, shop, price, current "
         "name, or availability. Returns titles, URLs, snippets, infoboxes, and plugin answers "
-        "from a private self-hosted metasearch engine."
+        "from a private self-hosted metasearch engine. "
+        "A question about the world goes here, not to search_memory (what this system already "
+        "knows) or recall_personal_history (the user's own past conversations). Naming a "
+        "brand, product or shop without a result behind it is a guess, even when the question "
+        "names it. Do not use it for arithmetic or reasoning that needs no outside fact. "
+        "To read a page whose URL you have, use fetch_url."
         "\n\nPlugin capabilities (returned in the 'answers' field — no engine needed):\n"
         "  - Timezone: query 'time Berlin' or 'clock Tokyo' → current local time\n"
         "  - Unit conversion: query '20 °C in °F' or '10 EUR in USD' (use symbols, not words) → converted value\n"
@@ -75,7 +87,10 @@ web_search_tool = ToolDefinition(
         "\n\nIf underlying engines are failing, the result carries "
         "'degraded_retrieval': true and a 'retrieval_warning' naming which engines "
         "failed and which ones the results actually came from — treat such a result "
-        "set with more caution than a normal 'success' would warrant."
+        "set with more caution than a normal result."
+        '\n\nExamples: web_search(query="best tinned tuna brand France supermarket"), '
+        'web_search(query="asyncio TaskGroup cancel", categories="it"), '
+        'web_search(query="Lyon", categories="weather").'
     ),
     category="network",
     parameters=[
@@ -166,6 +181,9 @@ web_search_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=15,
     rate_limit_per_hour=120,
+    error_codes=error_codes(WebSearchError),
+    max_result_tokens=20_000,
+    truncation_next_action="Call web_search again with a lower max_results or a narrower query.",
 )
 
 
@@ -184,7 +202,7 @@ async def web_search_executor(
     Follows the same executor contract as ``search_memory_executor``:
     keyword arguments matching the tool's parameter names, optional
     ``ctx`` for tracing, returns a plain dict (the ``ToolExecutionLayer``
-    wraps it in a ``ToolResult``), and raises ``ToolExecutionError`` on
+    wraps it in a ``ToolResult``), and raises ``WebSearchError`` on
     failure.
 
     Args:
@@ -205,12 +223,17 @@ async def web_search_executor(
         string is added in that case), and query metadata.
 
     Raises:
-        ToolExecutionError: When SearXNG is unreachable, times out,
+        WebSearchError: When the query is empty, or SearXNG is unreachable, times out,
             or returns an unparseable response.
     """
     query = (query or "").strip()
     if not query:
-        raise ToolExecutionError("query parameter is required and cannot be empty.")
+        raise WebSearchError(
+            "missing_query",
+            "query parameter is required and cannot be empty.",
+            retryable=True,
+            next_action="Call web_search again with a query.",
+        )
 
     categories = categories or settings.searxng_default_categories
     capped_max = min(max(int(max_results or settings.searxng_max_results), 1), 50)
@@ -264,12 +287,22 @@ async def web_search_executor(
             "Is the searxng Docker service running?"
         )
         log.error("web_search_connect_failed", trace_id=trace_id, error=error_msg)
-        raise ToolExecutionError(error_msg) from exc
+        raise WebSearchError(
+            "search_unavailable",
+            error_msg,
+            retryable=True,
+            next_action="Call web_search once more; if it fails again, tell the user.",
+        ) from exc
 
     except httpx.TimeoutException as exc:
         error_msg = f"SearXNG request timed out after {settings.searxng_timeout_seconds}s."
         log.error("web_search_timeout", trace_id=trace_id, error=error_msg)
-        raise ToolExecutionError(error_msg) from exc
+        raise WebSearchError(
+            "search_timeout",
+            error_msg,
+            retryable=True,
+            next_action="Call web_search once more, or with fewer engines or categories.",
+        ) from exc
 
     except Exception as exc:
         log.error(
@@ -278,7 +311,12 @@ async def web_search_executor(
             error=str(exc),
             exc_info=True,
         )
-        raise ToolExecutionError(str(exc)) from exc
+        raise WebSearchError(
+            "search_failed",
+            f"The search failed: {type(exc).__name__}: {exc}",
+            retryable=False,
+            next_action="Change the query or the categories, or use perplexity_query.",
+        ) from exc
 
     # SearXNG's own `number_of_results` total has been observed to read 0 on a
     # response whose `results` array held 20 real entries — it is independently

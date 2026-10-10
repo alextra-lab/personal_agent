@@ -29,7 +29,9 @@ Security model
   ``user``/``group``/``extra_groups`` spawn kwargs (FRE-1518).
 
 FRE-261 Step 4 · FRE-283 (real shell contract) · FRE-1505 (eval credential isolation) ·
-FRE-1518 (isolation on the served event loop) · FRE-1574 (one permission model).
+FRE-1518 (isolation on the served event loop) · FRE-1574 (one permission model) ·
+FRE-1575 (one tool contract: a guard failure raises :class:`BashError`; a non-zero exit is a
+normal result, because the tool ran the command).
 """
 
 from __future__ import annotations
@@ -37,10 +39,11 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from personal_agent.config import settings
 from personal_agent.telemetry import TraceContext, get_logger
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
@@ -87,17 +90,38 @@ EVAL_CHILD_SETPRIV_ARGV: tuple[str, ...] = (
 # ToolDefinition
 # ---------------------------------------------------------------------------
 
+BashCode = Literal["empty_command", "timeout", "os_error", "credential_isolation_unavailable"]
+
+
+class BashError(ToolError[BashCode]):
+    """A ``bash`` failure: the command did not run to completion."""
+
+
 bash_tool = ToolDefinition(
     name="bash",
     description=(
-        "Execute a shell command in the agent's container via /bin/bash. "
-        "Pipes (|), &&, ||, ;, redirects, globs, and env expansion all work. "
-        "A command runs without asking only when every subcommand is a plain command "
-        "(literal words, no $ expansion, glob, substitution, or redirection except to "
-        "/dev/null) that an allow rule covers, such as ls, grep, cat, curl, jq, head or "
-        "git log. Any other command asks the user on an approval card; a refusal names "
-        "the subcommand and the rule. Some commands (rm -rf, sudo, wget, ssh, dd) are "
-        "always refused."
+        "Run a shell command in the agent's container with /bin/bash -o pipefail -c; pipes, "
+        "&&, ||, ;, redirects and globs work. "
+        "Commands start in /app; use absolute paths (for example /app/src, /app/config, "
+        "/app/telemetry). "
+        "A command runs without asking only when every subcommand is a plain command that an "
+        "allow rule covers, such as ls, cat, grep, find, head, tail, wc, sort, jq, curl, ps, "
+        "df or free. "
+        "A plain command has literal words only: no $VAR or $(...), no unquoted glob such as "
+        "*.py (quote it: '*.py'), no ~, no VAR=x in front, no here-doc, and no redirection "
+        "except > /dev/null, 2> /dev/null and 2>&1. "
+        "Any other command asks the user on an approval card; python3, awk, sed, env, psql "
+        "and redis-cli always ask, and rm -rf, sudo, wget, ssh and dd are always refused. "
+        "A refusal names the subcommand and the rule: do not retry it, use a covered command. "
+        "To count files use find <dir> -name '*.yaml' -type f | wc -l, not ls -R. "
+        "Output is capped at 50 KiB (the full text goes to truncated_path). A non-zero "
+        "exit_code is a normal result; exit 141 in a pipeline (head closed the pipe) counts "
+        "as success. "
+        "Do not use it to read a file that read can open, or to fetch a web page (use "
+        "fetch_url). "
+        "Examples: bash(command=\"grep -rn 'def bash_executor' /app/src/\"), "
+        "bash(command=\"find /app/config -name '*.yaml' -type f | wc -l\"), "
+        'bash(command="curl -s http://elasticsearch:9200/_cluster/health | jq .status").'
     ),
     category="system_dangerous",
     parameters=[
@@ -126,6 +150,12 @@ bash_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=_DEFAULT_TIMEOUT,
     rate_limit_per_hour=200,
+    error_codes=error_codes(BashError),
+    max_result_tokens=16_000,
+    truncation_next_action=(
+        "Narrow the command (grep, head, a smaller path) and run it again; the full output "
+        "is in truncated_path."
+    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -253,21 +283,19 @@ async def bash_executor(
 
     Returns:
         Dict with keys:
-        - ``success`` (bool): True when exit_code == 0, or when exit_code is
-          141 (SIGPIPE) and the command is a pipeline — a downstream consumer
-          (``head``, ``grep -q``) closing the pipe early is benign (FRE-470).
         - ``exit_code`` (int): Process return code (reflects ``pipefail`` semantics).
+          A non-zero exit is a normal result: the tool ran the command.
         - ``stdout`` (str): Captured stdout (possibly truncated).
         - ``stderr`` (str): Captured stderr (possibly truncated).
         - ``command`` (str): Original command string.
         - ``truncated_path`` (str | None): Path to overflow file if output
           exceeded 50 KiB, else None.
-        - ``note`` (str | None): Explanatory note when a benign SIGPIPE exit was
-          reinterpreted as success, else None.
+        - ``note`` (str | None): Explanatory note when a benign SIGPIPE exit (141 in a
+          pipeline, FRE-470) was reinterpreted as success, else None.
 
-        On guard failures, returns a dict with ``success=False`` and an
-        ``error`` key set to one of: ``empty_command``, ``timeout``,
-        ``credential_isolation_unavailable`` (eval deployment, gateway not root).
+    Raises:
+        BashError: ``empty_command``, ``timeout``, ``os_error``, or
+            ``credential_isolation_unavailable`` (eval deployment, gateway not root).
     """
     trace_id = ctx.trace_id
 
@@ -275,7 +303,12 @@ async def bash_executor(
     # 2. Empty-command guard
     # ------------------------------------------------------------------
     if not command.strip():
-        return {"success": False, "error": "empty_command", "command": command}
+        raise BashError(
+            "empty_command",
+            "The command is empty.",
+            retryable=True,
+            next_action="Call bash again with a command.",
+        )
 
     # ------------------------------------------------------------------
     # 3. Clamp timeout
@@ -292,15 +325,13 @@ async def bash_executor(
             trace_id=trace_id,
             euid=os.geteuid(),
         )
-        return {
-            "success": False,
-            "error": "credential_isolation_unavailable",
-            "detail": (
-                "bash on an eval deployment must drop to an unprivileged account, "
-                "which needs a root gateway; no command was run."
-            ),
-            "command": command,
-        }
+        raise BashError(
+            "credential_isolation_unavailable",
+            "bash on an eval deployment must drop to an unprivileged account, "
+            "which needs a root gateway; no command was run.",
+            retryable=False,
+            next_action="bash cannot run on this deployment. Use another tool.",
+        )
     child_env = eval_child_env() if eval_isolation else None
     # setpriv, not the user/group/extra_groups kwargs: uvloop (the served loop)
     # rejects those kwargs even when they are None (FRE-1518).
@@ -345,20 +376,23 @@ async def bash_executor(
                 command=command,
                 timeout_seconds=timeout_seconds,
             )
-            return {
-                "success": False,
-                "error": "timeout",
-                "command": command,
-                "timeout_seconds": timeout_seconds,
-            }
+            raise BashError(
+                "timeout",
+                f"The command did not finish within {timeout_seconds} seconds and was killed: "
+                f"{command}",
+                retryable=True,
+                next_action=(
+                    f"Narrow the command, or raise timeout_seconds (at most {_MAX_TIMEOUT})."
+                ),
+            ) from None
     except OSError as exc:
         log.error("bash_os_error", trace_id=trace_id, command=command, error=str(exc))
-        return {
-            "success": False,
-            "error": "os_error",
-            "detail": str(exc),
-            "command": command,
-        }
+        raise BashError(
+            "os_error",
+            f"The shell could not start: {exc}",
+            retryable=True,
+            next_action="Call bash once more; if it fails again, tell the user.",
+        ) from exc
 
     # ------------------------------------------------------------------
     # 6. Decode output
@@ -381,8 +415,6 @@ async def bash_executor(
             "exit 141 (SIGPIPE): a downstream pipeline consumer closed the pipe "
             "early, killing the upstream producer; treated as success."
         )
-    success = exit_code == 0 or note is not None
-
     # ------------------------------------------------------------------
     # 7. Output cap (50 KiB combined)
     # ------------------------------------------------------------------
@@ -425,7 +457,6 @@ async def bash_executor(
     )
 
     return {
-        "success": success,
         "exit_code": exit_code,
         "stdout": stdout_str,
         "stderr": stderr_str,

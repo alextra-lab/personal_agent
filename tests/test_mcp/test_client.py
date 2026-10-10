@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from personal_agent.mcp.client import MCPClientWrapper, _load_mcp_sdk
+from personal_agent.mcp.types import MCPToolError
 
 
 def test_load_mcp_sdk_raises_clear_error_when_mcp_unavailable() -> None:
@@ -90,6 +91,31 @@ async def test_call_tool():
 
     result = await client.call_tool("test_tool", {"arg": "value"})
     assert result == {"result": "success"}
+
+
+@pytest.mark.asyncio
+async def test_call_tool_is_error_result_raises_mcp_tool_error():
+    """FRE-1575 (ADR-0156 D6.6): an ``isError`` result raises ``mcp_tool_error`` with its text."""
+    client = MCPClientWrapper(["docker", "mcp", "gateway", "run"])
+
+    mock_content = MagicMock()
+    mock_content.text = "team 'Nope' does not exist"
+
+    mock_result = MagicMock()
+    mock_result.content = [mock_content]
+    mock_result.isError = True
+    mock_result.structuredContent = None
+
+    client.session = AsyncMock()
+    client.session.call_tool = AsyncMock(return_value=mock_result)
+
+    with pytest.raises(MCPToolError) as exc_info:
+        await client.call_tool("save_issue", {"team": "Nope"}, trace_id="t-1")
+
+    assert exc_info.value.code == "mcp_tool_error"
+    assert exc_info.value.retryable is False
+    assert "team 'Nope' does not exist" in exc_info.value.message
+    assert "save_issue" in exc_info.value.message
 
 
 @pytest.mark.asyncio

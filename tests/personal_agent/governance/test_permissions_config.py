@@ -15,7 +15,7 @@ import yaml
 from personal_agent.config.governance_loader import load_governance_config
 from personal_agent.governance.models import Mode, ToolPolicy
 from personal_agent.governance.permissions import evaluate_permission, load_permission_rules
-from personal_agent.tools.primitives._governance import _check_path_governance
+from personal_agent.tools.primitives._governance import PathRefusalError, _check_path_governance
 
 RULES = load_permission_rules()
 _TOOLS_YAML = Path(__file__).resolve().parents[3] / "config" / "governance" / "tools.yaml"
@@ -165,10 +165,12 @@ def test_path_check_denies_when_governance_fails_to_load(monkeypatch: pytest.Mon
         raise RuntimeError("broken")
 
     monkeypatch.setattr(_governance, "load_governance_config", boom)
-    result = _check_path_governance(Path("/tmp/x"), "read")
-    assert result is not None and result["error"] == "governance_unavailable"
+    with pytest.raises(PathRefusalError) as exc_info:
+        _check_path_governance(Path("/tmp/x"), "read")
+    assert exc_info.value.code == "governance_unavailable"
 
 
 def test_path_check_denies_a_tool_with_no_policy() -> None:
-    result = _check_path_governance(Path("/tmp/x"), "no_such_tool")
-    assert result is not None and result["error"] == "no_path_policy"
+    with pytest.raises(PathRefusalError) as exc_info:
+        _check_path_governance(Path("/tmp/x"), "no_such_tool")
+    assert exc_info.value.code == "no_path_policy"

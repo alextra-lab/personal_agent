@@ -14,15 +14,18 @@ explicit ``offset``/``limit`` rather than relying on the head default, and shoul
 
 FRE-261 Step 3. FRE-355: tail_lines parameter for large log files.
 FRE-410: per-read head cap + line-based offset/limit to stop whole-file context bloat.
+FRE-1575: one tool contract — a failure raises :class:`ReadError`.
 """
 
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Literal
 
 import structlog
 
 from personal_agent.telemetry import TraceContext
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.primitives._governance import (
+    PathCode,
     _check_path_governance,
     _expand_path,
 )
@@ -39,21 +42,35 @@ DEFAULT_HEAD_BYTES = 8_192  # default head byte cap (~2K tokens)
 LEGACY_TAIL_CAP = 1_048_576  # tail mode keeps the old 1 MiB cap (no log regression)
 
 # ---------------------------------------------------------------------------
+# Failure codes (ADR-0156 D6.1)
+# ---------------------------------------------------------------------------
+
+ReadCode = Literal[PathCode, "not_a_file", "permission_denied", "io_error"]
+
+
+class ReadError(ToolError[ReadCode]):
+    """A ``read`` failure."""
+
+
+# ---------------------------------------------------------------------------
 # ToolDefinition
 # ---------------------------------------------------------------------------
 
 read_tool = ToolDefinition(
     name="read",
     description=(
-        "Read a file's content from the filesystem. By default returns a truncated head "
-        "(first ~200 lines / ~8 KB) with truncated=true and a 'marker'. "
-        "To understand a large file, DO NOT read the whole thing and DO NOT answer from just the "
-        "head. Instead work in this order: (1) FIND what you need with grep via the bash tool "
-        '(grep -n "<keyword>" <path>) to get line numbers; (2) READ each line number with '
-        "offset=<line> limit=60; (3) REPEAT until you have gathered every relevant part, then "
-        "answer. Use offset (1-based line) and limit (line count) for a specific range. "
-        "Use tail_lines to read the last N lines of a growing log file. "
-        "Set max_bytes only for a deliberate large read when you truly need the whole file."
+        "Read a text file and return its lines. By default it returns the first 200 lines "
+        "(about 8 KB) with truncated=true and a marker that names the next call. "
+        "For a large file, do not read the whole file and do not answer from the head alone: "
+        'find the lines with bash grep -n "<keyword>" <path>, then read each range with '
+        "offset=<line> limit=60, and repeat until you have every part. "
+        "Use tail_lines for the end of a growing log, and max_bytes only for a deliberate "
+        "large read. "
+        "Do not use it to list a directory (use bash find) or to change a file (use write). "
+        "A path outside the allowed paths, or a directory, is refused. "
+        'Examples: read(path="/app/config/governance/tools.yaml"), '
+        'read(path="/app/src/personal_agent/service/app.py", offset=120, limit=60), '
+        'read(path="/app/telemetry/logs/current.jsonl", tail_lines=200).'
     ),
     category="read_only",
     parameters=[
@@ -117,6 +134,9 @@ read_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=10,
     rate_limit_per_hour=None,
+    error_codes=error_codes(ReadError),
+    max_result_tokens=25_000,
+    truncation_next_action="Read a smaller range with offset and limit, or a lower max_bytes.",
 )
 
 
@@ -305,10 +325,9 @@ async def read_executor(
         ctx: Trace context for structured logging correlation.
 
     Returns:
-        On success in head/range mode::
+        In head/range mode::
 
             {
-                "success": True,
                 "path": str,
                 "size_bytes": int,
                 "content": str,
@@ -322,17 +341,9 @@ async def read_executor(
 
         Tail mode additionally echoes ``"tail_lines"`` and omits the line-range fields.
 
-        On failure::
-
-            {"success": False, "error": "<error_code>", "path": str, ...}
-
-        Possible ``error`` values:
-
-        * ``"forbidden_path"`` — path matched a ``forbidden_paths`` entry
-        * ``"path_not_allowed"`` — path not in ``allowed_paths``
-        * ``"not_a_file"`` — path exists but is not a regular file
-        * ``"permission_denied"`` — OS permission error
-        * ``"io_error"`` — other I/O error
+    Raises:
+        PathRefusalError: The path rules refuse the path.
+        ReadError: ``not_a_file``, ``permission_denied`` or ``io_error``.
     """
     trace_id = ctx.trace_id
     session_id = ctx.session_id
@@ -348,63 +359,73 @@ async def read_executor(
     )
 
     # 2. Path governance
-    governance_error = _check_path_governance(resolved, tool_name="read", trace_id=trace_id)
-    if governance_error is not None:
+    try:
+        _check_path_governance(resolved, tool_name="read", trace_id=trace_id)
+    except ToolError as exc:
         log.warning(
             "read_path_rejected",
-            reason=governance_error.get("error"),
+            reason=exc.code,
             path=str(resolved),
             trace_id=trace_id,
             session_id=session_id,
         )
-        return governance_error
+        raise
 
     # 3. Must be a regular file
     if not resolved.exists() or not resolved.is_file():
-        return {
-            "success": False,
-            "error": "not_a_file",
-            "path": str(resolved),
-            "detail": f"Path {str(resolved)!r} is not an existing regular file",
-        }
+        raise ReadError(
+            "not_a_file",
+            f"Path {str(resolved)!r} is not an existing regular file",
+            retryable=False,
+            next_action="Check the path with bash ls or find, then read an existing file.",
+        )
 
     actual_size = resolved.stat().st_size
+    tail_cap = max_bytes if max_bytes is not None else LEGACY_TAIL_CAP
+    requested_limit = limit if limit is not None else DEFAULT_LINE_LIMIT
+    effective_limit = max(requested_limit, 1)  # a non-positive limit would skip content
+    byte_cap = max_bytes if max_bytes is not None else DEFAULT_HEAD_BYTES
 
-    # 4a. Tail mode — read from EOF; keep the legacy 1 MiB cap unless overridden.
-    if tail_lines is not None:
-        tail_cap = max_bytes if max_bytes is not None else LEGACY_TAIL_CAP
-        try:
-            with resolved.open("rb") as fh:
+    try:
+        with resolved.open("rb") as fh:
+            if tail_lines is not None:
+                # 4a. Tail mode — read from EOF; keep the legacy 1 MiB cap unless overridden.
                 content, truncated = _read_tail(fh, tail_lines, tail_cap)
-        except PermissionError as exc:
-            log.warning(
-                "read_permission_denied",
-                path=str(resolved),
-                error=str(exc),
-                trace_id=trace_id,
-                session_id=session_id,
-            )
-            return {
-                "success": False,
-                "error": "permission_denied",
-                "path": str(resolved),
-                "detail": str(exc),
-            }
-        except OSError as exc:
-            log.error(
-                "read_io_error",
-                path=str(resolved),
-                error=str(exc),
-                trace_id=trace_id,
-                session_id=session_id,
-            )
-            return {
-                "success": False,
-                "error": "io_error",
-                "path": str(resolved),
-                "detail": str(exc),
-            }
+            else:
+                # 4b. Head/range mode — truncate to a line window, never error on size.
+                content, truncated, lines_returned, total_lines, line_clipped = _read_line_window(
+                    fh, offset, effective_limit, byte_cap
+                )
+    except PermissionError as exc:
+        log.warning(
+            "read_permission_denied",
+            path=str(resolved),
+            error=str(exc),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        raise ReadError(
+            "permission_denied",
+            f"Cannot read {str(resolved)!r}: {exc}",
+            retryable=False,
+            next_action="Do not retry this file. Read another file or tell the user.",
+        ) from exc
+    except OSError as exc:
+        log.error(
+            "read_io_error",
+            path=str(resolved),
+            error=str(exc),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        raise ReadError(
+            "io_error",
+            f"Reading {str(resolved)!r} failed: {exc}",
+            retryable=True,
+            next_action="Call read once more; if it fails again, tell the user.",
+        ) from exc
 
+    if tail_lines is not None:
         log.info(
             "read_executor_success",
             path=str(resolved),
@@ -415,50 +436,11 @@ async def read_executor(
             session_id=session_id,
         )
         return {
-            "success": True,
             "path": str(resolved),
             "size_bytes": actual_size,
             "content": content,
             "truncated": truncated,
             "tail_lines": tail_lines,
-        }
-
-    # 4b. Head/range mode — truncate to a line window, never error on size.
-    requested_limit = limit if limit is not None else DEFAULT_LINE_LIMIT
-    effective_limit = max(requested_limit, 1)  # a non-positive limit would skip content
-    byte_cap = max_bytes if max_bytes is not None else DEFAULT_HEAD_BYTES
-    try:
-        with resolved.open("rb") as fh:
-            content, truncated, lines_returned, total_lines, line_clipped = _read_line_window(
-                fh, offset, effective_limit, byte_cap
-            )
-    except PermissionError as exc:
-        log.warning(
-            "read_permission_denied",
-            path=str(resolved),
-            error=str(exc),
-            trace_id=trace_id,
-            session_id=session_id,
-        )
-        return {
-            "success": False,
-            "error": "permission_denied",
-            "path": str(resolved),
-            "detail": str(exc),
-        }
-    except OSError as exc:
-        log.error(
-            "read_io_error",
-            path=str(resolved),
-            error=str(exc),
-            trace_id=trace_id,
-            session_id=session_id,
-        )
-        return {
-            "success": False,
-            "error": "io_error",
-            "path": str(resolved),
-            "detail": str(exc),
         }
 
     start = max(offset, 1)
@@ -481,7 +463,6 @@ async def read_executor(
         session_id=session_id,
     )
     return {
-        "success": True,
         "path": str(resolved),
         "size_bytes": actual_size,
         "content": content,

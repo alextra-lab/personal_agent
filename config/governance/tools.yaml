@@ -25,9 +25,18 @@
 sub_agent_tools:
   run_python:
     granted: true
+    param_forced:
+      network: false
     reason: >-
       Owner decision, 2026-09-04 (FRE-1388): the first and, until 2026-09-08, the
       only grant. Sandboxed execution with no network route of its own.
+
+      FRE-1564, 2026-10-10: that last sentence was false for a worker. run_python
+      takes a `network` argument, and `true` attaches the sandbox to the compose
+      network that holds Elasticsearch, Postgres and Neo4j and has outbound access.
+      A worker could set it. The `general` worker type now holds private reads
+      (memory, notes, telemetry), so a worker's run_python is pinned to network
+      false here. The primary is unaffected: it never reads this mapping.
 
   web_search:
     granted: true
@@ -62,13 +71,54 @@ sub_agent_tools:
       data can travel.
 
   fetch_url:
-    granted: false
+    granted: true
     reason: >-
-      FRE-1463, 2026-09-08. Refused while FRE-1360 is open. Its destination is
-      model-selected and arbitrary — it reaches any http(s) host the model names,
-      which web_search cannot do — and FRE-1360 still delivers that text to the
-      model as user text with no tool-result channel. web_search plus fetch_url
-      is the complete search-then-fetch chain. Revisit when FRE-1360 lands.
+      Owner decision, 2026-10-10 (FRE-1564, "2 yes"), reversing the FRE-1463 refusal of
+      2026-09-08. That refusal held "while FRE-1360 is open": fetch_url's destination is
+      model-selected and arbitrary, it reaches any http(s) host the model names, which
+      web_search cannot, and FRE-1360 still delivers fetched text to the model as user
+      text with no tool-result channel. FRE-1360 is still open. The risk is not removed;
+      it is contained by the worker split. Only the `researcher` type holds fetch_url,
+      and `researcher` holds no private or internal read (no memory, notes or
+      telemetry), so a hostile page can steer a worker that has nothing private to
+      send. A test over the whole worker registry fails if any type holds an outbound
+      tool (web_search, fetch_url, get_library_docs) with a private read. Revisit when
+      FRE-1360 lands.
+
+  get_library_docs:
+    granted: true
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1564, option B: every read-only tool reaches a
+      worker). It is an outbound channel: a library name and a query leave the system for
+      the context7 service. So it goes only to the `researcher` type, which holds no
+      private or internal read. A registry test enforces that split.
+
+  read_skill:
+    granted: true
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1564, option B). It returns checked-in skill
+      documents by name from the repository. It reads nothing private and sends nothing
+      out, so it is safe beside any worker's other tools. It goes to the `general` type.
+
+  notes_search:
+    granted: true
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1564, option B). A nearest-neighbour search over the
+      calling user's own notes, read-only. It is private data, so it goes only to the
+      `general` type, which holds no outbound tool, and the worker's run_python is pinned
+      to network false (above). The tool registers only when the R2 substrate is
+      configured; where it does not, the worker simply is not offered it.
+
+  query_telemetry:
+    granted: true
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1564, "1 a"). A native read-only Elasticsearch tool
+      for the system's own logs, metrics and health (FRE-1517 stage 3, F4: no worker could
+      read telemetry). The tool builds its own request and accepts only a listed set of
+      query operators, aggregation types and fields per index family. No conversation
+      content field is listed. It is internal data, so it goes only to the `general` type,
+      which holds no outbound tool. Residual risk: `message` and `error` are free text from
+      the agent's own logging and can carry a fragment of user input.
 
   recall_personal_history:
     granted: true
@@ -1338,6 +1388,16 @@ tools:
     rate_limit_per_hour: 60
     loop_max_per_signature: 3
     loop_max_consecutive: 5
+
+  # FRE-1564: native read-only Elasticsearch query over the system's own telemetry.
+  # The tool validates every query against an allowlist and builds the request itself.
+  query_telemetry:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 20
+    rate_limit_per_hour: 120
 
   # FRE-227: pgvector NN search over the calling user's notes. Read-only.
   notes_search:

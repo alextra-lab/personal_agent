@@ -240,7 +240,7 @@ class TestPlannerPromptToolSurface:
             _build_planner_system_prompt,
         )
 
-        assert "fetch_url" not in _build_planner_system_prompt(["fetch_url", "web_search"])
+        assert "bash" not in _build_planner_system_prompt(["bash", "web_search"])
 
     def test_surface_lookup_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A governance/mode lookup error yields an empty surface, not a crash."""
@@ -288,7 +288,9 @@ class TestPlannerPromptToolSurface:
         surface = ec._current_sub_agent_tool_surface("t")
         assert "web_search" in surface
         assert "search_memory" in surface
-        assert "fetch_url" not in surface
+        # FRE-1564: the owner granted fetch_url ("2 yes"), reversing the FRE-1463 refusal.
+        assert "fetch_url" in surface
+        assert "query_telemetry" in surface
         # FRE-1467 granted this one: FRE-1463 refused it only because it could
         # not work without an identity, and FRE-1467 threads the identity.
         assert "recall_personal_history" in surface
@@ -1503,15 +1505,22 @@ class TestSubAgentToolGrant:
     async def test_type_tools_outside_grant_set_are_stripped(
         self, controller: ExpansionController
     ) -> None:
-        """AC-2/AC-3: of general's three tools, only the granted one is passed."""
+        """AC-2/AC-3: of general's six tools, only the granted one is passed."""
         specs: list[Any] = []
         results = await _dispatch_hermetic(
             controller, _one_task_plan(), self._capture(specs), granted=("run_python",)
         )
 
         assert specs[0].tools == ["run_python"]
-        assert specs[0].denied_tools == ("search_memory", "recall_personal_history")
-        assert results[0].denied_tools == ("search_memory", "recall_personal_history")
+        denied = (
+            "search_memory",
+            "recall_personal_history",
+            "query_telemetry",
+            "notes_search",
+            "read_skill",
+        )
+        assert specs[0].denied_tools == denied
+        assert results[0].denied_tools == denied
 
     @pytest.mark.asyncio
     async def test_denial_is_legible_in_the_synthesis_context(
@@ -1525,7 +1534,7 @@ class TestSubAgentToolGrant:
         )
         context = controller._build_synthesis_context(plan=plan, sub_results=results)
 
-        assert specs[0].denied_tools == ("web_search",)
+        assert specs[0].denied_tools == ("web_search", "fetch_url", "get_library_docs")
         assert "web_search" in context
         assert "not granted" in context
 
@@ -1736,14 +1745,14 @@ class TestSubAgentGapRedispatch:
 
         async def _run(**kwargs: Any) -> SubAgentResult:
             calls.append(kwargs["spec"])
-            return _make_sub_agent_result("task_0", stated_tool_gap="fetch_url")
+            return _make_sub_agent_result("task_0", stated_tool_gap="bash")
 
         results = await _dispatch_hermetic(
-            controller, _one_task_plan(), _run, granted=("fetch_url",), known=("fetch_url",)
+            controller, _one_task_plan(), _run, granted=("bash",), known=("bash",)
         )
 
         assert len(calls) == 1
-        assert results[0].stated_tool_gap == "fetch_url"
+        assert results[0].stated_tool_gap == "bash"
 
     @pytest.mark.asyncio
     async def test_a_same_type_gap_is_never_widened(self, controller: ExpansionController) -> None:

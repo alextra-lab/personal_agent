@@ -307,3 +307,70 @@ class TestPrincipalAwareParamClamping:
             == primary_layer.execute_tool.call_args.args[1]
             == in_bounds_args
         )
+
+
+def _governance_config_forcing(tool_name: str, **forced: bool) -> GovernanceConfig:
+    return GovernanceConfig(
+        modes={},
+        tools={},
+        sub_agent_tools={
+            tool_name: SubAgentToolDecision(
+                granted=True, reason="test decision", param_forced=forced
+            )
+        },
+        mode_constraints={},
+    )
+
+
+class TestPrincipalAwareForcedParams:
+    """FRE-1564 — a forced argument binds the sub-agent principal at the dispatch boundary."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("supplied", [{"network": True}, {"network": "yes"}, {}])
+    async def test_sub_agent_run_python_reaches_execute_tool_with_network_off(
+        self, supplied: dict[str, Any]
+    ) -> None:
+        result = ToolResult(
+            tool_name="run_python", success=True, output={}, error=None, latency_ms=1.0
+        )
+        layer = _fake_tool_layer(
+            result, governance_config=_governance_config_forcing("run_python", network=False)
+        )
+
+        await dispatch_tool_call(
+            tool_call_id="tc-1",
+            tool_name="run_python",
+            arguments={"code": "print(1)", **supplied},
+            tool_layer=layer,
+            trace_ctx=_trace(),
+            trace_id="t-1",
+            session_id="s-1",
+            loaded_skills=set(),
+            principal="sub_agent",
+        )
+
+        sent_args = layer.execute_tool.call_args.args[1]
+        assert sent_args == {"code": "print(1)", "network": False}
+
+    @pytest.mark.asyncio
+    async def test_primary_run_python_keeps_the_network_argument(self) -> None:
+        result = ToolResult(
+            tool_name="run_python", success=True, output={}, error=None, latency_ms=1.0
+        )
+        layer = _fake_tool_layer(
+            result, governance_config=_governance_config_forcing("run_python", network=False)
+        )
+
+        await dispatch_tool_call(
+            tool_call_id="tc-1",
+            tool_name="run_python",
+            arguments={"code": "print(1)", "network": True},
+            tool_layer=layer,
+            trace_ctx=_trace(),
+            trace_id="t-1",
+            session_id="s-1",
+            loaded_skills=set(),
+        )
+
+        sent_args = layer.execute_tool.call_args.args[1]
+        assert sent_args == {"code": "print(1)", "network": True}

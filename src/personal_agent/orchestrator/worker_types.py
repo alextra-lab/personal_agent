@@ -307,21 +307,30 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
     {
         WorkerType.RESEARCHER: WorkerTypeSpec(
             description=(
-                "Finds facts on the open web for one bounded question and reports "
-                "them as data with sources and gaps"
+                "Finds facts on the open web, reads a known web page or library "
+                "documentation, for one bounded question and reports them as data "
+                "with sources and gaps"
             ),
             prompt_block=_RESEARCHER_BLOCK,
-            tools=("web_search",),
+            tools=("web_search", "fetch_url", "get_library_docs"),
             report_schema=WORKER_REPORT_SCHEMA_NAME,
             default_thoroughness="standard",
         ),
         WorkerType.GENERAL: WorkerTypeSpec(
             description=(
                 "Answers a bounded question from its own knowledge, a computation, "
-                "or the user's own memory, and reports in text"
+                "the user's own memory or notes, or the system's own logs, metrics, "
+                "errors and health, and reports in text"
             ),
             prompt_block="",
-            tools=("run_python", "search_memory", "recall_personal_history"),
+            tools=(
+                "run_python",
+                "search_memory",
+                "recall_personal_history",
+                "query_telemetry",
+                "notes_search",
+                "read_skill",
+            ),
             report_schema=None,
             default_thoroughness="quick",
         ),

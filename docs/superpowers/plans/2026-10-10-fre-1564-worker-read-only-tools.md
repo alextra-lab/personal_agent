@@ -107,9 +107,14 @@ source by accident. Default-deny (`UNCLASSIFIED_TOOL`) matches today's `bash` + 
 yields no citable source either. A test pins this outcome. The decision goes in the ADR note.
 
 Registration: `tools/__init__.py` registers it unconditionally (Elasticsearch is core substrate).
-The registry is shared, so the primary sees it too; the primary keeps `bash`. Governance `tools:`
-entry: category `read_only`, modes NORMAL/ALERT/DEGRADED/RECOVERY, risk low, no approval, timeout 20,
-rate limit 120/hour.
+**Worker-only (build-time decision):** the primary lists every registered tool in its tool array
+and in its tool-awareness prompt, and the tool costs about 535 tokens per turn. The primary reads
+telemetry with `bash` and `curl` and the skill docs tell it to. So `ToolDefinition.worker_only`
+hides the tool from every listing the primary reads (`ToolRegistry.list_tools` and
+`get_tool_definitions_for_llm` default `include_worker_only=False`), and only
+`sub_agent._build_tool_defs` opts in. The ticket allowed either; this keeps the primary unchanged.
+Governance `tools:` entry: category `read_only`, modes NORMAL/ALERT/DEGRADED/RECOVERY, risk low, no
+approval, timeout 20, rate limit 120/hour.
 
 ### D-B. Worker lists
 

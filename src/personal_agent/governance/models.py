@@ -288,6 +288,15 @@ class SubAgentToolDecision(BaseModel):
         ),
     )
 
+    param_forced: dict[str, bool] = Field(
+        default_factory=dict,
+        description=(
+            "Per-parameter values pinned only for the sub-agent principal (FRE-1564). The "
+            "dispatch boundary overwrites a supplied or omitted argument with the pinned "
+            "value. The primary's own tool policy never reads this mapping."
+        ),
+    )
+
     @field_validator("reason")
     @classmethod
     def _reason_is_not_blank(cls, value: str) -> str:
@@ -327,6 +336,25 @@ class SubAgentToolDecision(BaseModel):
                 raise ValueError(
                     f"param_ceilings[{param!r}] must be a positive integer, got {ceiling}"
                 )
+        return value
+
+    @field_validator("param_forced")
+    @classmethod
+    def _forced_names_are_not_blank(cls, value: dict[str, bool]) -> dict[str, bool]:
+        """Reject a blank parameter name.
+
+        Args:
+            value: The recorded per-parameter pinned values.
+
+        Returns:
+            The pinned values unchanged.
+
+        Raises:
+            ValueError: A key is blank or whitespace-only.
+        """
+        for param in value:
+            if not param.strip():
+                raise ValueError("param_forced key must not be blank")
         return value
 
 

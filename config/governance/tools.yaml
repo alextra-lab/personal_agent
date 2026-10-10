@@ -72,6 +72,8 @@ sub_agent_tools:
 
   fetch_url:
     granted: true
+    param_ceilings:
+      max_chars: 10000
     reason: >-
       Owner decision, 2026-10-10 (FRE-1564, "2 yes"), reversing the FRE-1463 refusal of
       2026-09-08. That refusal held "while FRE-1360 is open": fetch_url's destination is
@@ -93,6 +95,15 @@ sub_agent_tools:
       no conversation history (`carries_conversation_context` in worker_types.py). The
       task text itself still reaches the researcher, and it derives from the user's
       request. Revisit when FRE-1360 lands.
+
+      FRE-1569, 2026-10-10: `max_chars` is capped at 10,000 for a worker. The tool returns
+      up to 50,000 characters when asked, about 19,000 prompt tokens a page. A researcher
+      that fetched seven such pages passed 115,000 tokens (131,072 context minus the 16,000
+      reserve) and stopped on context_reserve (trace b791f193). 10,000 characters is about
+      3,800 tokens a page, so seven pages cost about 27,000. The value equals the tool's own
+      default on purpose: the clamp acts only on a value the model sent, so a ceiling below
+      the default would not bind when `max_chars` is omitted. The primary keeps the tool's
+      50,000 cap; it never reads this mapping.
 
   get_library_docs:
     granted: true

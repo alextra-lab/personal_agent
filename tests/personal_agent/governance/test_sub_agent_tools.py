@@ -563,3 +563,40 @@ class TestShippedRecallPersonalHistoryCeiling:
         config = load_governance_config()
         policy = config.tools["recall_personal_history"]
         assert not hasattr(policy, "param_ceilings")
+
+
+class TestShippedFetchUrlPageCeiling:
+    """FRE-1569 — a worker cannot take a full-size page; the ceiling sits beside the grant."""
+
+    def test_the_shipped_ceiling_equals_the_tool_default_page(self) -> None:
+        """The ceiling must equal the tool default.
+
+        The clamp acts only on a value the model sent. When ``max_chars`` is omitted the tool
+        applies its own default, so a ceiling below that default would not bind. A ceiling above
+        it would let a worker ask for a larger page than the primary gets by default.
+        """
+        from personal_agent.config.governance_loader import load_governance_config
+        from personal_agent.tools.fetch import _DEFAULT_MAX_CHARS
+
+        decision = load_governance_config().sub_agent_tools["fetch_url"]
+        assert decision.param_ceilings == {"max_chars": _DEFAULT_MAX_CHARS}
+
+    def test_a_worker_asking_for_the_tool_maximum_is_clamped(self) -> None:
+        from personal_agent.config.governance_loader import load_governance_config
+        from personal_agent.tools.fetch import _MAX_CHARS_CAP
+
+        config = load_governance_config()
+        ceiling = config.sub_agent_tools["fetch_url"].param_ceilings["max_chars"]
+        clamped, applied = clamp_sub_agent_tool_params(
+            "fetch_url", {"url": "https://example.com", "max_chars": _MAX_CHARS_CAP}, config
+        )
+        assert clamped["max_chars"] == ceiling
+        assert applied == (
+            ParamClamp(param="max_chars", requested=_MAX_CHARS_CAP, applied=ceiling),
+        )
+
+    def test_the_primarys_own_tool_policy_is_untouched(self) -> None:
+        from personal_agent.config.governance_loader import load_governance_config
+
+        policy = load_governance_config().tools["fetch_url"]
+        assert not hasattr(policy, "param_ceilings")

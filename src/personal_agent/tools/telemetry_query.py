@@ -22,6 +22,7 @@ carry a fragment of user input inside an exception string. That is the residual 
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -169,7 +170,7 @@ _ES_TIMEOUT = "10s"
 _ERROR_CHARS = 300
 
 _AGG_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
-_FIXED_INTERVAL_RE = re.compile(r"\d{1,4}(ms|s|m|h|d)")
+_FIXED_INTERVAL_RE = re.compile(r"\d{1,4}(s|m|h|d)")
 _CALENDAR_INTERVALS = frozenset(
     {"minute", "hour", "day", "week", "month", "quarter", "year", "1m", "1h", "1d", "1w", "1M"}
 )
@@ -324,8 +325,8 @@ def _refuse(reason: str) -> ToolExecutionError:
 
 
 def _is_number(value: object) -> TypeGuard[int | float]:
-    """Report whether ``value`` is an int or float and not a bool."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """Report whether ``value`` is a finite int or float and not a bool."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _is_int(value: object) -> TypeGuard[int]:
@@ -536,12 +537,14 @@ class _Validator:
         calendar, fixed = spec.get("calendar_interval"), spec.get("fixed_interval")
         if (calendar is None) == (fixed is None):
             raise _refuse("date_histogram needs exactly one of calendar_interval, fixed_interval")
-        if calendar is not None and calendar not in _CALENDAR_INTERVALS:
+        if calendar is not None and (
+            not isinstance(calendar, str) or calendar not in _CALENDAR_INTERVALS
+        ):
             raise _refuse(f"calendar_interval must be one of {sorted(_CALENDAR_INTERVALS)}")
         if fixed is not None and not (
             isinstance(fixed, str) and _FIXED_INTERVAL_RE.fullmatch(fixed)
         ):
-            raise _refuse("fixed_interval is a number and ms, s, m, h or d, e.g. '15m'")
+            raise _refuse("fixed_interval is a number and s, m, h or d, e.g. '15m'")
 
     def include_fields(self, fields: object) -> list[str]:
         """Resolve the ``fields`` argument to the list returned for each hit.
@@ -687,6 +690,33 @@ def _short_reason(response: httpx.Response) -> str:
     return reason[:_ERROR_CHARS]
 
 
+def _shard_failures(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Report shards that failed, because Elasticsearch answers 200 with their data missing.
+
+    ``agent-logs-*`` spans monthly indices, and a field mapped differently in one month can
+    fail on that month's shards only. The rest of the reply still looks complete.
+
+    Args:
+        data: The decoded reply.
+
+    Returns:
+        ``{}`` when no shard failed. Otherwise ``shards_failed`` and, when the reply gives
+        one, a short ``shard_failure_reason``.
+    """
+    shards = data.get("_shards")
+    failed = shards.get("failed", 0) if isinstance(shards, dict) else 0
+    if not _is_int(failed) or failed <= 0:
+        return {}
+    out: dict[str, Any] = {"shards_failed": failed}
+    failures = shards.get("failures") if isinstance(shards, dict) else None
+    if isinstance(failures, list) and failures and isinstance(failures[0], dict):
+        reason = failures[0].get("reason")
+        text = reason.get("reason") if isinstance(reason, dict) else reason
+        if isinstance(text, str):
+            out["shard_failure_reason"] = text[:_ERROR_CHARS]
+    return out
+
+
 def _shape_result(action: str, data: Mapping[str, Any]) -> dict[str, Any]:
     """Reduce an Elasticsearch reply to what the model needs, within the size cap.
 
@@ -695,31 +725,37 @@ def _shape_result(action: str, data: Mapping[str, Any]) -> dict[str, Any]:
         data: The decoded reply.
 
     Returns:
-        ``{"count": n}`` for a count. For a search: ``total``, ``hits`` (the source
-        documents) and ``aggregations``. Over the cap, ``total`` plus ``truncated`` and the
-        first characters of the result.
+        ``{"count": n}`` for a count. For a search: ``total``, ``aggregations`` when asked,
+        and ``hits`` (the source documents). Either carries ``shards_failed`` when a shard
+        failed. Over the cap, hits are dropped from the end until the reply fits and
+        ``truncated`` says so, so aggregations survive. If the aggregations alone are over the
+        cap, the reply is ``total``, ``truncated`` and the first characters of the result.
     """
     if action == "count":
-        return {"count": data.get("count", 0)}
+        return {"count": data.get("count", 0), **_shard_failures(data)}
     hits = data.get("hits", {})
     total = hits.get("total", {})
-    out: dict[str, Any] = {
-        "total": total.get("value", 0) if isinstance(total, dict) else total,
-        "hits": [h.get("_source", {}) for h in hits.get("hits", [])],
-    }
+    out: dict[str, Any] = {"total": total.get("value", 0) if isinstance(total, dict) else total}
     if "aggregations" in data:
         out["aggregations"] = data["aggregations"]
     if data.get("timed_out"):
         out["timed_out"] = True
+    out.update(_shard_failures(data))
+    documents = [h.get("_source", {}) for h in hits.get("hits", [])]
+    out["hits"] = documents
+    if len(json.dumps(out)) <= _MAX_RESULT_CHARS:
+        return out
+    while documents and len(json.dumps(out)) > _MAX_RESULT_CHARS:
+        documents.pop()
     text = json.dumps(out)
-    if len(text) > _MAX_RESULT_CHARS:
-        return {
-            "total": out["total"],
-            "truncated": True,
-            "chars_total": len(text),
-            "partial_json": text[:_MAX_RESULT_CHARS],
-        }
-    return out
+    if len(text) <= _MAX_RESULT_CHARS:
+        return {**out, "truncated": True, "hits_returned": len(documents)}
+    return {
+        "total": out["total"],
+        "truncated": True,
+        "chars_total": len(text),
+        "partial_json": text[:_MAX_RESULT_CHARS],
+    }
 
 
 async def query_telemetry_executor(
@@ -807,4 +843,6 @@ async def query_telemetry_executor(
         data = response.json()
     except ValueError as exc:
         raise ToolExecutionError("Elasticsearch returned a reply that is not JSON.") from exc
+    if not isinstance(data, dict):
+        raise ToolExecutionError("Elasticsearch returned a reply that is not a JSON object.")
     return _shape_result(action, data)

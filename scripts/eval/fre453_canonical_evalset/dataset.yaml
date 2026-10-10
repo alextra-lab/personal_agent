@@ -29,7 +29,9 @@ coverage:
   # artifact-generation sub-agent, distilled into _HTML_GENERATION_SYSTEM_PROMPT; it is
   # not a user-routable skill and has no skill-loading mechanism wired yet, so no case.
   allowlist_skills: [get_location, artifact-design]
-  allowlist_tools: [get_location, get_library_docs, expand_tool_result]
+  # query_telemetry (FRE-1564) is worker-only: the primary is never offered it, so no
+  # primary-facing case can exercise it.
+  allowlist_tools: [get_location, get_library_docs, expand_tool_result, query_telemetry]
   # MCP tools are enforced at family granularity (a real browser task exercises many
   # mcp_browser_* micro-tools in one turn; per-method cases are meaningless).
   tool_families:

@@ -96,9 +96,7 @@ def _planner_prompt(surface: Sequence[str], *, before: bool) -> str:
         return expansion_controller._build_planner_system_prompt(list(surface))
     old = MappingProxyType(
         {
-            t: replace(
-                spec, description=_BEFORE_DESCRIPTION[t], tools=_BEFORE_TOOLS[t]
-            )
+            t: replace(spec, description=_BEFORE_DESCRIPTION[t], tools=_BEFORE_TOOLS[t])
             for t, spec in WORKER_TYPES.items()
         }
     )
@@ -142,6 +140,7 @@ def main() -> None:
     print("|---|---:|---|---:|")
     added = count(worker_only) if in_primary else 0
     print(f"| NORMAL mode | {count(primary_text)} | {'yes' if in_primary else 'no'} | +{added} |")
+
 
 if __name__ == "__main__":
     main()

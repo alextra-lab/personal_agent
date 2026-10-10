@@ -893,7 +893,7 @@ second test fails if a worker tool is in neither class.
 
 | Type | Tools | Direction |
 |---|---|---|
-| `researcher` | `web_search`, `fetch_url`, `get_library_docs` | outward, no private read |
+| `researcher` | `web_search`, `fetch_url`, `get_library_docs` | outward, no private tool read |
 | `general` | `run_python`, `search_memory`, `recall_personal_history`, `query_telemetry`, `notes_search`, `read_skill` | inward, no outbound tool |
 
 The two descriptions in the planner prompt change with the lists. `general` now covers the system's
@@ -917,6 +917,14 @@ documentation. The planner request changes, so ADR-0154 D7 applies again.
 - The worker grant reads only the `sub_agent_tools` block. It never reads a tool's
   `allowed_in_modes`. Each added tool has its own entry there. ALERT and DEGRADED still deny every
   worker tool.
+- **What the rule does not cover.** Every worker spec carries the last four conversation messages as
+  context (`context=messages[-4:]`) and the task text. So a `researcher` holds conversation text, and
+  with `fetch_url` it has a channel to any public host. A hostile page can instruct it to put that
+  text in a request address. The rule protects the stores a worker can read with a tool (memory,
+  notes, telemetry). It does not protect the context slice. Before this amendment `web_search` could
+  carry the same text only to the SearXNG proxy and the upstream engines. The owner granted
+  `fetch_url` ("2 yes") before this was known. The security review of FRE-1564 found it, and the
+  decision on a narrower grant is open on the ticket.
 - `query_telemetry` is worker-only (`ToolDefinition.worker_only`). The registry omits it from every
   listing the primary reads, so the primary's tool list, its tool-awareness prompt and its per-turn
   tokens do not change. The primary keeps its `bash` and `curl` route. Only a worker's tool loop

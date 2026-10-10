@@ -510,3 +510,140 @@ async def test_a_timeout_becomes_a_tool_error() -> None:
 
     with pytest.raises(ToolExecutionError, match="timed out"):
         await _run(_Recorder(slow), action="search", index="agent-logs")
+
+
+# ── Code-review findings (FRE-1564) ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_failed_shard_is_reported_not_hidden() -> None:
+    """ES answers 200 with a failed month's data missing; the model must be told."""
+    reply = {
+        "hits": {"total": {"value": 5}, "hits": []},
+        "_shards": {
+            "total": 3,
+            "failed": 1,
+            "failures": [{"reason": {"reason": "fielddata is disabled on text fields"}}],
+        },
+    }
+    out = await _run(
+        _Recorder(lambda _r: httpx.Response(200, json=reply)), action="search", index="agent-logs"
+    )
+    assert out["shards_failed"] == 1
+    assert "fielddata" in out["shard_failure_reason"]
+
+    count = await _run(
+        _Recorder(lambda _r: httpx.Response(200, json={"count": 4, "_shards": {"failed": 2}})),
+        action="count",
+        index="agent-logs",
+    )
+    assert count == {"count": 4, "shards_failed": 2}
+
+
+@pytest.mark.asyncio
+async def test_a_clean_reply_has_no_shard_warning() -> None:
+    reply = {"hits": {"total": {"value": 1}, "hits": []}, "_shards": {"total": 3, "failed": 0}}
+    out = await _run(
+        _Recorder(lambda _r: httpx.Response(200, json=reply)), action="search", index="agent-logs"
+    )
+    assert "shards_failed" not in out
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_reply_drops_hits_and_keeps_the_aggregations() -> None:
+    reply = {
+        "hits": {
+            "total": {"value": 50},
+            "hits": [{"_source": {"error": "e" * 1000}} for _ in range(50)],
+        },
+        "aggregations": {"by_event": {"buckets": [{"key": "a", "doc_count": 3}]}},
+        "timed_out": True,
+    }
+    out = await _run(
+        _Recorder(lambda _r: httpx.Response(200, json=reply)),
+        action="search",
+        index="agent-logs",
+        size=50,
+    )
+    assert out["truncated"] is True
+    assert out["aggregations"] == reply["aggregations"]
+    assert out["timed_out"] is True
+    assert 0 < out["hits_returned"] < 50
+    assert out["hits_returned"] == len(out["hits"])
+    assert len(json.dumps(out)) <= 20_000
+
+
+@pytest.mark.asyncio
+async def test_aggregations_alone_over_the_cap_fall_back_to_a_partial_reply() -> None:
+    buckets = [{"key": f"k{i}", "doc_count": i} for i in range(3000)]
+    reply = {
+        "hits": {"total": {"value": 9}, "hits": []},
+        "aggregations": {"big": {"buckets": buckets}},
+    }
+    out = await _run(
+        _Recorder(lambda _r: httpx.Response(200, json=reply)), action="search", index="agent-logs"
+    )
+    assert out["truncated"] is True
+    assert out["total"] == 9
+    assert len(out["partial_json"]) == 20_000
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_is_not_a_json_object_is_a_tool_error() -> None:
+    rec = _Recorder(lambda _r: httpx.Response(200, json=[1, 2]))
+    with pytest.raises(ToolExecutionError, match="not a JSON object"):
+        await _run(rec, action="search", index="agent-logs")
+
+
+@pytest.mark.asyncio
+async def test_a_dict_valued_bool_clause_with_an_allowed_field_is_accepted() -> None:
+    """Pins the shape that `test_a_bypass_query...user_id` refuses only for its field."""
+    rec = _Recorder()
+    await _run(
+        rec,
+        action="search",
+        index="agent-logs",
+        query={"bool": {"filter": {"term": {"level": "ERROR"}}}},
+    )
+    assert rec.calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "aggs",
+    [
+        {"a": {"date_histogram": {"field": "@timestamp", "calendar_interval": ["day"]}}},
+        {"a": {"date_histogram": {"field": "@timestamp", "calendar_interval": {"x": 1}}}},
+        {"a": {"date_histogram": {"field": "@timestamp", "fixed_interval": "15ms"}}},
+        {"a": {"date_histogram": {"field": "@timestamp", "fixed_interval": ["15m"]}}},
+        {
+            "a": {
+                "date_histogram": {
+                    "field": "@timestamp",
+                    "calendar_interval": "day",
+                    "fixed_interval": "1h",
+                }
+            }
+        },
+    ],
+)
+async def test_a_malformed_interval_is_a_clean_refusal(aggs: dict[str, Any]) -> None:
+    await _refused(_Recorder(), action="search", index="agent-logs", aggs=aggs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+async def test_a_non_finite_number_is_a_clean_refusal(bad: float) -> None:
+    await _refused(_Recorder(), action="search", index="agent-logs", size=bad)
+    await _refused(
+        _Recorder(),
+        action="search",
+        index="agent-logs",
+        query={"range": {"latency_ms": {"gte": bad}}},
+    )
+    await _refused(
+        _Recorder(),
+        action="search",
+        index="agent-logs",
+        aggs={"p": {"percentiles": {"field": "latency_ms", "percents": [bad]}}},
+    )

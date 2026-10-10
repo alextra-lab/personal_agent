@@ -77,13 +77,20 @@ sub_agent_tools:
       2026-09-08. That refusal held "while FRE-1360 is open": fetch_url's destination is
       model-selected and arbitrary, it reaches any http(s) host the model names, which
       web_search cannot, and FRE-1360 still delivers fetched text to the model as user
-      text with no tool-result channel. FRE-1360 is still open. The risk is not removed;
-      it is contained by the worker split. Only the `researcher` type holds fetch_url,
-      and `researcher` holds no private or internal read (no memory, notes or
-      telemetry), so a hostile page can steer a worker that has nothing private to
-      send. A test over the whole worker registry fails if any type holds an outbound
-      tool (web_search, fetch_url, get_library_docs) with a private read. Revisit when
-      FRE-1360 lands.
+      text with no tool-result channel. FRE-1360 is still open. The risk is narrowed by
+      the worker split, not removed. Only the `researcher` type holds fetch_url, and
+      `researcher` holds no private tool (no memory, notes or telemetry read), so a
+      hostile page cannot make it query those stores. A test over the whole worker
+      registry fails if any type holds an outbound tool (web_search, fetch_url,
+      get_library_docs) with a private read.
+
+      What the split does not cover, found in the FRE-1564 security review: every worker
+      spec carries the last four conversation messages as context
+      (expansion_controller.py, `context=messages[-4:]`) and the task text, so a
+      researcher holds conversation text. A page it fetches can instruct it to put that
+      text in a fetch_url address, which the destination then logs. Before this
+      decision, web_search could carry the same text only to the SearXNG proxy and the
+      upstream search engines. Revisit when FRE-1360 lands.
 
   get_library_docs:
     granted: true

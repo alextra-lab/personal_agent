@@ -1,9 +1,11 @@
 """The worker tool split (FRE-1564, ADR-0150 D2 amendment of 2026-10-10).
 
 The rule: no worker type holds both an outbound channel (a query or URL leaves the system)
-and a private or internal read. A hostile page can steer a worker that has nothing private to
-send, and a worker that holds private data has no way out. Today's two types keep them apart,
-and these tests make that a property of the registry instead of luck.
+and a private or internal read made with a tool. A hostile page cannot make a worker that has
+no private tool query those stores, and a worker that holds a private tool has no way out. The
+rule does not cover the conversation context every worker carries (the last four messages and
+the task text): a `researcher` holds that and can send it out with `fetch_url`. That residual is
+recorded in the `fetch_url` governance decision and in ADR-0150.
 
 AC-2: each added tool reaches its worker type, after governance, and no write tool does.
 AC-3: the rule, with a seeded negative.
@@ -168,7 +170,6 @@ class TestToolsReachTheWorkers:
         conditional = {"notes_search"}
         assert (listed - conditional) <= offered, sorted((listed - conditional) - offered)
 
-
     def test_the_primary_is_not_offered_the_worker_only_tool(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -178,7 +179,9 @@ class TestToolsReachTheWorkers:
         monkeypatch.setattr(settings, "primitive_tools_enabled", True)
         registry = ToolRegistry()
         register_mvp_tools(registry)
-        primary = {d["function"]["name"] for d in registry.get_tool_definitions_for_llm(Mode.NORMAL)}
+        primary = {
+            d["function"]["name"] for d in registry.get_tool_definitions_for_llm(Mode.NORMAL)
+        }
         assert "query_telemetry" not in primary
         assert "query_telemetry" in registry.list_tool_names()
 

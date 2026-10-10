@@ -3146,10 +3146,14 @@ def _stop_turn_for_length_bound(
         tokens_generated: Completion tokens the server reported for the call.
         span_id: This step's span id, for the log event.
     """
-    lead = (
-        "Stopped — the model's reply ran too long. "
+    # llama-server also reports "length" when the context window fills. Name the bound only
+    # when the call reached it, so the reply never states a limit that did not apply.
+    reached = (
         f"It reached the limit of {bound:,} tokens before it finished."
+        if tokens_generated >= bound
+        else "It stopped before it finished."
     )
+    lead = f"Stopped — the model's reply ran too long. {reached}"
     if ctx.tool_results or ctx.sub_agent_results or ctx.expansion_skipped_tasks:
         ctx.final_reply = _fallback_reply_from_tool_results(
             ctx, lead=f"{lead} Here is what was gathered before it stopped:"

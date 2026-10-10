@@ -574,3 +574,19 @@ class TestStepLlmCallForwardsTheBound:
         assert state is TaskState.TOOL_EXECUTION
         assert _bound_events(events) == []
         assert ctx.turn_stopped_early is False
+
+
+class TestTheReplyNamesOnlyALimitThatApplied:
+    @pytest.mark.asyncio
+    async def test_a_length_stop_below_the_bound_does_not_claim_the_limit(self) -> None:
+        """llama-server reports ``length`` when the context window fills, too."""
+        response = _length_response()
+        response["usage"] = {"prompt_tokens": 131000, "completion_tokens": 900, "total_tokens": 131900}
+        ctx = _ctx()
+
+        state = await _finalize(ctx, response, generation_bound=_BOUND)
+
+        reply = ctx.final_reply or ""
+        assert state is TaskState.SYNTHESIS
+        assert "ran too long" in reply
+        assert "12,288" not in reply

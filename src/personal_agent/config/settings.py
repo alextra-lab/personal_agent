@@ -178,7 +178,9 @@ class AppConfig(BaseSettings):
     @classmethod
     def resolve_optional_path(cls, v: Path | str | None) -> Path | None:
         """Resolve a relative optional path to absolute; keep an unset value unset."""
-        return None if v in (None, "") else resolve_path(v)
+        if v is None or v == "":
+            return None
+        return resolve_path(v)
 
     # LLM Client
     slm_base_url: str | None = Field(
@@ -3049,11 +3051,11 @@ class AppConfig(BaseSettings):
     approval_ui_enabled: bool = Field(
         default=False,
         description=(
-            "Enable interactive tool-approval round-trips via the PWA (FRE-261). "
-            "When True, tools with requires_approval=True pause and await a human "
-            "decision via POST /agui/approval/{request_id} before executing, and a "
-            "turn with no PWA client is denied (FRE-1535, ADR-0063 Amendment A). "
-            "When False, those tools run without a prompt: an explicit opt-out. "
+            "Enable interactive tool-approval cards in the PWA (FRE-261). When True, a "
+            "call that the permission rules ask about (config/governance/permissions.yaml, "
+            "ADR-0156 D8) shows a card and runs only on the user's yes; a turn with no PWA "
+            "client is denied. When False, every such call is denied, not run "
+            "(ADR-0063 Amendment B, FRE-1574): no setting turns prompts off. "
             "Env var: AGENT_APPROVAL_UI_ENABLED"
         ),
     )

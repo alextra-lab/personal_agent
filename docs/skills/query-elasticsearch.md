@@ -46,7 +46,7 @@ canonical_patterns:
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `query_elasticsearch` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
 
-**Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); `run_python` auto-approved (NORMAL/ALERT/DEGRADED)
+**Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); `run_python` runs without asking in NORMAL; with `network: true` it asks
 
 **Latency is not here.** Model-call timing lives on OTel spans in Tempo, not in these logs (ADR-0129, FRE-1219: `duration_ms` and `latency_ms` are retired from `agent-logs-*`). For latency, p50/p90 or "what was slow", use the `query-tempo` skill (Pattern 5) or the `query_telemetry` tool, action `latency`.
 
@@ -79,6 +79,7 @@ The cluster has these index families. **Do not guess index names** — use only 
 To classify a family, use the tested classifier, not `sed`:
 
 ```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^agent-monitors-joinability-' \
   | python3 scripts/es_index_granularity.py agent-monitors-joinability

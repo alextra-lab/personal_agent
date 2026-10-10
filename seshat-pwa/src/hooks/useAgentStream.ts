@@ -103,7 +103,7 @@ export interface UseAgentStreamReturn {
   sendMessage: (text: string, sessionId: string, primarySelection?: string, attachments?: UploadedAttachment[]) => Promise<void>;
   resolveInterrupt: (choice: string) => void;
   /** Post an approve/deny decision for the current pendingApproval. */
-  handleApprovalDecision: (decision: 'approve' | 'deny') => void;
+  handleApprovalDecision: (decision: 'approve' | 'approve_session' | 'deny') => void;
   /** Send a constraint decision (ADR-0076) and optimistically clear the card. */
   sendConstraintDecision: (requestId: string, actionId: string, remember: boolean) => void;
   /** Send a USER_CANCEL (Stop button) to halt the current turn. */
@@ -614,6 +614,8 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
           risk_level: (String(e.risk_level ?? 'medium')) as 'low' | 'medium' | 'high',
           reason: String(e.reason ?? ''),
           expires_at: String(e.expires_at ?? ''),
+          worker: e.worker == null ? null : String(e.worker),
+          session_option: e.session_option === true,
         };
         setPendingApproval(approvalData);
         break;
@@ -927,13 +929,14 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   }, [pendingInterrupt]);
 
   /**
-   * Post an approve/deny decision for the current pendingApproval via WebSocket.
+   * Send the decision for the current pendingApproval via WebSocket.
    *
-   * Clears pendingApproval immediately (optimistic). Errors are logged to
-   * console but do not crash — the backend will auto-deny when the request expires.
+   * ``approve`` allows the call once; ``approve_session`` also allows the same
+   * call for the rest of the session (ADR-0156 D8.3). Clears pendingApproval
+   * immediately (optimistic). The backend denies when the request expires.
    */
   const handleApprovalDecision = useCallback(
-    (decision: 'approve' | 'deny'): void => {
+    (decision: 'approve' | 'approve_session' | 'deny'): void => {
       if (pendingApproval === null) return;
 
       const { request_id } = pendingApproval;

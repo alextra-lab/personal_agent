@@ -1,0 +1,21 @@
+# The eval stack's own permission rules (ADR-0156 D8.5, FRE-1574).
+#
+# The eval gateways run with AGENT_APPROVAL_UI_ENABLED=false, so every "ask" is denied there
+# (ADR-0063 Amendment B): no default turns prompts off. This file adds allow rules for the calls
+# the eval scripts run that permissions.yaml does not already allow. It is loaded after
+# permissions.yaml (AGENT_EXTRA_PERMISSION_RULES_PATH in docker-compose.eval.yml), so it cannot
+# override a deny rule or an explicit ask rule, and the loader's D8.2 rejections apply here too.
+#
+# What stays denied on eval, by the owner's decision of 2026-10-10 (FRE-1574, "Deny on eval, per
+# ADR"): run_python with network: true; bash python3, awk, sed and env; and any bash subcommand
+# that is not a plain command (here-docs, $ expansion, substitution, redirection to a file).
+#
+# Evidence: the FRE-1517 stage-3 runs (tests/fixtures/fre1574_stage3_calls.json). Every call that
+# ran successfully there comes out allow under this file, or is one of the classes above
+# (tests/personal_agent/governance/test_eval_permissions.py).
+
+allow:
+  # FRE-1572 (owner, 2026-10-10) removed redis-cli from the allow list, because plain arguments
+  # change the store. The stage-3 health check runs this one read-only probe.
+  - rule: "bash(redis-cli -h redis ping)"
+    reason: "Redis health probe run by the s3_logs_learning script."

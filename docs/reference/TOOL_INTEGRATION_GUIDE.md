@@ -132,15 +132,24 @@ from personal_agent.tools.myservice import my_tool, my_tool_executor
 registry.register(my_tool, my_tool_executor)
 ```
 
-And in `config/governance/tools.yaml`:
+And in `config/governance/tools.yaml` (availability per mode, limits):
 ```yaml
 my_tool:
   category: "network"
   allowed_in_modes: ["NORMAL", "DEGRADED"]
   risk_level: "low"
-  requires_approval: false
   timeout_seconds: 30
   rate_limit_per_hour: 100
+```
+
+And a rule in `config/governance/permissions.yaml` (ADR-0156 D8). A tool with no rule asks the
+user on every call, so decide it on purpose:
+```yaml
+allow:
+  - rule: "my_tool"            # every call runs; or my_tool(param=value*) for a subset
+ask:
+  - rule: "my_tool(mode=write)"
+    reason: "Writes to the service."
 ```
 
 ### Existing Tier 1 tools

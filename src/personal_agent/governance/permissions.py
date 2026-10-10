@@ -27,11 +27,11 @@ import json
 import re
 import shlex
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from personal_agent.config import settings
 from personal_agent.governance.bash_matcher import (
@@ -554,7 +554,8 @@ class PermissionDecision:
     Attributes:
         decision: ``allow`` runs the call, ``ask`` needs the user's answer, ``deny`` refuses it.
         reason: Why, in plain text.
-        rule: The rule that decided it, or ``None`` when no rule matched.
+        rule: The rule that decided it, or ``None`` when no rule matched. For an allowed bash
+            command, every allow rule that matched a subcommand, comma-separated.
         refused: For ``ask`` and ``deny``, the subcommand or argument that decided it.
         explicit: For ``ask``, whether an explicit ask rule matched. Only an unmatched call
             (``explicit`` false) offers "allow for this session" (D8.3).
@@ -565,7 +566,6 @@ class PermissionDecision:
     rule: str | None = None
     refused: str | None = None
     explicit: bool = False
-    matched_rules: tuple[str, ...] = field(default=())
 
 
 def _call_summary(tool: str, arguments: Mapping[str, object]) -> str:
@@ -694,17 +694,17 @@ def _evaluate_bash(
             return PermissionDecision(
                 "ask", f"the subcommand is not plain ({sub.refusal})", None, sub.text
             )
-        rule = next((r for r in allow if r.allows_subcommand(sub)), None)
-        if rule is None:
+        allowing = next((r for r in allow if r.allows_subcommand(sub)), None)
+        if allowing is None:
             why = (
                 "an indirect-execution word needs an exact allow rule"
                 if sub.indirect
                 else "no allow rule matches this subcommand"
             )
             return PermissionDecision("ask", why, None, sub.text)
-        matched.append(rule.text)
+        matched.append(allowing.text)
     return PermissionDecision(
-        "allow", "every subcommand matches an allow rule", matched[0], matched_rules=tuple(matched)
+        "allow", "every subcommand matches an allow rule", ", ".join(dict.fromkeys(matched))
     )
 
 

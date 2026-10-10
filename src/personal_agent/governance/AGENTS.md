@@ -67,11 +67,18 @@ modes:
     cpu_threshold: 75.0
     require_approval: ["filesystem_write"]
 
-# config/governance/tools.yaml
+# config/governance/tools.yaml — availability per mode
 tools:
   filesystem_write:
-    allowed_modes: ["NORMAL", "ALERT"]
-    requires_approval_in: ["ALERT"]
+    allowed_in_modes: ["NORMAL", "ALERT"]
+
+# config/governance/permissions.yaml — run, ask or refuse (ADR-0156 D8, FRE-1574)
+ask:
+  - rule: "filesystem_write"
+    modes: [ALERT]
+    reason: "Writes ask outside NORMAL mode."
+allow:
+  - rule: "filesystem_write"
 ```
 
 ## Dependencies

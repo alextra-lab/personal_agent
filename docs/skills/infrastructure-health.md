@@ -23,7 +23,7 @@ keywords:
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `infra_health` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
 
-**Category:** `system_read` · **Risk:** none · **Approval:** bash one-liners auto-approved in NORMAL; `run_python(network=True)` requires PWA approval in ALERT/DEGRADED
+**Category:** `system_read` · **Risk:** none · **Approval:** plain `bash curl` runs without asking; `psql`, `redis-cli` and `run_python(network=True)` ask the user (ADR-0156 D8)
 
 > **Container vs host:** Hostnames (`postgres`, `neo4j`, `elasticsearch`, `redis`) are Docker DNS names that only resolve from **inside** the `cloud-sim` network. From the VPS host shell, use `localhost:<port>` instead.
 
@@ -34,6 +34,7 @@ For "is Postgres reachable?" use a real connection, not a TCP probe to port 5432
 ```bash
 # Postgres — AGENT_DATABASE_URL uses postgresql+asyncpg:// which psql cannot parse.
 # Strip the driver specifier first:
+# ask: the shell expands $(…) and $AGENT_DATABASE_URL here, so this is not a plain command and asks for approval.
 bash psql "$(echo $AGENT_DATABASE_URL | sed 's|postgresql+asyncpg|postgresql|')" -c 'SELECT 1'
 ```
 
@@ -45,6 +46,7 @@ bash psql "$(echo $AGENT_DATABASE_URL | sed 's|postgresql+asyncpg|postgresql|')"
 bash curl -fsS http://elasticsearch:9200/_cluster/health | grep '"status"'
 
 # Redis
+# ask: no allow rule covers redis-cli (FRE-1572), so this asks for approval.
 bash redis-cli -h redis ping
 
 # Neo4j HTTP
@@ -92,7 +94,7 @@ print(json.dumps(result, indent=2))
 
 ## Governance
 
-- `bash curl`, `bash redis-cli`: auto-approved NORMAL/ALERT/DEGRADED.
-- `bash psql -c`: auto-approved NORMAL.
-- `run_python(network=True)`: NORMAL auto-approved; ALERT/DEGRADED require PWA approval.
+- `bash curl`: runs without asking in NORMAL/ALERT/DEGRADED.
+- `bash psql`, `bash redis-cli`: ask the user (FRE-1572), in every mode.
+- `run_python(network=True)`: asks the user in every mode (ADR-0156 D8.6).
 - LOCKDOWN: bash and run_python both disabled.

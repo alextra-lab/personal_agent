@@ -159,15 +159,18 @@ def _text(node: Node) -> str:
 
 
 def _has_control_character(text: str) -> bool:
-    """Report whether text holds a control character other than tab.
+    """Report whether text holds a control character other than tab and newline.
+
+    A newline inside quotes is literal data (a multi-line ``jq`` filter or JSON body). In an
+    unquoted word it cannot occur: it ends the command.
 
     Args:
         text: The text to check.
 
     Returns:
-        ``True`` when a character below 32 (tab excepted) or DEL is present.
+        ``True`` when a character below 32 (tab and newline excepted) or DEL is present.
     """
-    return any((ord(c) < 32 and c != "\t") or ord(c) == 127 for c in text)
+    return any((ord(c) < 32 and c not in "\t\n") or ord(c) == 127 for c in text)
 
 
 def _unquoted_word(text: str) -> tuple[str | None, str | None]:
@@ -261,10 +264,10 @@ def _literal(node: Node) -> tuple[str | None, str | None]:
     if kind == "concatenation":
         parts: list[str] = []
         for child in node.children:
-            value, reason = _literal(child)
-            if value is None:
+            part, reason = _literal(child)
+            if part is None:
                 return None, reason
-            parts.append(value)
+            parts.append(part)
         return "".join(parts), None
     if kind in _EXPANSION_NODES:
         return None, "expansion"

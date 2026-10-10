@@ -202,6 +202,13 @@ export interface ToolApprovalRequestData {
   reason: string;
   /** ISO-8601 UTC timestamp after which the backend auto-denies. */
   expires_at: string;
+  /** The worker type that asks, or null for the primary agent (ADR-0156 D8.3). */
+  worker: string | null;
+  /**
+   * Whether the card offers "Allow for this session". Only a call that matched no
+   * permission rule offers it; an explicit ask rule never does (ADR-0156 D8.3).
+   */
+  session_option: boolean;
 }
 
 // --------------------------------------------------------------------------

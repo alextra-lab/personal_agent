@@ -66,6 +66,7 @@ Rule: `interval × count < 30` seconds.
 ## Disk usage
 
 ```bash
+# ask: the shell expands the glob /app/* here, so this is not a plain command and asks for approval.
 bash du -sh /app/*
 bash du -sh /app/* | sort -rh | head -10
 ```

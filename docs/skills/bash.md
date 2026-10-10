@@ -9,7 +9,7 @@ tools: [bash]
 
 **Status:** Primary path (FRE-263, 2026-04-28). Replaces 8 deprecated curated tools via `AGENT_LEGACY_TOOLS_ENABLED=false`. Use `bash`, `read`, `run_python` primitives for all shell operations.
 
-**Category:** `system_dangerous` · **Risk:** high · **Approval:** required (auto-approve list exempts safe commands)
+**Category:** `system_dangerous` · **Risk:** high · **Approval:** plain commands that an allow rule covers run; any other command asks the user (ADR-0156 D8)
 
 ## Purpose
 
@@ -42,7 +42,7 @@ The bash tool runs commands **inside the seshat-gateway container** (`python:3.1
 
 ## Pipes
 
-**Pipes work in a single bash call.** You can chain auto-approved commands without escaping:
+**Pipes work in a single bash call.** A pipeline runs without asking when every command in it is allowed:
 
 ```bash
 bash command="find /app/src -name '*.py' | wc -l"
@@ -54,34 +54,23 @@ bash command="curl -s http://elasticsearch:9200/_cluster/health | jq .status"
 
 `bash` runs commands via `/bin/bash -o pipefail -c <command>`. Pipes (`|`), logical operators (`&&`, `||`), separators (`;`), redirects (`>`, `>>`), globs, and env substitution all work — the command is passed as a single argument to the shell.
 
-The auto-approve check splits the command on top-level operators and verifies the first word of every segment. A command like `curl … | grep foo | wc -l` is auto-approved if all three first words (`curl`, `grep`, `wc`) are on the allowlist.
+The permission check parses the command and judges every subcommand on its own (ADR-0156 D8.2). `curl … | grep foo | wc -l` runs without asking because each of `curl`, `grep` and `wc` is a plain command that an allow rule covers. A plain command has literal words only: no `$VAR` or `$(…)`, no glob such as `*.py` (quote it: `'*.py'`), no `~`, no `VAR=x` in front, no here-doc, and no redirection except `> /dev/null`, `2> /dev/null` and `2>&1`.
 
 ### SIGPIPE / exit 141 (FRE-470)
 
 When a downstream pipeline consumer closes the pipe early — e.g. `find … | head` or `… | grep -q` — the upstream producer is killed by SIGPIPE (signal 13), and under `pipefail` the pipeline's exit code becomes `141` (128 + 13). This is normal early-exit behavior, not a failure. The executor therefore reports `success: true` for exit `141` **when the command is a pipeline**, and adds an explanatory `note` field. A standalone `exit 141` (no pipe) still reports `success: false`, so genuine errors are never masked.
 
-## Auto-approve list (no PWA prompt required)
+## Allow, ask and deny (`config/governance/permissions.yaml`)
 
-**NORMAL mode** — auto-approved first words:
+**Allowed in NORMAL mode** (as plain commands): `curl`, `grep`, `ls`, `cat`, `find`, `jq`, `docker ps`, `docker logs`, `git log`, `git status`, `git diff`, `ps`, `top`, `free`, `df`, `uptime`, `wc`, `rg`, `ss`, `vmstat`, `iostat`, `lsof`, `netstat`, `uname`, `pgrep`, `pg_isready`, `tr`, `sort`, `uniq`, `head`, `tail`, `echo`, `date`, `du`, `id`, `which`, `mmdc`.
 
-`curl`, `grep`, `ls`, `cat`, `find`, `jq`, `docker ps`, `docker logs`, `git log`, `git status`, `git diff`, `psql -c`, `redis-cli`, `ps`, `top`, `free`, `df`, `uptime`, `wc`, `rg`, `awk`, `sed`, `ss`, `vmstat`, `iostat`, `lsof`, `netstat`, `uname`, `pgrep`, `pg_isready`, `tr`, `sort`, `uniq`, `head`, `tail`, `echo`, `date`, `du`, `id`, `env`, `which`, `python3`
+**ALERT** — `curl`, `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `uname`, `echo`, `ss`, `netstat`, `pgrep`, `date`. **DEGRADED** — `curl`, `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `uname`, `echo`.
 
-**ALERT/DEGRADED** — smaller subset: `curl`, `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `ss`, `netstat`, `uname`, `pgrep`, `echo`, `date`
+**Ask:** every other command, and every command that is not plain. `python3`, `awk`, `sed`, `env`, `psql` and `redis-cli` always ask. `curl` asks when an option sends or writes a local file (`-d @file`, `-F f=@file`, `-T`, `-K`, `-o` outside `/tmp`). The user answers on a card; with no card available (a CLI or eval turn) the call is refused.
 
-Commands whose first word is not in the list (or a piped segment whose first word is not) pause for user approval via the PWA before executing.
+**Deny** (refused even with approval): `rm -rf`, `rm -fr`, `dd`, `mkfs`, `sudo`, `wget`, `ssh`, `nc -l`.
 
-## Hard-denied patterns (immediate block — no subprocess spawned)
-
-| Pattern | Reason |
-|---------|--------|
-| `rm\s+-rf` | Recursive deletion |
-| `dd\s+if=` | Raw disk write |
-| `mkfs` | Filesystem format |
-| `sudo` | Privilege escalation |
-| `wget` | Arbitrary file download |
-| `ssh` | Remote shell access |
-| `nc\s+-l` | Netcat listener |
-| `:\(\)\s*\{.*\};:` | Fork bomb |
+A refusal names the subcommand and the rule. Do not retry the same command: use one that the allow list covers, or tell the user what you need to run.
 
 ## Output cap
 
@@ -106,9 +95,11 @@ bash command="ps aux --sort=-%mem | head -10"
 bash command="find /app/src -name '*.py' | wc -l"
 
 # Ad-hoc Postgres query (note: URL uses postgresql:// not postgresql+asyncpg://)
+# ask: no allow rule covers psql (FRE-1572: plain arguments can change the store), so this asks for approval.
 bash command="psql -c 'SELECT count(*) FROM sessions;' postgresql://agent:<password>@postgres:5432/personal_agent"
 
 # Redis cache check
+# ask: no allow rule covers redis-cli (FRE-1572), so this asks for approval.
 bash command="redis-cli -h redis PING"
 
 # Disk usage

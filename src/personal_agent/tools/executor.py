@@ -370,6 +370,7 @@ async def _check_permissions(
         explicit_ask=decision.explicit,
         worker=worker,
         trace_id=trace_ctx.trace_id,
+        session_id=session_id,
     )
     if decision.decision == "allow":
         return PermissionResult(allowed=True)
@@ -408,6 +409,7 @@ async def _check_permissions(
             rule=decision.rule,
             worker=worker,
             trace_id=trace_ctx.trace_id,
+            session_id=session_id,
         )
         return _permission_refusal(
             tool_name=tool_name,
@@ -453,6 +455,7 @@ async def _check_permissions(
             scope="once",
             worker=worker,
             trace_id=trace_ctx.trace_id,
+            session_id=session_id,
         )
         return PermissionResult(allowed=True)
     if answer.decision == "approve_session":
@@ -468,6 +471,7 @@ async def _check_permissions(
                 rule=rule_text,
                 worker=worker,
                 trace_id=trace_ctx.trace_id,
+                session_id=session_id,
             )
         log.info(
             "approval_granted",
@@ -475,6 +479,7 @@ async def _check_permissions(
             scope=scope,
             worker=worker,
             trace_id=trace_ctx.trace_id,
+            session_id=session_id,
         )
         return PermissionResult(allowed=True)
 
@@ -502,6 +507,7 @@ async def _check_permissions(
         refused=decision.refused,
         worker=worker,
         trace_id=trace_ctx.trace_id,
+        session_id=session_id,
     )
     return _permission_refusal(
         tool_name=tool_name,

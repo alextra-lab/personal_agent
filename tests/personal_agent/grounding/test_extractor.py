@@ -9,12 +9,16 @@ nonsense must produce *more* citation obligations, never fewer.
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Any
 
 import pytest
+import structlog
+import structlog.testing
 
 from personal_agent.grounding.code_regions import RegionKind, partition_output
 from personal_agent.grounding.extractor import (
+    MAX_OUTPUT_TOKENS,
     SPAN_TOOL_NAME,
     ModelSpanExtractor,
     SpanExtractor,
@@ -25,18 +29,41 @@ from personal_agent.grounding.extractor import (
     span_tool_choice,
 )
 from personal_agent.grounding.spans import NonExemptReason, SpanLabel
+from personal_agent.llm_client.cost_estimator import estimate_reservation
+from personal_agent.telemetry.trace import SystemTraceContext
+from tests._helpers.budget_config import load_budget_config_for_tests
 
 
 class StubClient:
-    """Returns a canned tool call and records what it was asked."""
+    """Returns a canned tool call and records what it was asked.
 
-    def __init__(self, segments: list[dict[str, Any]] | None = None, *, raw: str | None = None):
+    ``finish_reason`` and ``completion_tokens`` are added to the reply only when given, so
+    a stub built without them answers exactly as the provider does when it reports neither.
+    """
+
+    def __init__(
+        self,
+        segments: list[dict[str, Any]] | None = None,
+        *,
+        raw: str | None = None,
+        finish_reason: str | None = None,
+        completion_tokens: int | None = None,
+    ):
         self._payload = raw if raw is not None else json.dumps({"segments": segments or []})
+        self._finish_reason = finish_reason
+        self._completion_tokens = completion_tokens
         self.calls: list[dict[str, Any]] = []
 
     async def respond(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
-        return {"tool_calls": [{"name": SPAN_TOOL_NAME, "arguments": self._payload}]}
+        reply: dict[str, Any] = {
+            "tool_calls": [{"name": SPAN_TOOL_NAME, "arguments": self._payload}]
+        }
+        if self._finish_reason is not None:
+            reply["finish_reason"] = self._finish_reason
+        if self._completion_tokens is not None:
+            reply["usage"] = {"completion_tokens": self._completion_tokens}
+        return reply
 
 
 # ── the wire contract ────────────────────────────────────────────────────────
@@ -269,10 +296,163 @@ async def test_extractor_satisfies_the_protocol() -> None:
 
 @pytest.mark.asyncio
 async def test_call_is_bounded_and_forced() -> None:
-    """The cost gate reserves against the declared ceiling, so it must be declared."""
+    """The call declares its ceiling, so time and spend per call have a known bound."""
     client = StubClient([])
     await ModelSpanExtractor(client).extract("Ortiz is Spanish.")
     (call,) = client.calls
-    assert call["max_tokens"] == 4096
+    assert call["max_tokens"] == MAX_OUTPUT_TOKENS
     assert call["tool_choice"] == span_tool_choice()
     assert call["role"].value == "span_extraction"
+
+
+# ── the output ceiling (FRE-1570) ────────────────────────────────────────────
+
+_PRE_FIX_CEILING = 4096
+"""The ceiling that stopped 13% of live calls (35 of 261 over 30 days, FRE-1570)."""
+
+_THREE_CLAIMS = (
+    "Ortiz is a Spanish brand. It is sold in French supermarkets. It is high in mercury."
+)
+
+
+def _truncation_events(captured: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in captured if e["event"] == "span_extractor_truncated"]
+
+
+def test_ceiling_is_above_the_measured_cut_off() -> None:
+    """The measured sizing: 12,288 still cut up to 3.8% of calls, 16,384 cuts 0-1.5%.
+
+    A change-detector on purpose. Lowering the ceiling re-opens FRE-1570's defect, so doing
+    it must be a decision that updates this number and its evidence together.
+    """
+    assert MAX_OUTPUT_TOKENS > _PRE_FIX_CEILING
+    assert MAX_OUTPUT_TOKENS >= 16_384
+
+
+def test_reservation_does_not_depend_on_the_ceiling() -> None:
+    """AC-3: the cost gate reserves ``min(max_tokens, lane default)``, not the ceiling.
+
+    The extractor's docstring used to say the gate "reserves against whatever ceiling is
+    declared". It does not: the ``span_extraction`` lane declares a default output size
+    below both ceilings, so raising the ceiling leaves the reserved amount where it was.
+    Spend still rises on the calls that were being cut — that is measured live, not here.
+    """
+    config = load_budget_config_for_tests()
+    lane_default = config.role("span_extraction").default_output_tokens
+    assert lane_default < _PRE_FIX_CEILING, "premise: the lane default is below the old ceiling"
+
+    common = {
+        "role": "span_extraction",
+        "input_tokens": 4000,
+        "input_price_per_token": Decimal("0.000003"),
+        "output_price_per_token": Decimal("0.000015"),
+        "config": config,
+    }
+    before = estimate_reservation(max_tokens=_PRE_FIX_CEILING, **common)
+    # A literal, not the constant: the claim is about 16,384, whatever the constant holds.
+    after = estimate_reservation(max_tokens=16_384, **common)
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_stop_at_the_limit_leaves_the_tail_as_a_logged_gap() -> None:
+    """AC-1: a reply that stops mid-tiling must not read as a complete one.
+
+    The provider returns a parseable, partial tiling — live, ``payload_unparseable`` fired
+    0 times in 30 days. Layer 3 turns the uncovered tail into a coverage gap, which is
+    non-exempt, and the extractor now says *why* the tail is uncovered.
+    """
+    client = StubClient(
+        [{"region": 0, "quote": "Ortiz is a Spanish brand.", "label": "claim_non_exempt"}],
+        finish_reason="length",
+        completion_tokens=MAX_OUTPUT_TOKENS,
+    )
+    trace_ctx = SystemTraceContext.new("fre1570")
+    with structlog.testing.capture_logs() as captured:
+        extraction = await ModelSpanExtractor(client).extract(_THREE_CLAIMS, trace_ctx=trace_ctx)
+
+    assert extraction.degraded
+    tail = [s for s in extraction.spans if s.reason is NonExemptReason.COVERAGE_GAP]
+    assert tail, "the uncovered part must be a coverage gap"
+    assert all(s.label is SpanLabel.CLAIM_NON_EXEMPT for s in tail)
+    assert "mercury" in "".join(s.text for s in tail)
+
+    (event,) = _truncation_events(captured)
+    assert event["trace_id"] == trace_ctx.trace_id
+    assert event["max_tokens"] == MAX_OUTPUT_TOKENS
+    assert event["finish_reason"] == "length"
+    assert event["uncovered_chars"] == sum(len(s.text) for s in tail)
+
+
+@pytest.mark.asyncio
+async def test_cut_off_json_is_a_whole_reply_gap_and_logged() -> None:
+    """AC-1: a payload cut mid-segment is unparseable, so every claim is a gap — logged."""
+    cut = '{"segments": [{"region": 0, "quote": "Ortiz is a Spanish brand.", "label": "claim_no'
+    client = StubClient(raw=cut, finish_reason="length")
+    with structlog.testing.capture_logs() as captured:
+        extraction = await ModelSpanExtractor(client).extract(_THREE_CLAIMS)
+
+    assert extraction.degraded
+    assert extraction.non_exempt
+    assert all(s.reason is NonExemptReason.COVERAGE_GAP for s in extraction.non_exempt)
+    assert len(_truncation_events(captured)) == 1
+
+
+@pytest.mark.asyncio
+async def test_token_count_at_the_ceiling_counts_as_a_stop() -> None:
+    """A provider that reports no ``finish_reason`` is still caught by the token count.
+
+    Same two-signal rule as ``session_summary._reject_if_truncated``: the direct signal
+    can be overwritten upstream, the count cannot.
+    """
+    client = StubClient([], completion_tokens=MAX_OUTPUT_TOKENS)
+    with structlog.testing.capture_logs() as captured:
+        await ModelSpanExtractor(client).extract(_THREE_CLAIMS)
+
+    (event,) = _truncation_events(captured)
+    assert event["finish_reason"] is None
+    assert event["output_tokens"] == MAX_OUTPUT_TOKENS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("finish_reason", "completion_tokens"),
+    [(None, None), ("stop", 900), ("tool_calls", 900), ("tool_use", MAX_OUTPUT_TOKENS - 1)],
+)
+async def test_a_complete_reply_is_not_reported_as_truncated(
+    finish_reason: str | None, completion_tokens: int | None
+) -> None:
+    """Seeded negative: a clean stop, or one token under the ceiling, raises no alarm."""
+    client = StubClient([], finish_reason=finish_reason, completion_tokens=completion_tokens)
+    with structlog.testing.capture_logs() as captured:
+        await ModelSpanExtractor(client).extract(_THREE_CLAIMS)
+
+    assert _truncation_events(captured) == []
+
+
+@pytest.mark.asyncio
+async def test_a_long_reply_is_tiled_completely() -> None:
+    """AC-2: a reply whose tiling is longer than the old ceiling gets a complete tiling.
+
+    The stub stands in for a model that tiles the whole reply; what this proves is that
+    nothing on our side shortens it, and that the request carries room for it. Whether the
+    live model fits is AC-4's measurement, not a unit test's.
+    """
+    sentences = [f"Item {n} is documented." for n in range(600)]
+    output = " ".join(sentences)
+    segments = [{"region": 0, "quote": s, "label": "claim_non_exempt"} for s in sentences]
+    payload = json.dumps({"segments": segments})
+    # ~4 characters per token. The tiling must exceed what the old ceiling allowed.
+    assert len(payload) // 4 > _PRE_FIX_CEILING
+    assert len(payload) // 4 <= MAX_OUTPUT_TOKENS
+
+    client = StubClient(segments, finish_reason="tool_calls", completion_tokens=len(payload) // 4)
+    with structlog.testing.capture_logs() as captured:
+        extraction = await ModelSpanExtractor(client).extract(output)
+
+    (call,) = client.calls
+    assert call["max_tokens"] > _PRE_FIX_CEILING
+    assert not extraction.degraded
+    assert len(extraction.non_exempt) == len(sentences)
+    assert extraction.non_exempt[-1].end == len(output)
+    assert _truncation_events(captured) == []

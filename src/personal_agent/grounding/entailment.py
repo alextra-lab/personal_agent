@@ -71,9 +71,9 @@ MAX_OUTPUT_TOKENS = 512
 """Ceiling for one verdict.
 
 Declared for the reason :data:`personal_agent.grounding.extractor.MAX_OUTPUT_TOKENS` is:
-the ADR-0065 cost gate reserves against whatever ceiling the call names, so leaving it to
-the deployment's own maximum would reserve a turn's worth of budget for one enum and a
-sentence.
+a known bound on one call's time and spend, rather than the deployment's own maximum for
+one enum and a sentence. The ADR-0065 cost gate reserves ``min(ceiling, lane default)``,
+so this value does not set the reservation.
 """
 
 DEFAULT_MAX_EXCERPT_CHARS = 6000

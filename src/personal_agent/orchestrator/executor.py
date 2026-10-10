@@ -7226,10 +7226,15 @@ async def step_llm_call(
             model_role=model_role.value,
             message_count=len(request_messages),
             message_roles=message_roles,
+            # FRE-1566: no preview of a harness tool result. The memory result opens with
+            # the user's :Person profile (location, pronouns, role, languages), and this
+            # event ships to the text-indexed log store on every primary call.
             messages_preview=[
                 {
                     "role": msg.get("role"),
-                    "content_preview": get_text_content(msg.get("content", ""))[:100] or None,
+                    "content_preview": None
+                    if is_harness_tool_result(msg)
+                    else get_text_content(msg.get("content", ""))[:100] or None,
                     "has_tool_calls": bool(msg.get("tool_calls")),
                 }
                 for msg in request_messages

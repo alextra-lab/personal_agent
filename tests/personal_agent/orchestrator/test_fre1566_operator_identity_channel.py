@@ -248,6 +248,26 @@ class TestProfileBlock:
         state_line = MEMORY_STATE_LINES[ctx.memory_status.status]
         assert result["content"] == f"{ctx.operator_profile}\n\n{state_line}"
 
+    @pytest.mark.asyncio
+    async def test_profile_never_reaches_the_turn_logs(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Security-review fold-in: the profile stays out of text-indexed telemetry.
+
+        In the system prompt the profile sat past every 100-character message preview.
+        At the head of the memory tool result it sat inside ``llm_call_messages_debug``'s
+        preview, which INFO ships to the log index on every primary call.
+        """
+        caplog.set_level("INFO", logger="personal_agent.orchestrator.executor")
+        await _wire_for(
+            monkeypatch,
+            {"name": _NAME_MARKER, "location": _LOCATION_MARKER},
+            memory=[_episode("conv-1", "the owner likes trains")],
+        )
+        assert "llm_call_messages_debug" in caplog.text
+        assert _LOCATION_MARKER not in caplog.text
+        assert _NAME_MARKER not in caplog.text
+
 
 # ── Master's gate note: the planner request is unchanged ────────────────────────────
 

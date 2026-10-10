@@ -242,6 +242,11 @@ def scan_segments(command: str) -> list[_Segment]:
                 check_parameter_expansion(i)
             current.append(c)
             i += 1
+        elif c not in "\t\n" and (ord(c) < 32 or ord(c) == 127):
+            # shlex reads a control character as a separator; bash does not.
+            flag("control_character")
+            current.append(c)
+            i += 1
         elif c == "#" and (not current or current[-1] in " \t"):
             end = command.find("\n", i)
             i = end if end != -1 else n
@@ -687,8 +692,9 @@ def option_hazard(words: Sequence[str]) -> str | None:
                     i += 1
                     if i >= len(args) or not is_scratch_path(args[i]):
                         return "mmdc writes a non-scratch file"
-                elif word.startswith("--output="):
-                    if not is_scratch_path(word.partition("=")[2]):
+                elif word.startswith("--output=") or (word.startswith("-o") and len(word) > 2):
+                    value = word.partition("=")[2] if word.startswith("--") else word[2:]
+                    if not is_scratch_path(value):
                         return "mmdc writes a non-scratch file"
                 i += 1
         case "curl":

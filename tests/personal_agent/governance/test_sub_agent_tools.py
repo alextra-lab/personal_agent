@@ -25,6 +25,7 @@ from personal_agent.governance.sub_agent_tools import (
     ParamClamp,
     clamp_sub_agent_tool_params,
     evaluate_sub_agent_tool_grant,
+    sub_agent_tool_asks_per_call,
     sub_agent_tool_requires_approval,
 )
 
@@ -600,3 +601,47 @@ class TestShippedFetchUrlPageCeiling:
 
         policy = load_governance_config().tools["fetch_url"]
         assert not hasattr(policy, "param_ceilings")
+
+
+# --------------------------------------------------------------------------------------
+# FRE-1565 — a side-effecting worker tool asks per call, whatever its own policy says.
+# --------------------------------------------------------------------------------------
+
+
+class TestPerCallApproval:
+    def test_a_per_call_tool_needs_approval_although_its_policy_needs_none(self) -> None:
+        config = GovernanceConfig(
+            modes={},
+            tools={
+                "create_linear_issue": ToolPolicy(
+                    category="network", allowed_in_modes=["NORMAL"], requires_approval=False
+                )
+            },
+            sub_agent_tools={
+                "create_linear_issue": SubAgentToolDecision(
+                    granted=True, reason="per call for this test", approval="per_call"
+                )
+            },
+            mode_constraints={},
+        )
+        assert sub_agent_tool_asks_per_call("create_linear_issue", config) is True
+        assert sub_agent_tool_requires_approval("create_linear_issue", Mode.NORMAL, config)
+
+    def test_a_per_call_tool_with_no_policy_entry_still_needs_approval(self) -> None:
+        config = _config_with_decisions(
+            {"bash": SubAgentToolDecision(granted=True, reason="r", approval="per_call")}
+        )
+        assert sub_agent_tool_requires_approval("bash", Mode.NORMAL, config) is True
+
+    def test_the_default_is_the_tools_own_policy(self) -> None:
+        """Seeded negative: a decision with no `approval` field keeps the FRE-1461 rule."""
+        config = _config(["run_python"])
+        assert sub_agent_tool_asks_per_call("run_python", config) is False
+        assert sub_agent_tool_requires_approval("run_python", Mode.NORMAL, config) is False
+
+    def test_an_undecided_tool_is_not_per_call(self) -> None:
+        assert sub_agent_tool_asks_per_call("bash", _config([])) is False
+
+    def test_a_refusal_cannot_carry_per_call(self) -> None:
+        with pytest.raises(ValidationError):
+            SubAgentToolDecision(granted=False, reason="refused", approval="per_call")

@@ -20,6 +20,12 @@ from personal_agent.tools.primitives._governance import (
     _expand_path,
     _matches_any,
 )
+from personal_agent.tools.primitives.worker_workspace import (
+    confine_to_workspace,
+    ensure_worker_workspace,
+    get_worker_workspace,
+    give_written_path_to_worker,
+)
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = structlog.get_logger(__name__)
@@ -155,6 +161,8 @@ async def write_executor(
         Possible ``error`` values:
 
         * ``"invalid_mode"`` — *mode* is not ``'overwrite'`` or ``'append'``
+        * ``"outside_worker_workspace"`` — a worker's path resolves outside its own
+          workspace (FRE-1565). A worker's relative path resolves inside it.
         * ``"forbidden_path"`` — path matched a ``forbidden_paths`` entry
         * ``"path_not_allowed"`` — path not in ``allowed_paths``
         * ``"not_durable"`` — path is under ``/app`` but not backed by a mounted
@@ -173,8 +181,38 @@ async def write_executor(
             "detail": f"mode must be 'overwrite' or 'append', got {mode!r}",
         }
 
-    # 2. Resolve path
-    resolved = Path(_expand_path(path)).expanduser().resolve()
+    # 2. Resolve path. A worker writes only inside its own workspace (FRE-1565).
+    workspace = get_worker_workspace()
+    if workspace is not None:
+        confined = confine_to_workspace(path, workspace)
+        if confined is None:
+            log.warning(
+                "write_outside_worker_workspace",
+                path=path,
+                workspace=str(workspace),
+                trace_id=trace_id,
+            )
+            return {
+                "success": False,
+                "error": "outside_worker_workspace",
+                "path": path,
+                "detail": (
+                    f"A worker writes only inside its own workspace {workspace}. "
+                    "Use a relative path."
+                ),
+            }
+        try:
+            ensure_worker_workspace()
+        except OSError as exc:
+            return {
+                "success": False,
+                "error": "io_error",
+                "path": str(confined),
+                "detail": str(exc),
+            }
+        resolved = confined
+    else:
+        resolved = Path(_expand_path(path)).expanduser().resolve()
     log.debug(
         "write_executor_called", path=path, resolved=str(resolved), mode=mode, trace_id=trace_id
     )
@@ -242,6 +280,15 @@ async def write_executor(
             "path": str(resolved),
             "detail": str(exc),
         }
+
+    if workspace is not None:
+        try:
+            give_written_path_to_worker(resolved, workspace)
+        except OSError as exc:
+            # The file is written. Only the worker shell's right to change it is lost.
+            log.warning(
+                "write_worker_chown_failed", path=str(resolved), error=str(exc), trace_id=trace_id
+            )
 
     bytes_written = len(content.encode("utf-8"))
     log.info(

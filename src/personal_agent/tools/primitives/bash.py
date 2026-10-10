@@ -30,16 +30,23 @@ Security model
   cannot drop privileges, so eval bash refuses and spawns nothing. The identity
   change runs through ``setpriv`` because the served event loop (uvloop) rejects the
   ``user``/``group``/``extra_groups`` spawn kwargs (FRE-1518).
+* In a sub-agent worker (a worker workspace is set) the child gets the same drop
+  and environment, with its own workspace as working directory, ``HOME`` and
+  ``TMPDIR`` (FRE-1565). It leads its own session, and its process group is killed
+  when the call returns, times out or is cancelled. The owner approves every worker
+  call before it reaches this executor.
 
 FRE-261 Step 4 · FRE-283 (real shell contract) · FRE-1505 (eval credential isolation) ·
-FRE-1518 (isolation on the served event loop).
+FRE-1518 (isolation on the served event loop) · FRE-1565 (worker shells).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
+import signal
 import shlex
 from pathlib import Path
 from typing import Any
@@ -47,6 +54,10 @@ from typing import Any
 from personal_agent.config import load_governance_config, settings
 from personal_agent.config.governance_loader import GovernanceConfigError
 from personal_agent.telemetry import TraceContext, get_logger
+from personal_agent.tools.primitives.worker_workspace import (
+    ensure_worker_workspace,
+    get_worker_workspace,
+)
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
@@ -374,6 +385,20 @@ def eval_child_env() -> dict[str, str]:
     return env
 
 
+def _kill_process_group(pgid: int) -> None:
+    """Kill every process left in a worker shell's process group (FRE-1565).
+
+    A worker's shell leads its own session, so its process group id is its pid. Called
+    when the call returns, times out or is cancelled. A group already empty is not an
+    error.
+
+    Args:
+        pgid: The process group id, equal to the shell's pid.
+    """
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(pgid, signal.SIGKILL)
+
+
 def _truncate_to_bytes(s: str, max_bytes: int) -> str:
     """Truncate a string to at most max_bytes when UTF-8 encoded.
 
@@ -478,23 +503,42 @@ async def bash_executor(
     # ------------------------------------------------------------------
     # 3a. Eval credential isolation (FRE-1505) — fail closed.
     # ------------------------------------------------------------------
-    eval_isolation = settings.deployment_profile == "eval"
+    # FRE-1565: a worker's shell gets the same drop, in its own workspace. The owner
+    # approves every worker bash call, but a page the worker read can still shape the
+    # command, so the shell must not be able to read the gateway's credentials either.
+    workspace = get_worker_workspace()
+    eval_isolation = settings.deployment_profile == "eval" or workspace is not None
     if eval_isolation and os.geteuid() != 0:
         log.error(
             "bash_credential_isolation_unavailable",
             trace_id=trace_id,
             euid=os.geteuid(),
+            worker=workspace is not None,
         )
         return {
             "success": False,
             "error": "credential_isolation_unavailable",
             "detail": (
-                "bash on an eval deployment must drop to an unprivileged account, "
-                "which needs a root gateway; no command was run."
+                "bash on an eval deployment or in a worker must drop to an unprivileged "
+                "account, which needs a root gateway; no command was run."
             ),
             "command": command,
         }
     child_env = eval_child_env() if eval_isolation else None
+    child_cwd: Path | None = None
+    if workspace is not None and child_env is not None:
+        try:
+            child_cwd = ensure_worker_workspace()
+        except OSError as exc:
+            log.error("bash_worker_workspace_failed", trace_id=trace_id, error=str(exc))
+            return {
+                "success": False,
+                "error": "os_error",
+                "detail": f"the worker workspace could not be created: {exc}",
+                "command": command,
+            }
+        child_env["HOME"] = str(child_cwd)
+        child_env["TMPDIR"] = str(child_cwd)
     # setpriv, not the user/group/extra_groups kwargs: uvloop (the served loop)
     # rejects those kwargs even when they are None (FRE-1518).
     child_prefix = EVAL_CHILD_SETPRIV_ARGV if eval_isolation else ()
@@ -524,6 +568,10 @@ async def bash_executor(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=child_env,
+            cwd=child_cwd,
+            # FRE-1565: a worker's shell leads its own process group, so nothing it
+            # starts outlives the approved call (see the `finally` below).
+            start_new_session=child_cwd is not None,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -544,6 +592,9 @@ async def bash_executor(
                 "command": command,
                 "timeout_seconds": timeout_seconds,
             }
+        finally:
+            if child_cwd is not None:
+                _kill_process_group(proc.pid)
     except OSError as exc:
         log.error("bash_os_error", trace_id=trace_id, command=command, error=str(exc))
         return {

@@ -8,9 +8,9 @@ This module defines the schema for governance policies including:
 """
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Mode(str, Enum):
@@ -297,6 +297,16 @@ class SubAgentToolDecision(BaseModel):
         ),
     )
 
+    approval: Literal["policy", "per_call"] = Field(
+        default="policy",
+        description=(
+            "How the sub-agent principal's approval is scoped (FRE-1565). ``policy`` follows "
+            "the tool's own approval fields, asked once per tool per turn (FRE-1461). "
+            "``per_call`` asks the owner before every call, in every mode, with the call's "
+            "exact arguments on the card. The primary's own tool policy never reads it."
+        ),
+    )
+
     @field_validator("reason")
     @classmethod
     def _reason_is_not_blank(cls, value: str) -> str:
@@ -356,6 +366,20 @@ class SubAgentToolDecision(BaseModel):
             if not param.strip():
                 raise ValueError("param_forced key must not be blank")
         return value
+
+    @model_validator(mode="after")
+    def _per_call_needs_a_grant(self) -> "SubAgentToolDecision":
+        """Reject ``approval: per_call`` on a refusal, where it can never apply.
+
+        Returns:
+            The decision unchanged.
+
+        Raises:
+            ValueError: When a refused decision carries ``per_call``.
+        """
+        if not self.granted and self.approval == "per_call":
+            raise ValueError("approval per_call is meaningful only on a granted decision")
+        return self
 
 
 class GovernanceConfig(BaseModel):

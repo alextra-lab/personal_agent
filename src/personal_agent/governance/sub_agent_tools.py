@@ -209,11 +209,32 @@ def sub_agent_tool_requires_approval(
         config: Loaded governance configuration.
 
     Returns:
-        ``True`` when the owner must be asked before this call runs. ``False`` when
-        the tool has no governance policy entry at all — an unpoliced tool is not
-        made approval-gated by this ticket.
+        ``True`` when the owner must be asked before this call runs: always for a
+        ``per_call`` tool (FRE-1565), else by the tool's own policy. ``False`` when the
+        tool is not ``per_call`` and has no governance policy entry at all — an
+        unpoliced tool is not made approval-gated by FRE-1461.
     """
+    if sub_agent_tool_asks_per_call(tool_name, config):
+        return True
     policy = config.tools.get(tool_name)
     if policy is None:
         return False
     return policy.requires_approval or mode.value in policy.requires_approval_in_modes
+
+
+def sub_agent_tool_asks_per_call(tool_name: str, config: GovernanceConfig) -> bool:
+    """Report whether a sub-agent's call of this tool asks the owner every time (FRE-1565).
+
+    A side-effecting worker tool is approved per call, with the call's exact arguments on
+    the card, whatever the tool's own policy says. One answer then covers one call, not
+    every later call of every worker in the turn.
+
+    Args:
+        tool_name: The granted tool name about to be dispatched.
+        config: Loaded governance configuration.
+
+    Returns:
+        ``True`` when the tool's sub-agent decision is granted with ``approval: per_call``.
+    """
+    decision = config.sub_agent_tools.get(tool_name)
+    return decision is not None and decision.granted and decision.approval == "per_call"

@@ -3006,6 +3006,16 @@ class AppConfig(BaseSettings):
             "Env var: AGENT_SANDBOX_IMAGE"
         ),
     )
+    worker_workspace_root: str = Field(
+        default="/app/agent_workspace/workers",
+        description=(
+            "Root of the per-worker workspaces (FRE-1565). Each sub-agent worker that writes "
+            "a file or runs bash gets <root>/<trace_id>/<task_id>, an empty directory that is "
+            "its write root and the working directory of its shell. Under the durable "
+            "/app/agent_workspace volume and inside the write tool's allowed_paths. "
+            "Env var: AGENT_WORKER_WORKSPACE_ROOT"
+        ),
+    )
     sandbox_scratch_root: str = Field(
         default="/app/agent_workspace/sandbox",
         description=(

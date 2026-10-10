@@ -30,11 +30,18 @@ from personal_agent.orchestrator.loop_gate import GateResult, ToolLoopPolicy, st
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import SUB_AGENT_TOOL_PARAM_CLAMPED
 from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.primitives.worker_workspace import (
+    confine_to_workspace,
+    get_worker_workspace,
+)
 
 if TYPE_CHECKING:
     from personal_agent.tools import ToolExecutionLayer
 
 log = get_logger(__name__)
+
+# Tools whose `path` argument a worker's workspace confines (FRE-1565).
+_WORKSPACE_PATH_TOOLS: frozenset[str] = frozenset({"write"})
 
 _tool_execution_layer: "ToolExecutionLayer | None" = None
 
@@ -100,7 +107,8 @@ async def dispatch_tool_call(
             ``"sub_agent"`` runs ``arguments`` through
             ``clamp_sub_agent_tool_params`` before anything else, reducing any
             parameter over that principal's declared ceiling and logging each
-            reduction. Defaults to ``"primary"``, which never calls the clamp
+            reduction, then moves a ``write`` path into the worker's own
+            workspace (FRE-1565). Defaults to ``"primary"``, which never calls the clamp
             function at all — the primary's own tool policy is untouched by
             this parameter's existence, not merely by its value.
         approved_upstream: True only when the sub-agent approval broker approved
@@ -130,6 +138,17 @@ async def dispatch_tool_call(
                 requested=clamp.requested,
                 applied=clamp.applied,
             )
+
+        # FRE-1565: a worker's `write` path is moved into its own workspace here, before
+        # the layer's allowed_paths check, which would refuse a relative path. A path
+        # that resolves outside the workspace is left as sent: the layer or the `write`
+        # executor then refuses it.
+        workspace = get_worker_workspace()
+        path_arg = arguments.get("path")
+        if tool_name in _WORKSPACE_PATH_TOOLS and workspace is not None and isinstance(path_arg, str):
+            confined = confine_to_workspace(path_arg, workspace)
+            if confined is not None:
+                arguments = {**arguments, "path": str(confined)}
 
     # Validate required parameters against the tool definition.
     tool_info = tool_layer.registry.get_tool(tool_name)

@@ -103,6 +103,11 @@ from personal_agent.orchestrator.worker_types import (
     render_worker_report_summary,
 )
 from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.primitives.worker_workspace import (
+    reset_worker_workspace,
+    set_worker_workspace,
+    worker_workspace_path,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -2417,6 +2422,11 @@ async def run_sub_agent(
     # readable from here in the except blocks below.
     state = _ToolLoopState(messages=messages)
 
+    # FRE-1565: this worker's own empty workspace, for `write` and `bash`. Only the path is
+    # set here. The directory is created on first use, so a worker that writes nothing
+    # leaves nothing behind. Reset in the `finally` below, so the primary never sees it.
+    _workspace_token = set_worker_workspace(worker_workspace_path(trace_id, task_id_str))
+
     try:
         # ADR-0145 D1: resolved once, inside the audited region, and used twice — by the
         # outer net below and by the dispatched call itself. Inside the try because an
@@ -2604,6 +2614,8 @@ async def run_sub_agent(
             stop_reason="origin_error" if isinstance(exc, LLMServerError) else "error",
             why=f"the worker raised before it could report: {exc}",
         )
+    finally:
+        reset_worker_workspace(_workspace_token)
 
     _full_output_chars = len(result.full_output)
     _digest_chars = len(result.summary)

@@ -193,6 +193,22 @@ _BYPASSES: dict[str, str] = {
     "brace_expansion_quoted_item": "find . -ex{ec,'x y'} chmod 777 {} ;",
     "parameter_default_builds_an_option": "find . ${X:--exec} chmod 777 {} ;",
     "glob_in_an_option": "find . -exe? chmod 777 {} ;",
+    # Found by the Codex correctness review of 2026-10-10 (placeholder payloads).
+    "continuation_joins_a_substitution": "echo $\\\n(id)",
+    "continuation_joins_a_process_substitution": "cat <\\\n(id)",
+    "continuation_in_a_heredoc_body": "cat <<EOF\n$\\\n(id)\nEOF",
+    "heredoc_parameter_transformation": "cat <<EOF\n${x@P}\nEOF",
+    "legacy_arithmetic": "echo $[x]",
+    "variable_becomes_an_option": "find . $X chmod 777 {} ;",
+    "quoted_variable_becomes_an_option": 'find . "$X" chmod 777 {} ;',
+    "awk_program_file_glued": "awk -f/tmp/prog.awk f",
+    "awk_program_file_abbreviated": "awk --fi=/tmp/prog.awk f",
+    "sed_e_command_no_space": "sed 'eid' f",
+    "sed_w_command_no_space": "sed 'w/app/x' f",
+    "sed_file_abbreviated": "sed --fi=/tmp/s.sed f",
+    "sed_in_place_abbreviated": "sed --in-p=.bak 's/a/b/' f",
+    "curl_etag_save": "curl --etag-save /app/x https://example.com",
+    "sort_temporary_directory": "sort -T /app f",
     "control_character": "ls\rchmod 777 x",
     "mmdc_puppeteer_config": "mmdc -i /tmp/m.mmd -o /tmp/m.svg -p /tmp/p.json",
     # curl
@@ -348,6 +364,13 @@ _NORMAL_USE = [
     "ls ${HOME}",
     "find . -name '*.{py,md}'",
     "rg -g '*.py' pattern",
+    "cat <<EOF\n\\$(not run)\nEOF",
+    "sort -o /dev/stdout f",
+    "sort -o /tmp/sorted.txt f",
+    "uniq f /tmp/out.txt",
+    "find . -fprint /tmp/list.txt",
+    "git diff --output-indicator-new='>'",
+    "curl -X POST \\\n  -d '{}' http://localhost:9200/x/_search",
 ]
 
 

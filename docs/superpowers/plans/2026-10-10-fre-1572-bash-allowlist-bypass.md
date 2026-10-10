@@ -114,3 +114,35 @@ the code reviewer and `security-review` on `git diff origin/main...HEAD`. Diff c
 | `date -s` | Accepted: the container has no `CAP_SYS_TIME`. |
 | `tail -f`, `top` | Accepted: bounded by the bash timeout. |
 | Subshells, groups, functions, `if`/`for`, `!`, `X=1 cmd` | Caught: the first word (`(cmd`, `{`, `if`, `!`, `X=1`) is not allowlisted. Tests pin each. |
+
+## Codex review (2026-10-10) — disposition
+
+The first run was refused by the provider's content filter. Its one partial lead (expansions
+build option words after the check) was confirmed and fixed. A second run, framed as a
+correctness review, reported the findings below.
+
+**Fixed (each has an AC-1 test and passes the AC-4 seeded negative):**
+
+- A line continuation joined characters into `$(`, `<(` or `>(` after the scan. The scanner now
+  removes each continuation outside single quotes first, as bash does.
+- An unquoted here-doc body was checked line by line and for `$(` and backticks only. It is now
+  joined first, escaped `\$` and backticks are removed, and `$[`, `${…}` operators and `@`
+  transformations are refused too.
+- Legacy arithmetic `$[…]` is refused.
+- Brace expansion (`-ex{ec,}`), parameter operators (`${X:--exec}`), a glob in an option word, and
+  an unquoted `$` expansion (or one that opens a double-quoted word) on a binary with option rules
+  are refused. The option rules read words before bash expands them.
+- `awk -fFILE` (attached) and abbreviated `--fi…`; GNU `sed` `e`/`w` with no space; `sed --fi…`,
+  `--in-p…`; `curl --etag-save`, `--hsts`, `--alt-svc`; `sort -T` outside scratch.
+
+**Fixed, too strict:** `sort -o`, `uniq OUT`, `find -fprint*` to a scratch target, and
+`git --output-indicator-*`, now auto-approve. A here-doc body with an escaped `\$(` auto-approves.
+
+**Accepted:**
+
+- An inherited `BASH_ENV` or an exported shell function changes what bash runs. The gateway's own
+  environment is trusted configuration: setting it needs control of the process already.
+- Still refused, by design or unchanged from main: `LC_ALL=C sort` and `< /dev/null cat` (a
+  prefix that is not the command name; main refused them too), `env -i0`, `echo {a,b}`,
+  `echo ${HOME:-/tmp}`, `echo $'x'`, `sed 'w /dev/stdout'`, `awk '{print > "/dev/stdout"}'`.
+  Each costs one card when it occurs.

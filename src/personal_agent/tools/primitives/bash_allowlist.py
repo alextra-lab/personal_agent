@@ -36,6 +36,9 @@ _SCRATCH_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "-"})
 # Characters that end an unquoted shell word.
 _WORD_END = frozenset(" \t\n;&|<>()")
 
+# In an unquoted here-doc a backslash escapes `$`, a backtick and itself; those are literal.
+_ESCAPED_IN_HEREDOC = re.compile(r"\\[$`\\]")
+
 # A `${…}` body that is a bare name, positional or special parameter: no operator.
 _PLAIN_PARAMETER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]")
 
@@ -47,10 +50,14 @@ class _Segment:
     Attributes:
         text: The segment's text, without comments and here-doc bodies.
         unsafe: Why the segment needs approval whatever its first word, or ``None``.
+        unquoted_expansion: Whether the segment holds a ``$`` expansion outside quotes, or
+            one that opens a double-quoted word. Its value can become an option word that
+            the option rules never read.
     """
 
     text: str
     unsafe: str | None = None
+    unquoted_expansion: bool = False
 
 
 def is_scratch_path(path: str) -> bool:
@@ -119,6 +126,64 @@ def _unquote(word: str) -> str | None:
     return parts[0] if len(parts) == 1 else None
 
 
+def _join_continuations(command: str) -> str:
+    """Remove each backslash-newline pair where bash removes it: outside single quotes.
+
+    Bash joins a continued line before it looks for ``$(``, ``<(`` and the rest, so the
+    scanner must see the joined text, or a pair split across lines would pass unseen.
+
+    Args:
+        command: The raw command line.
+
+    Returns:
+        The command with every line continuation outside single quotes removed.
+    """
+    out: list[str] = []
+    in_single = False
+    in_double = False
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if in_single:
+            out.append(c)
+            in_single = c != "'"
+            i += 1
+        elif c == "\\" and i + 1 < n:
+            if command[i + 1] != "\n":
+                out.append(command[i : i + 2])
+            i += 2
+        else:
+            if c == "'" and not in_double:
+                in_single = True
+            elif c == '"':
+                in_double = not in_double
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _expansion_hazard(text: str) -> str | None:
+    """Return why expanded text could run a command, or ``None``.
+
+    Used for an unquoted here-doc body, where bash expands ``$``, backticks and ``${…}``.
+
+    Args:
+        text: The text bash expands, with escaped characters already removed.
+
+    Returns:
+        A reason, or ``None``.
+    """
+    if "$(" in text or "`" in text:
+        return "heredoc_substitution"
+    if "$[" in text:
+        return "arithmetic_expansion"
+    for match in re.finditer(r"\$\{([^}]*)\}?", text):
+        body = match.group(1)
+        if "@" in body or not _PLAIN_PARAMETER.fullmatch(body):
+            return "heredoc_parameter_operator"
+    return None
+
+
 def scan_segments(command: str) -> list[_Segment]:
     """Split a command line into the commands bash would run, and mark the unsafe ones.
 
@@ -138,9 +203,12 @@ def scan_segments(command: str) -> list[_Segment]:
     Returns:
         The segments in order. Empty segments are dropped.
     """
+    command = _join_continuations(command)
     segments: list[_Segment] = []
     current: list[str] = []
     unsafe: str | None = None
+    unquoted_expansion = False
+    dq_word_start = False
     heredocs: list[tuple[str, bool, bool]] = []  # (delimiter, quoted, strip_tabs)
     in_single = False
     in_double = False
@@ -152,10 +220,10 @@ def scan_segments(command: str) -> list[_Segment]:
             unsafe = reason
 
     def close() -> None:
-        nonlocal current, unsafe
+        nonlocal current, unsafe, unquoted_expansion
         text = "".join(current).strip()
         if text:
-            segments.append(_Segment(text, unsafe))
+            segments.append(_Segment(text, unsafe, unquoted_expansion))
         elif unsafe is not None:
             if segments:
                 last = segments[-1]
@@ -164,6 +232,7 @@ def scan_segments(command: str) -> list[_Segment]:
                 segments.append(_Segment(command.strip(), unsafe))
         current = []
         unsafe = None
+        unquoted_expansion = False
 
     def check_parameter_expansion(at: int) -> None:
         # `at` indexes the `$` of `${`. A transformation (`${x@P}` and friends) can expand
@@ -215,8 +284,10 @@ def scan_segments(command: str) -> list[_Segment]:
                 if (line.lstrip("\t") if strip_tabs else line) == delimiter:
                     found = True
                     break
-                if not quoted and ("$(" in line or "`" in line):
-                    flag("heredoc_substitution")
+                if not quoted:
+                    reason = _expansion_hazard(_ESCAPED_IN_HEREDOC.sub("", line))
+                    if reason is not None:
+                        flag(reason)
                 if end == -1:
                     break
             if not found:
@@ -242,6 +313,10 @@ def scan_segments(command: str) -> list[_Segment]:
                 continue
             if c == "`" or (c == "$" and nxt == "("):
                 flag("command_substitution")
+            elif c == "$" and nxt == "[":
+                flag("arithmetic_expansion")
+            if c == "$" and dq_word_start and current and current[-1] == '"':
+                unquoted_expansion = True  # "$X" as a whole word can still be an option
             elif c == "$" and nxt == "{":
                 check_parameter_expansion(i)
             elif c == '"':
@@ -262,6 +337,7 @@ def scan_segments(command: str) -> list[_Segment]:
             i += 1
         elif c == '"':
             in_double = True
+            dq_word_start = not current or current[-1] in " \t"
             current.append(c)
             i += 1
         elif c == "`":
@@ -271,8 +347,12 @@ def scan_segments(command: str) -> list[_Segment]:
         elif c == "$":
             if nxt == "(":
                 flag("command_substitution")
+            elif nxt == "[":
+                flag("arithmetic_expansion")
             elif nxt == "{":
                 check_parameter_expansion(i)
+            if nxt and (nxt.isalnum() or nxt in "_{@*#?$!-"):
+                unquoted_expansion = True
             current.append(c)
             i += 1
         elif c not in "\t\n" and (ord(c) < 32 or ord(c) == 127):
@@ -424,9 +504,9 @@ _OPTION_RULE_BINARIES = frozenset(
 )
 _ENV_SAFE_OPTIONS = frozenset({"-i", "-0", "-", "--null", "--ignore-environment"})
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
-_FIND_ACTIONS = frozenset(
-    {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
-)
+_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete"})
+# The output file is the next word; a scratch target stays auto-approvable.
+_FIND_WRITES = frozenset({"-fprint", "-fprint0", "-fprintf", "-fls"})
 _AWK_LOADING_OPTIONS = frozenset(
     {"-f", "--file", "-i", "--include", "-l", "--load", "-E", "--exec"}
 )
@@ -437,7 +517,7 @@ _SED_S_FLAGS = re.compile(
 )
 _SED_ADDRESS = r"(?:[0-9]+|\$|/(?:[^/\\]|\\.)*/[IM]*)"
 _SED_EXEC_COMMAND = re.compile(
-    rf"(?:^|[;{{}}\n])\s*(?:{_SED_ADDRESS}(?:\s*,\s*(?:{_SED_ADDRESS}|[~+][0-9]+))?)?\s*!?\s*[ewW](?:\s|$|;)"
+    rf"(?:^|[;{{}}\n])\s*(?:{_SED_ADDRESS}(?:\s*,\s*(?:{_SED_ADDRESS}|[~+][0-9]+))?)?\s*!?\s*[ewW]"
 )
 _CURL_SHORT_WITH_ARG = frozenset("AbcCdDeEFHKmoPQrtTuUwxXyYz")
 _CURL_LONG_WITH_ARG = frozenset(
@@ -463,6 +543,9 @@ _CURL_LONG_WITH_ARG = frozenset(
         "--variable",
         "--url",
         "--cookie",
+        "--etag-save",
+        "--hsts",
+        "--alt-svc",
     }
 )
 _CURL_ALWAYS_HAZARD = frozenset(
@@ -477,6 +560,9 @@ _CURL_WRITE_TARGET = frozenset(
         "--trace-ascii",
         "--libcurl",
         "--stderr",
+        "--etag-save",
+        "--hsts",
+        "--alt-svc",
     }
 )
 _CURL_AT_FILE = frozenset(
@@ -582,13 +668,19 @@ def _sed_hazard(args: Sequence[str]) -> str | None:
     i = 0
     while i < len(args):
         word = args[i]
-        if word in ("-e", "--expression"):
-            i += 1
-            if i < len(args):
-                scripts.append(args[i])
-        elif word.startswith("--expression="):
-            scripts.append(word.partition("=")[2])
-        elif word.startswith("--in-place") or word.startswith("--file"):
+        if word == "-e" or (
+            word.startswith("--") and _long_option_abbreviates(word, "--expression")
+        ):
+            _, eq, value = word.partition("=")
+            if eq:
+                scripts.append(value)
+            else:
+                i += 1
+                if i < len(args):
+                    scripts.append(args[i])
+        elif word.startswith("--") and (
+            _long_option_abbreviates(word, "--in-place") or _long_option_abbreviates(word, "--file")
+        ):
             return f"sed {word.partition('=')[0]}"
         elif word.startswith("-") and not word.startswith("--") and len(word) > 1:
             letters = word[1:]
@@ -635,6 +727,14 @@ def _awk_hazard(args: Sequence[str]) -> str | None:
         name = word.partition("=")[0]
         if word in _AWK_LOADING_OPTIONS or name in _AWK_LOADING_OPTIONS:
             return f"awk {name}"
+        if word.startswith("--") and any(
+            _long_option_abbreviates(name, full)
+            for full in _AWK_LOADING_OPTIONS
+            if full.startswith("--")
+        ):
+            return f"awk {name}"
+        if word.startswith("-") and not word.startswith("--") and word[1:2] in ("f", "i", "l", "E"):
+            return f"awk {word[:2]}"
         if word in ("-F", "-v"):
             i += 2  # the field separator and an assignment cannot run anything
             continue
@@ -665,6 +765,50 @@ def _long_option_abbreviates(word: str, full: str) -> bool:
     return len(name) >= 3 and full.startswith(name)
 
 
+def _sort_hazard(args: Sequence[str]) -> str | None:
+    """Return why a sort call needs approval, or ``None``.
+
+    Args:
+        args: sort's arguments, without the command name.
+
+    Returns:
+        A reason when sort runs a compressor, or writes its output or temporary files
+        outside scratch space.
+    """
+    i = 0
+    while i < len(args):
+        word = args[i]
+        if word.startswith("--"):
+            name, eq, value = word.partition("=")
+            if _long_option_abbreviates(name, "--compress-program"):
+                return "sort --compress-program"
+            for full in ("--output", "--temporary-directory"):
+                if _long_option_abbreviates(name, full):
+                    if not eq:
+                        i += 1
+                        value = args[i] if i < len(args) else ""
+                    target = value if full == "--output" else value.rstrip("/") + "/"
+                    if not is_scratch_path(target):
+                        return f"sort {full} outside scratch"
+        elif word.startswith("-") and len(word) > 1:
+            for j, letter in enumerate(word[1:], start=1):
+                if letter in "kt" or letter == "S":
+                    if j == len(word) - 1:
+                        i += 1  # the value is the next word
+                    break
+                if letter in "oT":
+                    value = word[j + 1 :]
+                    if not value:
+                        i += 1
+                        value = args[i] if i < len(args) else ""
+                    target = value if letter == "o" else value.rstrip("/") + "/"
+                    if not is_scratch_path(target):
+                        return f"sort -{letter} outside scratch"
+                    break
+        i += 1
+    return None
+
+
 def option_hazard(words: Sequence[str]) -> str | None:
     """Return why an allowlisted command needs approval because of its options, or ``None``.
 
@@ -690,22 +834,19 @@ def option_hazard(words: Sequence[str]) -> str | None:
                 if word not in _ENV_SAFE_OPTIONS and not _ASSIGNMENT.fullmatch(word):
                     return "env runs a command or takes an unread option"
         case "find":
-            for word in args:
-                if word in _FIND_ACTIONS:
+            for k, word in enumerate(args):
+                if word in _FIND_WRITES:
+                    target = args[k + 1] if k + 1 < len(args) else ""
+                    if not is_scratch_path(target):
+                        return f"find {word} to a file"
+                elif word in _FIND_ACTIONS:
                     return f"find {word}"
         case "awk":
             return _awk_hazard(args)
         case "sed":
             return _sed_hazard(args)
         case "sort":
-            for word in args:
-                if word.startswith("--"):
-                    if _long_option_abbreviates(word, "--compress-program") or (
-                        _long_option_abbreviates(word, "--output")
-                    ):
-                        return f"sort {word.partition('=')[0]}"
-                elif word.startswith("-") and "o" in word[1:]:
-                    return "sort -o"
+            return _sort_hazard(args)
         case "uniq":
             positional: list[str] = []
             skip = False
@@ -716,7 +857,7 @@ def option_hazard(words: Sequence[str]) -> str | None:
                     skip = True
                 elif not word.startswith("-") or word == "-":
                     positional.append(word)
-            if len(positional) >= 2:
+            if len(positional) >= 2 and not is_scratch_path(positional[1]):
                 return "uniq writes an output file"
         case "rg":
             for word in args:
@@ -724,7 +865,7 @@ def option_hazard(words: Sequence[str]) -> str | None:
                     return "rg --pre"
         case "git":
             for word in args:
-                if word.startswith("--output") or word == "--ext-diff":
+                if word in ("--output", "--ext-diff") or word.startswith("--output="):
                     return f"git {word.partition('=')[0]}"
         case "mmdc":
             i = 0
@@ -780,6 +921,10 @@ def check_segment_allowlist(command: str, allowlist: Sequence[str]) -> str | Non
             if (prefix_words := entry.split())
         )
         if not matched or option_hazard(words) is not None:
+            return segment.text
+        # An expansion's value is read by bash, not by the option rules: `$X` can become
+        # `-exec`. So a binary with option rules auto-approves only with literal arguments.
+        if words[0] in _OPTION_RULE_BINARIES and segment.unquoted_expansion:
             return segment.text
     return None
 

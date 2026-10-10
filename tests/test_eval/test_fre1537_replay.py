@@ -169,6 +169,56 @@ def test_primary_and_prime_bodies(tmp_path: Path) -> None:
     assert prime["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def _with_memory_tail(inputs: llama.Inputs, label: str, *, multi_turn: bool) -> None:
+    """Give a fixture the FRE-1360 primary tail: the turn's user message, then the
+    harness memory exchange (assistant tool call, memory_recall tool result)."""
+    history = (
+        [{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "answer"}]
+        if multi_turn
+        else []
+    )
+    inputs.captured[label]["body"] = {
+        **inputs.captured[label]["body"],
+        "messages": [
+            {"role": "system", "content": "S"},
+            *history,
+            {"role": "user", "content": "u"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_mem_x",
+                        "type": "function",
+                        "function": {"name": "memory_recall", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_mem_x", "name": "memory_recall", "content": "m"},
+        ],
+    }
+
+
+@pytest.mark.parametrize("multi_turn", [False, True])
+def test_prime_cuts_back_to_the_last_user_message(tmp_path: Path, multi_turn: bool) -> None:
+    """FRE-1360: the primary request no longer ends on the user turn.
+
+    The prime is the previous turn's prefix, so it ends before this turn's user message —
+    never on the harness tool call, which llama.cpp rejects with 400 (the D7 timing arm,
+    2026-10-10).
+    """
+    _, inputs = make_inputs(tmp_path)
+    _with_memory_tail(inputs, "greeting", multi_turn=multi_turn)
+    prime = llama.prime_body(inputs, "greeting")
+    roles = [m["role"] for m in prime["messages"]]
+    assert all(not m.get("tool_calls") for m in prime["messages"])
+    if multi_turn:
+        assert roles == ["system", "user", "assistant"]
+    else:
+        assert prime["messages"][-1] == {"role": "user", "content": "."}
+        assert roles == ["system", "user"]
+
+
 def test_run_decide_writes_rows_and_resumes(tmp_path: Path) -> None:
     paths, inputs = make_inputs(tmp_path)
     calls: list[int] = []

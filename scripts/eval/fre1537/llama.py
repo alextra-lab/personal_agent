@@ -271,11 +271,19 @@ def primary_body(inputs: Inputs, label: str, max_tokens: int | None = None) -> d
 
 
 def prime_body(inputs: Inputs, label: str) -> dict[str, object]:
-    """Build the request that primes the previous turn's prefix: the request without its last user message."""
+    """Build the request that primes the previous turn's prefix: the request without its last user message.
+
+    The prefix ends before this turn's user message. Since FRE-1360 the primary request no
+    longer ends on that message — the harness memory exchange (an assistant tool call and
+    its ``memory_recall`` result) follows it — so the cut is at the last user message, not
+    at the last message. Cutting one message left a dangling assistant tool call, which
+    llama.cpp rejects with 400.
+    """
     src = inputs.body(label)
     messages = list(src["messages"])  # type: ignore[call-overload]
+    last_user = max(i for i, m in enumerate(messages) if m.get("role") == "user")
     body: dict[str, object] = {
-        "messages": messages[:-1],
+        "messages": messages[:last_user],
         "tools": src["tools"],
         "max_tokens": 1,
         **sampling(src),

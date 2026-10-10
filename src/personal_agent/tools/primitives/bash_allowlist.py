@@ -408,6 +408,11 @@ def scan_segments(command: str) -> list[_Segment]:
                 if not raw or delimiter is None:
                     flag("unparseable_heredoc")
                     delimiter = raw
+                if "\\" in raw:
+                    # shlex and bash unescape a backslash in a delimiter differently (bash
+                    # also drops it before `$` and a backtick in double quotes), so the body
+                    # would end at a different line for each.
+                    flag("heredoc_delimiter_escape")
                 quoted = any(q in raw for q in "'\"\\")
                 heredocs.append((delimiter, quoted, strip_tabs))
                 current.append(command[i:end])

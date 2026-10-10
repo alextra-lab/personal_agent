@@ -214,6 +214,9 @@ _BYPASSES: dict[str, str] = {
     "quoted_parameter_operator_option": 'find . "${X:--exec}" chmod 777 {} ;',
     "continuation_after_a_quoted_heredoc": "cat <<'EOF'\nit's\nEOF\necho $\\\n(id)",
     "continuation_after_a_comment_quote": "ls # it's\necho $\\\n(id)",
+    # Found by the security review of 2026-10-10.
+    "comment_ending_in_a_backslash": "ls # note \\\nchmod 777 x",
+    "heredoc_delimiter_with_a_backslash": 'cat <<"E\\$F"\nbody\nE\\$F',
     "control_character": "ls\rchmod 777 x",
     "mmdc_puppeteer_config": "mmdc -i /tmp/m.mmd -o /tmp/m.svg -p /tmp/p.json",
     # curl

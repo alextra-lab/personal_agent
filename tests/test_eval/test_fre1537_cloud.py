@@ -544,11 +544,11 @@ def test_a_failed_extended_call_keeps_the_cold_call_cost_and_is_retried(tmp_path
     paths, inputs = start(tmp_path, session)
     real_call = session.call
 
-    def fail_second(system: str, user: str) -> dict[str, object]:
+    def fail_second(system: str, user: str, digest: str | None = None) -> dict[str, object]:
         if len(session.calls) == 1:
             session.calls.append((system, user))
             raise cloud.CloudCallError("timeout")
-        return real_call(system, user)
+        return real_call(system, user, digest)
 
     session.call = fail_second  # type: ignore[method-assign]
     args = (None, "", "", paths, inputs, llama.PlannerMode("planner", session.target.declared))

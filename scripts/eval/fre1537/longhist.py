@@ -69,19 +69,22 @@ def _call(
     cloud: cloud_mod.CloudSession | None = None,
     budget: cloud_mod.Budget | None = None,
     pending: float = 0.0,
+    digest: str | None = None,
 ) -> dict[str, object]:
     user = render.build_user_message(history, None, query)
     if cloud is not None:
         estimate = (
-            budget.check(cloud.target, inputs.system, user, pending=pending) if budget else 0.0
+            budget.check(cloud.target, inputs.system, f"{user}\n{digest or ''}", pending=pending)
+            if budget
+            else 0.0
         )
         try:
-            result = cloud.call(inputs.system, user)
+            result = cloud.call(inputs.system, user, digest)
         except cloud_mod.CloudCallError as exc:
             raise cloud_mod.CloudCallError(str(exc), estimate) from exc
     else:
         body = planner_request(
-            inputs.system, user, inputs.body(reference_label(inputs)), mode, MAX_TOKENS
+            inputs.system, user, inputs.body(reference_label(inputs)), mode, MAX_TOKENS, digest
         )
         result = stream(client, url, model, body)
     result["plan"] = parse_plan(str(result.pop("content")))
@@ -99,6 +102,7 @@ def run_longhist(
     *,
     cloud: cloud_mod.CloudSession | None = None,
     budget: cloud_mod.Budget | None = None,
+    digest: str | None = None,
 ) -> None:
     """Run the long-history arm, one row per size. A size that already has a complete row is skipped.
 
@@ -116,6 +120,9 @@ def run_longhist(
         cloud: A managed-deployment session. The primary call between the two planner calls primes the llama.cpp
             prefix cache and decides no threshold, so a managed row has none.
         budget: The spending cap, for a managed deployment.
+        digest: Optional memory digest lines. Both planner calls carry them the way the
+            decision arm does: the production ``memory_recall`` tool result after the user
+            message (FRE-1360).
     """
     seen = {int(str(r["size_chars"])) for r in read_jsonl(paths.longhist) if "error" not in r}
     for size in sizes:
@@ -124,7 +131,9 @@ def run_longhist(
         first = render_history(size, secrets.token_hex(4))
         row: dict[str, object] = {"arm": "longhist", "tag": paths.tag, "size_chars": size}
         try:
-            cold = _call(client, url, model, inputs, mode, first, FIRST_QUERY, cloud, budget)
+            cold = _call(
+                client, url, model, inputs, mode, first, FIRST_QUERY, cloud, budget, digest=digest
+            )
         except cloud_mod.CloudCallError as exc:
             append_jsonl(
                 paths.longhist,
@@ -154,6 +163,7 @@ def run_longhist(
                 cloud,
                 budget,
                 pending=float(cold.get("cost_usd") or 0),  # type: ignore[arg-type]
+                digest=digest,
             )
         except (cloud_mod.CloudCallError, SystemExit) as exc:
             if cloud is not None:  # keep the cold call's cost on disk
@@ -179,7 +189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     common_arguments(parser)
     args = parser.parse_args(argv)
     if args.deployment:
-        paths, inputs, target, _digest, budget = prepare_cloud(args)
+        paths, inputs, target, digest, budget = prepare_cloud(args)
         mode = PlannerMode(target.mode_name, dict(target.declared))
         with cloud_mod.CloudSession(target) as session:
             run_longhist(
@@ -191,13 +201,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 mode,
                 cloud=session,
                 budget=budget,
+                digest=digest,
             )
         print(f"spent in {args.run_dir}: {budget.spent():.4f} USD of {args.max_usd:g}")
         print(f"rows in {paths.longhist}. Next: score --run-dir {args.run_dir} --tag {paths.tag}")
         return 0
     with httpx.Client(timeout=900.0) as client:
-        paths, inputs, mode, _digest = prepare(args, client)
-        run_longhist(client, args.url, args.model, paths, inputs, mode)
+        paths, inputs, mode, digest = prepare(args, client)
+        run_longhist(client, args.url, args.model, paths, inputs, mode, digest=digest)
     print(f"rows in {paths.longhist}. Next: score --run-dir {args.run_dir} --tag {paths.tag}")
     return 0
 

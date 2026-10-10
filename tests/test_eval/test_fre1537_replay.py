@@ -315,6 +315,43 @@ def test_long_history_arm_builds_each_size_and_extends_the_history(tmp_path: Pat
     assert cold["messages"][0]["content"] == "SYSTEM PROMPT"
 
 
+@pytest.mark.parametrize("digest", [None, "DIGEST-LINE"])
+def test_long_history_arm_sends_the_digest_as_replay_does(
+    tmp_path: Path, digest: str | None
+) -> None:
+    """FRE-1360: with --digest-file, both planner calls carry the production memory_recall
+    exchange after the unchanged user message; without it, the request is unchanged."""
+    from personal_agent.orchestrator.expansion_controller import planner_digest_exchange
+
+    paths, inputs = make_inputs(tmp_path)
+    bodies: list[dict[str, object]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(req.content))
+        return sse_response(content=DECLINE)
+
+    with client_for(handler) as client:
+        longhist.run_longhist(
+            client,
+            URL,
+            "m",
+            paths,
+            inputs,
+            llama.MODES["thinking_off"],
+            sizes=(2000,),
+            digest=digest,
+        )
+    cold, _primary, extended = bodies
+    for planner in (cold, extended):
+        messages = planner["messages"]  # type: ignore[index]
+        if digest is None:
+            assert [m["role"] for m in messages] == ["system", "user"]
+        else:
+            assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool"]
+            assert messages[2:] == planner_digest_exchange(digest, trace_id=render.PROBE_TRACE_ID)
+            assert digest not in messages[1]["content"]
+
+
 def test_long_history_arm_resumes(tmp_path: Path) -> None:
     paths, inputs = make_inputs(tmp_path)
     with client_for(lambda req: sse_response(content=DECLINE)) as client:
@@ -629,7 +666,9 @@ def test_the_long_history_step_runs_the_mode_that_prepare_resolved(
     seen: list[llama.PlannerMode] = []
     monkeypatch.setattr(longhist, "prepare", lambda args, client: (paths, inputs, sentinel, None))
     monkeypatch.setattr(
-        longhist, "run_longhist", lambda client, url, model, p, i, mode: seen.append(mode)
+        longhist,
+        "run_longhist",
+        lambda client, url, model, p, i, mode, digest=None: seen.append(mode),
     )
     longhist.main(["--run-dir", str(tmp_path), "--mode", "planner"])
     assert seen == [sentinel]

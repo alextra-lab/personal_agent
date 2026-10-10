@@ -47,6 +47,14 @@ class ToolDefinition(BaseModel):
     timeout_seconds: int = Field(30, ge=1, description="Execution timeout in seconds")
     rate_limit_per_hour: int | None = Field(None, ge=0, description="Rate limit per hour")
 
+    worker_only: bool = Field(
+        False,
+        description=(
+            "True for a tool only a sub-agent worker is offered (FRE-1564). The registry omits "
+            "it from every listing the primary reads; a worker's tool loop opts in."
+        ),
+    )
+
     # Grounding metadata (ADR-0098 Amendment A2)
     referent_parameter: str | None = Field(
         None,

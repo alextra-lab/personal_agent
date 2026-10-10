@@ -28,7 +28,7 @@ class TestRegistryShape:
 
     def test_researcher_entry(self) -> None:
         spec = WORKER_TYPES[WorkerType.RESEARCHER]
-        assert spec.tools == ("web_search",)
+        assert spec.tools == ("web_search", "fetch_url", "get_library_docs")
         assert spec.report_schema == "worker_report_v1"
         assert spec.default_thoroughness == "standard"
         assert spec.description.startswith("Finds facts on the open web")
@@ -36,7 +36,14 @@ class TestRegistryShape:
 
     def test_general_entry(self) -> None:
         spec = WORKER_TYPES[WorkerType.GENERAL]
-        assert spec.tools == ("run_python", "search_memory", "recall_personal_history")
+        assert spec.tools == (
+            "run_python",
+            "search_memory",
+            "recall_personal_history",
+            "query_telemetry",
+            "notes_search",
+            "read_skill",
+        )
         assert spec.report_schema is None
         assert spec.default_thoroughness == "quick"
         assert spec.prompt_block == ""
@@ -152,9 +159,11 @@ class TestTypesDeclaring:
     def test_each_tool_has_one_declaring_type(self) -> None:
         assert worker_types_declaring("web_search") == (WorkerType.RESEARCHER,)
         assert worker_types_declaring("run_python") == (WorkerType.GENERAL,)
+        assert worker_types_declaring("fetch_url") == (WorkerType.RESEARCHER,)
+        assert worker_types_declaring("query_telemetry") == (WorkerType.GENERAL,)
 
     def test_an_undeclared_tool_has_none(self) -> None:
-        assert worker_types_declaring("fetch_url") == ()
+        assert worker_types_declaring("bash") == ()
 
 
 def _finding(**overrides: object) -> Finding:

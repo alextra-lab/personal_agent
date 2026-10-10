@@ -260,3 +260,50 @@ def test_default_registry_offers_fetch_url_in_normal_mode() -> None:
     fetch_def = next(t for t in llm_tools if t["function"]["name"] == "fetch_url")
     assert "url" in fetch_def["function"]["parameters"]["properties"]
     assert "url" in fetch_def["function"]["parameters"]["required"]
+
+
+def _tool(name: str, *, worker_only: bool = False) -> ToolDefinition:
+    return ToolDefinition(
+        name=name,
+        description=f"{name} tool",
+        category="read_only",
+        parameters=[],
+        risk_level="low",
+        allowed_modes=["NORMAL"],
+        worker_only=worker_only,
+    )
+
+
+class TestWorkerOnlyTools:
+    """FRE-1564 — a worker-only tool is registered but never shown to the primary."""
+
+    @staticmethod
+    def _registry() -> ToolRegistry:
+        registry = ToolRegistry()
+        registry.register(_tool("shared_tool"), lambda: {})
+        registry.register(_tool("worker_tool", worker_only=True), lambda: {})
+        return registry
+
+    def test_default_is_not_worker_only(self) -> None:
+        assert _tool("t").worker_only is False
+
+    def test_the_primarys_listings_omit_it(self) -> None:
+        registry = self._registry()
+        assert [t.name for t in registry.list_tools()] == ["shared_tool"]
+        assert [t.name for t in registry.list_tools(mode=Mode.NORMAL)] == ["shared_tool"]
+        names = {d["function"]["name"] for d in registry.get_tool_definitions_for_llm(Mode.NORMAL)}
+        assert names == {"shared_tool"}
+        names = {d["function"]["name"] for d in registry.get_tool_definitions_for_llm()}
+        assert names == {"shared_tool"}
+
+    def test_the_workers_listing_includes_it(self) -> None:
+        registry = self._registry()
+        defs = registry.get_tool_definitions_for_llm(include_worker_only=True)
+        assert {d["function"]["name"] for d in defs} == {"shared_tool", "worker_tool"}
+        listed = registry.list_tools(include_worker_only=True)
+        assert {t.name for t in listed} == {"shared_tool", "worker_tool"}
+
+    def test_it_is_still_registered_and_executable_by_name(self) -> None:
+        registry = self._registry()
+        assert registry.get_tool("worker_tool") is not None
+        assert "worker_tool" in registry.list_tool_names()

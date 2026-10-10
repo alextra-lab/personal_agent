@@ -60,22 +60,30 @@ class ToolRegistry:
         """
         return self._tools.get(name)
 
-    def list_tools(self, mode: Mode | None = None) -> list[ToolDefinition]:
+    def list_tools(
+        self, mode: Mode | None = None, *, include_worker_only: bool = False
+    ) -> list[ToolDefinition]:
         """List tools available in the given mode.
 
         Args:
             mode: Operational mode to filter by. If None, returns all tools.
+            include_worker_only: Whether to include tools only a sub-agent worker is offered
+                (FRE-1564). Default False, so every existing caller (the primary's tool list
+                and its tool-awareness prompt) is unchanged.
 
         Returns:
             List of tool definitions available in the mode.
         """
+        tools = [
+            tool_def
+            for tool_def, _ in self._tools.values()
+            if include_worker_only or not tool_def.worker_only
+        ]
         if mode is None:
-            return [tool_def for tool_def, _ in self._tools.values()]
+            return tools
 
         mode_str = mode.value
-        return [
-            tool_def for tool_def, _ in self._tools.values() if mode_str in tool_def.allowed_modes
-        ]
+        return [tool_def for tool_def in tools if mode_str in tool_def.allowed_modes]
 
     def filter_by_category(self, category: str) -> list[ToolDefinition]:
         """Filter tools by governance category.
@@ -99,16 +107,20 @@ class ToolRegistry:
     def get_tool_definitions_for_llm(
         self,
         mode: Mode | None = None,
+        *,
+        include_worker_only: bool = False,
     ) -> list[dict[str, Any]]:
         """Get tool definitions in OpenAI function calling format.
 
         Args:
             mode: Operational mode to filter by. If None, returns all tools.
+            include_worker_only: Whether to include tools only a sub-agent worker is offered
+                (FRE-1564). Only the worker tool loop passes True.
 
         Returns:
             List of tool definitions in OpenAI format (for function calling).
         """
-        tools = self.list_tools(mode=mode)
+        tools = self.list_tools(mode=mode, include_worker_only=include_worker_only)
         result = []
         for tool_def in tools:
             # Build properties dict, using full JSON schema for complex types

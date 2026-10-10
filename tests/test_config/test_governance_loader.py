@@ -223,8 +223,7 @@ def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
 
     FRE-1463 turned the flat list into a per-tool decision record, so the
     independence claim is now asserted against the granted subset. Membership of
-    the mapping proves only that a decision was recorded — ``fetch_url`` is a key
-    and is refused.
+    the mapping proves only that a decision was recorded.
     """
     project_root = Path(__file__).parent.parent.parent
     config_dir = project_root / "config" / "governance"
@@ -232,20 +231,26 @@ def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
     config = load_governance_config(config_dir)
 
     granted = config.granted_sub_agent_tool_names()
-    # Decisions of 2026-09-04 and 2026-09-08 (FRE-1388, FRE-1463, FRE-1467).
+    # Decisions of 2026-09-04 and 2026-09-08 (FRE-1388, FRE-1463, FRE-1467) and of
+    # 2026-10-10 (FRE-1564: option B, the telemetry tool, and fetch_url).
     assert set(granted) == {
         "run_python",
         "web_search",
         "search_memory",
         "recall_personal_history",
+        "fetch_url",
+        "get_library_docs",
+        "read_skill",
+        "notes_search",
+        "query_telemetry",
     }
-    # fetch_url is granted to the primary in NORMAL but refused to the sub-agent
-    # principal — proves the two policies are genuinely independent.
-    assert "fetch_url" in config.tools
-    assert "fetch_url" not in granted
-    # ... and the refusal is a recorded entry, not an absence (FRE-1463 AC-1).
-    assert config.sub_agent_tools["fetch_url"].granted is False
-    assert config.sub_agent_tools["fetch_url"].reason.strip()
+    # write_file is a tool of the primary in NORMAL that no sub-agent holds — proves the
+    # two policies are genuinely independent (fetch_url used to be the proof, until
+    # FRE-1564 granted it).
+    assert "write_file" in config.tools
+    assert "write_file" not in granted
+    # Every granted tool carries a recorded reason (FRE-1463 AC-1).
+    assert all(config.sub_agent_tools[name].reason.strip() for name in granted)
 
 
 def test_governance_config_safety_policies() -> None:

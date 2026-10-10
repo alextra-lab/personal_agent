@@ -873,3 +873,69 @@ which is the bulk of the work. Both touched T4 alone, and T4 is now consistent w
 **AC-8 holds at acceptance.** No limit is changed by this ADR, including the landing `max_tokens`.
 FRE-1487's study limits remain raised under the owner's separate direction and are unrelated to
 this decision.
+
+### 2026-10-10 — Amendment to D2: read-only tools for workers, split by direction (FRE-1564)
+**Changed By:** build seat, on the owner's decisions of 2026-10-10 relayed by master
+**Reason:** FRE-1517 stage 3, finding F4. On a turn that asked for latency metrics of the last
+24 hours, the planner sent the task to a `researcher`, and no worker type could read telemetry. The
+`researcher` ran 20 web searches and the turn failed. The tool rows of the D2 table are replaced by
+the lists below. Nothing else in D2 changes.
+
+**The owner's decisions.** "Workers should not be limited", then option B: every read-only tool
+reaches a worker, and side-effecting tools stay with the primary. Then "1 a": build a native
+read-only Elasticsearch tool for `general`. Then "2 yes": grant `fetch_url` to `researcher`, which
+reverses the FRE-1463 refusal recorded while FRE-1360 is open.
+
+**The rule.** A worker that holds an outbound channel (a query or URL leaves the system) and a
+private or internal read has all three parts of an exfiltration path: untrusted input, private
+data and a way out. So no worker type holds both. A registry test fails if one does, and a
+second test fails if a worker tool is in neither class.
+
+| Type | Tools | Direction |
+|---|---|---|
+| `researcher` | `web_search`, `fetch_url`, `get_library_docs` | outward, no private tool read |
+| `general` | `run_python`, `search_memory`, `recall_personal_history`, `query_telemetry`, `notes_search`, `read_skill` | inward, no outbound tool |
+
+The two descriptions in the planner prompt change with the lists. `general` now covers the system's
+own logs, metrics, errors and health. `researcher` now covers reading a known web page or library
+documentation. The planner request changes, so ADR-0154 D7 applies again.
+
+**What the build found, and did.**
+
+- The Elasticsearch MCP entries in `tools.yaml` are disabled fossils. The cloud gateway starts only
+  `sequentialthinking` and `context7`. So the tool is a new native tool, `query_telemetry`. It
+  builds the request itself and accepts only listed query operators, aggregation types and fields
+  for three index families (`agent-logs`, `agent-topology`, `agent-monitors-slm-health`). It is not
+  a denylist, because a denylist over the Elasticsearch query language cannot be complete.
+- No field that holds conversation text is listed. `message` and `error` are free text written by
+  the agent's own logging and can carry a fragment of user input in an exception string. That is the
+  residual risk.
+- `run_python` took a `network` argument. `true` attached the sandbox to the network that holds
+  Elasticsearch, Postgres and Neo4j and has outbound access, and nothing stopped a worker from
+  setting it. A worker's `run_python` is now pinned to `network: false` through a new
+  `param_forced` field on the worker's governance decision. The primary never reads it.
+- The worker grant reads only the `sub_agent_tools` block. It never reads a tool's
+  `allowed_in_modes`. Each added tool has its own entry there. ALERT and DEGRADED still deny every
+  worker tool.
+- **The conversation context (owner decision A, 2026-10-10).** The tool rule protects the stores a
+  worker can read with a tool: memory, notes and telemetry. It did not protect the conversation.
+  Every worker spec carried the last four conversation messages as context
+  (`context=messages[-4:]`), so a `researcher` held conversation text. With `fetch_url` it has a
+  channel to any public host, and a hostile page can instruct it to put that text in a request
+  address. The security review of FRE-1564 found this after the owner had granted `fetch_url`
+  ("2 yes") on the premise that the researcher held nothing private. The owner then chose option A:
+  a worker type that holds an outbound tool is briefed by its task text alone, with no conversation
+  history (`carries_conversation_context`). `general` holds no outbound tool and keeps its four
+  messages. This also closes the older `web_search` path. A search query is an outbound channel, it
+  reaches the SearXNG proxy and the upstream engines, and until now the `researcher` held the last
+  four messages when it sent one. A test checks the messages a worker's model receives, with a seeded
+  negative. The task text still reaches the `researcher`, and it derives from the user's request.
+- **A cost to watch.** The `researcher` now relies on the planner's brief for context (ADR-0154).
+  A follow-up question that depended on earlier turns reaches it only as far as the planner wrote
+  that dependence into the task. Watch for thinner research in the Gemma retest and in real use.
+- `query_telemetry` is worker-only (`ToolDefinition.worker_only`). The registry omits it from every
+  listing the primary reads, so the primary's tool list, its tool-awareness prompt and its per-turn
+  tokens do not change. The primary keeps its `bash` and `curl` route. Only a worker's tool loop
+  asks for worker-only tools.
+- `query_telemetry` is not on the retrieval table of ADR-0138 D2. Telemetry is partly agent-written,
+  so it is not a citable source. This matches the `bash` and `curl` route it replaces for a worker.

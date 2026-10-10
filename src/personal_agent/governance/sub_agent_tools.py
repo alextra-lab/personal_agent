@@ -127,7 +127,7 @@ class ParamClamp:
     """
 
     param: str
-    requested: int | float
+    requested: int | float | str
     applied: int
 
 
@@ -136,15 +136,16 @@ def clamp_sub_agent_tool_params(
     arguments: Mapping[str, Any],
     config: GovernanceConfig,
 ) -> tuple[dict[str, Any], tuple[ParamClamp, ...]]:
-    """Clamp a sub-agent's tool arguments to this principal's declared ceilings (FRE-1473).
+    """Bound a sub-agent's tool arguments by this principal's declared limits.
 
-    Reduces only the parameters named in ``config.sub_agent_tools[tool_name].param_ceilings``
-    — that mapping is declared beside the grant it constrains (AC-4) — and only when the
-    sub-agent's requested value exceeds the ceiling; an in-bounds request passes through with
-    the same values (AC-5). A tool with no recorded decision, or a decision with no ceilings,
-    is a no-op: this function never invents a ceiling the config does not declare. It carries
-    no notion of "primary" versus "sub-agent" itself — the caller must never invoke this for a
-    primary-principal call (see ``dispatch_tool_call``'s ``principal`` gate).
+    Two limits exist, both declared beside the grant they constrain. A ceiling (FRE-1473)
+    reduces a numeric argument that exceeds it and leaves an in-bounds request unchanged. A
+    forced value (FRE-1564) replaces the argument whatever the sub-agent sent, wrong type
+    included, and is set when the sub-agent omitted it. A tool with no recorded decision, or a
+    decision with neither limit, is a no-op: this function never invents a limit the config does
+    not declare. It carries no notion of "primary" versus "sub-agent" itself — the caller must
+    never invoke this for a primary-principal call (see ``dispatch_tool_call``'s ``principal``
+    gate).
 
     Args:
         tool_name: The tool about to be dispatched.
@@ -158,7 +159,7 @@ def clamp_sub_agent_tool_params(
     """
     clamped = dict(arguments)
     decision = config.sub_agent_tools.get(tool_name)
-    if decision is None or not decision.param_ceilings:
+    if decision is None:
         return clamped, ()
 
     applied: list[ParamClamp] = []
@@ -169,6 +170,15 @@ def clamp_sub_agent_tool_params(
         if requested > ceiling:
             applied.append(ParamClamp(param=param, requested=requested, applied=ceiling))
             clamped[param] = ceiling
+
+    # FRE-1564: a pinned value replaces whatever the model sent, wrong type included, and is
+    # set when the model omitted the argument so the tool's own default never decides it.
+    for param, forced in decision.param_forced.items():
+        if param in clamped and clamped[param] != forced:
+            sent = clamped[param]
+            shown = sent if isinstance(sent, (int, float, str)) else repr(sent)
+            applied.append(ParamClamp(param=param, requested=shown, applied=forced))
+        clamped[param] = forced
 
     return clamped, tuple(applied)
 

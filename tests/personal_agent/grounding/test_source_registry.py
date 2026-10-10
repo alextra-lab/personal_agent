@@ -272,6 +272,24 @@ def test_unknown_tool_registers_no_source() -> None:
     assert registration.admissibility is Admissibility.UNCLASSIFIED_TOOL
 
 
+def test_query_telemetry_is_not_a_citable_source() -> None:
+    """FRE-1564: telemetry is partly agent-written, so it must not become a source by accident.
+
+    The tool stays off the typed-retrieval table, which matches the `bash` + `curl` route it
+    replaces for a worker. Adding it there needs its own decision (an ADR-0138 D2 amendment).
+    """
+    registry = SourceRegistry(turn_id=TURN_A)
+
+    registration = registry.register_tool_result(
+        tool_name="query_telemetry",
+        arguments={"action": "count", "index": "agent-logs"},
+        content='{"count": 12}',
+    )
+
+    assert registration.source is None
+    assert registration.admissibility is Admissibility.UNCLASSIFIED_TOOL
+
+
 ADMISSIBLE_TOOLS = [
     pytest.param(
         "web_search",

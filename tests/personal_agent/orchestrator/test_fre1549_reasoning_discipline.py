@@ -37,8 +37,12 @@ from personal_agent.telemetry.trace import TraceContext
 # round budgets stubbed (see ``_pin_round_budgets``) so an AGENT_SUB_AGENT_* override
 # cannot move them. A legitimate planner edit moves them too: that is the point
 # (ADR-0154 D7 — a planner prompt change needs a new probe run, then a new pin).
-_MAIN_PLANNER_SHA256_WITH_TOOLS = "af31d5924ce09722be4329f75c1361712f1fd193cd3d02b193fd4a5eddeb6ae5"
-_MAIN_PLANNER_SHA256_NO_TOOLS = "b2da2a94c709d6d6742bacbbb60d9068a558a2697ab46a9b392712022197f7e9"
+#
+# Re-pinned for FRE-1564 (2026-10-10): the `researcher` and `general` descriptions changed and
+# their tool lists grew. Before: with tools af31d592…, no tools b2da2a94…. The ADR-0154 D7
+# probe on qwen3.8-flash-next is run for this change and posted on FRE-1564.
+_MAIN_PLANNER_SHA256_WITH_TOOLS = "38fdec72f9b11945b720122ce302a27c4df7076b92eec7ded0f51eddc72a4719"
+_MAIN_PLANNER_SHA256_NO_TOOLS = "253510e7b0916df330966a3103bc44cce816e8b347ff85f2f88b075ac7dc7e1a"
 _PINNED_ROUNDS = {"quick": 3, "standard": 10, "thorough": 20}
 
 # No skill keyword: nothing here can route the sequential-thinking skill.

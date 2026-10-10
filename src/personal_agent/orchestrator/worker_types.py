@@ -307,26 +307,57 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
     {
         WorkerType.RESEARCHER: WorkerTypeSpec(
             description=(
-                "Finds facts on the open web for one bounded question and reports "
-                "them as data with sources and gaps"
+                "Finds facts on the open web, reads a known web page or library "
+                "documentation, for one bounded question and reports them as data "
+                "with sources and gaps"
             ),
             prompt_block=_RESEARCHER_BLOCK,
-            tools=("web_search",),
+            tools=("web_search", "fetch_url", "get_library_docs"),
             report_schema=WORKER_REPORT_SCHEMA_NAME,
             default_thoroughness="standard",
         ),
         WorkerType.GENERAL: WorkerTypeSpec(
             description=(
                 "Answers a bounded question from its own knowledge, a computation, "
-                "or the user's own memory, and reports in text"
+                "the user's own memory or notes, or the system's own logs, metrics, "
+                "errors and health, and reports in text"
             ),
             prompt_block="",
-            tools=("run_python", "search_memory", "recall_personal_history"),
+            tools=(
+                "run_python",
+                "search_memory",
+                "recall_personal_history",
+                "query_telemetry",
+                "notes_search",
+                "read_skill",
+            ),
             report_schema=None,
             default_thoroughness="quick",
         ),
     }
 )
+
+
+# FRE-1564: the tools that send a query or a URL out of the system. A worker type that holds
+# one is outbound; a registry test fails if it also holds a private tool read.
+OUTBOUND_TOOLS: frozenset[str] = frozenset({"web_search", "fetch_url", "get_library_docs"})
+
+
+def carries_conversation_context(spec: WorkerTypeSpec) -> bool:
+    """Whether a worker of this type is handed the recent conversation messages.
+
+    A type that holds an outbound tool (a query or a URL leaves the system) is briefed by its
+    task text alone. A page it fetches can instruct it to put whatever it holds in a request,
+    so it must not hold the conversation (FRE-1564, owner decision A of 2026-10-10). This also
+    closes the older ``web_search`` path: a search query is an outbound channel too.
+
+    Args:
+        spec: The registry entry of the worker type.
+
+    Returns:
+        ``True`` when the type holds no outbound tool.
+    """
+    return not OUTBOUND_TOOLS & set(spec.tools)
 
 
 def render_prompt_block(worker_type: WorkerType, researcher_min_search_rounds: int = 0) -> str:

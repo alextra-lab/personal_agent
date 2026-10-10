@@ -277,7 +277,13 @@ class TestTheShippedDecisions:
             ("run_python", True),
             ("web_search", True),
             ("search_memory", True),
-            ("fetch_url", False),
+            # FRE-1564: the owner reversed the FRE-1463 refusal ("2 yes"); the split in
+            # test_worker_tool_split.py is what contains it.
+            ("fetch_url", True),
+            ("get_library_docs", True),
+            ("read_skill", True),
+            ("notes_search", True),
+            ("query_telemetry", True),
             # FRE-1467 reversed this one: FRE-1463 refused it because it could
             # not work without an identity, and FRE-1467 threaded the identity.
             ("recall_personal_history", True),
@@ -295,13 +301,26 @@ class TestTheShippedDecisions:
         assert decision.reason.strip()
 
     def test_the_four_are_not_one_decision(self) -> None:
-        """*Fails if* the four are granted as a block (the ticket's own words)."""
+        """*Fails if* the four share one decision record (the ticket's own words).
+
+        FRE-1564 reversed the fetch_url refusal, so the four no longer disagree on the
+        answer. What stays true is that each carries its own reason.
+        """
         from personal_agent.config.governance_loader import load_governance_config
 
         config = load_governance_config()
         four = ("web_search", "search_memory", "fetch_url", "recall_personal_history")
-        answers = {config.sub_agent_tools[name].granted for name in four}
-        assert answers == {True, False}
+        reasons = {config.sub_agent_tools[name].reason.strip() for name in four}
+        assert len(reasons) == len(four)
+
+    def test_the_fetch_url_reversal_cites_the_decision_and_the_open_ticket(self) -> None:
+        """FRE-1564: a reversed refusal must say who reversed it and what it left open."""
+        from personal_agent.config.governance_loader import load_governance_config
+
+        reason = load_governance_config().sub_agent_tools["fetch_url"].reason
+        assert "2026-10-10" in reason
+        assert "FRE-1360" in reason
+        assert "FRE-1463" in reason
 
     def test_every_recorded_reason_is_distinct(self) -> None:
         """A reason copied across entries is a block decision in disguise."""
@@ -457,6 +476,72 @@ class TestClampSubAgentToolParams:
         )
         assert clamped_bool == {"days_ago": True}
         assert applied_bool == ()
+
+
+class TestForcedParams:
+    """FRE-1564 — ``param_forced`` pins an argument for the sub-agent principal only."""
+
+    def test_default_is_empty(self) -> None:
+        decision = SubAgentToolDecision(granted=True, reason="nothing forced")
+        assert decision.param_forced == {}
+
+    def test_a_blank_key_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SubAgentToolDecision(granted=True, reason="x", param_forced={" ": False})
+
+    def test_a_supplied_value_that_differs_is_overridden_and_recorded(self) -> None:
+        config = _config_with_decision(
+            "run_python",
+            SubAgentToolDecision(granted=True, reason="t", param_forced={"network": False}),
+        )
+        clamped, applied = clamp_sub_agent_tool_params(
+            "run_python", {"code": "print(1)", "network": True}, config
+        )
+        assert clamped == {"code": "print(1)", "network": False}
+        assert applied == (ParamClamp(param="network", requested=True, applied=False),)
+
+    def test_a_wrong_typed_value_is_overridden_and_recorded(self) -> None:
+        config = _config_with_decision(
+            "run_python",
+            SubAgentToolDecision(granted=True, reason="t", param_forced={"network": False}),
+        )
+        clamped, applied = clamp_sub_agent_tool_params("run_python", {"network": "yes"}, config)
+        assert clamped == {"network": False}
+        assert applied == (ParamClamp(param="network", requested="yes", applied=False),)
+
+    def test_an_omitted_value_is_set_without_a_record(self) -> None:
+        config = _config_with_decision(
+            "run_python",
+            SubAgentToolDecision(granted=True, reason="t", param_forced={"network": False}),
+        )
+        clamped, applied = clamp_sub_agent_tool_params("run_python", {"code": "x"}, config)
+        assert clamped == {"code": "x", "network": False}
+        assert applied == ()
+
+    def test_a_value_that_already_matches_changes_nothing(self) -> None:
+        config = _config_with_decision(
+            "run_python",
+            SubAgentToolDecision(granted=True, reason="t", param_forced={"network": False}),
+        )
+        clamped, applied = clamp_sub_agent_tool_params("run_python", {"network": False}, config)
+        assert clamped == {"network": False}
+        assert applied == ()
+
+    def test_the_input_mapping_is_never_mutated(self) -> None:
+        config = _config_with_decision(
+            "run_python",
+            SubAgentToolDecision(granted=True, reason="t", param_forced={"network": False}),
+        )
+        arguments = {"network": True}
+        clamp_sub_agent_tool_params("run_python", arguments, config)
+        assert arguments == {"network": True}
+
+    def test_the_shipped_run_python_decision_forces_the_network_off(self) -> None:
+        """A worker holds private reads, so run_python must not reach the sandbox network."""
+        from personal_agent.config.governance_loader import load_governance_config
+
+        decision = load_governance_config().sub_agent_tools["run_python"]
+        assert decision.param_forced == {"network": False}
 
 
 class TestShippedRecallPersonalHistoryCeiling:

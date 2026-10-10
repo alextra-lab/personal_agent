@@ -57,6 +57,10 @@ from personal_agent.tools.personal_history import (
     recall_personal_history_tool,
 )
 from personal_agent.tools.registry import ToolRegistry
+from personal_agent.tools.telemetry_query import (
+    query_telemetry_executor,
+    query_telemetry_tool,
+)
 from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
 from personal_agent.tools.web import (
     web_search_executor,
@@ -111,6 +115,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(perplexity_query_tool, perplexity_query_executor)
     registry.register(get_library_docs_tool, get_library_docs_executor)
     registry.register(fetch_url_tool, fetch_url_executor)  # ADR-0028 Ph3, FRE-1297
+    registry.register(query_telemetry_tool, query_telemetry_executor)  # FRE-1564
     # FRE-224: native Linear tool (Tier-1, no MCP gateway required)
     registry.register(create_linear_issue_tool, create_linear_issue_executor)
     registry.register(find_linear_issues_tool, find_linear_issues_executor)

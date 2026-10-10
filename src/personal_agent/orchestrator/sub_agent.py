@@ -278,7 +278,9 @@ def _build_tool_defs(tool_names: list[str]) -> list[dict[str, Any]] | None:
     if not tool_names:
         return None
     granted = set(tool_names)
-    all_defs = get_shared_tool_execution_layer().registry.get_tool_definitions_for_llm(mode=None)
+    all_defs = get_shared_tool_execution_layer().registry.get_tool_definitions_for_llm(
+        mode=None, include_worker_only=True
+    )
     defs = [d for d in all_defs if d.get("function", {}).get("name") in granted]
     return defs or None
 

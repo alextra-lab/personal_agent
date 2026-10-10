@@ -327,6 +327,7 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_OTEL_EXPORTER_ENDPOINT: otel-collector:4317
+      AGENT_TEMPO_URL: http://tempo:3200
       # ── Docker-specific paths and hardcoded production values ─────────────────
       AGENT_MCP_GATEWAY_COMMAND: '["/app/docker/mcp/run-gateway.sh"]'
       AGENT_DEPLOYMENT_PROFILE: cloud

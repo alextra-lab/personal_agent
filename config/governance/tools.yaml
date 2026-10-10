@@ -139,6 +139,12 @@ sub_agent_tools:
       content field is listed. It is internal data, so it goes only to the `general` type,
       which holds no outbound tool. Residual risk: `message` and `error` are free text from
       the agent's own logging and can carry a fragment of user input.
+      Widened by the owner on 2026-10-10 (FRE-1567): the `latency` action reads model-call
+      timing from Tempo's search API. The tool writes the TraceQL; the model picks a span
+      kind, group keys and exact-match filters. Only listed span attributes are selected or
+      read (role, model, token counts, slm prefill and decode time, duration, status), and
+      the model gets per-group statistics, never spans. Attributes that carry text or a
+      conversation id (statusMessage, url.full, http.target, slm.session_id) are not listed.
 
   recall_personal_history:
     granted: true

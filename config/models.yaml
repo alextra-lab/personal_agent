@@ -24,6 +24,7 @@
 #
 # Cloud-model fields:
 #   max_tokens       Max output tokens (billed per token; set deliberately)
+#                    A local entry declares one only as a runaway bound (FRE-1562, ADR-0141 D5).
 #
 # Every `kind: llm` entry (ADR-0145 D3a):
 #   dialect          Override of the provider's default wire vocabulary. Required
@@ -139,6 +140,8 @@ models:
     # deployment this collapse deletes.
     max_concurrency: 3
     default_timeout: 600         # 128K prefill + up to 32K thinking output (was 180)
+    # FRE-1562: same bound as qwen3.8-flash-next (see its comment).
+    max_tokens: 12288
     # ADR-0145 D3a: sampler/thinking values move into modes:, field for field —
     # no value changes here, only their home. `thinking_budget_tokens` (was
     # 32768) has no home in llamacpp_qwen's dialect and is dropped: it is
@@ -220,6 +223,15 @@ models:
     # paired deployment this collapse deletes.
     max_concurrency: 3
     default_timeout: 600
+    # FRE-1562: bound on every local generation. 12288 = 1.42x the largest completed local
+    # primary call of the last 30 days (8,654 output tokens) and 1.20x the all-time maximum
+    # (10,263), measured in agent-logs-* (model_call_completed, role primary, slm_local); the
+    # query and rationale: docs/superpowers/plans/2026-10-10-fre-1562-local-primary-generation-bound.md.
+    # At the Flash-Next median 26 tok/s this fires at ~470 s, before the 600 s client budget.
+    # A runaway ends with finish_reason=length and an honest reply (executor
+    # _stop_turn_for_length_bound). Raise it only from a new measurement, and never below the
+    # largest normal call: a low value truncates answers (ADR-0141 D5, 2026-09-02).
+    max_tokens: 12288
     # ADR-0145 D3a: sampler/thinking values move into modes:, field for field.
     # `thinking_budget_tokens` (was 32768) has no home in llamacpp_qwen's
     # dialect and is dropped: wire-inert on this server (FRE-1430 F2, FRE-1423).
@@ -293,6 +305,8 @@ models:
     min_concurrency: 1
     max_concurrency: 1
     default_timeout: 600
+    # FRE-1562: same bound as qwen3.8-flash-next (see its comment).
+    max_tokens: 12288
     default_mode: default
     modes:
       # Qwen3.8-27B card values, read 2026-09-06 (see qwen3.8-27b-ovh below).
@@ -326,6 +340,8 @@ models:
     min_concurrency: 1
     max_concurrency: 1
     default_timeout: 600
+    # FRE-1562: same bound as qwen3.8-flash-next (see its comment).
+    max_tokens: 12288
     default_mode: default
     modes:
       # Identical to qwen3.8-flash-next's modes, so the arm differs only by engine and pack.
@@ -375,6 +391,8 @@ models:
     min_concurrency: 1
     max_concurrency: 3           # slm_server's production slot count
     default_timeout: 600
+    # FRE-1562: same bound as qwen3.8-flash-next (see its comment).
+    max_tokens: 12288
     default_mode: default
     modes:
       # Sampling per the Gemma 4 model card (temperature 1.0, top_p 0.95, top_k 64).

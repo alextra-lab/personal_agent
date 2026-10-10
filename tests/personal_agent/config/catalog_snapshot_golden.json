@@ -411,7 +411,7 @@
         "input_cost_per_token": null,
         "input_cost_per_token_eur": null,
         "max_concurrency": 3,
-        "max_tokens": null,
+        "max_tokens": 12288,
         "min_concurrency": 1,
         "modes": {
           "default": {

@@ -40,6 +40,10 @@ HISTORY_SANITISED = "history_sanitised"
 # window and was retried once on a trimmed message list.
 PRIMARY_CONTEXT_WINDOW_TRIMMED = "primary_context_window_trimmed"
 
+# FRE-1562: a local primary generation stopped on its catalog ``max_tokens`` bound
+# (``finish_reason == "length"``) and the turn ended with an honest reply. One event per stop.
+PRIMARY_GENERATION_HIT_BOUND = "primary_generation_hit_bound"
+
 # ADR-0074 / FRE-376 Phase 3: orchestrator step-planning boundary.
 # Distinct from MODEL_CALL_* (which the model clients emit with the full
 # canonical shape). Before Phase 3, the orchestrator also emitted

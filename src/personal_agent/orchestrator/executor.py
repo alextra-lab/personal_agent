@@ -115,6 +115,7 @@ from personal_agent.telemetry import (
     MODEL_CALL_ERROR,
     ORCHESTRATOR_FATAL_ERROR,
     PRIMARY_CONTEXT_WINDOW_TRIMMED,
+    PRIMARY_GENERATION_HIT_BOUND,
     REPLY_READY,
     STATE_TRANSITION,
     STEP_EXECUTED,
@@ -3105,6 +3106,79 @@ def _stop_turn_for_cancel(ctx: ExecutionContext) -> None:
             "type": "warning",
             "description": "Turn stopped by user request",
             "metadata": {"reason": "user_cancel"},
+        }
+    )
+    ctx.turn_stopped_early = True
+
+
+def _local_generation_bound(llm_client: Any) -> int | None:
+    """Return the output-token bound of a local primary client, or ``None``.
+
+    FRE-1562: only a local deployment's catalog ``max_tokens`` is a runaway bound
+    (ADR-0141 D5). A cloud client's ``max_tokens`` is a billing ceiling that already
+    existed, and a cloud ``finish_reason == "length"`` keeps its old handling.
+
+    Args:
+        llm_client: The client that served (or will serve) the primary call.
+
+    Returns:
+        The bound in tokens, or ``None`` when the client is not local or declares none.
+    """
+    if getattr(llm_client, "placement", None) is not Placement.LOCAL:
+        return None
+    bound = getattr(llm_client, "max_tokens", None)
+    return bound if isinstance(bound, int) else None
+
+
+def _stop_turn_for_length_bound(
+    ctx: ExecutionContext, *, bound: int, tokens_generated: int, span_id: str
+) -> None:
+    """End the turn after a local primary generation stopped on its bound (FRE-1562).
+
+    The reply says the model's reply ran too long. It does not say "timed out" or
+    "the request was large", because neither happened. Like :func:`_stop_turn_for_cancel`,
+    it never routes back through another ``LLM_CALL``: ``turn_stopped_early`` also skips
+    grounding verification, whose enforce-mode retry would issue exactly that call.
+
+    Args:
+        ctx: Execution context. ``ctx.answering_model_key`` names the deployment.
+        bound: The ``max_tokens`` the request carried.
+        tokens_generated: Completion tokens the server reported for the call.
+        span_id: This step's span id, for the log event.
+    """
+    # llama-server also reports "length" when the context window fills. Name the bound only
+    # when the call reached it, so the reply never states a limit that did not apply.
+    reached = (
+        f"It reached the limit of {bound:,} tokens before it finished."
+        if tokens_generated >= bound
+        else "It stopped before it finished."
+    )
+    lead = f"Stopped — the model's reply ran too long. {reached}"
+    if ctx.tool_results or ctx.sub_agent_results or ctx.expansion_skipped_tasks:
+        ctx.final_reply = _fallback_reply_from_tool_results(
+            ctx, lead=f"{lead} Here is what was gathered before it stopped:"
+        )
+    else:
+        ctx.final_reply = f"{lead} Ask for a shorter answer or a narrower question."
+    log.warning(
+        PRIMARY_GENERATION_HIT_BOUND,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        span_id=span_id,
+        deployment=ctx.answering_model_key,
+        bound=bound,
+        tokens_generated=tokens_generated,
+    )
+    ctx.steps.append(
+        {
+            "type": "warning",
+            "description": "Model reply reached its output bound; stopping the turn",
+            "metadata": {
+                "reason": "generation_bound",
+                "deployment": ctx.answering_model_key,
+                "bound": bound,
+                "tokens_generated": tokens_generated,
+            },
         }
     )
     ctx.turn_stopped_early = True
@@ -6189,6 +6263,7 @@ async def _finalize_llm_call_success(
     cite_only_retry: bool,
     tool_strategy: "ToolCallingStrategy",
     step_start_time: float,
+    generation_bound: int | None = None,
 ) -> TaskState:
     """Apply a successful primary ``respond()`` result to ``ctx`` and pick the next state.
 
@@ -6206,6 +6281,11 @@ async def _finalize_llm_call_success(
             (ADR-0151 D3) — its tool calls are dropped if present.
         tool_strategy: The resolved tool-calling strategy, for logging.
         step_start_time: ``time.time()`` at the top of the step, for duration_ms.
+        generation_bound: The ``max_tokens`` a local primary request carried
+            (:func:`_local_generation_bound`), or ``None`` for a cloud call. When set and
+            the response stopped with ``finish_reason == "length"``, the turn ends with an
+            honest reply (FRE-1562): the cut-off content and any partial tool calls are
+            dropped, so neither runs nor enters history.
 
     Returns:
         TOOL_EXECUTION when the response carries tool calls, else SYNTHESIS.
@@ -6269,6 +6349,26 @@ async def _finalize_llm_call_success(
         },
     }
     ctx.steps.append(step)
+
+    # FRE-1562: a local generation that stopped on its bound is a runaway or a cut-off tool
+    # argument, not an answer. End the turn here, before the reply or its tool calls are
+    # recorded or run.
+    if generation_bound is not None and response.get("finish_reason") == "length":
+        _stop_turn_for_length_bound(
+            ctx, bound=generation_bound, tokens_generated=completion_tokens, span_id=span_id
+        )
+        log.info(
+            STEP_PLANNING_COMPLETED,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            span_id=span_id,
+            parent_span_id=trace_ctx.parent_span_id,
+            model_role=model_role.value,
+            channel=ctx.channel.value,
+            status="length_bound",
+            next_state="synthesis",
+        )
+        return TaskState.SYNTHESIS
 
     # Some reasoning models may emit router-style JSON with a `response` field.
     # Unwrap it to avoid returning JSON to the user.
@@ -7238,6 +7338,7 @@ async def step_llm_call(
             cite_only_retry=cite_only_retry,
             tool_strategy=tool_strategy,
             step_start_time=step_start_time,
+            generation_bound=_local_generation_bound(llm_client),
         )
 
     except Exception as e:
@@ -7356,6 +7457,7 @@ async def step_llm_call(
                         cite_only_retry=cite_only_retry,
                         tool_strategy=tool_strategy,
                         step_start_time=step_start_time,
+                        generation_bound=_local_generation_bound(llm_client),
                     )
 
         log.error(

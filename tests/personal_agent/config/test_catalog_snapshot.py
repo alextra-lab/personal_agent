@@ -200,6 +200,15 @@ One explicit delta, hand-edited rather than regenerated:
    parameter, served alone by swap window. **No role binding, resolved definition or
    price changed.**
 
+**Rebaselined a tenth time, deliberately, for FRE-1562 (ADR-0141 D5).**
+One explicit delta, hand-edited rather than regenerated:
+
+1. **``primary``'s ``max_tokens`` null -> 12288.** Every local ``kind: llm`` entry now
+   declares the same runaway bound, measured at 1.42x the largest completed local primary
+   call of 30 days (8,654 tokens). ``primary`` resolves onto ``qwen3.8-flash-next``, so only
+   that cell moved. ``sub_agent`` keeps its binding's 8192. **No role binding, resolved key,
+   timeout, concurrency or price changed, and no cloud cell changed.**
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

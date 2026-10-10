@@ -96,7 +96,21 @@ def test_definition_is_a_low_risk_read_only_tool() -> None:
     # The primary reads telemetry with bash and curl; this tool is for workers (FRE-1564).
     assert query_telemetry_tool.worker_only is True
     names = {p.name for p in query_telemetry_tool.parameters}
-    assert names == {"action", "index", "query", "aggs", "fields", "size", "since"}
+    # FRE-1567 added the five latency (Tempo) parameters.
+    assert names == {
+        "action",
+        "index",
+        "query",
+        "aggs",
+        "fields",
+        "size",
+        "since",
+        "span",
+        "group_by",
+        "role",
+        "model",
+        "limit",
+    }
     # No parameter can carry a URL, path, header or raw request body.
     assert not names & {"url", "path", "endpoint", "body", "method", "headers"}
 
@@ -219,18 +233,18 @@ async def test_a_realistic_error_query_and_a_latency_aggregation_pass() -> None:
             "per_hour": {
                 "date_histogram": {"field": "@timestamp", "calendar_interval": "hour"},
                 "aggs": {
-                    "p": {"percentiles": {"field": "latency_ms", "percents": [50, 95]}},
-                    "avg_ms": {"avg": {"field": "duration_ms"}},
+                    "p": {"percentiles": {"field": "elapsed_ms", "percents": [50, 95]}},
+                    "avg_ms": {"avg": {"field": "input_tokens"}},
                 },
             },
             "by_event": {"terms": {"field": "event_type", "size": 20, "order": {"_count": "desc"}}},
         },
-        fields=["@timestamp", "event_type", "latency_ms"],
+        fields=["@timestamp", "event_type", "elapsed_ms"],
         size=5,
     )
     body = rec.body()
     assert body["size"] == 5
-    assert body["_source"]["includes"] == ["@timestamp", "event_type", "latency_ms"]
+    assert body["_source"]["includes"] == ["@timestamp", "event_type", "elapsed_ms"]
     assert set(body["aggs"]) == {"per_hour", "by_event"}
 
 

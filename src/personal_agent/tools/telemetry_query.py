@@ -17,14 +17,26 @@ route a worker has. It is a security boundary, so it is built on two rules:
 ``arguments``, ...). None of them is in the allowlist, so none can be queried, aggregated or
 returned. ``message`` and ``error`` are free text written by the agent's own logging and can
 carry a fragment of user input inside an exception string. That is the residual risk.
+
+**Tempo (FRE-1567).** ADR-0129 moved model-call timing onto OTel spans, so Elasticsearch has
+none. The ``latency`` action reads Tempo's search API under the same two rules: the model picks
+a span kind, group keys and two exact-match filters, and the tool writes the TraceQL, the
+window and the limits. The span attributes it selects and reads are listed in
+``TEMPO_ATTRIBUTES``. Attributes that carry text or a conversation id (``statusMessage``,
+``url.full``, ``http.target``, ``slm.session_id``, span names of HTTP spans) are not in it,
+and the result is built from the listed attributes only. The model gets per-group statistics,
+never spans.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
-from collections.abc import Mapping
+import time
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, TypeGuard
 
@@ -49,6 +61,8 @@ FAMILY_TIME_FIELD: Mapping[str, str] = MappingProxyType(
 
 # family -> the fields a query, aggregation or ``fields`` list may name. Positive list,
 # checked against the live mappings on 2026-10-10. A name plus ``.keyword`` is also allowed.
+# FRE-1567 removed duration_ms, latency_ms and response_time_ms: no event wrote them in the
+# 30-day window (ADR-0129, FRE-1219), and the window cap makes older data unreachable.
 ALLOWED_FIELDS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         "agent-logs": frozenset(
@@ -73,9 +87,6 @@ ALLOWED_FIELDS: Mapping[str, frozenset[str]] = MappingProxyType(
                 "cache_read_tokens",
                 "cost_usd",
                 "elapsed_ms",
-                "duration_ms",
-                "latency_ms",
-                "response_time_ms",
                 "actual_wall_ms",
                 "max_latency_ms",
                 "probe_latency_ms",
@@ -199,30 +210,126 @@ _AGG_KEYS: Mapping[str, frozenset[str]] = MappingProxyType(
 )
 _BUCKET_AGGS = frozenset({"terms", "date_histogram"})
 
+
+@dataclass(frozen=True)
+class _TempoSpan:
+    """One span kind the ``latency`` action can read.
+
+    Attributes:
+        selector: The fixed TraceQL condition that picks the spans.
+        timings: Output prefix -> an integer millisecond attribute summarised per group.
+    """
+
+    selector: str
+    timings: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+
+
+# span kind -> how to find it. Live on 2026-10-10: ``model_call <model>`` spans (service
+# seshat-vps) carry the role; slm-server ``chat <model>`` spans carry prefill and decode time.
+TEMPO_SPANS: Mapping[str, _TempoSpan] = MappingProxyType(
+    {
+        "model_call": _TempoSpan('span:name =~ "model_call .*"'),
+        "slm_chat": _TempoSpan(
+            'resource.service.name = "slm-server" && span:name =~ "chat .*"',
+            MappingProxyType({"prefill": "slm.prefill_ms", "decode": "slm.decode_ms"}),
+        ),
+    }
+)
+# group key (and filter name) -> the span attribute it reads
+TEMPO_GROUP_KEYS: Mapping[str, str] = MappingProxyType(
+    {"role": "gen_ai.operation.name", "model": "gen_ai.request.model"}
+)
+_TEMPO_TOKENS: Mapping[str, str] = MappingProxyType(
+    {"input_tokens": "gen_ai.usage.input_tokens", "output_tokens": "gen_ai.usage.output_tokens"}
+)
+# Every span attribute the tool selects or reads: the positive list. The conversation-text
+# check of 2026-10-10 (plan section 1.1) found that no attribute here carries text.
+TEMPO_ATTRIBUTES: frozenset[str] = frozenset(
+    {
+        *TEMPO_GROUP_KEYS.values(),
+        *_TEMPO_TOKENS.values(),
+        *(name for kind in TEMPO_SPANS.values() for name in kind.timings.values()),
+        "span:duration",
+        "span:status",
+    }
+)
+# Tempo names a selected ``span:status`` "status" in its reply.
+_TEMPO_STATUS_KEY = "status"
+_TEMPO_READ_KEYS = frozenset(
+    {*(a for a in TEMPO_ATTRIBUTES if not a.startswith("span:")), _TEMPO_STATUS_KEY}
+)
+
+_LATENCY = "latency"
+_TEMPO_DEFAULT_LIMIT = 200
+_TEMPO_MAX_LIMIT = 500
+_TEMPO_SPANS_PER_SET = 100
+# Tempo's search refuses a window over 168 h (live, 2026-10-10).
+_TEMPO_MAX_SINCE_MINUTES = 7 * 24 * 60
+_TEMPO_MAX_BYTES = 16 * 1024 * 1024
+_TEMPO_MAX_SPANS = _TEMPO_MAX_LIMIT * _TEMPO_SPANS_PER_SET
+_TEMPO_MAX_GROUPS = 50
+_TEMPO_QUERY_ERROR_STATUSES = frozenset({400, 422})
+# A filter value, and a group label read back from Tempo, must look like a role or model id.
+# No quote or backslash can enter the TraceQL, and no free text can come back.
+_LABEL_RE = re.compile(r"[A-Za-z0-9._/:-]{1,100}")
+_ES_ONLY_ARGS = ("index", "query", "aggs", "fields", "size")
+_TEMPO_ONLY_ARGS = ("span", "group_by", "role", "model", "limit")
+
+
+def _render_description() -> str:
+    """Build the tool description from the allowlists, so the two cannot drift (AC-1).
+
+    Returns:
+        The description, with one line per index family and per Tempo list.
+    """
+    family_lines = [
+        f"- {family} fields: {', '.join(sorted(fields))}."
+        for family, fields in ALLOWED_FIELDS.items()
+    ]
+    return "\n".join(
+        [
+            "Read the system's own logs, metrics, health and model-call timing. Read-only. "
+            "Never use it for the user's conversation text: that is not available.",
+            "Actions: 'search' and 'count' read Elasticsearch and need 'index'. 'latency' "
+            "reads model-call timing from Tempo trace spans and needs 'since'.",
+            "Elasticsearch index families and the only fields each accepts:",
+            *family_lines,
+            "Elasticsearch holds no model-call timing: duration_ms, latency_ms and "
+            "response_time_ms are not in agent-logs (retired in August 2026, ADR-0129). "
+            "agent-topology latency_total_ms is empty since 2026-08-08 (FRE-1568). "
+            "Use 'latency' for model-call timing. Other timing fields depend on event_type; "
+            "to find which event carries a field, use an exists query with a terms "
+            "aggregation on event_type.",
+            "search and count: 'since' default 24h, at most 30d. Query operators: match_all, "
+            "bool, term, terms, match, match_phrase, prefix, range, exists. Aggregations: "
+            "terms, date_histogram, avg, sum, min, max, value_count, cardinality, stats, "
+            "percentiles.",
+            f"- latency spans: {', '.join(TEMPO_SPANS)}.",
+            f"- latency group_by: {', '.join(TEMPO_GROUP_KEYS)}.",
+            f"- latency span attributes: {', '.join(sorted(TEMPO_ATTRIBUTES))}.",
+            "latency: model_call is one span per model call; slm_chat is the local model "
+            "server's side and adds prefill and decode time. Filter with 'role' and 'model' "
+            f"(exact values). 'since' 1m to 7d. 'limit' caps traces (default "
+            f"{_TEMPO_DEFAULT_LIMIT}, at most {_TEMPO_MAX_LIMIT}). It returns, per group, "
+            "count, errors, p50_ms, p90_ms, max_ms and token sums over the spans it read. "
+            "complete=false means a cap was hit and the numbers cover a sample.",
+            "A name outside these lists is refused.",
+        ]
+    )
+
+
 query_telemetry_tool = ToolDefinition(
     name="query_telemetry",
-    description=(
-        "Read the system's own logs, metrics and health from Elasticsearch. Read-only. "
-        "Use it for errors, latency, token counts, cost, planner decisions and backend "
-        "health. Never use it for the user's conversation text: that is not available. "
-        "Index families: 'agent-logs' (events: level, event_type, message, error, tool_name, "
-        "model, cost_usd, input_tokens, trace_id), 'agent-topology' (one row per turn: planner "
-        "fields), 'agent-monitors-slm-health' (model server health probes). "
-        "Latency is not in one field: it depends on event_type (elapsed_ms, actual_wall_ms, "
-        "planner_duration_ms, rerank_ms, query_embedding_ms, probe_latency_ms). To find which "
-        "event carries a field, use an exists query with a terms aggregation on event_type. "
-        "Every call is bounded by 'since' (default 24h, at most 30d). "
-        "The query uses a small part of the Elasticsearch query language: match_all, bool, "
-        "term, terms, match, match_phrase, prefix, range, exists. Aggregations: terms, "
-        "date_histogram, avg, sum, min, max, value_count, cardinality, stats, percentiles. "
-        "A field outside the family's list is refused, and the refusal lists the allowed fields."
-    ),
+    description=_render_description(),
     category="read_only",
     parameters=[
         ToolParameter(
             name="action",
             type="string",
-            description="'search' (hits and aggregations) or 'count' (a document count).",
+            description=(
+                "'search' (hits and aggregations), 'count' (a document count) or 'latency' "
+                "(model-call timing from Tempo)."
+            ),
             required=True,
             default=None,
             json_schema=None,
@@ -230,13 +337,13 @@ query_telemetry_tool = ToolDefinition(
         ToolParameter(
             name="index",
             type="string",
-            description="The index family to read.",
-            required=True,
+            description="The index family to read. Required for search and count.",
+            required=False,
             default=None,
             json_schema={
                 "type": "string",
                 "enum": list(FAMILY_TIME_FIELD),
-                "description": "The index family to read.",
+                "description": "The index family to read. Required for search and count.",
             },
         ),
         ToolParameter(
@@ -292,7 +399,59 @@ query_telemetry_tool = ToolDefinition(
             type="string",
             description=(
                 f"How far back to look: a number and m, h or d, e.g. '90m', '24h', '7d'. "
-                f"Default {_DEFAULT_SINCE}, at most 30d."
+                f"search and count: default {_DEFAULT_SINCE}, at most 30d. latency: required, "
+                "at most 7d."
+            ),
+            required=False,
+            default=None,
+            json_schema=None,
+        ),
+        ToolParameter(
+            name="span",
+            type="string",
+            description="latency only: the span kind. Default model_call.",
+            required=False,
+            default=None,
+            json_schema={
+                "type": "string",
+                "enum": list(TEMPO_SPANS),
+                "description": "latency only: the span kind. Default model_call.",
+            },
+        ),
+        ToolParameter(
+            name="group_by",
+            type="array",
+            description="latency only: group keys. Default ['role', 'model'].",
+            required=False,
+            default=None,
+            json_schema={
+                "type": "array",
+                "items": {"type": "string", "enum": list(TEMPO_GROUP_KEYS)},
+                "description": "latency only: group keys. Default ['role', 'model'].",
+            },
+        ),
+        ToolParameter(
+            name="role",
+            type="string",
+            description="latency only: keep spans of this role, e.g. 'primary'.",
+            required=False,
+            default=None,
+            json_schema=None,
+        ),
+        ToolParameter(
+            name="model",
+            type="string",
+            description="latency only: keep spans of this model id.",
+            required=False,
+            default=None,
+            json_schema=None,
+        ),
+        ToolParameter(
+            name="limit",
+            type="number",
+            description=(
+                f"latency only: traces to read (default {_TEMPO_DEFAULT_LIMIT}, at most "
+                f"{_TEMPO_MAX_LIMIT})."
             ),
             required=False,
             default=None,
@@ -635,7 +794,7 @@ def _build_request(
         ToolExecutionError: Any argument is refused. Nothing has been sent at that point.
     """
     if action not in _ACTIONS:
-        raise _refuse(f"action must be one of {', '.join(_ACTIONS)}")
+        raise _refuse(f"action must be one of {', '.join((*_ACTIONS, _LATENCY))}")
     if not isinstance(index, str) or index not in FAMILY_TIME_FIELD:
         raise _refuse(f"index must be one of {', '.join(FAMILY_TIME_FIELD)}")
     window = _parse_since(since)
@@ -758,6 +917,452 @@ def _shape_result(action: str, data: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_absent(value: object) -> bool:
+    """Report whether an optional argument was left out (``None``, ``""``, ``{}`` or ``[]``)."""
+    return value is None or value in ("", {}, [])
+
+
+def _refuse_foreign_args(action: str, args: Mapping[str, object], names: Sequence[str]) -> None:
+    """Refuse arguments that belong to the other data source.
+
+    Args:
+        action: The action the model asked for.
+        args: Every argument the model passed, by name.
+        names: The names that ``action`` does not take.
+
+    Raises:
+        ToolExecutionError: One of ``names`` was given a value.
+    """
+    given = [name for name in names if not _is_absent(args.get(name))]
+    if given:
+        raise _refuse(f"action {action!r} does not take {', '.join(given)}")
+
+
+@dataclass(frozen=True)
+class _TempoRequest:
+    """A validated ``latency`` request: the query parameters and how to read the reply.
+
+    Attributes:
+        params: The search API query parameters, built by the tool.
+        span: The span kind.
+        group_by: The group keys, in order.
+        window: The ``since`` value as written.
+        limit: The trace limit.
+    """
+
+    params: Mapping[str, str]
+    span: str
+    group_by: tuple[str, ...]
+    window: str
+    limit: int
+
+
+def _build_tempo_request(
+    since: object,
+    span: object,
+    group_by: object,
+    role: object,
+    model: object,
+    limit: object,
+    *,
+    now: float,
+) -> _TempoRequest:
+    """Validate the ``latency`` arguments and build the one search the tool will send.
+
+    Args:
+        since: The look-back window. Required, from ``1m`` to ``7d``.
+        span: A key of ``TEMPO_SPANS``, or ``None`` for ``model_call``.
+        group_by: A list of distinct keys of ``TEMPO_GROUP_KEYS``, or ``None`` or ``[]`` for
+            role and model.
+        role: An exact role to keep, or ``None``.
+        model: An exact model id to keep, or ``None``.
+        limit: The trace limit, an integer from 1 to 500, or ``None`` for 200.
+        now: The current Unix time in seconds.
+
+    Returns:
+        The request.
+
+    Raises:
+        ToolExecutionError: Any argument is refused. Nothing has been sent at that point.
+    """
+    if since is None:
+        raise _refuse("latency needs 'since', e.g. '24h' (at most 7d)")
+    match = _SINCE_RE.fullmatch(since) if isinstance(since, str) else None
+    if match is None:
+        raise _refuse("since is a number and m, h or d, e.g. '90m', '24h', '7d'")
+    minutes = int(match.group(1)) * _SINCE_UNIT_MINUTES[match.group(2)]
+    if not 1 <= minutes <= _TEMPO_MAX_SINCE_MINUTES:
+        raise _refuse("for latency, since must be between 1 minute and 7 days")
+
+    kind = "model_call" if span is None else span
+    if not isinstance(kind, str) or kind not in TEMPO_SPANS:
+        raise _refuse(f"span must be one of {', '.join(TEMPO_SPANS)}")
+
+    keys: object = list(TEMPO_GROUP_KEYS) if _is_absent(group_by) else group_by
+    if (
+        not isinstance(keys, list)
+        or not all(isinstance(k, str) and k in TEMPO_GROUP_KEYS for k in keys)
+        or len(set(keys)) != len(keys)
+    ):
+        raise _refuse(f"group_by is a list of distinct keys from {', '.join(TEMPO_GROUP_KEYS)}")
+
+    if limit is None:
+        traces = _TEMPO_DEFAULT_LIMIT
+    elif _is_number(limit) and float(limit).is_integer() and 1 <= limit <= _TEMPO_MAX_LIMIT:
+        traces = int(limit)
+    else:
+        raise _refuse(f"limit must be an integer from 1 to {_TEMPO_MAX_LIMIT}")
+
+    conditions = [TEMPO_SPANS[kind].selector]
+    for name, value in (("role", role), ("model", model)):
+        if value is None:
+            continue
+        if not isinstance(value, str) or not _LABEL_RE.fullmatch(value):
+            raise _refuse(f"{name} is 1 to 100 letters, digits or . _ / : -")
+        conditions.append(f'span.{TEMPO_GROUP_KEYS[name]} = "{value}"')
+
+    selected = [
+        *(f"span.{a}" for a in (*TEMPO_GROUP_KEYS.values(), *_TEMPO_TOKENS.values())),
+        "span:status",
+        *(f"span.{a}" for a in TEMPO_SPANS[kind].timings.values()),
+    ]
+    traceql = f"{{ {' && '.join(conditions)} }} | select({', '.join(selected)})"
+    end = int(now)
+    return _TempoRequest(
+        params=MappingProxyType(
+            {
+                "q": traceql,
+                "start": str(end - minutes * 60),
+                "end": str(end),
+                "limit": str(traces),
+                "spss": str(_TEMPO_SPANS_PER_SET),
+            }
+        ),
+        span=kind,
+        group_by=tuple(keys),
+        window=match.group(0),
+        limit=traces,
+    )
+
+
+def _as_int(value: object) -> int | None:
+    """Read an integer that Tempo's JSON may write as a number or a decimal string.
+
+    Args:
+        value: The raw value.
+
+    Returns:
+        The integer, or ``None`` when ``value`` is not a whole number.
+    """
+    if _is_int(value):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?\d{1,20}", value):
+        return int(value)
+    return None
+
+
+def _span_attributes(span: Mapping[str, object]) -> dict[str, str | int]:
+    """Read the listed attributes of one span and drop every other one.
+
+    Args:
+        span: One span of a Tempo search reply.
+
+    Returns:
+        Attribute name -> a string or integer value, for names in ``_TEMPO_READ_KEYS`` only.
+    """
+    out: dict[str, str | int] = {}
+    attributes = span.get("attributes")
+    for item in attributes if isinstance(attributes, list) else []:
+        if not isinstance(item, dict) or item.get("key") not in _TEMPO_READ_KEYS:
+            continue
+        value = item.get("value")
+        if not isinstance(value, dict):
+            continue
+        if isinstance(value.get("stringValue"), str):
+            out[item["key"]] = value["stringValue"]
+        elif (number := _as_int(value.get("intValue"))) is not None:
+            out[item["key"]] = number
+    return out
+
+
+def _label(value: str | int | None) -> str:
+    """Turn a group value from Tempo into a safe label.
+
+    Args:
+        value: The attribute value, or ``None`` when the span lacks it.
+
+    Returns:
+        The value when it looks like a role or model id, ``<none>`` when absent, else
+        ``<unrecognised>``. No free text from Tempo can pass.
+    """
+    if value is None:
+        return "<none>"
+    if isinstance(value, str) and _LABEL_RE.fullmatch(value):
+        return value
+    return "<unrecognised>"
+
+
+def _percentile(ordered: Sequence[float], percent: int) -> float:
+    """Nearest-rank percentile of a sorted, non-empty sequence, rounded to 0.1."""
+    return round(ordered[max(0, math.ceil(percent / 100 * len(ordered)) - 1)], 1)
+
+
+@dataclass
+class _Group:
+    """Running totals for one group while the reply is read."""
+
+    durations_ms: list[float] = field(default_factory=list)
+    errors: int = 0
+    tokens: dict[str, int] = field(default_factory=lambda: dict.fromkeys(_TEMPO_TOKENS, 0))
+    timings: dict[str, list[float]] = field(default_factory=dict)
+
+    def summary(self, labels: Mapping[str, str]) -> dict[str, object]:
+        """Return the group's statistics with its labels first."""
+        ordered = sorted(self.durations_ms)
+        out: dict[str, object] = {
+            **labels,
+            "count": len(ordered),
+            "errors": self.errors,
+            "p50_ms": _percentile(ordered, 50),
+            "p90_ms": _percentile(ordered, 90),
+            "max_ms": round(ordered[-1], 1),
+            **self.tokens,
+        }
+        for prefix, values in self.timings.items():
+            values.sort()
+            out[f"{prefix}_p50_ms"] = _percentile(values, 50)
+            out[f"{prefix}_p90_ms"] = _percentile(values, 90)
+        return out
+
+
+def _trace_span_sets(trace: Mapping[str, object]) -> list[Mapping[str, object]] | None:
+    """Return a trace's span sets, from either reply shape, or ``None`` when it has none."""
+    span_sets = trace.get("spanSets")
+    if isinstance(span_sets, list):
+        return [s for s in span_sets if isinstance(s, dict)]
+    single = trace.get("spanSet")
+    return [single] if isinstance(single, dict) else None
+
+
+def _summarise_tempo(data: Mapping[str, object], request: _TempoRequest) -> dict[str, object]:
+    """Reduce a Tempo search reply to per-group statistics, and say if anything was cut.
+
+    Args:
+        data: The decoded reply.
+        request: The request that produced it.
+
+    Returns:
+        The result for the model: the bounds, ``complete`` with its reasons, and the groups,
+        largest first. Percentiles are over ``spans_used`` only.
+
+    Raises:
+        ToolExecutionError: ``traces`` is present and is not a list.
+    """
+    traces = data.get("traces", [])
+    if not isinstance(traces, list):
+        raise ToolExecutionError("Tempo returned a reply of an unexpected shape.")
+    reasons: dict[str, None] = {}
+    if len(traces) >= request.limit:
+        reasons["trace limit reached: more traces can match; narrow the window or raise limit"] = (
+            None
+        )
+    metrics = data.get("metrics")
+    if isinstance(metrics, dict):
+        done, total = _as_int(metrics.get("completedJobs")), _as_int(metrics.get("totalJobs"))
+        if done is not None and total is not None and done < total:
+            reasons["the search stopped before all blocks were read"] = None
+
+    timings = TEMPO_SPANS[request.span].timings
+    groups: dict[tuple[str, ...], _Group] = {}
+    seen: set[tuple[str, str]] = set()
+    used = 0
+    for index, trace in enumerate(traces[: request.limit]):
+        span_sets = _trace_span_sets(trace) if isinstance(trace, dict) else None
+        if span_sets is None:
+            reasons["a trace had no span set"] = None
+            continue
+        for span_set in span_sets:
+            spans = span_set.get("spans", [])
+            spans = spans if isinstance(spans, list) else []
+            matched = _as_int(span_set.get("matched"))
+            if matched is None or matched < 0:
+                reasons["a span set had no valid match count"] = None
+            elif matched > len(spans):
+                reasons["a span set held more matching spans than it returned"] = None
+            for span in spans:
+                if not isinstance(span, dict):
+                    reasons["a span was not an object"] = None
+                    continue
+                span_id = str(span.get("spanID", ""))
+                if span_id and (str(index), span_id) in seen:
+                    continue
+                seen.add((str(index), span_id))
+                if used >= _TEMPO_MAX_SPANS:
+                    reasons[f"span cap of {_TEMPO_MAX_SPANS} reached"] = None
+                    break
+                nanos = _as_int(span.get("durationNanos"))
+                if nanos is None or nanos < 0:
+                    reasons["a span had no valid duration"] = None
+                    continue
+                attributes = _span_attributes(span)
+                key = tuple(_label(attributes.get(TEMPO_GROUP_KEYS[k])) for k in request.group_by)
+                group = groups.get(key)
+                if group is None:
+                    if len(groups) >= _TEMPO_MAX_GROUPS:
+                        reasons[f"more than {_TEMPO_MAX_GROUPS} groups; the rest were dropped"] = (
+                            None
+                        )
+                        continue
+                    group = groups[key] = _Group()
+                used += 1
+                group.durations_ms.append(nanos / 1_000_000)
+                group.errors += attributes.get(_TEMPO_STATUS_KEY) == "error"
+                for name, attribute in _TEMPO_TOKENS.items():
+                    value = attributes.get(attribute)
+                    group.tokens[name] += value if isinstance(value, int) else 0
+                for prefix, attribute in timings.items():
+                    value = attributes.get(attribute)
+                    if isinstance(value, int):
+                        group.timings.setdefault(prefix, []).append(float(value))
+
+    ranked = sorted(groups.items(), key=lambda item: (-len(item[1].durations_ms), item[0]))
+    out: dict[str, object] = {
+        "source": "tempo",
+        "span": request.span,
+        "since": request.window,
+        "group_by": list(request.group_by),
+        "trace_limit": request.limit,
+        "traces_returned": len(traces),
+        "spans_used": used,
+        "complete": not reasons,
+        "percentiles_over": "spans_used",
+        "groups": [
+            group.summary(dict(zip(request.group_by, key, strict=True))) for key, group in ranked
+        ],
+    }
+    if reasons:
+        out["sample"] = True
+        out["incomplete_reasons"] = list(reasons)
+    return out
+
+
+async def _read_tempo(
+    request: _TempoRequest, *, trace_id: str, session_id: str | None
+) -> Mapping[str, object]:
+    """Send the one search request and read the reply within the size and time bounds.
+
+    Args:
+        request: The validated request.
+        trace_id: For logging.
+        session_id: For logging.
+
+    Returns:
+        The decoded reply object.
+
+    Raises:
+        ToolExecutionError: Tempo cannot be reached, times out, rejects the query, or replies
+            with more than 16 MB or with something other than a JSON object.
+    """
+    url = f"{settings.tempo_url.rstrip('/')}/api/search"
+    body = bytearray()
+    try:
+        async with asyncio.timeout(_CLIENT_TIMEOUT_S):
+            async with create_guarded_http_client(timeout=_CLIENT_TIMEOUT_S) as client:
+                async with client.stream("GET", url, params=dict(request.params)) as response:
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > _TEMPO_MAX_BYTES:
+                            raise ToolExecutionError(
+                                "Tempo's reply is too large. Narrow the window, add a role or "
+                                "model filter, or lower limit."
+                            )
+    except EgressBlockedError as exc:
+        raise ToolExecutionError("Tempo is blocked by the egress guard.") from exc
+    except httpx.ConnectError as exc:
+        log.error("query_telemetry_tempo_connect_failed", trace_id=trace_id, session_id=session_id)
+        raise ToolExecutionError("Cannot connect to Tempo. Is the tempo service running?") from exc
+    except (httpx.TimeoutException, TimeoutError) as exc:
+        log.error("query_telemetry_tempo_timeout", trace_id=trace_id, session_id=session_id)
+        raise ToolExecutionError("Tempo request timed out.") from exc
+    except httpx.HTTPError as exc:
+        log.error(
+            "query_telemetry_tempo_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+            error=type(exc).__name__,
+        )
+        raise ToolExecutionError("Tempo request failed.") from exc
+
+    if response.is_error:
+        # A 400 or 422 describes the query, which the tool built. Any other body (a proxy
+        # page, a server error) is not checked text, so the model gets the status only.
+        if response.status_code in _TEMPO_QUERY_ERROR_STATUSES:
+            reason = bytes(body[:_ERROR_CHARS]).decode("utf-8", errors="replace")
+        else:
+            reason = "no detail passed on for this status"
+        log.warning(
+            "query_telemetry_tempo_rejected",
+            trace_id=trace_id,
+            session_id=session_id,
+            status=response.status_code,
+            reason=reason,
+        )
+        raise ToolExecutionError(
+            f"Tempo rejected the query (HTTP {response.status_code}): {reason}"
+        )
+    try:
+        data = json.loads(body)
+    except ValueError as exc:
+        raise ToolExecutionError("Tempo returned a reply that is not JSON.") from exc
+    if not isinstance(data, dict):
+        raise ToolExecutionError("Tempo returned a reply that is not a JSON object.")
+    return data
+
+
+async def _latency(args: Mapping[str, object], *, ctx: TraceContext) -> dict[str, object]:
+    """Run the ``latency`` action: one bounded Tempo search, summarised per group.
+
+    Args:
+        args: Every argument the model passed, by name.
+        ctx: Trace context for logging.
+
+    Returns:
+        The per-group statistics (see ``_summarise_tempo``).
+
+    Raises:
+        ToolExecutionError: The request is refused (nothing was sent), or Tempo fails.
+    """
+    try:
+        _refuse_foreign_args(_LATENCY, args, _ES_ONLY_ARGS)
+        request = _build_tempo_request(
+            args.get("since"),
+            args.get("span"),
+            args.get("group_by"),
+            args.get("role"),
+            args.get("model"),
+            args.get("limit"),
+            now=time.time(),
+        )
+    except ToolExecutionError as exc:
+        log.warning(
+            "query_telemetry_refused",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            reason=str(exc),
+        )
+        raise
+    log.info(
+        "query_telemetry_tempo_started",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        span=request.span,
+        since=request.window,
+        limit=request.limit,
+    )
+    data = await _read_tempo(request, trace_id=ctx.trace_id, session_id=ctx.session_id)
+    return _summarise_tempo(data, request)
+
+
 async def query_telemetry_executor(
     action: str = "",
     index: str = "",
@@ -766,35 +1371,61 @@ async def query_telemetry_executor(
     fields: object = None,
     size: object = None,
     since: object = None,
+    span: object = None,
+    group_by: object = None,
+    role: object = None,
+    model: object = None,
+    limit: object = None,
     *,
     ctx: TraceContext,
 ) -> dict[str, Any]:
-    """Run one bounded, read-only search or count over the system's own telemetry.
+    """Run one bounded, read-only search, count or latency summary over the own telemetry.
 
     Args:
-        action: ``search`` or ``count``.
+        action: ``search`` or ``count`` (Elasticsearch), or ``latency`` (Tempo).
         index: An index family: ``agent-logs``, ``agent-topology`` or
-            ``agent-monitors-slm-health``.
+            ``agent-monitors-slm-health``. Search and count only.
         query: Optional filter from the supported query operators. Default: all documents.
         aggs: Optional aggregations for ``search``.
         fields: Optional field names to return for each hit.
         size: Hits to return. Default 20, at most 50.
-        since: Look-back window, a number and ``m``, ``h`` or ``d``. Default ``24h``, at
-            most ``30d``.
+        since: Look-back window, a number and ``m``, ``h`` or ``d``. Search and count:
+            default ``24h``, at most ``30d``. Latency: required, at most ``7d``.
+        span: Latency only: a key of ``TEMPO_SPANS``. Default ``model_call``.
+        group_by: Latency only: keys of ``TEMPO_GROUP_KEYS``. Default role and model.
+        role: Latency only: an exact role to keep.
+        model: Latency only: an exact model id to keep.
+        limit: Latency only: traces to read. Default 200, at most 500.
         ctx: Trace context for logging.
 
     Returns:
         For ``count``, ``{"count": n}``. For ``search``, ``total``, ``hits`` and, when
         asked, ``aggregations``. A reply over 20,000 characters is cut and marked
-        ``truncated``.
+        ``truncated``. For ``latency``, per-group statistics and ``complete``.
 
     Raises:
         ToolExecutionError: The request is refused (the message starts with ``refused:`` and
-            nothing was sent), Elasticsearch rejects the query, or it cannot be reached.
+            nothing was sent), the store rejects the query, or it cannot be reached.
     """
     trace_id = ctx.trace_id
     session_id = ctx.session_id
+    args: dict[str, object] = {
+        "index": index,
+        "query": query,
+        "aggs": aggs,
+        "fields": fields,
+        "size": size,
+        "since": since,
+        "span": span,
+        "group_by": group_by,
+        "role": role,
+        "model": model,
+        "limit": limit,
+    }
+    if action == _LATENCY:
+        return await _latency(args, ctx=ctx)
     try:
+        _refuse_foreign_args(action, args, _TEMPO_ONLY_ARGS)
         path, body = _build_request(action, index, query, aggs, fields, size, since)
     except ToolExecutionError as exc:
         log.warning(

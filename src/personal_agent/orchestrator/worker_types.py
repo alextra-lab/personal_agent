@@ -338,6 +338,28 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
 )
 
 
+# FRE-1564: the tools that send a query or a URL out of the system. A worker type that holds
+# one is outbound; a registry test fails if it also holds a private tool read.
+OUTBOUND_TOOLS: frozenset[str] = frozenset({"web_search", "fetch_url", "get_library_docs"})
+
+
+def carries_conversation_context(spec: WorkerTypeSpec) -> bool:
+    """Whether a worker of this type is handed the recent conversation messages.
+
+    A type that holds an outbound tool (a query or a URL leaves the system) is briefed by its
+    task text alone. A page it fetches can instruct it to put whatever it holds in a request,
+    so it must not hold the conversation (FRE-1564, owner decision A of 2026-10-10). This also
+    closes the older ``web_search`` path: a search query is an outbound channel too.
+
+    Args:
+        spec: The registry entry of the worker type.
+
+    Returns:
+        ``True`` when the type holds no outbound tool.
+    """
+    return not OUTBOUND_TOOLS & set(spec.tools)
+
+
 def render_prompt_block(worker_type: WorkerType, researcher_min_search_rounds: int = 0) -> str:
     """The type block appended to the shared base prompt for this type (ADR-0150 D5).
 

@@ -10,7 +10,7 @@ import asyncio
 import json
 import time
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -1438,6 +1438,7 @@ async def _dispatch_hermetic(
     mode: Mode = Mode.NORMAL,
     config_error: Exception | None = None,
     result: Any = None,
+    messages: list[dict[str, Any]] | None = None,
 ) -> list[SubAgentResult]:
     """Drive ``_run_dispatch`` with hermetic governance, registry and worker."""
     from personal_agent.orchestrator.expansion_controller import ExpansionResult
@@ -1469,7 +1470,7 @@ async def _dispatch_hermetic(
             plan=plan,
             llm_client=AsyncMock(),
             trace_id="t-hermetic",
-            messages=[],
+            messages=messages if messages is not None else [],
             result=result if result is not None else ExpansionResult(),
         )
 
@@ -3128,3 +3129,136 @@ class TestPlannerInputTooLargeFRE1541:
         )
 
         client.respond.assert_not_awaited()
+
+
+class TestWorkerConversationContext:
+    """FRE-1564 (owner decision A, 2026-10-10) — a worker that can send text out holds no history.
+
+    Every worker used to carry the last four conversation messages. A `researcher` holds
+    `web_search` and `fetch_url`, and a fetched page can instruct it to put that text in a
+    query or an address. So a type that holds an outbound tool is briefed by its task text
+    alone. A type with no outbound tool (`general`) still carries its four messages.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    _HISTORY: ClassVar[list[dict[str, Any]]] = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"private turn {i}"}
+        for i in range(6)
+    ]
+
+    @staticmethod
+    def _plan() -> ExpansionPlan:
+        return ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[
+                _task(name="r", type_=WorkerType.RESEARCHER),
+                _task(name="g", type_=WorkerType.GENERAL),
+            ],
+        )
+
+    @staticmethod
+    def _capture(specs: list[Any]) -> Any:
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            specs.append(kwargs["spec"])
+            return _make_sub_agent_result(f"task_{len(specs) - 1}")
+
+        return _run
+
+    @pytest.mark.asyncio
+    async def test_the_researcher_is_briefed_without_history_and_general_keeps_its_four(
+        self, controller: ExpansionController
+    ) -> None:
+        specs: list[Any] = []
+        await _dispatch_hermetic(
+            controller,
+            self._plan(),
+            self._capture(specs),
+            granted=("web_search", "run_python"),
+            messages=self._HISTORY,
+        )
+
+        by_type = {s.worker_type: s for s in specs}
+        assert by_type[WorkerType.RESEARCHER].context == []
+        assert by_type[WorkerType.GENERAL].context == self._HISTORY[-4:]
+        assert len(by_type[WorkerType.GENERAL].context) == 4
+
+    @pytest.mark.asyncio
+    async def test_the_researchers_task_text_is_still_its_brief(
+        self, controller: ExpansionController
+    ) -> None:
+        specs: list[Any] = []
+        await _dispatch_hermetic(
+            controller,
+            ExpansionPlan(strategy="HYBRID", tasks=[_task(type_=WorkerType.RESEARCHER)]),
+            self._capture(specs),
+            granted=("web_search",),
+            messages=self._HISTORY,
+        )
+        assert "Goal for task 0" in specs[0].task
+
+    @pytest.mark.asyncio
+    async def test_seeded_negative_with_the_rule_off_the_researcher_gets_its_history(
+        self, controller: ExpansionController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """*Fails if* the test above cannot tell the rule from its absence."""
+        from personal_agent.orchestrator import expansion_controller as ec
+
+        monkeypatch.setattr(ec, "carries_conversation_context", lambda _spec: True)
+        specs: list[Any] = []
+        await _dispatch_hermetic(
+            controller,
+            self._plan(),
+            self._capture(specs),
+            granted=("web_search", "run_python"),
+            messages=self._HISTORY,
+        )
+
+        by_type = {s.worker_type: s for s in specs}
+        assert by_type[WorkerType.RESEARCHER].context == self._HISTORY[-4:]
+
+    @pytest.mark.asyncio
+    async def test_the_messages_a_worker_model_receives_hold_no_history_for_the_researcher(
+        self, controller: ExpansionController
+    ) -> None:
+        """The assembled request, not only the brief: what ``run_sub_agent`` sends the model."""
+        from personal_agent.orchestrator import sub_agent as sa
+
+        specs: list[Any] = []
+        await _dispatch_hermetic(
+            controller,
+            self._plan(),
+            self._capture(specs),
+            granted=(),
+            messages=self._HISTORY,
+        )
+
+        sent: dict[WorkerType, list[dict[str, Any]]] = {}
+        for spec in specs:
+            client = AsyncMock()
+
+            async def _respond(_spec: Any = spec, _client: Any = client, **kwargs: Any) -> Any:
+                sent.setdefault(_spec.worker_type, list(kwargs["messages"]))
+                return {
+                    "role": "assistant",
+                    "content": "DONE",
+                    "tool_calls": [],
+                    "usage": {},
+                    "response_id": None,
+                }
+
+            client.respond = _respond
+            with patch.object(sa, "get_shared_tool_execution_layer", return_value=MagicMock()):
+                await sa.run_sub_agent(spec=spec, llm_client=client, trace_id="t-ctx")
+
+        def history_in(worker_type: WorkerType) -> list[str]:
+            return [
+                m["content"]
+                for m in sent[worker_type]
+                if isinstance(m.get("content"), str) and m["content"].startswith("private turn")
+            ]
+
+        assert history_in(WorkerType.RESEARCHER) == []
+        assert history_in(WorkerType.GENERAL) == [m["content"] for m in self._HISTORY[-4:]]

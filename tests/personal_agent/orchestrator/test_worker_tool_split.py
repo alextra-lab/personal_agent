@@ -2,10 +2,10 @@
 
 The rule: no worker type holds both an outbound channel (a query or URL leaves the system)
 and a private or internal read made with a tool. A hostile page cannot make a worker that has
-no private tool query those stores, and a worker that holds a private tool has no way out. The
-rule does not cover the conversation context every worker carries (the last four messages and
-the task text): a `researcher` holds that and can send it out with `fetch_url`. That residual is
-recorded in the `fetch_url` governance decision and in ADR-0150.
+no private tool query those stores, and a worker that holds a private tool has no way out.
+The conversation context is the second half of the same rule: a type that holds an outbound
+tool is briefed by its task text alone (owner decision A, 2026-10-10), and
+`test_expansion_controller.py::TestWorkerConversationContext` checks what the model receives.
 
 AC-2: each added tool reaches its worker type, after governance, and no write tool does.
 AC-3: the rule, with a seeded negative.
@@ -23,13 +23,19 @@ from personal_agent.config.governance_loader import load_governance_config
 from personal_agent.governance.models import Mode
 from personal_agent.governance.sub_agent_tools import evaluate_sub_agent_tool_grant
 from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
-from personal_agent.orchestrator.worker_types import WORKER_TYPES, WorkerType, WorkerTypeSpec
+from personal_agent.orchestrator.worker_types import (
+    OUTBOUND_TOOLS,
+    WORKER_TYPES,
+    WorkerType,
+    WorkerTypeSpec,
+    carries_conversation_context,
+)
 from personal_agent.tools import register_mvp_tools
 from personal_agent.tools.registry import ToolRegistry
 
 # A worker tool is exactly one of these. A new worker tool that is in none of them fails
 # `test_every_worker_tool_is_classified`, so the author must decide which side it is on.
-OUTBOUND = frozenset({"web_search", "fetch_url", "get_library_docs"})
+OUTBOUND = OUTBOUND_TOOLS
 PRIVATE = frozenset({"search_memory", "recall_personal_history", "notes_search", "query_telemetry"})
 # Reads nothing private and sends nothing out. `run_python` is here only because its
 # `network` argument is pinned false for a worker (see the governance decision).
@@ -105,6 +111,30 @@ class TestTheRule:
         """`general` holds private reads, so its code sandbox must not have a way out."""
         decision = load_governance_config().sub_agent_tools["run_python"]
         assert decision.param_forced == {"network": False}
+
+
+class TestConversationContextRule:
+    """Owner decision A (2026-10-10): a type that can send text out holds no conversation history."""
+
+    def test_the_researcher_carries_none_and_general_carries_its_messages(self) -> None:
+        assert carries_conversation_context(WORKER_TYPES[WorkerType.RESEARCHER]) is False
+        assert carries_conversation_context(WORKER_TYPES[WorkerType.GENERAL]) is True
+
+    @pytest.mark.parametrize("worker_type", list(WorkerType))
+    def test_the_rule_is_exactly_no_outbound_tool(self, worker_type: WorkerType) -> None:
+        spec = WORKER_TYPES[worker_type]
+        assert carries_conversation_context(spec) is (not OUTBOUND & set(spec.tools))
+
+    @pytest.mark.parametrize("outbound_tool", sorted(OUTBOUND))
+    def test_seeded_negative_an_outbound_tool_added_to_general_removes_its_context(
+        self, outbound_tool: str
+    ) -> None:
+        general = WORKER_TYPES[WorkerType.GENERAL]
+        widened = replace(general, tools=(*general.tools, outbound_tool))
+        assert carries_conversation_context(widened) is False
+
+    def test_the_outbound_set_names_every_tool_that_sends_a_query_or_url_out(self) -> None:
+        assert OUTBOUND_TOOLS == frozenset({"web_search", "fetch_url", "get_library_docs"})
 
 
 class TestToolsReachTheWorkers:

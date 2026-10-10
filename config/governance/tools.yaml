@@ -84,13 +84,15 @@ sub_agent_tools:
       registry fails if any type holds an outbound tool (web_search, fetch_url,
       get_library_docs) with a private read.
 
-      What the split does not cover, found in the FRE-1564 security review: every worker
-      spec carries the last four conversation messages as context
-      (expansion_controller.py, `context=messages[-4:]`) and the task text, so a
-      researcher holds conversation text. A page it fetches can instruct it to put that
-      text in a fetch_url address, which the destination then logs. Before this
-      decision, web_search could carry the same text only to the SearXNG proxy and the
-      upstream search engines. Revisit when FRE-1360 lands.
+      What the split alone did not cover, found in the FRE-1564 security review: every
+      worker spec carried the last four conversation messages as context
+      (expansion_controller.py, `context=messages[-4:]`), so a researcher held
+      conversation text, and a page it fetched could instruct it to put that text in a
+      fetch_url address, which the destination then logs. Owner decision A, 2026-10-10:
+      a worker type that holds an outbound tool is briefed by its task text alone, with
+      no conversation history (`carries_conversation_context` in worker_types.py). The
+      task text itself still reaches the researcher, and it derives from the user's
+      request. Revisit when FRE-1360 lands.
 
   get_library_docs:
     granted: true

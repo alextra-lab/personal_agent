@@ -793,15 +793,19 @@ async def query_telemetry_executor(
             nothing was sent), Elasticsearch rejects the query, or it cannot be reached.
     """
     trace_id = ctx.trace_id
+    session_id = ctx.session_id
     try:
         path, body = _build_request(action, index, query, aggs, fields, size, since)
     except ToolExecutionError as exc:
-        log.warning("query_telemetry_refused", trace_id=trace_id, reason=str(exc))
+        log.warning(
+            "query_telemetry_refused", trace_id=trace_id, session_id=session_id, reason=str(exc)
+        )
         raise
 
     log.info(
         "query_telemetry_started",
         trace_id=trace_id,
+        session_id=session_id,
         action=action,
         index=index,
         since=_parse_since(since),
@@ -817,15 +821,20 @@ async def query_telemetry_executor(
     except EgressBlockedError as exc:
         raise ToolExecutionError("Elasticsearch is blocked by the egress guard.") from exc
     except httpx.ConnectError as exc:
-        log.error("query_telemetry_connect_failed", trace_id=trace_id)
+        log.error("query_telemetry_connect_failed", trace_id=trace_id, session_id=session_id)
         raise ToolExecutionError(
             "Cannot connect to Elasticsearch. Is the elasticsearch service running?"
         ) from exc
     except httpx.TimeoutException as exc:
-        log.error("query_telemetry_timeout", trace_id=trace_id)
+        log.error("query_telemetry_timeout", trace_id=trace_id, session_id=session_id)
         raise ToolExecutionError("Elasticsearch request timed out.") from exc
     except httpx.HTTPError as exc:
-        log.error("query_telemetry_failed", trace_id=trace_id, error=type(exc).__name__)
+        log.error(
+            "query_telemetry_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+            error=type(exc).__name__,
+        )
         raise ToolExecutionError("Elasticsearch request failed.") from exc
 
     if response.is_error:
@@ -833,6 +842,7 @@ async def query_telemetry_executor(
         log.warning(
             "query_telemetry_rejected",
             trace_id=trace_id,
+            session_id=session_id,
             status=response.status_code,
             reason=reason,
         )

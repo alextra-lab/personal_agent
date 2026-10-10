@@ -130,6 +130,15 @@ owner's decision of 2026-10-10 and FRE-1360, and keeps the old refusal's text as
 tool for `general` regardless; a missing registration means the tool is simply absent from
 `_build_tool_defs` (the existing behaviour for any unregistered name).
 
+### D-B2. The conversation context (security review, owner decision A)
+
+Every worker spec carried `messages[-4:]`. A type that holds an outbound tool must not, because a
+fetched page can instruct it to send what it holds out. `worker_types.carries_conversation_context`
+returns false for any type holding a tool in `OUTBOUND_TOOLS`; `expansion_controller` passes an empty
+context for it. `general` keeps its four messages. Tests: the brief, the messages the model receives,
+a seeded negative with the rule off. This also closes the `web_search` path. The researcher now
+relies on the planner's brief (ADR-0154).
+
 ### D-C. Close the `run_python` network route for workers
 
 Add `param_forced: dict[str, bool]` to `SubAgentToolDecision`. `clamp_sub_agent_tool_params` sets each

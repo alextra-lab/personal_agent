@@ -917,14 +917,22 @@ documentation. The planner request changes, so ADR-0154 D7 applies again.
 - The worker grant reads only the `sub_agent_tools` block. It never reads a tool's
   `allowed_in_modes`. Each added tool has its own entry there. ALERT and DEGRADED still deny every
   worker tool.
-- **What the rule does not cover.** Every worker spec carries the last four conversation messages as
-  context (`context=messages[-4:]`) and the task text. So a `researcher` holds conversation text, and
-  with `fetch_url` it has a channel to any public host. A hostile page can instruct it to put that
-  text in a request address. The rule protects the stores a worker can read with a tool (memory,
-  notes, telemetry). It does not protect the context slice. Before this amendment `web_search` could
-  carry the same text only to the SearXNG proxy and the upstream engines. The owner granted
-  `fetch_url` ("2 yes") before this was known. The security review of FRE-1564 found it, and the
-  decision on a narrower grant is open on the ticket.
+- **The conversation context (owner decision A, 2026-10-10).** The tool rule protects the stores a
+  worker can read with a tool: memory, notes and telemetry. It did not protect the conversation.
+  Every worker spec carried the last four conversation messages as context
+  (`context=messages[-4:]`), so a `researcher` held conversation text. With `fetch_url` it has a
+  channel to any public host, and a hostile page can instruct it to put that text in a request
+  address. The security review of FRE-1564 found this after the owner had granted `fetch_url`
+  ("2 yes") on the premise that the researcher held nothing private. The owner then chose option A:
+  a worker type that holds an outbound tool is briefed by its task text alone, with no conversation
+  history (`carries_conversation_context`). `general` holds no outbound tool and keeps its four
+  messages. This also closes the older `web_search` path. A search query is an outbound channel, it
+  reaches the SearXNG proxy and the upstream engines, and until now the `researcher` held the last
+  four messages when it sent one. A test checks the messages a worker's model receives, with a seeded
+  negative. The task text still reaches the `researcher`, and it derives from the user's request.
+- **A cost to watch.** The `researcher` now relies on the planner's brief for context (ADR-0154).
+  A follow-up question that depended on earlier turns reaches it only as far as the planner wrote
+  that dependence into the task. Watch for thinner research in the Gemma retest and in real use.
 - `query_telemetry` is worker-only (`ToolDefinition.worker_only`). The registry omits it from every
   listing the primary reads, so the primary's tool list, its tool-awareness prompt and its per-turn
   tokens do not change. The primary keeps its `bash` and `curl` route. Only a worker's tool loop

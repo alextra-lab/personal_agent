@@ -61,6 +61,7 @@ from personal_agent.orchestrator.worker_types import (
     THOROUGHNESS_LEVELS,
     WORKER_TYPES,
     WorkerType,
+    carries_conversation_context,
     render_worker_report_body,
     worker_types_declaring,
 )
@@ -1470,7 +1471,12 @@ class ExpansionController:
                 # see _render_worker_task's docstring for why `background` below
                 # cannot carry them to the worker.
                 task=_render_worker_task(task),
-                context=messages[-4:] if messages else [],
+                # FRE-1564: a type that can send text out is briefed by the task text alone.
+                context=(
+                    messages[-4:]
+                    if messages and carries_conversation_context(WORKER_TYPES[task.type])
+                    else []
+                ),
                 # FRE-1379: no max_tokens override here — SubAgentSpec's own
                 # default (None) defers to the deployment's catalog-declared
                 # ceiling. settings.sub_agent_max_tokens used to be passed here

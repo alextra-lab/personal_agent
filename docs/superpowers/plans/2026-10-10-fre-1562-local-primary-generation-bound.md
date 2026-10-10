@@ -118,3 +118,13 @@ make test && make mypy && make ruff-check && make ruff-format && pre-commit run 
 
 Not a production write path, not destructive, no schema, no cost or governance code. Self-serve.
 Deploy class: `seshat-gateway` rebuild (master).
+
+## Codex plan review — dispositions (2026-10-10)
+
+| Finding | Disposition |
+|---|---|
+| Blocker: a local planner `length` does not end the turn (`expansion_controller.py` falls back to `generate_fallback_plan`) | **Declined, stated scope.** The planner already treats truncation as a planner failure with its own `planner_failed reason=output_truncated` event (FRE-1413 AC-3) and a deterministic fallback plan, so the turn survives. The bound now caps that call at 12,288 tokens, which removes the 600 s stall. Ending the turn there would be a worse outcome for the user, and the ticket names the primary call. Flagged for master in the handoff. |
+| Blocker: the finalizer cannot name the deployment | **Not a defect in this design.** `step_llm_call` sets `ctx.answering_model_key` before the call, and the event reads it. A test through `step_llm_call` with `answering_model_key` reset to `None` proves it. |
+| Should-fix: tests do not prove the production callers forward the bound | **Accepted.** `TestStepLlmCallForwardsTheBound` drives `step_llm_call` for the normal call, the context-window retry call and a cloud client. A mutation check (bound removed from the retry call) turned the retry test red. |
+| Nit: the golden changes in the `primary` resolution cell only | **Accepted.** Hand-edited one cell. The five catalog entries are checked in `test_local_primary_generation_bound.py`. |
+| Nit: artifact-builder option cards show `max_output_tokens` | **Accepted.** The five local options now advertise 12,288, which is the value applied. No golden test covers the payload. |

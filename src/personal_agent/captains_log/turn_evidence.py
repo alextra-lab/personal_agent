@@ -57,7 +57,7 @@ EVIDENCE_RECORD_KEYS: tuple[str, ...] = (
 """The eight records ADR-0125 D3 requires every turn to carry, in table order."""
 
 _VOLATILE_TAIL_COMPONENTS: frozenset[str] = frozenset(
-    {"skill_bodies", "memory_section", "artifact_builder_planning_note"}
+    {"skill_bodies", "artifact_builder_planning_note"}
 )
 """Prompt components that ride the volatile block inlined into the user message.
 
@@ -67,6 +67,10 @@ component list is intentionally left alone: it describes what assembly produced,
 what the ADR-0078 prompt identity means; only the *capture's* claim is narrowed to what
 the model actually received.
 """
+
+_MEMORY_COMPONENT = "memory_section"
+"""The recalled-memory component. Since FRE-1360 it rides its own tool result, not the
+fence, so the record filters it on ``memory_reached_input`` instead."""
 
 _MAX_RECORDED_ASSERTION_CHARS = 2000
 """Bound on the recorded operator assertion (FRE-1150).
@@ -110,13 +114,13 @@ class MemoryItemKind(StrEnum):
 class CandidateSource(StrEnum):
     """Which producer offered a candidate, which determines how admission resolves.
 
-    ``MEMORY_CONTEXT`` items ride the volatile block inlined into the user message and
-    are subject to budget trimming, renderer caps, and the inliner. The sole member
+    ``MEMORY_CONTEXT`` items ride the turn's recalled-memory tool result (FRE-1360) and
+    are subject to budget trimming, renderer caps, and that result reaching the wire. The sole member
     today, deliberately: a former second member, ``SESSION_FACT_SECTION``, resolved
     admission from a producer-supplied stamp instead of the wire form (FRE-1135) and
     was removed along with its producer. Any future source must resolve admission the
     same way ``MEMORY_CONTEXT`` does — grounded in ``rendered_identities`` /
-    ``block_reached_input`` — never from a bare flag.
+    ``memory_reached_input`` — never from a bare flag.
     """
 
     MEMORY_CONTEXT = "memory_context"
@@ -705,12 +709,39 @@ def _wire_carries_volatile_fence(wire_messages: Sequence[object], user_message: 
     return False
 
 
+def _wire_carries_tool_result(wire_messages: Sequence[object], call_id: str | None) -> bool:
+    """Whether this turn's harness tool result survived into the final serialized input.
+
+    Anchored on the tool-call id, which carries this turn's trace id
+    (:func:`~personal_agent.orchestrator.untrusted_channel.harness_call_id`), so a previous
+    turn's memory result left in the history can never stand in for this one — the same
+    provenance rule the fence check applies by anchoring on the user's own text. The
+    sanitiser drops an orphaned tool result, so a result present in the wire form answers a
+    call that is present too.
+
+    Args:
+        wire_messages: The final serialized message list.
+        call_id: This turn's memory exchange id, or None when no exchange was appended.
+
+    Returns:
+        True when a ``role: "tool"`` message with this id is in the wire form.
+    """
+    if not call_id:
+        return False
+    return any(
+        isinstance(message, Mapping)
+        and message.get("role") == "tool"
+        and message.get("tool_call_id") == call_id
+        for message in wire_messages
+    )
+
+
 def _resolve_admission(
     candidate: RecallCandidateRecord,
     *,
     memory_context_present: bool,
     rendered_budget: Counter[str],
-    block_reached_input: bool,
+    memory_reached_input: bool,
 ) -> RecalledMemoryRecord:
     """Resolve one candidate's disposition against the final serialized model input.
 
@@ -725,7 +756,8 @@ def _resolve_admission(
         candidate: The candidate to resolve.
         memory_context_present: Whether memory context survived budget trimming.
         rendered_budget: Remaining rendered identities, decremented on each match.
-        block_reached_input: Whether the volatile block reached the wire form.
+        memory_reached_input: Whether this turn's recalled-memory tool result reached the
+            wire form (FRE-1360).
 
     Returns:
         The candidate with its admission and drop reason resolved.
@@ -751,7 +783,7 @@ def _resolve_admission(
         admitted, reason = False, DropReason.BUDGET_TRIMMED
     elif rendered_budget[candidate.identity] <= 0:
         admitted, reason = False, DropReason.NOT_RENDERED
-    elif not block_reached_input:
+    elif not memory_reached_input:
         rendered_budget[candidate.identity] -= 1
         admitted, reason = False, DropReason.ABSENT_FROM_FINAL_INPUT
     else:
@@ -785,6 +817,7 @@ def build_turn_evidence(
     operator_assertion: str | None = None,
     memory_state: str = "unavailable",
     memory_state_cause: str | None = None,
+    memory_result_call_id: str | None = None,
 ) -> TurnEvidence:
     """Build both D3 records for one turn from its final serialized model input.
 
@@ -815,6 +848,9 @@ def build_turn_evidence(
             that does not pass it cannot over-claim completeness (D3).
         memory_state_cause: The cause behind ``memory_state``, when the caller has one —
             what the rendered vocabulary collapses and this record preserves.
+        memory_result_call_id: The tool-call id of this turn's recalled-memory exchange
+            (FRE-1360). Memory is admitted only when that tool result reached the wire.
+            None — no exchange was appended — admits no memory.
 
     Returns:
         A :class:`TurnEvidence` whose two halves describe the same model call.
@@ -823,13 +859,16 @@ def build_turn_evidence(
     block_reached_input = inline_outcome is InlineOutcome.INLINED and _wire_carries_volatile_fence(
         wire_messages, user_message
     )
+    # FRE-1360: recalled memory rides its own tool result, so its admission is that
+    # result's arrival, never the fence's.
+    memory_reached_input = _wire_carries_tool_result(wire_messages, memory_result_call_id)
 
     items = [
         _resolve_admission(
             candidate,
             memory_context_present=memory_context_present,
             rendered_budget=rendered_budget,
-            block_reached_input=block_reached_input,
+            memory_reached_input=memory_reached_input,
         )
         for candidate in candidates
     ]
@@ -887,7 +926,8 @@ def build_turn_evidence(
         prompt_component_ids=[
             c
             for c in prompt_component_ids
-            if block_reached_input or c not in _VOLATILE_TAIL_COMPONENTS
+            if (c != _MEMORY_COMPONENT or memory_reached_input)
+            and (block_reached_input or c not in _VOLATILE_TAIL_COMPONENTS)
         ],
         operator_identity=operator_identity,
         operator_assertion=operator_assertion,

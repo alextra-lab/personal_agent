@@ -579,6 +579,9 @@ class ExecutionContext:
     # mid-turn user-role message (tool-budget warning, forced synthesis, cite-only
     # retry) never receives a second copy. Valid because a context serves one request.
     turn_context_inlined: bool = False
+    # FRE-1360: the tool-call id of this turn's recalled-memory exchange, set when the
+    # exchange is appended. The evidence record anchors memory admission on it.
+    memory_result_call_id: str | None = None
 
     # --- ADR-0081 §D3 cache-aware compaction (FRE-434) ---
     # Bounded salient highlights produced by the most recent frozen reset; ride

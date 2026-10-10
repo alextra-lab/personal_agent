@@ -100,6 +100,13 @@ from personal_agent.orchestrator.types import (
     TaskState,
 )
 from personal_agent.orchestrator.unmeasured_claim import detect_unmeasured_claim
+from personal_agent.orchestrator.untrusted_channel import (
+    MEMORY_RECALL_TOOL,
+    WORKER_REPORTS_TOOL,
+    harness_call_id,
+    harness_tool_exchange,
+    is_harness_tool_result,
+)
 from personal_agent.request_gateway.budget import estimate_tokens
 from personal_agent.request_gateway.memory_status import (
     MEMORY_STATE_LINES,
@@ -1508,6 +1515,9 @@ def _record_turn_evidence(
             wire_messages=build_wire_messages(request_messages, system_prompt, ctx.trace_id),
             system_prompt=system_prompt,
             user_message=ctx.user_message,
+            # FRE-1360: memory rides its own tool result, so it is admitted on that
+            # result reaching the wire, not on the fence.
+            memory_result_call_id=ctx.memory_result_call_id,
             skill_bodies=skill_body_names,
             call_index=0,
             # FRE-1060: read from the assembler, never assumed here. The gateway path
@@ -2522,6 +2532,32 @@ def _inline_volatile_into_last_user_message(
         nothing to inline or no user message exists.
     """
     return _inline_volatile_with_outcome(messages, volatile_block)[0]
+
+
+_SYNTHESIS_INSTRUCTION = (
+    "The worker reports follow as a tool result. Synthesize them into a coherent "
+    "response for the user's original question."
+)
+
+
+def _append_synthesis_exchange(ctx: ExecutionContext, synthesis_context: str) -> None:
+    """Append a HYBRID turn's synthesis instruction, then the worker reports (FRE-1360).
+
+    The worker reports are built from pages and tool output the workers read, so ADR-0140
+    T2 declares them untrusted: they ride a harness tool exchange, never user text. The
+    instruction stays a ``user`` message and is the turn's volatile-fence carrier
+    (FRE-1529) — the role fixer merges it into the query, as it did before.
+
+    Args:
+        ctx: Execution context. ``ctx.messages`` is extended in place.
+        synthesis_context: The expansion controller's rendered worker reports.
+    """
+    call, result = harness_tool_exchange(
+        call_id=harness_call_id("wrk", ctx.trace_id),
+        tool_name=WORKER_REPORTS_TOOL,
+        content=synthesis_context,
+    )
+    ctx.messages.extend([{"role": "user", "content": _SYNTHESIS_INSTRUCTION}, call, result])
 
 
 def _frozen_backend() -> str:
@@ -5643,15 +5679,7 @@ async def step_init(
             # primary never learns dispatch produced nothing, and the "not
             # run" report from AC-3 would be silently discarded here.
             if expansion_result.sub_agent_results or expansion_result.skipped_tasks:
-                synthesis_msg = {
-                    "role": "user",
-                    "content": (
-                        f"{expansion_result.synthesis_context}\n"
-                        "Synthesize the results into a coherent response "
-                        "for the user's original question."
-                    ),
-                }
-                ctx.messages.append(synthesis_msg)
+                _append_synthesis_exchange(ctx, expansion_result.synthesis_context)
                 ctx.synthesis_appended = True  # ADR-0154 D6 (FRE-1512)
 
             log.info(
@@ -6027,7 +6055,14 @@ def _trim_messages_for_context_retry(
         messages, only one, or every older one is already stubbed) — the caller reads
         ``dropped_results`` to tell a no-op apart from a real trim.
     """
-    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    # FRE-1360: recalled memory and worker reports ride harness tool results. They are
+    # never stubbed — their earlier carriers (the volatile fence, a user message) never
+    # were, and stubbing them would cut the turn's recall rather than an old tool output.
+    tool_indices = [
+        i
+        for i, m in enumerate(messages)
+        if m.get("role") == "tool" and not is_harness_tool_result(m)
+    ]
     droppable = [
         i
         for i in tool_indices[:-1]  # every tool result except the newest
@@ -7074,8 +7109,9 @@ async def step_llm_call(
         # ADR-0081 §D2 (FRE-434): frozen append-only layout — the sole layout since
         # the cache_frozen_layout_enabled A/B flag was retired (FRE-941; frozen won
         # decisively, quality flat). Per-turn volatile (selected skill bodies +
-        # usage-directives + recalled memory + D3 salient highlights) rides the
-        # CURRENT user turn, not the system head. message[0] stays exactly
+        # usage-directives + D3 salient highlights) rides the CURRENT user turn, and
+        # recalled memory rides a tool result right after it (FRE-1360, below) —
+        # neither touches the system head. message[0] stays exactly
         # inner_system_before_memory, so the wire prefix is byte-stable and prior
         # turns replay as a strict forward extension — the property local KV reuse
         # requires.
@@ -7095,14 +7131,23 @@ async def step_llm_call(
         # the "last user message" and take a full second copy (trace 91b57b5c: four
         # copies, 154,096 prompt tokens). The owner's bytes never change afterwards, so
         # the sequence stays a forward extension.
-        # Order (ADR-0081 §D4/§D3): skill bodies + usage-directives → recalled
-        # memory → D3 salient highlights → the ADR-0122 §5 artifact-builder
-        # planning note, the latter two closest to the query.
+        # Fence order (ADR-0081 §D4/§D3): skill bodies + usage-directives → D3 salient
+        # highlights → the ADR-0122 §5 artifact-builder planning note → current date.
+        #
+        # FRE-1360 (ADR-0140 T2): recalled memory is not in the fence. Graph content is
+        # agent-writable, so it is untrusted input, and untrusted input reaches the model
+        # only as a tool result — never as user or system text. Once the fence lands, the
+        # memory section is appended as a harness tool exchange (an assistant tool call
+        # plus the tool result answering it). It is the last context before the model
+        # generates, so it stays the context nearest the query (ADR-0081 §D3/§D4), with
+        # the same items in the same order. Appended once, in the same once-per-turn
+        # branch as the fence, and never rewritten, so the sequence stays a forward
+        # extension. The other fence members stay: skill bodies, the planning note and
+        # the date are harness-authored, and the highlights summarize this session.
         _volatile_block = "\n\n".join(
             p
             for p in (
                 _skill_bodies_tail,
-                memory_section or "",
                 ctx.salient_highlights,
                 ctx.artifact_builder_planning_note or "",
                 _current_datetime_block,
@@ -7119,6 +7164,16 @@ async def step_llm_call(
                 InlineOutcome.INLINED,
                 InlineOutcome.ALREADY_WRAPPED,
             )
+            if ctx.turn_context_inlined and memory_section:
+                ctx.memory_result_call_id = harness_call_id("mem", ctx.trace_id)
+                ctx.messages = [
+                    *ctx.messages,
+                    *harness_tool_exchange(
+                        call_id=ctx.memory_result_call_id,
+                        tool_name=MEMORY_RECALL_TOOL,
+                        content=memory_section,
+                    ),
+                ]
 
         # Call the unified client's respond()
         # Pass previous_response_id for stateful /v1/responses API

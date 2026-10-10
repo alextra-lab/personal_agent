@@ -1,4 +1,9 @@
-"""FRE-1541 AC-1 / ADR-0154 D1: the planner's user message is bounded, and the query is never cut."""
+"""FRE-1541 AC-1 / ADR-0154 D1: the planner's user message is bounded, and the query is never cut.
+
+FRE-1360: the memory digest left the user message for a tool result of its own
+(``digest_block``). The bound still covers every character the planner reads, so these
+tests measure ``content`` plus ``digest_block`` — :func:`_whole`.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +20,11 @@ from personal_agent.orchestrator.expansion_controller import (
 _TOTAL = 64_000
 _HISTORY = 60_000
 _TAIL_OVERHEAD = len("Strategy: HYBRID\nQuery: \n\nProduce the JSON plan.")
+
+
+def _whole(built) -> str:
+    """Every character the planner reads: the user message, then the digest tool result."""
+    return built.content + built.digest_block
 
 
 def _turns(count: int, size: int) -> list[dict[str, str]]:
@@ -65,9 +75,9 @@ def test_history_receives_only_what_the_query_and_digest_leave() -> None:
     digest = "d" * 5_000
     built = _build(query, history, digest=digest, total=20_000)
 
-    assert len(built.content) <= 20_000
+    assert len(_whole(built)) <= 20_000
     assert query in built.content
-    assert digest in built.content
+    assert digest in built.digest_block
     assert built.history_chars < 20_000 - 10_000 - 5_000
     assert built.history_chars > 0
 
@@ -108,14 +118,17 @@ def test_the_bound_counts_the_digest_header_exactly() -> None:
     # FRE-1472: the digest block carries a title line, and the bound counts it.
     digest = "- [Concept] A fact."
     digest_block = len(
-        build_planner_user_message(
-            "q", "HYBRID", None, digest_text=digest, history_max_chars=0, input_max_chars=_TOTAL
-        ).content
+        _whole(
+            build_planner_user_message(
+                "q", "HYBRID", None, digest_text=digest, history_max_chars=0, input_max_chars=_TOTAL
+            )
+        )
     ) - len(_build("q", []).content)
+    assert digest_block == len(_DIGEST_HEADER) + len(digest)
     query_fits = "q" * (_TOTAL - _TAIL_OVERHEAD - digest_block)
     built = _build(query_fits, [], digest=digest)
-    assert len(built.content) == _TOTAL
-    assert digest in built.content
+    assert len(_whole(built)) == _TOTAL
+    assert digest in built.digest_block
 
     with pytest.raises(PlannerInputTooLargeError):
         _build(query_fits + "q", [], digest=digest)
@@ -129,8 +142,8 @@ def test_history_and_digest_together_stay_inside_the_bound_at_every_size() -> No
             built = _build(query, _turns(40, 60), digest=digest, total=total)
         except PlannerInputTooLargeError:
             continue
-        assert built.total_chars == len(built.content) <= total
-        assert digest in built.content
+        assert built.total_chars == len(_whole(built)) <= total
+        assert digest in built.digest_block
 
 
 def test_no_room_for_history_omits_the_history_block() -> None:
@@ -141,12 +154,14 @@ def test_no_room_for_history_omits_the_history_block() -> None:
     assert len(built.content) <= _TOTAL
 
 
-def test_order_is_history_then_digest_then_query() -> None:
+def test_order_is_history_then_query_then_digest() -> None:
+    """FRE-1360: the digest follows the user message as a tool result, so it is last."""
     built = _build("the question", _turns(2, 50), digest="DIGEST-LINE")
     history_at = built.content.index("Conversation so far:")
-    digest_at = built.content.index("DIGEST-LINE")
     query_at = built.content.index("Query: the question")
-    assert history_at < digest_at < query_at
+    assert history_at < query_at
+    assert "DIGEST-LINE" not in built.content
+    assert built.digest_block == f"{_DIGEST_HEADER}DIGEST-LINE"
 
 
 def test_three_turn_history_precedes_the_query() -> None:
@@ -165,7 +180,7 @@ def test_counts_describe_each_input() -> None:
     assert built.digest_chars == 3
     assert built.message_chars == _TAIL_OVERHEAD + 3
     assert built.history_chars == len(
-        built.content.split("Conversation so far:\n", 1)[1].split(f"\n\n{_DIGEST_HEADER}DIG", 1)[0]
+        built.content.split("Conversation so far:\n", 1)[1].split("\n\nStrategy: ", 1)[0]
     )
 
 
@@ -195,7 +210,7 @@ def test_total_chars_is_the_length_of_the_whole_message(
     history_turns: int, digest: str, total: int
 ) -> None:
     built = _build("abc", _turns(history_turns, 100), digest=digest, total=total)
-    assert built.total_chars == len(built.content)
+    assert built.total_chars == len(_whole(built))
     assert built.total_chars <= total
 
 

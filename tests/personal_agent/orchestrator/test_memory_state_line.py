@@ -106,14 +106,20 @@ async def _run(ctx: object, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return client
 
 
-def _dispatched_user_text(client: MagicMock) -> str:
-    """The text of the last user message actually dispatched to the provider."""
+def _dispatched_memory_text(client: MagicMock) -> str:
+    """The recalled-memory text actually dispatched to the provider.
+
+    FRE-1360: memory rides the ``memory_recall`` tool result, never a user message
+    (ADR-0140 T2), so this reads that result and checks it is the only carrier.
+    """
     messages = client.respond.call_args.kwargs["messages"]
-    for msg in reversed(messages):
+    results = [m for m in messages if m.get("role") == "tool" and m.get("name") == "memory_recall"]
+    assert len(results) == 1, [m.get("role") for m in messages]
+    content = str(results[0].get("content"))
+    for msg in messages:
         if msg.get("role") == "user":
-            content = msg.get("content")
-            return content if isinstance(content, str) else str(content)
-    return ""
+            assert content not in str(msg.get("content")), "memory reached a user message"
+    return content
 
 
 # ── Fixtures for each of the four states ────────────────────────────────────────
@@ -181,7 +187,7 @@ class TestAc1SectionAlwaysPresent:
     @pytest.mark.asyncio
     async def test_populated_has_no_state_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = await _run(_populated_ctx(), monkeypatch)
-        text = _dispatched_user_text(client)
+        text = _dispatched_memory_text(client)
 
         assert "the orchestrator this team runs on" in text
         for line in MEMORY_STATE_LINES.values():
@@ -190,21 +196,21 @@ class TestAc1SectionAlwaysPresent:
     @pytest.mark.asyncio
     async def test_nothing_relevant_renders_its_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = await _run(_nothing_relevant_ctx(), monkeypatch)
-        text = _dispatched_user_text(client)
+        text = _dispatched_memory_text(client)
 
         assert MEMORY_STATE_LINES[MemoryStatus.NOTHING_RELEVANT] in text
 
     @pytest.mark.asyncio
     async def test_withheld_renders_its_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = await _run(_withheld_ctx(), monkeypatch)
-        text = _dispatched_user_text(client)
+        text = _dispatched_memory_text(client)
 
         assert MEMORY_STATE_LINES[MemoryStatus.WITHHELD] in text
 
     @pytest.mark.asyncio
     async def test_unavailable_renders_its_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = await _run(_unavailable_ctx(), monkeypatch)
-        text = _dispatched_user_text(client)
+        text = _dispatched_memory_text(client)
 
         assert MEMORY_STATE_LINES[MemoryStatus.UNAVAILABLE] in text
 
@@ -232,8 +238,8 @@ class TestAc3NothingRelevantVsUnavailable:
         nothing_relevant = await _run(_nothing_relevant_ctx(), monkeypatch)
         unavailable = await _run(_unavailable_ctx(), monkeypatch)
 
-        text_a = _dispatched_user_text(nothing_relevant)
-        text_b = _dispatched_user_text(unavailable)
+        text_a = _dispatched_memory_text(nothing_relevant)
+        text_b = _dispatched_memory_text(unavailable)
 
         assert text_a != text_b
         assert "usable record" in text_a
@@ -248,7 +254,7 @@ class TestAc4BehaviouralSectionCoexistsWithAbsence:
     @pytest.mark.asyncio
     async def test_both_render_on_the_same_turn(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = await _run(_nothing_relevant_with_behavioural_ctx(), monkeypatch)
-        text = _dispatched_user_text(client)
+        text = _dispatched_memory_text(client)
 
         assert "## Standing Behavioural Preferences" in text
         assert "prefers explicit request before creation" in text

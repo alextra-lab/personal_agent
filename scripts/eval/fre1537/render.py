@@ -111,10 +111,14 @@ def build_planner_request(
             oldest end.
 
     Returns:
-        ``{"messages": [system, user], "history": str, "history_chars": int}``.
+        ``{"messages": [system, user, (assistant, tool when a digest is given)],
+        "history": str, "history_chars": int}``.
     """
     from personal_agent.config import settings
-    from personal_agent.orchestrator.expansion_controller import build_planner_user_message
+    from personal_agent.orchestrator.expansion_controller import (
+        build_planner_user_message,
+        planner_request_messages,
+    )
 
     # The production builder, so the probe qualifies the message that ships: the same bound,
     # the same fill order, the same framing (FRE-1541). It drops the trailing query message.
@@ -127,10 +131,9 @@ def build_planner_request(
         input_max_chars=settings.planner_input_max_chars,
     )
     return {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": built.content},
-        ],
+        # FRE-1360: the production request — a digest rides a tool result after the user
+        # message, never the user text.
+        "messages": planner_request_messages(system_prompt, built, trace_id="fre1537probe"),
         "history": built.history_text,
         "history_chars": built.history_chars,
     }

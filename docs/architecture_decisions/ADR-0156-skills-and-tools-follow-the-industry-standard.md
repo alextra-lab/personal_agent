@@ -211,7 +211,7 @@ Model studies (FRE-1517 and its successors) resume only when every implementatio
 
 ## Migration table
 
-Each row has a target state and the ticket that delivers it. The tickets T1–T9 are listed in the Implementation Notes.
+Each row has a target state and the ticket that delivers it. The tickets T1–T9 are listed in the Implementation Notes, with their Linear ids (T1 is FRE-1572, T2–T9 are FRE-1574 to FRE-1581, project P-FRE-49).
 
 ### Every file in `docs/skills/` (25 files)
 
@@ -387,14 +387,14 @@ Source: `tools/__init__.py:86-183`, and the startup log of the running gateway o
 | # | Ticket | Delivers | Blocked by |
 |---|---|---|---|
 | T1 | FRE-1572 (exists) | The live bash bypass fix. Its splitter becomes D8.2's matcher | — |
-| T2 | Permission model | D8 (including the fail-closed load and the bash parser rules), D4 (`known_bad_patterns` to deny rules), the eval rules file | T1 |
-| T3 | Tool contract | D6, and the 8 skills folded into descriptions (D5.6) | T2 |
-| T4 | `edit` tool, and `query_telemetry` for the primary | D7.1, D7.2 | T3 |
-| T5 | Skill loader and layout | D1, D2, D3, D4, D5.7, D5.8: every file moved, deleted or replaced | T3 |
-| T6 | Conversion: telemetry and host skills | D5.1–D5.5 for 8 skills | T4, T5, FRE-1568 |
-| T7 | Conversion: authoring skills | D5.1–D5.5 for `artifact-design`, `mermaid-diagrams`, `sequential-thinking` | T5 |
-| T8 | Workers | D9 | T5 |
-| T9 | Gate run | D10 | T6, T7, T8 |
+| T2 (FRE-1574) | Permission model | D8 (including the fail-closed load and the bash parser rules), D4 (`known_bad_patterns` to deny rules), the eval rules file | T1 |
+| T3 (FRE-1575) | Tool contract | D6, and the 8 skills folded into descriptions (D5.6) | T2 |
+| T4 (FRE-1576) | `edit` tool, and `query_telemetry` for the primary | D7.1, D7.2 | T3 |
+| T5 (FRE-1577) | Skill loader and layout | D1, D2, D3, D4, D5.7, D5.8: every file moved, deleted or replaced | T3 |
+| T6 (FRE-1578) | Conversion: telemetry and host skills | D5.1–D5.5 for 8 skills | T4, T5, FRE-1568 |
+| T7 (FRE-1579) | Conversion: authoring skills | D5.1–D5.5 for `artifact-design`, `mermaid-diagrams`, `sequential-thinking` | T5 |
+| T8 (FRE-1580) | Workers | D9 | T5 |
+| T9 (FRE-1581) | Gate run | D10 | T6, T7, T8 |
 
 T4 comes before T6 so that the telemetry skills can lead with `query_telemetry`. The owner's brief order put the tools after the conversion. This order avoids writing those skills twice.
 

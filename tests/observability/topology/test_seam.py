@@ -9,6 +9,7 @@ must never break the wrapped turn; ``CancelledError`` must still propagate.
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -18,6 +19,11 @@ import pytest
 from personal_agent.events.models import (
     TopologyEnteredEvent,
     TurnCompletedEvent,
+)
+from personal_agent.observability.first_token import (
+    clear_first_token_clock,
+    request_elapsed_ms,
+    start_first_token_clock,
 )
 from personal_agent.observability.topology import seam as seam_mod
 from personal_agent.observability.topology.seam import observe_topology
@@ -258,3 +264,48 @@ async def test_seam_projection_failure_does_not_break_turn(
     # Must not raise despite the projector failing on both the turn-level and segment rows.
     async with observe_topology(ctx):
         pass
+
+
+async def test_seam_row_carries_the_time_since_request_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1568: ``route_traces.latency_total_ms`` is request receipt to the row write."""
+    ledger = _fake_ledger()
+    _patch(monkeypatch, ledger, AsyncMock())
+    clear_first_token_clock()
+    start_first_token_clock(time.monotonic() - 2.5)
+    try:
+        async with observe_topology(_ctx()):
+            pass
+    finally:
+        clear_first_token_clock()
+
+    row = ledger.write.call_args.args[0]
+    assert row.latency_total_ms is not None
+    assert 2500.0 <= row.latency_total_ms < 60_000.0
+
+
+async def test_seam_row_latency_is_none_when_no_request_clock_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One column, one meaning: a turn with no receipt clock gets None, not a second source."""
+    ledger = _fake_ledger()
+    _patch(monkeypatch, ledger, AsyncMock())
+    clear_first_token_clock()
+
+    async with observe_topology(_ctx(turn_started_monotonic=time.monotonic() - 9.0)):
+        pass
+
+    assert ledger.write.call_args.args[0].latency_total_ms is None
+
+
+def test_request_elapsed_ms_reads_the_running_clock_and_none_otherwise() -> None:
+    clear_first_token_clock()
+    assert request_elapsed_ms() is None
+    start_first_token_clock(time.monotonic() - 1.0)
+    try:
+        elapsed = request_elapsed_ms()
+    finally:
+        clear_first_token_clock()
+    assert elapsed is not None and elapsed >= 1000.0
+    assert request_elapsed_ms() is None

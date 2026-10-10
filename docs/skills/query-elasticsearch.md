@@ -27,8 +27,6 @@ keywords:
   - last hour
   - last day
   - 24 hour
-  - p95
-  - latency
   - errors in the
   - event_type
   - esql
@@ -81,6 +79,8 @@ known_bad_patterns:
 
 **Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); `run_python` auto-approved (NORMAL/ALERT/DEGRADED)
 
+**Latency is not here.** Model-call timing lives on OTel spans in Tempo, not in these logs (ADR-0129, FRE-1219: `duration_ms` and `latency_ms` are retired from `agent-logs-*`). For latency, p50/p90 or "what was slow", use the `query-tempo` skill (Pattern 5) or the `query_telemetry` tool, action `latency`.
+
 ## Actual indices (families verified 2026-04-28; date shapes verified 2026-07-31)
 
 The cluster has these index families. **Do not guess index names** — use only these patterns:
@@ -96,28 +96,9 @@ The cluster has these index families. **Do not guess index names** — use only 
 
 **Non-existent patterns** (404 errors): `agent-events-*`, `agent-traces-*`, `agent-telemetry-*` — these do not exist.
 
-**Do not assume a fixed date shape from the example above.** `docker/elasticsearch/` (FRE-1036)
-is migrating every family from daily indices (`YYYY.MM.DD`/`YYYY-MM-DD`, some with a trailing
-`-v2` suffix) to monthly indices (`YYYY-MM`/`YYYY.MM`) family by family, and this is a live,
-in-progress migration, not a single cutover — verified 2026-07-31 that `agent-logs`,
-`agent-insights`, `agent-monitors-slm-health`, and `agent-captains-captures` each currently have
-**both** daily-shaped and monthly-shaped indices live at once, while `agent-monitors-joinability`
-had its daily indices migrated out from under this very investigation within the same hour. A
-family's shape today is not a reliable predictor of its shape tomorrow, or even later in the same
-session — see "Determining a family's index granularity" below rather than hard-coding a pattern.
+**Do not assume a date shape.** A family holds daily indices (`YYYY.MM.DD`), monthly indices (`YYYY-MM`), or both at once. Use the `<family>-*` wildcard. Never rebuild a date pattern by cutting another one: a cut name such as `agent-logs-2026` looks real and is not.
 
-## Determining a family's index granularity — don't strip dates in the shell
-
-A previous live turn (FRE-1035) inferred a family's granularity by shell-stripping the trailing
-date off index names — one `sed` substitution for dash-dated names, a second for dot-dated names
-that stripped only the month and day, leaving the year attached. Run against a dot-dated name like
-`agent-logs-2026.07.28`, the second substitution produced `agent-logs-2026` — a string that looks
-like a real yearly index but is a truncation artifact. The agent reported it as real, then
-"confirmed" it by grepping its own output for four-digit-year names and finding the artifact it
-had just manufactured. **Never reconstruct a date pattern by truncating another one** — a partial
-strip that happens to look like a valid shape is not evidence that shape exists.
-
-**Primary recipe — the tested classifier**, never ad hoc `sed`/`cut`:
+To classify a family, use the tested classifier, not `sed`:
 
 ```bash
 curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
@@ -125,39 +106,17 @@ curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
   | python3 scripts/es_index_granularity.py agent-monitors-joinability
 ```
 
-Reports daily/monthly counts, flags `MIXED` when both shapes are live at once, and lists any name
-it doesn't recognize instead of guessing at it — including a sibling family sharing the same
-prefix (e.g. `agent-captains-captures-subagents-*` under the `agent-captains-captures` prefix,
-which the `grep` above would otherwise sweep in). `scripts/es_index_granularity.py` is unit-tested
-(`tests/scripts/test_es_index_granularity.py`) against every observed shape and the exact artifact
-from the paragraph above — it returns `None`/unrecognized rather than a guess for anything that
-doesn't match a known shape in full.
+It reports daily and monthly counts, flags `MIXED`, and lists any name it does not recognise.
 
-**Secondary — live document coverage, not granularity classification.** An index's real
-document date-range only tells you what data it actually holds, which is a different question
-from what shape its name is (a monthly bucket a day into the month looks "daily" by span, and an
-empty index has no span at all — don't use this to answer "daily or monthly"). Useful when you
-need to confirm a query actually saw everything it should have:
+**The date field differs by family.** The time bound in a query must use the family's own field (from `docker/elasticsearch/*-index-template.json`):
 
-```bash
-# agent-logs / agent-insights / agent-monitors-* use @timestamp.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "aggs": {"by_index": {"terms": {"field": "_index", "size": 200},
-      "aggs": {"earliest": {"min": {"field": "@timestamp"}}, "latest": {"max": {"field": "@timestamp"}}}}}
-  }' | jq '.aggregations.by_index.buckets'
-
-# agent-captains-captures-* / agent-captains-reflections-* use plain "timestamp", not "@timestamp".
-curl -s -X POST 'http://elasticsearch:9200/agent-captains-captures-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "aggs": {"by_index": {"terms": {"field": "_index", "size": 200},
-      "aggs": {"earliest": {"min": {"field": "timestamp"}}, "latest": {"max": {"field": "timestamp"}}}}}
-  }' | jq '.aggregations.by_index.buckets'
-```
+| Family | Date field |
+|--------|-----------|
+| `agent-logs-*`, `agent-topology-*`, `agent-monitors-cache-reset-cadence-*`, `agent-monitors-projector-health-*` | `@timestamp` |
+| `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*` | `timestamp` |
+| `agent-monitors-slm-health-*` | `probed_at` |
+| `agent-monitors-cache-erosion-*`, `agent-monitors-delivery-ratio-*` | `run_at` |
+| `agent-monitors-joinability-*` | `started_at` |
 
 ## Key fields in `agent-logs-*`
 
@@ -184,7 +143,6 @@ Most important fields for queries:
 | `cache_creation_input_tokens` | long | Cache-miss tokens (new cache entry) |
 | `cost_usd` | float | Cost of LLM call |
 | `elapsed_s` | float | Elapsed wall time in seconds |
-| `elapsed_ms` / `duration_ms` | long | Elapsed time in milliseconds |
 | `success` | boolean | Whether the operation succeeded |
 | `error` | text + `.keyword` | Free-form error message; use `error.keyword` for term equality / aggregations, `error` for full-text search |
 | `turn_count` | long | Number of LLM turns in request |
@@ -252,7 +210,7 @@ curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
     "size": 200,
     "query": {"term": {"trace_id": "<trace_id>"}},
     "sort": [{"@timestamp": "asc"}],
-    "_source": ["@timestamp","event_type","level","tool_name","duration_ms","latency_ms","model_id"]
+    "_source": ["@timestamp","event_type","level","tool_name","model_id"]
   }' | jq ".hits.hits[]._source"
 
 # Total tokens / cost in last 24h, grouped by task_type
@@ -485,7 +443,7 @@ curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
   -d '{
     "size": 10,
     "sort": [{"timestamp": "desc"}],
-    "_source": ["trace_id","user_message","outcome","total_tokens","duration_ms","timestamp"]
+    "_source": ["trace_id","user_message","outcome","total_tokens","timestamp"]
   }' | jq '.hits.hits[]._source'
 
 # Recent reflections — recurring ones only (seen_count >= 2, most persistent first)
@@ -505,7 +463,7 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
     "size": 100,
     "query": {"term": {"trace_id.keyword": "<trace_id>"}},
     "sort": [{"@timestamp": "asc"}],
-    "_source": ["event_type","@timestamp","duration_ms","latency_ms","model_id","tokens"]
+    "_source": ["event_type","@timestamp","model_id","tokens"]
   }' | jq '.hits.hits[]._source'
 ```
 

@@ -90,11 +90,16 @@ def test_full_population_maps_fields() -> None:
     assert row.orchestration_event == "primary_handled"
     assert row.fallback_triggered is False
     assert row.final_reply_chars == len("Here is what you said.")
-    # ADR-0129 D3 / FRE-1067: RequestTimer is retired — these two fields have
-    # no source and are always None going forward (Postgres schema unchanged).
+    # ADR-0129 D3 / FRE-1067 retired RequestTimer, so the breakdown has no source. The total
+    # arrives as an argument from the seam (FRE-1568) and defaults to None.
     assert row.latency_total_ms is None
     assert row.latency_breakdown is None
     assert row.pedagogical_outcomes is None
+
+
+def test_latency_total_ms_is_the_value_the_caller_measured() -> None:
+    """FRE-1568: the assembler keeps the seam's request-receipt reading."""
+    assert _assemble(_base_ctx(), latency_total_ms=1234.5).latency_total_ms == 1234.5
 
 
 def test_skills_loaded_includes_evidence_skill_bodies() -> None:

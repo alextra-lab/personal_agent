@@ -30,7 +30,7 @@ from personal_agent.events.models import (
     TurnCompletedEvent,
     TurnDegradedEvent,
 )
-from personal_agent.observability.first_token import first_token_clock_active
+from personal_agent.observability.first_token import first_token_clock_active, request_elapsed_ms
 from personal_agent.observability.route_trace import (
     assemble_route_trace,
     assemble_sub_agent_route_trace,
@@ -169,6 +169,7 @@ async def _write_durable_row(ctx: ExecutionContext, topology: str) -> float:
             store_preview=settings.route_trace_store_preview,
             preview_chars=settings.route_trace_preview_chars,
             topology=topology,
+            latency_total_ms=request_elapsed_ms(),
         )
         await ledger.write(row)
         # FRE-548: project the same in-hand row to the dedicated agent-topology-* ES index

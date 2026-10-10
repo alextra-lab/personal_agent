@@ -27,6 +27,7 @@ from personal_agent.telemetry import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.telemetry_query import (
     ALLOWED_FIELDS,
+    FAMILY_TIME_FIELD,
     TEMPO_ATTRIBUTES,
     TEMPO_GROUP_KEYS,
     TEMPO_SPANS,
@@ -167,10 +168,23 @@ def test_the_description_says_where_model_call_timing_lives() -> None:
     description = query_telemetry_tool.description
     assert "Tempo" in description
     assert "latency_total_ms" in description and "FRE-1568" in description
+    # FRE-1568 restored the column: the text no longer says it is empty from now on.
+    assert "empty since" not in description
+    assert "from request receipt" in description
     for name in _RETIRED:
         assert name in description  # named only in the "not in agent-logs" note
         for fields in ALLOWED_FIELDS.values():
             assert name not in fields
+
+
+def test_the_description_names_each_family_whose_time_field_is_not_the_default() -> None:
+    """Master's note 2: a model guessed ``@timestamp`` on slm-health, whose field is not that."""
+    description = query_telemetry_tool.description
+    odd = {f: t for f, t in FAMILY_TIME_FIELD.items() if t != "@timestamp"}
+    assert odd, "the test needs at least one family with its own time field"
+    for family, time_field in odd.items():
+        assert f"{family} uses {time_field}" in description
+    assert "'since' filters on @timestamp" in description
 
 
 def test_the_span_attribute_allowlist_holds_no_text_attribute() -> None:

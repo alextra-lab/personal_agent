@@ -142,7 +142,6 @@ Most important fields for queries:
 | `cache_read_input_tokens` | long | Cache-hit tokens (on `api_cost_recorded` — different field name, same meaning) |
 | `cache_creation_input_tokens` | long | Cache-miss tokens (new cache entry) |
 | `cost_usd` | float | Cost of LLM call |
-| `elapsed_s` | float | Elapsed wall time in seconds |
 | `success` | boolean | Whether the operation succeeded |
 | `error` | text + `.keyword` | Free-form error message; use `error.keyword` for term equality / aggregations, `error` for full-text search |
 | `turn_count` | long | Number of LLM turns in request |

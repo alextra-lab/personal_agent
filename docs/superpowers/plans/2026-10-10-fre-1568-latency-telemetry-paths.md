@@ -126,8 +126,8 @@ seam) and reported no bash-allowlist problem for the `curl -s -G --data-urlencod
 | `tests/observability/topology/test_seam_latency.py` (new) | `_write_durable_row` under `start_first_token_clock(t0)` writes a row whose `latency_total_ms` is within bounds; with no clock it writes `None` | AC-3 |
 | `tests/personal_agent/tools/test_telemetry_query_tempo.py` | extend: the description states `probed_at` for slm-health, and no longer says the column is empty | D4 |
 
-`test_tempo_recipe_jq_percentiles_and_completeness` skips when `jq` is not installed. The CI
-image has `jq` (checked in section 6).
+The jq tests skip on a workstation without `jq`, and fail when the `CI` variable is set, so a
+runner without `jq` is never a silent pass (the runner is `ubuntu-24.04`).
 
 ## 5. Out of scope, surfaced
 

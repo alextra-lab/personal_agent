@@ -226,7 +226,7 @@ curl -s "http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3" | jq 
     startTimeUnixNano: (.startTimeUnixNano | tonumber),
     endTimeUnixNano: (.endTimeUnixNano | tonumber),
     durationNano: ((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)),
-    attributes: (.attributes | map({(.key): .value.stringValue // .value.intValue}) | add)
+    attributes: ((.attributes // []) | map({(.key): (.value.stringValue // .value.intValue)}) | add)
   }) | 
   sort_by(.startTimeUnixNano)'
 ```
@@ -282,7 +282,7 @@ curl -s 'http://tempo:3200/api/search?start=1788026891&end=1788030491&q=service.
 Use this for "how slow are model calls", "p50 and p90 by role" and any latency over a window.
 Elasticsearch holds no model-call timing (ADR-0129). Tempo does: one `model_call <model>` span
 per model call, with the role in `gen_ai.operation.name` and the model in
-`gen_ai.request.model`. The `query_telemetry` tool, action `latency`, returns the same numbers
+`gen_ai.request.model`. The `query_telemetry` tool, action `latency`, returns the same kind of summary
 when that tool is available. This is the bash path.
 
 1. Read the clock: `date +%s` is the end, `date -d '24 hours ago' +%s` is the start. Tempo
@@ -303,10 +303,11 @@ curl -s -G 'http://tempo:3200/api/search' \
 def num: if type == "number" then . elif type == "string" then (tonumber? // null) else null end;
 def attr($k): ([.attributes[]? | select(.key == $k) | .value.stringValue] | first) // "unknown";
 [.traces[]? | (.spanSets // [.spanSet])[]? | select(. != null)] as $sets
-| (.metrics.completedJobs | num) as $done
 | (.metrics.totalJobs | num) as $total
+| (if $total != null then ((.metrics.completedJobs | num) // 0) else null end) as $done
 | [$sets[] | .spans[]? | select((.durationNanos | num) != null)] as $spans
 | (.traces | length) as $returned
+| ([.traces[]? | select((.spanSets // .spanSet) == null)] | length) as $noset
 | ([$sets[] | select((.matched | num) != null) | ((.matched | num) - ((.spans // []) | length)) | select(. > 0)] | add // 0) as $cut
 | ([$sets[] | select((.matched | num) == null)] | length) as $nomatch
 | ([$sets[] | .spans[]? | select((.durationNanos | num) == null)] | length) as $nodur
@@ -319,7 +320,8 @@ def attr($k): ([.attributes[]? | select(.key == $k) | .value.stringValue] | firs
     blocks_unread: $unread,
     sets_without_match: $nomatch,
     spans_without_duration: $nodur,
-    complete: ($returned < $limit and $cut == 0 and $unread == 0 and $nomatch == 0 and $nodur == 0),
+    traces_without_span_set: $noset,
+    complete: ($returned < $limit and $cut == 0 and $unread == 0 and $nomatch == 0 and $nodur == 0 and $noset == 0),
     groups: ($spans | group_by([attr("gen_ai.operation.name"), attr("gen_ai.request.model")])
       | map({
           role: (.[0] | attr("gen_ai.operation.name")),
@@ -342,6 +344,7 @@ def attr($k): ([.attributes[]? | select(.key == $k) | .value.stringValue] | firs
 | `blocks_unread` | Tempo stopped before it read every block. |
 | `sets_without_match` | A result had no match count, so its completeness is unknown. |
 | `spans_without_duration` | A span had no duration. It is left out of the percentiles. |
+| `traces_without_span_set` | A trace came back with no span set. Its spans are not counted. |
 
 When `complete` is `false`, say the percentiles come from a sample and name the field. An empty
 `groups` means no model-call span matched in the window. It does not mean zero latency.

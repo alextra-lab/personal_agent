@@ -11,6 +11,7 @@ No test talks to Tempo or Elasticsearch (tests/CLAUDE.md, FRE-375).
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -27,7 +28,7 @@ _ELASTICSEARCH = (_SKILLS / "query-elasticsearch.md").read_text(encoding="utf-8"
 _TEMPO = (_SKILLS / "query-tempo.md").read_text(encoding="utf-8")
 _NORMAL = load_governance_config().tools["bash"].auto_approve_prefixes["NORMAL"]
 
-_RETIRED_FIELDS = ("duration_ms", "latency_ms", "elapsed_ms", "response_time_ms")
+_RETIRED_FIELDS = ("duration_ms", "latency_ms", "elapsed_ms", "elapsed_s", "response_time_ms")
 _RECIPE_HEADING = "### Pattern 5: Model-call latency by role and model"
 _FENCE = re.compile(r"```bash\n(.*?)```", re.DOTALL)
 
@@ -159,9 +160,17 @@ def _span(role: str, model: str, millis: int, span_id: str) -> dict[str, Any]:
     }
 
 
+def _require_jq() -> None:
+    """Skip on a workstation without jq. Fail on CI, so a missing jq is never a silent pass."""
+    if shutil.which("jq") is not None:
+        return
+    if os.environ.get("CI"):
+        pytest.fail("jq is not installed on this CI runner: the recipe tests cannot run")
+    pytest.skip("jq is not installed")
+
+
 def _run_recipe_jq(reply: dict[str, Any]) -> dict[str, Any]:
-    if shutil.which("jq") is None:
-        pytest.skip("jq is not installed")
+    _require_jq()
     block = _recipe_block()
     limit = re.search(r"--argjson limit (\d+)", block)
     assert limit is not None
@@ -271,3 +280,37 @@ def test_tempo_recipe_jq_skips_a_span_with_no_duration_and_says_so() -> None:
     assert out["spans_without_duration"] == 1
     primary = {(g["role"], g["model"]): g for g in out["groups"]}[("primary", "m1")]
     assert primary["spans"] == 4  # the span with no duration is not counted
+
+
+def test_tempo_recipe_jq_says_incomplete_when_a_trace_has_no_span_set() -> None:
+    reply = _reply()
+    reply["traces"].append({"traceID": "c"})  # neither "spanSet" nor "spanSets"
+    out = _run_recipe_jq(reply)
+    assert out["complete"] is False
+    assert out["traces_without_span_set"] == 1
+
+
+def test_tempo_recipe_jq_reads_an_omitted_completed_jobs_as_zero() -> None:
+    """Proto JSON leaves out a zero: totalJobs alone means no block was read."""
+    reply = _reply()
+    reply["metrics"] = {"totalJobs": 3}
+    out = _run_recipe_jq(reply)
+    assert out["complete"] is False
+    assert out["blocks_unread"] == 3
+
+
+def test_every_jq_program_in_the_tempo_skill_compiles() -> None:
+    """jq exits 3 on a compile error. A runtime error on null input is not one."""
+    _require_jq()
+    programs = 0
+    for block in _FENCE.findall(_TEMPO):
+        for program in re.findall(r"\bjq\s+(?:--argjson limit \d+\s+)?'([^']*)'", block):
+            done = subprocess.run(  # noqa: S603 - fixed argv, test input only
+                ["jq", "-n", "--argjson", "limit", "1", program],  # noqa: S607
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert done.returncode != 3, f"jq compile error: {done.stderr}\n{program}"
+            programs += 1
+    assert programs >= 5  # patterns 1, 2, 3, 4 and 5 each hold at least one program

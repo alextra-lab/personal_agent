@@ -31,7 +31,7 @@ The FRE-1517 audit (`docs/research/2026-10-10-fre-1517-tool-call-efficiency.md`,
 - **Keyword routing is a substring test** (`orchestrator/skills.py:389`). "logic" loads `query-elasticsearch`, and "Spanish" loads `query-tempo`.
 - **No real progressive disclosure (G6).** Whole bodies are inlined, up to 8,192 tokens. The `bash` body is in every turn.
 - **The hint loop (G6).** 366 of 438 tool results carried "[hint: skill X is available — call read_skill…]". The model called `read_skill` 2 times.
-- **Tools (G5).** No edit tool exists. No tool shares an error shape. Every error that the model sees is cut to 150 characters (`orchestrator/tool_dispatch.py:304`).
+- **Tools (G5).** No edit tool exists. No tool shares an error shape. An error from the tool execution layer is cut to 150 characters before the model sees it (`orchestrator/tool_dispatch.py:304`).
 - **Wrong telemetry.** A tool that returns an error dict is logged with `success=True` (`tools/executor.py:620-637`).
 - **Permissions.** The bash allowlist checks only the first word (FRE-1572). An allowlist refusal tells the model only `approval_connection_lost` (G5). `run_python` with `network: true` needs no approval in NORMAL mode (G7).
 
@@ -149,8 +149,15 @@ The migration table gives the verdict for each file.
 ### D8 — One permission model (S6)
 
 1. **Rules.** Governance holds `deny`, `ask` and `allow` lists of `Tool(pattern)` rules for every tool. The order is "deny, then ask, then allow. The first match in that order determines the outcome" (S6). Mode-specific rules from `config/governance/tools.yaml` stay, as rules scoped to a mode.
-2. **Bash.** A command is split on "`&&`, `||`, `;`, `|`, `|&`, `&`, and newlines. A rule must match each subcommand independently" (S6). Deny and ask rules also apply to a command inside a subshell, a command substitution or a control-flow body (S6). FRE-1572's splitter becomes this matcher. The `auto_approve_prefixes` lists become allow rules.
-3. **No match asks the user.** The approval card (FRE-1461, ADR-0063 Amendment A) shows the tool, the exact arguments, and the worker when a worker asks. The card offers "allow once" and "allow for this session". The second adds a session rule for that exact rule pattern.
+   - **The rules fail closed.** If the rules cannot be loaded or evaluated, every call is denied with a D6 error. A tool with no matching rule asks (D8.3). It never runs by default.
+   - This replaces the fail-open branches of the path check: `_check_path_governance` returns "permitted" on a load error and on a missing policy (`tools/primitives/_governance.py:168-176`). After T2, a load error denies.
+2. **Bash.** A command is split on "`&&`, `||`, `;`, `|`, `|&`, `&`, and newlines. A rule must match each subcommand independently" (S6). Deny and ask rules also apply to a command inside a subshell, a command substitution or a control-flow body (S6). FRE-1572's splitter becomes this matcher. The `auto_approve_prefixes` lists become allow rules. Where S6 leaves the parsing open, these rules apply:
+   - The command is parsed with a shell parser, not split on text. Quotes and escapes are resolved before a subcommand is matched.
+   - A command that the parser cannot parse fully never matches an allow rule. It asks.
+   - These constructs never match an allow rule, at any depth: heredocs that contain an expansion, process substitution (`<(…)`, `>(…)`), function definitions, `eval`, `source` and `.`, `bash -c` and `sh -c`, `xargs`, `find -exec` and `-execdir`, and `env`, `nohup`, `timeout`, `nice` or `stdbuf` in front of a command. They ask, unless an explicit allow rule names the full form.
+3. **No match asks the user.** The approval card (FRE-1461, ADR-0063 Amendment A) shows the tool, the exact arguments, and the worker when a worker asks. The card offers "allow once" and "allow for this session".
+   - "Allow for this session" adds a session allow rule for the exact tool and arguments of the call.
+   - It is offered only when the call asks because no rule matched. A call that matches an explicit `ask` rule (for example `run_python` with `network: true`) offers "allow once" only. The order of D8.1 holds: an explicit ask rule is never overridden by an allow rule.
 4. **No approval surface: deny (amends ADR-0063 Amendment A row A3).** An "ask" call is denied, never run, in each of these cases:
    - the turn has no PWA client (as row A2);
    - the layer has no transport or no session id (as row A2);
@@ -167,7 +174,13 @@ The migration table gives the verdict for each file.
 1. **Each worker type gets a catalog** of the skills whose `metadata.requires-tools` that type holds. A filtered skill is hidden (S2: "Hide filtered skills entirely").
 2. **Every worker type gets `read_skill`,** the researcher too. `read_skill` reads only the bundled skill files, not private data, so FRE-1564's outbound/private split holds.
 3. **Worker calls pass through the D8 rules.** An "ask" goes to the same card, per call, with the exact arguments and the worker named (brief item 9). This replaces row A4's "once per tool per turn" for ask rules, and it answers FRE-1565's scope item 2. The `operator` type and worker bash as `nobody` in its own workspace (FRE-1565) are unchanged.
-4. **Read-only file grant (owner, 2026-10-10).** The `general` worker may `read` the files that its task names. It may not write them. The task spec carries the paths. A path that the task does not name is refused with a D6 error. The grant does not widen the read tool's path governance. The `general` worker holds private reads and no outbound tool, so the FRE-1564 split holds.
+4. **Read-only file grant (owner, 2026-10-10).** The `general` worker may `read` the files that its task names. It may not write them. The `general` worker holds private reads and no outbound tool, so the FRE-1564 split holds. The grant works by these rules:
+   - The task spec carries a structured field `read_paths`: a list of absolute file paths. Paths in the task text grant nothing.
+   - A directory grants nothing, and a glob grants nothing. Each entry names one regular file.
+   - At grant time, each path is resolved to its real path, and the file's device and inode numbers are recorded. A path that does not resolve to a regular file is dropped from the grant, with a log event.
+   - At read time, `read` opens the requested path and compares the opened file's device and inode numbers with the recorded ones. A mismatch is refused with a D6 error. This check on the open file closes the symlink and the check-then-use race.
+   - The path must also pass the read tool's path governance. The grant never widens it.
+   - The grant ends with the task.
 
 ### D10 — The gate that resumes model testing
 
@@ -222,7 +235,7 @@ Each row has a target state and the ticket that delivers it. The tickets T1–T9
 
 Result: 11 agent skills, 3 external skills, 8 skills folded into tool descriptions, 1 deleted.
 
-### Every tool registered in production (26 tools)
+### Every tool that the gateway can register (27 tools: 26 registered in production, and 1 conditional)
 
 Source: `tools/__init__.py:86-183`, and the startup log of the running gateway on 2026-10-10 (`mcp_tools_discovered count=3`, `primitive_tools_registered count=5`, `location_tool_registered`, `notes_tools_registered`, `artifact_tools_registered`). Every tool also gets its D8 rules (T2) and the D6 contract (T3). The table names the changes beyond that.
 
@@ -254,10 +267,11 @@ Source: `tools/__init__.py:86-183`, and the startup log of the running gateway o
 | `mcp_query-docs` | D6.6 mapping. Overlaps `get_library_docs` (Context7): open question O1 | T2, T3 |
 | `mcp_resolve-library-id` | D6.6 mapping. Overlaps `get_library_docs`: O1 | T2, T3 |
 | `mcp_sequentialthinking` | D6.6 mapping. Overlaps the `sequential-thinking` skill: O1 | T2, T3 |
+| `expand_tool_result` | **Not registered in production** (see below). Contract only, and the AC-1 test covers it | T2, T3 |
 
 **New tool:** `edit` (D7.1), T4.
 
-**Not registered in production:** `expand_tool_result` registers only with `tool_result_compression_enabled`, which is off (ADR-0085 is parked). It is out of scope. If it returns, D6 applies. The `mcp_browser_*` entries in `tools.yaml` have governance rows, but the gateway did not discover those tools.
+**Not registered in production:** `expand_tool_result` registers only with `tool_result_compression_enabled`, which is off (ADR-0085 is parked). It stays in the table and in the AC-1 test, so that it conforms if it returns. The `mcp_browser_*` entries in `tools.yaml` have governance rows, but the gateway did not discover those tools.
 
 **Open question O1 (for the owner, not decided here).** Three MCP tools overlap native ones. S4 warns against overlapping tools. Removing them changes the MCP server set, which the owner did not decide in this brief. Until the owner decides, they stay under the contract.
 
@@ -364,7 +378,7 @@ Source: `tools/__init__.py:86-183`, and the startup log of the running gateway o
 | # | Ticket | Delivers | Blocked by |
 |---|---|---|---|
 | T1 | FRE-1572 (exists) | The live bash bypass fix. Its splitter becomes D8.2's matcher | — |
-| T2 | Permission model | D8, D4 (`known_bad_patterns` to deny rules), the eval rules file | T1 |
+| T2 | Permission model | D8 (including the fail-closed load and the bash parser rules), D4 (`known_bad_patterns` to deny rules), the eval rules file | T1 |
 | T3 | Tool contract | D6, and the 8 skills folded into descriptions (D5.6) | T2 |
 | T4 | `edit` tool, and `query_telemetry` for the primary | D7.1, D7.2 | T3 |
 | T5 | Skill loader and layout | D1, D2, D3, D4, D5.7, D5.8: every file moved, deleted or replaced | T3 |
@@ -394,15 +408,29 @@ T4 comes before T6 so that the telemetry skills can lead with `query_telemetry`.
 
 These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9 are Done and deployed. AC-1 to AC-4 are the D10 gate.
 
-- **AC-1 — every skill and every tool conforms (G1).** **Check:** the D1 validator over `docs/skills/*/SKILL.md`, and a test that drives each registered tool's error paths and asserts the D6 shape. *Fails if* any skill fails the validator, or any registered tool returns an error in another shape. Seeded negative: a skill with a 1,025-character `description` fails the validator.
-- **AC-2 — the model chooses the right skill (G2).** **Check:** the T9 run over every `evals.yaml` scenario and 20 no-skill prompts, scored from `read_skill_invoked` events. *Fails if* the right skill loads on fewer than 90% of scenarios, or a skill loads on more than 2 of the 20 no-skill prompts.
+- **AC-1 — every skill and every tool conforms (G1).** **Check:** three CI tests.
+  - The D1 validator runs over `docs/skills/*/SKILL.md` and `docs/external-skills/*/SKILL.md`. It also asserts the expected inventory: exactly the 11 agent skills and the 3 external skills of the migration table, and an `evals.yaml` with at least 3 scenarios in each agent skill.
+  - A contract test builds the registry with every registration flag on, so that conditional tools are included. Each tool declares its closed set of error codes. The test drives each declared code and asserts the D6.1 failure shape. It also drives one success and asserts the success shape. The MCP mapping (D6.6) is tested with a stub server.
+  - The test fails if the registry holds a tool that is not in the migration table, or a tool of the table is missing.
+
+  *Fails if* any skill fails the validator, a skill or a scenario file is missing, any tool returns another shape, or any declared error code is not driven. Seeded negative: a skill with a 1,025-character `description` fails the validator.
+- **AC-2 — the model chooses the right skill (G2).** **Check:** the T9 run over every `evals.yaml` scenario (at least 33) and 20 no-skill prompts, scored from `read_skill_invoked` events. At least 10 of the 20 no-skill prompts contain a word that today's `keywords` match.
+  - A scenario counts as right only if the expected skill loads and no other skill loads.
+  - A no-skill prompt counts as wrong if any skill loads.
+
+  *Fails if* fewer than 33 scenarios run, fewer than 90% of scenarios are right, or more than 2 of the 20 no-skill prompts load a skill.
 - **AC-3 — fixable calls fall (G3).** **Check:** the PR #1242 audit method re-run per D10. *Fails if* the fixable share is above 15% in either session.
 - **AC-4 — the prompt does not grow (G4).** **Check:** the median first-call `prompt_tokens` per turn over the G3 runs, against the baseline recorded before the run. *Fails if* the median is above the baseline.
-- **AC-5 — an "ask" never runs unasked.** **Check:** a test with `approval_ui_enabled=False` drives a call that matches no allow rule. *Fails if* the call runs. Seeded negative: restoring row A3's branch makes the test fail.
-- **AC-6 — every FRE-1572 bypass form is caught.** **Check:** a test of `ls\nrm x`, `ls & rm x`, `ls $(rm x)`, `` ls `rm x` `` and `(rm x)` under an allow rule for `ls`. *Fails if* any one runs without an ask or a deny.
-- **AC-7 — unrelated words load no skill.** **Check:** on the eval stack, the turns "Which model is best for logic puzzles?" and "Please draw up a paragraph on the drawbacks of Spanish trade." *Fails if* a skill body is in either prompt without a `read_skill` call.
-- **AC-8 — the model sees the fix in an error.** **Check:** a `query_telemetry` call with a field that is not allowed. *Fails if* the tool message that the model receives lacks the list of allowed fields, or the `tool_call_completed` event says `success: true`.
-- **AC-9 — the worker file grant is read-only and bounded.** **Check:** a `general` worker test with a task that names one file. *Fails if* the worker cannot read that file, can read a file that the task does not name, or can write the named file.
+- **AC-5 — an "ask" never runs unasked.** **Check:** a test drives a call that matches no allow rule, for the primary and for a worker, in each case of D8.4: `approval_ui_enabled=False`, no session id, no transport, and a transport whose PWA client is gone. A second test makes the rules fail to load. *Fails if* the call runs in any case. Seeded negative: restoring row A3's branch makes the test fail.
+- **AC-6 — the bash matcher refuses hidden commands.** **Check:** a table test under an allow rule for `ls` only. The table holds every FRE-1572 form (`ls\nrm x`, `ls & rm x`, `ls $(rm x)`, `` ls `rm x` ``), and every D8.2 construct: `(rm x)`, `ls <(rm x)`, `eval "rm x"`, `bash -c "rm x"`, `find . -exec rm {} \;`, `echo x | xargs rm`, `nohup rm x`, a heredoc with `$(rm x)`, a quoted `"ls; rm x"` passed to `sh -c`, and one input that the parser cannot parse. *Fails if* any row is allowed without an ask or a deny. Seeded negative: a matcher that checks only the first word fails at least 5 rows.
+- **AC-7 — no skill enters the prompt unasked.** **Check:** a test assembles the primary's first-call messages for the 20 no-skill prompts of AC-2, plus "Which model is best for logic puzzles?" and "Please draw up a paragraph on the drawbacks of Spanish trade." *Fails if* any assembled prompt holds a skill body, or text other than the one catalog line per skill.
+- **AC-8 — the model sees the fix, and telemetry sees the failure.** **Check:** the AC-1 contract test also asserts, for each driven error code, that the tool message to the model holds the full `message` (up to 2,000 characters) and that `tool_call_completed` logs `success: false`. Named instance: a `query_telemetry` call with a field that is not allowed returns the list of allowed fields. *Fails if* any error is clipped below its message length, or logs `success: true`.
+- **AC-9 — the worker file grant is read-only and bounded.** **Check:** a `general` worker test with a task whose `read_paths` names one file. *Fails if* the worker cannot read that file, or if any of these succeeds:
+  - a read of a file that the task does not name;
+  - a write or an edit of the named file;
+  - a read through `../` or a symlink that resolves to another file;
+  - a read after the named file is replaced by a symlink to another file;
+  - a read of a directory named in `read_paths`.
 
 ---
 

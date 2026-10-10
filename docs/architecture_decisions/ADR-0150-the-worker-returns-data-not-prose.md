@@ -939,3 +939,102 @@ documentation. The planner request changes, so ADR-0154 D7 applies again.
   asks for worker-only tools.
 - `query_telemetry` is not on the retrieval table of ADR-0138 D2. Telemetry is partly agent-written,
   so it is not a citable source. This matches the `bash` and `curl` route it replaces for a worker.
+
+### 2026-10-10 — Amendment to D2: side-effecting tools for an `operator` worker (FRE-1565)
+**Changed By:** build seat, on the owner's decisions of 2026-10-10
+**Reason:** Option A, step 3. The owner's direction is "all tools, under controls": a worker can
+run a shell command, write a file, create a Linear issue or project, and write a note or an
+artifact. The FRE-1564 amendment kept those tools with the primary. This amendment gives them to a
+new type and states the control for each part of the exfiltration path. The tool rows of D2 are
+replaced by the table below. Nothing else in D2 changes.
+
+**The owner's decisions (2026-10-10, asked by the build seat before the plan).**
+
+1. A new `operator` type holds the side-effecting tools. `researcher` and `general` do not change.
+2. Approval is per call, with the exact arguments on the card. An identical call in the same turn
+   runs once. Arguments over 4,000 characters are refused without a card. `write` inside the
+   worker's own workspace asks only where its own policy asks (not in NORMAL).
+3. A worker's `bash` runs as `nobody` with an allowlisted environment, in its own workspace. It
+   fails closed when the gateway is not root.
+
+| Type | Tools | Approval for the sub-agent |
+|---|---|---|
+| `researcher` | `web_search`, `fetch_url`, `get_library_docs` | the tool's own policy |
+| `general` | `run_python`, `search_memory`, `recall_personal_history`, `query_telemetry`, `notes_search`, `read_skill` | the tool's own policy |
+| `operator` | `bash`, `write`, `run_python`, `create_linear_issue`, `create_linear_project`, `notes_write`, `artifact_write` | **per call** for `bash`, both Linear writes, `notes_write`, `artifact_write`. The tool's own policy for `write` and `run_python` |
+
+Refused, each with a recorded reason in `tools.yaml`: `read` (it reads `/opt/seshat/**` and
+`/app/**` with no approval, which is a private read beside outbound tools) and `artifact_draft`
+(it spawns its own sub-agent, outside this registry and outside the per-call approval). The
+ticket named `write_file`. No tool of that name is registered. The file writer is the FRE-261
+primitive `write`.
+
+**The approval scope, and why per call.** FRE-1461 asks once per tool per turn, so a fan-out of
+six workers raises one card. For a read-only tool that is the right trade. For `bash` it is not:
+one "yes" would cover every later command of every worker in the turn, and a page a worker read
+can shape those commands. So a decision in `sub_agent_tools` now carries `approval: policy | per_call`.
+A `per_call` tool asks before every call, in every mode, and the card shows the worker type, the
+tool, the full canonical arguments and the task. One answer covers one call. The cost is more
+cards. Two things bound it: the planner sends a change to one `operator`, and identical calls
+coalesce (below). An arguments string over 4,000 characters is refused without a card, because a
+shortened command could hide the part that sends data out. Most HTML artifacts are over that
+limit, so `artifact_write` serves small artifacts only. The primary keeps its own artifact path.
+
+**The exfiltration path for `operator`, part by part.**
+
+| Part | Control |
+|---|---|
+| Untrusted input | The task text only. `operator` holds an outbound tool, so `carries_conversation_context` gives it no conversation messages (the FRE-1564 rule, unchanged). It holds no memory, notes or telemetry read. |
+| Private read | `bash` is the only one. It runs as `nobody` (uid 65534) with an allowlisted environment, through the FRE-1505 `setpriv` drop, so it cannot read the gateway's credentials (`env`, `/proc/1/environ`). Every call is approved per call. |
+| Way out | `bash` (for example `curl`) and the two Linear writes. Each call is approved per call, with its full arguments on the card. `bash`'s `auto_approve_prefixes` never apply to a worker: the broker asks before the call reaches that check. |
+| Durable poisoning | `notes_write` and `artifact_write` are approved per call. `write` is confined to the worker's own workspace. |
+
+The FRE-1564 split rule becomes: no worker type holds an outbound tool and a private read unless
+every outbound tool it holds is approved per call. `researcher` and `general` still keep the plain
+split. `OUTBOUND_TOOLS` gains `bash`, `create_linear_issue` and `create_linear_project`. A test
+over the registry and the real governance config fails if a call able to send data out after a
+private read can run without per-call approval. Its seeded negatives set `bash`, a Linear write or
+`notes_write` back to `policy`, and add `web_search` to `operator`.
+
+**A workspace per worker (FRE-1517 stage 3, F9 and proposal 6).** Each worker gets
+`<worker_workspace_root>/<trace_id>/<task_id>` (default root `/app/agent_workspace/workers`). The
+directory is created on first use. A worker's `write` puts a relative path inside it and refuses a
+path that resolves outside it (`..`, an absolute path, a symlink out). The sub-agent dispatch moves
+the path into the workspace before the layer's `allowed_paths` check, which would refuse a relative
+path. A worker's `bash` uses the workspace as working directory, `HOME` and `TMPDIR`. Two workers
+that write the same file name keep two files, and no worker starts in another session's files.
+The workspace is a working directory, not a security boundary: every worker shell is uid 65534, so
+an approved `bash` command can still name a sibling's directory. The per-call card is the control
+there. Workspaces are not cleaned up. They are small and on the durable volume.
+
+**No duplicate side effects.** The broker keeps a per-turn record keyed by the tool and its
+canonical arguments. The first request decides and runs. An identical later request, from the same
+worker or another, raises no card and does not run: it receives the first call's result, or its
+refusal, and the worker's tool message says a sibling already made the call. Two workers that ask
+for the same Linear issue therefore make one. A near-duplicate (a different title) is a different
+call and raises its own card, so the owner sees both. The record is safe under concurrent workers
+(a shared future, shielded for followers, always resolved by the first request).
+
+**Other controls.**
+
+- A worker's shell leads its own session, and its process group is killed when the call returns,
+  times out or is cancelled, so nothing it starts outlives the approved call.
+- After a per-call card resolves with no answer (`timeout_default`, `connection_lost`,
+  `user_cancel`) or the pause fails, the broker refuses every later per-call request in that turn
+  without a card. A turn with no PWA client would otherwise wait the pause timeout, 180 s, once per
+  call. ADR-0063 A2 holds: such a turn denies.
+- The worker-budget floor of FRE-1461 applies per card. A worker needs the pause timeout plus 5 s
+  left, read after the card lock is taken, or the call is refused without a card.
+
+**Costs and risks, recorded.**
+
+- A worker's deadline does not stop while a card waits. A long owner wait spends worker budget.
+- Coalescing covers identical arguments only.
+- A symlink swap between `write`'s check and its write needs an approved `bash` call that leaves a
+  process behind. The process-group kill removes that process. The residual is stated, not closed.
+- `nobody` can read world-readable files in the container. The per-call card is the control.
+- The planner prompt gains one type line and one enum name, so ADR-0154 D7 applies again. The change
+  does not ship until the D7 probe passes on the new prompt.
+- Declined: moving per-call approval into `ToolExecutionLayer` (a refactor of the FRE-1461
+  boundary) and running the operator shell in a sandbox container (it would remove what `bash` is
+  for: the system's own state, `docker ps`, logs, `psql`).

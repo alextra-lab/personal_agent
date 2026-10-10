@@ -41,8 +41,12 @@ from personal_agent.telemetry.trace import TraceContext
 # Re-pinned for FRE-1564 (2026-10-10): the `researcher` and `general` descriptions changed and
 # their tool lists grew. Before: with tools af31d592…, no tools b2da2a94…. The ADR-0154 D7
 # probe on qwen3.8-flash-next is run for this change and posted on FRE-1564.
-_MAIN_PLANNER_SHA256_WITH_TOOLS = "38fdec72f9b11945b720122ce302a27c4df7076b92eec7ded0f51eddc72a4719"
-_MAIN_PLANNER_SHA256_NO_TOOLS = "253510e7b0916df330966a3103bc44cce816e8b347ff85f2f88b075ac7dc7e1a"
+#
+# Re-pinned for FRE-1565 (2026-10-10): a third worker type, `operator`, adds one type line and
+# one name to the type enum. Before: with tools 38fdec72…, no tools 253510e7…. The ADR-0154 D7
+# probe must pass on this prompt before the change ships; its result goes on FRE-1565.
+_MAIN_PLANNER_SHA256_WITH_TOOLS = "a0659561ffe84a1e7d209b604df8b774737afda824fc785c12ad36223a1b4663"
+_MAIN_PLANNER_SHA256_NO_TOOLS = "b7568c61e3de5d843c49338428a48d37c2e9c546433ef1dea1fee71cb00eefb9"
 _PINNED_ROUNDS = {"quick": 3, "standard": 10, "thorough": 20}
 
 # No skill keyword: nothing here can route the sequential-thinking skill.

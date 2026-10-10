@@ -22,6 +22,11 @@
 # sub_agent_tools.SUB_AGENT_DENIED_MODES). FRE-1461 wired the ADR-0076
 # constraint pause to the sub-agent path, so the "runs unattended" premise
 # behind that revocation no longer holds; lifting it is its own owner decision.
+#
+# FRE-1565 (2026-10-10) adds the side-effecting tools for the `operator` worker type and a
+# per-decision `approval` field: `policy` (the default) follows the tool's own approval
+# fields, asked once per tool per turn; `per_call` asks before every call, with the exact
+# arguments on the card.
 sub_agent_tools:
   run_python:
     granted: true
@@ -37,6 +42,8 @@ sub_agent_tools:
       A worker could set it. The `general` worker type now holds private reads
       (memory, notes, telemetry), so a worker's run_python is pinned to network
       false here. The primary is unaffected: it never reads this mapping.
+
+      FRE-1565, 2026-10-10: the `operator` type holds run_python too, with the same pin.
 
   web_search:
     granted: true
@@ -177,6 +184,89 @@ sub_agent_tools:
       word. The primary's own tool policy still allows the full 365-day/50-turn
       range; this ceiling reads only from param_ceilings above and never touches
       that policy.
+
+  # FRE-1565, 2026-10-10: the side-effecting tools, for the `operator` worker type only
+  # (ADR-0150 D2 amendment). `approval: per_call` asks the owner before every call, with the
+  # call's exact arguments on the card, whatever the tool's own policy below says, and an
+  # identical call later in the same turn is not run again (the duplicate control).
+  bash:
+    granted: true
+    approval: per_call
+    reason: >-
+      Owner decisions, 2026-10-10 (FRE-1565): option A ("all tools, under controls"), a new
+      `operator` worker type, approval per call with the exact command on the card, and the
+      shell drops to `nobody`. One bash call is a whole exfiltration path in the gateway: it
+      can read a credential (env, /proc/1/environ) and send it out (curl). Two controls
+      answer that. Every worker bash call asks the owner and shows the full command, so one
+      "yes" never covers a command the owner did not see. And a worker's shell runs as
+      `nobody` with an allowlisted environment (the FRE-1505 setpriv drop), so it cannot
+      read the gateway's credentials at all. The shell works in the worker's own workspace,
+      and its process group is killed when the call ends. The `auto_approve_prefixes` list
+      below never applies to a worker: the broker asks before the call reaches that check.
+
+  write:
+    granted: true
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1565). The ticket named `write_file`; no tool of that
+      name is registered, and the file writer is this FRE-261 primitive. For a worker it
+      writes only inside the worker's own empty workspace: a relative path lands there, and
+      a path that resolves outside it is refused. A file in a worker's own workspace changes
+      nothing the owner or another worker relies on, and it sends nothing out, so the tool
+      keeps its own policy (no card in NORMAL), as the owner chose. The workspace is a
+      working directory, not a security boundary: an approved bash call can still name
+      another directory.
+
+  create_linear_issue:
+    granted: true
+    approval: per_call
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1565). An outbound channel: the title and the body go
+      to Linear, so a page a worker read could shape them. Per call, the card shows the
+      full title and body. Two workers that ask for the identical issue in one turn make
+      one issue; the second receives the first's result. A near-duplicate is two calls and
+      raises two cards.
+
+  create_linear_project:
+    granted: true
+    approval: per_call
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1565). Like create_linear_issue, an outbound write to
+      Linear whose text a worker writes, so the owner approves each call and sees its full
+      arguments. An identical request later in the same turn is not run again.
+
+  notes_write:
+    granted: true
+    approval: per_call
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1565). It sends nothing out, but a note is durable
+      owner data that later turns read back, so a hostile page could plant one. Per call,
+      the card shows the slug and the full content. Content too long for the card (over
+      4,000 characters of arguments) is refused without a card.
+
+  artifact_write:
+    granted: true
+    approval: per_call
+    reason: >-
+      Owner decision, 2026-10-10 (FRE-1565). A durable, owner-facing artifact in R2, so it is
+      approved per call with its full arguments, for the same reason as notes_write. Most
+      HTML artifacts exceed the 4,000-character card limit and are refused for a worker; the
+      primary keeps its own artifact path.
+
+  read:
+    granted: false
+    reason: >-
+      FRE-1565, 2026-10-10. Refused for the `operator` type. Its allowed_paths include
+      /opt/seshat/** and /app/**, which hold private and internal files, and it asks no
+      approval. A type that holds bash and the Linear writes would then have an unapproved
+      private read beside its outbound tools. A worker reads its own files with bash, which
+      the owner approves per call.
+
+  artifact_draft:
+    granted: false
+    reason: >-
+      FRE-1565, 2026-10-10. Refused: it plans an artifact and then spawns its own sub-agent
+      to write the HTML. A worker that spawns a worker is outside the ADR-0150 registry, and
+      that inner call would not pass through this worker's per-call approval.
 
 # Per-mode allowed categories. Used by the mode-policy gate in evaluate_governance().
 # Not intersected with TaskType — the TaskType→tool-filter wire was severed in

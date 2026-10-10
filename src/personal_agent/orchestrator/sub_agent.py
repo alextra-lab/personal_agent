@@ -66,6 +66,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
 from personal_agent.config import settings
+from personal_agent.governance.sub_agent_tools import clamp_sub_agent_tool_params
 from personal_agent.llm_client.models import (
     Dialect,
     landing_accepts_json_schema,
@@ -82,6 +83,7 @@ from personal_agent.orchestrator.prompts import render_current_datetime_block
 from personal_agent.orchestrator.sub_agent_approval import (
     get_sub_agent_approval_broker,
     resolve_sub_agent_approval_requirements,
+    resolve_sub_agent_per_call_tools,
 )
 from personal_agent.orchestrator.sub_agent_types import (
     SubAgentReportKind,
@@ -1812,6 +1814,7 @@ async def _run_tool_loop(
     effective_timeout: float,
     approval_required_tools: frozenset[str],
     deadline_monotonic: float,
+    per_call_tools: frozenset[str] = frozenset(),
 ) -> _ToolLoopOutcome:
     """Run inference/tool-execution rounds until the model stops or a limit fires.
 
@@ -1859,6 +1862,11 @@ async def _run_tool_loop(
             same bound the outer ``wait_for`` enforces. The approval pause is opened
             only when enough of it remains for the worker to outlive its own wait,
             so a refusal is always recorded rather than lost to a mid-pause kill.
+        per_call_tools: Granted tools that ask the owner on every call, with the call's
+            exact arguments (FRE-1565). They go through
+            :meth:`~personal_agent.orchestrator.sub_agent_approval.SubAgentApprovalBroker.run_once`,
+            which also runs an identical call only once per turn. A subset of
+            ``approval_required_tools``.
 
     Returns:
         The terminal :class:`_ToolLoopOutcome`, declaring both why the loop ended
@@ -2254,6 +2262,77 @@ async def _run_tool_loop(
                 )
                 continue
 
+            # FRE-1565: a side-effecting tool asks per call, with the exact arguments the
+            # tool will receive (after the sub-agent clamp), and an identical call in the
+            # same turn runs once. No broker is a refusal, as below.
+            if tool_name in per_call_tools:
+                arguments, _clamps = clamp_sub_agent_tool_params(
+                    tool_name, arguments, tool_layer.governance_config
+                )
+                per_call_broker = get_sub_agent_approval_broker()
+                if per_call_broker is None:
+                    logger.warning(
+                        "sub_agent_tool_approval_denied",
+                        tool_name=tool_name,
+                        reason="no_approver_in_scope",
+                        task=spec.task,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                    )
+                    _absorb(
+                        tool_call_id,
+                        tool_name,
+                        raw_arguments,
+                        json.dumps(
+                            {
+                                "status": "error",
+                                "hint": (
+                                    f"{tool_name} was not approved for this call "
+                                    "(no_approver_in_scope). Continue without it."
+                                ),
+                            }
+                        ),
+                    )
+                    continue
+
+                async def _execute(
+                    _call_id: str = tool_call_id,
+                    _name: str = tool_name,
+                    _arguments: dict[str, Any] = arguments,
+                ) -> str:
+                    result = await dispatch_tool_call(
+                        tool_call_id=_call_id,
+                        tool_name=_name,
+                        arguments=_arguments,
+                        tool_layer=tool_layer,
+                        trace_ctx=trace_ctx,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        loaded_skills=loaded_skills,
+                        principal="sub_agent",
+                        approved_upstream=True,
+                    )
+                    return str(result["content"])
+
+                side_effect = await per_call_broker.run_once(
+                    tool_name,
+                    arguments,
+                    worker_type=spec.worker_type.value,
+                    task=spec.task,
+                    deadline_monotonic=deadline_monotonic,
+                    execute=_execute,
+                )
+                if side_effect.executed:
+                    state.tools_used.append(tool_name)
+                content = side_effect.content
+                if side_effect.coalesced and side_effect.approved:
+                    content = (
+                        f"A sibling worker already made this identical {tool_name} call in "
+                        f"this turn. It was not run again. Its result: {content}"
+                    )
+                _absorb(tool_call_id, tool_name, raw_arguments, content)
+                continue
+
             # FRE-1461: the owner's gate. Checked AFTER the argument parse, so a
             # malformed call is refused without troubling anyone, and before
             # dispatch, so a denial costs nothing. A missing broker is a denial,
@@ -2470,6 +2549,9 @@ async def run_sub_agent(
         approval_required_tools = resolve_sub_agent_approval_requirements(
             spec.tools, trace_id=trace_id
         )
+        # FRE-1565: the subset that asks on every call. Always inside the set above, so a
+        # per-call tool can never fall back to the layer's own gate.
+        per_call_tools = resolve_sub_agent_per_call_tools(spec.tools, trace_id=trace_id)
         # The same instant the wait_for below is measured from, expressed absolutely
         # so the approval gate can ask how much of THIS worker's budget is left.
         deadline_monotonic = time.monotonic() + hard_deadline
@@ -2488,6 +2570,7 @@ async def run_sub_agent(
                 effective_timeout,
                 approval_required_tools,
                 deadline_monotonic,
+                per_call_tools & approval_required_tools,
             ),
             timeout=hard_deadline,
         )

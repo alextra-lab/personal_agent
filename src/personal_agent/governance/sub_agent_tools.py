@@ -17,6 +17,10 @@ carrying its reason instead of an absence indistinguishable from an unconsidered
 the same day, and FRE-1473 gave it a sub-agent-only parameter ceiling (see
 :func:`clamp_sub_agent_tool_params`). Read ``GovernanceConfig.granted_sub_agent_tool_names()``
 for the grant set — the mapping's keys include the refusals.
+
+FRE-1565 (2026-10-10) grants the side-effecting tools to the ``operator`` worker type and
+adds ``approval`` to a decision: ``per_call`` asks the owner before every call, whatever the
+tool's own policy says (:func:`sub_agent_tool_asks_per_call`).
 """
 
 from __future__ import annotations

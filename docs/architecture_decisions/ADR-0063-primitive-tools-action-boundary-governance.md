@@ -301,3 +301,15 @@ Linear write tools.
 - `ToolExecutionLayer` injects an `approve` callable into async executors that declare an `approve`
   parameter (ADR-0153 D7). The name is reserved. With no channel the callable returns `deny`.
 - The code default of the flag is still false. A deployment that does not set it true stays open.
+
+### 2026-10-10 — A4 refined for side-effecting worker tools (FRE-1565)
+
+Row A4 ("asks once per tool per turn") holds for a worker tool whose sub-agent decision has
+`approval: policy`, the default. A decision with `approval: per_call` asks before every call, in
+every mode, and the card shows the call's exact arguments. An identical call (same tool, same
+arguments) later in the same turn raises no card and does not run again. It receives the first
+call's result or refusal. The `operator` worker type holds the per-call tools: `bash`, the two
+Linear writes, `notes_write` and `artifact_write`. A2 still holds: with no PWA client the first
+per-call card resolves without an answer and is refused, and the broker refuses every later
+per-call request in that turn without a card. The design and the reasons are in ADR-0150, the
+D2 amendment of 2026-10-10 (FRE-1565).

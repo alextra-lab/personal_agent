@@ -219,7 +219,7 @@ class TestPlannerPromptToolSurface:
         )
 
         prompt = _build_planner_system_prompt(["web_search"])
-        assert '"type": "researcher|general"' in prompt
+        assert '"type": "researcher|general|operator"' in prompt
         assert '"thoroughness": "quick|standard|thorough"' in prompt
         assert '"tools"' not in prompt
         assert '"expected_output"' not in prompt
@@ -231,16 +231,20 @@ class TestPlannerPromptToolSurface:
         )
 
         prompt = _build_planner_system_prompt([])
-        assert prompt.count("Tools granted now: none") == 2
+        assert prompt.count("Tools granted now: none") == 3
         assert "  - researcher: " in prompt
         assert "  - general: " in prompt
+        assert "  - operator: " in prompt
 
     def test_a_granted_tool_no_type_declares_is_never_rendered(self) -> None:
         from personal_agent.orchestrator.expansion_controller import (
             _build_planner_system_prompt,
         )
 
-        assert "bash" not in _build_planner_system_prompt(["bash", "web_search"])
+        # FRE-1565: `bash` is now declared by `operator`, so a tool no type declares is used.
+        assert "perplexity_query" not in _build_planner_system_prompt(
+            ["perplexity_query", "web_search"]
+        )
 
     def test_surface_lookup_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A governance/mode lookup error yields an empty surface, not a crash."""
@@ -1756,14 +1760,18 @@ class TestSubAgentGapRedispatch:
 
         async def _run(**kwargs: Any) -> SubAgentResult:
             calls.append(kwargs["spec"])
-            return _make_sub_agent_result("task_0", stated_tool_gap="bash")
+            return _make_sub_agent_result("task_0", stated_tool_gap="perplexity_query")
 
         results = await _dispatch_hermetic(
-            controller, _one_task_plan(), _run, granted=("bash",), known=("bash",)
+            controller,
+            _one_task_plan(),
+            _run,
+            granted=("perplexity_query",),
+            known=("perplexity_query",),
         )
 
         assert len(calls) == 1
-        assert results[0].stated_tool_gap == "bash"
+        assert results[0].stated_tool_gap == "perplexity_query"
 
     @pytest.mark.asyncio
     async def test_a_same_type_gap_is_never_widened(self, controller: ExpansionController) -> None:

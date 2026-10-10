@@ -16,6 +16,10 @@ This module is that wiring. It owns three things:
    a mechanism that asked each of them separately would be switched off by whoever
    met it first, which is why the answer's scope is the turn and not the call.
 3. **The safe branch** — every failure to obtain an answer resolves to a denial.
+4. **Per-call approval** (FRE-1565) — :meth:`SubAgentApprovalBroker.run_once`, for a
+   side-effecting tool whose sub-agent decision is ``approval: per_call``. Each distinct
+   call raises its own card with the exact arguments, and an identical call later in the
+   turn is not run again. The per-tool-per-turn rule below holds for every other tool.
 
 Why the tool NAME is the cache key. Arguments differ per sub-agent by design, so
 keying on the call would restore one prompt per worker. The owner's decision is
@@ -39,8 +43,10 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import Sequence
-from dataclasses import dataclass
+import json
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from personal_agent.brainstem import ModeManagerError, get_current_mode
@@ -49,7 +55,10 @@ from personal_agent.config.governance_loader import (
     GovernanceConfigError,
     load_governance_config,
 )
-from personal_agent.governance.sub_agent_tools import sub_agent_tool_requires_approval
+from personal_agent.governance.sub_agent_tools import (
+    sub_agent_tool_asks_per_call,
+    sub_agent_tool_requires_approval,
+)
 from personal_agent.telemetry import get_logger
 
 if TYPE_CHECKING:
@@ -83,6 +92,16 @@ APPROVAL_FINALIZATION_RESERVE_SECONDS = 5.0
 # owner is being asked; it is not a place to render an entire sub-agent brief.
 _TASK_PREVIEW_CHARS = 120
 
+#: Longest canonical arguments a per-call card carries (FRE-1565). The card shows the
+#: arguments in full or not at all: a shortened command could hide the part that sends
+#: data out. A longer call is refused without a card.
+PER_CALL_CARD_MAX_ARGUMENT_CHARS = 4000
+
+# The pause resolutions that are not an answer from the owner. After one of them on a
+# per-call card, the broker stops asking for the rest of the turn: a turn with no PWA
+# client would otherwise wait the full pause timeout once per call (FRE-1565).
+_NO_ANSWER_RESOLUTIONS = frozenset({"timeout_default", "connection_lost", "user_cancel"})
+
 
 @dataclass(frozen=True)
 class ApprovalOutcome:
@@ -99,6 +118,94 @@ class ApprovalOutcome:
 
     approved: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class SideEffectOutcome:
+    """One per-call decision and its result, shared by identical calls in a turn (FRE-1565).
+
+    Attributes:
+        approved: True only when the owner approved this exact call.
+        reason: The pause's resolution for a real decision, else a local reason.
+        content: The tool-role message for the worker: the tool's result when approved,
+            else the refusal.
+        executed: True only for the call that ran the tool. A coalesced copy is False.
+        coalesced: True when an identical earlier call in this turn produced this outcome.
+    """
+
+    approved: bool
+    reason: str
+    content: str
+    executed: bool = False
+    coalesced: bool = False
+
+
+def canonical_arguments(arguments: Mapping[str, object]) -> str:
+    """Render a call's arguments as one stable string: the card text and the ledger key.
+
+    Args:
+        arguments: The call's arguments, after the sub-agent clamp.
+
+    Returns:
+        Compact JSON with sorted keys. Two calls are identical when these strings are.
+    """
+    return json.dumps(
+        arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+    )
+
+
+def _refusal_content(tool_name: str, reason: str) -> str:
+    """The tool-role message a worker receives for a refused per-call request.
+
+    Args:
+        tool_name: The refused tool.
+        reason: Why it was refused.
+
+    Returns:
+        The JSON content of the tool-role message.
+    """
+    return json.dumps(
+        {
+            "status": "error",
+            "hint": (
+                f"{tool_name} was not approved for this call ({reason}). "
+                "Continue without it. Do not retry the same change with other arguments."
+            ),
+        }
+    )
+
+
+def resolve_sub_agent_per_call_tools(
+    granted_tools: Sequence[str],
+    *,
+    trace_id: str,
+) -> frozenset[str]:
+    """Return which of a sub-agent's granted tools ask the owner on every call (FRE-1565).
+
+    Fails closed like :func:`resolve_sub_agent_approval_requirements`: a governance
+    lookup failure returns every granted name, so a broken config asks per call rather
+    than once per turn.
+
+    Args:
+        granted_tools: The tools this sub-agent may use, already filtered by the grant set.
+        trace_id: Request trace identifier, for logging.
+
+    Returns:
+        The subset of ``granted_tools`` whose decision is ``approval: per_call``.
+    """
+    if not granted_tools:
+        return frozenset()
+    try:
+        config = load_governance_config()
+    except GovernanceConfigError as exc:
+        log.warning(
+            "sub_agent_per_call_lookup_failed",
+            error=str(exc),
+            granted_tools=list(granted_tools),
+            trace_id=trace_id,
+        )
+        return frozenset(granted_tools)
+    return frozenset(name for name in granted_tools if sub_agent_tool_asks_per_call(name, config))
 
 
 def resolve_sub_agent_approval_requirements(
@@ -167,6 +274,10 @@ class SubAgentApprovalBroker:
         self._ctx = ctx
         self._decisions: dict[str, ApprovalOutcome] = {}
         self._lock = asyncio.Lock()
+        # FRE-1565: one future per distinct per-call request (tool, canonical arguments).
+        # Only the first request for a key resolves it.
+        self._side_effects: dict[tuple[str, str], asyncio.Future[SideEffectOutcome]] = {}
+        self._owner_unreachable: str | None = None
 
     async def decide(
         self,
@@ -221,7 +332,12 @@ class SubAgentApprovalBroker:
             return outcome
 
     async def _ask(
-        self, tool_name: str, task: str, worker_remaining_seconds: float
+        self,
+        tool_name: str,
+        task: str,
+        worker_remaining_seconds: float,
+        *,
+        context: str | None = None,
     ) -> ApprovalOutcome:
         """Raise one pause for one tool, converting every failure into a denial.
 
@@ -229,6 +345,7 @@ class SubAgentApprovalBroker:
             tool_name: The granted tool about to be dispatched.
             task: The sub-agent's task description for the card.
             worker_remaining_seconds: What is left of this worker's own deadline.
+            context: The card text. ``None`` gives the per-tool-per-turn card.
 
         Returns:
             The resolved :class:`ApprovalOutcome`.
@@ -268,7 +385,8 @@ class SubAgentApprovalBroker:
                 # what it is asking. Per-call argument review needs a per-call
                 # decision, which is the design this ticket rejected on fan-out
                 # grounds.
-                context=(
+                context=context
+                or (
                     f"A sub-agent wants to use {tool_name}. "
                     f"Task: {task[:_TASK_PREVIEW_CHARS]}. "
                     f"Allowing covers every sub-agent in this turn."
@@ -307,6 +425,149 @@ class SubAgentApprovalBroker:
             session_id=self._ctx.session_id,
         )
         return ApprovalOutcome(approved=approved, reason=decision.resolution)
+
+    async def run_once(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, object],
+        *,
+        worker_type: str,
+        task: str,
+        deadline_monotonic: float,
+        execute: Callable[[], Awaitable[str]],
+    ) -> SideEffectOutcome:
+        """Ask the owner about this exact call, run it once on approve (FRE-1565).
+
+        A ``per_call`` tool: every distinct call raises its own card, which shows the
+        exact arguments, and one answer covers one call. An identical call (same tool,
+        same canonical arguments) later in the turn raises no card and does not run
+        again: it receives the first call's outcome, with ``coalesced=True``. That is
+        the duplicate control: two workers asking for the same Linear issue make one.
+
+        Args:
+            tool_name: The granted per-call tool about to be dispatched.
+            arguments: The call's arguments, after the sub-agent clamp.
+            worker_type: The worker type, shown on the card.
+            task: The worker's task description, shown on the card.
+            deadline_monotonic: The worker's own absolute deadline. The remaining time
+                is read after the card lock is taken, not before.
+            execute: Runs the tool and returns the tool-role message content. Called at
+                most once per distinct call per turn, and only on approve.
+
+        Returns:
+            The :class:`SideEffectOutcome` for this call.
+
+        Raises:
+            asyncio.CancelledError: Propagated. The shared outcome is still resolved
+                first, with a refusal, so no identical call waits forever and none runs
+                a second time.
+        """
+        canonical = canonical_arguments(arguments)
+        key = (tool_name, canonical)
+        existing = self._side_effects.get(key)
+        if existing is not None:
+            # shield: cancelling this follower must not cancel the shared future.
+            earlier = await asyncio.shield(existing)
+            log.info(
+                "sub_agent_side_effect_coalesced",
+                tool_name=tool_name,
+                worker_type=worker_type,
+                approved=earlier.approved,
+                reason=earlier.reason,
+                trace_id=self._ctx.trace_id,
+                session_id=self._ctx.session_id,
+            )
+            return replace(earlier, executed=False, coalesced=True)
+
+        future: asyncio.Future[SideEffectOutcome] = asyncio.get_running_loop().create_future()
+        self._side_effects[key] = future
+        outcome: SideEffectOutcome | None = None
+        try:
+            outcome = await self._decide_and_run(
+                tool_name, canonical, worker_type, task, deadline_monotonic, execute
+            )
+            return outcome
+        finally:
+            if not future.done():
+                future.set_result(
+                    outcome
+                    if outcome is not None
+                    else SideEffectOutcome(
+                        approved=False,
+                        reason="cancelled_before_completion",
+                        content=_refusal_content(tool_name, "cancelled_before_completion"),
+                    )
+                )
+
+    async def _decide_and_run(
+        self,
+        tool_name: str,
+        canonical: str,
+        worker_type: str,
+        task: str,
+        deadline_monotonic: float,
+        execute: Callable[[], Awaitable[str]],
+    ) -> SideEffectOutcome:
+        """Raise the per-call card, then run the call on approve.
+
+        Args:
+            tool_name: The per-call tool.
+            canonical: The call's canonical arguments.
+            worker_type: The worker type, shown on the card.
+            task: The worker's task description, shown on the card.
+            deadline_monotonic: The worker's own absolute deadline.
+            execute: Runs the tool and returns the tool-role message content.
+
+        Returns:
+            The :class:`SideEffectOutcome` of this call.
+        """
+        if len(canonical) > PER_CALL_CARD_MAX_ARGUMENT_CHARS:
+            decision = ApprovalOutcome(approved=False, reason="arguments_too_long_for_card")
+        else:
+            # One card at a time. The owner reads the cards in order, and the budget
+            # read below cannot go stale behind another card's wait.
+            async with self._lock:
+                if self._owner_unreachable is not None:
+                    decision = ApprovalOutcome(
+                        approved=False, reason="owner_did_not_answer_this_turn"
+                    )
+                else:
+                    decision = await self._ask(
+                        tool_name,
+                        task,
+                        deadline_monotonic - time.monotonic(),
+                        context=(
+                            f"A {worker_type} worker wants to run {tool_name} with these "
+                            f"exact arguments: {canonical}. "
+                            f"Task: {task[:_TASK_PREVIEW_CHARS]}. "
+                            "Allowing covers this one call only."
+                        ),
+                    )
+                    if decision.reason in _NO_ANSWER_RESOLUTIONS or decision.reason.startswith(
+                        "pause_failed"
+                    ):
+                        self._owner_unreachable = decision.reason
+
+        log.info(
+            "sub_agent_side_effect_decided",
+            tool_name=tool_name,
+            worker_type=worker_type,
+            approved=decision.approved,
+            reason=decision.reason,
+            argument_chars=len(canonical),
+            trace_id=self._ctx.trace_id,
+            session_id=self._ctx.session_id,
+        )
+        if not decision.approved:
+            return SideEffectOutcome(
+                approved=False,
+                reason=decision.reason,
+                content=_refusal_content(tool_name, decision.reason),
+            )
+        content = await execute()
+        return SideEffectOutcome(
+            approved=True, reason=decision.reason, content=content, executed=True
+        )
 
 
 _sub_agent_approval_broker: contextvars.ContextVar[SubAgentApprovalBroker | None] = (

@@ -53,6 +53,7 @@ class WorkerType(str, Enum):
 
     RESEARCHER = "researcher"
     GENERAL = "general"
+    OPERATOR = "operator"
 
 
 @dataclass(frozen=True)
@@ -303,6 +304,22 @@ _RESEARCHER_MIN_ROUNDS_RULE = (
     "a reason to stop.\n"
 )
 
+# FRE-1565: the `operator` block. The workspace path differs per worker, so it is not in
+# the prompt (the system bytes stay identical across workers, ADR-0150 D2): a relative path
+# is enough, because `write` and `bash` both resolve it inside the worker's own workspace.
+_OPERATOR_BLOCK = (
+    "You make one bounded change the task asks for: you run a shell command, write a "
+    "file, create a Linear issue or project, or write a note or an artifact.\n"
+    "The owner approves each shell command, Linear write, note and artifact before it "
+    "runs, and sees its exact arguments. Make each call complete and exact, so the owner "
+    "can judge it. Do not split one change into many small calls.\n"
+    "A refused call is final for this turn. Do not retry the same change with other "
+    "arguments. Report that it was refused.\n"
+    "Write files with relative paths. They land in your own empty workspace, which is also "
+    "the working directory of your shell. Do not change files outside it.\n"
+    "Report in text what you changed: each file path, issue identifier, note or artifact."
+)
+
 WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
     {
         WorkerType.RESEARCHER: WorkerTypeSpec(
@@ -334,13 +351,44 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
             report_schema=None,
             default_thoroughness="quick",
         ),
+        WorkerType.OPERATOR: WorkerTypeSpec(
+            description=(
+                "Makes one bounded change the user asked for: runs a shell command, writes "
+                "a file in its own workspace, creates a Linear issue or project, or writes a "
+                "note or an artifact. The owner approves each such call. Reports in text"
+            ),
+            prompt_block=_OPERATOR_BLOCK,
+            tools=(
+                "bash",
+                "write",
+                "run_python",
+                "create_linear_issue",
+                "create_linear_project",
+                "notes_write",
+                "artifact_write",
+            ),
+            report_schema=None,
+            default_thoroughness="quick",
+        ),
     }
 )
 
 
 # FRE-1564: the tools that send a query or a URL out of the system. A worker type that holds
-# one is outbound; a registry test fails if it also holds a private tool read.
-OUTBOUND_TOOLS: frozenset[str] = frozenset({"web_search", "fetch_url", "get_library_docs"})
+# one is outbound and gets no conversation messages (`carries_conversation_context`).
+# FRE-1565 adds `bash` (it can reach the network) and the two Linear writes (their text goes to
+# Linear). The registry test now allows an outbound tool beside a private read only when the
+# owner approves every call of it (`test_worker_tool_split.py`).
+OUTBOUND_TOOLS: frozenset[str] = frozenset(
+    {
+        "web_search",
+        "fetch_url",
+        "get_library_docs",
+        "bash",
+        "create_linear_issue",
+        "create_linear_project",
+    }
+)
 
 
 def carries_conversation_context(spec: WorkerTypeSpec) -> bool:

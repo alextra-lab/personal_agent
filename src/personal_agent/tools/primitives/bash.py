@@ -46,8 +46,8 @@ import asyncio
 import contextlib
 import os
 import re
-import signal
 import shlex
+import signal
 from pathlib import Path
 from typing import Any
 

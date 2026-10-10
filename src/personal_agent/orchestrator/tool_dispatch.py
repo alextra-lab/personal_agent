@@ -145,7 +145,11 @@ async def dispatch_tool_call(
         # executor then refuses it.
         workspace = get_worker_workspace()
         path_arg = arguments.get("path")
-        if tool_name in _WORKSPACE_PATH_TOOLS and workspace is not None and isinstance(path_arg, str):
+        if (
+            tool_name in _WORKSPACE_PATH_TOOLS
+            and workspace is not None
+            and isinstance(path_arg, str)
+        ):
             confined = confine_to_workspace(path_arg, workspace)
             if confined is not None:
                 arguments = {**arguments, "path": str(confined)}

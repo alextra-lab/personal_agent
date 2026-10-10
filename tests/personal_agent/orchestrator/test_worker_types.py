@@ -22,9 +22,31 @@ from personal_agent.orchestrator.worker_types import (
 
 
 class TestRegistryShape:
-    def test_exactly_two_types(self) -> None:
-        assert set(WORKER_TYPES) == {WorkerType.RESEARCHER, WorkerType.GENERAL}
-        assert [t.value for t in WorkerType] == ["researcher", "general"]
+    def test_exactly_three_types(self) -> None:
+        assert set(WORKER_TYPES) == {
+            WorkerType.RESEARCHER,
+            WorkerType.GENERAL,
+            WorkerType.OPERATOR,
+        }
+        assert [t.value for t in WorkerType] == ["researcher", "general", "operator"]
+
+    def test_operator_entry(self) -> None:
+        """FRE-1565: the side-effecting type, text-reporting, quick by default."""
+        spec = WORKER_TYPES[WorkerType.OPERATOR]
+        assert spec.tools == (
+            "bash",
+            "write",
+            "run_python",
+            "create_linear_issue",
+            "create_linear_project",
+            "notes_write",
+            "artifact_write",
+        )
+        assert spec.report_schema is None
+        assert spec.default_thoroughness == "quick"
+        assert spec.description.startswith("Makes one bounded change the user asked for")
+        assert "relative paths" in spec.prompt_block
+        assert "A refused call is final for this turn" in spec.prompt_block
 
     def test_researcher_entry(self) -> None:
         spec = WORKER_TYPES[WorkerType.RESEARCHER]
@@ -156,14 +178,15 @@ class TestMinSearchRoundsVariant:
 
 
 class TestTypesDeclaring:
-    def test_each_tool_has_one_declaring_type(self) -> None:
+    def test_each_tool_has_its_declaring_types(self) -> None:
         assert worker_types_declaring("web_search") == (WorkerType.RESEARCHER,)
-        assert worker_types_declaring("run_python") == (WorkerType.GENERAL,)
+        assert worker_types_declaring("run_python") == (WorkerType.GENERAL, WorkerType.OPERATOR)
+        assert worker_types_declaring("bash") == (WorkerType.OPERATOR,)
         assert worker_types_declaring("fetch_url") == (WorkerType.RESEARCHER,)
         assert worker_types_declaring("query_telemetry") == (WorkerType.GENERAL,)
 
     def test_an_undeclared_tool_has_none(self) -> None:
-        assert worker_types_declaring("bash") == ()
+        assert worker_types_declaring("perplexity_query") == ()
 
 
 def _finding(**overrides: object) -> Finding:

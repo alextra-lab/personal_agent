@@ -2026,7 +2026,8 @@ class TestResearcherMinSearchRounds:
     """FRE-1561: ``sub_agent_researcher_min_search_rounds`` selects the researcher's stop rule."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("worker_type", list(WorkerType))
+    # The two types that existed before FRE-1565; `operator` is new and has no main bytes.
+    @pytest.mark.parametrize("worker_type", list(_MAIN_SYSTEM_PROMPT_FINGERPRINT))
     async def test_default_system_prompt_is_todays_bytes(
         self, monkeypatch: pytest.MonkeyPatch, worker_type: WorkerType
     ) -> None:

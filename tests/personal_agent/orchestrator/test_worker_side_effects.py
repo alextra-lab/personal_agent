@@ -335,3 +335,483 @@ class TestWorkerBash:
         assert kwargs["env"] is None
         assert kwargs["cwd"] is None
         assert kwargs["start_new_session"] is False
+
+
+# --------------------------------------------------------------------------------------
+# The per-call broker (AC-1, AC-2, AC-5, AC-6)
+# --------------------------------------------------------------------------------------
+
+import asyncio  # noqa: E402
+
+import personal_agent.orchestrator.executor as ex  # noqa: E402
+from personal_agent.governance.models import Mode  # noqa: E402
+from personal_agent.orchestrator.channels import Channel  # noqa: E402
+from personal_agent.orchestrator.constraint_options import ConstraintDecision  # noqa: E402
+from personal_agent.orchestrator.sub_agent_approval import (  # noqa: E402
+    APPROVE_ACTION_ID,
+    DENY_ACTION_ID,
+    PER_CALL_CARD_MAX_ARGUMENT_CHARS,
+    SUB_AGENT_APPROVAL_CONSTRAINT,
+    SubAgentApprovalBroker,
+    reset_sub_agent_approval_broker,
+    set_sub_agent_approval_broker,
+)
+from personal_agent.orchestrator.types import ExecutionContext  # noqa: E402
+from personal_agent.orchestrator.worker_types import WorkerType  # noqa: E402
+
+_TRANSPORT = "personal_agent.transport.agui.transport"
+
+
+def _ctx() -> ExecutionContext:
+    return ExecutionContext(
+        session_id="s1",
+        trace_id="t1",
+        user_message="hi",
+        mode=Mode.NORMAL,
+        channel=Channel.CHAT,
+    )
+
+
+def _operator_spec(tools: list[str], task: str = "operate") -> SubAgentSpec:
+    return SubAgentSpec(
+        task=task,
+        context=[],
+        max_tokens=1024,
+        timeout_seconds=300.0,
+        tools=tools,
+        worker_type=WorkerType.OPERATOR,
+    )
+
+
+@pytest.fixture
+def broker() -> Iterator[SubAgentApprovalBroker]:
+    b = SubAgentApprovalBroker(_ctx())
+    token = set_sub_agent_approval_broker(b)
+    try:
+        yield b
+    finally:
+        reset_sub_agent_approval_broker(token)
+
+
+class _Cards:
+    """A fake pause that records each card's text and answers with a fixed decision."""
+
+    def __init__(self, action: str = APPROVE_ACTION_ID, resolution: str = "user_choice") -> None:
+        self.contexts: list[str] = []
+        self._action = action
+        self._resolution = resolution
+
+    async def __call__(self, **kwargs: object) -> ConstraintDecision:
+        self.contexts.append(str(kwargs["context"]))
+        return ConstraintDecision(self._action, self._resolution)
+
+
+def _patched_loop(dispatch: AsyncMock, *tools: str) -> Any:
+    """Patch the layer and dispatch; the approval sets come from the REAL tools.yaml."""
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(
+        patch(f"{_SUB_AGENT}.get_shared_tool_execution_layer", return_value=_stub_tool_layer(*tools))
+    )
+    stack.enter_context(patch(f"{_SUB_AGENT}.dispatch_tool_call", dispatch))
+    stack.enter_context(
+        patch(
+            "personal_agent.orchestrator.sub_agent_approval.get_current_mode",
+            return_value=Mode.NORMAL,
+        )
+    )
+    return stack
+
+
+def _ok_dispatch(content: str = "done") -> AsyncMock:
+    return AsyncMock(
+        side_effect=lambda **kw: _dispatch_result(kw["tool_call_id"], kw["tool_name"], content)
+    )
+
+
+class TestASideEffectingCallAsksTheOwner:
+    """AC-1."""
+
+    @pytest.mark.asyncio
+    async def test_the_card_reaches_the_transport_with_the_exact_command(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        """Drives the REAL `_maybe_pause_for_constraint`; only the socket push is faked."""
+        pushed: list[Any] = []
+
+        async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
+            return None
+
+        async def fake_push(**kwargs: object) -> dict[str, str]:
+            pushed.append(kwargs["event"])
+            return {"decision": APPROVE_ACTION_ID, "resolution": "user_choice"}
+
+        async def fake_emit(**_kw: object) -> None:
+            return None
+
+        monkeypatch.setattr(ex, "_load_constraint_preference", fake_load)
+        monkeypatch.setattr(f"{_TRANSPORT}.register_and_push_constraint", fake_push)
+        monkeypatch.setattr(f"{_TRANSPORT}.emit_constraint_resolved", fake_emit)
+        dispatch = _ok_dispatch("Linux")
+
+        with _patched_loop(dispatch, "bash"):
+            result = await run_sub_agent(
+                spec=_operator_spec(["bash"]),
+                llm_client=_calls_then_answers(("bash", '{"command": "uname -a"}')),
+                trace_id="t",
+            )
+
+        assert len(pushed) == 1
+        event = pushed[0]
+        assert event.constraint == SUB_AGENT_APPROVAL_CONSTRAINT
+        assert event.default_option == DENY_ACTION_ID
+        assert 'operator worker wants to run bash with these exact arguments: {"command":"uname -a"}' in event.context
+        assert "this one call only" in event.context
+        assert dispatch.call_count == 1
+        assert dispatch.await_args.kwargs["approved_upstream"] is True
+        assert result.tools_used == ["bash"]
+
+    @pytest.mark.asyncio
+    async def test_deny_refuses_the_call_and_the_worker_still_finishes(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", _Cards(DENY_ACTION_ID))
+        dispatch = _ok_dispatch()
+        with _patched_loop(dispatch, "bash"):
+            result = await run_sub_agent(
+                spec=_operator_spec(["bash"]),
+                llm_client=_calls_then_answers(("bash", '{"command": "uname -a"}')),
+                trace_id="t",
+            )
+        dispatch.assert_not_called()
+        assert result.success is True
+        assert result.tools_used == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            ("bash", '{"command": "ls"}'),
+            ("create_linear_issue", '{"title": "t", "description": "d"}'),
+            ("create_linear_project", '{"name": "p"}'),
+            ("notes_write", '{"slug": "s", "content": "c"}'),
+            ("artifact_write", '{"title": "a", "content": "c"}'),
+        ],
+    )
+    @pytest.mark.parametrize("action", [APPROVE_ACTION_ID, DENY_ACTION_ID])
+    async def test_every_per_call_grant_asks_and_obeys(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        broker: SubAgentApprovalBroker,
+        tool: str,
+        args: str,
+        action: str,
+    ) -> None:
+        """Every `per_call` grant in the real config asks, and the answer decides."""
+        cards = _Cards(action)
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        dispatch = _ok_dispatch()
+        with _patched_loop(dispatch, tool):
+            await run_sub_agent(
+                spec=_operator_spec([tool]),
+                llm_client=_calls_then_answers((tool, args)),
+                trace_id="t",
+            )
+        assert len(cards.contexts) == 1
+        assert f"run {tool} with these exact arguments" in cards.contexts[0]
+        assert dispatch.call_count == (1 if action == APPROVE_ACTION_ID else 0)
+
+
+class TestTheApprovalScopeIsPerCall:
+    """AC-2 — at fan-out scale (FRE-1461 AC-4 shape: six workers)."""
+
+    @pytest.mark.asyncio
+    async def test_six_workers_with_two_distinct_bash_calls_raise_twelve_cards(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        cards = _Cards()
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        dispatch = _ok_dispatch()
+        with _patched_loop(dispatch, "bash"):
+            for i in range(6):
+                await run_sub_agent(
+                    spec=_operator_spec(["bash"], task=f"task {i}"),
+                    llm_client=_calls_then_answers(
+                        ("bash", f'{{"command": "echo {i}-a"}}'),
+                        ("bash", f'{{"command": "echo {i}-b"}}'),
+                    ),
+                    trace_id="t",
+                )
+        assert len(cards.contexts) == 12, "one approval must cover exactly one call"
+        assert dispatch.call_count == 12
+
+    @pytest.mark.asyncio
+    async def test_contrast_a_policy_tool_still_asks_once_per_turn(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        """The FRE-1461 scope is unchanged for a tool that is not `per_call`."""
+        cards = _Cards()
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        dispatch = _ok_dispatch()
+        with (
+            _patched_loop(dispatch, "run_python"),
+            patch(
+                f"{_SUB_AGENT}.resolve_sub_agent_approval_requirements",
+                return_value=frozenset({"run_python"}),
+            ),
+        ):
+            for i in range(6):
+                await run_sub_agent(
+                    spec=_operator_spec(["run_python"], task=f"task {i}"),
+                    llm_client=_calls_then_answers(
+                        ("run_python", f'{{"code": "{i}"}}'),
+                        ("run_python", f'{{"code": "{i}+1"}}'),
+                    ),
+                    trace_id="t",
+                )
+        assert len(cards.contexts) == 1
+        assert dispatch.call_count == 12
+
+
+class TestNoDuplicateSideEffects:
+    """AC-5."""
+
+    _ISSUE = '{"title": "Fix the cache", "description": "It is stale."}'
+
+    @pytest.mark.asyncio
+    async def test_two_workers_asking_for_the_same_issue_make_one(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        cards = _Cards()
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        dispatch = _ok_dispatch('{"identifier": "FRE-9999"}')
+        clients = [_calls_then_answers(("create_linear_issue", self._ISSUE)) for _ in range(2)]
+        with _patched_loop(dispatch, "create_linear_issue"):
+            results = [
+                await run_sub_agent(
+                    spec=_operator_spec(["create_linear_issue"], task=f"file it {i}"),
+                    llm_client=clients[i],
+                    trace_id="t",
+                )
+                for i in range(2)
+            ]
+        assert dispatch.call_count == 1, "two identical issues must not be created"
+        assert len(cards.contexts) == 1
+        assert results[0].tools_used == ["create_linear_issue"]
+        assert results[1].tools_used == []
+        second_messages = clients[1].respond.await_args_list[-1].kwargs["messages"]
+        tool_message = next(m for m in second_messages if m.get("role") == "tool")
+        assert "A sibling worker already made this identical create_linear_issue call" in (
+            tool_message["content"]
+        )
+        assert "FRE-9999" in tool_message["content"]
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_workers_still_make_one(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", _Cards())
+        release = asyncio.Event()
+        calls = {"n": 0}
+
+        async def _slow_dispatch(**kw: Any) -> dict[str, Any]:
+            calls["n"] += 1
+            await release.wait()
+            return _dispatch_result(kw["tool_call_id"], kw["tool_name"], "FRE-9999")
+
+        async def _both() -> None:
+            await asyncio.gather(
+                *(
+                    run_sub_agent(
+                        spec=_operator_spec(["create_linear_issue"]),
+                        llm_client=_calls_then_answers(("create_linear_issue", self._ISSUE)),
+                        trace_id="t",
+                    )
+                    for _ in range(2)
+                )
+            )
+
+        with _patched_loop(AsyncMock(side_effect=_slow_dispatch), "create_linear_issue"):
+            task = asyncio.create_task(_both())
+            await asyncio.sleep(0.05)
+            release.set()
+            await task
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_seeded_negative_different_titles_are_two_calls(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        cards = _Cards()
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        dispatch = _ok_dispatch()
+        with _patched_loop(dispatch, "create_linear_issue"):
+            for title in ("One", "Two"):
+                await run_sub_agent(
+                    spec=_operator_spec(["create_linear_issue"]),
+                    llm_client=_calls_then_answers(
+                        ("create_linear_issue", f'{{"title": "{title}"}}')
+                    ),
+                    trace_id="t",
+                )
+        assert len(cards.contexts) == 2
+        assert dispatch.call_count == 2
+
+
+class TestHarnessTurnsStillDeny:
+    """AC-6 — ADR-0063 A2: a turn with no PWA client denies."""
+
+    @pytest.mark.asyncio
+    async def test_no_broker_in_scope_refuses(self) -> None:
+        dispatch = _ok_dispatch()
+        with _patched_loop(dispatch, "bash"):
+            result = await run_sub_agent(
+                spec=_operator_spec(["bash"]),
+                llm_client=_calls_then_answers(("bash", '{"command": "ls"}')),
+                trace_id="t",
+            )
+        dispatch.assert_not_called()
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_connection_lost_refuses_and_stops_asking_for_the_turn(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        cards = _Cards(DENY_ACTION_ID, "connection_lost")
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        dispatch = _ok_dispatch()
+        with _patched_loop(dispatch, "bash"):
+            await run_sub_agent(
+                spec=_operator_spec(["bash"]),
+                llm_client=_calls_then_answers(
+                    ("bash", '{"command": "ls"}'), ("bash", '{"command": "pwd"}')
+                ),
+                trace_id="t",
+            )
+        dispatch.assert_not_called()
+        assert len(cards.contexts) == 1, "a socket-less turn must not wait once per call"
+
+    @pytest.mark.asyncio
+    async def test_a_real_answer_does_not_stop_the_asking(
+        self, monkeypatch: pytest.MonkeyPatch, broker: SubAgentApprovalBroker
+    ) -> None:
+        """Seeded negative: an owner's own "deny" is not "unreachable"."""
+        cards = _Cards(DENY_ACTION_ID, "user_choice")
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        with _patched_loop(_ok_dispatch(), "bash"):
+            await run_sub_agent(
+                spec=_operator_spec(["bash"]),
+                llm_client=_calls_then_answers(
+                    ("bash", '{"command": "ls"}'), ("bash", '{"command": "pwd"}')
+                ),
+                trace_id="t",
+            )
+        assert len(cards.contexts) == 2
+
+
+class TestTheBrokerEdges:
+    @pytest.mark.asyncio
+    async def test_arguments_too_long_for_a_card_are_refused_without_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cards = _Cards()
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        execute = AsyncMock(return_value="ran")
+        outcome = await SubAgentApprovalBroker(_ctx()).run_once(
+            "bash",
+            {"command": "x" * PER_CALL_CARD_MAX_ARGUMENT_CHARS},
+            worker_type="operator",
+            task="t",
+            deadline_monotonic=10_000_000_000.0,
+            execute=execute,
+        )
+        assert outcome.approved is False
+        assert outcome.reason == "arguments_too_long_for_card"
+        assert cards.contexts == []
+        execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_small_worker_budget_is_refused_without_a_card(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import time
+
+        cards = _Cards()
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", cards)
+        outcome = await SubAgentApprovalBroker(_ctx()).run_once(
+            "bash",
+            {"command": "ls"},
+            worker_type="operator",
+            task="t",
+            deadline_monotonic=time.monotonic() + 10.0,
+            execute=AsyncMock(),
+        )
+        assert outcome.reason == "insufficient_worker_budget"
+        assert cards.contexts == []
+
+    @pytest.mark.asyncio
+    async def test_a_leader_cancelled_during_the_card_releases_its_followers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex review: the shared future must resolve even when the leader never ran."""
+        started = asyncio.Event()
+
+        async def _hanging_pause(**_kw: object) -> ConstraintDecision:
+            started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", _hanging_pause)
+        b = SubAgentApprovalBroker(_ctx())
+        execute = AsyncMock(return_value="ran")
+        kwargs: dict[str, Any] = {
+            "worker_type": "operator",
+            "task": "t",
+            "deadline_monotonic": 10_000_000_000.0,
+            "execute": execute,
+        }
+        leader = asyncio.create_task(b.run_once("bash", {"command": "ls"}, **kwargs))
+        await started.wait()
+        follower = asyncio.create_task(b.run_once("bash", {"command": "ls"}, **kwargs))
+        await asyncio.sleep(0)
+        leader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await leader
+        outcome = await asyncio.wait_for(follower, timeout=1.0)
+        assert outcome.approved is False
+        assert outcome.reason == "cancelled_before_completion"
+        assert outcome.coalesced is True
+        execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_follower_does_not_cancel_the_leader(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        release = asyncio.Event()
+
+        async def _slow_pause(**_kw: object) -> ConstraintDecision:
+            await release.wait()
+            return ConstraintDecision(APPROVE_ACTION_ID, "user_choice")
+
+        monkeypatch.setattr(ex, "_maybe_pause_for_constraint", _slow_pause)
+        b = SubAgentApprovalBroker(_ctx())
+        execute = AsyncMock(return_value="ran")
+        kwargs: dict[str, Any] = {
+            "worker_type": "operator",
+            "task": "t",
+            "deadline_monotonic": 10_000_000_000.0,
+            "execute": execute,
+        }
+        leader = asyncio.create_task(b.run_once("bash", {"command": "ls"}, **kwargs))
+        await asyncio.sleep(0)
+        follower = asyncio.create_task(b.run_once("bash", {"command": "ls"}, **kwargs))
+        await asyncio.sleep(0)
+        follower.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await follower
+        release.set()
+        outcome = await leader
+        assert outcome.approved is True
+        assert outcome.executed is True
+        execute.assert_awaited_once()

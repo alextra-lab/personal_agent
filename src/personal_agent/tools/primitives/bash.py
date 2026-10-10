@@ -14,10 +14,12 @@ Security model
   separators (``;``), redirects, glob expansion, and env substitution all work.
   This is safe because no user-visible string is interpolated into the shell
   invocation itself; the command is passed as a single ``-c`` argument.
-* Auto-approve logic (``_check_segment_allowlist``) splits the command on
-  top-level operators and verifies the first word of every segment against the
-  per-mode ``auto_approve_prefixes`` from ``tools.yaml``.  It is evaluated by
-  the ``_check_permissions`` layer in ``tools/executor.py``, not by the executor.
+* Auto-approve logic (``_check_segment_allowlist``, in ``bash_allowlist.py``)
+  splits the command into the commands bash would run and verifies each against
+  the per-mode ``auto_approve_prefixes`` from ``tools.yaml``. A segment holding a
+  substitution, a non-scratch output redirection or a run-a-command option of an
+  allowlisted binary needs approval (FRE-1572). It is evaluated by the
+  ``_check_permissions`` layer in ``tools/executor.py``, not by the executor.
 * Timeout is clamped to [1, 120] seconds.
 * Output is capped at 50 KiB (combined stdout + stderr); overflow is written to
   a scratch file and the path is returned.
@@ -40,13 +42,20 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 from pathlib import Path
 from typing import Any
 
 from personal_agent.config import load_governance_config, settings
 from personal_agent.config.governance_loader import GovernanceConfigError
 from personal_agent.telemetry import TraceContext, get_logger
+
+# Re-exported under their pre-FRE-1572 names: tools/executor.py and the tests import them here.
+from personal_agent.tools.primitives.bash_allowlist import (  # noqa: F401
+    check_segment_allowlist as _check_segment_allowlist,
+)
+from personal_agent.tools.primitives.bash_allowlist import (  # noqa: F401
+    split_command_segments as _split_command_segments,
+)
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
@@ -186,99 +195,12 @@ def _is_hard_denied(command: str, patterns: list[str]) -> str | None:
     return None
 
 
-def _split_command_segments(command: str) -> list[str]:
-    """Split a shell command into pipeline / sequence segments.
-
-    Splits on top-level ``|``, ``||``, ``&&``, and ``;`` while respecting
-    single-quoted strings, double-quoted strings, and backslash escapes.
-    Sub-shells (``$(…)`` or backticks) are treated as opaque and are NOT
-    recursively split — their content is included in the surrounding segment.
-
-    Args:
-        command: Raw shell command string.
-
-    Returns:
-        Non-empty, stripped segment strings.  An empty command returns ``[]``.
-    """
-    segments: list[str] = []
-    current: list[str] = []
-    in_single = False
-    in_double = False
-    i = 0
-    n = len(command)
-
-    while i < n:
-        c = command[i]
-
-        if in_single:
-            current.append(c)
-            if c == "'":
-                in_single = False
-            i += 1
-        elif in_double:
-            if c == "\\" and i + 1 < n:
-                # Backslash escapes are two characters inside double quotes.
-                current.append(c)
-                i += 1
-                current.append(command[i])
-                i += 1
-            else:
-                current.append(c)
-                if c == '"':
-                    in_double = False
-                i += 1
-        elif c == "\\" and i + 1 < n:
-            current.append(c)
-            i += 1
-            current.append(command[i])
-            i += 1
-        elif c == "'":
-            in_single = True
-            current.append(c)
-            i += 1
-        elif c == '"':
-            in_double = True
-            current.append(c)
-            i += 1
-        elif c == ";":
-            segments.append("".join(current).strip())
-            current = []
-            i += 1
-        elif c == "|":
-            if i + 1 < n and command[i + 1] == "|":
-                segments.append("".join(current).strip())
-                current = []
-                i += 2
-            else:
-                segments.append("".join(current).strip())
-                current = []
-                i += 1
-        elif c == "&":
-            if i + 1 < n and command[i + 1] == "&":
-                segments.append("".join(current).strip())
-                current = []
-                i += 2
-            else:
-                # Single ``&`` (background execution) — treat as part of segment.
-                current.append(c)
-                i += 1
-        else:
-            current.append(c)
-            i += 1
-
-    remaining = "".join(current).strip()
-    if remaining:
-        segments.append(remaining)
-
-    return [s for s in segments if s]
-
-
 def _has_top_level_pipe(command: str) -> bool:
     """Return True if the command contains a top-level pipe (``|``, not ``||``).
 
     Quote- and escape-aware: a ``|`` inside single quotes, double quotes, or
     preceded by a backslash is not a pipeline operator.  A ``||`` (logical OR)
-    is not a pipe.  Mirrors the quote handling in :func:`_split_command_segments`.
+    is not a pipe.  Mirrors the quote handling of the old segment splitter.
 
     Used to gate SIGPIPE (exit 141) leniency: exit 141 is only treated as benign
     when the command actually pipes, so a standalone ``exit 141`` or a
@@ -326,39 +248,6 @@ def _has_top_level_pipe(command: str) -> bool:
             i += 1
 
     return False
-
-
-def _check_segment_allowlist(command: str, allowlist: list[str]) -> str | None:
-    """Check every pipeline segment's first word against the auto-approve allowlist.
-
-    Multi-word allowlist entries (e.g. ``"psql -c"``, ``"docker ps"``) match
-    when the segment begins with those exact words in order.
-
-    Args:
-        command: Raw shell command string.
-        allowlist: Ordered list of allowed prefix strings for the current mode.
-
-    Returns:
-        The first non-matching segment string, or ``None`` if all segments pass
-        (indicating the command may be auto-approved).
-    """
-    segments = _split_command_segments(command)
-    for segment in segments:
-        try:
-            words = shlex.split(segment)
-        except ValueError:
-            # Unparseable segment — conservative: treat as not approved.
-            return segment
-        if not words:
-            continue
-        matched = any(
-            words[: len(prefix_words)] == prefix_words
-            for entry in allowlist
-            if (prefix_words := entry.split())
-        )
-        if not matched:
-            return segment
-    return None
 
 
 def eval_child_env() -> dict[str, str]:

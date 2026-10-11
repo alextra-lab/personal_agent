@@ -242,6 +242,9 @@ telemetry/evaluation/fre1537-planner-probe/
 # FRE-1581 G2 skill-choice run outputs (rows hold full prompts and replies; never committed)
 telemetry/evaluation/fre1581-g2/
 
+# FRE-1590 skill test run outputs (captured bodies and replies hold full prompts; never committed)
+telemetry/evaluation/fre1590-skill-test/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

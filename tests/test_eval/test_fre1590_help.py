@@ -330,6 +330,15 @@ def test_the_override_sets_the_same_run_values_on_both_arms() -> None:
         assert env["AGENT_ENABLE_SECOND_BRAIN"] == "false"
         assert env["AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS"] == "5"
         assert env["AGENT_TEMPO_URL"] == "http://tempo:3200"
+        for key in (
+            "AGENT_EXPANSION_ENABLED",
+            "AGENT_SESSION_SUMMARY_ENABLED",
+            "AGENT_SLM_HEALTH_GENERATION_CHECK_ENABLED",
+            "AGENT_SLM_TUNNEL_BASE_URL",
+            "AGENT_USER_DISPLAY_NAMES_JSON",
+        ):
+            assert env[key] == f"${{{key}}}", f"{name}: {key} must come from the env file"
+        assert "AGENT_AGENT_ID" not in env
     control = services["seshat-gateway-control"]["environment"]
     assert control["AGENT_PRIMITIVE_TOOLS_ENABLED"] == "true"
     assert control["AGENT_APPROVAL_UI_ENABLED"] == "false"

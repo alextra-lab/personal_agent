@@ -44,6 +44,15 @@ x-fre1590-env: &fre1590-env
   AGENT_ENABLE_SECOND_BRAIN: "false"
   AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS: "5"
   AGENT_TEMPO_URL: http://tempo:3200
+  # Owner decision (FRE-1590): production reads these from .env, and docker-compose.eval.yml
+  # does not pass them. They can change a turn (expansion, for example), so both arms get the
+  # production values, read from the --env-file at `up` time. AGENT_AGENT_ID stays unset, so the
+  # eval telemetry stays separate from production's.
+  AGENT_EXPANSION_ENABLED: ${AGENT_EXPANSION_ENABLED}
+  AGENT_SESSION_SUMMARY_ENABLED: ${AGENT_SESSION_SUMMARY_ENABLED}
+  AGENT_SLM_HEALTH_GENERATION_CHECK_ENABLED: ${AGENT_SLM_HEALTH_GENERATION_CHECK_ENABLED}
+  AGENT_SLM_TUNNEL_BASE_URL: ${AGENT_SLM_TUNNEL_BASE_URL}
+  AGENT_USER_DISPLAY_NAMES_JSON: ${AGENT_USER_DISPLAY_NAMES_JSON}
 
 services:
   seshat-gateway-control:

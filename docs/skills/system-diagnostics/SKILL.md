@@ -88,12 +88,13 @@ Check the result before you answer:
 | A piped command prints an error | A pipe or an option failed | Run the same command without the pipe |
 | `vmstat` or `iostat` runs until the timeout | No count was given | Add `1 3` |
 | `Operation not permitted` from `lsof` or `ss -p` | The process runs as another user | Report the part that is visible. Do not try `sudo` |
-| The output is very long | A verbose command | Add `| head -c 30000` (the tool cap is 50 KiB) |
+| The output is very long | A verbose command | Pipe it into `head -c 30000` (the tool cap is 50 KiB) |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |
 
 ## Governance
 
 - NORMAL runs without asking: `ps`, `pgrep`, `ss`, `netstat`, `lsof`, `vmstat`, `iostat`, `uname`, `uptime`, `du`, `df`, `free`, `top`, `find`.
-- ALERT and DEGRADED run without asking: `ps`, `top`, `free`, `df`, `ss`, `netstat`, `uname`, `pgrep`.
+- ALERT runs without asking: `ps`, `top`, `free`, `df`, `uname`, `ss`, `netstat`, `pgrep`.
+- DEGRADED runs without asking: `ps`, `top`, `free`, `df`, `uname`. Any other command asks.
 - A glob such as `/app/*` asks (the shell expands it).
 - LOCKDOWN and RECOVERY: `bash` is disabled.

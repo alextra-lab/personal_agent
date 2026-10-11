@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `d848bb35` · Committed: 2026-10-11T08:08:38+02:00  
+> Source revision: `ae1b599a` · Committed: 2026-10-11T07:09:23Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,22 +32,22 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 22,377  
+Total skill docs: 11 · Total tokens (all skills): 22,708  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
 | SKILL: Artifact Design | 5,558 | `docs/skills/artifact-design/SKILL.md` |
-| infrastructure-health — Is each backend service reachable? | 889 | `docs/skills/infrastructure-health/SKILL.md` |
+| infrastructure-health — Is each backend service reachable? | 892 | `docs/skills/infrastructure-health/SKILL.md` |
 | SKILL: Mermaid Diagrams | 2,985 | `docs/skills/mermaid-diagrams/SKILL.md` |
-| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,401 | `docs/skills/neo4j-direct/SKILL.md` |
+| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,568 | `docs/skills/neo4j-direct/SKILL.md` |
 | query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,107 | `docs/skills/query-elasticsearch/SKILL.md` |
-| query-tempo — Model-call latency and the spans of one trace | 1,551 | `docs/skills/query-tempo/SKILL.md` |
+| query-tempo — Model-call latency and the spans of one trace | 1,665 | `docs/skills/query-tempo/SKILL.md` |
 | self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `docs/skills/self-telemetry/SKILL.md` |
 | sequential-thinking — Structured Reasoning Discipline | 1,289 | `docs/skills/sequential-thinking/SKILL.md` |
-| system-diagnostics — ps, ss, vmstat, iostat, lsof | 801 | `docs/skills/system-diagnostics/SKILL.md` |
-| system-metrics — CPU, memory and disk utilisation snapshot | 912 | `docs/skills/system-metrics/SKILL.md` |
-| turn-forensics — Reconstruct one turn end to end | 2,026 | `docs/skills/turn-forensics/SKILL.md` |
+| system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `docs/skills/system-diagnostics/SKILL.md` |
+| system-metrics — CPU, memory and disk utilisation snapshot | 917 | `docs/skills/system-metrics/SKILL.md` |
+| turn-forensics — Reconstruct one turn end to end | 2,043 | `docs/skills/turn-forensics/SKILL.md` |
 
 ---
 
@@ -1233,7 +1233,7 @@ shelf entry stays *experimental/gated*); un-gating it — which would add paged.
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 889 |
+| **Token count** | 892 |
 | **Source** | `docs/skills/infrastructure-health/SKILL.md` |
 
 ```markdown
@@ -1300,7 +1300,7 @@ Check the result before you answer:
 
 - `curl` `GET` of a listed health endpoint runs without asking in NORMAL, ALERT and DEGRADED (FRE-1583). Any other host, path or method asks. For Neo4j only `GET http://neo4j:7474/` runs without asking.
 - `python3` (the probe script), `psql` and `redis-cli` ask the user, in every mode (FRE-1572, ADR-0156 D8.2).
-- LOCKDOWN: `bash` is disabled.
+- LOCKDOWN and RECOVERY: `bash` is disabled.
 ```
 
 ---
@@ -1667,7 +1667,7 @@ External resources (use for syntax lookup, not as import targets):
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,401 |
+| **Token count** | 1,568 |
 | **Source** | `docs/skills/neo4j-direct/SKILL.md` |
 
 ```markdown
@@ -1679,6 +1679,7 @@ External resources (use for syntax lookup, not as import targets):
 - If the user asks to change the graph, do not do it. Show the `MATCH` that finds the nodes and leave the change to the user.
 - Use the script, not a hand-written driver call. The `run_python` sandbox has no `neo4j` driver.
 - Pass a value with `--param name=value`. Never put a value into the query text.
+- A `CALL` is allowed only for the schema procedures `db.labels`, `db.relationshipTypes`, `db.propertyKeys`, `db.schema.visualization`, `db.schema.nodeTypeProperties` and `db.schema.relTypeProperties`. Any other procedure (an `apoc.*` call, `dbms.*`) is refused: it can write, reach a URL or show the configuration.
 - Do not use the `/db/data/transaction/commit` HTTP endpoint. It does not exist in Neo4j 5 (404 or 401).
 
 ## Step 1 — Run one query
@@ -1692,8 +1693,10 @@ The reply is one JSON document: `{"rows": [...], "row_count": n, "truncated": fa
 returns at most 100 rows. Use `--limit N` (up to 1000) for more. `truncated: true` means that the
 query holds more rows than were returned.
 
-The script opens a read transaction, so the server refuses a write. It checks for a write clause
-first, to give a plain error before it connects.
+The script opens a read transaction, so the server refuses a write (checked live on 2026-10-11,
+including `apoc.cypher.doIt`). It checks for a write clause and for a procedure that is not on
+the list first, to give a plain error before it connects. A word inside a string, a comment or a
+backtick name is not read as a clause.
 
 ## Step 2 — Common diagnostic queries
 
@@ -1749,6 +1752,7 @@ Check the result before you answer:
 | Failure | Cause | Next step |
 |---|---|---|
 | `error: this script is read-only and the query holds SET` | A write clause, or a property named like one | Remove the write. If it is a property or alias name, quote it with backticks |
+| `error: the procedure apoc.x.y is not allowed` | A `CALL` outside the list | Use `MATCH` and `RETURN`, or one of the listed schema procedures |
 | `error: AGENT_NEO4J_PASSWORD is not set in this environment` | The script runs where the variable is not set | Say that the graph cannot be read from here. Do not look for the password |
 | `error: authentication failed` | The user or password is wrong | Stop. Tell the user. Do not try other credentials |
 | `error: cannot connect to bolt://...` | Neo4j is down, or the name does not resolve from here | Run the `infrastructure-health` skill for `neo4j`. Do not use `localhost` inside the container |
@@ -1925,7 +1929,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,551 |
+| **Token count** | 1,665 |
 | **Source** | `docs/skills/query-tempo/SKILL.md` |
 
 ```markdown
@@ -1984,17 +1988,32 @@ used as they are in a later query.
 
 ## Step 3 — Search and status: use curl
 
+Recent traces. `limit` is required: a search without it fails silently.
+
 ```bash
-# Recent traces. limit is required: a search without it fails silently
 curl -fsS 'http://tempo:3200/api/search?limit=10' | jq '.traces'
+```
 
-# Traces of a service in a window. start and end are Unix seconds, written as literals
-curl -fsS 'http://tempo:3200/api/search?start=1788026891&end=1788030491&q=service.name%3Dseshat-vps&limit=20' | jq '.traces'
+Traces of a service in a window. `q` is TraceQL: it needs braces and quotes. `start` and `end`
+are Unix seconds, written as literals.
 
-# The attribute names that a search can use
+```bash
+curl -fsS -G 'http://tempo:3200/api/search' \
+  --data-urlencode 'q={ resource.service.name = "seshat-vps" }' \
+  --data-urlencode 'start=1788026891' \
+  --data-urlencode 'end=1788030491' \
+  --data-urlencode 'limit=20' | jq '.traces'
+```
+
+The attribute names that a search can use:
+
+```bash
 curl -fsS 'http://tempo:3200/api/search/tags' | jq '.tagNames'
+```
 
-# Status and version
+Status and version:
+
+```bash
 curl -fsS 'http://tempo:3200/status'
 ```
 
@@ -2006,7 +2025,7 @@ date +%s
 date -d '1 hour ago' +%s
 ```
 
-`q` takes TraceQL. A search with a pipeline returns only the attributes that `select(...)` names.
+`q` takes TraceQL. A bare `key=value` in `q` is refused with HTTP 400 (`parse error ... unexpected IDENTIFIER`); that form belongs to the `tags` parameter, as in `tags=service.name%3Dseshat-vps`. A search with a pipeline returns only the attributes that `select(...)` names.
 `spss` caps the spans returned for each trace and `limit` caps the traces. A reply that reaches
 either cap is a sample. For a latency summary that the tool cannot give, read
 `references/latency-recipe.md`.
@@ -2373,7 +2392,7 @@ engages on have no wrong turn at all — so ordinary answers do not turn into nu
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 801 |
+| **Token count** | 826 |
 | **Source** | `docs/skills/system-diagnostics/SKILL.md` |
 
 ```markdown
@@ -2457,13 +2476,14 @@ Check the result before you answer:
 | A piped command prints an error | A pipe or an option failed | Run the same command without the pipe |
 | `vmstat` or `iostat` runs until the timeout | No count was given | Add `1 3` |
 | `Operation not permitted` from `lsof` or `ss -p` | The process runs as another user | Report the part that is visible. Do not try `sudo` |
-| The output is very long | A verbose command | Add `| head -c 30000` (the tool cap is 50 KiB) |
+| The output is very long | A verbose command | Pipe it into `head -c 30000` (the tool cap is 50 KiB) |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |
 
 ## Governance
 
 - NORMAL runs without asking: `ps`, `pgrep`, `ss`, `netstat`, `lsof`, `vmstat`, `iostat`, `uname`, `uptime`, `du`, `df`, `free`, `top`, `find`.
-- ALERT and DEGRADED run without asking: `ps`, `top`, `free`, `df`, `ss`, `netstat`, `uname`, `pgrep`.
+- ALERT runs without asking: `ps`, `top`, `free`, `df`, `uname`, `ss`, `netstat`, `pgrep`.
+- DEGRADED runs without asking: `ps`, `top`, `free`, `df`, `uname`. Any other command asks.
 - A glob such as `/app/*` asks (the shell expands it).
 - LOCKDOWN and RECOVERY: `bash` is disabled.
 ```
@@ -2475,7 +2495,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 912 |
+| **Token count** | 917 |
 | **Source** | `docs/skills/system-metrics/SKILL.md` |
 
 ```markdown
@@ -2568,7 +2588,7 @@ Check the result before you answer:
 
 - `top`, `free` and `df` run without asking in NORMAL, ALERT and DEGRADED.
 - `bash` is disabled in LOCKDOWN and RECOVERY. There is no other route for those modes.
-- `run_python` for `/proc` metrics runs in NORMAL, ALERT and DEGRADED.
+- `run_python` for `/proc` metrics runs without asking in NORMAL. It asks in ALERT and DEGRADED.
 ```
 
 ---
@@ -2578,7 +2598,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,026 |
+| **Token count** | 2,043 |
 | **Source** | `docs/skills/turn-forensics/SKILL.md` |
 
 ```markdown
@@ -2685,7 +2705,7 @@ compute than the token count shows. All times are UTC ISO-8601.
 
 ## Reading the result
 
-- **A context jump after a `read`**: a whole-file read. `read` has a 1 MiB cap, so a source file under about 1 MB returns in full (`executor.py` is about 134 KB, about 33K tokens). The fix is in the tool (FRE-401).
+- **A context jump after a `read`**: a large read. The default `read` returns the first 200 lines and at most 8 KiB. A jump means that the call named a large `max_bytes` or `limit`, or that the model paged through a file in many reads. The arguments of the `tool_call_started` before the jump show which (FRE-401).
 - **A slow primary call with no tool before it**: a large prefill (the grown context is sent again at each step), or a degraded model server (multi-minute calls, HTTP 524). A restart of the model server fixes the second case.
 - **A gap between the sub-agent end and the final reply**: the synthesis call on the grown context. The sub-agent was not slow.
 - **A terminal tool failure**: look for `tool_terminal_short_circuit` (FRE-402). The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.

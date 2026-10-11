@@ -172,10 +172,15 @@ def test_every_path_to_a_skill_file_exists() -> None:
     for where, text in _skill_texts():
         if not where.endswith(".md"):
             continue
-        for pattern in (_SCRIPT_PATH, _OTHER_SKILL_PATH):
-            for skill, relative in pattern.findall(text):
-                if (_SKILLS / skill).is_dir() and not (_SKILLS / skill / relative).is_file():
-                    missing.append(f"{where}: {skill}/{relative}")
+        # A path that starts with docs/skills/ names its folder outright: a missing folder is a
+        # typo. The other-skill form (<name>/references/x) can match ordinary prose, so it is
+        # read only when its first part is a real skill folder.
+        for skill, relative in _SCRIPT_PATH.findall(text):
+            if not (_SKILLS / skill / relative).is_file():
+                missing.append(f"{where}: {skill}/{relative}")
+        for skill, relative in _OTHER_SKILL_PATH.findall(text):
+            if (_SKILLS / skill).is_dir() and not (_SKILLS / skill / relative).is_file():
+                missing.append(f"{where}: {skill}/{relative}")
     assert missing == []
 
 
@@ -183,6 +188,14 @@ def test_the_path_check_reads_both_spellings() -> None:
     text = "Run docs/skills/neo4j-direct/scripts/x.py or read self-telemetry/references/y.md."
     assert _SCRIPT_PATH.findall(text) == [("neo4j-direct", "scripts/x.py")]
     assert _OTHER_SKILL_PATH.findall(text) == [("self-telemetry", "references/y.md")]
+
+
+def test_a_mistyped_skill_folder_in_a_repository_path_is_caught(tmp_path: Path) -> None:
+    """Seeded negative: a typo in the folder of a docs/skills/ path must not pass."""
+    text = "Run docs/skills/neo4j-dirct/scripts/cypher.py now."
+    found = _SCRIPT_PATH.findall(text)
+    assert found == [("neo4j-dirct", "scripts/cypher.py")]
+    assert not (_SKILLS / found[0][0] / found[0][1]).is_file()
 
 
 # --- D5.5 and AC-2: the telemetry skills lead with query_telemetry --------------------------

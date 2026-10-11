@@ -326,6 +326,50 @@ def test_cypher_refuses_a_write_clause_before_it_connects(query: str) -> None:
     assert "read-only" in line and "s3cret" not in done.stderr
 
 
+_BLOCKED_PROCEDURES = [
+    "CALL apoc.load.json('http://elasticsearch:9200/_cat/indices') YIELD value RETURN value",
+    "CALL apoc.cypher.doIt('CREATE (n)', {}) YIELD value RETURN value",
+    "CALL dbms.listConfig() YIELD name RETURN name",
+    "call apoc.export.csv.all('x.csv', {})",
+    "MATCH (n) CALL apoc.nodes.delete(n, 1) YIELD value RETURN value",
+]
+
+
+@pytest.mark.parametrize("query", _BLOCKED_PROCEDURES)
+def test_cypher_refuses_a_procedure_that_is_not_on_the_list(query: str) -> None:
+    done = _run(_CYPHER, [query], env={"AGENT_NEO4J_PASSWORD": "s3cret"})
+    line = _plain_error(done, 1)
+    assert "is not allowed" in line and "db.labels" in line
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "CALL db.labels() YIELD label RETURN label",
+        "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+        "CALL { MATCH (n) RETURN n LIMIT 1 } RETURN n",
+        "MATCH (n) WHERE n.note = 'CALL apoc.load.json(x)' RETURN n",
+    ],
+)
+def test_cypher_passes_a_listed_procedure_a_subquery_and_a_quoted_call(query: str) -> None:
+    cypher = _load(_CYPHER)
+    assert cypher.find_write_clause(query) is None
+    assert cypher.find_blocked_procedure(query) is None
+
+
+def test_a_quote_inside_a_quoted_name_does_not_hide_a_write() -> None:
+    """Seeded negative: the first form opened a string at the quote and hid the SET."""
+    cypher = _load(_CYPHER)
+    assert cypher.find_write_clause("MATCH (n:`a'b`) SET n.p = 1 RETURN 'c'") == "SET"
+    assert cypher.find_blocked_procedure("MATCH (n:`a'b`) CALL apoc.x.y() RETURN 'c'") == "apoc.x.y"
+
+
+def test_a_quoted_name_that_looks_like_a_clause_is_not_a_write() -> None:
+    """The error text says to quote a property named like a clause, so this must work."""
+    cypher = _load(_CYPHER)
+    assert cypher.find_write_clause("MATCH (n) RETURN n.`set`, n.`create`") is None
+
+
 def test_cypher_does_not_read_a_clause_word_inside_a_string_or_comment() -> None:
     cypher = _load(_CYPHER)
     assert cypher.find_write_clause("MATCH (n) WHERE n.note = 'please SET me' RETURN n") is None
@@ -410,29 +454,54 @@ def test_cypher_truncates_at_the_limit_and_says_so() -> None:
     assert out["row_count"] == 3 and out["truncated"] is True and len(out["rows"]) == 3
 
 
-def test_cypher_turns_each_driver_failure_into_one_plain_line(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_cypher_turns_each_driver_failure_into_one_plain_line() -> None:
     from neo4j import exceptions as exc
 
     cypher = _load(_CYPHER)
     env = {"AGENT_NEO4J_PASSWORD": "s3cret", "AGENT_NEO4J_URI": "bolt://u:s3cret@graph:7687"}
+    # A server error is built the way the driver builds it, with the text in .message. A plain
+    # ClientError("...") has no server text, and would not test the masking.
+    server = exc.Neo4jError._hydrate_neo4j(
+        code="Neo.ClientError.Statement.SyntaxError", message="Invalid input for s3cret"
+    )
     failures = [
         exc.AuthError("bad credentials s3cret"),
         exc.ServiceUnavailable("cannot reach bolt://u:s3cret@graph:7687"),
-        exc.ClientError("Writing in read access mode not allowed. s3cret"),
+        server,
         exc.ConfigurationError("bad scheme"),
     ]
     for failure in failures:
-        monkey_driver = _FakeDriver(error=failure)
-        try:
-            cypher.run_query("MATCH (n) RETURN n", {}, 5, env, driver=monkey_driver)
-        except cypher.CypherError as err:
-            assert "s3cret" not in str(err)
-            assert "\n" not in str(err)
-        else:
-            raise AssertionError(f"{type(failure).__name__} was not turned into an error")
-    capsys.readouterr()
+        with pytest.raises(cypher.CypherError) as caught:
+            cypher.run_query("MATCH (n) RETURN n", {}, 5, env, driver=_FakeDriver(error=failure))
+        message = str(caught.value)
+        assert "s3cret" not in message and "\n" not in message
+        if failure is server:
+            assert "Invalid input for ***" in message
+
+
+def test_cypher_masks_a_password_that_the_server_echoes() -> None:
+    """Seeded negative: without the masking, this message would hold the password."""
+    from neo4j import exceptions as exc
+
+    cypher = _load(_CYPHER)
+    echo = exc.Neo4jError._hydrate_neo4j(code="Neo.ClientError.General.Unknown", message="x s3cret")
+    with pytest.raises(cypher.CypherError, match=r"x \*\*\*"):
+        cypher.run_query(
+            "RETURN 1", {}, 5, {"AGENT_NEO4J_PASSWORD": "s3cret"}, driver=_FakeDriver(error=echo)
+        )
+
+
+@pytest.mark.parametrize(
+    ("uri", "shown"),
+    [
+        ("bolt://u:pw@graph:7687", "bolt://graph:7687"),
+        ("bolt://graph", "bolt://graph"),
+        ("bolt://graph:notaport", "the URI"),
+        ("", "the URI"),
+    ],
+)
+def test_cypher_safe_uri_hides_user_info_and_survives_a_bad_port(uri: str, shown: str) -> None:
+    assert _load(_CYPHER)._safe_uri(uri) == shown
 
 
 # --- call_timeline.py -----------------------------------------------------------------------
@@ -472,3 +541,35 @@ def test_timeline_exits_1_on_input_that_is_not_text() -> None:
 
 def test_timeline_rejects_a_trace_id_with_a_shell_character() -> None:
     _plain_error(_run(_TIMELINE, ["abc; rm x"], _LOG), 2)
+
+
+def test_timeline_marks_a_failed_sub_agent_and_wraps_at_midnight() -> None:
+    log = (
+        "23:59:50.000Z model_call_completed trace_id=abc123 input_tokens=10 role=primary\n"
+        "00:00:05.000Z artifact_draft_sub_agent_complete trace_id=abc123 success=False\n"
+        "00:00:06.000Z artifact_draft_sub_agent_complete trace_id=abc123 success=True\n"
+    )
+    done = _run(_TIMELINE, ["abc123"], log)
+    assert done.stdout.splitlines() == [
+        "23:59:50  +?s  CALL in=10 role=primary",
+        "00:00:05  +15s  SUBAGENT failed",
+        "00:00:06  +1s  SUBAGENT done",
+    ]
+
+
+# --- probe_services.py: a URL with user-info, and a value that is not a port ----------------
+
+
+def test_probe_prints_no_user_info_of_the_elasticsearch_url() -> None:
+    down = f"http://admin:hunter2@127.0.0.1:{_closed_port()}"
+    done = _run(_PROBE, ["elasticsearch"], env={"AGENT_ELASTICSEARCH_URL": down})
+    assert done.returncode == 1 and "FAIL cannot connect" in done.stdout
+    assert "hunter2" not in done.stdout + done.stderr
+
+
+def test_probe_reports_a_bad_port_as_one_line_and_does_not_stop_the_run() -> None:
+    env = {"AGENT_EVENT_BUS_REDIS_URL": "redis://redis:notaport/0"}
+    done = _run(_PROBE, ["redis"], env=env)
+    assert done.returncode == 1
+    assert done.stdout.startswith("redis: FAIL unexpected ValueError")
+    assert "Traceback" not in done.stderr

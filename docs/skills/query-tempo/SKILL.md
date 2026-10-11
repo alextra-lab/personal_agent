@@ -64,17 +64,32 @@ used as they are in a later query.
 
 ## Step 3 — Search and status: use curl
 
+Recent traces. `limit` is required: a search without it fails silently.
+
 ```bash
-# Recent traces. limit is required: a search without it fails silently
 curl -fsS 'http://tempo:3200/api/search?limit=10' | jq '.traces'
+```
 
-# Traces of a service in a window. start and end are Unix seconds, written as literals
-curl -fsS 'http://tempo:3200/api/search?start=1788026891&end=1788030491&q=service.name%3Dseshat-vps&limit=20' | jq '.traces'
+Traces of a service in a window. `q` is TraceQL: it needs braces and quotes. `start` and `end`
+are Unix seconds, written as literals.
 
-# The attribute names that a search can use
+```bash
+curl -fsS -G 'http://tempo:3200/api/search' \
+  --data-urlencode 'q={ resource.service.name = "seshat-vps" }' \
+  --data-urlencode 'start=1788026891' \
+  --data-urlencode 'end=1788030491' \
+  --data-urlencode 'limit=20' | jq '.traces'
+```
+
+The attribute names that a search can use:
+
+```bash
 curl -fsS 'http://tempo:3200/api/search/tags' | jq '.tagNames'
+```
 
-# Status and version
+Status and version:
+
+```bash
 curl -fsS 'http://tempo:3200/status'
 ```
 
@@ -86,7 +101,7 @@ date +%s
 date -d '1 hour ago' +%s
 ```
 
-`q` takes TraceQL. A search with a pipeline returns only the attributes that `select(...)` names.
+`q` takes TraceQL. A bare `key=value` in `q` is refused with HTTP 400 (`parse error ... unexpected IDENTIFIER`); that form belongs to the `tags` parameter, as in `tags=service.name%3Dseshat-vps`. A search with a pipeline returns only the attributes that `select(...)` names.
 `spss` caps the spans returned for each trace and `limit` caps the traces. A reply that reaches
 either cap is a sample. For a latency summary that the tool cannot give, read
 `references/latency-recipe.md`.

@@ -96,4 +96,4 @@ Check the result before you answer:
 
 - `top`, `free` and `df` run without asking in NORMAL, ALERT and DEGRADED.
 - `bash` is disabled in LOCKDOWN and RECOVERY. There is no other route for those modes.
-- `run_python` for `/proc` metrics runs in NORMAL, ALERT and DEGRADED.
+- `run_python` for `/proc` metrics runs without asking in NORMAL. It asks in ALERT and DEGRADED.

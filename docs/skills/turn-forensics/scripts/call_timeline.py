@@ -10,7 +10,7 @@ Output, one line for each event, in log order:
 
     HH:MM:SS  +Ns  CALL in=<input tokens> role=<role>
     HH:MM:SS  +Ns  TOOL <name> <path or command>
-    HH:MM:SS  +Ns  SUBAGENT done
+    HH:MM:SS  +Ns  SUBAGENT done   (or SUBAGENT failed, when the event says success=False)
 
 ``+Ns`` is the wall-clock gap since the previous printed event. A big gap before a CALL is
 the call (its prefill and decode). A big step in ``in=`` is context growth.
@@ -45,7 +45,9 @@ def _describe(line: str) -> str:
         shown = (arg[1] or arg[2]) if arg else ""
         return f"TOOL {name[1] if name else '?'} {shown}".rstrip()
     if "sub_agent_complete" in line:
-        return "SUBAGENT done"
+        # The same event is written on a timeout or an error, with success=False.
+        outcome = re.search(r"(?<![\w])success=(\w+)", line)
+        return "SUBAGENT failed" if outcome and outcome[1] == "False" else "SUBAGENT done"
     # A key is read whole: input_tokens must not match inside cache_creation_input_tokens,
     # and role must not match inside budget_role.
     tokens = re.search(r"(?<![\w])input_tokens=(\d+)", line)
@@ -70,7 +72,8 @@ def timeline(lines: Iterable[str], trace_id: str) -> Iterator[str]:
             continue
         clock = _TIME.search(line)
         now = _seconds(line)
-        gap = "?" if previous is None or now is None else str(max(0, now - previous))
+        # The clock has no date: a turn that crosses midnight UTC wraps, so take the gap modulo a day.
+        gap = "?" if previous is None or now is None else str((now - previous) % 86400)
         previous = now if now is not None else previous
         stamp = f"{clock[1]}:{clock[2]}:{clock[3]}" if clock else "??:??:??"
         yield f"{stamp}  +{gap}s  {_describe(line)}"

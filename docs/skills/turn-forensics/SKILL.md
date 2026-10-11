@@ -111,7 +111,7 @@ compute than the token count shows. All times are UTC ISO-8601.
 
 ## Reading the result
 
-- **A context jump after a `read`**: a whole-file read. `read` has a 1 MiB cap, so a source file under about 1 MB returns in full (`executor.py` is about 134 KB, about 33K tokens). The fix is in the tool (FRE-401).
+- **A context jump after a `read`**: a large read. The default `read` returns the first 200 lines and at most 8 KiB. A jump means that the call named a large `max_bytes` or `limit`, or that the model paged through a file in many reads. The arguments of the `tool_call_started` before the jump show which (FRE-401).
 - **A slow primary call with no tool before it**: a large prefill (the grown context is sent again at each step), or a degraded model server (multi-minute calls, HTTP 524). A restart of the model server fixes the second case.
 - **A gap between the sub-agent end and the final reply**: the synthesis call on the grown context. The sub-agent was not slow.
 - **A terminal tool failure**: look for `tool_terminal_short_circuit` (FRE-402). The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.

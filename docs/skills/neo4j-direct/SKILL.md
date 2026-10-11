@@ -15,6 +15,7 @@ metadata:
 - If the user asks to change the graph, do not do it. Show the `MATCH` that finds the nodes and leave the change to the user.
 - Use the script, not a hand-written driver call. The `run_python` sandbox has no `neo4j` driver.
 - Pass a value with `--param name=value`. Never put a value into the query text.
+- A `CALL` is allowed only for the schema procedures `db.labels`, `db.relationshipTypes`, `db.propertyKeys`, `db.schema.visualization`, `db.schema.nodeTypeProperties` and `db.schema.relTypeProperties`. Any other procedure (an `apoc.*` call, `dbms.*`) is refused: it can write, reach a URL or show the configuration.
 - Do not use the `/db/data/transaction/commit` HTTP endpoint. It does not exist in Neo4j 5 (404 or 401).
 
 ## Step 1 — Run one query
@@ -28,8 +29,10 @@ The reply is one JSON document: `{"rows": [...], "row_count": n, "truncated": fa
 returns at most 100 rows. Use `--limit N` (up to 1000) for more. `truncated: true` means that the
 query holds more rows than were returned.
 
-The script opens a read transaction, so the server refuses a write. It checks for a write clause
-first, to give a plain error before it connects.
+The script opens a read transaction, so the server refuses a write (checked live on 2026-10-11,
+including `apoc.cypher.doIt`). It checks for a write clause and for a procedure that is not on
+the list first, to give a plain error before it connects. A word inside a string, a comment or a
+backtick name is not read as a clause.
 
 ## Step 2 — Common diagnostic queries
 
@@ -85,6 +88,7 @@ Check the result before you answer:
 | Failure | Cause | Next step |
 |---|---|---|
 | `error: this script is read-only and the query holds SET` | A write clause, or a property named like one | Remove the write. If it is a property or alias name, quote it with backticks |
+| `error: the procedure apoc.x.y is not allowed` | A `CALL` outside the list | Use `MATCH` and `RETURN`, or one of the listed schema procedures |
 | `error: AGENT_NEO4J_PASSWORD is not set in this environment` | The script runs where the variable is not set | Say that the graph cannot be read from here. Do not look for the password |
 | `error: authentication failed` | The user or password is wrong | Stop. Tell the user. Do not try other credentials |
 | `error: cannot connect to bolt://...` | Neo4j is down, or the name does not resolve from here | Run the `infrastructure-health` skill for `neo4j`. Do not use `localhost` inside the container |

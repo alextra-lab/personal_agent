@@ -12,6 +12,10 @@ Read-only. The session opens in read access mode and runs the query as a read tr
 the server refuses a write. A check for write clauses runs first, only to give a plain error
 before a connection is made. The server is the guard, not the check.
 
+A read transaction does not stop a read-mode procedure that reaches out (``apoc.load.json``) or
+shows the configuration (``dbms.listConfig``). So a ``CALL`` is allowed only for the procedures
+in ``_ALLOWED_PROCEDURES``, which list the schema and nothing else.
+
 Environment (the same names as ``config/``; the script is standalone, because importing
 ``personal_agent.config`` starts the app configuration and logs to stdout):
 
@@ -26,9 +30,12 @@ import json
 import os
 import re
 import sys
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    import neo4j
 
 _USAGE = 'usage: cypher.py [--param name=value ...] [--limit N] "<cypher>"'
 _DEFAULT_LIMIT = 100
@@ -37,8 +44,41 @@ _TIMEOUT_S = 15
 _WRITE_CLAUSE = re.compile(
     r"\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|FOREACH|LOAD\s+CSV)\b", re.IGNORECASE
 )
-# A string literal or a comment can hold the word "set". Remove both before the check.
-_LITERAL_OR_COMMENT = re.compile(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|//[^\n]*|/\*.*?\*/", re.S)
+# A string literal, a quoted name or a comment can hold the word "set". Remove all three before
+# the check. The backtick form is first, so a quote inside a quoted name does not open a string.
+_LITERAL_OR_COMMENT = re.compile(
+    r"`(?:``|[^`])*`|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|//[^\n]*|/\*.*?\*/", re.S
+)
+# A procedure call is allowed only if it is on this list (allow, never deny): a procedure can
+# write (apoc.cypher.doIt), read a file or a URL (apoc.load.json), or show the server
+# configuration (dbms.listConfig), and a read transaction stops only the first.
+_ALLOWED_PROCEDURES = frozenset(
+    {
+        "db.labels",
+        "db.relationshipTypes",
+        "db.propertyKeys",
+        "db.schema.visualization",
+        "db.schema.nodeTypeProperties",
+        "db.schema.relTypeProperties",
+    }
+)
+_CALL = re.compile(r"\bCALL\s+([A-Za-z_][\w.]*)", re.IGNORECASE)
+
+
+class _Record(Protocol):
+    """One result row of the driver."""
+
+    def data(self) -> dict[str, object]:
+        """Return the row as a plain dict."""
+        ...
+
+
+class _Transaction(Protocol):
+    """The part of a driver transaction that the script uses."""
+
+    def run(self, query: str, parameters: dict[str, object], /) -> Iterable[_Record]:
+        """Run one statement."""
+        ...
 
 
 class CypherError(Exception):
@@ -51,8 +91,14 @@ class UsageError(CypherError):
 
 def _safe_uri(uri: str) -> str:
     """Return ``uri`` without user-info, so that a password in it is never printed."""
-    parts = urlsplit(uri)
-    return f"{parts.scheme}://{parts.hostname}:{parts.port}" if parts.hostname else "the URI"
+    try:
+        parts = urlsplit(uri)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "the URI"
+    if not host:
+        return "the URI"
+    return f"{parts.scheme}://{host}" + (f":{port}" if port else "")
 
 
 def find_write_clause(query: str) -> str | None:
@@ -68,13 +114,29 @@ def find_write_clause(query: str) -> str | None:
     return " ".join(found.group(1).upper().split()) if found else None
 
 
-def _parse_args(argv: Sequence[str]) -> tuple[str, dict[str, Any], int]:
+def find_blocked_procedure(query: str) -> str | None:
+    """Return the first procedure in ``query`` that is not on the allowed list, or ``None``.
+
+    Args:
+        query: The Cypher text.
+
+    Returns:
+        The procedure name as written, or ``None``. A ``CALL { ... }`` subquery is not a
+        procedure. Text in a string, a quoted name or a comment is not read.
+    """
+    for found in _CALL.finditer(_LITERAL_OR_COMMENT.sub(" ", query)):
+        if found.group(1) not in _ALLOWED_PROCEDURES:
+            return found.group(1)
+    return None
+
+
+def _parse_args(argv: Sequence[str]) -> tuple[str, dict[str, object], int]:
     """Read the command line.
 
     Raises:
         UsageError: The usage is wrong.
     """
-    params: dict[str, Any] = {}
+    params: dict[str, object] = {}
     limit = _DEFAULT_LIMIT
     query: str | None = None
     items = list(argv)
@@ -105,8 +167,12 @@ def _parse_args(argv: Sequence[str]) -> tuple[str, dict[str, Any], int]:
 
 
 def run_query(
-    query: str, params: Mapping[str, Any], limit: int, env: Mapping[str, str], driver: Any = None
-) -> dict[str, Any]:
+    query: str,
+    params: Mapping[str, object],
+    limit: int,
+    env: Mapping[str, str],
+    driver: neo4j.Driver | None = None,
+) -> dict[str, object]:
     """Run ``query`` in a read transaction.
 
     Args:
@@ -122,6 +188,14 @@ def run_query(
     Raises:
         CypherError: The check, the connection or the query failed.
     """
+    # The procedure check is first: the name apoc.nodes.delete holds the word DELETE.
+    procedure = find_blocked_procedure(query)
+    if procedure:
+        raise CypherError(
+            f"the procedure {procedure} is not allowed. "
+            f"Allowed procedures: {', '.join(sorted(_ALLOWED_PROCEDURES))}. "
+            "Use MATCH and RETURN for other data."
+        )
     clause = find_write_clause(query)
     if clause:
         raise CypherError(
@@ -141,19 +215,20 @@ def run_query(
             "Run the script with /app/.venv/bin/python."
         ) from None
 
-    def read(tx: Any) -> list[dict[str, Any]]:
+    def read(tx: _Transaction) -> list[dict[str, object]]:
         result = tx.run(query, dict(params))
         return [record.data() for _, record in zip(range(limit + 1), result, strict=False)]
 
     owned = driver is None
+    client = driver
     try:
-        if owned:
-            driver = neo4j.GraphDatabase.driver(
+        if client is None:
+            client = neo4j.GraphDatabase.driver(
                 uri,
                 auth=(env.get("AGENT_NEO4J_USER", "neo4j"), password),
                 connection_timeout=_TIMEOUT_S,
             )
-        with driver.session(default_access_mode=neo4j.READ_ACCESS) as session:
+        with client.session(default_access_mode=neo4j.READ_ACCESS) as session:
             rows = session.execute_read(neo4j.unit_of_work(timeout=_TIMEOUT_S)(read))
     except neo4j_exceptions.AuthError:
         raise CypherError(
@@ -175,8 +250,8 @@ def run_query(
             f"the driver failed ({type(exc).__name__}). Check AGENT_NEO4J_URI."
         ) from None
     finally:
-        if owned and driver is not None:
-            driver.close()
+        if owned and client is not None:
+            client.close()
     return {
         "rows": rows[:limit],
         "row_count": min(len(rows), limit),

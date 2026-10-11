@@ -21,6 +21,7 @@ Environment (the same names as ``config/``; the script is standalone, because im
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
@@ -34,6 +35,18 @@ from urllib.parse import unquote, urlsplit
 SERVICES = ("postgres", "elasticsearch", "neo4j", "redis")
 _TIMEOUT_S = 5
 _USAGE = "usage: probe_services.py {postgres,elasticsearch,neo4j,redis,all}"
+
+
+def _show(url: str) -> str:
+    """Return ``url`` without user-info, so that a password in it is never printed."""
+    try:
+        parts = urlsplit(url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return "the configured URL"
+    if not host:
+        return "the configured URL"
+    return f"{parts.scheme}://{host}" + (f":{port}" if port else "") + parts.path
 
 
 def _clean(text: str, secret: str = "") -> str:
@@ -109,12 +122,13 @@ def probe_elasticsearch(env: Mapping[str, str]) -> tuple[bool, str]:
         ``(ok, detail)``.
     """
     base = env.get("AGENT_ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    shown = _show(base)
     try:
         status, body = _http_get(f"{base}/_cluster/health")
     except OSError as exc:
-        return False, f"cannot connect to {base}: {_clean(str(exc))}"
+        return False, f"cannot connect to {shown}: {_clean(str(exc), base)}"
     if status != 200:
-        return False, f"{base}/_cluster/health answered HTTP {status}"
+        return False, f"{shown}/_cluster/health answered HTTP {status}"
     try:
         cluster = json.loads(body)["status"]
     except (ValueError, KeyError, TypeError):
@@ -192,7 +206,11 @@ def main(argv: list[str], env: Mapping[str, str]) -> int:
     names = SERVICES if argv[0] == "all" else (argv[0],)
     failed = 0
     for name in names:
-        ok, detail = _PROBES[name](env)
+        try:
+            ok, detail = _PROBES[name](env)
+        except (ValueError, http.client.HTTPException) as exc:
+            # A bad port in a URL, or a reply that is not HTTP. One line, and the run goes on.
+            ok, detail = False, f"unexpected {type(exc).__name__}: check the environment values"
         print(f"{name}: {'ok' if ok else 'FAIL'} {detail}")
         failed += not ok
     return 1 if failed else 0

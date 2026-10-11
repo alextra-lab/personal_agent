@@ -483,7 +483,7 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 
 ### 2026-10-11 - Amendment 1 accepted
 **Changed By:** `adr` seat (FRE-1587)
-**Reason:** The owner, 2026-10-11, relayed by master: the planner assessment "could and should be integrated into our model testing", then "Go now" for both steps (amend AC-5, and add the measurement to the FRE-1581 run). On FRE-1515, the same day: "no 14 day delay". In the ADR session of 2026-10-11, the owner chose four points that the ticket left open: the pair measures to the primary's first token, direct on the engine; the 10 decline fixtures give the short pairs; every configuration needs the paired arm, and the managed path is built later; and the missing engine field is a stated limit, with FRE-1588 filed to close it.
+**Reason:** The owner, 2026-10-11, relayed by master: the planner assessment "could and should be integrated into our model testing", then "Go now" for both steps (amend AC-5, and add the measurement to the FRE-1581 run). On FRE-1515, the same day: "no 14 day delay". In the ADR session of 2026-10-11, the owner chose four points that the ticket left open: the pair measures to the primary's first token, direct on the engine; the 10 decline fixtures give the short pairs; every configuration needs the paired arm, and the managed path is built later; and the missing engine field is a stated limit, with FRE-1588 filed to close it. Codex round 1 (4 blocking): a fixed pair-key set per split, a balanced arm order, a precondition over the complete primary request, and the `timings` shape of the stream result. Round 2 (1 blocking): the precondition compares the final `litellm.acompletion` arguments, because the client adds the catalog values after the executor. Round 3: no blocking finding. Its three non-blocking points were applied: the calls are told apart by their order, only `client` and the trace and span headers may differ, and two more offline tests.
 
 ---
 
@@ -515,7 +515,7 @@ The probe does not run a gateway turn, for two reasons:
 - No gateway can make a declined `planner_asked` turn before FRE-1515 ships, and FRE-1515 merges on this result.
 - Production `first_token_ms` measures the whole reply today, because nothing streams token by token (master, FRE-1515, 2026-10-03).
 
-**The precondition.** The measure is valid only if a declined `planner_asked` turn sends the same primary request as a `SINGLE` turn with the same session state. "The same" means the final request of the first primary call: the keyword arguments that `LiteLLMClient` passes to `litellm.acompletion`. The executor passes only part of the request, and the client adds the mode, sampling, dialect parameters, `parallel_tool_calls` and the token limit from the catalog. So the comparison is made after the client, not at the executor. Only the HTTP `client` object and trace, span and request-id values may differ. FRE-1515 asserts this in a test (1.3).
+**The precondition.** The measure is valid only if a declined `planner_asked` turn sends the same primary request as a `SINGLE` turn with the same session state. "The same" means the final request of the first primary call: the keyword arguments that `LiteLLMClient` passes to `litellm.acompletion`. The executor passes only part of the request, and the client adds the mode, sampling, dialect parameters, `parallel_tool_calls` and the token limit from the catalog. So the comparison is made after the client, not at the executor. Only the HTTP `client` object and the trace and span header values inside `extra_headers` may differ. Every other key of `extra_headers`, and every other argument, must be equal. FRE-1515 asserts this in a test (1.3).
 
 **Which turns.**
 
@@ -569,7 +569,7 @@ The original AC-5 is replaced by this text:
 
 - **AC-5 — The planner's added delay passes the paired arm on the production configuration.** · **Check:**
   - The scorer report of FRE-1581's D7 run, on the production configuration, posted on FRE-1515 with its fingerprint before FRE-1515 merges. The production configuration is the default local primary binding at its deployed engine build, model, quant, `planner` mode and planner prompt hash.
-  - FRE-1515's test of the precondition in 1.1. The test drives the same input once routed `SINGLE` and once routed `planner_asked` with a declining planner stub. It patches `litellm.acompletion`, captures the keyword arguments of the first primary call of each route, and asserts that they are equal except for the values that 1.1 allows to differ. The planner call is not the first primary call: the test identifies the primary call by the primary client's deployment and mode.
+  - FRE-1515's test of the precondition in 1.1. The test drives the same input once routed `SINGLE` and once routed `planner_asked` with a declining planner stub. Both routes use one fixed session ID. The test patches `litellm.acompletion` and captures its calls in order, per route. In the `SINGLE` route the first call is the primary call. In the planner route the first call is the planner call and the second is the primary call. The test asserts that the two primary calls are equal except for the values that 1.1 allows to differ.
 
   · *Fails if*:
   - either paired check in the report is FAIL;
@@ -653,10 +653,11 @@ Each call in `single` and `planner` holds the `stream` result, with its shape un
 2. A short median above 3 s gives FAIL.
 3. 27 counted short pairs give FAIL, with a median below the limit.
 4. A long median above 10 s gives FAIL, and 7 counted long pairs give FAIL with a median below the limit.
-5. A run with a missing pair key gives FAIL, and a duplicated key does not raise the count.
+5. A run with a missing pair key gives FAIL, a run with an unexpected pair key gives FAIL, and a duplicated key does not raise the count.
 6. A pair whose measured primary `timings.cache_n` exceeds its prime's prompt tokens is void and does not count. A call with no `timings` is void too.
 7. A pair whose planner call expands does not count.
-8. `run_paired` against a fake engine: the nonce differs for each arm and draw, the order follows the rule of 1.1, and each arm sends its calls in the order of 1.1.
+8. `done_pair_keys` returns only the keys of rows without an error, so a rerun skips only the completed (key, draw) pairs.
+9. `run_paired` against a fake engine: the nonce differs for each arm and draw, the order follows the rule of 1.1, and each arm sends its calls in the order of 1.1.
 
 **`scripts/eval/fre1537/README.md`:** steps 5 and 6 name the new files and their call counts, and the scorer's table gains the two rows.
 

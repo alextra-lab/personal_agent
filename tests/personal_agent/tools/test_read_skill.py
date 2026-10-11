@@ -190,3 +190,12 @@ def test_name_is_an_enum_of_the_skill_names(skills_dir: Path) -> None:
     assert params["name"].required is True
     assert params["path"].required is False
     assert "invalid_path" in tool.error_codes
+
+
+def test_no_skill_means_no_enum(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty ``enum`` is invalid JSON Schema; with no skill folder the field has none."""
+    monkeypatch.setattr(skills, "SKILLS_DIR", tmp_path)
+    monkeypatch.setattr(skills, "_cache", None)
+    schema = build_read_skill_tool().parameters[0].json_schema
+    assert schema is not None and "enum" not in schema
+    skills._cache = None

@@ -237,7 +237,7 @@ def assemble_skill_catalog() -> str:
 # ---------------------------------------------------------------------------
 
 
-class SkillFileRefused(Exception):
+class SkillFileRefused(ValueError):
     """A requested skill file is not one listed file of the skill folder (D3.2)."""
 
 

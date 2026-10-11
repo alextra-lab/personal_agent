@@ -6050,16 +6050,16 @@ def _trim_messages_for_context_retry(
     Never touches a tool result whose ``tool_call_id`` is in ``keep_call_ids``: the skill
     bodies and skill files ``read_skill`` loaded in this turn (ADR-0156 D2.4).
 
-    Args:
-        messages: The full message list the rejected call sent.
-        keep_call_ids: Tool-call ids whose results stay verbatim.
-
     A later, separate rejection in the same turn (a fresh ``step_llm_call`` round
     that also overflows) calls this again over ``ctx.messages``, which by then may
     already hold a message this function stubbed earlier — that one is excluded from
     ``droppable`` rather than stubbed again: re-stubbing already-tiny placeholder text
     drops nothing new and would report a misleading, near-zero ``dropped_chars`` for
     what looks like a real trim (codex review, PR #1183).
+
+    Args:
+        messages: The full message list the rejected call sent.
+        keep_call_ids: Tool-call ids whose results stay verbatim.
 
     Returns:
         A tuple of (message list, tool results dropped, characters dropped). Returns

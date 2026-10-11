@@ -68,10 +68,11 @@ def build_read_skill_tool() -> ToolDefinition:
                 description="The skill name, exactly as the catalog lists it.",
                 required=True,
                 default=None,
+                # An empty enum is not valid JSON Schema, so no skill means no enum.
                 json_schema={
                     "type": "string",
-                    "enum": names,
                     "description": "The skill name, exactly as the catalog lists it.",
+                    **({"enum": names} if names else {}),
                 },
             ),
             ToolParameter(

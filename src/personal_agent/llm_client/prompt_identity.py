@@ -77,7 +77,6 @@ PROMPT_COMPONENT_TAXONOMY: tuple[str, ...] = (
     "deployment_context",
     "operator_stanza",
     "skill_index",
-    "skill_bodies",
     "memory_section",
     "salient_highlights",
     "artifact_builder_planning_note",

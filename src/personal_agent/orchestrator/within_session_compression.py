@@ -495,7 +495,8 @@ async def compress_in_place(
 
     if summary is None and kept:
         # No summary: the middle stays in its own order, pre-passed except the kept results.
-        pre_passed, replacements = _pre_pass_tool_outputs(middle, threshold_tokens=threshold)
+        # The replacement count stays the one over the non-kept messages.
+        pre_passed, _ = _pre_pass_tool_outputs(middle, threshold_tokens=threshold)
         pre_passed = [
             original if original.get("tool_call_id") in keep_call_ids else rewritten
             for original, rewritten in zip(middle, pre_passed, strict=True)

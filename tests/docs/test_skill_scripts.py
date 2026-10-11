@@ -332,6 +332,15 @@ _BLOCKED_PROCEDURES = [
     "CALL dbms.listConfig() YIELD name RETURN name",
     "call apoc.export.csv.all('x.csv', {})",
     "MATCH (n) CALL apoc.nodes.delete(n, 1) YIELD value RETURN value",
+    # The quoted forms of a name are valid Cypher. Each one hid the name from a text search.
+    "CALL `apoc.load.json`('http://elasticsearch:9200/_cat/indices') YIELD value RETURN value",
+    "CALL `apoc`.`load`.`json`('http://elasticsearch:9200') YIELD value RETURN value",
+    "CALL apoc . load . json('http://elasticsearch:9200') YIELD value RETURN value",
+    "CALL /* x */ apoc.load.json('http://elasticsearch:9200') YIELD value RETURN value",
+    "CALL `dbms`.`listConfig`() YIELD name RETURN name",
+    # A CALL that cannot be read is blocked: the check fails closed.
+    "CALL 'apoc.load.json'('http://x') YIELD value RETURN value",
+    "CALL $name()",
 ]
 
 
@@ -355,6 +364,22 @@ def test_cypher_passes_a_listed_procedure_a_subquery_and_a_quoted_call(query: st
     cypher = _load(_CYPHER)
     assert cypher.find_write_clause(query) is None
     assert cypher.find_blocked_procedure(query) is None
+
+
+def test_a_quoted_name_of_a_listed_procedure_is_allowed() -> None:
+    cypher = _load(_CYPHER)
+    assert cypher.find_blocked_procedure("CALL `db`.`labels`() YIELD label RETURN label") is None
+    assert cypher.find_blocked_procedure("CALL db . labels() YIELD label RETURN label") is None
+
+
+def test_a_quoted_procedure_name_is_read_whole() -> None:
+    """Seeded negative: the name that a reader of the text could not see."""
+    cypher = _load(_CYPHER)
+    query = "CALL `apoc`.`load`.`json`('http://x') YIELD value RETURN value"
+    assert cypher.find_blocked_procedure(query) == "apoc.load.json"
+    assert cypher.find_blocked_procedure("CALL 'x'()") == "<unreadable>"
+    # Not a CALL of a procedure: a property after a dot, and a word inside a string.
+    assert cypher.find_blocked_procedure("MATCH (n) RETURN n.call, 'CALL apoc.x()'") is None
 
 
 def test_a_quote_inside_a_quoted_name_does_not_hide_a_write() -> None:

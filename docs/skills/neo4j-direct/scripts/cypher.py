@@ -41,13 +41,23 @@ _USAGE = 'usage: cypher.py [--param name=value ...] [--limit N] "<cypher>"'
 _DEFAULT_LIMIT = 100
 _MAX_LIMIT = 1000
 _TIMEOUT_S = 15
-_WRITE_CLAUSE = re.compile(
-    r"\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|FOREACH|LOAD\s+CSV)\b", re.IGNORECASE
+# The query is read as tokens, not searched as text. A search over text has two failure modes: a
+# quote inside a quoted name starts a false string, and a quoted name can hide a procedure name
+# (the form with backticks around each part is valid Cypher). A token is a string, a comment, a
+# quoted name, a word, white space, or one other character.
+_TOKEN = re.compile(
+    r"""
+    (?P<ws>\s+)
+    |(?P<comment>//[^\n]*|/\*.*?\*/)
+    |(?P<string>'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")
+    |(?P<quoted>`(?:``|[^`])*`)
+    |(?P<word>[A-Za-z_]\w*)
+    |(?P<other>.)
+    """,
+    re.VERBOSE | re.DOTALL,
 )
-# A string literal, a quoted name or a comment can hold the word "set". Remove all three before
-# the check. The backtick form is first, so a quote inside a quoted name does not open a string.
-_LITERAL_OR_COMMENT = re.compile(
-    r"`(?:``|[^`])*`|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|//[^\n]*|/\*.*?\*/", re.S
+_WRITE_WORDS = frozenset(
+    {"CREATE", "MERGE", "DELETE", "DETACH", "SET", "REMOVE", "DROP", "FOREACH"}
 )
 # A procedure call is allowed only if it is on this list (allow, never deny): a procedure can
 # write (apoc.cypher.doIt), read a file or a URL (apoc.load.json), or show the server
@@ -62,7 +72,6 @@ _ALLOWED_PROCEDURES = frozenset(
         "db.schema.relTypeProperties",
     }
 )
-_CALL = re.compile(r"\bCALL\s+([A-Za-z_][\w.]*)", re.IGNORECASE)
 
 
 class _Record(Protocol):
@@ -101,6 +110,21 @@ def _safe_uri(uri: str) -> str:
     return f"{parts.scheme}://{host}" + (f":{port}" if port else "")
 
 
+def _tokens(query: str) -> list[tuple[str, str]]:
+    """Split ``query`` into (kind, text) tokens, with white space and comments left out."""
+    return [
+        (match.lastgroup or "other", match.group())
+        for match in _TOKEN.finditer(query)
+        if match.lastgroup not in ("ws", "comment")
+    ]
+
+
+def _name(token: tuple[str, str]) -> str:
+    """Return the name that a word or a quoted-name token stands for, without backticks."""
+    kind, text = token
+    return text[1:-1].replace("``", "`") if kind == "quoted" else text
+
+
 def find_write_clause(query: str) -> str | None:
     """Return the first write clause in ``query``, or ``None``.
 
@@ -108,25 +132,53 @@ def find_write_clause(query: str) -> str | None:
         query: The Cypher text.
 
     Returns:
-        The clause in upper case, or ``None``. Text in a string or a comment is not read.
+        The clause in upper case, or ``None``. Text in a string, a comment or a quoted name
+        is not read, and a word after a dot is a property name, not a clause.
     """
-    found = _WRITE_CLAUSE.search(_LITERAL_OR_COMMENT.sub(" ", query))
-    return " ".join(found.group(1).upper().split()) if found else None
+    tokens = _tokens(query)
+    for index, (kind, text) in enumerate(tokens):
+        if kind != "word" or (index and tokens[index - 1] == ("other", ".")):
+            continue
+        word = text.upper()
+        if word in _WRITE_WORDS:
+            return word
+        if word == "LOAD" and index + 1 < len(tokens) and tokens[index + 1][1].upper() == "CSV":
+            return "LOAD CSV"
+    return None
 
 
 def find_blocked_procedure(query: str) -> str | None:
-    """Return the first procedure in ``query`` that is not on the allowed list, or ``None``.
+    """Return the first ``CALL`` in ``query`` that is not on the allowed list, or ``None``.
+
+    Fails closed: a ``CALL`` that is not followed by a name that can be read, or by the opening
+    of a subquery, counts as blocked.
 
     Args:
         query: The Cypher text.
 
     Returns:
-        The procedure name as written, or ``None``. A ``CALL { ... }`` subquery is not a
-        procedure. Text in a string, a quoted name or a comment is not read.
+        The procedure name (quoted parts joined and unquoted), ``<unreadable>``, or ``None``.
+        A ``CALL { ... }`` or ``CALL (...) { ... }`` subquery is not a procedure.
     """
-    for found in _CALL.finditer(_LITERAL_OR_COMMENT.sub(" ", query)):
-        if found.group(1) not in _ALLOWED_PROCEDURES:
-            return found.group(1)
+    tokens = _tokens(query)
+    for index, (kind, text) in enumerate(tokens):
+        if kind != "word" or text.upper() != "CALL":
+            continue
+        if index and tokens[index - 1] == ("other", "."):
+            continue
+        cursor = index + 1
+        if cursor < len(tokens) and tokens[cursor][1] in ("{", "("):
+            continue
+        parts: list[str] = []
+        while cursor < len(tokens) and tokens[cursor][0] in ("word", "quoted"):
+            parts.append(_name(tokens[cursor]))
+            if cursor + 2 < len(tokens) and tokens[cursor + 1] == ("other", "."):
+                cursor += 2
+            else:
+                break
+        name = ".".join(parts)
+        if not parts or name not in _ALLOWED_PROCEDURES:
+            return name or "<unreadable>"
     return None
 
 

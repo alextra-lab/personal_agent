@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `4c2ee486` · Committed: 2026-10-11T07:27:26Z  
+> Source revision: `860b2773` · Committed: 2026-10-11T07:27:58Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,7 +32,7 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 22,708  
+Total skill docs: 11 · Total tokens (all skills): 22,842  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
@@ -40,7 +40,7 @@ Total skill docs: 11 · Total tokens (all skills): 22,708
 | SKILL: Artifact Design | 5,558 | `docs/skills/artifact-design/SKILL.md` |
 | infrastructure-health — Is each backend service reachable? | 892 | `docs/skills/infrastructure-health/SKILL.md` |
 | SKILL: Mermaid Diagrams | 2,985 | `docs/skills/mermaid-diagrams/SKILL.md` |
-| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,568 | `docs/skills/neo4j-direct/SKILL.md` |
+| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,702 | `docs/skills/neo4j-direct/SKILL.md` |
 | query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,107 | `docs/skills/query-elasticsearch/SKILL.md` |
 | query-tempo — Model-call latency and the spans of one trace | 1,665 | `docs/skills/query-tempo/SKILL.md` |
 | self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `docs/skills/self-telemetry/SKILL.md` |
@@ -1667,7 +1667,7 @@ External resources (use for syntax lookup, not as import targets):
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,568 |
+| **Token count** | 1,702 |
 | **Source** | `docs/skills/neo4j-direct/SKILL.md` |
 
 ```markdown
@@ -1712,7 +1712,7 @@ python3 docs/skills/neo4j-direct/scripts/cypher.py "CALL db.relationshipTypes() 
 
 ```bash
 # ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
-python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.created_at AS created ORDER BY e.created_at DESC LIMIT 5"
+python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.first_seen AS first_seen ORDER BY e.first_seen DESC LIMIT 5"
 ```
 
 ```bash
@@ -1727,6 +1727,10 @@ python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETU
 
 Labels in the graph include `Entity` and `Turn`. A relationship type of interest is `DISCUSSES`.
 Run the label query first when you are unsure what exists.
+
+When was an entity created? Use `first_seen` and `last_seen`: on 2026-10-11 all 9,743 `Entity`
+nodes held both. `created_at` is set on 1 node, so an `ORDER BY` on it gives no useful order.
+Find the property keys of the graph with `CALL db.propertyKeys()`.
 
 ## Environment
 
@@ -1745,6 +1749,7 @@ Check the result before you answer:
 - The answer quotes the number or the rows from the script output, with the query that produced them.
 - `truncated` is `false`, or the answer says that only `row_count` rows are shown.
 - A count of 0 is checked once with the label query (Step 2): a wrong label name also gives 0.
+- A column that is `null` in every row names a property that these nodes do not hold. Check it with `count(e.<property>)` and `CALL db.propertyKeys()`. The driver may print a warning on stderr for a property that does not exist: read it.
 - No write was attempted.
 
 ## Recovery

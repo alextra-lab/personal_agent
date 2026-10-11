@@ -5,7 +5,7 @@ scenarios:
     expect: "Runs the Cypher script with a MATCH and count query and reports the number from the output."
   - prompt: "List the five entities that were created most recently, with their creation times."
     expected_skill: neo4j-direct
-    expect: "Runs the Cypher script with an ORDER BY on created_at and a LIMIT of 5 and lists the rows."
+    expect: "Runs the Cypher script with an ORDER BY on first_seen (created_at is set on almost no node) and a LIMIT of 5, and lists the rows with their times."
   - prompt: "Which node labels and relationship types are in the graph, and how many of each?"
     expected_skill: neo4j-direct
     expect: "Runs read-only Cypher for the labels and the relationship types with counts. Reports both lists."

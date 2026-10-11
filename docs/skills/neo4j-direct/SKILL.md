@@ -48,7 +48,7 @@ python3 docs/skills/neo4j-direct/scripts/cypher.py "CALL db.relationshipTypes() 
 
 ```bash
 # ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
-python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.created_at AS created ORDER BY e.created_at DESC LIMIT 5"
+python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.first_seen AS first_seen ORDER BY e.first_seen DESC LIMIT 5"
 ```
 
 ```bash
@@ -63,6 +63,10 @@ python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETU
 
 Labels in the graph include `Entity` and `Turn`. A relationship type of interest is `DISCUSSES`.
 Run the label query first when you are unsure what exists.
+
+When was an entity created? Use `first_seen` and `last_seen`: on 2026-10-11 all 9,743 `Entity`
+nodes held both. `created_at` is set on 1 node, so an `ORDER BY` on it gives no useful order.
+Find the property keys of the graph with `CALL db.propertyKeys()`.
 
 ## Environment
 
@@ -81,6 +85,7 @@ Check the result before you answer:
 - The answer quotes the number or the rows from the script output, with the query that produced them.
 - `truncated` is `false`, or the answer says that only `row_count` rows are shown.
 - A count of 0 is checked once with the label query (Step 2): a wrong label name also gives 0.
+- A column that is `null` in every row names a property that these nodes do not hold. Check it with `count(e.<property>)` and `CALL db.propertyKeys()`. The driver may print a warning on stderr for a property that does not exist: read it.
 - No write was attempted.
 
 ## Recovery

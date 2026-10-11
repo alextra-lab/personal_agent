@@ -17,7 +17,7 @@ metadata:
 - Start with the `query_telemetry` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
 - Use curl only for what the tool cannot do. The table below says which.
 - Use only the index families in this file. Never write a guessed index name.
-- Model-call timing is not in Elasticsearch (retired, ADR-0129). Use the `query-tempo` skill.
+- Model-call timing is not in Elasticsearch. Use the `query-tempo` skill.
 - Spend, token totals and interaction outcomes are in the `self-telemetry` skill.
 
 ## Step 1 — Use the tool
@@ -47,7 +47,7 @@ query_telemetry(action="search", index="agent-logs", size=0, since="24h",
                 aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}})
 ```
 
-What the events carry (verified live 2026-10-11):
+What the events carry:
 
 | `event_type` | Fields to read |
 |---|---|

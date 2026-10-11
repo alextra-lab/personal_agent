@@ -1,10 +1,11 @@
 ---
 name: query-tempo
-description: Reads Tempo traces - how long model calls took by role or model over a time window, and the
-  spans and durations of one trace id. Starts with the query_telemetry tool, action latency, and uses curl
-  for a trace by id, a span search and the tag list. Use when the task is how long model calls took,
-  latency over a window by role or model, or the spans and durations of a given trace id. Not for
-  explaining a whole turn, which the turn-forensics skill does.
+description: Reads Tempo traces - latency numbers of model calls over a time window (p50, p90, max by
+  role or model), the raw span list and durations of one given trace id, a trace search, the tag list, and
+  Tempo status and version. Starts with the query_telemetry tool, action latency, and uses curl for the
+  rest. Use when the task asks for latency numbers over a window, the spans of a known trace id, or Tempo
+  status or version. Not for explaining one turn - why it was slow, why the context grew, what it did step
+  by step - which the turn-forensics skill does.
 metadata:
   requires-tools: bash
 ---
@@ -14,7 +15,7 @@ metadata:
 ## Rules
 
 - Answer only from a live Tempo query. Never answer from what a trace probably holds.
-- For latency over a window, start with `query_telemetry`, action `latency`. Elasticsearch holds no model-call timing (retired, ADR-0129).
+- For latency over a window, start with `query_telemetry`, action `latency`. Elasticsearch holds no model-call timing.
 - For the spans of one trace, use curl on `http://tempo:3200`. The tool does not read one trace.
 - Write a trace id, a clock value and a number as a literal in the command. A shell variable or `$(...)` makes the command ask for approval.
 
@@ -129,5 +130,4 @@ Check the result before you answer:
 | A very large trace is slow | More than 1000 spans | Select the span fields with `jq`. Do not print the whole trace |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |
 
-See also: ADR-0129 (`docs/architecture_decisions/ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md`)
-for the Tempo deployment, and the `query-elasticsearch` skill for log queries.
+See also: the `query-elasticsearch` skill for log queries.

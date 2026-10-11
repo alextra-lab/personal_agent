@@ -17,9 +17,9 @@ doc. Keep the pairs in sync when either changes:
 | Design-System Conventions | `REQUIREMENTS` design-system bullets |
 | Sealed-Box Constraints | `SEALED-BOX CONSTRAINTS` bullet |
 | Portability (3 lanes) | `PORTABILITY` bullet |
-| Never bake secrets | (carried as the standing D4 rule) |
+| Never bake secrets | (carried as the standing secrets rule) |
 
-## E2E verification (FRE-531 · ADR-0089 Addendum A7)
+## E2E verification
 
 The done-bar for the curated toolkit is **"it renders under the live policy, and the
 envelope is provably applied"** — not "it renders". Two complementary gates cover it:
@@ -52,11 +52,11 @@ exact CSP directive set + MIME + `nosniff`, and every `/lib/` asset serves the c
 executable/typed MIME + `nosniff` reachable under the artifact CSP. Requires a CF Access
 service token; runs at the deploy gate. A real-device iOS Safari pass is the owner's check.
 
-**paged.js Scenario C verdict (2026-06-09, record-only):** paged.js 0.4.3 runs **eval-free**
+**paged.js Scenario C result:** paged.js 0.4.3 runs **eval-free**
 under the eval-free artifact CSP and paginates on **both Chromium and WebKit** in the hermetic
 harness — corroborating the static-analysis claim. The `eval_gated` flag is **left set** (the
 shelf entry stays *experimental/gated*); un-gating it — which would add paged.js to the default
-`verify-lib` assert set — is a separate explicit decision pending the live-origin confirmation.
+`verify-lib` assert set — is a separate decision pending the live-origin confirmation.
 
 ## References
 
@@ -64,4 +64,3 @@ shelf entry stays *experimental/gated*); un-gating it — which would add paged.
 - `config/artifact_lib_manifest.json` — the single cross-repo source of truth for `/lib/` origin + paths + versions.
 - `src/personal_agent/tools/artifact_tools.py` — `_HTML_GENERATION_SYSTEM_PROMPT` (the distilled runtime prompt) + `artifact_draft` tool.
 - The `mermaid-diagrams` skill — sibling skill; the static-diagram portability lane.
-- Linear: FRE-525 (Addendum A), FRE-527 (manifest + hosting), FRE-528 (prompt reframe), FRE-530 (export-to-standalone), FRE-531 (paged.js CSP confirmation + E2E live verify).

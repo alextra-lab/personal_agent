@@ -1,9 +1,11 @@
 ---
 name: system-diagnostics
 description: Lists and inspects what runs on the host or in the container with ps, ss, vmstat, iostat and
-  lsof - which processes run, which ports listen, which process holds a file, and what disk and network
-  activity looks like. Use when the task is to find or list processes, listening ports, open files, or
-  I/O and network activity.
+  lsof - which processes run, a ranked list of processes (for example the top 5 by memory or CPU), which
+  ports listen, which process holds a file, and what disk and network I/O activity looks like. Use when the
+  task is to find, list or rank processes, or to find listening ports, open files, or I/O and network
+  activity. Not for a utilisation number - CPU %, the memory of the agent process or the host in MB, disk
+  space, load average - which the system-metrics skill gives.
 metadata:
   requires-tools: bash
 ---

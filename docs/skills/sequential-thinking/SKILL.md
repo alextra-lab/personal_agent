@@ -16,34 +16,6 @@ abandoned, alongside the correct path. Never invent a wrong step you did
 not actually take. An unremarkable linear chain of reasoning with no false
 start must stay invisible to the reader.
 
-> **Tier:** N/A — prompt technique, not a tool.
-> **Provenance:** `docs/architecture_decisions/ADR-0028-external-tool-cli-migration.md:83` ruled
-> `mcp_sequentialthinking` "Not a real tool — prompt technique", recommendation 5 said to remove
-> it, and FRE-1358 executed that removal. This skill replaces the discipline the removed tool's
-> instruction text imposed, without re-adding a tool ADR-0028 already ruled against.
->
-> **Delivery (FRE-1549):** this skill reached the model only on a keyword match or a `read_skill`
-> call, and `route_traces` recorded 0 loads in 1,128 turns. The standing rule now lives in the
-> primary system prompt (`REASONING_DISCIPLINE_PROMPT`, `orchestrator/prompts.py`) on every turn.
-> This file stays for depth. The model loads it with `read_skill`.
-
-## What this replaces
-
-The removed MCP server did no reasoning. It type-checked its inputs, extended its own step
-estimate by one line of logic, appended to two in-memory arrays, and printed a formatted box to
-**stderr** that neither the model nor the user ever saw. What it actually bought was:
-
-1. **The instruction text** — a discipline for estimating steps, marking revisions, and naming
-   branch points. This skill reproduces that text.
-2. **A forcing function** — calling the tool required committing to a step number and a
-   continue/stop decision each time. A skill cannot force a call-per-thought loop; it can only
-   ask for the discipline. Follow it because it is asked for, not because anything enforces it.
-
-The reasoning itself is not the gap. The primary model already runs with a
-32,768-token thinking budget (`config/models.yaml`, `thinking_budget_tokens`) — native thinking
-is unstructured and invisible, and does not itself oblige a model to admit it is revising an
-earlier conclusion. This skill supplies the discipline, not more thinking.
-
 ## The discipline
 
 When this skill engages, hold yourself to the following, internally, for the whole turn:
@@ -60,37 +32,23 @@ When this skill engages, hold yourself to the following, internally, for the who
 
 ## When to surface structure in the answer
 
-**Owner decision, 2026-09-05 — not always, and not never.** Do not surface anything for an
-ordinary linear chain of reasoning that needed no revision or branch — that case must **stay
-clean**, exactly as invisible as it was under the removed tool, which never surfaced anything to
-the model or the user either way.
-
-**Owner decision, 2026-09-08 — the mechanism changed; the "not always, not never" boundary did
-not.** Master's live verification of the 2026-09-05 design ("surface only on a spontaneous
-reversal") found it structurally unmeetable: the primary runs with a 32,768-token thinking
-budget, so a reversal happens inside the invisible thinking block, and by the time the visible
-answer is written the question is already settled. There is no live reversal left to mark.
-
-The owner ruled: "not achievable. We can force the model to think through a problem and include
-a step that was wrong." The replacement mechanism is a **false start**, not a spontaneous
-reversal — when the problem genuinely has one:
+Surface structure only when the problem has a real false start. An ordinary linear chain of
+reasoning that needed no revision or branch stays clean: no step numbers, no scaffold.
 
 - If the obvious first line of attack on this problem fails, show that **tried and abandoned**
   step in the answer, alongside the correct path, and name what was wrong with it — for example:
   "First attempt: X — that fails because Y, so this answer instead does Z."
 - Show it only when a false start actually exists. An unremarkable linear chain of reasoning
-  with no false start available must stay clean, per the 2026-09-05 boundary above.
+  with no false start available must stay clean.
 - Do not renumber the whole answer into an essay around it — one short line at the point in the
   answer where the false start belongs.
 
 **Never invent a false start you did not actually take.** A plausible-looking wrong step
-manufactured for presentation, rather than reasoning the model genuinely did, is confabulation —
-the same failure shape FRE-1327 is open on. If the problem has no real false start, show none;
-a fabricated one is worse than showing nothing.
+manufactured for presentation, rather than reasoning you actually did, is confabulation. If the
+problem has no real false start, show none; a fabricated one is worse than showing nothing.
 
-Rationale: a false start the reader cannot see is what native thinking already discards once the
-question is settled, so it is the part worth surfacing. It stays rare — most problems this skill
-engages on have no wrong turn at all — so ordinary answers do not turn into numbered essays.
+A false start stays rare — most problems this skill engages on have no wrong turn at all — so
+ordinary answers do not turn into numbered essays.
 
 ## When NOT to engage
 

@@ -2,7 +2,8 @@
 name: infrastructure-health
 description: Probes whether Postgres, Elasticsearch, Neo4j and Redis answer, with a real connection or a
   health endpoint for each, and reports one line for each service. Use when the task is whether a backend
-  service is up, reachable or healthy, before saying that a service is up or down.
+  service is up, reachable or healthy, before saying that a service is up or down. Not for Tempo - Tempo
+  status and version belong to the query-tempo skill.
 metadata:
   requires-tools: bash
 ---
@@ -66,6 +67,6 @@ Check the result before you answer:
 
 ## Governance
 
-- `curl` `GET` of a listed health endpoint runs without asking in NORMAL, ALERT and DEGRADED (FRE-1583). Any other host, path or method asks. For Neo4j only `GET http://neo4j:7474/` runs without asking.
-- `python3` (the probe script), `psql` and `redis-cli` ask the user, in every mode (FRE-1572, ADR-0156 D8.2).
+- `curl` `GET` of a listed health endpoint runs without asking in NORMAL, ALERT and DEGRADED. Any other host, path or method asks. For Neo4j only `GET http://neo4j:7474/` runs without asking.
+- `python3` (the probe script), `psql` and `redis-cli` ask the user, in every mode.
 - LOCKDOWN and RECOVERY: `bash` is disabled.

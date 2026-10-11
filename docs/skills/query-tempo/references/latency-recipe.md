@@ -5,13 +5,10 @@ attribute or a TraceQL filter that the tool does not list, or when the tool is n
 your tool list. The tool, action `latency`, gives the same summary for the role and model
 group keys and for the `model_call` and `slm_chat` spans.
 
-The recipe was run live in FRE-1568. The `jq` program is covered by a test
-(`tests/personal_agent/orchestrator/test_latency_skill_paths.py`).
-
 ### Pattern 5: Model-call latency by role and model (p50, p90, max)
 
 Use this for "how slow are model calls", "p50 and p90 by role" and any latency over a window.
-Elasticsearch holds no model-call timing (ADR-0129). Tempo does: one `model_call <model>` span
+Elasticsearch holds no model-call timing. Tempo does: one `model_call <model>` span
 per model call, with the role in `gen_ai.operation.name` and the model in
 `gen_ai.request.model`. The `query_telemetry` tool, action `latency`, returns the same kind of summary
 when that tool is available. This is the bash path.

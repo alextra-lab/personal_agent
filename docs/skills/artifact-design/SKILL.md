@@ -16,11 +16,11 @@ description: 'Guides the authoring of a rich, self-contained HTML artifact: the 
 > (d) stay inside the sealed-box constraints, (e) choose the right **portability** lane, and
 > (f) never leak secrets into a file that may leave the sandbox.
 
-> **Tier:** runtime-guidance (not a CLI skill). **ADR:** `docs/architecture_decisions/ADR-0089-artifact-execution-security-model.md` (§D2/D3/D4 + Addendum A).
+> **Tier:** runtime-guidance (not a CLI skill).
 > **Relationship to the generation prompt:** this doc is the **maintainable source-of-truth**;
 > the artifact generation system prompt (`_HTML_GENERATION_SYSTEM_PROMPT`,
 > `src/personal_agent/tools/artifact_tools.py`) is **distilled from it**. The generation
-> sub-agent is driven by that compressed prompt at runtime today — it does **not** load this
+> sub-agent is driven by that compressed prompt at runtime — it does **not** load this
 > file. Keep the two paired: when the manifest or a recipe changes, update this doc and
 > re-distill the prompt. Versions/URLs are anchored to `config/artifact_lib_manifest.json`.
 > **Not** an extension of the `frontend-design` harness skill (that guides the *developer*
@@ -31,13 +31,13 @@ description: 'Guides the authoring of a rich, self-contained HTML artifact: the 
 ## What This Skill Does
 
 An artifact is a complete `<!DOCTYPE html>…</html>` document that renders in a **sealed box**:
-an opaque-origin, CSP-locked, network-denied, storage-denied iframe (ADR-0089 D2/D3). Inside
+an opaque-origin, CSP-locked, network-denied, storage-denied iframe. Inside
 that box JavaScript runs normally — inline `<script>` and event handlers work — so simulations,
 explorable diagrams, charts, animations, calculators, tabs, and filters are all fair game.
 
 The decisive split: **most dynamism needs no library.** Sliders, simulations, explorables,
 animation, tabs/filters are all reachable with inline JS + Canvas / WebGL / SVG / CSS, which
-ADR-0089 already unlocks. Reach for a curated `/lib/` library **only where the model genuinely
+the sealed box allows. Reach for a curated `/lib/` library **only where the model genuinely
 cannot hand-roll the capability well** — real math typesetting, charts, 3-D, syntax
 highlighting, publishing-grade fonts, print pagination. Otherwise inline your own code: it is
 cheaper, more portable, and fully under your control.
@@ -62,7 +62,7 @@ A small, vetted shelf is hosted on the artifact origin (`https://artifacts.examp
 it is the **only** external origin a sealed artifact may load. Reference each asset by its
 **exact absolute, version-pinned URL** in its reference file; a relative `/lib/…` path is *not* the expected
 reach form and is not counted as a satisfied capability by the demand meter. URLs are immutable
-pins (ADR-0089 A3) — never edit a version in place. Source of truth:
+pins — never edit a version in place. Source of truth:
 `config/artifact_lib_manifest.json`.
 
 Each library has its own file in `references/`, with its boot recipe and its gotchas. Before you
@@ -155,13 +155,13 @@ Three distinct lanes; pick by how the artifact needs to travel.
 
 1. **static-SVG-travels.** For static diagrams — flowcharts, architecture, sequence/class
    diagrams — use `<pre class="mermaid">…</pre>` markup. The server renders these to **inline
-   SVG** (FRE-396), so the document stays self-contained and viewable anywhere, including in an
+   SVG**, so the document stays self-contained and viewable anywhere, including in an
    exported file. Example: `<pre class="mermaid">graph LR; A[Start] --> B[End];</pre>`. This is
    strictly better than a client diagram library for static diagrams.
 2. **interactive-viewed-on-origin.** JS-driven and `/lib/`-using artifacts run on their hosted,
    Access-gated page. They reference the sealed shelf and are otherwise **view-on-origin-only** —
    the live interactivity is the point, and it lives where the envelope is applied.
-3. **exported-standalone** (server-side export, FRE-530). Two modes, both driven by the per-asset
+3. **exported-standalone** (server-side export). Two modes, both driven by the per-asset
    export substitution map:
    - **Inline (default, offline-portable):** the referenced pinned `/lib/` assets + fonts are
      inlined (scripts inline, CSS inline, fonts/images as `data:` URIs) into one self-contained
@@ -183,12 +183,12 @@ Three distinct lanes; pick by how the artifact needs to travel.
 
 > *Saving work produced **inside** a running artifact* (e.g. a draft typed into the artifact) is a
 > different problem — the sandbox omits downloads/storage/network, so a running artifact cannot
-> save out. That needs the future parent-brokered model-bridge (ADR-0089 D4a), not an export
+> save out. That needs the future parent-brokered model-bridge, not an export
 > mode. Out of scope here.
 
 ---
 
-## Standing Rule: never bake secrets into an artifact (ADR-0089 D4)
+## Standing Rule: never bake secrets into an artifact
 
 **Never bake secrets into an artifact.** Artifacts are untrusted LLM-authored bytes served from
 an opaque origin, and an exported file leaves the sandbox entirely — it can be opened, inspected,

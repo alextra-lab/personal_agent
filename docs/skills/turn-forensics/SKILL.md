@@ -60,7 +60,6 @@ seconds between events. The script strips colour codes, keeps the trace, and pri
 each model call, tool call and sub-agent end:
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
   | python3 docs/skills/turn-forensics/scripts/call_timeline.py <trace_id>
 ```

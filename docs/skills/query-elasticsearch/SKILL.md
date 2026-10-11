@@ -105,7 +105,6 @@ date off a name: a cut name such as `agent-logs-2026` looks real and is not. To 
 family, use the tested script:
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^agent-monitors-joinability-' \
   | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py agent-monitors-joinability

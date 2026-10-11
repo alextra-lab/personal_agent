@@ -162,11 +162,20 @@ def check(source: Path, timeout: float) -> tuple[int, str]:
     Returns:
         The exit code (0 valid, 1 invalid, 2 the check could not run) and the report text.
     """
+    # An allow rule runs this script without a card (FRE-1585), and mmdc echoes the text of a
+    # parse error. So the script reads only a diagram file: a .mmd file that is not a link. mmdc
+    # gets the absolute path, which cannot start with '-' and be read as an option.
+    if source.suffix != ".mmd" or source.is_symlink():
+        return EXIT_ERROR, (
+            f"ERROR\nThe file {source} is not a .mmd file, or it is a link. "
+            "Write the diagram to /tmp/m.mmd with the write tool, then run the check again."
+        )
     if not source.is_file():
         return EXIT_ERROR, (
             f"ERROR\nThe file {source} was not found. "
             "Write the diagram to this path, then run the check again."
         )
+    source = source.absolute()
     try:
         size = len(source.read_text(encoding="utf-8", errors="replace"))
     except OSError as exc:

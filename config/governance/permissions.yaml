@@ -133,6 +133,30 @@ allow:
   - {rule: "bash(which *)", modes: [NORMAL]}
   - {rule: "bash(mmdc *)", modes: [NORMAL]}  # FRE-315: mermaid-cli for diagram validation
 
+  # Reviewed skill scripts run without a card (owner, 2026-10-11, FRE-1585; ADR-0156 D8.2
+  # amendment). The form is 'bash(python3 docs/skills/<skill>/scripts/<file>.py *)'. The loader
+  # accepts it only for one regular file under docs/skills/*/scripts/, with no glob, no dot
+  # segment and no symbolic link. The words after the script are its own arguments. Every other
+  # python3 command asks. A script gets a rule only in the PR that reviews it, with a test that
+  # its arguments cannot write, run another program or read outside its purpose
+  # (tests/docs/test_skill_scripts.py).
+  - rule: "bash(python3 docs/skills/infrastructure-health/scripts/probe_services.py *)"
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "Reachability probes of postgres, elasticsearch, neo4j and redis. The argument only picks the services; psql runs with a fixed argv."
+  - rule: "bash(python3 docs/skills/neo4j-direct/scripts/cypher.py *)"
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "One Cypher query in a read session and a read transaction. The script refuses write clauses, administration commands, and procedures and function namespaces that are not on its lists."
+  - rule: "bash(python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py *)"
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "Classifies index names read from stdin. No file, network or process access."
+  - rule: "bash(python3 docs/skills/turn-forensics/scripts/call_timeline.py *)"
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "Filters gateway log text read from stdin for one trace id. No file, network or process access."
+  # NORMAL only, as bash(mmdc *): the script runs mmdc with a fixed argv.
+  - rule: "bash(python3 docs/skills/mermaid-diagrams/scripts/validate_mermaid.py *)"
+    modes: [NORMAL]
+    reason: "Checks one .mmd diagram file with mmdc into a new temporary directory that it removes. It reads no other file."
+
 # curl runs without asking only for a read of internal telemetry (owner, 2026-10-10, FRE-1583;
 # ADR-0156 D8.2 amendment). A bash subcommand whose first word is curl, and that no allow rule
 # matches, is reduced to one request: one http:// URL with an explicit host:port, one method, one

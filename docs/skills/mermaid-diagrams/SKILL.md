@@ -198,7 +198,6 @@ The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed, and the 
 2. Run the script on that file:
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/mermaid-diagrams/scripts/validate_mermaid.py /tmp/m.mmd
 ```
 
@@ -208,7 +207,7 @@ The first line of the output is the verdict:
 |---|---|---|
 | `VALID` | `mmdc` parsed the diagram and wrote an SVG | Emit the fence to the user. |
 | `INVALID` | The diagram has a syntax error. The error text follows. | Read it, fix, write the file again, run the script again (Recovery). |
-| `ERROR` | The check could not run: no `mmdc`, no browser, a time-out or a missing file | Do not repair the diagram (Recovery). |
+| `ERROR` | The check could not run: no `mmdc`, no browser, a time-out, a missing file, or a file that is not a `.mmd` file | Do not repair the diagram (Recovery). |
 
 **Why a script.** Do not rebuild the check with `mmdc` and a file test. Observed on `mmdc` 11.17.0:
 

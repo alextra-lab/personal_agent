@@ -152,6 +152,10 @@ allow:
   - rule: "bash(python3 docs/skills/turn-forensics/scripts/call_timeline.py *)"
     modes: [NORMAL, ALERT, DEGRADED]
     reason: "Filters gateway log text read from stdin for one trace id. No file, network or process access."
+  # NORMAL only, as bash(mmdc *): the script runs mmdc with a fixed argv.
+  - rule: "bash(python3 docs/skills/mermaid-diagrams/scripts/validate_mermaid.py *)"
+    modes: [NORMAL]
+    reason: "Checks one .mmd diagram file with mmdc into a new temporary directory that it removes. It reads no other file."
 
 # curl runs without asking only for a read of internal telemetry (owner, 2026-10-10, FRE-1583;
 # ADR-0156 D8.2 amendment). A bash subcommand whose first word is curl, and that no allow rule

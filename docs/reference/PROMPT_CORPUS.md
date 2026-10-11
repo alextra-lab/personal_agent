@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `adb02005` · Committed: 2026-10-11T08:04:19Z  
+> Source revision: `5ace9241` · Committed: 2026-10-11T08:27:40Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,22 +32,22 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 21,492  
+Total skill docs: 11 · Total tokens (all skills): 21,286  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
 | SKILL: Artifact Design | 3,279 | `docs/skills/artifact-design/SKILL.md` |
-| infrastructure-health — Is each backend service reachable? | 892 | `docs/skills/infrastructure-health/SKILL.md` |
-| SKILL: Mermaid Diagrams | 3,607 | `docs/skills/mermaid-diagrams/SKILL.md` |
-| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,702 | `docs/skills/neo4j-direct/SKILL.md` |
-| query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,107 | `docs/skills/query-elasticsearch/SKILL.md` |
+| infrastructure-health — Is each backend service reachable? | 842 | `docs/skills/infrastructure-health/SKILL.md` |
+| SKILL: Mermaid Diagrams | 3,595 | `docs/skills/mermaid-diagrams/SKILL.md` |
+| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,608 | `docs/skills/neo4j-direct/SKILL.md` |
+| query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,082 | `docs/skills/query-elasticsearch/SKILL.md` |
 | query-tempo — Model-call latency and the spans of one trace | 1,665 | `docs/skills/query-tempo/SKILL.md` |
 | self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `docs/skills/self-telemetry/SKILL.md` |
 | sequential-thinking — Structured Reasoning Discipline | 1,596 | `docs/skills/sequential-thinking/SKILL.md` |
 | system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `docs/skills/system-diagnostics/SKILL.md` |
 | system-metrics — CPU, memory and disk utilisation snapshot | 917 | `docs/skills/system-metrics/SKILL.md` |
-| turn-forensics — Reconstruct one turn end to end | 2,043 | `docs/skills/turn-forensics/SKILL.md` |
+| turn-forensics — Reconstruct one turn end to end | 2,018 | `docs/skills/turn-forensics/SKILL.md` |
 
 ---
 
@@ -1043,7 +1043,7 @@ manifest or the generation prompt.
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 892 |
+| **Token count** | 842 |
 | **Source** | `docs/skills/infrastructure-health/SKILL.md` |
 
 ```markdown
@@ -1061,12 +1061,10 @@ The script opens a real Postgres connection and runs `SELECT 1`, reads the Elast
 health, reads the Neo4j HTTP page, and sends a Redis `PING`. It prints one line for each service.
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/infrastructure-health/scripts/probe_services.py all
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/infrastructure-health/scripts/probe_services.py postgres
 ```
 
@@ -1120,7 +1118,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 3,607 |
+| **Token count** | 3,595 |
 | **Source** | `docs/skills/mermaid-diagrams/SKILL.md` |
 
 ```markdown
@@ -1313,7 +1311,6 @@ The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed, and the 
 2. Run the script on that file:
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/mermaid-diagrams/scripts/validate_mermaid.py /tmp/m.mmd
 ```
 
@@ -1323,7 +1320,7 @@ The first line of the output is the verdict:
 |---|---|---|
 | `VALID` | `mmdc` parsed the diagram and wrote an SVG | Emit the fence to the user. |
 | `INVALID` | The diagram has a syntax error. The error text follows. | Read it, fix, write the file again, run the script again (Recovery). |
-| `ERROR` | The check could not run: no `mmdc`, no browser, a time-out or a missing file | Do not repair the diagram (Recovery). |
+| `ERROR` | The check could not run: no `mmdc`, no browser, a time-out, a missing file, or a file that is not a `.mmd` file | Do not repair the diagram (Recovery). |
 
 **Why a script.** Do not rebuild the check with `mmdc` and a file test. Observed on `mmdc` 11.17.0:
 
@@ -1498,7 +1495,7 @@ External resources (use for syntax lookup, not as import targets):
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,702 |
+| **Token count** | 1,608 |
 | **Source** | `docs/skills/neo4j-direct/SKILL.md` |
 
 ```markdown
@@ -1511,12 +1508,12 @@ External resources (use for syntax lookup, not as import targets):
 - Use the script, not a hand-written driver call. The `run_python` sandbox has no `neo4j` driver.
 - Pass a value with `--param name=value`. Never put a value into the query text.
 - A `CALL` is allowed only for the schema procedures `db.labels`, `db.relationshipTypes`, `db.propertyKeys`, `db.schema.visualization`, `db.schema.nodeTypeProperties` and `db.schema.relTypeProperties`. Any other procedure (an `apoc.*` call, `dbms.*`) is refused: it can write, reach a URL or show the configuration.
+- The script also refuses administration commands (`SHOW`, `TERMINATE`, `USE`, `ALTER`, `GRANT` and the like) and the `apoc.cypher.*` and `apoc.xml.*` functions. For the schema, use the procedures above.
 - Do not use the `/db/data/transaction/commit` HTTP endpoint. It does not exist in Neo4j 5 (404 or 401).
 
 ## Step 1 — Run one query
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN count(e) AS n"
 ```
 
@@ -1532,27 +1529,22 @@ backtick name is not read as a clause.
 ## Step 2 — Common diagnostic queries
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY cnt DESC"
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.first_seen AS first_seen ORDER BY e.first_seen DESC LIMIT 5"
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py 'MATCH (e:Entity) WHERE toLower(e.name) CONTAINS $q RETURN e.name AS name, e.entity_type AS type LIMIT 10' --param q=memory
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETURN e.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 10"
 ```
 
@@ -1617,7 +1609,7 @@ curl -fsS -X POST \
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,107 |
+| **Token count** | 2,082 |
 | **Source** | `docs/skills/query-elasticsearch/SKILL.md` |
 
 ```markdown
@@ -1717,7 +1709,6 @@ date off a name: a cut name such as `agent-logs-2026` looks real and is not. To 
 family, use the tested script:
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^agent-monitors-joinability-' \
   | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py agent-monitors-joinability
@@ -2457,7 +2448,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,043 |
+| **Token count** | 2,018 |
 | **Source** | `docs/skills/turn-forensics/SKILL.md` |
 
 ```markdown
@@ -2513,7 +2504,6 @@ seconds between events. The script strips colour codes, keeps the trace, and pri
 each model call, tool call and sub-agent end:
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
   | python3 docs/skills/turn-forensics/scripts/call_timeline.py <trace_id>
 ```

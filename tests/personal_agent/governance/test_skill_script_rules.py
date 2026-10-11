@@ -30,10 +30,11 @@ _PROBE = "docs/skills/infrastructure-health/scripts/probe_services.py"
 _CYPHER = "docs/skills/neo4j-direct/scripts/cypher.py"
 _CLASSIFIER = "docs/skills/query-elasticsearch/scripts/es_index_granularity.py"
 _TIMELINE = "docs/skills/turn-forensics/scripts/call_timeline.py"
+_VALIDATE = "docs/skills/mermaid-diagrams/scripts/validate_mermaid.py"
 
 #: The scripts that a reviewed PR gave an allow rule. A new rule changes this set, and the
 #: AC-3 argument test in tests/docs/test_skill_scripts.py must cover the new script.
-REVIEWED = {_PROBE, _CYPHER, _CLASSIFIER, _TIMELINE}
+REVIEWED = {_PROBE, _CYPHER, _CLASSIFIER, _TIMELINE, _VALIDATE}
 
 
 def _bash(command: str, mode: str = "NORMAL") -> str:
@@ -65,6 +66,12 @@ def _load(rule: str) -> None:
 @pytest.mark.parametrize("mode", ["NORMAL", "ALERT", "DEGRADED"])
 def test_ac1_a_reviewed_script_runs_without_a_card(command: str, mode: str) -> None:
     assert _bash(command, mode) == "allow"
+
+
+def test_ac1_the_mermaid_check_runs_without_a_card_in_normal_mode() -> None:
+    """NORMAL only, as the mmdc rule: the script runs mmdc."""
+    assert _bash(f"python3 {_VALIDATE} /tmp/m.mmd") == "allow"
+    assert _bash(f"python3 {_VALIDATE} /tmp/m.mmd", "ALERT") == "ask"
 
 
 def test_ac1_the_documented_timeline_pipeline_runs_without_a_card() -> None:

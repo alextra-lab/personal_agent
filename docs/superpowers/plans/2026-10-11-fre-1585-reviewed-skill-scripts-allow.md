@@ -143,3 +143,14 @@ widens the allow list).
 | The audit harness can pass without running the script | Medium | The harness already used `run_name="__main__"` | Fixed: each hostile-argument test asserts exit code 1 or 2; seeded positives for the spawn and the connect; a control test proves the hook sees a write, a read, a spawn and a connect |
 | The hook cannot see what `psql` does | Medium | True | Recorded as a residual risk: `psql` argv is fixed, its target comes from the environment |
 | Time-of-check/time-of-use between the loader and bash | Low | True | Recorded as a residual risk in the ADR amendment |
+
+## Self-review and rebase (2026-10-11)
+
+- Code review: a range bound (`[0..apoc.cypher.x()]`) passed the function check, and the admin
+  words refused `start`/`stop` as names. Fixed. Admin commands are refused at the statement start
+  only, where the server accepts them (probed: `CYPHER 5 …`, `CYPHER runtime=slotted …`,
+  `EXPLAIN …` ran; `CALL { SHOW … }`, `UNION SHOW …`, `WITH … SHOW …` were refused by the server).
+- Parser probes on the test Neo4j: `apoc.\u0063ypher.runFirstColumnSingle` ran. The script now
+  refuses a backslash outside a string. Line comments end at every line terminator.
+- Rebased on `ef6aac78` (FRE-1579). `validate_mermaid.py` gets a rule (NORMAL only, as
+  `bash(mmdc *)`), reads only a `.mmd` file that is not a link, and passes the absolute path.

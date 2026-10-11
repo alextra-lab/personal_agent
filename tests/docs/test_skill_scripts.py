@@ -849,13 +849,15 @@ def _assert_contained(
 
 @pytest.mark.parametrize("args", _HOSTILE, ids=[" ".join(a) for a in _HOSTILE])
 @pytest.mark.parametrize(
-    "script", [_CLASSIFIER, _TIMELINE, _PROBE, _CYPHER], ids=lambda p: p.stem
+    "script", [_CLASSIFIER, _TIMELINE, _PROBE, _CYPHER, _VALIDATE], ids=lambda p: p.stem
 )
 def test_ac3_a_hostile_argument_writes_spawns_reads_and_connects_nothing(
     script: Path, args: list[str]
 ) -> None:
     report = _audit(script, args, stdin="agent-logs-2026.10.01\n/etc/passwd\n")
-    assert report["code"] in (1, 2)  # the script ran and refused, or found nothing
+    # The script ran and refused, or found nothing. argparse answers --help first, with 0.
+    expected = (0,) if script == _VALIDATE and args[0] == "--help" else (1, 2)
+    assert report["code"] in expected
     _assert_contained(report)
 
 
@@ -933,5 +935,79 @@ def test_ac3_every_script_rule_names_a_script_that_this_file_tests() -> None:
         for rule in load_permission_rules().allow
         if rule.bash_words and rule.bash_prefix and rule.bash_words[0] == "python3"
     }
-    tested = {str(p.relative_to(repo)) for p in (_CLASSIFIER, _TIMELINE, _PROBE, _CYPHER)}
+    tested = {
+        str(p.relative_to(repo)) for p in (_CLASSIFIER, _TIMELINE, _PROBE, _CYPHER, _VALIDATE)
+    }
     assert named and named <= tested
+
+
+# --- AC-3 for validate_mermaid.py (FRE-1585): only a .mmd file, mmdc with a fixed argv -------
+
+
+def _fake_mmdc_dir(tmp_path: Path) -> dict[str, str]:
+    """A PATH whose mmdc writes a small SVG to the -o path, as the real one does."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    mmdc = bin_dir / "mmdc"
+    mmdc.write_text('#!/bin/sh\necho "<svg></svg>" > "$4"\n')
+    mmdc.chmod(mmdc.stat().st_mode | stat.S_IEXEC)
+    return {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}", "TMPDIR": str(tmp_path / "t")}
+
+
+@pytest.mark.parametrize("name", ["passwd", "m.txt", "m.mmd.py", ".env"])
+def test_ac3_the_mermaid_check_reads_no_file_that_is_not_a_diagram(
+    tmp_path: Path, name: str
+) -> None:
+    target = tmp_path / name
+    target.write_text("AGENT_SECRET=s3cret\n")
+    report = _audit(_VALIDATE, [str(target)], env=_fake_mmdc_dir(tmp_path))
+    assert report["code"] == 2
+    _assert_contained(report)
+
+
+def test_ac3_the_mermaid_check_refuses_a_link_named_like_a_diagram(tmp_path: Path) -> None:
+    secret = tmp_path / "secret.env"
+    secret.write_text("AGENT_SECRET=s3cret\n")
+    (tmp_path / "m.mmd").symlink_to(secret)
+    report = _audit(_VALIDATE, [str(tmp_path / "m.mmd")], env=_fake_mmdc_dir(tmp_path))
+    assert report["code"] == 2
+    _assert_contained(report)
+
+
+def test_ac3_the_mermaid_check_runs_mmdc_with_an_absolute_path_and_its_own_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _fake_mmdc_dir(tmp_path)
+    (tmp_path / "t").mkdir()
+    (tmp_path / "-p.mmd").write_text("flowchart TD\n    A --> B\n")
+    done = subprocess.run(
+        [sys.executable, "-B", "-c", _HARNESS, str(_VALIDATE), "--", "-p.mmd"],
+        capture_output=True,
+        timeout=60,
+        env=env,
+        cwd=tmp_path,
+    )
+    lines = [ln for ln in done.stderr.decode().splitlines() if ln.startswith("AUDIT:")]
+    report = json.loads(lines[0][len("AUDIT:") :])
+    assert report["code"] == 0, done.stdout
+    [argv] = _spawns(report)  # the seeded positive: the one spawn is seen
+    assert argv[:3] == ["mmdc", "-i", str(tmp_path / "-p.mmd")]
+    assert argv[3] == "-o"
+    scratch = Path(argv[4]).parent
+    assert scratch.parent == tmp_path / "t" and scratch.name.startswith("mermaid-check-")
+    assert not scratch.exists()  # removed after the run
+    # Every change is inside TMPDIR: the scratch directory, made then removed, and the probe
+    # file that tempfile writes and removes to check that the directory is writable.
+    changes = [e for e in report["events"] if e[0] == "change"]
+    assert ["change", "shutil.rmtree", repr((str(scratch), None))] in changes, changes
+    # shutil.rmtree removes the SVG through a descriptor of the scratch directory, so that
+    # event names the file without its directory.
+    by_path = [
+        e
+        for e in changes
+        if not (e[1] == "os.remove" and e[2].startswith("('diagram.svg', ") and "-1" not in e[2])
+    ]
+    assert all(f"{tmp_path / 't'}/" in e[2] for e in by_path), changes
+    opened = [e[1] for e in _writes(report) if e[0] == "open"]
+    assert all(path.startswith(f"{tmp_path / 't'}/") for path in opened), opened
+    assert _connects(report) == []

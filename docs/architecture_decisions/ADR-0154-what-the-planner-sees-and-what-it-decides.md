@@ -515,7 +515,7 @@ The probe does not run a gateway turn, for two reasons:
 - No gateway can make a declined `planner_asked` turn before FRE-1515 ships, and FRE-1515 merges on this result.
 - Production `first_token_ms` measures the whole reply today, because nothing streams token by token (master, FRE-1515, 2026-10-03).
 
-**The precondition.** The measure is valid only if a declined `planner_asked` turn sends the same primary request as a `SINGLE` turn with the same session state. "The same" means the complete request that the executor passes to the LLM client for the first primary call: messages, tools, `tool_choice`, `parallel_tool_calls`, sampling, model mode, response format and token limit. Only trace and request identifiers may differ. FRE-1515 asserts this in a test (1.3).
+**The precondition.** The measure is valid only if a declined `planner_asked` turn sends the same primary request as a `SINGLE` turn with the same session state. "The same" means the final request of the first primary call: the keyword arguments that `LiteLLMClient` passes to `litellm.acompletion`. The executor passes only part of the request, and the client adds the mode, sampling, dialect parameters, `parallel_tool_calls` and the token limit from the catalog. So the comparison is made after the client, not at the executor. Only the HTTP `client` object and trace, span and request-id values may differ. FRE-1515 asserts this in a test (1.3).
 
 **Which turns.**
 
@@ -544,7 +544,7 @@ A prime is a request that sets this state. It has `max_tokens: 1`, and the probe
 
 **No reuse across arms or draws.** Each arm of each draw puts a line `probe nonce <8 hex characters>` at the start of the system message of every request in that arm. The nonce is new for each arm and draw. So no arm can reuse a prompt that another arm or draw cached. The rendered planner prompt does not hold the nonce, so the configuration fingerprint does not change.
 
-**The arm order.** A pair runs the `SINGLE` arm first when (index + draw) is even, and the planner arm first when it is odd. The index is the fixture's position in the sorted list of decline fixture labels, or the size's position in `SIZES`. So 15 of the 30 short pairs and 5 of the 9 long pairs run `SINGLE` first. Appendix A4 found a bias from a fixed order.
+**The arm order.** A pair runs the `SINGLE` arm first when (index + draw) is even, and the planner arm first when it is odd. The index is the zero-based position of the fixture in the sorted list of decline fixture labels, or the zero-based position of the size in `SIZES`. So 15 of the 30 short pairs and 5 of the 9 long pairs run `SINGLE` first. Appendix A4 found a bias from a fixed order.
 
 **A void pair.** A pair is void when a measured call's `timings.cache_n` exceeds the prompt tokens (`timings.cache_n + timings.prompt_n`) of the prime before it in the same arm. The planner call is compared with the planner prime. Each primary call is compared with its primary prime. A void pair means that the engine reused more than the previous turn left, so the instrument failed on that pair. A void pair does not count. The report states the void count and the reasons.
 
@@ -569,7 +569,7 @@ The original AC-5 is replaced by this text:
 
 - **AC-5 — The planner's added delay passes the paired arm on the production configuration.** · **Check:**
   - The scorer report of FRE-1581's D7 run, on the production configuration, posted on FRE-1515 with its fingerprint before FRE-1515 merges. The production configuration is the default local primary binding at its deployed engine build, model, quant, `planner` mode and planner prompt hash.
-  - FRE-1515's test of the precondition in 1.1. The test drives the same input once routed `SINGLE` and once routed `planner_asked` with a declining planner stub. It captures the complete first primary request of each, as 1.1 defines it, and it asserts that they are equal except for trace and request identifiers.
+  - FRE-1515's test of the precondition in 1.1. The test drives the same input once routed `SINGLE` and once routed `planner_asked` with a declining planner stub. It patches `litellm.acompletion`, captures the keyword arguments of the first primary call of each route, and asserts that they are equal except for the values that 1.1 allows to differ. The planner call is not the first primary call: the test identifies the primary call by the primary client's deployment and mode.
 
   · *Fails if*:
   - either paired check in the report is FAIL;

@@ -121,6 +121,8 @@ jobs:
           # service container is available, causing 500 instead of 401 in auth
           # tests (test_list_artifacts_requires_auth, test_card_click_no_auth_is_401).
 
+      # The script imports the tool modules, so the config loads outside pytest: it needs the
+      # test-stack URLs that tests/conftest.py otherwise sets (it opens no connection).
       - name: Every tool failure line is executed by a test (ADR-0156 AC-1)
         run: uv run python scripts/check_tool_failure_coverage.py coverage-tools.json
         env:
@@ -128,6 +130,8 @@ jobs:
           AGENT_NEO4J_URI: bolt://localhost:7688
           AGENT_ELASTICSEARCH_URL: http://localhost:9201
           AGENT_DATABASE_URL: postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent
+          AGENT_DATABASE_ADMIN_URL: postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent
+          AGENT_SYSGRAPH_DATABASE_URL: postgresql+asyncpg://sysgraph_role:sysgraph_dev_password@localhost:5433/personal_agent
           AGENT_ELASTICSEARCH_INDEX_PREFIX: agent-logs-test
           AGENT_CAPTAINS_LOG_INDEX_PREFIX: agent-captains-test
 

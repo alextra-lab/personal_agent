@@ -154,3 +154,11 @@ widens the allow list).
   refuses a backslash outside a string. Line comments end at every line terminator.
 - Rebased on `ef6aac78` (FRE-1579). `validate_mermaid.py` gets a rule (NORMAL only, as
   `bash(mmdc *)`), reads only a `.mmd` file that is not a link, and passes the absolute path.
+
+## Master gate bounce (2026-10-11)
+
+- The function check becomes an allowlist of namespaces (`_ALLOWED_FUNCTION_NAMESPACES`), exact
+  match, read from `SHOW FUNCTIONS` on the test Neo4j. A plain built-in name stays allowed. A name
+  after `CALL` stays with the procedure check. Tests: unlisted namespaces refused
+  (`ai.text.completion`, `apoc.util.decompress`, a new namespace below a listed one), allowed
+  namespaces pass, and every `neo4j-direct` recipe passes every check.

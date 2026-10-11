@@ -16,8 +16,8 @@ A read transaction does not stop a read-mode procedure that reaches out (``apoc.
 shows the configuration (``dbms.listConfig``). So a ``CALL`` is allowed only for the procedures
 in ``_ALLOWED_PROCEDURES``, which list the schema and nothing else. For the same reason the
 script refuses administration commands (``SHOW SETTINGS`` shows the configuration and
-``TERMINATE TRANSACTIONS`` stops other work, both in read mode) and the ``apoc.cypher`` and
-``apoc.xml`` functions, which run Cypher text or parse XML (FRE-1585).
+``TERMINATE TRANSACTIONS`` stops other work, both in read mode), and it allows a function with
+a namespace only if the namespace is in ``_ALLOWED_FUNCTION_NAMESPACES`` (FRE-1585).
 
 Environment (the same names as ``config/``; the script is standalone, because importing
 ``personal_agent.config`` starts the app configuration and logs to stdout):
@@ -88,10 +88,54 @@ _ADMIN_WORDS = frozenset(
 # refused anywhere.
 _USE = "USE"
 _PREFIX_WORDS = frozenset({"EXPLAIN", "PROFILE", "CYPHER"})
-# Functions in these namespaces are refused (FRE-1585). apoc.cypher.* runs Cypher text, so a
-# blocked procedure or LOAD CSV in a string ran inside a read transaction (seen on the test
-# server: dbms.listConfig through runFirstColumnSingle). apoc.xml.* parses XML on the server.
-_BLOCKED_FUNCTION_NAMESPACES = ("apoc.cypher.", "apoc.xml.")
+# A call of a function with a namespace is allowed only if the namespace is on this list (allow,
+# never deny, as for procedures). A function can run Cypher text (apoc.cypher.*: a blocked
+# procedure in a string ran inside a read transaction on the test server), parse XML
+# (apoc.xml.*) or decompress data (apoc.util.*), and a plugin change (a newer APOC, the GenAI
+# plugin's ai.text.*) adds functions that nobody reviewed. The match is exact: a new namespace
+# below a listed one is not allowed. A function without a namespace (count, toLower, size) is a
+# Cypher built-in and is allowed. The list holds the Cypher built-ins with a namespace and the
+# APOC core namespaces that only compute on their arguments or read the graph (FRE-1585, read
+# from SHOW FUNCTIONS on Neo4j 5.26 with APOC core).
+_ALLOWED_FUNCTION_NAMESPACES = frozenset(
+    {
+        # Cypher built-ins
+        "date",
+        "datetime",
+        "localdatetime",
+        "localtime",
+        "time",
+        "duration",
+        "point",
+        "vector.similarity",
+        # APOC core
+        "apoc.agg",
+        "apoc.any",
+        "apoc.coll",
+        "apoc.convert",
+        "apoc.date",
+        "apoc.label",
+        "apoc.map",
+        "apoc.math",
+        "apoc.meta.cypher",
+        "apoc.meta.nodes",
+        "apoc.node",
+        "apoc.node.degree",
+        "apoc.node.relationship",
+        "apoc.node.relationships",
+        "apoc.nodes",
+        "apoc.nodes.relationship",
+        "apoc.nodes.relationships",
+        "apoc.number",
+        "apoc.number.exact",
+        "apoc.path",
+        "apoc.rel",
+        "apoc.schema.node",
+        "apoc.schema.relationship",
+        "apoc.temporal",
+        "apoc.text",
+    }
+)
 # A procedure call is allowed only if it is on this list (allow, never deny): a procedure can
 # write (apoc.cypher.doIt), read a file or a URL (apoc.load.json), or show the server
 # configuration (dbms.listConfig), and a read transaction stops only the first.
@@ -265,17 +309,19 @@ def find_blocked_procedure(query: str) -> str | None:
 
 
 def find_blocked_function(query: str) -> str | None:
-    """Return the first name in ``query`` that is in a blocked function namespace, or ``None``.
+    """Return the first function call in ``query`` whose namespace is not allowed, or ``None``.
 
     A name is a chain of words and quoted names joined by dots. Each part is unquoted, the
     parts are joined, and the result is compared in lower case, so every quoting and spacing
-    form of ``apoc.cypher.runFirstColumnSingle`` is read as one name.
+    form of ``apoc.cypher.runFirstColumnSingle`` is read as one name. A name followed by ``(``
+    is a call. Its namespace is the name without the last part. A name after ``CALL`` is a
+    procedure, which ``find_blocked_procedure`` checks.
 
     Args:
         query: The Cypher text.
 
     Returns:
-        The name as joined, or ``None``. Text in a string or a comment is not read.
+        The function name as joined, or ``None``. Text in a string or a comment is not read.
     """
     tokens = _tokens(query)
     index = 0
@@ -285,6 +331,12 @@ def find_blocked_function(query: str) -> str | None:
         if tokens[index][0] not in ("word", "quoted"):
             index += 1
             continue
+        after_call = (
+            index > 0
+            and tokens[index - 1][0] == "word"
+            and tokens[index - 1][1].upper() == "CALL"
+            and not _after_property_dot(tokens, index - 1)
+        )
         parts = [_name(tokens[index])]
         while (
             index + 2 < len(tokens)
@@ -294,8 +346,11 @@ def find_blocked_function(query: str) -> str | None:
             index += 2
             parts.append(_name(tokens[index]))
         name = ".".join(parts)
-        if (name.lower() + ".").startswith(_BLOCKED_FUNCTION_NAMESPACES):
-            return name
+        is_call = index + 1 < len(tokens) and tokens[index + 1] == ("other", "(")
+        if is_call and not after_call and "." in name:
+            namespace = name.rsplit(".", 1)[0]
+            if namespace.lower() not in _ALLOWED_FUNCTION_NAMESPACES:
+                return name
         index += 1
     return None
 
@@ -375,8 +430,9 @@ def run_query(
     function = find_blocked_function(query)
     if function:
         raise CypherError(
-            f"the function {function} is not allowed: apoc.cypher functions run Cypher text and "
-            "apoc.xml functions parse XML on the server. Write the query itself."
+            f"the function {function} is not allowed. Functions without a namespace (count, "
+            "toLower, size) are allowed, and these namespaces: "
+            f"{', '.join(sorted(_ALLOWED_FUNCTION_NAMESPACES))}."
         )
     clause = find_write_clause(query)
     if clause:

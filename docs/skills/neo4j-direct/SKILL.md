@@ -16,7 +16,8 @@ metadata:
 - Use the script, not a hand-written driver call. The `run_python` sandbox has no `neo4j` driver.
 - Pass a value with `--param name=value`. Never put a value into the query text.
 - A `CALL` is allowed only for the schema procedures `db.labels`, `db.relationshipTypes`, `db.propertyKeys`, `db.schema.visualization`, `db.schema.nodeTypeProperties` and `db.schema.relTypeProperties`. Any other procedure (an `apoc.*` call, `dbms.*`) is refused: it can write, reach a URL or show the configuration.
-- The script also refuses administration commands (`SHOW`, `TERMINATE`, `USE`, `ALTER`, `GRANT` and the like) and the `apoc.cypher.*` and `apoc.xml.*` functions. For the schema, use the procedures above.
+- The script also refuses administration commands (`SHOW`, `TERMINATE`, `USE`, `ALTER`, `GRANT` and the like). For the schema, use the procedures above.
+- Functions without a namespace (`count`, `toLower`, `size`, `labels`) are allowed. A function with a namespace is allowed only from a list: the Cypher built-ins (`date.*`, `datetime.*`, `duration.*`, `point.*`, `vector.similarity.*` and the time types) and the APOC namespaces that compute on their arguments (`apoc.coll`, `apoc.map`, `apoc.text`, `apoc.convert`, `apoc.date`, `apoc.number`, `apoc.math` and others). The error names the full list. Any other namespace (`apoc.cypher`, `apoc.util`, `ai.text`) is refused.
 - Do not use the `/db/data/transaction/commit` HTTP endpoint. It does not exist in Neo4j 5 (404 or 401).
 
 ## Step 1 — Run one query

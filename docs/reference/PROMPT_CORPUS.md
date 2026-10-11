@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `5ace9241` · Committed: 2026-10-11T08:27:40Z  
+> Source revision: `e0f3b3a6` · Committed: 2026-10-11T08:33:02Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,7 +32,7 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 21,286  
+Total skill docs: 11 · Total tokens (all skills): 21,410  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
@@ -40,7 +40,7 @@ Total skill docs: 11 · Total tokens (all skills): 21,286
 | SKILL: Artifact Design | 3,279 | `docs/skills/artifact-design/SKILL.md` |
 | infrastructure-health — Is each backend service reachable? | 842 | `docs/skills/infrastructure-health/SKILL.md` |
 | SKILL: Mermaid Diagrams | 3,595 | `docs/skills/mermaid-diagrams/SKILL.md` |
-| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,608 | `docs/skills/neo4j-direct/SKILL.md` |
+| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,732 | `docs/skills/neo4j-direct/SKILL.md` |
 | query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,082 | `docs/skills/query-elasticsearch/SKILL.md` |
 | query-tempo — Model-call latency and the spans of one trace | 1,665 | `docs/skills/query-tempo/SKILL.md` |
 | self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `docs/skills/self-telemetry/SKILL.md` |
@@ -1495,7 +1495,7 @@ External resources (use for syntax lookup, not as import targets):
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,608 |
+| **Token count** | 1,732 |
 | **Source** | `docs/skills/neo4j-direct/SKILL.md` |
 
 ```markdown
@@ -1508,7 +1508,8 @@ External resources (use for syntax lookup, not as import targets):
 - Use the script, not a hand-written driver call. The `run_python` sandbox has no `neo4j` driver.
 - Pass a value with `--param name=value`. Never put a value into the query text.
 - A `CALL` is allowed only for the schema procedures `db.labels`, `db.relationshipTypes`, `db.propertyKeys`, `db.schema.visualization`, `db.schema.nodeTypeProperties` and `db.schema.relTypeProperties`. Any other procedure (an `apoc.*` call, `dbms.*`) is refused: it can write, reach a URL or show the configuration.
-- The script also refuses administration commands (`SHOW`, `TERMINATE`, `USE`, `ALTER`, `GRANT` and the like) and the `apoc.cypher.*` and `apoc.xml.*` functions. For the schema, use the procedures above.
+- The script also refuses administration commands (`SHOW`, `TERMINATE`, `USE`, `ALTER`, `GRANT` and the like). For the schema, use the procedures above.
+- Functions without a namespace (`count`, `toLower`, `size`, `labels`) are allowed. A function with a namespace is allowed only from a list: the Cypher built-ins (`date.*`, `datetime.*`, `duration.*`, `point.*`, `vector.similarity.*` and the time types) and the APOC namespaces that compute on their arguments (`apoc.coll`, `apoc.map`, `apoc.text`, `apoc.convert`, `apoc.date`, `apoc.number`, `apoc.math` and others). The error names the full list. Any other namespace (`apoc.cypher`, `apoc.util`, `ai.text`) is refused.
 - Do not use the `/db/data/transaction/commit` HTTP endpoint. It does not exist in Neo4j 5 (404 or 401).
 
 ## Step 1 — Run one query

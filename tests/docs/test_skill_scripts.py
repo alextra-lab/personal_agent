@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import socket
 import stat
 import subprocess
@@ -650,7 +651,23 @@ _COMMENT_ENDS = [
 ] + ["// x\rCALL dbms.listConfig() YIELD name RETURN name"]
 
 
-@pytest.mark.parametrize("query", _BLOCKED_FUNCTIONS)
+# The function check is an allowlist of namespaces (master gate, FRE-1585): a namespace that
+# nobody reviewed is refused, so a plugin change cannot add an allowed function.
+_UNLISTED_FUNCTIONS = [
+    "RETURN ai.text.completion('hello', {}) AS x",
+    "RETURN apoc.util.decompress([1, 2], {}) AS x",
+    "RETURN apoc.util.sha1(['a']) AS x",
+    "RETURN apoc.create.uuid() AS x",
+    "RETURN my.plugin.fn(1) AS x",
+    "RETURN apoc.text.ai.summarise('x') AS x",
+    "RETURN `ai.text.completion`('hello', {}) AS x",
+    "RETURN `ai`.text.completion('hello', {}) AS x",
+    "RETURN AI.TEXT.COMPLETION('hello', {}) AS x",
+    "MATCH (n) WHERE apoc.util.validatePredicate(false, 'x', []) RETURN n",
+]
+
+
+@pytest.mark.parametrize("query", [*_BLOCKED_FUNCTIONS, *_UNLISTED_FUNCTIONS])
 def test_cypher_refuses_a_function_that_runs_cypher_text_or_parses_xml(query: str) -> None:
     done = _run(_CYPHER, [query], env={"AGENT_NEO4J_PASSWORD": "s3cret"})
     line = _plain_error(done, 1)
@@ -665,10 +682,44 @@ def test_cypher_refuses_a_function_that_runs_cypher_text_or_parses_xml(query: st
         "MATCH (n) WHERE n.note = 'apoc.cypher.runFirstColumnSingle' RETURN n",
         "MATCH (cypher) RETURN cypher.name",
         "MATCH (n) RETURN n.apoc",
+        "RETURN date.truncate('month', date()) AS d, duration.between(date(), date()) AS g",
+        "RETURN vector.similarity.cosine([1.0, 0.0], [1.0, 0.0]) AS s",
+        "RETURN apoc.number.exact.add('1', '2') AS s, apoc.meta.cypher.type(1) AS t",
+        "MATCH (n) RETURN apoc.node.degree.in(n) AS d, toLower(n.name), size(labels(n))",
+        "CALL db.labels() YIELD label RETURN label",
+        "CALL db.schema.nodeTypeProperties() YIELD nodeType RETURN nodeType",
+        "MATCH (n) WHERE n.name IN ['a'] AND (n.x > 1) RETURN count(n)",
     ],
 )
 def test_cypher_passes_other_functions_and_the_name_in_a_string(query: str) -> None:
     assert _load(_CYPHER).find_blocked_function(query) is None
+
+
+def _skill_queries() -> list[str]:
+    """Every query that a cypher.py command in the neo4j-direct skill passes."""
+    text = (_SKILLS / "neo4j-direct" / "SKILL.md").read_text()
+    queries = []
+    for line in text.splitlines():
+        if "scripts/cypher.py" in line and line.lstrip().startswith("python3 "):
+            words = shlex.split(line)
+            queries.extend(w for w in words[2:] if not w.startswith("--") and " " in w)
+    return queries
+
+
+_SKILL_QUERIES = _skill_queries()
+
+
+def test_the_skill_has_cypher_recipes() -> None:
+    assert len(_SKILL_QUERIES) >= 6
+
+
+@pytest.mark.parametrize("query", _SKILL_QUERIES)
+def test_every_neo4j_direct_recipe_passes_every_check(query: str) -> None:
+    cypher = _load(_CYPHER)
+    assert not cypher.find_escape(query)
+    assert cypher.find_blocked_procedure(query) is None
+    assert cypher.find_blocked_function(query) is None
+    assert cypher.find_write_clause(query) is None
 
 
 @pytest.mark.parametrize("query", _ESCAPES)
@@ -902,7 +953,14 @@ def test_ac3_the_probe_spawns_only_the_fixed_psql_and_connects_only_to_the_envir
     assert set(_connects(report)) == expected
 
 
-_HOSTILE_QUERIES = [*_WRITES, *_BLOCKED_PROCEDURES, *_BLOCKED_FUNCTIONS, *_ESCAPES, *_COMMENT_ENDS]
+_HOSTILE_QUERIES = [
+    *_WRITES,
+    *_BLOCKED_PROCEDURES,
+    *_BLOCKED_FUNCTIONS,
+    *_UNLISTED_FUNCTIONS,
+    *_ESCAPES,
+    *_COMMENT_ENDS,
+]
 
 
 @pytest.mark.parametrize("query", _HOSTILE_QUERIES)

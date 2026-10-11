@@ -548,7 +548,7 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
 
 **Found in the review, fixed in the same change:** `cypher.py` sent three kinds of query that a read transaction does not stop. Each was seen on the test Neo4j in read access mode: `apoc.cypher.runFirstColumnSingle` ran `dbms.listConfig()` from inside a string, `SHOW SETTINGS` returned the configuration, and `TERMINATE TRANSACTIONS` ran. The self-review and probes of the server's parser found two more ways past the function check: a `\u` escape in a name (`apoc.\u0063ypher` ran) and a range bound (`[0..apoc.cypher.x()]`). Before it connects, the script now refuses:
   - a backslash outside a string;
-  - the `apoc.cypher.*` and `apoc.xml.*` functions, in every quoting and spacing form;
+  - a function with a namespace that is not on an explicit list (allow, never deny, as for procedures; master's gate). The list holds the Cypher built-ins with a namespace and the APOC core namespaces that compute on their arguments or read the graph, read from `SHOW FUNCTIONS` on Neo4j 5.26. The match is exact and works in every quoting and spacing form. So `apoc.cypher.*`, `apoc.xml.*` and `apoc.util.*` are refused, and so is a function that a plugin change adds (`ai.text.*`, a newer APOC). A function without a namespace (`count`, `toLower`) is a built-in and is allowed;
   - an administration command (`SHOW`, `TERMINATE`, `ALTER`, `RENAME`, `GRANT`, `DENY`, `REVOKE`, `START`, `STOP`, `ENABLE`, `DEALLOCATE`, `REALLOCATE`) at the start of a statement, after `CYPHER` options and `EXPLAIN` or `PROFILE`, where the server accepts one. Elsewhere these words are names (a variable `start`);
   - `USE` anywhere, because it is valid in a subquery.
 

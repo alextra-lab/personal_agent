@@ -145,7 +145,7 @@ allow:
     reason: "Reachability probes of postgres, elasticsearch, neo4j and redis. The argument only picks the services; psql runs with a fixed argv."
   - rule: "bash(python3 docs/skills/neo4j-direct/scripts/cypher.py *)"
     modes: [NORMAL, ALERT, DEGRADED]
-    reason: "One Cypher query in a read session and a read transaction. The script refuses write clauses, procedures not on its list and apoc.cypher/apoc.xml functions."
+    reason: "One Cypher query in a read session and a read transaction. The script refuses write clauses, administration commands, and procedures and function namespaces that are not on its lists."
   - rule: "bash(python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py *)"
     modes: [NORMAL, ALERT, DEGRADED]
     reason: "Classifies index names read from stdin. No file, network or process access."

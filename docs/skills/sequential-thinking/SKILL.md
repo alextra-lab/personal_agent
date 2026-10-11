@@ -25,7 +25,7 @@ start must stay invisible to the reader.
 > **Delivery (FRE-1549):** this skill reached the model only on a keyword match or a `read_skill`
 > call, and `route_traces` recorded 0 loads in 1,128 turns. The standing rule now lives in the
 > primary system prompt (`REASONING_DISCIPLINE_PROMPT`, `orchestrator/prompts.py`) on every turn.
-> This file stays for depth and for the keyword path.
+> This file stays for depth. The model loads it with `read_skill`.
 
 ## What this replaces
 
@@ -99,3 +99,26 @@ engages on have no wrong turn at all — so ordinary answers do not turn into nu
 - Any turn where no assumption is at risk of being wrong and no real alternative is being
   weighed. Engaging here just manufactures a numbered essay out of a simple answer, which is a
   net loss over saying nothing.
+
+## Success
+
+Check these points before the answer is final:
+
+- The answer holds up. It covers every part of the question, and no later step contradicts an
+  earlier one without a marked revision.
+- The step count that was estimated first matches the work done, or the change was stated.
+- A false start is shown only if it was actually taken. It takes one short line, with what was
+  wrong with it.
+- An ordinary linear chain has no numbered scaffold in the answer.
+
+## Recovery
+
+What to do on each failure, with a stop rule:
+
+| Failure | Cause | Next step |
+|---|---|---|
+| A later step contradicts an earlier conclusion | An assumption was wrong | Mark it as a revision: name what is reconsidered and why. Redo each step that depended on it. |
+| The work passes the estimated step count | The task is larger than estimated | State the new count. Do not continue as if the first count held. |
+| The answer does not hold up on the final check | A step was skipped, or a conclusion was assumed | Name the point that failed. Redo the work from the step that holds it. |
+| It is not clear that a false start was real | The wrong step was not actually taken | Show none. A made-up false start is worse than showing nothing. |
+| The same check fails twice | — | Stop. Tell the user what is not settled and what was tried. |

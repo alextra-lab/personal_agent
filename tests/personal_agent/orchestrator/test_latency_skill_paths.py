@@ -26,6 +26,9 @@ from personal_agent.orchestrator.skills import get_all_skills
 _SKILLS = Path(__file__).resolve().parents[3] / "docs" / "skills"
 _ELASTICSEARCH = (_SKILLS / "query-elasticsearch" / "SKILL.md").read_text(encoding="utf-8")
 _TEMPO = (_SKILLS / "query-tempo" / "SKILL.md").read_text(encoding="utf-8")
+# FRE-1578: the Pattern 5 recipe moved from SKILL.md to references/ (progressive disclosure).
+_RECIPE = (_SKILLS / "query-tempo" / "references" / "latency-recipe.md").read_text(encoding="utf-8")
+_TEMPO_FILES = f"{_TEMPO}\n{_RECIPE}"
 _RULES = load_permission_rules()
 
 
@@ -50,12 +53,12 @@ def _retired_field_lines(text: str) -> list[str]:
 
 
 def _recipe_block() -> str:
-    """Return the bash block under the model-call latency heading of ``query-tempo.md``."""
-    start = _TEMPO.index(_RECIPE_HEADING)
+    """Return the bash block under the model-call latency heading of the recipe file."""
+    start = _RECIPE.index(_RECIPE_HEADING)
     ends = [
-        i for i in (_TEMPO.find("\n### ", start + 1), _TEMPO.find("\n## ", start + 1)) if i != -1
+        i for i in (_RECIPE.find("\n### ", start + 1), _RECIPE.find("\n## ", start + 1)) if i != -1
     ]
-    section = _TEMPO[start : min(ends) if ends else len(_TEMPO)]
+    section = _RECIPE[start : min(ends) if ends else len(_RECIPE)]
     blocks = _FENCE.findall(section)
     assert len(blocks) == 1, "the recipe section holds exactly one bash block"
     return blocks[0]
@@ -113,7 +116,7 @@ def test_allowlist_check_rejects_the_old_tempo_forms() -> None:
 
 def test_every_tempo_skill_bash_block_is_auto_approved() -> None:
     """Every command the skill shows is allowed by the production rules (no approval card)."""
-    blocks = _FENCE.findall(_TEMPO)
+    blocks = _FENCE.findall(_TEMPO_FILES)
     assert blocks
     for block in blocks:
         assert _refused(block) is None, block
@@ -287,7 +290,7 @@ def test_every_jq_program_in_the_tempo_skill_compiles() -> None:
     """jq exits 3 on a compile error. A runtime error on null input is not one."""
     _require_jq()
     programs = 0
-    for block in _FENCE.findall(_TEMPO):
+    for block in _FENCE.findall(_TEMPO_FILES):
         for program in re.findall(r"\bjq\s+(?:--argjson limit \d+\s+)?'([^']*)'", block):
             done = subprocess.run(  # noqa: S603 - fixed argv, test input only
                 ["jq", "-n", "--argjson", "limit", "1", program],  # noqa: S607
@@ -297,4 +300,4 @@ def test_every_jq_program_in_the_tempo_skill_compiles() -> None:
             )
             assert done.returncode != 3, f"jq compile error: {done.stderr}\n{program}"
             programs += 1
-    assert programs >= 5  # patterns 1, 2, 3, 4 and 5 each hold at least one program
+    assert programs >= 4  # the span read, the search, the tag list and the Pattern 5 recipe

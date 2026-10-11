@@ -1,0 +1,14 @@
+skill: query-tempo
+scenarios:
+  - prompt: "How long do the model calls take? Give me p50 and p90 for each role over the last day."
+    expected_skill: query-tempo
+    expect: "Calls query_telemetry with action latency, since 24h, grouped by role. Reports p50 and p90 per role and says whether complete is true. Reads no latency field from Elasticsearch."
+  - prompt: "Show me every span of trace 1bc849bf94ebf80162af9c97b9ee91c3 with its duration."
+    expected_skill: query-tempo
+    expect: "Reads the trace with a curl GET of /api/v2/traces/<id> on tempo:3200, with the id written as a literal. Lists the spans with durations in milliseconds."
+  - prompt: "Which model is the slowest at prompt prefill on the local server this week?"
+    expected_skill: query-tempo
+    expect: "Calls query_telemetry with action latency, span slm_chat, since 7d, grouped by model. Reports prefill p50 and p90 per model."
+  - prompt: "Is Tempo up, and which version runs?"
+    expected_skill: query-tempo
+    expect: "Calls GET /status on tempo:3200 with curl and reports the version."

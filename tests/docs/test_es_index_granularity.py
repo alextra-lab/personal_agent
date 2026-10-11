@@ -10,11 +10,30 @@ a prefix (``agent-captains-captures-subagents-*`` under the ``agent-captains-cap
 prefix).
 
 Source of truth: ``docs/superpowers/plans/2026-07-31-fre-1035-es-skill-granularity-recipe.md``.
+The script moved into the skill folder in FRE-1578 (it is not importable as a package).
 """
 
 from __future__ import annotations
 
-from scripts.es_index_granularity import classify_index_period, report_family_granularity
+import importlib.util
+import sys
+from pathlib import Path
+
+_SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "skills"
+    / "query-elasticsearch"
+    / "scripts"
+    / "es_index_granularity.py"
+)
+_spec = importlib.util.spec_from_file_location("es_index_granularity", _SCRIPT)
+assert _spec is not None and _spec.loader is not None
+_module = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _module  # a dataclass looks its module up here
+_spec.loader.exec_module(_module)
+classify_index_period = _module.classify_index_period
+report_family_granularity = _module.report_family_granularity
 
 # --------------------------------------------------------------------------- #
 # The six observed shapes classify correctly.

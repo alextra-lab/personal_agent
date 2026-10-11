@@ -17,9 +17,17 @@ prefix (e.g. ``agent-captains-captures-subagents-*`` under the
 
 CLI usage — classify a family's live indices without hitting document data:
 
-    curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
+    curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
       | grep '^agent-monitors-joinability-' \
-      | python3 scripts/es_index_granularity.py agent-monitors-joinability
+      | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py \
+          agent-monitors-joinability
+
+Exit codes: 0 the family has daily or monthly indices, 1 the check failed (no input, input
+that is not text, or no index of the family in a known shape), 2 bad usage. Every failure is
+one ``error:`` line on stderr. An upstream ``curl`` or ``grep`` that fails gives empty input,
+which exits 1, so a failed pipeline is never read as "no indices".
+
+This file lives in the skill folder (FRE-1578) so that it ships in the gateway image.
 """
 
 from __future__ import annotations
@@ -151,21 +159,41 @@ def report_family_granularity(
     return FamilyGranularityReport(family_prefix, tuple(daily), tuple(monthly), tuple(unrecognized))
 
 
+_USAGE = "usage: es_index_granularity.py <family-prefix>  (index names on stdin, one per line)"
+
+
 def main() -> int:
     """Read index names on stdin and report one family's granularity mix.
 
     Returns:
-        0 on success, 2 on usage error.
+        0 when the family has a daily or monthly index, 1 when the check failed (empty or
+        undecodable input, or no index of the family in a known shape), 2 on usage error.
     """
     args = sys.argv[1:]
-    if len(args) != 1:
-        print(
-            "usage: es_index_granularity.py <family-prefix>  (index names on stdin, one per line)",
-            file=sys.stderr,
-        )
+    if args in (["-h"], ["--help"]):
+        print(_USAGE)
+        print("Reports how many daily and monthly indices the family has, and flags MIXED.")
+        return 0
+    if len(args) != 1 or args[0].startswith("-"):
+        print(f"error: {_USAGE}", file=sys.stderr)
         return 2
     family_prefix = args[0]
-    names = [line.strip() for line in sys.stdin if line.strip()]
+    try:
+        # sys.stdin passes undecodable bytes through (surrogateescape): decode strictly.
+        text = sys.stdin.buffer.read().decode("utf-8")
+        names = [line.strip() for line in text.splitlines() if line.strip()]
+    except UnicodeDecodeError:
+        print(
+            "error: standard input is not text. Pipe the output of _cat/indices.", file=sys.stderr
+        )
+        return 1
+    if not names:
+        print(
+            "error: no index names on standard input. The command before this one failed, "
+            "or the family has no index. Check the curl command and the grep prefix.",
+            file=sys.stderr,
+        )
+        return 1
     report = report_family_granularity(names, family_prefix)
 
     print(f"family: {family_prefix}")
@@ -180,6 +208,9 @@ def main() -> int:
         print(f"  unrecognized ({len(report.unrecognized)}) — not matched, not counted:")
         for name in report.unrecognized:
             print(f"    {name}")
+    if not report.daily and not report.monthly:
+        print(f"error: no index of family {family_prefix} has a known date shape.", file=sys.stderr)
+        return 1
     return 0
 
 

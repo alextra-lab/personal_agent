@@ -65,25 +65,17 @@ class TestTotalSpendUsesApiCostRecorded:
         assert "api_cost_recorded" in filters
         assert "model_call_completed" not in filters
 
-    def test_query_elasticsearch_daily_trend_uses_api_cost_recorded(self) -> None:
-        """query-elasticsearch's daily spend trend recipe filters on api_cost_recorded."""
-        body = get_all_skills()["query-elasticsearch"].body
-        block = _extract_block(
-            body, "# Daily spend trend, last 7 days", "# Total spend by provider"
-        )
-        filters = _event_type_filters(block)
-        assert "api_cost_recorded" in filters
-        assert "model_call_completed" not in filters
+    def test_query_elasticsearch_sends_total_spend_to_the_ledger_skill(self) -> None:
+        """query-elasticsearch names the spend skill and the ledger event (FRE-1578).
 
-    def test_query_elasticsearch_total_by_provider_uses_api_cost_recorded(self) -> None:
-        """query-elasticsearch's total-spend-by-provider recipe filters on api_cost_recorded."""
+        It held two spend recipes (the daily trend and the total by provider). They are
+        Patterns 3a and 3c of self-telemetry now, pinned by the tests above.
+        """
         body = get_all_skills()["query-elasticsearch"].body
-        block = _extract_block(
-            body, "# Total spend by provider, last 24h", "# Managed-inference cost"
-        )
-        filters = _event_type_filters(block)
-        assert "api_cost_recorded" in filters
-        assert "model_call_completed" not in filters
+        assert "self-telemetry" in body
+        assert "api_cost_recorded" in body
+        assert "total-spend" in body
+        assert "model_call_completed" not in _event_type_filters(body)
 
 
 class TestManagedInferenceEventsDocumented:

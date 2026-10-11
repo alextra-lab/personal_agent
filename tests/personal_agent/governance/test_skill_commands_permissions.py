@@ -1,7 +1,8 @@
 """ADR-0156 D8.7 (FRE-1574): every command in a skill body is allowed, or a documented ask.
 
-It runs over every agent skill, ``docs/skills/<name>/SKILL.md`` (FRE-1577). It
-reads each fenced ``bash``/``sh``/``shell`` block of an agent skill and splits it into recipes at
+It runs over every agent skill, ``docs/skills/<name>/SKILL.md`` (FRE-1577), and over the
+``references/*.md`` files that a body links (FRE-1578: a command in a reference is a command
+that the skill names). It reads each fenced ``bash``/``sh``/``shell`` block of an agent skill and splits it into recipes at
 blank lines, because the model runs one recipe at a time. Two notations are normalised first:
 
 - ``bash <command>`` and ``bash command="<command>"`` mean "call the bash tool with this";
@@ -48,9 +49,17 @@ def _parser() -> Parser:
     return Parser(Language(tree_sitter_bash.language()))
 
 
+_SCANNED: set[str] = set()
+
+
 def _recipes() -> Iterator[tuple[str, str, bool]]:
-    """Yield (skill file, recipe, documented ask) for every recipe of every agent skill."""
-    for path in sorted(_SKILLS.glob("*/SKILL.md")):
+    """Yield (skill name, recipe, documented ask) for every recipe of every agent skill.
+
+    Fills ``_SCANNED`` with the path of each file that held at least one recipe.
+    """
+    files = [*_SKILLS.glob("*/SKILL.md"), *_SKILLS.glob("*/references/*.md")]
+    for path in sorted(files):
+        skill = path.relative_to(_SKILLS).parts[0]
         for block in _FENCE.findall(path.read_text()):
             for chunk in _chunks(block):
                 documented = bool(_ASK_MARKER.search(chunk))
@@ -59,14 +68,26 @@ def _recipes() -> Iterator[tuple[str, str, bool]]:
                 if not recipe:
                     continue
                 recipe = _NOTATION.sub(lambda m: m.group(1) + (m.group(2) or ""), recipe)
-                yield path.parent.name, _PLACEHOLDER.sub("PLACEHOLDER", recipe), documented
+                _SCANNED.add(str(path.relative_to(_SKILLS)))
+                yield skill, _PLACEHOLDER.sub("PLACEHOLDER", recipe), documented
 
 
 _ALL = list(_recipes())
 
 
 def test_the_extractor_finds_recipes() -> None:
-    assert len(_ALL) >= 50
+    # 74 before FRE-1578. The telemetry patterns became query_telemetry calls, which are not
+    # commands, so the count fell. The reference files below are asserted by name.
+    assert len(_ALL) >= 40
+
+
+def test_the_extractor_reads_the_reference_files() -> None:
+    """A command in a ``references/`` file is scanned, so a low count cannot hide a file."""
+    assert {
+        "query-elasticsearch/references/curl-recipes.md",
+        "query-elasticsearch/references/esql.md",
+        "query-tempo/references/latency-recipe.md",
+    } <= _SCANNED
 
 
 @pytest.mark.parametrize(
@@ -97,7 +118,8 @@ _TELEMETRY_CURL = [
 
 def test_the_telemetry_skills_have_curl_recipes() -> None:
     assert {skill for skill, _ in _TELEMETRY_CURL} == _TELEMETRY_SKILLS
-    assert len(_TELEMETRY_CURL) >= 40
+    # 51 before FRE-1578, when the counts and breakdowns became query_telemetry calls.
+    assert len(_TELEMETRY_CURL) >= 14
 
 
 @pytest.mark.parametrize(

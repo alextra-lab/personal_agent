@@ -1,84 +1,75 @@
 ---
 name: turn-forensics
-description: 'Reconstructs and diagnoses one agent turn from its trace_id across all substrates: the per-call
-  timeline, which parts of the context used the tokens, latency, retries, and the inference-server request
-  log when present. Use when the user asks why a turn was slow, why the context grew, what a turn did
-  step by step, or to replay a trace.'
+description: Explains one agent turn from its trace id or session id across the substrates - the per-call
+  timeline, which part of the context used the tokens, where the time went, what the browser received, and
+  the inference-server request log when present. Use when the task is to explain one turn - why it was
+  slow, why the context grew, or what it did step by step - or to replay a trace.
 metadata:
   requires-tools: bash
 ---
 
-# SKILL: turn-forensics
+# turn-forensics — Reconstruct one turn end to end
 
 ## Rules
 
-Reconstruct the turn from live logs (gateway + Postgres + R2 + inference-server). Never infer the timeline or token counts from priors — pull them.
+- Pull the turn from live data. Never infer the timeline or a token count from priors.
+- Input: a `trace_id` (best) or a `session_id`. If the task names only "the last turn" or "the slowest turn", find the trace first (Step 0).
+- This skill explains one turn in depth. For a count or a breakdown over many turns use `query-elasticsearch`. For latency over a window use `query-tempo`.
+- Related: ADR-0074 (identity threading: `trace_id` and `session_id` join every substrate), FRE-401 (context bloat).
 
-> **Tier:** 2 — log/SQL analysis via `bash`
-> **Inputs:** a `trace_id` (preferred) or `session_id`. If only "the last/slowest turn" is given, find the trace first (step 0).
-> **Related:** ADR-0074 (identity threading — the join key); FRE-401 (context bloat prevention).
+## What each substrate answers
 
----
+| Substrate | Answers | How to read it |
+|---|---|---|
+| Elasticsearch `agent-logs-*` | The calls, the tokens, the tool calls | `query_telemetry` (Steps 0 and 1) |
+| Gateway log | The same events, complete, with time stamps | `call_timeline.py` (Step 1b) |
+| Tempo | The duration of each span | `query-tempo` Step 2 |
+| Postgres `session_events` | What the browser received (`RUN_ERROR`, `STATE_DELTA`) | `psql` (Step 2) |
+| R2 artifact store | The bytes of an artifact | Step 3 |
+| Inference-server log | The model server's view of each request | Step 4 |
 
-## What This Skill Does
+## Step 0 — Find the trace
 
-Takes one turn and reconstructs it end-to-end by joining the substrates on the shared identity tuple (`trace_id` / `session_id`, ADR-0074):
-
-- **Gateway logs** — per-call timeline (`model_call_started/completed`, `input_tokens`, `latency_ms`, `role`), tool calls, state transitions, errors.
-- **Postgres `session_events`** — what the PWA received (`RUN_ERROR`, `STATE_DELTA`, replay buffer).
-- **R2 artifact store** — bytes actually produced (when the turn wrote an artifact).
-- **Inference-server log** — the SLM's view of each request (optional; see §Caveats).
-
-The headline output is a **context-token attribution**: track `input_tokens` per primary call, find the jumps, and blame the preceding tool result (a whole-file `read` is the usual culprit — file bytes ÷ ~4 ≈ tokens).
-
----
-
-## When to Use
-
-- "Why was that turn slow?" / "Where did the time go?"
-- "The context counter jumped to 47K — what caused it?"
-- "Replay trace `<id>` step by step."
-- **Prefer `query-elasticsearch`** for fleet-wide log questions; this skill is for *one* turn in depth.
-
----
-
-## Commands
-
-All gateway commands strip ANSI colour first: `sed -r 's/\x1b\[[0-9;]*m//g'`. Container names come from `docker-compose.cloud.yml` (`cloud-sim-seshat-gateway`, `cloud-sim-postgres`).
-
-### 0. Find the trace (if not given)
-
-```bash
-# ask: sed can run a program, so this asks for approval (ADR-0156 D8.2).
-docker logs cloud-sim-seshat-gateway --since=30m 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' \
-  | grep -E "task_failed|model_call_completed" | grep -oE "trace_id=\S+" | sort | uniq -c | sort -rn | head
+```python
+# The traces of one session, newest first (a model call starts every one)
+query_telemetry(action="search", index="agent-logs", size=20, since="24h",
+                query={"bool": {"must": [{"term": {"session_id": "<session_id>"}},
+                                         {"term": {"event_type": "model_call_started"}}]}},
+                fields=["@timestamp", "trace_id", "role"])
 ```
 
-### 1. Per-call timeline + context attribution (the core)
+A turn with a model call has one trace id. Take the newest `trace_id` for "the last turn".
 
-```bash
-# ask: the shell expands $TRACE here, so this is not a plain command and asks for approval.
-TRACE=<trace_id>
-docker logs cloud-sim-seshat-gateway --since=40m 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' \
-  | grep "$TRACE" | grep -E "model_call_completed|tool_call_started|artifact_draft_sub_agent_complete" \
-  | python3 -c "
-import sys,re
-for l in sys.stdin:
-    ts=re.search(r'(\d\d:\d\d:\d\d)\.\d+Z', l); t=ts.group(1) if ts else '?'
-    if 'tool_call_started' in l:
-        a=re.search(r\"'path': '([^']+)'|'command': '([^']{0,60})\", l); n=re.search(r'tool_name=(\S+)', l)
-        print(t,'TOOL', n.group(1) if n else '?', (a.group(1) or a.group(2)) if a else '')
-    elif 'sub_agent_complete' in l:
-        print(t,'SUBAGENT done')
-    else:
-        it=re.search(r'input_tokens=(\d+)',l); lat=re.search(r'latency_ms=(\d+)',l); role=re.search(r'role=(\w+)',l)
-        print(t,'CALL in=%s lat=%ss %s'%(it.group(1) if it else '?', int(int(lat.group(1))/1000) if lat else '?', role.group(1) if role else ''))
-"
+## Step 1 — The per-call timeline and the context attribution
+
+```python
+query_telemetry(action="search", index="agent-logs", size=50, since="24h",
+                query={"bool": {"must": [{"term": {"trace_id": "<trace_id>"}},
+                                         {"terms": {"event_type": ["model_call_completed", "tool_call_started"]}}]}},
+                fields=["@timestamp", "event_type", "role", "model", "input_tokens", "output_tokens", "tool_name"])
 ```
 
-Read the `in=` column down the primary calls. A big step up = context bloat; the `TOOL read <path>` immediately before it is the cause. Cross-check file size: `wc -c <path>` (÷4 ≈ tokens).
+The reply is newest first. Sort it by `@timestamp`. Read `input_tokens` down the primary calls.
+A big step up is context growth. The `tool_call_started` before it is the cause. A whole-file
+`read` is the usual one: file bytes divided by 4 are about the tokens (`wc -c <path>` gives the bytes).
 
-### 2. What the PWA received (Postgres `session_events`)
+### Step 1b — The same timeline from the gateway log, with the time gaps
+
+Use this when the tool reply holds fewer events than expected, or when you need the gap in
+seconds between events. The script strips colour codes, keeps the trace, and prints one line for
+each model call, tool call and sub-agent end:
+
+```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
+  | python3 docs/skills/turn-forensics/scripts/call_timeline.py <trace_id>
+```
+
+Each line reads `HH:MM:SS  +Ns  CALL in=<tokens> role=<role>`, or `TOOL <name> <path>`. The
+`+Ns` is the gap since the previous line. The script exits 1 with one `error:` line when no event
+of the trace is in the window: widen `--since`, or use Step 1.
+
+## Step 2 — What the browser received (Postgres `session_events`)
 
 ```bash
 # ask: no allow rule covers docker exec, so this asks for approval.
@@ -87,7 +78,7 @@ docker exec cloud-sim-postgres psql -U agent -d personal_agent -c \
   from session_events where session_id='<session_id>' order by seq desc limit 20;"
 ```
 
-### 3. Artifact bytes (if the turn wrote one)
+## Step 3 — The bytes of an artifact, if the turn wrote one
 
 ```bash
 # ask: no allow rule covers docker exec, so this asks for approval.
@@ -98,51 +89,51 @@ import asyncio; from personal_agent.storage.artifact_store import get_artifact_s
 print(len(asyncio.run(get_artifact_store().get(\"<r2_key>\"))))"'
 ```
 
-### 4. Join the SLM request log (ES join on span_id)
+The first command gives the storage key. The second prints the size of the stored bytes.
 
-slm_server emits a `request_complete` event to `slm-requests-*` for every request,
-tagged with the harness's `X-Span-Id` / `X-Trace-Id` headers (FRE-411). Join on
-`span_id` for per-call granularity or `trace_id` for the whole turn:
+## Step 4 — Join the inference-server request log
+
+The model server writes a `request_complete` event for each request to `slm-requests-*`. It is
+tagged with the `X-Span-Id` and `X-Trace-Id` headers of the harness (FRE-411). Join on `span_id`
+for one call, or on `trace_id` for the turn:
 
 ```bash
-# ask: the shell expands $TRACE here, so this is not a plain command and asks for approval.
-TRACE=<trace_id>
-# All SLM request_complete docs for this turn
-curl -s -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+# ask: the shell expands $CF_ACCESS_CLIENT_ID and $CF_ACCESS_CLIENT_SECRET here, so this is not a plain command and asks for approval.
+curl -fsS -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
         -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-  "https://es.example.com/slm-requests-*/_search?q=trace_id:$TRACE&size=20" \
-  | python3 -c "
-import sys, json
-hits = json.load(sys.stdin)['hits']['hits']
-for h in hits:
-    s = h['_source']
-    print(s.get('ts','?'), 'span', s.get('span_id','?')[:8],
-          'in=%s out=%s' % (s.get('prompt_tokens'), s.get('completion_tokens')),
-          'prefill=%sms decode=%sms total=%sms' % (s.get('prefill_ms'), s.get('decode_ms'), s.get('total_ms')),
-          'cache=%s' % s.get('cache_reuse'))
-"
+  "https://es.example.com/slm-requests-*/_search?q=trace_id:<trace_id>&size=20" \
+  | jq -r '.hits.hits[]._source | [.ts, (.span_id // "?")[0:8], .prompt_tokens, .completion_tokens, .prefill_ms, .decode_ms, .total_ms, .cache_reuse] | @tsv'
 ```
 
-Cross-reference with step 1 (`model_call_completed`) using the shared `span_id`. A
-`cache_reuse > 0` value means the SLM reused a KV-cache prefix — prompt tokens were
-cheaper than they look in terms of compute. No timezone math: all times are UTC ISO-8601.
+Columns: time, span, prompt tokens, completion tokens, prefill ms, decode ms, total ms, cache
+reuse. A `cache_reuse` above 0 means the server reused a KV-cache prefix: the prompt was cheaper in
+compute than the token count shows. All times are UTC ISO-8601.
 
----
+## Reading the result
 
-## Interpreting Results
+- **A context jump after a `read`**: a large read. The default `read` returns the first 200 lines and at most 8 KiB. A jump means that the call named a large `max_bytes` or `limit`, or that the model paged through a file in many reads. The arguments of the `tool_call_started` before the jump show which (FRE-401).
+- **A slow primary call with no tool before it**: a large prefill (the grown context is sent again at each step), or a degraded model server (multi-minute calls, HTTP 524). A restart of the model server fixes the second case.
+- **A gap between the sub-agent end and the final reply**: the synthesis call on the grown context. The sub-agent was not slow.
+- **A terminal tool failure**: look for `tool_terminal_short_circuit` (FRE-402). The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.
+- `input_tokens` (the model's tokenizer) and `turn_status.context_tokens` (an estimate) differ by 10 to 20 percent. The trend is the same.
 
-- **Context jump after a `read`** → whole-file slurp. `read` defaults to a 1 MiB cap, so any source file under ~1 MB returns in full (e.g. `executor.py` ≈ 134 KB ≈ 33K tokens). Mitigation lives in the tool (ranged reads / lower token cap) — FRE-401.
-- **Slow primary call with no tool before it** → large prefill (the bloated context is re-sent every step) or a degraded SLM origin (multi-minute calls, 524s). Restarting the SLM server fixes the latter.
-- **Gap between `sub_agent_complete` and the final reply** → the post-tool *synthesis* primary call running on the now-bloated context (not the sub-agent being slow).
-- **Terminal tool failure** → look for `tool_terminal_short_circuit` (FRE-402); the turn should end in ~ms with a `tool_failure` `RUN_ERROR`, no recovery LLM call.
+## Success
 
----
+Check the result before you answer:
 
-## Caveats
+- The answer names the trace id and lists the calls with `input_tokens` and the gap before each.
+- A "why was it slow" answer names one step (a call or a tool) and gives its seconds, from Step 1b or from Tempo.
+- A "why did the context grow" answer names the tool result before the jump and its size.
+- The answer says which substrates were read. A substrate that was not reachable is named, not skipped.
 
-- §4 requires `es.example.com` to be reachable and slm_server to be running with
-  `SLM_ES_URL=https://es.example.com`. Steps 1–3 are fully self-contained on the gateway VPS.
-- `input_tokens` (model tokenizer) and the status bar's `turn_status.context_tokens`
-  (`estimate_messages_tokens` heuristic) differ by ~10–20%; same trend, different absolute.
-- UTC timestamp join (floor): if `span_id` is absent, match by `ts` within ±5s of the
-  gateway's `model_call_started` timestamp.
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| The tool reply holds no event for the trace | The `since` window is too short, or the id is wrong | Widen `since` to `7d` once. Check the id against Step 0 |
+| `error: no model call or tool call of trace ...` from the script | The window of `--since` is too short, or `docker logs` failed | Use `--since=2h`, or use Step 1 |
+| `docker logs` prints nothing | The container name is wrong | List the names with `docker ps` and use the gateway container |
+| Step 4 returns HTTP 401 or 403 | The access headers are missing | Say that the model server log is not reachable. Do not guess its content |
+| Step 4 cannot resolve the host | `es.example.com` is not reachable from here | Use Steps 1 to 3. They are self-contained on the gateway host |
+| A `span_id` is absent | An older turn | Match by `ts` within 5 seconds of `model_call_started` in the gateway log |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |

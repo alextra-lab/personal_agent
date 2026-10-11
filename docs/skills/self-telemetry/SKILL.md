@@ -1,243 +1,220 @@
 ---
 name: self-telemetry
-description: 'Reads the agent''s own telemetry from Elasticsearch and Captain''s Log through bash and
-  curl: token usage, prompt-cache hit rate, LLM latency, cost, model usage, call counts and interaction
-  outcomes. Use when the user asks about the agent''s own token stats, cache hit rate, latency, cost,
-  model usage, success rate or performance, or the latency breakdown of one trace_id.'
+description: Reads the agent's own token use, prompt-cache hit rate, spend, budget use and interaction
+  outcomes. Starts with the query_telemetry tool for event data and uses curl for the budget snapshot and
+  the Captain's Log, which the tool does not read. Use when the task is about token totals, cache hit rate,
+  cost, spend by provider, budget caps or how recent interactions ended. Not for how long model calls took,
+  or for a general count of log events.
 metadata:
   requires-tools: bash
 ---
 
-# self-telemetry — Agent self-introspection via ES + Captain's Log
+# self-telemetry — The agent's own tokens, cost, budget and outcomes
 
 ## Rules
 
-Cite real ES counts/traces in your answer — do not paraphrase what the telemetry 'probably' shows.
+- Cite real counts from a live query. Never describe what the telemetry probably shows.
+- Start with `query_telemetry`. Use curl only for the budget snapshot (Pattern 3b) and the Captain's Log (Pattern 4).
+- For total spend, use `api_cost_recorded`. `model_call_completed` is LLM-only: it leaves out embedding and rerank cost.
+- How long model calls took is in the `query-tempo` skill. The timeline of one turn is in the `turn-forensics` skill.
+- Elasticsearch mechanics (schema, ES|QL, the `_search` template) are in the `query-elasticsearch` skill. A path of the form `<skill>/<file>` names a file of another skill: load it with `read_skill`, with `name` set to `<skill>` and `path` set to `<file>`.
 
-## Canonical patterns
+## What the events hold
 
-`model_call_completed`, `agent-captains-captures-*`, `agent-captains-reflections-*`
+| `event_type` | Fields to read |
+|---|---|
+| `api_cost_recorded` | The total-spend ledger. Every priced call, by `provider` (`anthropic`, `openai`, `ovh`, `voyage`). `model`, `cost_usd`, `trace_id`, `session_id` |
+| `model_call_completed` | LLM-completions only, cloud and local. `model`, `provider`, `role`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cost_usd` (priced calls) |
+| `embedding_generated` | Managed embedding call. `provider`, `model`, `cost_usd` |
+| `reranker_applied` | Reranker call. `provider` (`voyage`), `cost_usd` is empty for the free local fallback |
+| `budget_counter_snapshot` | One document for each budget role and window, every 60 seconds. `role`, `time_window`, `running_total`, `cap_usd`, `utilization_ratio` |
 
-**Primary path:** `bash curl` to `http://elasticsearch:9200`. **No `run_python` project imports.**
+Two fields have different names for the same meaning. On `model_call_completed` the cache field
+is `cache_read_tokens`. On `api_cost_recorded` it is `cache_read_input_tokens`. A query for the
+second name on `model_call_completed` returns nothing.
 
-## Known mistakes
+## Pattern 1 — Token stats by model
 
-These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
-
-- `from personal_agent`: run_python sandbox has no project source installed — 'from personal_agent import ...' raises ImportError. Use bash+curl to the ES REST API instead.
-- `cache_read_input_tokens`: On 'model_call_completed' the ES field is 'cache_read_tokens', not 'cache_read_input_tokens' (internal usage object name). Use 'cache_read_tokens' when querying 'model_call_completed'.
-
-## Event types and what they cover
-
-| `event_type` | Path | Key fields |
-|---|---|---|
-| `api_cost_recorded` | **Total-spend source (FRE-979).** Unified per-call cost ledger (Postgres `api_costs` mirror) — every priced call lands here regardless of provider: `anthropic`/`openai` (LLM), `ovh` (managed embedding), `voyage` (reranker). Always carries `cost_usd`, no `role`. | `provider`, `model`, `cost_usd`, `latency_ms`, `record_id`, `trace_id`, `session_id`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
-| `model_call_completed` | **LLM-completions only.** Cloud (`LiteLLMClient`) AND local (`LocalLLMClient`) both emit this since FRE-376 Phase 3 (the per-provider event name was retired). Has the `role` dimension, so keep it for by-role/by-model LLM breakdowns — but it **excludes embedding and rerank cost**; do not use it alone for total spend. | `model`, `provider`, `role`, `endpoint`, `latency_ms`, `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cost_usd` (present on cloud/priced calls) |
-| `embedding_generated` | Managed-embedding call (FRE-974) — provider `ovh` only today | `provider` (`ovh`), `model`, `tokens`, `cost_usd`, `latency_ms`, `trace_id`, `session_id` |
-| `reranker_applied` | Reranker call, primary + fallback paths (FRE-851/974) — `cost_usd` is `None` for the free local fallback (`slm_local`) or a Voyage response with no reported usage | `provider` (`voyage` or `slm_local`), `model_id`, `cost_usd`, `duration_ms`, `fallback` |
-| `budget_counter_snapshot` | Cap-utilization gauge, one doc per configured budget-role cap every 60s (FRE-547) | `role` (the **budget-role** key, e.g. `main_inference`, `entity_extraction`, `artifact_builder` — already groups factory roles like `primary`/`sub_agent`/`compressor` via `cost_gate.budget_role_for()`), `time_window` (`daily`/`weekly`), `window_start`, `running_total`, `cap_usd`, `utilization_ratio` |
-| `llm_step_completed` | Orchestrator step wrapper | `model_role`, `duration_ms`, `tokens` (total) |
-
-Captain's Log:
-- `agent-captains-captures-*` — per-request outcome: `outcome`, `total_tokens`, `duration_ms`, `task_type`, `user_message`, `timestamp`
-- `agent-captains-reflections-*` — recurring pattern reflections: `rationale`, `seen_count`, `category`, `proposed_change_what`
-
----
-
-## Pattern 1 — Token stats by model, last 2 hours
-
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-2hours | STATS calls=COUNT(*), input=SUM(input_tokens), output=SUM(output_tokens), cost=SUM(cost_usd) BY model, provider | SORT input DESC"}' \
-  | jq '.columns[].name, .values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="2h",
+                query={"term": {"event_type": "model_call_completed"}},
+                aggs={"by_model": {"terms": {"field": "model", "size": 10},
+                                   "aggs": {"input": {"sum": {"field": "input_tokens"}},
+                                            "output": {"sum": {"field": "output_tokens"}},
+                                            "cost": {"sum": {"field": "cost_usd"}}}}})
 ```
-
----
 
 ## Pattern 2 — Prompt-cache hit rate
 
-Cache read tokens (served from cache) versus input tokens written fresh. A higher ratio = more cache reuse.
+Cache read tokens are served from the cache. A higher share means more reuse.
 
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND input_tokens IS NOT NULL | STATS total_input=SUM(input_tokens), total_cached=SUM(cache_read_tokens), calls=COUNT(*) BY provider"}' \
-  | jq '.values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+                query={"term": {"event_type": "model_call_completed"}},
+                aggs={"by_provider": {"terms": {"field": "provider", "size": 10},
+                                      "aggs": {"input": {"sum": {"field": "input_tokens"}},
+                                               "cached": {"sum": {"field": "cache_read_tokens"}}}}})
 ```
 
-Hit rate ≈ `total_cached / (total_input + total_cached)`. A ratio near zero means caching is not firing; near 1 means heavy reuse.
+Hit rate is `cached / (input + cached)`. Say which providers the rate covers. A rate near zero
+means caching does not fire. Some calls hold no `cache_read_tokens`: the sum covers only those
+that do.
 
----
+## Pattern 3 — Cost by role and by model, LLM only (last 24 hours)
 
-## Pattern 3 — Cost breakdown by role and by model (last 24 h)
+`role` is the factory role: `primary`, `sub_agent`, `compressor`, `artifact_builder`. It is
+not the budget cap (see Pattern 3b). This pattern is LLM-only and leaves out embedding and
+rerank cost. For total spend use Pattern 3c.
 
-**LLM-only** (`model_call_completed`) — excludes OVH embedding and Voyage rerank cost; see
-Pattern 3c for total spend across all providers.
-
-`role` is the factory role (`primary`, `sub_agent`, `compressor`, `artifact_builder`, ...) —
-not yet grouped into a budget cap. See Pattern 3b to group by budget cap instead.
-
-```bash
-# By role
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND cost_usd IS NOT NULL | STATS total_cost=SUM(cost_usd), calls=COUNT(*), avg_latency=AVG(latency_ms) BY role | SORT total_cost DESC"}' \
-  | jq '.values'
-
-# By model
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND cost_usd IS NOT NULL | STATS total_cost=SUM(cost_usd), calls=COUNT(*) BY model | SORT total_cost DESC"}' \
-  | jq '.values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+                query={"bool": {"must": [{"term": {"event_type": "model_call_completed"}},
+                                         {"exists": {"field": "cost_usd"}}]}},
+                aggs={"by_role": {"terms": {"field": "role", "size": 10},
+                                  "aggs": {"cost": {"sum": {"field": "cost_usd"}}}}})
 ```
 
----
+For the split by model, change `"field": "role"` to `"field": "model"`.
 
 ## Pattern 3a — Daily spend trend (last 7 days)
 
-Total spend across **all** providers (LLM + OVH embedding + Voyage rerank) — uses
-`api_cost_recorded`, the unified per-call ledger. `model_call_completed` alone would
-understate this (misses embedding/rerank cost).
+Total spend across all providers (LLM, OVH embedding, Voyage rerank). It uses
+`api_cost_recorded`, the unified per-call ledger.
 
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"api_cost_recorded\" AND @timestamp > NOW()-7days | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
-  | jq '.values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="7d",
+                query={"term": {"event_type": "api_cost_recorded"}},
+                aggs={"by_day": {"date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
+                                 "aggs": {"cost": {"sum": {"field": "cost_usd"}}}}})
 ```
 
----
+## Pattern 3b — Spend by budget cap
 
-## Pattern 3b — Spend by budget cap (grouped, not per-role)
-
-Several factory roles share one budget cap (`cost_gate.budget_role_for()` maps them —
-`primary`/`sub_agent`/`compressor` all count against the `main_inference` cap;
-`artifact_builder` has its own lane). `budget_counter_snapshot` already carries the grouped
-`running_total` per cap — no client-side join needed:
+Several factory roles share one budget cap. `budget_counter_snapshot` already holds the grouped
+`running_total` for each cap, so no join is needed. The tool does not list these fields, so this
+pattern uses curl. The role in this event is the budget role from `config/governance/budget.yaml`,
+not the factory role of Pattern 3.
 
 ```bash
-# Current utilization per budget cap (daily + weekly windows)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+curl -fsS -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"budget_counter_snapshot\" AND @timestamp > NOW()-5minutes | STATS running_total=MAX(running_total), cap_usd=MAX(cap_usd), utilization_ratio=MAX(utilization_ratio) BY role, time_window | SORT time_window, utilization_ratio DESC"}' \
-  | jq '.values'
+  -d '{
+    "size": 0,
+    "query": {"bool": {"filter": [
+      {"term": {"event_type": "budget_counter_snapshot"}},
+      {"range": {"@timestamp": {"gte": "now-5m"}}}
+    ]}},
+    "aggs": {"by_window": {
+      "terms": {"field": "time_window", "size": 5},
+      "aggs": {"by_role": {
+        "terms": {"field": "role", "size": 20},
+        "aggs": {
+          "running_total": {"max": {"field": "running_total"}},
+          "cap_usd": {"max": {"field": "cap_usd"}},
+          "utilization_ratio": {"max": {"field": "utilization_ratio"}}
+        }
+      }}
+    }}
+  }' | jq '.aggregations.by_window.buckets'
 ```
 
-The cap definitions themselves live in `config/governance/budget.yaml`; the `role` value on
-this event is the budget-role key from that file, not the factory `role` seen on
-`model_call_completed`.
+If the reply has no buckets, the last 5 minutes hold no snapshot. Widen `gte` to `now-30m` once.
 
----
+## Pattern 3c — Total spend by provider (last 24 hours)
 
-## Pattern 3c — Total spend by provider (last 24h)
+The total-spend source of truth. `api_cost_recorded` carries every priced call.
+`model_call_completed` alone understates spend, because it leaves out the `embedding_generated`
+(OVH) and `reranker_applied` (Voyage) cost.
 
-The **total-spend source of truth**. `api_cost_recorded` carries every priced call
-(`anthropic`, `openai`, `ovh`, `voyage`) — `model_call_completed` alone understates spend
-because it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost (FRE-979).
-
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"api_cost_recorded\" AND @timestamp > NOW()-24hours | STATS total_cost=SUM(cost_usd), calls=COUNT(*) BY provider | SORT total_cost DESC"}' \
-  | jq '.values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+                query={"term": {"event_type": "api_cost_recorded"}},
+                aggs={"by_provider": {"terms": {"field": "provider", "size": 10},
+                                      "aggs": {"cost": {"sum": {"field": "cost_usd"}}}}})
 ```
 
----
+## Pattern 3d — Managed-inference cost: embedding and reranker (last 7 days)
 
-## Pattern 3d — Managed-inference cost: embedding + reranker (last 7 days)
+These are the two non-LLM cost paths that Pattern 3c adds up without a split by purpose.
 
-Breaks out the two non-LLM cost paths `api_cost_recorded`'s total rolls up but doesn't
-distinguish by purpose.
+```python
+# OVH embedding cost, by day
+query_telemetry(action="search", index="agent-logs", size=0, since="7d",
+                query={"term": {"event_type": "embedding_generated"}},
+                aggs={"by_day": {"date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
+                                 "aggs": {"cost": {"sum": {"field": "cost_usd"}}}}})
 
-```bash
-# OVH embedding cost, daily
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"embedding_generated\" AND @timestamp > NOW()-7days | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
-  | jq '.values'
-
-# Voyage reranker cost, total (excludes the free slm_local fallback — filter cost_usd IS NOT NULL)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"reranker_applied\" AND provider == \"voyage\" AND cost_usd IS NOT NULL AND @timestamp > NOW()-7days | STATS total_cost=SUM(cost_usd), calls=COUNT(*)"}' \
-  | jq '.values'
+# Voyage reranker cost, total. The free local fallback has no cost_usd, so it is left out
+query_telemetry(action="search", index="agent-logs", size=0, since="7d",
+                query={"bool": {"must": [{"term": {"event_type": "reranker_applied"}},
+                                         {"term": {"provider": "voyage"}},
+                                         {"exists": {"field": "cost_usd"}}]}},
+                aggs={"total": {"sum": {"field": "cost_usd"}}})
 ```
 
----
+## Pattern 4 — How recent interactions ended (Captain's Log)
 
-## Pattern 4 — Recent interaction outcomes
+The captures index is not one of the tool's families, so this pattern uses curl. A capture holds
+`trace_id`, `outcome`, `total_tokens` and `timestamp`. The date field is `timestamp`, not
+`@timestamp`: a range on `@timestamp` returns nothing and no error.
 
 ```bash
-# Last 10 interactions (newest first)
-curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
+# The last 10 interactions, newest first
+curl -fsS -X POST 'http://elasticsearch:9200/agent-captains-captures-*/_search?format=json' \
   -H 'Content-Type: application/json' \
   -d '{
     "size": 10,
     "sort": [{"timestamp": "desc"}],
-    "_source": ["trace_id","task_type","outcome","total_tokens","duration_ms","timestamp","user_message"]
+    "_source": ["trace_id", "outcome", "total_tokens", "timestamp"]
   }' | jq '.hits.hits[]._source'
 
-# Success rate over last 24 h (ES|QL on captures)
-# Captures use plain "timestamp", not "@timestamp" (FRE-1035) — filtering on @timestamp
-# here returns empty silently since the field doesn't exist on this index.
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-captains-captures-* | WHERE timestamp > NOW()-24hours | STATS total=COUNT(*), successes=COUNT_IF(outcome == \"success\"), avg_tokens=AVG(total_tokens), avg_duration=AVG(duration_ms)"}' \
-  | jq '.values'
-```
-
----
-
-## Pattern 5 — Latency breakdown for a specific trace
-
-Replace `<trace_id>` with the actual ID.
-
-```bash
-# Full timeline for a trace
-curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
+# Outcomes over the last 24 hours
+curl -fsS -X POST 'http://elasticsearch:9200/agent-captains-captures-*/_search?format=json' \
   -H 'Content-Type: application/json' \
   -d '{
-    "size": 100,
-    "query": {"term": {"trace_id.keyword": "<trace_id>"}},
-    "sort": [{"@timestamp": "asc"}],
-    "_source": ["event_type","@timestamp","latency_ms","duration_ms","model","input_tokens","output_tokens","tool_name","role"]
-  }' | jq '.hits.hits[]._source'
-
-# LLM-only events for a trace (model call + step wrapper)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE trace_id == \"<trace_id>\" AND event_type IN (\"model_call_completed\", \"llm_step_completed\") | FIELDS @timestamp, event_type, latency_ms, duration_ms, model, input_tokens, output_tokens, model_role | SORT @timestamp ASC"}' \
-  | jq '.values'
+    "size": 0,
+    "query": {"range": {"timestamp": {"gte": "now-24h"}}},
+    "aggs": {"by_outcome": {"terms": {"field": "outcome", "size": 10}}}
+  }' | jq '{total: .hits.total.value, outcomes: .aggregations.by_outcome.buckets}'
 ```
 
----
+Reflections (recurring patterns) are in `agent-captains-reflections-*`. They hold `rationale`,
+`seen_count`, `category` and `proposed_change_what`. Use the same `_search` form, with
+`"sort": [{"seen_count": "desc"}]` and `"query": {"range": {"seen_count": {"gte": 2}}}`.
 
-## Quick health check — am I running well right now?
+## Pattern 5 — Am I running well right now?
 
-```bash
-# Errors in the last hour
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE level == \"ERROR\" AND @timestamp > NOW()-1hour | STATS count=COUNT(*) BY message | SORT count DESC | LIMIT 10"}' \
-  | jq '.values'
+```python
+# Errors in the last hour, by event type
+query_telemetry(action="search", index="agent-logs", size=0, since="1h",
+                query={"term": {"level": "ERROR"}},
+                aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}})
 
-# LLM call count + avg latency last hour (cloud + local combined — one unified event)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-1hour | STATS calls=COUNT(*), avg_latency=AVG(latency_ms), p95_approx=PERCENTILE(latency_ms, 95)"}' \
-  | jq '.values'
+# Model calls in the last hour
+query_telemetry(action="count", index="agent-logs", since="1h",
+                query={"term": {"event_type": "model_call_completed"}})
 ```
 
----
+For how long those calls took, use the `query-tempo` skill.
 
-## Notes
+## Success
 
-- Always pipe large responses through `| head -c 50000` or use `LIMIT N` in ES|QL.
-- `trace_id` requires `.keyword` suffix for exact-match `_search` queries but not for ES|QL `==`.
-- Cloud and local paths emit the **same** `event_type` (`model_call_completed`) — filter by `provider` if you need to split them, not by a different event name.
-- For **total spend**, use `api_cost_recorded` — `model_call_completed` alone excludes OVH
-  embedding (`embedding_generated`) and Voyage rerank (`reranker_applied`) cost (FRE-979).
-- Reflections and captures use the Captain's Log indices (`agent-captains-*`), not `agent-logs-*`.
+Check the result before you answer:
 
-See also: the `query-elasticsearch` skill (`read_skill(name="query-elasticsearch")`).
+- The answer names the window (`since`) and says whether the figure is LLM-only or total spend.
+- A total-spend figure comes from `api_cost_recorded`. It is higher than the LLM-only figure by the embedding and rerank cost. If the two are equal, check the filter.
+- The buckets of an outcome count can sum to less than the total: a capture can hold no `outcome`. Say how many hold none.
+- A cache hit rate states the providers that it covers. A local provider and a cloud provider have different cache behaviour.
+- The budget figure is the latest snapshot for each role and window, not a sum of snapshots.
+
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `refused: field 'x' is not available in agent-logs. Allowed fields: ...` | A field outside the allowlist (for example `time_window` or `running_total`) | For the budget fields use Pattern 3b. Otherwise pick a field from the list |
+| An aggregation returns no buckets | The field does not exist for this event, or the window is empty | Run a terms aggregation on `event_type` with `exists` on the field (see `query-elasticsearch`). Widen the window once |
+| A query on `cache_read_input_tokens` returns nothing on `model_call_completed` | That name is for `api_cost_recorded` | Use `cache_read_tokens` on `model_call_completed` |
+| `run_python` raises `ImportError` on `personal_agent` | The sandbox holds no project source | Use the tool, or curl. Never import project modules |
+| A curl range on the captures index returns nothing | The range used `@timestamp` | Use `timestamp` |
+| `store_unavailable` or `store_timeout` | Elasticsearch is down or slow | Call once more. If it fails again, stop and tell the user |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |

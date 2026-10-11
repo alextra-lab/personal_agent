@@ -76,6 +76,10 @@ def test_an_error_row_is_not_scored_and_a_later_row_replaces_it() -> None:
     rows = passing_rows()
     rows.append({"id": "s#0", "kind": "scenario", "error": "ReadTimeout"})
     assert g2.score(rows).scenarios_run == 33
+    assert g2.score(rows).errored == []
+    only_error = [*passing_rows(), {"id": "x#9", "kind": "scenario", "error": "ReadTimeout"}]
+    result = g2.score(only_error)
+    assert result.errored == ["x#9"] and "errored, not scored: x#9" in result.render()
     short = [r for r in passing_rows() if r["id"] != "ns01"]
     assert not g2.score(short).passed  # 19 no-skill prompts ran
 

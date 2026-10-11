@@ -122,6 +122,8 @@ class G2Result:
         primary_only_right: Scenarios right when worker loads are ignored, for rows where no worker
             called ``read_skill`` (informational).
         wrong: The ids of the wrong turns, with what loaded.
+        errored: The ids that have only error rows. They are not scored, so a rerun must
+            complete them; the report names them so that none leaves the count unseen.
     """
 
     scenarios_run: int
@@ -130,6 +132,7 @@ class G2Result:
     no_skill_loaded: int
     primary_only_right: int
     wrong: Sequence[str]
+    errored: Sequence[str] = ()
 
     @property
     def passed(self) -> bool:
@@ -154,6 +157,7 @@ class G2Result:
             f" (need <= {MAX_NO_SKILL_LOADS})",
             f"  informational, primary-only rows right: {self.primary_only_right}",
             "  wrong: " + ("; ".join(self.wrong) or "none"),
+            "  errored, not scored: " + (", ".join(self.errored) or "none"),
             f"RESULT: {'PASS' if self.passed else 'FAIL'}",
         ]
         return "\n".join(lines) + "\n"
@@ -192,6 +196,7 @@ def score(rows: Sequence[Mapping[str, object]]) -> G2Result:
         no_skill_loaded=sum(bool(loaded(r)) for r in no_skill),
         primary_only_right=sum(right(r) for r in scenarios if r.get("worker_read_skill") is False),
         wrong=sorted(wrong),
+        errored=sorted({str(r["id"]) for r in rows if "error" in r} - set(kept)),
     )
 
 

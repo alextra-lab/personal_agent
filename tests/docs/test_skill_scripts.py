@@ -34,6 +34,9 @@ _CLASSIFIER = _SKILLS / "query-elasticsearch" / "scripts" / "es_index_granularit
 _PROBE = _SKILLS / "infrastructure-health" / "scripts" / "probe_services.py"
 _CYPHER = _SKILLS / "neo4j-direct" / "scripts" / "cypher.py"
 _TIMELINE = _SKILLS / "turn-forensics" / "scripts" / "call_timeline.py"
+# FRE-1579 (T7). Its verdict goes to stdout (VALID, INVALID, ERROR), so its own tests are in
+# test_validate_mermaid_script.py. Here it is held to the shared --help and usage-error contract.
+_VALIDATE = _SKILLS / "mermaid-diagrams" / "scripts" / "validate_mermaid.py"
 
 
 def _load(path: Path) -> ModuleType:
@@ -75,7 +78,7 @@ def _plain_error(done: subprocess.CompletedProcess[str], code: int) -> str:
 
 # --- every script: --help and one error line ------------------------------------------------
 
-_ALL = (_CLASSIFIER, _PROBE, _CYPHER, _TIMELINE)
+_ALL = (_CLASSIFIER, _PROBE, _CYPHER, _TIMELINE, _VALIDATE)
 
 
 @pytest.mark.parametrize("script", _ALL, ids=[p.stem for p in _ALL])

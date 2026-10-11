@@ -2296,10 +2296,12 @@ def test_system_prompt_real_origin_substituted_when_setting_set(
 
 
 def test_artifact_design_doc_matches_manifest() -> None:
-    """FRE-529 (ADR-0089 A4): docs/skills/artifact-design/SKILL.md is the source-of-truth.
+    """FRE-529 (ADR-0089 A4): the docs/skills/artifact-design/ folder is the source-of-truth.
 
-    The skill doc is the maintainable superset the generation prompt is distilled
-    from. This manifest-driven drift guard keeps doc ↔ manifest ↔ prompt in
+    The skill is the maintainable superset the generation prompt is distilled
+    from. Since FRE-1579 (ADR-0156 D5.3) it is ``SKILL.md`` plus ``references/``:
+    the library recipes live in the reference files, so this test reads them all.
+    This manifest-driven drift guard keeps doc ↔ manifest ↔ prompt in
     lockstep: every non-eval-gated asset must appear as its full absolute,
     version-pinned URL (``origin + /lib/ + path``); the eval-gated paged.js must
     be present but flagged experimental, never first-class; the native-typography
@@ -2310,8 +2312,9 @@ def test_artifact_design_doc_matches_manifest() -> None:
     )
 
     repo_root = DEFAULT_LIB_MANIFEST_PATH.resolve().parents[1]
-    doc_path = repo_root / "docs" / "skills" / "artifact-design" / "SKILL.md"
-    doc = doc_path.read_text(encoding="utf-8")
+    skill_dir = repo_root / "docs" / "skills" / "artifact-design"
+    parts = [skill_dir / "SKILL.md", *sorted((skill_dir / "references").glob("*.md"))]
+    doc = "\n".join(path.read_text(encoding="utf-8") for path in parts)
 
     origin, assets = load_lib_manifest()
 

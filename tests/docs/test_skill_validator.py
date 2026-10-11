@@ -5,10 +5,8 @@ The validator runs over ``docs/skills/*/SKILL.md`` (the agent's skills) and
 of the ADR's migration table and every S1 rule of D1.3. An agent skill also needs a success
 section, a recovery section and an ``evals.yaml`` with 3 scenarios (D5.1, D5.2).
 
-A check that fails today for content that T7 (FRE-1579) converts is a strict xfail, never a
-skip: when the content is fixed, the test passes unexpectedly and fails CI, so the mark is
-removed in that ticket. T6 (FRE-1578) converted the 8 telemetry and host skills and removed
-their marks.
+Every check must pass. T6 (FRE-1578) and T7 (FRE-1579) converted the 11 agent skills and
+removed the strict xfail marks that held the checks of the skills they had not converted yet.
 """
 
 from __future__ import annotations
@@ -58,14 +56,6 @@ _GONE = (
     "web-search",
     "seshat-delegate",
 )
-_T7 = "FRE-1579 (T7) converts this skill's content"
-_CONVERTED_IN = {
-    "artifact-design": _T7,
-    "mermaid-diagrams": _T7,
-    "sequential-thinking": _T7,
-}
-# D5.3: the body of artifact-design is over the D1 token limit. T7 splits it into references/.
-_LATE = {("artifact-design", "body_tokens"): _T7}
 
 
 def _params() -> list[object]:
@@ -75,11 +65,7 @@ def _params() -> list[object]:
             for rule in SKILL_RULES:
                 if kind == "external" and rule in ("sections", "evals"):
                     continue
-                reason = _LATE.get((name, rule))
-                if reason is None and rule in ("sections", "evals"):
-                    reason = _CONVERTED_IN.get(name)
-                marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
-                params.append(pytest.param(kind, name, rule, marks=marks, id=f"{name}:{rule}"))
+                params.append(pytest.param(kind, name, rule, id=f"{name}:{rule}"))
     return params
 
 

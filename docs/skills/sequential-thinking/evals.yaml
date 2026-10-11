@@ -1,0 +1,17 @@
+skill: sequential-thinking
+scenarios:
+  - prompt: "We must move three services to a new database. Each service needs the schema of the one before it. Work out the order of the steps and tell me if an early assumption fails."
+    expect: >-
+      The answer gives the order of the steps. The count of steps is estimated before the work
+      and changed in the open if it grows. A step that contradicts an earlier one is marked as a
+      revision, with what changed and why. An ordinary linear chain has no numbered scaffold.
+  - prompt: "Should the report endpoint cache its result in Redis or in process memory? Compare the two and pick one."
+    expect: >-
+      The answer names the branch point and says which line it follows. Each alternative is
+      weighed on the facts of the question. The answer ends only when the pick holds up against
+      the strongest point of the other option.
+  - prompt: "The nightly export job fails about once a week. My first guess is a timeout. Find the cause, and be ready to drop that guess."
+    expect: >-
+      If the timeout guess fails on the evidence, the answer shows it as one short line: the step
+      tried, and why it failed. The answer then gives the line that works. If the guess holds,
+      the answer shows no false start and invents none.

@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `860b2773` · Committed: 2026-10-11T07:27:58Z  
+> Source revision: `adb02005` · Committed: 2026-10-11T08:04:19Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,19 +32,19 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 22,842  
+Total skill docs: 11 · Total tokens (all skills): 21,492  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
-| SKILL: Artifact Design | 5,558 | `docs/skills/artifact-design/SKILL.md` |
+| SKILL: Artifact Design | 3,279 | `docs/skills/artifact-design/SKILL.md` |
 | infrastructure-health — Is each backend service reachable? | 892 | `docs/skills/infrastructure-health/SKILL.md` |
-| SKILL: Mermaid Diagrams | 2,985 | `docs/skills/mermaid-diagrams/SKILL.md` |
+| SKILL: Mermaid Diagrams | 3,607 | `docs/skills/mermaid-diagrams/SKILL.md` |
 | neo4j-direct — Run read-only Cypher on the knowledge graph | 1,702 | `docs/skills/neo4j-direct/SKILL.md` |
 | query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,107 | `docs/skills/query-elasticsearch/SKILL.md` |
 | query-tempo — Model-call latency and the spans of one trace | 1,665 | `docs/skills/query-tempo/SKILL.md` |
 | self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `docs/skills/self-telemetry/SKILL.md` |
-| sequential-thinking — Structured Reasoning Discipline | 1,289 | `docs/skills/sequential-thinking/SKILL.md` |
+| sequential-thinking — Structured Reasoning Discipline | 1,596 | `docs/skills/sequential-thinking/SKILL.md` |
 | system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `docs/skills/system-diagnostics/SKILL.md` |
 | system-metrics — CPU, memory and disk utilisation snapshot | 917 | `docs/skills/system-metrics/SKILL.md` |
 | turn-forensics — Reconstruct one turn end to end | 2,043 | `docs/skills/turn-forensics/SKILL.md` |
@@ -807,7 +807,7 @@ The `skill_index` component holds the catalog only. A body reaches the model as 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 5,558 |
+| **Token count** | 3,279 |
 | **Source** | `docs/skills/artifact-design/SKILL.md` |
 
 ```markdown
@@ -863,179 +863,23 @@ cheaper, more portable, and fully under your control.
 
 A small, vetted shelf is hosted on the artifact origin (`https://artifacts.example.com`) —
 it is the **only** external origin a sealed artifact may load. Reference each asset by its
-**exact absolute, version-pinned URL** below; a relative `/lib/…` path is *not* the expected
+**exact absolute, version-pinned URL** in its reference file; a relative `/lib/…` path is *not* the expected
 reach form and is not counted as a satisfied capability by the demand meter. URLs are immutable
 pins (ADR-0089 A3) — never edit a version in place. Source of truth:
 `config/artifact_lib_manifest.json`.
 
-### KaTeX → math / formula typesetting (MIT)
+Each library has its own file in `references/`, with its boot recipe and its gotchas. Before you
+write the artifact, read the file of each library that it uses, for example
+`read_skill(name="artifact-design", path="references/katex.md")`:
 
-```html
-<link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.47/katex.min.css">
-<script src="https://artifacts.example.com/lib/katex@0.16.47/katex.min.js"></script>
-```
-
-```html
-<span id="eq"></span>
-<script>
-  katex.render("c = \\pm\\sqrt{a^2 + b^2}", document.getElementById("eq"),
-    { throwOnError: false, displayMode: true });
-</script>
-```
-
-**Gotchas:**
-- The **CSS `<link>` is mandatory** — without it KaTeX renders boxes/tofu (the glyph metrics
-  and math fonts live in the stylesheet). Loading only the JS is the most common KaTeX failure.
-- KaTeX's stylesheet resolves its math fonts from a **co-hosted `fonts/` directory relative to
-  the CSS** — do not rewrite or relocate the CSS `url(fonts/…)` references; the shelf hosts them
-  at the path the CSS expects.
-- Use `throwOnError: false` so a single bad expression degrades to a readable error instead of
-  aborting render. `displayMode: true` for block equations, omit for inline.
-- KaTeX is **not** auto-render: it does not scan the page for `$…$` delimiters by default.
-  Call `katex.render(tex, element, opts)` per equation (the auto-render extension is not on the
-  shelf — render explicitly).
-
-### Chart.js → charts / data visualization (MIT, global `Chart`)
-
-```html
-<script src="https://artifacts.example.com/lib/chartjs@4.4.7/chart.umd.js"></script>
-```
-
-```html
-<canvas id="spend" width="640" height="320"></canvas>
-<script>
-  new Chart(document.getElementById("spend"), {
-    type: "bar",
-    data: {
-      labels: ["Q1", "Q2", "Q3", "Q4"],
-      datasets: [{ label: "Spend", data: [12, 19, 8, 15] }]   // inline the data
-    },
-    options: { responsive: true, maintainAspectRatio: false }
-  });
-</script>
-```
-
-**Gotchas:**
-- Give the `<canvas>` **explicit `width` and `height` attributes** (e.g.
-  `<canvas width="640" height="320">`). Chart.js reads the element's attributes for initial
-  layout; a CSS-sized parent alone is not enough and an unsized canvas collapses to 0×0 or
-  renders blurry. If you want it fluid, wrap the canvas in a sized container **and** set
-  `maintainAspectRatio: false`.
-- **Inline the data** as a JS array/object literal. There is no `fetch` — never point Chart.js
-  at a URL or load CSV/JSON over the network.
-- The global is `Chart` (UMD build). One `new Chart(...)` per canvas.
-
-### three.js → 3-D / spatial / physics (MIT, global `THREE`, r171)
-
-```html
-<script src="https://artifacts.example.com/lib/three@0.171.0/three.iife.min.js"></script>
-```
-
-```html
-<div id="stage" style="width:100%;height:420px"></div>
-<script>
-  const el = document.getElementById("stage");
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(60, el.clientWidth / el.clientHeight, 0.1, 100);
-  camera.position.z = 4;
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(el.clientWidth, el.clientHeight);
-  el.appendChild(renderer.domElement);
-
-  const mesh = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(1, 0),
-    new THREE.MeshStandardMaterial({ color: 0x6366f1, flatShading: true })
-  );
-  scene.add(mesh);
-  scene.add(new THREE.DirectionalLight(0xffffff, 1).translateZ(5));
-  scene.add(new THREE.AmbientLight(0x404040));
-
-  (function loop() {
-    requestAnimationFrame(loop);
-    mesh.rotation.x += 0.005; mesh.rotation.y += 0.008;
-    renderer.render(scene, camera);
-  })();
-</script>
-```
-
-**Gotchas:**
-- **Textures and models must be `data:` URIs or generated in code — never fetched.**
-  `connect-src 'none'` blocks `TextureLoader`/`GLTFLoader` over the network. Build geometry
-  procedurally, embed textures as base64 `data:` URIs, or draw to an offscreen `<canvas>` and
-  use it as a `CanvasTexture`.
-- The shelf hosts a **bundled IIFE/global build** exposing `THREE` on `window` — there is no
-  ES-module import (the sealed null-origin can't resolve `import`/CORS). Use the global, not
-  `import * as THREE`.
-- Size the renderer to a container with an explicit height; on resize, update
-  `camera.aspect` + `renderer.setSize`. Dispose geometries/materials/renderer if you tear a
-  scene down to avoid GPU leaks in long-lived artifacts.
-
-### highlight.js → code / syntax highlighting (BSD-3, global `hljs`)
-
-```html
-<link rel="stylesheet" href="https://artifacts.example.com/lib/highlightjs@11.9.0/github-dark.min.css">
-<script src="https://artifacts.example.com/lib/highlightjs@11.9.0/highlight.min.js"></script>
-```
-
-```html
-<pre><code class="language-python">def greet(name): return f"hi {name}"</code></pre>
-<script>
-  document.addEventListener("DOMContentLoaded", () => hljs.highlightAll());
-</script>
-```
-
-**Gotchas:**
-- Put code inside `<pre><code class="language-XXX">…</code></pre>` and call
-  `hljs.highlightAll()` **after the DOM is ready** (`DOMContentLoaded`) — calling it before the
-  `<code>` elements exist highlights nothing.
-- The theme **`<link>` carries the colors**; without it highlighted tokens get class names but
-  no styling. `github-dark` is the hosted theme.
-- HTML-escape `<`, `>`, `&` inside the code text, or the browser parses them as markup.
-
-### OFL fonts → publishing-grade prose (SIL OFL, variable woff2)
-
-Declare each face with `@font-face`, then wire it into the design-system custom properties:
-
-```css
-@font-face {
-  font-family: "Source Serif 4";
-  src: url("https://artifacts.example.com/lib/fonts/source-serif-4@4.005/source-serif-4.woff2") format("woff2");
-  font-weight: 200 900; font-display: swap;
-}
-@font-face {
-  font-family: "Playfair Display";
-  src: url("https://artifacts.example.com/lib/fonts/playfair-display@2.103/playfair-display.woff2") format("woff2");
-  font-weight: 400 900; font-display: swap;
-}
-@font-face {
-  font-family: "JetBrains Mono";
-  src: url("https://artifacts.example.com/lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2") format("woff2");
-  font-weight: 100 800; font-display: swap;
-}
-:root {
-  --font-serif: "Source Serif 4", Georgia, serif;       /* body prose */
-  --font-display: "Playfair Display", Georgia, serif;    /* display headings */
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;/* code */
-}
-```
-
-**Gotchas:**
-- These are **variable** woff2 fonts — declare a weight range (`font-weight: 200 900`) so the
-  whole axis is usable from one file.
-- `font-src https://artifacts.example.com data:` already admits them — **no CSP change**.
-  Google Fonts / other font CDNs silently fail; use these or inline `data:` woff2.
-- Use Source Serif 4 for body prose, Playfair Display for display headings, JetBrains Mono for
-  code, falling back to system faces only when no shelf font fits.
-
-### paged.js → book / print layout (MIT) — **experimental, gated**
-
-paged.js is on the shelf **but is `eval_gated`**: it may require `eval` under the live CSP
-(which omits `'unsafe-eval'`), pending runtime confirmation (FRE-531). Treat it as an
-**advanced, experimental** option that **may silently fail under the live page policy** — do
-**not** rely on it as a first-class library. For book/print layout, **lead with the native
-`@page` / `column-count` / `break-*` recipes below**; reach for paged.js only for
-hand-roll-impossible pagination (running heads, footnote placement, generated page numbers) and
-only after confirming it loads in the target environment.
+| Library | Use for | File |
+|---|---|---|
+| KaTeX (MIT) | math / formula typesetting | `references/katex.md` |
+| Chart.js (MIT, global `Chart`) | charts / data visualization | `references/chartjs.md` |
+| three.js (MIT, global `THREE`, r171) | 3-D / spatial / physics | `references/threejs.md` |
+| highlight.js (BSD-3, global `hljs`) | code / syntax highlighting | `references/highlightjs.md` |
+| OFL fonts (SIL OFL, variable woff2) | publishing-grade prose | `references/ofl-fonts.md` |
+| paged.js (MIT), experimental and gated | book / print pagination | `references/pagedjs.md` |
 
 ---
 
@@ -1070,7 +914,7 @@ p { widows: 3; orphans: 3; }
   dictionary.
 - `text-wrap: balance` is for short blocks (headings, captions) — don't apply it to long body
   paragraphs.
-- `font-feature-settings` requires the font to carry the features (the OFL faces above do).
+- `font-feature-settings` requires the font to carry the features (the OFL faces of `references/ofl-fonts.md` do).
 
 ---
 
@@ -1083,7 +927,7 @@ generation prompt so this doc is its superset):
   `--color-bg`, `--color-surface`, `--color-text`, `--color-muted`.
 - **Spacing scale**: `--spacing-1` … `--spacing-8` (0.25rem increments).
 - **Typography**: `--font-sans`, `--font-mono` (plus the OFL `--font-serif`/`--font-display`
-  above when prose-grade); size classes `text-xs` … `text-3xl`.
+  of `references/ofl-fonts.md` when prose-grade); size classes `text-xs` … `text-3xl`.
 - **Utility classes**: `flex`, `grid`, `gap-1`…`gap-6`, `p-1`…`p-8`, `m-1`…`m-8`, `text-center`,
   `font-bold`, `rounded`, `rounded-lg`, `shadow`, `shadow-lg`, `w-full`.
 - **Semantic HTML5**: `header`/`main`/`section`/`article`/`footer`/`nav`/`aside`/`figure`.
@@ -1157,73 +1001,39 @@ a plain file. Inline only the content the artifact is meant to display.
 
 ---
 
-## Distillation Map (doc → generation prompt)
+## Success
 
-The generation prompt (`_HTML_GENERATION_SYSTEM_PROMPT`) is a compressed distillation of this
-doc. Keep the pairs in sync when either changes:
+Check the artifact before the answer is final:
 
-| This doc section | Prompt block it feeds |
-|---|---|
-| Curated `/lib/` Shelf (the absolute URLs) | `CURATED TOOLKIT` bullet (exact `<script>`/`<link>` snippets) |
-| Per-library "when to reach for each" | `CURATED TOOLKIT` per-asset one-liners |
-| three.js textures-as-data-URI gotcha | `CURATED TOOLKIT` three.js note + `SEALED-BOX` no-network |
-| paged.js experimental/gated | `CURATED TOOLKIT` book/print "experimental" line |
-| Native Typography | `NATIVE TYPOGRAPHY` bullet |
-| Design-System Conventions | `REQUIREMENTS` design-system bullets |
-| Sealed-Box Constraints | `SEALED-BOX CONSTRAINTS` bullet |
-| Portability (3 lanes) | `PORTABILITY` bullet |
-| Never bake secrets | (carried as the standing D4 rule) |
+- It is one complete `<!DOCTYPE html>…</html>` document of under about 200KB.
+- Every external file is an exact absolute, version-pinned URL of the shelf. No other origin is used.
+- No `fetch`, `XHR`, `WebSocket`, `sendBeacon`, storage or popup is used. All data, images and
+  textures are inline.
+- Each library that is used follows its reference file. For example, the KaTeX stylesheet link is
+  present, the Chart.js canvas has `width` and `height`, and the three.js scene uses the global
+  `THREE`.
+- No secret, token, credential, session identifier or internal host name is in the file.
 
----
+## Recovery
 
-## E2E verification (FRE-531 · ADR-0089 Addendum A7)
+What to do on each failure, with a stop rule:
 
-The done-bar for the curated toolkit is **"it renders under the live policy, and the
-envelope is provably applied"** — not "it renders". Two complementary gates cover it:
+| Failure | Cause | Next step |
+|---|---|---|
+| Math shows as boxes | The KaTeX stylesheet `<link>` is missing | Add the stylesheet link (`references/katex.md`). |
+| A chart is blank, blurry or 0×0 | The `<canvas>` has no `width` and `height` | Set both attributes, or wrap it and set `maintainAspectRatio: false` (`references/chartjs.md`). |
+| A 3-D scene is blank, or a texture fails | A texture is fetched, or `import * as THREE` is used | Use a `data:` URI or a generated texture, and the global `THREE` (`references/threejs.md`). |
+| Code has no colors | `hljs.highlightAll()` ran before the DOM was ready, or the theme `<link>` is missing | Call it on `DOMContentLoaded` and link the theme (`references/highlightjs.md`). |
+| Text falls back to a system face | A font CDN is used | Declare the shelf faces with `@font-face` (`references/ofl-fonts.md`). |
+| The artifact renders broken after it commits | A script, style or font comes from an origin that is not on the shelf | Inline it, or use the shelf library (Sealed-Box Constraints). |
+| paged.js does nothing | The live policy can block it (`eval_gated`) | Use the native `@page` recipes (`references/pagedjs.md`, Native Typography). |
+| The same failure twice | The cause is not found | Stop. Tell the user what failed and what was tried. |
 
-**1. Hermetic render harness (in-repo, CI-able) — `make verify-artifact-e2e`.**
-Builds a real, SRI-pinned fixture set (the repository's `build_e2e_artifact_fixtures.py`: KaTeX
-0.16.11 + Chart.js 4.4.7 + paged.js fetched from the substitution-map CDN twins, each
-byte-verified against the pinned `sha384`), then runs `e2e/artifact-lib/` on **Chromium
-and WebKit**:
+## Maintenance
 
-- **A — hosted render** under the *exact* artifact CSP directive set (served by a local
-  CSP server whose header is emitted by the Python builder from `EXPECTED_CSP_DIRECTIVES`,
-  the single source of truth). Asserts the KaTeX MathML annotation echoes the source TeX,
-  the live `Chart.getChart()` instance holds the seeded dataset + the canvas painted, the
-  CSP header is present, and **zero CSP violations**.
-- **B — offline export** — the real `export_artifact_html(mode="inline")` output opened via
-  `file://` with **all network aborted**; same semantic render assertions; proves zero
-  network requests (truly self-contained).
-- **C — paged.js eval-gate** — loads paged.js under the eval-free CSP and asserts it runs
-  with **no `eval`/script CSP violation**.
-
-One-time browser install: `cd e2e/artifact-lib && npx playwright install --with-deps webkit chromium`.
-
-**Fidelity gap:** the harness rebinds the CSP host token to its localhost serving origin, so
-it proves render under the directive *shape*, not the exact `artifacts.example.com` tokens.
-
-**2. Live-origin gate (master, post-merge) — `make verify-envelope URL=…` + `make verify-lib`.**
-Closes the host-token gap on the real Access-gated origin: the served artifact carries the
-exact CSP directive set + MIME + `nosniff`, and every `/lib/` asset serves the correct
-executable/typed MIME + `nosniff` reachable under the artifact CSP. Requires a CF Access
-service token; runs at the deploy gate. A real-device iOS Safari pass is the owner's check.
-
-**paged.js Scenario C verdict (2026-06-09, record-only):** paged.js 0.4.3 runs **eval-free**
-under the eval-free artifact CSP and paginates on **both Chromium and WebKit** in the hermetic
-harness — corroborating the static-analysis claim. The `eval_gated` flag is **left set** (the
-shelf entry stays *experimental/gated*); un-gating it — which would add paged.js to the default
-`verify-lib` assert set — is a separate explicit decision pending the live-origin confirmation.
-
----
-
-## References
-
-- ADR-0089 — Artifact Execution Security Model (`docs/architecture_decisions/ADR-0089-artifact-execution-security-model.md`), §D2/D3/D4 + **Addendum A** (A2 curated set, A3 hosting/pinning, A4 this doc, A5 export, A7 done-bar).
-- `config/artifact_lib_manifest.json` — the single cross-repo source of truth for `/lib/` origin + paths + versions.
-- `src/personal_agent/tools/artifact_tools.py` — `_HTML_GENERATION_SYSTEM_PROMPT` (the distilled runtime prompt) + `artifact_draft` tool.
-- The `mermaid-diagrams` skill — sibling skill; the static-diagram portability lane.
-- Linear: FRE-525 (Addendum A), FRE-527 (manifest + hosting), FRE-528 (prompt reframe), FRE-530 (export-to-standalone), FRE-531 (paged.js CSP confirmation + E2E live verify).
+The distillation map (this skill to the generation prompt), the E2E verification runbook and the
+reference links are in `references/maintenance.md`. Read it only when you change this skill, the
+manifest or the generation prompt.
 ```
 
 ---
@@ -1310,7 +1120,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,985 |
+| **Token count** | 3,607 |
 | **Source** | `docs/skills/mermaid-diagrams/SKILL.md` |
 
 ```markdown
@@ -1318,10 +1128,10 @@ Check the result before you answer:
 
 ## Rules
 
-Before emitting any non-trivial mermaid block to the user, validate it with `mmdc` (see Validation section).
+Before emitting any non-trivial mermaid block to the user, validate it with the check script `scripts/validate_mermaid.py`, which runs `mmdc` (see Validation section).
 The first content line MUST be the diagram-type keyword. Do not invent syntax — every arrow, keyword, and bracket must be from the v11 spec.
 
-> **Use this skill to** (a) decide when a diagram beats prose, (b) pick the right type, (c) get v11 syntax exactly right, (d) **validate the fence with `mmdc` before sending it to the user**.
+> **Use this skill to** (a) decide when a diagram beats prose, (b) pick the right type, (c) get v11 syntax exactly right, (d) **validate the fence with the check script before sending it to the user**.
 
 ---
 
@@ -1495,30 +1305,34 @@ Before closing the fence, verify:
 
 ## Validation (automated)
 
-The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed. **Validate any non-trivial diagram before showing it to the user.** A trivial diagram is ≤5 nodes of a type you've successfully produced earlier in this turn.
+The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed, and the check script `scripts/validate_mermaid.py` of this skill runs it and gives one verdict. **Validate any non-trivial diagram before showing it to the user.** A trivial diagram is ≤5 nodes of a type you've successfully produced earlier in this turn.
 
 ### Pattern
 
-Write the diagram body to a temp file (no fence), run `mmdc`, check the output file:
+1. Write the diagram body (no fence) to `/tmp/m.mmd` with the `write` tool.
+2. Run the script on that file:
 
 ```bash
-# ask: a here-doc written to a file is not a plain command, so this asks for approval.
-cat > /tmp/m.mmd <<'EOF'
-flowchart LR
-    A[Open PR] --> B{CI passes?}
-    B -->|Yes| C[Merge]
-    B -->|No| D[Fix]
-EOF
-mmdc -i /tmp/m.mmd -o /tmp/m.svg 2>&1
-test -s /tmp/m.svg && echo "VALID" || echo "INVALID"
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/mermaid-diagrams/scripts/validate_mermaid.py /tmp/m.mmd
 ```
 
-Interpretation:
+The first line of the output is the verdict:
 
-- **`VALID`** (the SVG was written and is non-empty) — syntax parses. Emit the fence to the user.
-- **`INVALID`** (no SVG, or empty file) — mmdc emits a `Parse error on line X` block to stdout/stderr with the exact location and the expected tokens. Read it, fix, re-validate.
+| First line | Meaning | Next step |
+|---|---|---|
+| `VALID` | `mmdc` parsed the diagram and wrote an SVG | Emit the fence to the user. |
+| `INVALID` | The diagram has a syntax error. The error text follows. | Read it, fix, write the file again, run the script again (Recovery). |
+| `ERROR` | The check could not run: no `mmdc`, no browser, a time-out or a missing file | Do not repair the diagram (Recovery). |
 
-**Note:** `mmdc` exits 0 even on parse failure (the binary's exit semantics are loose), so do not rely on `$?` alone — check the output file.
+**Why a script.** Do not rebuild the check with `mmdc` and a file test. Observed on `mmdc` 11.17.0:
+
+- most parse errors exit 1 and write no SVG, but a broken `pie` diagram exits 0 and writes mermaid's error diagram as an SVG;
+- a diagram of more than 50,000 characters exits 0, and mermaid reads none of it (it draws a placeholder);
+- a browser failure also exits 1, and it looks like a diagram error;
+- a fixed output path such as `/tmp/m.svg` keeps an old SVG, and a file test then calls a broken diagram valid.
+
+The script writes to a new directory on every run, reads the exit code and the SVG, and tells a browser failure from a diagram error. `--help` lists the options.
 
 ### Cost-aware policy
 
@@ -1529,11 +1343,13 @@ Each `mmdc` call takes ~2 seconds (Chromium spin-up). Use the cost budget:
 
 ### Repair loop
 
-If validation fails:
+If the script prints `INVALID`:
 
-1. Read the error from stderr. Typical forms: `Parse error on line 3: ... Expecting 'X', got 'Y'`.
+1. Read the error text. Typical forms: `Parse error on line 3: ... Expecting 'X', got 'Y'`.
 2. Match the error against the Syntax Invariants section above. The most common failures: missing diagram-type header (§1), label not bracketed (§2), wrong arrow for the type (§3), reserved word as bare ID (§4).
 3. Rewrite the diagram and re-validate. Cap at **3 repair attempts** — if you can't get it to parse after three, fall back to the source-only form: emit the raw `mermaid` fence as a `text` code block (so it's at least readable) and explain in prose what the diagram was supposed to show.
+
+If the script prints `ERROR`, the check did not run, so the diagram is not known to be wrong. Do not repair it.
 
 ---
 
@@ -1643,13 +1459,28 @@ erDiagram
 
 ---
 
-## Failure Recovery
+## Success
 
-If the user reports a diagram didn't render:
+A diagram is ready to show when all of these hold:
 
-1. Ask them to paste the error shown in the source-view fallback in the PWA (the rose-tinted annotation above the raw code).
-2. Compare the error against the Syntax Invariants section above — most failures are one of: missing header, mixed arrow types, bare reserved word, or `{}` in a label.
-3. Re-emit the corrected fence in a fresh message — don't try to patch the previous one in place.
+- The script printed `VALID` for this exact text, or the diagram is trivial under the cost-aware policy.
+- The first non-empty line is the diagram-type keyword.
+- The Pre-emit Checklist holds.
+- The diagram has ≤30 nodes, no `%%{init: ...}%%` directive, no frontmatter config block and no `click` handler (Seshat PWA Conventions).
+
+## Recovery
+
+What to do on each failure, with a stop rule:
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `INVALID`: `Parse error on line N: ... Expecting 'X', got 'Y'` | A syntax rule is broken | Match the error to the Syntax Invariants: missing header (§1), label not bracketed (§2), wrong arrow for the type (§3), reserved word as bare ID (§4). Rewrite, write the file again, run the script again. |
+| `INVALID`: `No diagram type detected` | The first line is not a diagram-type keyword | Add the header (§1). Run the script again. |
+| `INVALID`: `mmdc drew mermaid's error diagram` | The diagram has a syntax error that `mmdc` does not report as a failure | Compare the diagram with the syntax of its type. Rewrite and run the script again. |
+| `ERROR` | `mmdc` is missing, its browser did not start, or it timed out | Do not repair the diagram. Emit the `mermaid` fence and say that it was not validated. |
+| `INVALID`: `The diagram has N characters` | The text is over the limit of 50,000 characters of mermaid | Split it into smaller diagrams. Check each one. |
+| `INVALID` 3 times in a row | The diagram is not fixed | Stop. Emit the raw source as a `text` code block and explain in prose what the diagram was supposed to show. |
+| The user reports that a diagram did not render | The PWA failed to parse it | Ask them to paste the error shown in the source-view fallback in the PWA (the rose-tinted annotation above the raw code). Compare it with the Syntax Invariants: most failures are a missing header, mixed arrow types, a bare reserved word, or `{}` in a label. Re-emit the corrected fence in a fresh message — don't patch the previous one in place. |
 
 ---
 
@@ -2291,7 +2122,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,289 |
+| **Token count** | 1,596 |
 | **Source** | `docs/skills/sequential-thinking/SKILL.md` |
 
 ```markdown
@@ -2314,7 +2145,7 @@ start must stay invisible to the reader.
 > **Delivery (FRE-1549):** this skill reached the model only on a keyword match or a `read_skill`
 > call, and `route_traces` recorded 0 loads in 1,128 turns. The standing rule now lives in the
 > primary system prompt (`REASONING_DISCIPLINE_PROMPT`, `orchestrator/prompts.py`) on every turn.
-> This file stays for depth and for the keyword path.
+> This file stays for depth. The model loads it with `read_skill`.
 
 ## What this replaces
 
@@ -2388,6 +2219,29 @@ engages on have no wrong turn at all — so ordinary answers do not turn into nu
 - Any turn where no assumption is at risk of being wrong and no real alternative is being
   weighed. Engaging here just manufactures a numbered essay out of a simple answer, which is a
   net loss over saying nothing.
+
+## Success
+
+Check these points before the answer is final:
+
+- The answer holds up. It covers every part of the question, and no later step contradicts an
+  earlier one without a marked revision.
+- The step count that was estimated first matches the work done, or the change was stated.
+- A false start is shown only if it was actually taken. It takes one short line, with what was
+  wrong with it.
+- An ordinary linear chain has no numbered scaffold in the answer.
+
+## Recovery
+
+What to do on each failure, with a stop rule:
+
+| Failure | Cause | Next step |
+|---|---|---|
+| A later step contradicts an earlier conclusion | An assumption was wrong | Mark it as a revision: name what is reconsidered and why. Redo each step that depended on it. |
+| The work passes the estimated step count | The task is larger than estimated | State the new count. Do not continue as if the first count held. |
+| The answer does not hold up on the final check | A step was skipped, or a conclusion was assumed | Name the point that failed. Redo the work from the step that holds it. |
+| It is not clear that a false start was real | The wrong step was not actually taken | Show none. A made-up false start is worse than showing nothing. |
+| The same check fails twice | — | Stop. Tell the user what is not settled and what was tried. |
 ```
 
 ---

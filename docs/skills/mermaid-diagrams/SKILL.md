@@ -6,17 +6,17 @@ description: 'Creates software diagrams in Mermaid syntax and validates them wit
   a flowchart, a schema, an architecture sketch or a visualization, or when a picture explains a system,
   a data flow or a workflow better than prose.'
 metadata:
-  requires-tools: bash
+  requires-tools: bash, write
 ---
 
 # SKILL: Mermaid Diagrams
 
 ## Rules
 
-Before emitting any non-trivial mermaid block to the user, validate it with `mmdc` (see Validation section).
+Before emitting any non-trivial mermaid block to the user, validate it with the check script `scripts/validate_mermaid.py`, which runs `mmdc` (see Validation section).
 The first content line MUST be the diagram-type keyword. Do not invent syntax — every arrow, keyword, and bracket must be from the v11 spec.
 
-> **Use this skill to** (a) decide when a diagram beats prose, (b) pick the right type, (c) get v11 syntax exactly right, (d) **validate the fence with `mmdc` before sending it to the user**.
+> **Use this skill to** (a) decide when a diagram beats prose, (b) pick the right type, (c) get v11 syntax exactly right, (d) **validate the fence with the check script before sending it to the user**.
 
 ---
 
@@ -190,30 +190,34 @@ Before closing the fence, verify:
 
 ## Validation (automated)
 
-The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed. **Validate any non-trivial diagram before showing it to the user.** A trivial diagram is ≤5 nodes of a type you've successfully produced earlier in this turn.
+The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed, and the check script `scripts/validate_mermaid.py` of this skill runs it and gives one verdict. **Validate any non-trivial diagram before showing it to the user.** A trivial diagram is ≤5 nodes of a type you've successfully produced earlier in this turn.
 
 ### Pattern
 
-Write the diagram body to a temp file (no fence), run `mmdc`, check the output file:
+1. Write the diagram body (no fence) to `/tmp/m.mmd` with the `write` tool.
+2. Run the script on that file:
 
 ```bash
-# ask: a here-doc written to a file is not a plain command, so this asks for approval.
-cat > /tmp/m.mmd <<'EOF'
-flowchart LR
-    A[Open PR] --> B{CI passes?}
-    B -->|Yes| C[Merge]
-    B -->|No| D[Fix]
-EOF
-mmdc -i /tmp/m.mmd -o /tmp/m.svg 2>&1
-test -s /tmp/m.svg && echo "VALID" || echo "INVALID"
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/mermaid-diagrams/scripts/validate_mermaid.py /tmp/m.mmd
 ```
 
-Interpretation:
+The first line of the output is the verdict:
 
-- **`VALID`** (the SVG was written and is non-empty) — syntax parses. Emit the fence to the user.
-- **`INVALID`** (no SVG, or empty file) — mmdc emits a `Parse error on line X` block to stdout/stderr with the exact location and the expected tokens. Read it, fix, re-validate.
+| First line | Meaning | Next step |
+|---|---|---|
+| `VALID` | `mmdc` parsed the diagram and wrote an SVG | Emit the fence to the user. |
+| `INVALID` | The diagram has a syntax error. The error text follows. | Read it, fix, write the file again, run the script again (Recovery). |
+| `ERROR` | The check could not run: no `mmdc`, no browser, a time-out or a missing file | Do not repair the diagram (Recovery). |
 
-**Note:** `mmdc` exits 0 even on parse failure (the binary's exit semantics are loose), so do not rely on `$?` alone — check the output file.
+**Why a script.** Do not rebuild the check with `mmdc` and a file test. Observed on `mmdc` 11.17.0:
+
+- most parse errors exit 1 and write no SVG, but a broken `pie` diagram exits 0 and writes mermaid's error diagram as an SVG;
+- a diagram of more than 50,000 characters exits 0, and mermaid reads none of it (it draws a placeholder);
+- a browser failure also exits 1, and it looks like a diagram error;
+- a fixed output path such as `/tmp/m.svg` keeps an old SVG, and a file test then calls a broken diagram valid.
+
+The script writes to a new directory on every run, reads the exit code and the SVG, and tells a browser failure from a diagram error. `--help` lists the options.
 
 ### Cost-aware policy
 
@@ -224,11 +228,13 @@ Each `mmdc` call takes ~2 seconds (Chromium spin-up). Use the cost budget:
 
 ### Repair loop
 
-If validation fails:
+If the script prints `INVALID`:
 
-1. Read the error from stderr. Typical forms: `Parse error on line 3: ... Expecting 'X', got 'Y'`.
+1. Read the error text. Typical forms: `Parse error on line 3: ... Expecting 'X', got 'Y'`.
 2. Match the error against the Syntax Invariants section above. The most common failures: missing diagram-type header (§1), label not bracketed (§2), wrong arrow for the type (§3), reserved word as bare ID (§4).
 3. Rewrite the diagram and re-validate. Cap at **3 repair attempts** — if you can't get it to parse after three, fall back to the source-only form: emit the raw `mermaid` fence as a `text` code block (so it's at least readable) and explain in prose what the diagram was supposed to show.
+
+If the script prints `ERROR`, the check did not run, so the diagram is not known to be wrong. Do not repair it.
 
 ---
 
@@ -338,13 +344,28 @@ erDiagram
 
 ---
 
-## Failure Recovery
+## Success
 
-If the user reports a diagram didn't render:
+A diagram is ready to show when all of these hold:
 
-1. Ask them to paste the error shown in the source-view fallback in the PWA (the rose-tinted annotation above the raw code).
-2. Compare the error against the Syntax Invariants section above — most failures are one of: missing header, mixed arrow types, bare reserved word, or `{}` in a label.
-3. Re-emit the corrected fence in a fresh message — don't try to patch the previous one in place.
+- The script printed `VALID` for this exact text, or the diagram is trivial under the cost-aware policy.
+- The first non-empty line is the diagram-type keyword.
+- The Pre-emit Checklist holds.
+- The diagram has ≤30 nodes, no `%%{init: ...}%%` directive, no frontmatter config block and no `click` handler (Seshat PWA Conventions).
+
+## Recovery
+
+What to do on each failure, with a stop rule:
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `INVALID`: `Parse error on line N: ... Expecting 'X', got 'Y'` | A syntax rule is broken | Match the error to the Syntax Invariants: missing header (§1), label not bracketed (§2), wrong arrow for the type (§3), reserved word as bare ID (§4). Rewrite, write the file again, run the script again. |
+| `INVALID`: `No diagram type detected` | The first line is not a diagram-type keyword | Add the header (§1). Run the script again. |
+| `INVALID`: `mmdc drew mermaid's error diagram` | The diagram has a syntax error that `mmdc` does not report as a failure | Compare the diagram with the syntax of its type. Rewrite and run the script again. |
+| `ERROR` | `mmdc` is missing, its browser did not start, or it timed out | Do not repair the diagram. Emit the `mermaid` fence and say that it was not validated. |
+| `INVALID`: `The diagram has N characters` | The text is over the limit of 50,000 characters of mermaid | Split it into smaller diagrams. Check each one. |
+| `INVALID` 3 times in a row | The diagram is not fixed | Stop. Emit the raw source as a `text` code block and explain in prose what the diagram was supposed to show. |
+| The user reports that a diagram did not render | The PWA failed to parse it | Ask them to paste the error shown in the source-view fallback in the PWA (the rose-tinted annotation above the raw code). Compare it with the Syntax Invariants: most failures are a missing header, mixed arrow types, a bare reserved word, or `{}` in a label. Re-emit the corrected fence in a fresh message — don't patch the previous one in place. |
 
 ---
 

@@ -1,0 +1,21 @@
+skill: mermaid-diagrams
+scenarios:
+  - prompt: "Draw a sequence diagram of a login: the browser calls the API, the API checks the database, and the API returns a token."
+    expect: >-
+      The answer holds one mermaid fence. The first line is `sequenceDiagram`. Arrows are
+      sequence arrows (`->>`, `-->>`). The diagram was checked with the validation script and
+      printed VALID before it was shown.
+  - prompt: "Show the life cycle of a build job as a state machine: queued, running, passed, failed, and a retry from failed."
+    expect: >-
+      The answer holds one mermaid fence. The first line is `stateDiagram-v2`. It uses `[*]` for
+      the start state and `-->` for every transition. The diagram was checked with the
+      validation script before it was shown.
+  - prompt: "This flowchart does not render. Fix it: flowchart TD, A[Start] --> end, end --> B[Done]"
+    expect: >-
+      The answer finds the bare reserved word `end`, brackets or renames it, and checks the new
+      diagram with the validation script. It stops after 3 failed repairs and gives the source
+      as a `text` block with a prose description.
+  - prompt: "Give me an ER diagram for users, orders and order lines. A user has many orders, and an order has many lines."
+    expect: >-
+      The answer holds one mermaid fence. The first line is `erDiagram`. Relationships use the
+      glyph `||--o{`. The diagram was checked with the validation script before it was shown.

@@ -83,10 +83,7 @@ def _restore_executor_tool_globals():
 
 async def _run(ctx: object, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Drive the real ``step_llm_call`` and return the mocked client."""
-    from personal_agent.config import settings
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
 
     client = _mock_llm()
     session = MagicMock()

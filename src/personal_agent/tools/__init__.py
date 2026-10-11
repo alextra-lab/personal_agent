@@ -173,16 +173,21 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
         from personal_agent.tools.primitives.write import write_executor, write_tool  # noqa: PLC0415
         from personal_agent.tools.primitives.edit import edit_executor, edit_tool  # noqa: PLC0415
 
-        # Phase B skill routing: read_skill tool (always registered with primitives)
-        from personal_agent.tools.read_skill import read_skill_executor, read_skill_tool  # noqa: PLC0415, I001
-
         registry.register(read_tool, read_executor)
         registry.register(write_tool, write_executor)
         registry.register(edit_tool, edit_executor)  # ADR-0156 D7.1 (FRE-1576)
         registry.register(bash_tool, bash_executor)
         registry.register(run_python_tool, run_python_executor)
-        registry.register(read_skill_tool, read_skill_executor)
-        log.info("primitive_tools_registered", count=6)
+        log.info("primitive_tools_registered", count=5)
+
+    # ADR-0156 D3.3 (FRE-1577): the skill loader needs no filesystem tool, so no flag gates it.
+    # The skill catalog is always in the system prompt, and this is how the model reads it.
+    from personal_agent.tools.read_skill import (  # noqa: PLC0415
+        read_skill_executor,
+        read_skill_tool,
+    )
+
+    registry.register(read_skill_tool, read_skill_executor)
 
 
 # Global singleton registry

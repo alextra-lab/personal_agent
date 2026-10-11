@@ -6030,6 +6030,7 @@ _STUBBED_TOOL_RESULT_PREFIX = "[stubbed: "
 
 def _trim_messages_for_context_retry(
     messages: list[dict[str, Any]],
+    keep_call_ids: frozenset[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Stub every tool result but the newest, once, after a context-window rejection (FRE-1527).
 
@@ -6046,8 +6047,8 @@ def _trim_messages_for_context_retry(
     ``role == "tool"`` messages are ever stubbed. Never touches the newest tool result
     either, so the retried call still sees at least the most recent tool output.
 
-    Args:
-        messages: The full message list the rejected call sent.
+    Never touches a tool result whose ``tool_call_id`` is in ``keep_call_ids``: the skill
+    bodies and skill files ``read_skill`` loaded in this turn (ADR-0156 D2.4).
 
     A later, separate rejection in the same turn (a fresh ``step_llm_call`` round
     that also overflows) calls this again over ``ctx.messages``, which by then may
@@ -6055,6 +6056,10 @@ def _trim_messages_for_context_retry(
     ``droppable`` rather than stubbed again: re-stubbing already-tiny placeholder text
     drops nothing new and would report a misleading, near-zero ``dropped_chars`` for
     what looks like a real trim (codex review, PR #1183).
+
+    Args:
+        messages: The full message list the rejected call sent.
+        keep_call_ids: Tool-call ids whose results stay verbatim.
 
     Returns:
         A tuple of (message list, tool results dropped, characters dropped). Returns
@@ -6068,7 +6073,9 @@ def _trim_messages_for_context_retry(
     tool_indices = [
         i
         for i, m in enumerate(messages)
-        if m.get("role") == "tool" and not is_harness_tool_result(m)
+        if m.get("role") == "tool"
+        and not is_harness_tool_result(m)
+        and m.get("tool_call_id") not in keep_call_ids
     ]
     droppable = [
         i
@@ -6544,6 +6551,7 @@ async def step_llm_call(
                     session_id=ctx.session_id,
                     trigger="hard",
                     bus=_bus,
+                    keep_call_ids=frozenset(ctx.skill_call_ids),
                 )
             except Exception as exc:
                 # Pre-LLM compression must never crash the orchestrator: Stage 7
@@ -6610,7 +6618,7 @@ async def step_llm_call(
         )
 
     # Operator identity stanza (FRE-213 / ADR-0052) — populated in step_init.
-    # Placed before skill routing and memory sections to sit inside the cached prompt prefix.
+    # Placed before the skill catalog and memory sections to sit inside the cached prompt prefix.
     if ctx.operator_stanza:
         if system_prompt:
             system_prompt = f"{system_prompt}\n\n{ctx.operator_stanza}"
@@ -6623,181 +6631,25 @@ async def step_llm_call(
     _skill_index_present = False
     tool_awareness = ""
 
-    # ADR-0081 D4: the volatile skill-bodies block (selected bodies +
-    # <skill_usage_directives>). Assembled in the skill-routing block below but
-    # appended to the VOLATILE tail (after the static-prefix capture), alongside
-    # memory_section. Declared here so it survives into the try block regardless
-    # of whether the prefer_primitives_enabled path runs.
-    _skill_bodies_tail = ""
-    # FRE-1004: same reason — the turn evidence record reads the loaded body names at
-    # the admission point, which is reached whether or not the skill path ran.
+    # FRE-1004: the turn evidence record names the skill bodies inlined into the prompt. Since
+    # ADR-0156 D2 (FRE-1577) none is inlined: a body reaches the model only as a read_skill
+    # result, which the route trace records from ctx.loaded_skills.
     _skill_body_names: tuple[str, ...] = ()
 
-    # Phase B skill routing (FRE-skill-routing, ADR-0063 §D7).
-    # Routing mode controls what gets injected:
-    #   keyword       — keyword-matched skill bodies only (Phase A legacy behavior)
-    #   model_decided — compact skill index only; model calls read_skill on demand
-    #   hybrid        — both index AND keyword bodies; bodies suppressed for skills
-    #                   already loaded via read_skill this conversation
-    # Placed before dynamic content (memory/decomposition) to stay in the cached prefix.
-    from personal_agent.orchestrator.skills import (  # noqa: PLC0415
-        assemble_skill_index,
-        assemble_skill_index_directive,
-        assemble_skill_usage_directives,
-        fit_skill_bodies,
-        get_all_skills,
-        get_skill_bodies,
+    # ADR-0156 D2 (FRE-1577): the skill catalog, one line per skill (name and description), in
+    # the cached prefix. It depends only on the skill files, never on the request: the model
+    # loads a body with read_skill, and nothing in the user's message selects a skill.
+    from personal_agent.orchestrator.skills import assemble_skill_catalog  # noqa: PLC0415
+
+    _skill_catalog = assemble_skill_catalog()
+    if _skill_catalog:
+        _skill_index_present = True
+        system_prompt = f"{system_prompt}\n\n{_skill_catalog}" if system_prompt else _skill_catalog
+    log.info(
+        "skill_index_assembled",
+        index_chars=len(_skill_catalog),
+        trace_id=ctx.trace_id,
     )
-
-    if settings.prefer_primitives_enabled:
-        # FRE-1529: route on the request's own text. The last user message is the
-        # fenced query after round 1 (its memory and skill bodies match many more
-        # keywords) or a mid-turn directive, which inflated the bodies about 7x.
-        _user_message: str | None = ctx.user_message or None
-
-        # Priority: per-request override > global setting.
-        from personal_agent.config.selection import (  # noqa: PLC0415
-            get_skill_routing_mode_override as _get_srm_override,
-        )
-
-        _routing_mode = _get_srm_override() or settings.skill_routing_mode
-
-        # Phase C: separate routing call (model_decided + non-empty model key, once per request)
-        if (
-            _routing_mode == "model_decided"
-            and settings.skill_routing_model_key
-            and not ctx.skill_routing_done
-            and _user_message
-        ):
-            ctx.skill_routing_done = True
-            ctx.skill_routing_model_id = settings.skill_routing_model_key
-            try:
-                from personal_agent.llm_client.factory import (  # noqa: PLC0415
-                    get_llm_client_for_key,
-                )
-                from personal_agent.orchestrator.skills import route_skills  # noqa: PLC0415
-
-                _routing_client = get_llm_client_for_key(
-                    settings.skill_routing_model_key, budget_role="skill_routing"
-                )
-                _relevant = await route_skills(
-                    user_message=_user_message,
-                    routing_client=_routing_client,
-                    cap_tokens=settings.skill_index_max_tokens,
-                    trace_id=ctx.trace_id,
-                    session_id=ctx.session_id,
-                )
-                # Pre-load returned skill bodies — primary agent sees them already in scope
-                from personal_agent.orchestrator.skills import get_all_skills  # noqa: PLC0415
-
-                _all = get_all_skills()
-                for _name in _relevant:
-                    if _name in _all:
-                        ctx.loaded_skills.add(_name)
-
-                log.info(
-                    "skill_routing_call_completed",
-                    routing_model_key=settings.skill_routing_model_key,
-                    skills_returned=_relevant,
-                    trace_id=ctx.trace_id,
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "skill_routing_call_skipped",
-                    error=str(exc),
-                    routing_model_key=settings.skill_routing_model_key,
-                    trace_id=ctx.trace_id,
-                )
-
-        # ADR-0081 D4: split the skill block at its volatility seam.
-        #   STABLE  → compact index + <skill_index_directive>  (cached prefix)
-        #   VOLATILE → selected bodies + <skill_usage_directives>  (volatile tail)
-        # Track the two classes in separate variables so the volatile fragments
-        # never enter the static-prefix capture.
-        _skill_index_text: str = ""  # STABLE — deterministic catalog render
-        _skill_bodies_text: str = ""  # VOLATILE — per-turn selected bodies
-        # FRE-1004: _skill_body_names is declared above this block — D3 item 6 asks
-        # *which* bodies were loaded, and the admission point reads it whether or not
-        # this path runs.
-
-        _all_skills = get_all_skills()
-
-        if _routing_mode in ("model_decided", "hybrid"):
-            _skill_index_text = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
-
-        if ctx.turn_context_inlined:
-            # FRE-1529: this turn's fence already carries the bodies chosen on its first
-            # call, and nothing new is inlined, so do not re-select (or re-log a drop).
-            pass
-        elif _routing_mode == "model_decided":
-            # Bodies of any pre-loaded (router-selected) skills, in name order.
-            _preloaded = fit_skill_bodies(
-                [
-                    _doc
-                    for _name in sorted(ctx.loaded_skills)
-                    if (_doc := _all_skills.get(_name)) is not None and _doc.body
-                ],
-                cap_tokens=settings.skill_bodies_max_tokens,
-                separator="\n\n",
-                trace_id=ctx.trace_id,
-            )
-            _skill_bodies_text = "\n\n".join(_doc.body for _doc in _preloaded)
-            _skill_body_names = tuple(_doc.name for _doc in _preloaded)
-        elif _routing_mode == "hybrid":
-            _skill_bodies_text, _skill_body_names = get_skill_bodies(
-                message=_user_message,
-                loaded_skills=ctx.loaded_skills,
-                trace_id=ctx.trace_id,
-            )
-        else:  # keyword (default / legacy) — bodies only, no index
-            _skill_bodies_text, _skill_body_names = get_skill_bodies(
-                message=_user_message, trace_id=ctx.trace_id
-            )
-
-        _has_index = bool(_skill_index_text)
-        _has_bodies = bool(_skill_bodies_text)
-
-        # FRE-337: deterministic directive blocks, partitioned by volatility class.
-        # <skill_index_directive> is STABLE → rides the cached index block.
-        # <skill_usage_directives> is VOLATILE → rides the body block in the tail.
-        # Both gated by settings.skill_nudge_enabled.
-        _index_directive = ""
-        _usage_directives = ""
-        if settings.skill_nudge_enabled:
-            if _has_index:
-                _index_directive = assemble_skill_index_directive()
-            if _has_bodies:
-                _usage_directives = assemble_skill_usage_directives(
-                    list(ctx.loaded_skills), _all_skills
-                )
-
-        # Independent joiners (ADR-0081 D4 caution): the stable side must be
-        # byte-identical whether 0 or N bodies are selected, so build each block
-        # from its own fragments — the tail's presence never alters prefix bytes.
-        _skill_index_block = "\n\n".join(p for p in [_skill_index_text, _index_directive] if p)
-        _skill_bodies_tail = "\n\n".join(p for p in [_skill_bodies_text, _usage_directives] if p)
-
-        # STABLE index → cached prefix (before the line-~2259 capture).
-        # _skill_index_present reflects ACTUAL index presence only (not bodies),
-        # so the skill_index component id is not falsely stamped in keyword mode.
-        _skill_index_present = _has_index
-        if _skill_index_block:
-            if system_prompt:
-                system_prompt = f"{system_prompt}\n\n{_skill_index_block}"
-            else:
-                system_prompt = _skill_index_block
-
-        log.info(
-            "skill_index_assembled",
-            routing_mode=_routing_mode,
-            index_chars=len(_skill_index_text),
-            bodies_chars=len(_skill_bodies_text),
-            loaded_skills_count=len(ctx.loaded_skills),
-            skill_routing_model_key=ctx.skill_routing_model_id or None,
-            index_directive_emitted=bool(_index_directive),
-            usage_directives_emitted=bool(_usage_directives),
-            trace_id=ctx.trace_id,
-        )
 
     # Create span for LLM call
     span_ctx, span_id = trace_ctx.new_span()
@@ -7149,8 +7001,9 @@ async def step_llm_call(
         # the "last user message" and take a full second copy (trace 91b57b5c: four
         # copies, 154,096 prompt tokens). The owner's bytes never change afterwards, so
         # the sequence stays a forward extension.
-        # Fence order (ADR-0081 §D4/§D3): skill bodies + usage-directives → D3 salient
-        # highlights → the ADR-0122 §5 artifact-builder planning note → current date.
+        # Fence order (ADR-0081 §D4/§D3): D3 salient highlights → the ADR-0122 §5
+        # artifact-builder planning note → current date. Skill bodies left the fence in
+        # ADR-0156 D2 (FRE-1577): a body arrives only as a read_skill result.
         #
         # FRE-1360 (ADR-0140 T2): recalled memory is not in the fence. Graph content is
         # agent-writable, so it is untrusted input, and untrusted input reaches the model
@@ -7160,12 +7013,11 @@ async def step_llm_call(
         # generates, so it stays the context nearest the query (ADR-0081 §D3/§D4), with
         # the same items in the same order. Appended once, in the same once-per-turn
         # branch as the fence, and never rewritten, so the sequence stays a forward
-        # extension. The other fence members stay: skill bodies, the planning note and
-        # the date are harness-authored, and the highlights summarize this session.
+        # extension. The other fence members stay: the planning note and the date are
+        # harness-authored, and the highlights summarize this session.
         _volatile_block = "\n\n".join(
             p
             for p in (
-                _skill_bodies_tail,
                 ctx.salient_highlights,
                 ctx.artifact_builder_planning_note or "",
                 _current_datetime_block,
@@ -7254,10 +7106,6 @@ async def step_llm_call(
             _component_ids.append("operator_stanza")
         if _skill_index_present:
             _component_ids.append("skill_index")
-        if _skill_bodies_tail:
-            # ADR-0081 D4: distinct VOLATILE marker — these bytes feed dynamic_hash,
-            # never static_prefix_hash (they are appended after the capture point).
-            _component_ids.append("skill_bodies")
         if memory_section:
             # FRE-1150: keyed on what was actually spliced, not on ctx.memory_context
             # being non-empty. A turn whose candidates all rendered blank set the flag
@@ -7429,7 +7277,7 @@ async def step_llm_call(
         if is_context_window_error(e):
             estimated_prompt_tokens = estimate_messages_tokens(ctx.messages)
             trimmed_messages, dropped_results, dropped_chars = _trim_messages_for_context_retry(
-                ctx.messages
+                ctx.messages, keep_call_ids=frozenset(ctx.skill_call_ids)
             )
             if dropped_results:
                 ctx.messages = trimmed_messages
@@ -8157,6 +8005,10 @@ async def step_tool_execution(
                 },
             }
         )
+
+        # ADR-0156 D2.4 (FRE-1577): a skill body or file loaded in this turn stays verbatim.
+        if dr["tool_name"] == "read_skill" and dr["success"]:
+            ctx.skill_call_ids.add(dr["tool_call_id"])
 
         _total_serial_ms += dr["latency_ms"]
         _max_dispatch_ms = max(_max_dispatch_ms, dr["latency_ms"])

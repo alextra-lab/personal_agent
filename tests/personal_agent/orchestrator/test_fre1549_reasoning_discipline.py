@@ -1,6 +1,6 @@
 """FRE-1549: the primary prompt carries the sequential-thinking discipline.
 
-The skill in ``docs/skills/sequential-thinking.md`` reached the model only on a keyword
+The skill in ``docs/skills/sequential-thinking/SKILL.md`` reached the model only on a keyword
 match, so the rule moved into the stable part of the primary system prompt. Covers the
 ticket's three criteria that a unit test can decide:
 
@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import yaml
 
-from personal_agent.config import settings
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import execute_task_safe
@@ -63,12 +62,6 @@ def _mock_client() -> AsyncMock:
         "cost_usd": 0.0,
     }
     return mock
-
-
-@pytest.fixture(autouse=True)
-def _hybrid_skill_routing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin the default routing mode so no test reaches a real skill-routing client."""
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
 
 
 @pytest.fixture(autouse=True)
@@ -211,7 +204,7 @@ class TestNoToolIntroduced:
     """AC-6: the rule adds no tool and no governance entry (ADR-0028:83)."""
 
     def test_skill_still_declares_no_tools(self) -> None:
-        assert get_all_skills()["sequential-thinking"].tools == ()
+        assert get_all_skills()["sequential-thinking"].requires_tools == ()
 
     def test_governance_has_no_sequential_thinking_entry(self) -> None:
         governance_path = (

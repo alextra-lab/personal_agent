@@ -282,7 +282,7 @@ tools:
     rate_limit_per_hour: null
     description: "FRE-343 — personal time-window retrieval scoped to ctx.user_id"
 
-  # Phase B skill routing (FRE-skill-routing): load skill doc body on demand
+  # ADR-0156 D3 (FRE-1577): load a skill body, or one listed file of the skill folder
   read_skill:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]

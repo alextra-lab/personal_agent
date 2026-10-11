@@ -1,46 +1,35 @@
-"""Skill-doc loader and injection module.
+"""Skill loader, catalog and validator (ADR-0156 D1, D2, D3).
 
-Loads skill documentation files from ``docs/skills/`` via glob discovery.
-Each skill file must have YAML frontmatter with at minimum ``name``,
-``description``, and ``when_to_use``.  Optional fields: ``tools``,
-``keywords``, ``canonical_patterns``.
+Each agent skill is a folder ``docs/skills/<name>/`` in the Agent Skills format (S1,
+https://agentskills.io/specification): a ``SKILL.md`` whose frontmatter holds ``name``,
+``description`` and an optional ``metadata`` map, with optional ``scripts/``, ``references/``
+and ``assets/`` beside it.
 
-Routing: ``get_skill_block`` always injects the ``bash`` skill plus any
-skills whose ``keywords`` match the user message (substring, case-insensitive).
-Files without frontmatter (e.g. EMPIRICAL_TEST_RESULTS.md, SKILL_TEMPLATE.md)
-are silently skipped.
+The model sees one catalog line per skill (name and description) in the cached system prompt
+and loads a body with ``read_skill`` (D2). Nothing in the user's message selects a skill: the
+keyword routing, the hint loop and the separate routing model are gone (FRE-1577).
 
-Cache is invalidated whenever any ``docs/skills/*.md`` file is added, removed,
-or modified (mtime-based).
-
-FRE-282: original intent-based routing preserved.
-Phase A (FRE-skill-routing): migrated from hardcoded _SKILL_FILES /
-_KEYWORD_ROUTES to frontmatter-driven auto-discovery.
+The cache is reloaded when a ``SKILL.md`` file is added, removed or modified (mtime-based).
 """
 
 from __future__ import annotations
 
-import collections.abc
+import os
+import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Literal, get_args
 
 import structlog
 import yaml  # type: ignore[import-untyped]
 
-from personal_agent.config import settings
-
 log = structlog.get_logger(__name__)
 
-_SKILLS_DIR = Path(__file__).resolve().parents[3] / "docs" / "skills"
-_SEPARATOR = "\n\n---\n\n"
-SKILL_BLOCK_HEADER = (
-    "<skill_library>\n"
-    "The following skill docs are reference material for using the `bash`, `read`, "
-    "`write`, and `run_python` primitives effectively. Prefer these idioms over named "
-    "curated tools when both are available.\n"
-    "</skill_library>\n\n"
-)
+SKILLS_DIR = Path(__file__).resolve().parents[3] / "docs" / "skills"
+SKILL_FILE = "SKILL.md"
+_CHARS_PER_TOKEN = 4  # the repo's token estimate
+_MAX_FILE_BYTES = 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -50,21 +39,35 @@ SKILL_BLOCK_HEADER = (
 
 @dataclass(frozen=True)
 class SkillDoc:
-    """Parsed representation of a single skill doc with frontmatter."""
+    """One skill folder, parsed.
+
+    Attributes:
+        name: The skill name, equal to the folder name.
+        description: What the skill does and when to use it (the catalog text).
+        requires_tools: ``metadata.requires-tools``, split on commas (D4).
+        body: The ``SKILL.md`` text after the frontmatter.
+        folder: The skill folder.
+    """
 
     name: str
     description: str
-    when_to_use: str
-    tools: tuple[str, ...]
-    keywords: tuple[str, ...]
-    canonical_patterns: tuple[str, ...]
+    requires_tools: tuple[str, ...]
     body: str
-    nudge: str | None = None
+    folder: Path
+
+
+@dataclass(frozen=True)
+class SkillFile:
+    """One file of a skill folder, as listed: its relative path and its inode."""
+
+    path: str
+    device: int
+    inode: int
 
 
 @dataclass
 class _SkillCache:
-    """Loaded skill docs indexed by name, with file mtimes for invalidation."""
+    """Loaded skills by name, with the mtimes of their ``SKILL.md`` files."""
 
     docs: dict[str, SkillDoc]
     mtimes: dict[Path, float]
@@ -75,25 +78,41 @@ class _SkillCache:
 # ---------------------------------------------------------------------------
 
 
-def _parse_frontmatter(path: Path) -> tuple[dict[str, Any], str]:
+def _split_frontmatter(content: str) -> tuple[dict[str, object], str] | None:
+    """Split YAML frontmatter from a body, or return None when there is no frontmatter block."""
+    if not content.startswith("---\n"):
+        return None
+    end = content.find("\n---\n", 4)
+    if end == -1:
+        return None
+    loaded = yaml.safe_load(content[4:end])
+    fm: dict[str, object] = loaded if isinstance(loaded, dict) else {}
+    return fm, content[end + 5 :].strip()
+
+
+def _parse_frontmatter(path: Path) -> tuple[dict[str, object], str]:
     """Split YAML frontmatter and body from a markdown file.
 
     Args:
         path: Path to the markdown file.
 
     Returns:
-        Tuple of (frontmatter_dict, body_text). Returns ({}, full_text) when
-        the file has no frontmatter block.
+        Tuple of (frontmatter_dict, body_text). Returns ({}, full_text) when the file has no
+        frontmatter block.
     """
     content = path.read_text(encoding="utf-8")
-    if not content.startswith("---\n"):
-        return {}, content.strip()
-    end = content.find("\n---\n", 4)
-    if end == -1:
-        return {}, content.strip()
-    fm: dict[str, Any] = yaml.safe_load(content[4:end]) or {}
-    body = content[end + 5 :].strip()
-    return fm, body
+    split = _split_frontmatter(content)
+    return split if split is not None else ({}, content.strip())
+
+
+def _requires_tools(fm: dict[str, object]) -> tuple[str, ...]:
+    metadata = fm.get("metadata")
+    if not isinstance(metadata, dict):
+        return ()
+    raw = metadata.get("requires-tools")
+    if not isinstance(raw, str):
+        return ()
+    return tuple(t.strip() for t in raw.split(",") if t.strip())
 
 
 # ---------------------------------------------------------------------------
@@ -101,49 +120,46 @@ def _parse_frontmatter(path: Path) -> tuple[dict[str, Any], str]:
 # ---------------------------------------------------------------------------
 
 
-def _load_all_skills(skills_dir: Path) -> _SkillCache:
-    """Scan *skills_dir* for markdown files and parse frontmatter.
+def _skill_files_on_disk(skills_dir: Path) -> list[Path]:
+    return sorted(skills_dir.glob(f"*/{SKILL_FILE}"))
 
-    Files without a ``name`` key in frontmatter are skipped with a debug log.
-    Parse errors are logged as warnings and skipped.
+
+def _load_all_skills(skills_dir: Path) -> _SkillCache:
+    """Parse every ``<name>/SKILL.md`` under *skills_dir*.
+
+    A file without a ``name``, with a ``name`` that is not its folder name, or without a
+    ``description`` is skipped with a warning. The CI validator rejects all three.
 
     Args:
-        skills_dir: Directory containing skill markdown files.
+        skills_dir: The folder that holds one sub-folder per skill.
 
     Returns:
-        Populated _SkillCache with all valid skill docs.
+        The loaded skills with the mtimes of their files.
     """
     docs: dict[str, SkillDoc] = {}
     mtimes: dict[Path, float] = {}
-
-    for path in sorted(skills_dir.glob("*.md")):
+    for path in _skill_files_on_disk(skills_dir):
         mtimes[path] = path.stat().st_mtime
         try:
             fm, body = _parse_frontmatter(path)
-        except OSError as exc:
-            log.warning("skill_doc_unreadable", file=path.name, error=str(exc))
+        except (OSError, UnicodeDecodeError) as exc:
+            log.warning("skill_doc_unreadable", file=str(path), error=str(exc))
             continue
         except yaml.YAMLError as exc:
-            log.warning("skill_doc_parse_error", file=path.name, error=str(exc))
+            log.warning("skill_doc_parse_error", file=str(path), error=str(exc))
             continue
-
         name = fm.get("name")
-        if not name:
-            log.debug("skill_doc_no_frontmatter", file=path.name)
+        description = fm.get("description")
+        if not isinstance(name, str) or name != path.parent.name or not description:
+            log.warning("skill_doc_invalid", file=str(path), name=name)
             continue
-
-        _nudge_raw = fm.get("nudge")
         docs[name] = SkillDoc(
-            name=str(name),
-            description=str(fm.get("description", "")),
-            when_to_use=str(fm.get("when_to_use", "")),
-            tools=tuple(fm.get("tools") or []),
-            keywords=tuple(fm.get("keywords") or []),
-            canonical_patterns=tuple(fm.get("canonical_patterns") or []),
+            name=name,
+            description=" ".join(str(description).split()),
+            requires_tools=_requires_tools(fm),
             body=body,
-            nudge=str(_nudge_raw).strip() if _nudge_raw is not None else None,
+            folder=path.parent,
         )
-
     return _SkillCache(docs=docs, mtimes=mtimes)
 
 
@@ -151,12 +167,10 @@ _cache: _SkillCache | None = None
 
 
 def _needs_reload(skills_dir: Path) -> bool:
-    """Return True when the cache is absent or any skill file has changed."""
+    """Return True when the cache is absent or any ``SKILL.md`` file has changed."""
     if _cache is None:
         return True
-    current_files = set(skills_dir.glob("*.md"))
-    cached_files = set(_cache.mtimes.keys())
-    if current_files != cached_files:
+    if set(_skill_files_on_disk(skills_dir)) != set(_cache.mtimes):
         return True
     return any(
         not path.exists() or path.stat().st_mtime != mtime for path, mtime in _cache.mtimes.items()
@@ -166,9 +180,8 @@ def _needs_reload(skills_dir: Path) -> bool:
 def _get_cache() -> _SkillCache:
     """Return the skill cache, reloading from disk when stale."""
     global _cache
-    if _needs_reload(_SKILLS_DIR):
-        _cache = _load_all_skills(_SKILLS_DIR)
-    assert _cache is not None  # _needs_reload returns True when None; just assigned above
+    if _cache is None or _needs_reload(SKILLS_DIR):
+        _cache = _load_all_skills(SKILLS_DIR)
     return _cache
 
 
@@ -177,287 +190,8 @@ def _get_cache() -> _SkillCache:
 # ---------------------------------------------------------------------------
 
 
-_SKILL_INDEX_HEADER = (
-    "## Available Skills\n\n"
-    'To propose a new skill, call `read_skill(name="your-desired-name")` '
-    "with the name you'd want for it. Every such call is logged as a "
-    "capability-gap signal and feeds skill-library growth.\n\n"
-)
-_CHARS_PER_TOKEN = 4  # conservative estimate for token counting
-
-
-def assemble_skill_index(cap_tokens: int = 2048) -> str:
-    """Emit a compact skill index for model_decided and hybrid routing modes.
-
-    Each line is ``- <name>: <description>``.  The index is capped at *cap_tokens*
-    (estimated at 4 chars/token) to stay within prompt budgets.
-
-    Args:
-        cap_tokens: Maximum token budget for the index block. Defaults to 2048.
-
-    Returns:
-        Formatted skill index string, or empty string if no skills are loaded.
-    """
-    cache = _get_cache()
-    if not cache.docs:
-        return ""
-
-    cap_chars = cap_tokens * _CHARS_PER_TOKEN
-    lines: list[str] = []
-    total = len(_SKILL_INDEX_HEADER)
-
-    for skill in cache.docs.values():
-        line = f"- {skill.name}: {skill.description}\n"
-        if total + len(line) > cap_chars:
-            log.debug("skill_index_truncated", cap_tokens=cap_tokens, truncated_at=skill.name)
-            break
-        lines.append(line)
-        total += len(line)
-
-    if not lines:
-        return ""
-    return _SKILL_INDEX_HEADER + "".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# FRE-337 — Skill directive blocks (deterministic XML wrappers)
-# ---------------------------------------------------------------------------
-
-_SKILL_INDEX_DIRECTIVE_TAG = "skill_index_directive"
-_SKILL_USAGE_DIRECTIVES_TAG = "skill_usage_directives"
-
-_INDEX_DIRECTIVE_BODY = (
-    "The skill index lists capabilities you may load with read_skill(name).\n"
-    "For requests about live systems, logs, metrics, infrastructure, files, or\n"
-    "project-specific procedures, load the matching skill before answering.\n"
-    "For general knowledge questions, answer normally."
-)
-
-_USAGE_DIRECTIVES_WRAPPER = (
-    "Loaded skill bodies are actionable instructions for this turn.\n"
-    "If a loaded skill describes how to investigate or answer the user's request,\n"
-    "follow it and use its tools before giving a substantive answer.\n"
-    "If no loaded skill applies, answer normally.\n"
-    "If an indexed skill appears necessary but was not loaded, call read_skill(name)\n"
-    "before improvising.\n"
-    "Do not speculate about live system state when an available skill can check it."
-)
-
-
-def assemble_skill_index_directive() -> str:
-    """Return the constant ``<skill_index_directive>`` XML block.
-
-    Emitted whenever the compact skill index is present in the system prompt
-    (always in hybrid mode, never in pure keyword mode with no index).
-    Weak wording intentional: must not push tool use on conceptual prompts.
-
-    Returns:
-        XML-wrapped directive string.
-    """
-    return (
-        f"<{_SKILL_INDEX_DIRECTIVE_TAG}>\n{_INDEX_DIRECTIVE_BODY}\n</{_SKILL_INDEX_DIRECTIVE_TAG}>"
-    )
-
-
-def assemble_skill_usage_directives(
-    loaded: collections.abc.Sequence[str],
-    skills: collections.abc.Mapping[str, "SkillDoc"],
-) -> str:
-    """Return the ``<skill_usage_directives>`` XML block for *loaded* skill bodies.
-
-    Emitted only when ≥1 skill body is present in the system prompt. Per-skill
-    bullets are included only for skills whose ``nudge`` field is non-empty.
-
-    Args:
-        loaded: Names of skills whose full body is currently in the prompt.
-        skills: Mapping from skill name to SkillDoc (from ``get_all_skills()``).
-
-    Returns:
-        XML-wrapped directive string, or empty string when *loaded* is empty.
-    """
-    if not loaded:
-        return ""
-
-    bullets: list[str] = []
-    for name in loaded:
-        doc = skills.get(name)
-        if doc and doc.nudge:
-            bullets.append(f"- {doc.name}: {doc.nudge}")
-
-    inner = _USAGE_DIRECTIVES_WRAPPER
-    if bullets:
-        inner = inner + "\n\n" + "\n".join(bullets)
-
-    return f"<{_SKILL_USAGE_DIRECTIVES_TAG}>\n{inner}\n</{_SKILL_USAGE_DIRECTIVES_TAG}>"
-
-
-def fit_skill_bodies(
-    docs: collections.abc.Sequence[SkillDoc],
-    *,
-    cap_tokens: int,
-    separator: str,
-    fixed_chars: int = 0,
-    trace_id: str | None = None,
-) -> tuple[SkillDoc, ...]:
-    """Keep the bodies that fit the budget, in the given priority order (FRE-1529).
-
-    The budget covers the whole joined block: ``fixed_chars`` (a header) plus every kept
-    body plus one ``separator`` between each pair. A body that does not fit is skipped and
-    the scan continues, so one oversized body never blocks a smaller one after it. Every
-    drop is logged as ``skill_bodies_truncated``. Same 4 chars/token estimate as
-    :func:`assemble_skill_index`.
-
-    Args:
-        docs: Candidate skills, highest priority first.
-        cap_tokens: Budget for the joined block, in estimated tokens.
-        separator: The string the caller joins the bodies with.
-        fixed_chars: Characters the caller adds once when at least one body is kept.
-        trace_id: Request trace id for the drop log.
-
-    Returns:
-        The kept skills, in their input order. Empty when no body fits.
-    """
-    cap_chars = cap_tokens * _CHARS_PER_TOKEN
-    kept: list[SkillDoc] = []
-    dropped: list[str] = []
-    total = fixed_chars
-    for doc in docs:
-        cost = len(doc.body) + (len(separator) if kept else 0)
-        if total + cost <= cap_chars:
-            kept.append(doc)
-            total += cost
-        else:
-            dropped.append(doc.name)
-    if dropped:
-        log.info(
-            "skill_bodies_truncated",
-            cap_tokens=cap_tokens,
-            dropped_count=len(dropped),
-            dropped_skills=dropped,
-            kept_skills=[d.name for d in kept],
-            kept_chars=total if kept else 0,
-            trace_id=trace_id,
-        )
-    return tuple(kept)
-
-
-def get_skill_bodies(
-    message: str | None = None,
-    loaded_skills: frozenset[str] | set[str] | None = None,
-    trace_id: str | None = None,
-) -> tuple[str, tuple[str, ...]]:
-    """Return the skill library block *and* the names of the skills it contains.
-
-    Same selection as :func:`get_skill_block`, which delegates here. The names are what
-    the turn evidence record needs (ADR-0125 D3 item 6, FRE-1004): "which skill bodies
-    were loaded" is answerable only by name, not by the presence flag the existing
-    prompt-component taxonomy records.
-
-    The block is bounded by ``settings.skill_bodies_max_tokens`` (FRE-1529). Priority:
-    ``bash`` first, then keyword matches by the number of distinct keywords hit, file
-    order on ties. Bodies that do not fit are dropped and logged.
-
-    Args:
-        message: The original user message used for keyword-based routing.
-            Pass ``None`` to get the bash-only block.
-        loaded_skills: Skill names already loaded this conversation. Bodies for
-            these skills are suppressed to avoid duplication. Ignored when None.
-        trace_id: Request trace id for the drop log.
-
-    Returns:
-        Tuple of (block text, ordered skill names). Both are empty when no skill loads.
-    """
-    if not settings.prefer_primitives_enabled:
-        return "", ()
-
-    _already_loaded = loaded_skills or set()
-    cache = _get_cache()
-    candidates: list[SkillDoc] = []
-
-    bash_doc = cache.docs.get("bash")
-    if bash_doc and bash_doc.body and "bash" not in _already_loaded:
-        candidates.append(bash_doc)
-
-    if message:
-        msg_lower = message.lower()
-        matched: list[tuple[int, SkillDoc]] = []
-        for skill in cache.docs.values():
-            if skill.name == "bash" or skill.name in _already_loaded:
-                continue
-            hits = sum(1 for kw in skill.keywords if kw.lower() in msg_lower)
-            if hits:
-                matched.append((hits, skill))
-                log.debug(
-                    "skill_route_matched",
-                    skill=skill.name,
-                    keyword_hits=hits,
-                    message_preview=message[:80],
-                    trace_id=trace_id,
-                )
-        # Stable sort: equal hit counts keep file order.
-        candidates.extend(skill for _, skill in sorted(matched, key=lambda m: -m[0]))
-
-    kept = fit_skill_bodies(
-        candidates,
-        cap_tokens=settings.skill_bodies_max_tokens,
-        separator=_SEPARATOR,
-        fixed_chars=len(SKILL_BLOCK_HEADER),
-        trace_id=trace_id,
-    )
-    if not kept:
-        return "", ()
-    return (
-        SKILL_BLOCK_HEADER + _SEPARATOR.join(d.body for d in kept),
-        tuple(d.name for d in kept),
-    )
-
-
-def get_skill_block(
-    message: str | None = None,
-    loaded_skills: frozenset[str] | set[str] | None = None,
-) -> str:
-    """Return a skill library block for keyword-based injection into the system prompt.
-
-    Always includes the ``bash`` skill body (base tool reference). When
-    *message* is provided, additionally injects any skills whose ``keywords``
-    match a substring of the lowercased message.
-
-    In ``hybrid`` routing mode, pass *loaded_skills* to suppress injecting bodies
-    for skills the model has already read via ``read_skill`` this conversation.
-
-    Args:
-        message: The original user message used for keyword-based routing.
-            Pass ``None`` to get the bash-only block.
-        loaded_skills: Skill names already loaded this conversation. Bodies for
-            these skills are suppressed to avoid duplication. Ignored when None.
-
-    Returns:
-        Skill library block prefixed with a header, or an empty string when
-        ``settings.prefer_primitives_enabled`` is ``False`` or no skills load.
-    """
-    return get_skill_bodies(message=message, loaded_skills=loaded_skills)[0]
-
-
-def find_skills_for_tool(tool_name: str) -> list[SkillDoc]:
-    """Return all skills that list *tool_name* in their ``tools`` field.
-
-    Multiple skills can declare the same tool (e.g. bash.md, query-elasticsearch.md,
-    and fetch-url.md all list ``bash``).
-
-    Args:
-        tool_name: Registered tool name (e.g. ``"bash"``).
-
-    Returns:
-        List of matching SkillDocs, empty if no skill claims this tool.
-    """
-    cache = _get_cache()
-    return [skill for skill in cache.docs.values() if tool_name in skill.tools]
-
-
 def get_all_skills() -> dict[str, SkillDoc]:
-    """Return all loaded skill docs keyed by name.
-
-    Primarily used by tests and the Phase B skill index assembler.
+    """Return every loaded agent skill keyed by name.
 
     Returns:
         Mapping of skill name to SkillDoc.
@@ -465,145 +199,269 @@ def get_all_skills() -> dict[str, SkillDoc]:
     return dict(_get_cache().docs)
 
 
-# ---------------------------------------------------------------------------
-# Phase C — model-decided routing via separate routing call
-# ---------------------------------------------------------------------------
+def skill_names() -> tuple[str, ...]:
+    """Return the agent skill names, sorted: the enum of ``read_skill``'s ``name`` (D2.2).
+
+    Returns:
+        The sorted skill names.
+    """
+    return tuple(sorted(_get_cache().docs))
 
 
-_ROUTING_SYSTEM_PROMPT = (
-    "You are a skill router. Given a user message and a list of available skills "
-    "(name + description), return ONLY the skill names that are directly relevant "
-    "to answering the user's message. Output a JSON array of skill name strings. "
-    "Empty array if no skill applies. Do not include any other text or explanation."
+_CATALOG_HEADER = (
+    "## Skills\n\n"
+    "Each skill below holds the instructions for one kind of task. When a task matches a "
+    'skill\'s description, call `read_skill(name="<name>")` to load its instructions before '
+    "you start the task, and follow them. A task that matches no description needs no skill.\n\n"
 )
 
 
-async def route_skills(
-    user_message: str,
-    routing_client: Any,
-    cap_tokens: int = 2048,
-    trace_id: str | None = None,
-    session_id: str | None = None,
-) -> list[str]:
-    r"""Ask the routing model which skills are relevant to *user_message*.
+def assemble_skill_catalog() -> str:
+    """Return the skill catalog: one line per skill, name and description only (D2.1).
 
-    Issues a single structured LLM call to the routing model with:
-      - System prompt: instructions to return a JSON array of skill names
-      - User content: ``[user_message]\\n\\n[skill index]``
-
-    The response is parsed as JSON; any name not in the loaded skill set is
-    silently dropped. Parse failures or empty/None responses return ``[]``.
-
-    Args:
-        user_message: The user's original message that the primary agent will
-            see. The router sees this same text.
-        routing_client: An LLM client (e.g. from
-            :func:`get_llm_client_for_key`) that has a ``respond()`` method.
-        cap_tokens: Max tokens for the skill index passed to the router.
-        trace_id: Optional trace_id stamped on parser-diagnostic log events
-            (``skill_routing_response_parsed``, ``skill_routing_parse_failed``,
-            ``skill_routing_call_misconfigured``, ``skill_routing_call_failed``)
-            so they can be correlated with the dispatch event the executor
-            emits. Pass ``ctx.trace_id`` from the calling step.
-        session_id: Originating session id for cost attribution (ADR-0074).
+    The text depends only on the skill files, never on the request, so it stays in the cached
+    prefix of the system prompt.
 
     Returns:
-        List of skill names from the loaded skill set that the router judged
-        relevant. Bounded by the size of the skill registry (≤ 20 today).
+        The catalog block, or an empty string when no skill is loaded.
     """
-    import json
+    docs = _get_cache().docs
+    if not docs:
+        return ""
+    lines = "".join(f"- {docs[name].name}: {docs[name].description}\n" for name in sorted(docs))
+    return _CATALOG_HEADER + lines
 
-    from personal_agent.llm_client.types import ModelRole  # noqa: PLC0415
 
-    cache = _get_cache()
-    if not cache.docs:
-        return []
+# ---------------------------------------------------------------------------
+# Files of a skill folder (D3)
+# ---------------------------------------------------------------------------
 
-    skill_index = assemble_skill_index(cap_tokens=cap_tokens)
-    if not skill_index:
-        return []
 
-    user_content = f"User message:\n{user_message}\n\n{skill_index}"
-    messages = [
-        {"role": "system", "content": _ROUTING_SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
+class SkillFileRefused(ValueError):
+    """A requested skill file is not one listed file of the skill folder (D3.2)."""
+
+
+def list_skill_files(folder: Path) -> tuple[SkillFile, ...]:
+    """List the regular files of a skill folder, without following symlinks.
+
+    ``SKILL.md`` is not listed (``read_skill`` without a path returns it). A symlink, at any
+    depth, is not listed and its target is not entered.
+
+    Args:
+        folder: The skill folder.
+
+    Returns:
+        The files, sorted by relative path (POSIX separators).
+    """
+    files: list[SkillFile] = []
+    for dirpath, dirnames, filenames in os.walk(folder, followlinks=False):
+        base = Path(dirpath)
+        dirnames[:] = sorted(d for d in dirnames if not (base / d).is_symlink())
+        for filename in filenames:
+            info = os.lstat(base / filename)
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            rel = (base / filename).relative_to(folder).as_posix()
+            if rel == SKILL_FILE or "__pycache__" in rel.split("/"):
+                continue
+            files.append(SkillFile(path=rel, device=info.st_dev, inode=info.st_ino))
+    return tuple(sorted(files, key=lambda f: f.path))
+
+
+def read_skill_file(folder: Path, path: str) -> str:
+    """Return one listed file of a skill folder as text (D3.2).
+
+    The path must equal a listed path exactly. The file is then opened one path part at a time
+    relative to the previous directory, each with ``O_NOFOLLOW``, so no part can be a symlink,
+    and the opened file must be a regular file with one link and the listed inode. A file
+    swapped after the listing is refused.
+
+    Args:
+        folder: The skill folder.
+        path: A relative path, as listed by :func:`list_skill_files`.
+
+    Returns:
+        The file content.
+
+    Raises:
+        SkillFileRefused: The path is not listed, the file changed, it is too large, or it is
+            not UTF-8 text.
+    """
+    listed = {f.path: f for f in list_skill_files(folder)}
+    entry = listed.get(path)
+    if entry is None:
+        raise SkillFileRefused(f"'{path}' is not a file of this skill.")
+    parts = path.split("/")
+    nofollow = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    opened: list[int] = []
+    try:
+        fd = os.open(folder, nofollow | os.O_DIRECTORY)
+        opened.append(fd)
+        for part in parts[:-1]:
+            fd = os.open(part, nofollow | os.O_DIRECTORY, dir_fd=fd)
+            opened.append(fd)
+        fd = os.open(parts[-1], nofollow, dir_fd=fd)
+        opened.append(fd)
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or (info.st_dev, info.st_ino) != (entry.device, entry.inode)
+        ):
+            raise SkillFileRefused(f"'{path}' changed after it was listed.")
+        if info.st_size > _MAX_FILE_BYTES:
+            raise SkillFileRefused(f"'{path}' is larger than {_MAX_FILE_BYTES:,} bytes.")
+        chunks: list[bytes] = []
+        while chunk := os.read(fd, 65536):
+            chunks.append(chunk)
+        data = b"".join(chunks)
+    except OSError as exc:
+        raise SkillFileRefused(f"'{path}' cannot be opened: {exc.strerror}.") from exc
+    finally:
+        for descriptor in reversed(opened):
+            os.close(descriptor)
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SkillFileRefused(f"'{path}' is not UTF-8 text.") from exc
+
+
+# ---------------------------------------------------------------------------
+# The S1 validator (D1.3, D5.1, D5.2) — run by tests/docs/test_skill_validator.py
+# ---------------------------------------------------------------------------
+
+SkillKind = Literal["agent", "external"]
+SkillRule = Literal[
+    "frontmatter",
+    "name",
+    "description",
+    "metadata",
+    "body_lines",
+    "body_tokens",
+    "file_refs",
+    "sections",
+    "evals",
+]
+SKILL_RULES: tuple[SkillRule, ...] = get_args(SkillRule)
+
+
+@dataclass(frozen=True)
+class SkillViolation:
+    """One broken rule of one skill folder."""
+
+    rule: SkillRule
+    detail: str
+
+
+_ALLOWED_FIELDS = frozenset({"name", "description", "metadata"})
+_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# S3: the description is in the third person.
+_PERSON = re.compile(r"\bI\b(?!/O)|\b(?i:me|my|you|your)\b")  # "I/O" is not a pronoun
+_MAX_BODY_LINES = 500  # the body is under 500 lines
+_MAX_BODY_TOKENS = 5000  # and under 5,000 tokens
+_LINK = re.compile(r"\]\(([^)\s]+)\)")
+_SKILL_PATH = re.compile(r"(?<![\w./-])(?:\./)?((?:scripts|references|assets)/[\w./-]*[\w-])")
+_SUCCESS = re.compile(r"^##\s+Success\b", re.IGNORECASE | re.MULTILINE)
+_RECOVERY = re.compile(r"^##\s+(?:Failure\s+)?Recovery\b", re.IGNORECASE | re.MULTILINE)
+_MIN_SCENARIOS = 3
+
+
+def _named_files(body: str) -> set[str]:
+    """Return the relative files a body names: relative links and S1 folder paths."""
+    named = {m.group(1) for m in _SKILL_PATH.finditer(body)}
+    for target in _LINK.findall(body):
+        target = target.split("#", 1)[0]
+        if target and "://" not in target and not target.startswith(("/", "mailto:")):
+            named.add(target.removeprefix("./"))
+    return named
+
+
+def _check_frontmatter(fm: dict[str, object], folder: Path) -> list[SkillViolation]:
+    found: list[SkillViolation] = []
+    extra = sorted(set(fm) - _ALLOWED_FIELDS)
+    if extra:
+        found.append(SkillViolation("frontmatter", f"fields not allowed: {extra}"))
+    name = fm.get("name")
+    if not isinstance(name, str) or not 1 <= len(name) <= 64 or not _NAME.match(name):
+        found.append(SkillViolation("name", f"name {name!r} is not 1-64 of [a-z0-9-]"))
+    elif name != folder.name:
+        found.append(SkillViolation("name", f"name {name!r} is not the folder {folder.name!r}"))
+    description = fm.get("description")
+    if not isinstance(description, str) or not 1 <= len(description) <= 1024:
+        size = len(description) if isinstance(description, str) else 0
+        found.append(SkillViolation("description", f"description has {size} characters"))
+    elif _PERSON.search(description):
+        found.append(SkillViolation("description", "description is not in the third person"))
+    metadata = fm.get("metadata", {})
+    if not isinstance(metadata, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in metadata.items()
+    ):
+        found.append(SkillViolation("metadata", "metadata is not a map of string to string"))
+    return found
+
+
+def _check_body(body: str, folder: Path) -> list[SkillViolation]:
+    found: list[SkillViolation] = []
+    lines = body.count("\n") + 1
+    if lines >= _MAX_BODY_LINES:
+        found.append(SkillViolation("body_lines", f"body has {lines} lines"))
+    tokens = len(body) // _CHARS_PER_TOKEN
+    if tokens >= _MAX_BODY_TOKENS:
+        found.append(SkillViolation("body_tokens", f"body has about {tokens} tokens"))
+    for named in sorted(_named_files(body)):
+        parts = Path(named).parts
+        target = folder / named
+        if ".." in parts or len(parts) > 2 or not target.is_file() or target.is_symlink():
+            found.append(
+                SkillViolation(
+                    "file_refs", f"'{named}' is not a file one level below {folder.name}/"
+                )
+            )
+    return found
+
+
+def _check_agent_parts(body: str, folder: Path) -> list[SkillViolation]:
+    found: list[SkillViolation] = []
+    missing = [
+        n for n, rx in (("success", _SUCCESS), ("recovery", _RECOVERY)) if not rx.search(body)
     ]
+    if missing:
+        found.append(SkillViolation("sections", f"no {' or '.join(missing)} section"))
+    evals = folder / "evals.yaml"
+    scenarios: object = None
+    if evals.is_file():
+        try:
+            loaded = yaml.safe_load(evals.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            loaded = None
+        scenarios = loaded.get("scenarios") if isinstance(loaded, dict) else None
+    count = len(scenarios) if isinstance(scenarios, list) else 0
+    if count < _MIN_SCENARIOS:
+        found.append(SkillViolation("evals", f"evals.yaml has {count} scenarios"))
+    return found
 
-    try:
-        from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
-        skill_ctx: TraceContext = (
-            TraceContext(trace_id=trace_id, session_id=session_id)
-            if trace_id
-            else SystemTraceContext.new("skill_routing", session_id=session_id)
-        )
-        response = await routing_client.respond(
-            role=ModelRole.SKILL_ROUTING,
-            messages=messages,
-            max_tokens=256,
-            temperature=0.0,
-            trace_ctx=skill_ctx,
-        )
-    except KeyError as exc:
-        # Misconfiguration (e.g. missing budget_role in budget.yaml) — surface
-        # loudly so it does not silently degrade routing to no-op behaviour.
-        log.error(
-            "skill_routing_call_misconfigured",
-            error=repr(exc),
-            error_type=type(exc).__name__,
-            trace_id=trace_id,
-        )
-        raise
-    except Exception as exc:  # noqa: BLE001
-        # LLM call failures (network, model error, timeout) — fall back to []
-        # so the primary agent can still proceed via read_skill on demand.
-        log.warning(
-            "skill_routing_call_failed",
-            error=str(exc),
-            error_type=type(exc).__name__,
-            trace_id=trace_id,
-        )
-        return []
+def validate_skill(folder: Path, kind: SkillKind) -> tuple[SkillViolation, ...]:
+    """Check one skill folder against the S1 rules of ADR-0156 D1.3.
 
-    raw = ""
-    if isinstance(response, dict):
-        raw = str(response.get("content") or "").strip()
-    elif hasattr(response, "content"):
-        raw = str(response.content or "").strip()
-    else:
-        raw = str(response).strip()
+    An agent skill must also hold a success and a recovery section (D5.1) and an
+    ``evals.yaml`` with at least 3 scenarios (D5.2).
 
-    if not raw:
-        return []
+    Args:
+        folder: The skill folder.
+        kind: ``"agent"`` for ``docs/skills/``, ``"external"`` for ``docs/external-skills/``.
 
-    # Strip code fences if the model wrapped its JSON output
-    if raw.startswith("```"):
-        raw = raw.strip("`").lstrip("json").strip()
-
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning(
-            "skill_routing_parse_failed",
-            raw_preview=raw[:200],
-            trace_id=trace_id,
-        )
-        return []
-
-    if not isinstance(parsed, list):
-        return []
-
-    valid = [str(name) for name in parsed if isinstance(name, str) and name in cache.docs]
-    # Distinct event from the executor's `skill_routing_call_completed`
-    # so analysis tools can read either without the two colliding on a
-    # shared name. This event captures parser-level diagnostics
-    # (raw vs validated count); the executor event captures dispatch
-    # metadata (latency_ms, routing_model_key).
-    log.info(
-        "skill_routing_response_parsed",
-        candidates=len(parsed),
-        valid=len(valid),
-        skills=valid,
-        trace_id=trace_id,
-    )
-    return valid
+    Returns:
+        Every broken rule; empty when the skill conforms.
+    """
+    skill_md = folder / SKILL_FILE
+    if not skill_md.is_file():
+        return (SkillViolation("frontmatter", f"{folder.name}/ has no {SKILL_FILE}"),)
+    split = _split_frontmatter(skill_md.read_text(encoding="utf-8"))
+    if split is None:
+        return (SkillViolation("frontmatter", f"{SKILL_FILE} has no frontmatter"),)
+    fm, body = split
+    found = _check_frontmatter(fm, folder) + _check_body(body, folder)
+    if kind == "agent":
+        found += _check_agent_parts(body, folder)
+    return tuple(found)

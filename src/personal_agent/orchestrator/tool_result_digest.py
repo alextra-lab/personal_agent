@@ -85,7 +85,8 @@ _FRAME_RE = re.compile(
 # observed in trace 950386d6: 4 of 9 digests re-compressed expansions). This guard
 # is a hard invariant, *not* a config default, so it cannot be accidentally
 # disabled via ``tool_result_digest_exclude_tools`` (which stays additive).
-_NEVER_DIGEST_TOOLS: frozenset[str] = frozenset({"expand_tool_result"})
+# read_skill: a loaded skill body is never pruned within its turn (ADR-0156 D2.4).
+_NEVER_DIGEST_TOOLS: frozenset[str] = frozenset({"expand_tool_result", "read_skill"})
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,9 @@ class TestTelemetryMountCoverage:
         # matching a writer (rename/idiom change), not that one was removed. Bumped
         # 9 -> 10 for FRE-1330's telemetry/security/egress_novelty_seen.json (already
         # covered by the same /app/telemetry mount as its sibling domain_blocklist.json).
-        assert len(find_telemetry_writers(repo_root())) == 10
+        # 10 -> 9 for FRE-1577: the ADR-0066 skill routing monitor and its
+        # telemetry/skill_routing_monitor state file were deleted with the routing modes.
+        assert len(find_telemetry_writers(repo_root())) == 9
 
     def test_parent_mount_is_the_named_seshat_telemetry_volume(self) -> None:
         # Not just "something is mounted at /app/telemetry" — the specific named

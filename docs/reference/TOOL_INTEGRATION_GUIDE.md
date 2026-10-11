@@ -228,23 +228,31 @@ ask:
 
 ### Pattern
 
-Tier 2 tools are documented in SKILL.md files. The agent reads the SKILL.md and invokes the CLI directly using its shell execution capability.
+A Tier 2 tool is documented by a skill in the Agent Skills format (ADR-0156 D1). The system
+prompt lists every skill's name and description. When a task matches a skill, the model loads
+the skill with `read_skill(name)` and runs the CLI with its shell tool. Nothing in the user's
+message selects a skill (ADR-0156 D2).
 
-**No Python wrapper code is needed.** The SKILL.md is the tool.
+**No Python wrapper code is needed.** The skill is the tool's interface.
 
-### SKILL.md file location
+### Skill folder
 ```
-docs/skills/
-└── <toolname>.md      ← SKILL.md file for the CLI tool
+docs/skills/<name>/
+├── SKILL.md          ← frontmatter (name, description, metadata) + instructions
+├── evals.yaml        ← at least 3 scenarios
+├── scripts/          ← optional tested scripts; they ship in the gateway image
+└── references/       ← optional detail, loaded with read_skill(name, path)
 ```
 
-### SKILL.md template
+### Skill template
 See `docs/skills/SKILL_TEMPLATE.md`.
 
 ### Adding a Tier 2 tool
-1. Create `docs/skills/<toolname>.md` from the template
-2. Reference it in `docs/skills/INDEX.md`
-3. No code changes required
+1. Create `docs/skills/<name>/SKILL.md` and `evals.yaml` from the template.
+2. Add `<name>` to the inventory in `tests/docs/test_skill_validator.py`.
+3. Run `make test-file FILE=tests/docs/test_skill_validator.py`. The validator checks the
+   format, and `tests/personal_agent/governance/test_skill_commands_permissions.py` checks
+   that every command is allowed or a documented ask.
 
 ---
 

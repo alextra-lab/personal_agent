@@ -547,7 +547,8 @@ def _trim_for_landing(
     without an index: only ``role == "tool"`` messages are ever stubbed, and the
     system/task messages are never that role (``run_sub_agent`` builds them as
     ``system``/``user``). Never touches the newest tool result either, so the model
-    always sees at least the most recent thing it just did.
+    always sees at least the most recent thing it just did. Never touches a
+    ``read_skill`` result: a loaded skill stays loaded for the task (ADR-0156 D2.4).
 
     The estimate covers only the message list, like every other estimate in this
     codebase (``context_window.py``'s own budget trim has the same scope) — it does
@@ -573,7 +574,9 @@ def _trim_for_landing(
     tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
     if not tool_indices:
         return messages, 0, 0
-    droppable = tool_indices[:-1]  # every tool result except the newest
+    # Every tool result except the newest, and never a skill body or file: a worker's
+    # messages are one task, so every read_skill result is this turn's (ADR-0156 D2.4).
+    droppable = [i for i in tool_indices[:-1] if messages[i].get("name") != "read_skill"]
     trimmed = list(messages)
     dropped_results = 0
     dropped_chars = 0

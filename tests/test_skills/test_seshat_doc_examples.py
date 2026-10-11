@@ -22,7 +22,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SKILL_DIR = Path(__file__).parent.parent.parent / "docs" / "skills"
+_SKILL_DIR = Path(__file__).parent.parent.parent / "docs" / "external-skills"
 
 # Regex: match /api/v1/... paths in curl examples inside "Works Now" sections.
 # Captures the path component after $SESHAT_API_URL or http://localhost:...
@@ -75,10 +75,9 @@ def _get_gateway_route_paths() -> set[str]:
 # ---------------------------------------------------------------------------
 
 _SESHAT_DOCS = [
-    "seshat-knowledge.md",
-    "seshat-observations.md",
-    "seshat-sessions.md",
-    # seshat-delegate.md excluded: its entire commands section is Planned.
+    "seshat-knowledge",
+    "seshat-observations",
+    "seshat-sessions",
 ]
 
 
@@ -92,7 +91,7 @@ def test_seshat_doc_paths_exist_in_gateway(
     doc_name: str, gateway_paths: set[str]
 ) -> None:
     """Every /api/v1/... path in the 'Works Now' section must be a registered route."""
-    doc_path = _SKILL_DIR / doc_name
+    doc_path = _SKILL_DIR / doc_name / "SKILL.md"
     assert doc_path.exists(), f"Skill doc not found: {doc_path}"
 
     extracted = _extract_api_paths(doc_path)

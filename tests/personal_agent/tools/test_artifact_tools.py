@@ -2296,7 +2296,7 @@ def test_system_prompt_real_origin_substituted_when_setting_set(
 
 
 def test_artifact_design_doc_matches_manifest() -> None:
-    """FRE-529 (ADR-0089 A4): docs/skills/artifact-design.md is the source-of-truth.
+    """FRE-529 (ADR-0089 A4): docs/skills/artifact-design/SKILL.md is the source-of-truth.
 
     The skill doc is the maintainable superset the generation prompt is distilled
     from. This manifest-driven drift guard keeps doc ↔ manifest ↔ prompt in
@@ -2310,7 +2310,7 @@ def test_artifact_design_doc_matches_manifest() -> None:
     )
 
     repo_root = DEFAULT_LIB_MANIFEST_PATH.resolve().parents[1]
-    doc_path = repo_root / "docs" / "skills" / "artifact-design.md"
+    doc_path = repo_root / "docs" / "skills" / "artifact-design" / "SKILL.md"
     doc = doc_path.read_text(encoding="utf-8")
 
     origin, assets = load_lib_manifest()

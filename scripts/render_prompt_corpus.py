@@ -260,8 +260,8 @@ ORCHESTRATOR_COMPONENTS = [
         "SEMI_STATIC",
         "executor.py",
         "1860–1993",
-        "Active skill metadata + matched skill bodies from docs/skills/*.md. "
-        "Capped at 2,048 tokens. Populated by orchestrator/skills.py.",
+        "The skill catalog: one line per skill (name and description) from "
+        "docs/skills/<name>/SKILL.md. Populated by orchestrator/skills.py (ADR-0156 D2).",
     ),
     (
         "memory_section",
@@ -334,7 +334,7 @@ def _extract_dspy_signature_doc(filepath: Path, classname: str) -> str:
 
 
 def _read_skill_doc(path: Path) -> tuple[str, str]:
-    """Return (title, body_without_frontmatter) for a skill .md file."""
+    """Return (title, body_without_frontmatter) for a skill's SKILL.md file."""
     raw = path.read_text(encoding="utf-8")
     lines = raw.splitlines()
     # Strip YAML frontmatter if present
@@ -504,13 +504,11 @@ def _render_corpus() -> str:
     # -----------------------------------------------------------------------
     # Skill documents
     # -----------------------------------------------------------------------
-    skill_files = sorted(SKILLS_DIR.glob("*.md"))
+    skill_files = sorted(SKILLS_DIR.glob("*/SKILL.md"))
     skill_rows: list[tuple[str, int, str]] = []
     skill_sections: list[str] = []
 
     for skill_path in skill_files:
-        if skill_path.name in ("SKILL_TEMPLATE.md", "EMPIRICAL_TEST_RESULTS.md"):
-            continue
         title, body = _read_skill_doc(skill_path)
         tok = _estimate_tokens(body)
         rel = _relative(skill_path)
@@ -519,7 +517,7 @@ def _render_corpus() -> str:
             f"### {title}\n\n"
             f"| | |\n"
             f"|---|---|\n"
-            f"| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |\n"
+            f"| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |\n"
             f"| **Token count** | {tok:,} |\n"
             f"| **Source** | `{rel}` |\n\n"
             f"```markdown\n{body}\n```\n"
@@ -542,7 +540,7 @@ def _render_corpus() -> str:
         "",
         "### Skill Documents\n",
         f"Total skill docs: {len(skill_rows)} · Total tokens (all skills): {skill_total:,}  ",
-        "*(Only matched skills are injected per turn; max 2,048 tokens via `skill_index` budget)*\n",
+        "*(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*\n",
         "| skill | tokens | source |",
         "|---|---|---|",
     ]
@@ -592,10 +590,9 @@ def _render_corpus() -> str:
     # Skill document sections
     # -----------------------------------------------------------------------
     sections.append(
-        "## Skill Documents (`docs/skills/*.md`)\n\n"
-        "Skill bodies are injected into the `skill_index` component when the skill "
-        "router matches them for a given turn. The index is capped at 2,048 tokens.  \n\n"
-        + "\n---\n\n".join(skill_sections)
+        "## Skill Documents (`docs/skills/<name>/SKILL.md`)\n\n"
+        "The `skill_index` component holds the catalog only. A body reaches the model as "
+        "the result of a `read_skill` call (ADR-0156 D2).  \n\n" + "\n---\n\n".join(skill_sections)
     )
 
     # -----------------------------------------------------------------------

@@ -567,16 +567,13 @@ class ExecutionContext:
     # when nothing was skipped.
     expansion_skip_reason: "SkipReason | None" = None
 
-    # --- Phase B skill routing (FRE-skill-routing) ---
-    # Tracks which skill bodies have been read_skill'd this conversation for dedup.
+    # --- ADR-0156 D2 (FRE-1577) ---
+    # Skills whose body read_skill returned in this turn: the read_skill dedup key, and the
+    # route trace's skills_loaded. A context serves one request, so this is per turn.
     loaded_skills: set[str] = field(default_factory=set)
-
-    # --- Phase C skill routing (FRE-skill-routing) ---
-    # Set True after the routing model has been queried for this request.
-    # Prevents the routing call from re-firing on every step_llm_call iteration.
-    skill_routing_done: bool = False
-    # Model ID returned by the routing call (for telemetry breakdown across cells).
-    skill_routing_model_id: str = ""
+    # Tool-call ids of this turn's read_skill results. The mid-turn trims and the hard
+    # compression keep these results verbatim (ADR-0156 D2.4).
+    skill_call_ids: set[str] = field(default_factory=set)
 
     # --- FRE-1529: one volatile fence per turn ---
     # Set True once this request's <turn_context> block is in ctx.messages. Later

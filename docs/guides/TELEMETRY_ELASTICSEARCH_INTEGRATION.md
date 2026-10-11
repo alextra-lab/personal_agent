@@ -187,7 +187,7 @@ curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
   | python3 scripts/es_index_granularity.py <family-prefix>
 ```
 
-See [query-elasticsearch skill](../skills/query-elasticsearch.md#determining-a-familys-index-granularity--dont-strip-dates-in-the-shell)
+See [query-elasticsearch skill](../skills/query-elasticsearch/SKILL.md#determining-a-familys-index-granularity--dont-strip-dates-in-the-shell)
 for the full recipe (tested classifier, guard against sibling-family name collisions, and the
 live-coverage aggregation as a secondary check) and FRE-1036's own plan
 (`docs/superpowers/plans/2026-07-31-fre-1036-es-ilm-monthly-rollover.md`) for the target design and

@@ -1,12 +1,12 @@
-"""read_skill tool — load a skill doc body on demand.
+"""read_skill tool — load a skill's instructions, or one file of its folder (ADR-0156 D3).
 
-Phase B (FRE-skill-routing): model-decided routing.  The compact skill index
-injected into the system prompt tells the model which skills exist; when the
-model decides a skill is relevant it calls ``read_skill(name=...)`` to fetch
-the full body.
+The skill catalog in the system prompt lists each skill's name and description (D2). When a
+task matches a skill, the model calls ``read_skill(name=...)``: it returns the ``SKILL.md`` body
+and the list of the skill's other files, without reading them (S2). ``read_skill(name, path)``
+returns one listed file. Any other path is refused.
 
-The tool itself is stateless — dedup tracking (``loaded_skills``) is handled
-in ``_dispatch_tool_call`` in the executor, not here.
+The tool reads no private data and needs no filesystem access, so it works for the primary and
+for every worker type (D3.3). Dedup of a repeated body read happens in ``dispatch_tool_call``.
 """
 
 from __future__ import annotations
@@ -15,13 +15,20 @@ from typing import Any, Literal
 
 import structlog
 
+from personal_agent.orchestrator.skills import (
+    SkillFileRefused,
+    get_all_skills,
+    list_skill_files,
+    read_skill_file,
+    skill_names,
+)
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = structlog.get_logger(__name__)
 
-ReadSkillCode = Literal["missing_name", "unknown_skill"]
+ReadSkillCode = Literal["missing_name", "unknown_skill", "invalid_path"]
 
 
 class ReadSkillError(ToolError[ReadSkillCode]):
@@ -32,36 +39,65 @@ class ReadSkillError(ToolError[ReadSkillCode]):
 # ToolDefinition
 # ---------------------------------------------------------------------------
 
-read_skill_tool = ToolDefinition(
-    name="read_skill",
-    description=(
-        "Load the full guidance of one skill by its name and return the skill body as text. "
-        "Use it when the skill index lists a skill that fits the current task, before you "
-        "start that task. "
-        "Do not use it for a skill already loaded in this conversation, or to read other "
-        "files (use read). "
-        "The name must match the index exactly; an unknown name returns the list of names. "
-        'Example: read_skill(name="query-elasticsearch").'
-    ),
-    category="read_only",
-    parameters=[
-        ToolParameter(
-            name="name",
-            type="string",
-            description="Skill name exactly as listed in the skill index (e.g. 'query-elasticsearch')",
-            required=True,
-            default=None,
-            json_schema=None,
+
+def build_read_skill_tool() -> ToolDefinition:
+    """Build the ``read_skill`` definition, with ``name`` as an enum of the skill names (D2.2).
+
+    Returns:
+        The tool definition.
+    """
+    names = list(skill_names())
+    return ToolDefinition(
+        name="read_skill",
+        description=(
+            "Load the instructions of one skill from the skill catalog in the system prompt. "
+            "Use it when a task matches a skill's description, before you start that task, "
+            "and follow the instructions it returns. "
+            "Without a path it returns the skill body and the list of the skill's files; with "
+            "a path it returns that one listed file, for example a reference or a script. "
+            "Do not use it to read any other file (use read), or to load a skill again in the "
+            "same turn. "
+            'Examples: read_skill(name="query-elasticsearch"), '
+            'read_skill(name="query-tempo", path="references/<file>.md").'
         ),
-    ],
-    risk_level="low",
-    allowed_modes=["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"],
-    requires_approval=False,
-    requires_sandbox=False,
-    timeout_seconds=5,
-    rate_limit_per_hour=None,
-    error_codes=error_codes(ReadSkillError),
-)
+        category="read_only",
+        parameters=[
+            ToolParameter(
+                name="name",
+                type="string",
+                description="The skill name, exactly as the catalog lists it.",
+                required=True,
+                default=None,
+                # An empty enum is not valid JSON Schema, so no skill means no enum.
+                json_schema={
+                    "type": "string",
+                    "description": "The skill name, exactly as the catalog lists it.",
+                    **({"enum": names} if names else {}),
+                },
+            ),
+            ToolParameter(
+                name="path",
+                type="string",
+                description=(
+                    "Optional. One file of the skill, exactly as the file list of an earlier "
+                    "read_skill call gives it (for example 'references/guide.md')."
+                ),
+                required=False,
+                default=None,
+                json_schema=None,
+            ),
+        ],
+        risk_level="low",
+        allowed_modes=["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"],
+        requires_approval=False,
+        requires_sandbox=False,
+        timeout_seconds=5,
+        rate_limit_per_hour=None,
+        error_codes=error_codes(ReadSkillError),
+    )
+
+
+read_skill_tool = build_read_skill_tool()
 
 
 # ---------------------------------------------------------------------------
@@ -71,29 +107,29 @@ read_skill_tool = ToolDefinition(
 
 async def read_skill_executor(
     name: str = "",
+    path: str | None = None,
     session_id: str | None = None,
     *,
     ctx: TraceContext,
     **_kwargs: Any,
 ) -> dict[str, Any]:
-    """Return the full body of a skill doc by name.
+    """Return a skill body and its file list, or one listed file of the skill.
 
     Args:
-        name: Skill name to look up (must match a name in the skill index).
-            If empty, returns the list of available skill names instead of crashing.
+        name: Skill name, one of the catalog names.
+        path: Optional relative path of one listed file of the skill.
         session_id: Optional session identifier for logging.
         ctx: Telemetry trace context (passed as 'ctx' by the tool executor layer).
 
     Returns:
-        Dict with ``skill_name`` and ``body``.
+        Without ``path``: ``skill_name``, ``base_dir``, ``body`` and ``files``. With ``path``:
+        ``skill_name``, ``path`` and ``content``.
 
     Raises:
-        ReadSkillError: ``missing_name`` or ``unknown_skill``; the message lists the names.
+        ReadSkillError: ``missing_name``, ``unknown_skill`` or ``invalid_path``.
     """
-    from personal_agent.orchestrator.skills import get_all_skills  # noqa: PLC0415
-
     all_skills = get_all_skills()
-    known = sorted(all_skills.keys())
+    known = sorted(all_skills)
 
     if not name:
         raise ReadSkillError(
@@ -104,7 +140,6 @@ async def read_skill_executor(
         )
 
     skill = all_skills.get(name)
-
     if skill is None:
         log.warning(
             "missing_skill_requested",
@@ -121,14 +156,50 @@ async def read_skill_executor(
             next_action="Call read_skill with one of the listed names, or go on without it.",
         )
 
+    files = [f.path for f in list_skill_files(skill.folder)]
+    if path:
+        try:
+            content = read_skill_file(skill.folder, path)
+        except SkillFileRefused as exc:
+            log.warning(
+                "read_skill_path_refused",
+                trace_id=ctx.trace_id,
+                session_id=session_id,
+                skill_name=name,
+                requested_path=path,
+                reason=str(exc),
+            )
+            listed = ", ".join(files) or "none"
+            raise ReadSkillError(
+                "invalid_path",
+                f"{exc} Files of skill '{name}': {listed}",
+                retryable=True,
+                next_action=(
+                    "Call read_skill with a path from the list exactly, or without a path."
+                ),
+            ) from exc
+        log.info(
+            "read_skill_invoked",
+            skill_name=name,
+            path=path,
+            content_chars=len(content),
+            session_id=session_id,
+            trace_id=ctx.trace_id,
+        )
+        return {"skill_name": name, "path": path, "content": content}
+
     log.info(
         "read_skill_invoked",
         skill_name=name,
+        path=None,
         body_chars=len(skill.body),
+        file_count=len(files),
         session_id=session_id,
         trace_id=ctx.trace_id,
     )
     return {
         "skill_name": name,
+        "base_dir": str(skill.folder),
         "body": skill.body,
+        "files": files,
     }

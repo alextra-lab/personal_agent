@@ -2,7 +2,8 @@
 
 Verifies that the bash executor runs commands through /bin/bash so that
 shell features — pipes, logical operators, redirects, globs, pipefail — all
-work as documented in docs/skills/bash.md.
+work as the bash tool description documents (ADR-0156 D5.6 folded docs/skills/bash.md
+into it).
 
 These tests run the actual executor (no subprocess mocking) and therefore
 require /bin/bash to be available.  They do NOT require any infrastructure

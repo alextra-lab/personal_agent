@@ -146,31 +146,6 @@ async def test_run_sub_agent_threads_session_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_route_skills_threads_session_id() -> None:
-    """route_skills must forward session_id into the TraceContext it builds."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from personal_agent.orchestrator.skills import route_skills
-
-    client = MagicMock()
-    client.respond = AsyncMock(return_value={"content": "[]"})
-
-    await route_skills(
-        user_message="hello",
-        routing_client=client,
-        trace_id="trace-rs",
-        session_id="sess-rs-456",
-    )
-
-    call_kwargs = client.respond.call_args.kwargs
-    trace_ctx = call_kwargs["trace_ctx"]
-    assert trace_ctx.session_id == "sess-rs-456", (
-        "route_skills did not thread session_id — "
-        "cost_record_missing_identity fires on skill-routing LLM calls"
-    )
-
-
-@pytest.mark.asyncio
 async def test_compress_turns_threads_session_id() -> None:
     """compress_turns must forward session_id into the TraceContext it builds."""
     from unittest.mock import AsyncMock, patch

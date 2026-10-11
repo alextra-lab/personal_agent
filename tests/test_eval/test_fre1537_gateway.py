@@ -16,7 +16,6 @@ HOST_ENV = {
     "POSTGRES_PASSWORD": "pg-secret-123",
     "NEO4J_PASSWORD": "neo-secret-456",
     "AGENT_OWNER_EMAIL": "owner@example.invalid",
-    "AGENT_SKILL_ROUTING_MODE": "keyword",
 }
 NETWORK = "stack_net"
 
@@ -111,15 +110,12 @@ def docker(monkeypatch: pytest.MonkeyPatch) -> FakeDocker:
 def test_gateway_environment_is_eval_only_and_production_shaped() -> None:
     env, secrets = gateway.gateway_env(HOST_ENV)
     assert env["AGENT_DEPLOYMENT_PROFILE"] == "eval" and env["APP_ENV"] == "eval"
-    assert (
-        env["AGENT_PRIMITIVE_TOOLS_ENABLED"] == "true" and env["AGENT_PREFER_PRIMITIVES"] == "true"
-    )
+    assert env["AGENT_PRIMITIVE_TOOLS_ENABLED"] == "true"
     assert env["AGENT_DELEGATION_ENABLED"] == "false" and env["AGENT_EXPANSION_ENABLED"] == "false"
     assert (
         env["AGENT_MCP_GATEWAY_ENABLED"] == "false" and env["AGENT_GATEWAY_AUTH_ENABLED"] == "false"
     )
     assert env["AGENT_SLM_BASE_URL"] == "http://fre1537-stub:8700"
-    assert env["AGENT_SKILL_ROUTING_MODE"] == "keyword"
     assert "AGENT_EVENT_BUS_ENABLED" not in env
     # The eval profile refuses to boot without these two. The model is a stub, so no real key is passed.
     for key in ("AGENT_ANTHROPIC_API_KEY", "AGENT_OPENAI_API_KEY"):

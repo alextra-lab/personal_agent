@@ -2733,81 +2733,6 @@ class AppConfig(BaseSettings):
             "pentest gate clears (ADR-0063 Phase 2)."
         ),
     )
-    prefer_primitives_enabled: bool = Field(
-        default=True,
-        alias="AGENT_PREFER_PRIMITIVES",
-        description=(
-            "Inject skill library docs into system prompt and nudge the model to prefer "
-            "primitives over MCP tools. Default True since 2026-06-01 — this is the deployed "
-            "production behavior (pentest gate cleared, 6+ skill docs present), pinned here so "
-            "it no longer depends on a single line in the gitignored .env. "
-            "Requires AGENT_PRIMITIVE_TOOLS_ENABLED=true to be meaningful. "
-            "Env var: AGENT_PREFER_PRIMITIVES"
-        ),
-    )
-
-    # Phase B skill routing (FRE-skill-routing)
-    skill_routing_mode: str = Field(
-        default="hybrid",
-        alias="AGENT_SKILL_ROUTING_MODE",
-        description=(
-            "Skill routing strategy when prefer_primitives_enabled is True. "
-            "'keyword' — inject keyword-matched skill bodies only (Phase A legacy). "
-            "'model_decided' — inject compact skill index; model calls read_skill on demand. "
-            "'hybrid' — inject both index and keyword-matched bodies; suppress keyword body "
-            "for any skill already read_skill'd this conversation. "
-            "Env var: AGENT_SKILL_ROUTING_MODE"
-        ),
-    )
-    skill_index_max_tokens: int = Field(
-        default=2048,
-        alias="AGENT_SKILL_INDEX_MAX_TOKENS",
-        description=(
-            "Token cap for the compact skill index injected in model_decided and hybrid modes. "
-            "Index is truncated to this many tokens if it exceeds the limit. "
-            "Env var: AGENT_SKILL_INDEX_MAX_TOKENS"
-        ),
-    )
-    skill_bodies_max_tokens: int = Field(
-        default=8192,
-        ge=0,
-        alias="AGENT_SKILL_BODIES_MAX_TOKENS",
-        description=(
-            "Budget for the per-turn skill-bodies block (header, separators and bodies), "
-            "estimated at 4 chars/token like the index. Bodies are kept in priority order "
-            "(bash, then by keyword hits) while they fit; the rest are dropped and logged as "
-            "skill_bodies_truncated. The default admits bash plus the largest single body, so "
-            "no skill becomes unreachable by keyword; a dropped one stays reachable through "
-            "read_skill (FRE-1529). Env var: AGENT_SKILL_BODIES_MAX_TOKENS"
-        ),
-    )
-    skill_routing_model_key: str = Field(
-        default="claude_haiku",
-        alias="AGENT_SKILL_ROUTING_MODEL_KEY",
-        description=(
-            "Model key from models.yaml used for skill routing decisions when "
-            "skill_routing_mode=model_decided. Independent of the primary agent's "
-            "model path (local vs cloud). The local SLM server is currently "
-            "single-threaded and cannot run routing concurrently with the primary "
-            "agent, so the default is a remote model (claude_haiku). When local "
-            "concurrency improves OR for a fully-cloud deployment, point this at "
-            "any models.yaml entry. Empty string disables the separate routing "
-            "call (primary agent does its own routing via read_skill). "
-            "Env var: AGENT_SKILL_ROUTING_MODEL_KEY"
-        ),
-    )
-
-    # FRE-337: Skill nudge injection
-    skill_nudge_enabled: bool = Field(
-        default=True,
-        alias="AGENT_SKILL_NUDGE_ENABLED",
-        description=(
-            "Inject deterministic skill directive blocks (<skill_index_directive> and "
-            "<skill_usage_directives>) into the system prompt after skill content. "
-            "Set to False for eval baseline cells. "
-            "Env var: AGENT_SKILL_NUDGE_ENABLED"
-        ),
-    )
 
     # FRE-225: Egress URL guard (domain blocklist)
     url_guard_enabled: bool = Field(
@@ -2866,39 +2791,6 @@ class AppConfig(BaseSettings):
             "route with no error (ADR-0141 D2.2). Boot refuses to start when true "
             "(enforce_experimental_litellm_handler_disabled). "
             "Env var: EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
-        ),
-    )
-
-    # FRE-335 / ADR-0066 D2: skill routing threshold monitor
-    skill_index_p95_token_threshold: int = Field(
-        default=6000,
-        alias="AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD",
-        ge=100,
-        description=(
-            "Token threshold for skill index p95 injection size. When the rolling "
-            "7-day p95 of injected_chars (divided by 4) exceeds this value for two "
-            "consecutive days, the threshold monitor files a Linear issue recommending "
-            "AGENT_SKILL_ROUTING_MODE=model_decided. "
-            "Env var: AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD"
-        ),
-    )
-    skill_routing_threshold_monitor_enabled: bool = Field(
-        default=True,
-        alias="AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED",
-        description=(
-            "Enable the ADR-0066 D2 daily job that monitors skill index injection size "
-            "and files a Linear ticket when the threshold is exceeded. "
-            "Env var: AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED"
-        ),
-    )
-    skill_routing_threshold_monitor_hour_utc: int = Field(
-        default=5,
-        alias="AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC",
-        ge=0,
-        le=23,
-        description=(
-            "UTC hour at which the skill routing threshold monitor runs daily. "
-            "Env var: AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC"
         ),
     )
 

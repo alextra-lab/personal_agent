@@ -1,533 +1,123 @@
-"""Tests for the skills.py skill-doc loader and get_skill_block gate.
+"""Tests for the skill loader in ``orchestrator/skills.py`` (ADR-0156 D1, D2; FRE-1577).
 
-Phase A: frontmatter-driven auto-discovery replaces hardcoded _SKILL_FILES
-and _KEYWORD_ROUTES.  Tests validate the new API surface:
-  - _load_all_skills() / _get_cache()
-  - get_skill_block(message=...)
-  - find_skills_for_tool()
-  - get_all_skills()
+The loader reads ``<name>/SKILL.md`` folders, skips an invalid file with a warning, reloads when
+a file changes, and renders a catalog that depends on the skill files only.
 """
 
 from __future__ import annotations
 
-import time
+import os
 from pathlib import Path
 
 import pytest
 
 import personal_agent.orchestrator.skills as skills_module
-from personal_agent.config import settings
-from personal_agent.orchestrator.skills import (
-    _load_all_skills,
-    find_skills_for_tool,
-    get_all_skills,
-    get_skill_block,
-)
+from personal_agent.orchestrator.skills import _load_all_skills, get_all_skills
 
 
-class TestSkillDiscovery:
-    """Test 1: Auto-discovery loads skill docs from docs/skills/."""
+def _write(root: Path, folder: str, frontmatter: str, body: str = "Body text.") -> Path:
+    path = root / folder / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\n{frontmatter}---\n\n{body}\n", encoding="utf-8")
+    return path
 
-    def test_all_skills_nonempty(self) -> None:
-        """get_all_skills() returns at least one skill (production docs present)."""
+
+class TestDiscovery:
+    """The repository's own skills load."""
+
+    def test_the_eleven_agent_skills_load(self) -> None:
+        assert len(get_all_skills()) == 11
+
+    def test_a_folded_skill_is_gone(self) -> None:
         skills = get_all_skills()
-        assert len(skills) > 0, "No skills discovered — frontmatter parse failed?"
+        assert "bash" not in skills
+        assert "seshat-knowledge" not in skills  # an external skill is not the agent's
 
-    def test_bash_skill_present(self) -> None:
-        """The 'bash' skill is always discovered and has a body."""
-        skills = get_all_skills()
-        assert "bash" in skills, "'bash' skill not found"
-        assert skills["bash"].body, "'bash' skill body is empty"
-
-    def test_bash_skill_contains_expected_content(self) -> None:
-        """The 'bash' skill body contains the canonical anchor text."""
-        skills = get_all_skills()
-        assert "bash" in skills["bash"].body.lower()
-        assert "bash — Shell Command Executor" in skills["bash"].body
-
-    def test_skills_have_required_fields(self) -> None:
-        """Every loaded skill has non-empty name, description, and when_to_use."""
+    def test_every_skill_has_a_description_and_a_body(self) -> None:
         for name, skill in get_all_skills().items():
-            assert skill.name, f"skill '{name}' has empty name"
-            assert skill.description, f"skill '{name}' has empty description"
-            assert skill.when_to_use, f"skill '{name}' has empty when_to_use"
+            assert skill.description, name
+            assert skill.body, name
+            assert skill.folder.name == name
 
 
-class TestMissingFileDegradation:
-    """Test 2: _load_all_skills() degrades gracefully for missing/bad files."""
+class TestInvalidFilesAreSkipped:
+    """A file the CI validator would reject is skipped by the loader, not loaded wrong."""
 
-    def test_partial_load_returns_nonempty(self, tmp_path: Path) -> None:
-        """With one valid skill file, cache is non-empty."""
-        skill_file = tmp_path / "bash.md"
-        skill_file.write_text(
-            "---\nname: bash\ndescription: test\nwhen_to_use: always\n---\n\n# bash content\nMinimal content.",
-            encoding="utf-8",
+    def test_a_valid_folder_loads(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path,
+            "alpha",
+            "name: alpha\ndescription: Checks a thing.\nmetadata:\n  requires-tools: bash, read\n",
         )
         cache = _load_all_skills(tmp_path)
-        assert len(cache.docs) == 1
-        assert "bash" in cache.docs
-        assert "Minimal content." in cache.docs["bash"].body
+        assert list(cache.docs) == ["alpha"]
+        assert cache.docs["alpha"].requires_tools == ("bash", "read")
+        assert cache.docs["alpha"].body == "Body text."
 
-    def test_files_without_frontmatter_are_skipped(self, tmp_path: Path) -> None:
-        """Markdown files without YAML frontmatter are excluded from the cache."""
-        no_fm = tmp_path / "EMPIRICAL_TEST_RESULTS.md"
-        no_fm.write_text("# Just a heading\nNo frontmatter here.", encoding="utf-8")
-        cache = _load_all_skills(tmp_path)
-        assert len(cache.docs) == 0
-
-    def test_all_missing_returns_empty_cache(self, tmp_path: Path) -> None:
-        """When the skills directory is empty, the cache has no docs."""
-        cache = _load_all_skills(tmp_path)
-        assert cache.docs == {}
-
-    def test_missing_name_key_skips_file(self, tmp_path: Path) -> None:
-        """Files with frontmatter but no 'name' key are skipped."""
-        no_name = tmp_path / "nameless.md"
-        no_name.write_text(
-            "---\ndescription: something\nwhen_to_use: never\n---\n\nbody",
-            encoding="utf-8",
-        )
-        cache = _load_all_skills(tmp_path)
-        assert len(cache.docs) == 0
-
-    def test_unreadable_file_emits_warning(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An unreadable skill file logs a warning and does not crash."""
-        import unittest.mock
-
-        bad = tmp_path / "bad.md"
-        bad.write_text(
-            "---\nname: bad\ndescription: x\nwhen_to_use: x\n---\nbody", encoding="utf-8"
-        )
-
-        original_read_text = Path.read_text
-
-        def failing_read(self: Path, **kwargs: object) -> str:
-            if self.name == "bad.md":
-                raise OSError("permission denied")
-            return original_read_text(self, **kwargs)
-
-        with unittest.mock.patch.object(skills_module, "log") as mock_log:
-            monkeypatch.setattr(Path, "read_text", failing_read)
-            _load_all_skills(tmp_path)
-
-        assert mock_log.warning.called
-
-
-class TestFlagGating:
-    """Test 3: get_skill_block() respects settings.prefer_primitives_enabled."""
-
-    def test_returns_empty_when_flag_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """get_skill_block() returns '' when prefer_primitives_enabled is False."""
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
-        result = get_skill_block()
-        assert result == ""
-
-    def test_returns_nonempty_when_flag_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """get_skill_block() returns non-empty string when prefer_primitives_enabled is True."""
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        result = get_skill_block()
-        assert result != ""
-        assert result.startswith("<skill_library>")
-
-    def test_returns_empty_with_message_when_flag_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """get_skill_block() returns '' even with a message when flag is False."""
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
-        result = get_skill_block(message="show me logs")
-        assert result == ""
-
-
-class TestKeywordRouting:
-    """Test 4: Keyword-based routing injects the correct skill doc."""
+    def test_a_flat_file_is_not_a_skill(self, tmp_path: Path) -> None:
+        (tmp_path / "alpha.md").write_text("---\nname: alpha\ndescription: d\n---\nbody\n")
+        assert _load_all_skills(tmp_path).docs == {}
 
     @pytest.mark.parametrize(
-        "msg",
-        [
-            "show me logs",
-            "check your logs",
-            "check the logs",
-            "app logs",
-            "agent logs",
-            "any recent errors",
-            "show me traces",
-            "what happened last hour",
-            "show me agent-logs from last 24 hour",
-        ],
+        "frontmatter",
+        ["description: no name\n", "name: other\ndescription: wrong folder\n", "name: alpha\n"],
     )
-    def test_es_keywords_inject_es_skill(self, msg: str, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Natural user phrasing triggers the query-elasticsearch skill."""
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        result = get_skill_block(message=msg)
-        assert "agent-logs-" in result, (
-            f"ES skill not injected for message: {msg!r}\n"
-            "query-elasticsearch.md keywords are too restrictive."
-        )
+    def test_a_bad_frontmatter_is_skipped(self, tmp_path: Path, frontmatter: str) -> None:
+        _write(tmp_path, "alpha", frontmatter)
+        assert _load_all_skills(tmp_path).docs == {}
 
-    def test_no_keyword_match_returns_bash_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A message with no matching keywords returns only the bash skill body."""
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        result = get_skill_block(message="what is the meaning of life")
-        assert "bash — Shell Command Executor" in result
-        # ES-specific content should NOT be present
-        assert "agent-logs-YYYY.MM.DD" not in result
-
-    def test_none_message_returns_bash_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Passing message=None returns only the bash skill block."""
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        result = get_skill_block(message=None)
-        assert result.startswith("<skill_library>")
-        assert "bash — Shell Command Executor" in result
-
-
-class TestSkillNudgeParser:
-    """Test 5: _load_all_skills() parses the optional nudge: frontmatter field."""
-
-    def _write_skill(
-        self, tmp_path: Path, name: str, extra_fm: str = "", body: str = "# body"
-    ) -> None:
-        content = (
-            f"---\nname: {name}\ndescription: desc\nwhen_to_use: always\n{extra_fm}---\n\n{body}"
-        )
-        (tmp_path / f"{name}.md").write_text(content, encoding="utf-8")
-
-    def test_nudge_field_parsed_from_frontmatter(self, tmp_path: Path) -> None:
-        """When nudge: is set in frontmatter, SkillDoc.nudge carries that text."""
-        self._write_skill(tmp_path, "es", extra_fm='nudge: "Run a live ES query."\n')
-        cache = _load_all_skills(tmp_path)
-        assert cache.docs["es"].nudge == "Run a live ES query."
-
-    def test_nudge_field_none_when_absent(self, tmp_path: Path) -> None:
-        """When nudge: is absent from frontmatter, SkillDoc.nudge is None."""
-        self._write_skill(tmp_path, "bash")
-        cache = _load_all_skills(tmp_path)
-        assert cache.docs["bash"].nudge is None
-
-    def test_nudge_multiline_yaml_preserved(self, tmp_path: Path) -> None:
-        """Multi-line YAML nudge strings are loaded verbatim."""
-        multiline = "nudge: |\n  Line one.\n  Line two.\n"
-        self._write_skill(tmp_path, "metrics", extra_fm=multiline)
-        cache = _load_all_skills(tmp_path)
-        nudge = cache.docs["metrics"].nudge
-        assert nudge is not None
-        assert "Line one." in nudge
-        assert "Line two." in nudge
-
-    def test_two_calls_return_identical_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Repeated calls with the same message return the same value."""
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        first = get_skill_block(message="show me logs")
-        second = get_skill_block(message="show me logs")
-        assert first == second
-
-
-class TestFindSkillsForTool:
-    """Test 5: find_skills_for_tool() returns all skills linked to a tool name."""
-
-    def test_bash_tool_links_to_multiple_skills(self) -> None:
-        """find_skills_for_tool('bash') returns all SkillDocs listing bash."""
-        skills = find_skills_for_tool("bash")
-        assert len(skills) > 0
-        assert all("bash" in s.tools for s in skills)
-
-    def test_unknown_tool_returns_empty_list(self) -> None:
-        """find_skills_for_tool with an unregistered name returns []."""
-        result = find_skills_for_tool("nonexistent_tool_xyz")
-        assert result == []
-
-    def test_run_python_tool_links_to_run_python_skill(self) -> None:
-        """find_skills_for_tool('run_python') includes the run-python skill."""
-        skills = find_skills_for_tool("run_python")
-        names = [s.name for s in skills]
-        assert "run-python" in names
-
-    def test_read_tool_links_to_read_write_skill(self) -> None:
-        """find_skills_for_tool('read') includes the read-write skill."""
-        skills = find_skills_for_tool("read")
-        names = [s.name for s in skills]
-        assert "read-write" in names
-
-
-class TestMtimeCache:
-    """Test 6: Cache invalidates when skill files change."""
-
-    def test_cache_reloads_after_file_change(
+    def test_an_unreadable_file_logs_a_warning(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Modifying a skill file triggers a cache reload on next access."""
-        monkeypatch.setattr(skills_module, "_SKILLS_DIR", tmp_path)
-        monkeypatch.setattr(skills_module, "_cache", None)
+        bad = _write(tmp_path, "alpha", "name: alpha\ndescription: d\n")
+        original = Path.read_text
 
-        skill_file = tmp_path / "bash.md"
-        skill_file.write_text(
-            "---\nname: bash\ndescription: d\nwhen_to_use: w\n---\n\nv1 content",
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        def failing_read(self: Path, *args: object, **kwargs: object) -> str:
+            if self == bad:
+                raise OSError("permission denied")
+            return original(self, *args, **kwargs)  # type: ignore[arg-type]
 
-        first = get_skill_block()
-        assert "v1 content" in first
-
-        # Ensure mtime changes (some filesystems have 1-second resolution)
-        time.sleep(0.05)
-        skill_file.write_text(
-            "---\nname: bash\ndescription: d\nwhen_to_use: w\n---\n\nv2 content",
-            encoding="utf-8",
-        )
-        # Force mtime to differ (touch with offset to be safe on fast filesystems)
-        import os
-
-        stat = skill_file.stat()
-        os.utime(skill_file, (stat.st_atime, stat.st_mtime + 1.0))
-
-        second = get_skill_block()
-        assert "v2 content" in second
+        warnings: list[str] = []
+        monkeypatch.setattr(Path, "read_text", failing_read)
+        monkeypatch.setattr(skills_module.log, "warning", lambda event, **_: warnings.append(event))
+        assert _load_all_skills(tmp_path).docs == {}
+        assert warnings == ["skill_doc_unreadable"]
 
 
-class TestGetSkillBodies:
-    """``get_skill_bodies`` names what ``get_skill_block`` only renders (FRE-1004)."""
+class TestCacheAndCatalog:
+    """The cache follows the files; the catalog follows the cache."""
 
-    def test_names_match_the_bodies_in_the_text(self, monkeypatch) -> None:
-        from personal_agent.orchestrator.skills import get_skill_block, get_skill_bodies
-
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        text, names = get_skill_bodies(message="show me logs")
-
-        assert text == get_skill_block(message="show me logs")
-        assert "bash" in names
-        assert len(names) == len(set(names))
-
-    def test_disabled_returns_empty_text_and_no_names(self, monkeypatch) -> None:
-        from personal_agent.orchestrator.skills import get_skill_bodies
-
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
-        assert get_skill_bodies(message="show me logs") == ("", ())
-
-
-class TestSkillBodiesBudget:
-    """FRE-1529 AC-3: the bodies block is bounded, and every drop is logged."""
-
-    @pytest.fixture(autouse=True)
-    def _library(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A small library: bash, plus three keyword skills of known sizes."""
-
-        def write(name: str, keywords: list[str], body: str) -> None:
-            kw = f"keywords: {keywords}\n" if keywords else ""
-            (tmp_path / f"{name}.md").write_text(
-                f"---\nname: {name}\ndescription: d\nwhen_to_use: w\n{kw}---\n\n{body}",
-                encoding="utf-8",
-            )
-
-        write("bash", [], "B" * 100)
-        write("alpha", ["alpha"], "A" * 400)
-        write("beta", ["beta", "second"], "C" * 300)
-        write("gamma", ["gamma"], "G" * 50)
-        monkeypatch.setattr(skills_module, "_SKILLS_DIR", tmp_path)
-        monkeypatch.setattr(skills_module, "_cache", None)
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-
-    @pytest.mark.parametrize("cap_tokens", range(0, 400, 7))
-    def test_get_skill_bodies_never_exceeds_cap(
-        self, cap_tokens: int, monkeypatch: pytest.MonkeyPatch
+    def test_the_cache_reloads_after_a_change(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """At every cap, the whole block — header included — fits in ``cap * 4`` chars."""
-        from personal_agent.orchestrator.skills import get_skill_bodies
+        monkeypatch.setattr(skills_module, "SKILLS_DIR", tmp_path)
+        monkeypatch.setattr(skills_module, "_cache", None)
+        path = _write(tmp_path, "alpha", "name: alpha\ndescription: First text.\n")
+        assert "First text." in skills_module.assemble_skill_catalog()
 
-        monkeypatch.setattr(settings, "skill_bodies_max_tokens", cap_tokens)
-        text, names = get_skill_bodies(message="alpha beta second gamma")
+        _write(tmp_path, "alpha", "name: alpha\ndescription: Second text.\n")
+        stat = path.stat()
+        os.utime(path, (stat.st_atime, stat.st_mtime + 1.0))
+        assert "Second text." in skills_module.assemble_skill_catalog()
 
-        assert len(text) <= cap_tokens * 4
-        assert bool(text) == bool(names)
+        _write(tmp_path, "beta", "name: beta\ndescription: Third text.\n")
+        assert skills_module.skill_names() == ("alpha", "beta")
 
-    def test_drop_is_logged_with_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from structlog.testing import capture_logs
-
-        from personal_agent.orchestrator.skills import SKILL_BLOCK_HEADER, get_skill_bodies
-
-        # header + bash + one separator + beta: room for one keyword body beside bash.
-        cap_chars = len(SKILL_BLOCK_HEADER) + 100 + 7 + 300 + 7 + 50
-        monkeypatch.setattr(settings, "skill_bodies_max_tokens", cap_chars // 4 + 1)
-        with capture_logs() as logs:
-            _, names = get_skill_bodies(message="alpha beta second gamma", trace_id="t-1529")
-
-        events = [e for e in logs if e["event"] == "skill_bodies_truncated"]
-        assert len(events) == 1
-        assert events[0]["dropped_count"] == 1
-        assert events[0]["dropped_skills"] == ["alpha"]
-        assert events[0]["trace_id"] == "t-1529"
-        assert names == ("bash", "beta", "gamma")
-
-    def test_higher_hit_skill_kept_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Two keyword hits outrank one: beta is ranked ahead of alpha and gamma."""
-        from personal_agent.orchestrator.skills import get_skill_bodies
-
-        monkeypatch.setattr(settings, "skill_bodies_max_tokens", 10_000)
-        _, names = get_skill_bodies(message="alpha beta second gamma")
-
-        assert names == ("bash", "beta", "alpha", "gamma")
-
-    def test_an_oversized_body_does_not_block_a_smaller_one(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_the_catalog_is_one_line_per_skill_without_bodies(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Alpha does not fit, so the scan continues to gamma rather than stopping."""
-        from personal_agent.orchestrator.skills import SKILL_BLOCK_HEADER, get_skill_bodies
+        monkeypatch.setattr(skills_module, "SKILLS_DIR", tmp_path)
+        monkeypatch.setattr(skills_module, "_cache", None)
+        _write(tmp_path, "beta", "name: beta\ndescription: >-\n  Checks\n  beta.\n", "BETA BODY")
+        _write(tmp_path, "alpha", "name: alpha\ndescription: Checks alpha.\n", "ALPHA BODY")
+        catalog = skills_module.assemble_skill_catalog()
+        assert catalog.endswith("- alpha: Checks alpha.\n- beta: Checks beta.\n")
+        assert "BODY" not in catalog
+        assert "read_skill" in catalog
 
-        cap_chars = len(SKILL_BLOCK_HEADER) + 100 + 7 + 50
-        monkeypatch.setattr(settings, "skill_bodies_max_tokens", cap_chars // 4 + 1)
-        _, names = get_skill_bodies(message="alpha gamma")
-
-        assert names == ("bash", "gamma")
-
-    def test_cap_below_every_body_gives_no_block(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No orphan header: nothing fits, so nothing is sent."""
-        from personal_agent.orchestrator.skills import get_skill_bodies
-
-        monkeypatch.setattr(settings, "skill_bodies_max_tokens", 10)
-        assert get_skill_bodies(message="alpha") == ("", ())
-
-    def test_no_drop_logs_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from structlog.testing import capture_logs
-
-        from personal_agent.orchestrator.skills import get_skill_bodies
-
-        monkeypatch.setattr(settings, "skill_bodies_max_tokens", 10_000)
-        with capture_logs() as logs:
-            get_skill_bodies(message="alpha")
-
-        assert not [e for e in logs if e["event"] == "skill_bodies_truncated"]
-
-    def test_default_budget_admits_bash_and_the_largest_real_body(self) -> None:
-        """The 8,192 default must never make a real skill unreachable by keyword."""
-        from personal_agent.config.settings import AppConfig
-        from personal_agent.orchestrator.skills import SKILL_BLOCK_HEADER, _load_all_skills
-
-        real = _load_all_skills(Path(skills_module.__file__).resolve().parents[3] / "docs/skills")
-        largest = max(len(d.body) for n, d in real.docs.items() if n != "bash")
-        needed = len(SKILL_BLOCK_HEADER) + len(real.docs["bash"].body) + 7 + largest
-        default = AppConfig.model_fields["skill_bodies_max_tokens"].default
-
-        assert needed <= default * 4
-
-
-class TestWebSearchSkill:
-    """FRE-1290: docs/skills/web-search.md loads and routes outward-facing questions."""
-
-    def test_loaded_with_required_fields(self) -> None:
-        skills = get_all_skills()
-        assert "web-search" in skills, "'web-search' skill not found"
-        doc = skills["web-search"]
-        assert doc.description
-        assert doc.when_to_use
-        assert doc.nudge
-        assert doc.keywords
-        assert tuple(doc.tools) == ("web_search",)
-
-    def test_name_appears_in_compact_index(self) -> None:
-        from personal_agent.orchestrator.skills import assemble_skill_index
-
-        index = assemble_skill_index()
-        assert "web-search" in index, (
-            "web-search skill missing from assemble_skill_index() output — this is the "
-            "only field model_decided routing sees (name + description), so a missing "
-            "index entry means the router can never select it"
-        )
-
-    def test_keyword_routes_a_brand_question(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from personal_agent.orchestrator.skills import get_skill_block
-
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        block = get_skill_block(message="Which brand of olive oil should I buy?")
-        assert "web-search" in block or "SKILL: web-search" in block
-
-
-class TestSequentialThinkingSkill:
-    """FRE-1402: docs/skills/sequential-thinking.md replaces the removed
-    mcp_sequentialthinking MCP tool (ADR-0028:83, FRE-1358) with a skill doc.
-    """
-
-    def test_loaded_with_required_fields(self) -> None:
-        skills = get_all_skills()
-        assert "sequential-thinking" in skills, "'sequential-thinking' skill not found"
-        doc = skills["sequential-thinking"]
-        assert doc.description
-        assert doc.when_to_use
-        assert doc.nudge
-        assert doc.keywords
-
-    def test_declares_no_tools(self) -> None:
-        """AC-4: this is a prompt technique, not a tool — ADR-0028 ruled on that."""
-        doc = get_all_skills()["sequential-thinking"]
-        assert doc.tools == ()
-
-    def test_name_appears_in_compact_index(self) -> None:
-        from personal_agent.orchestrator.skills import assemble_skill_index
-
-        index = assemble_skill_index()
-        assert "sequential-thinking" in index, (
-            "sequential-thinking skill missing from assemble_skill_index() output — "
-            "this is the field model_decided/hybrid routing reads to self-select the "
-            "skill via read_skill() on a judgment call, so a missing index entry means "
-            "the primary model can never reach for it"
-        )
-
-    def test_cites_provenance(self) -> None:
-        """AC-5: the file must link the removal (FRE-1358) and the ruling (ADR-0028:83)."""
-        doc = get_all_skills()["sequential-thinking"]
-        assert "ADR-0028" in doc.body
-        assert "FRE-1358" in doc.body
-
-    def test_keyword_routes_an_explicit_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from personal_agent.orchestrator.skills import get_skill_block
-
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        block = get_skill_block(message="Walk me through this step by step.")
-        assert "sequential-thinking" in block or "SKILL: sequential-thinking" in block
-
-    def test_no_governance_entry_added(self) -> None:
-        """AC-4: no new tool entry — the fossil mcp_sequentialthinking entry from
-        FRE-1358 is untouched, and no new key was added for this skill.
-        """
-        import yaml
-
-        governance_path = (
-            Path(__file__).resolve().parents[3] / "config" / "governance" / "tools.yaml"
-        )
-        governance = yaml.safe_load(governance_path.read_text(encoding="utf-8"))
-        tools = governance["tools"]
-        assert "sequential-thinking" not in tools
-        assert "sequential_thinking" not in tools
-
-    def test_surfaces_a_false_start_not_a_spontaneous_reversal(self) -> None:
-        """AC-2a (master's 2026-09-08 comment, superseding the original AC-2):
-
-        master's live verification found the original 'surface only on a
-        spontaneous reversal' rule structurally unmeetable — with the primary's
-        32,768-token thinking budget, any reversal happens inside the invisible
-        thinking block, so there is no live reversal left for the visible
-        answer to mark. The owner's replacement mechanism is to show a wrong
-        step the model actually tried and abandoned, when the problem had one.
-        """
-        doc = get_all_skills()["sequential-thinking"]
-        assert "false start" in doc.body.lower() or "tried and abandoned" in doc.body.lower()
-
-    def test_forbids_inventing_a_step_never_taken(self) -> None:
-        """AC-2b: the shown misstep must be real, not decorative. Master's
-        comment named the risk explicitly — instructing the model to invent a
-        plausible-looking wrong step it never took would produce the same
-        confabulation shape FRE-1327 is open on.
-        """
-        doc = get_all_skills()["sequential-thinking"]
-        body_lower = doc.body.lower()
-        assert "invent" in body_lower or "fabricat" in body_lower
-        assert "fre-1327" in body_lower
-
-    def test_still_stays_clean_with_no_false_start(self) -> None:
-        """AC-2c (renumbered from the original AC-2b, stands as written): an
-        unremarkable multi-step turn with no false start must still show no
-        visible scaffold. The rewritten surfacing rule must not regress to
-        always-surface, which the owner already rejected once.
-        """
-        doc = get_all_skills()["sequential-thinking"]
-        assert "stay" in doc.body.lower() and "clean" in doc.body.lower()
+    def test_no_skill_gives_no_catalog(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(skills_module, "SKILLS_DIR", tmp_path)
+        monkeypatch.setattr(skills_module, "_cache", None)
+        assert skills_module.assemble_skill_catalog() == ""

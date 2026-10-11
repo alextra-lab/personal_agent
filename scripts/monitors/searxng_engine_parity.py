@@ -20,9 +20,17 @@ So the check is deliberately dumb and post-deploy: read the declared engine name
 ask the running instance what it actually registered, and fail loudly on any
 declared engine that is missing.
 
+The opposite drift is just as silent (FRE-1584): ``use_default_settings`` keeps every
+upstream engine the file does not remove, so an engine the file never named can run —
+``google cse`` did, over quota, and caused 271 of 290 degraded searches in 14 days.
+With ``keep_only`` the file is the whole set, so the check also fails on any registered
+engine that the file does not declare.
+
 Exit codes:
-    0   green   — every declared engine is registered
+    0   green   — every declared engine is registered, and nothing else is
     2   red     — at least one declared engine is missing
+    4   red     — the instance runs at least one engine the file does not declare
+                  (when both 2 and 4 apply, 2 is returned and both are printed)
     3   skipped — SearXNG unreachable (not a parity failure)
     64  usage   — bad CLI args
 
@@ -47,6 +55,7 @@ import yaml
 EXIT_OK = 0
 EXIT_MISSING = 2
 EXIT_UNREACHABLE = 3
+EXIT_UNEXPECTED = 4
 EXIT_USAGE = 64
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8888"
@@ -85,6 +94,10 @@ def declared_engines(config: dict[str, Any]) -> set[str]:
     are an intentional absence, not a parity failure, so they are subtracted rather
     than reported.
 
+    ``use_default_settings.engines.keep_only`` (FRE-1584) names the engines that run.
+    An engine kept at its upstream defaults needs no ``engines:`` block, so those names
+    are added; otherwise the check would never look for it.
+
     Args:
         config: The parsed settings mapping.
 
@@ -112,8 +125,32 @@ def declared_engines(config: dict[str, Any]) -> set[str]:
             f"keys, got {type(uds_engines).__name__}. Refusing rather than assuming nothing "
             "is removed, which would report a false OK on a file SearXNG cannot honour."
         )
+    keep_only = (uds_engines or {}).get("keep_only")
+    if keep_only is not None and not isinstance(keep_only, list):
+        raise ValueError(
+            "`use_default_settings.engines.keep_only` is not a list — got "
+            f"{type(keep_only).__name__}. Refusing rather than reading it as 'keep everything', "
+            "which would report a false OK on a file SearXNG cannot honour."
+        )
     removed = set((uds_engines or {}).get("remove") or [])
-    return names - removed
+    return (names | set(keep_only or [])) - removed
+
+
+def unexpected_engines(declared: set[str], registered: set[str]) -> list[str]:
+    """Engines the running instance registered that the settings file does not declare.
+
+    The dangerous drift under ``use_default_settings`` is an undeclared engine that
+    loaded anyway, not a declared one that failed to: nothing in the file mentions it,
+    so nothing reviews it (FRE-1584).
+
+    Args:
+        declared: Engine names the settings file expects (see ``declared_engines``).
+        registered: Engine names the running instance reports.
+
+    Returns:
+        The sorted names that are registered but not declared.
+    """
+    return sorted(registered - declared)
 
 
 def registered_engines(base_url: str) -> set[str]:
@@ -181,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_UNREACHABLE
 
     missing = sorted(declared - registered)
+    unexpected = unexpected_engines(declared, registered)
 
     print(f"settings:   {path}")
     print(f"declared:   {len(declared)} engines")
@@ -196,9 +234,23 @@ def main(argv: list[str] | None = None) -> int:
             "`inactive: true` (which use_default_settings merges by name and which "
             "`disabled: false` does NOT override)."
         )
-        return EXIT_MISSING
 
-    print("\nOK — every declared engine is registered.")
+    if unexpected:
+        print(f"\nFAIL — {len(unexpected)} registered engine(s) the settings file does NOT declare:")
+        for name in unexpected:
+            print(f"  - {name}")
+        print(
+            "\nThe instance runs engines nobody named. Check that `use_default_settings."
+            "engines.keep_only` is present and that the container was restarted after the "
+            "file changed — SearXNG reads settings.yml only at startup."
+        )
+
+    if missing:
+        return EXIT_MISSING
+    if unexpected:
+        return EXIT_UNEXPECTED
+
+    print("\nOK — every declared engine is registered, and no other engine is.")
     return EXIT_OK
 
 

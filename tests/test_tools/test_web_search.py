@@ -4,6 +4,7 @@ Tests use mocked httpx responses — no SearXNG container required.
 The executor returns dict[str, Any] on success and raises ToolExecutionError on failure.
 """
 
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -85,20 +86,19 @@ def test_searxng_settings_yml_not_tracked_in_git() -> None:
     assert result.stdout.strip() == ""
 
 
-def test_exa_not_in_general_category() -> None:
-    """Exa must not be tagged under the default 'general' category.
+def test_exa_serves_general_and_its_own_category() -> None:
+    """Exa answers a default web search and stays reachable as categories=exa.
 
-    FRE-1310: SearXNG is self-hosted (queries never leave our infra); Exa is a
-    managed third-party vendor that sees plaintext queries. Scoped to its own
-    category so adoption is opt-in per query, not a silent default-search
-    exposure for health/travel/personal queries. Reachable via engines=exaapi
-    or categories=exa.
+    FRE-1310 first scoped Exa to its own opt-in category, because it is a managed
+    third-party vendor that sees plaintext queries. The owner reversed that on
+    2026-09-10 (the production file carries the decision), and FRE-1584 makes it
+    the template's state: web search runs on ``braveapi`` + ``exa``. A template that
+    kept Exa out of ``general`` would give a fresh install a one-engine web search.
     """
     cfg = _load_searxng_config()
     exa = next(e for e in cfg["engines"] if e["name"] == "exa")
     assert exa["engine"] == "exaapi"
-    assert exa["categories"] != "general"
-    assert exa["categories"] == "exa"
+    assert _engine_categories(exa) == {"general", "exa"}
 
 
 def test_exa_search_type_pinned_to_auto() -> None:
@@ -158,6 +158,173 @@ def test_exa_shipped_disabled_with_placeholder_key() -> None:
     exa = next(e for e in cfg["engines"] if e["name"] == "exa")
     assert exa["disabled"] is True
     assert exa["api_key"] == "REPLACE_WITH_EXA_API_KEY"
+
+
+# FRE-1584: the planned engine set. Pinned by name so any change to it is a visible edit
+# here, not a silent inheritance from SearXNG's upstream defaults. Rule: an engine stays
+# only if it calls a JSON or XML API (not an HTML page). The template header names the
+# three kept exceptions whose module marks `use_official_api: False`: currency,
+# chefkoch and mdn.
+_PLANNED_ENGINES: dict[str, frozenset[str]] = {
+    "general": frozenset({"braveapi", "exa", "currency"}),
+    "it": frozenset(
+        {
+            "stackoverflow",
+            "github",
+            "hackernews",
+            "mdn",
+            "docker hub",
+            "huggingface",
+            "huggingface datasets",
+            "huggingface spaces",
+        }
+    ),
+    "science": frozenset(
+        {
+            "arxiv",
+            "semantic scholar",
+            "pubmed",
+            "crossref",
+            "openalex",
+            "openairepublications",
+        }
+    ),
+    "news": frozenset({"wikinews"}),
+    "social_media": frozenset({"lemmy posts"}),
+    "recipes": frozenset({"chefkoch"}),
+    "weather": frozenset({"openmeteo", "wttr.in"}),
+}
+
+# Engines that fetch HTML pages or call a site-internal endpoint. None may be enabled.
+_SCRAPING_ENGINES = frozenset(
+    {
+        "google",
+        "google cse",
+        "google news",
+        "google scholar",
+        "bing",
+        "bing news",
+        "brave",
+        "brave.news",
+        "duckduckgo",
+        "duckduckgo news",
+        "startpage",
+        "startpage news",
+        "qwant",
+        "qwant news",
+        "reuters",
+        "lobste.rs",
+        "pypi",
+    }
+)
+
+
+def _engine_categories(entry: dict) -> set[str]:
+    raw = entry.get("categories") or []
+    return {raw} if isinstance(raw, str) else set(raw)
+
+
+def test_searxng_template_names_exactly_the_planned_engine_set() -> None:
+    """The template's running set is its own file, not an upstream default (FRE-1584 AC-1).
+
+    ``use_default_settings`` keeps every upstream engine the file does not remove, so
+    the file declared 28 of the 90 enabled engines and 62 ran unnamed. ``keep_only``
+    makes the file the whole set. This asserts the set is exactly the planned one, and that every
+    engine the file configures is also kept, so nothing is configured but dropped.
+    """
+    cfg = _load_searxng_example_config()
+    keep_only = cfg["use_default_settings"]["engines"]["keep_only"]
+    planned = frozenset().union(*_PLANNED_ENGINES.values())
+    assert set(keep_only) == planned
+    assert len(keep_only) == len(set(keep_only)), "duplicate name in keep_only"
+    assert {e["name"] for e in cfg["engines"]} == planned
+
+
+def test_searxng_template_enables_no_scraping_engine() -> None:
+    """No scraper and no ``google cse`` appears anywhere in the template (FRE-1584 AC-1).
+
+    Not even as ``disabled: true``: ``keep_only`` does not filter engines the file
+    declares itself, so a disabled scraper left in ``engines:`` would still register
+    and show in ``/config``. Those blocks are deleted, not switched off.
+    """
+    cfg = _load_searxng_example_config()
+    declared = {e["name"] for e in cfg["engines"]}
+    kept = set(cfg["use_default_settings"]["engines"]["keep_only"])
+    assert (declared | kept) & _SCRAPING_ENGINES == set()
+
+
+def test_searxng_template_assigns_each_planned_engine_its_category() -> None:
+    """Each planned engine serves the category the tool description promises."""
+    cfg = _load_searxng_example_config()
+    by_name = {e["name"]: e for e in cfg["engines"]}
+    for category, names in _PLANNED_ENGINES.items():
+        for name in names:
+            if name in {"braveapi", "currency"}:
+                # Upstream's default entry already places these in `general`; the file
+                # does not restate that, so there is nothing to assert here.
+                continue
+            assert category in _engine_categories(by_name[name]), f"{name} not in {category}"
+
+
+def test_searxng_template_braveapi_is_active() -> None:
+    """``braveapi`` is not disabled, and overrides upstream's ``inactive: true``.
+
+    FRE-1331: upstream ships ``braveapi`` inactive and ``use_default_settings`` merges
+    by name, so without ``inactive: false`` the engine is silently never loaded.
+    """
+    cfg = _load_searxng_example_config()
+    brave = next(e for e in cfg["engines"] if e["name"] == "braveapi")
+    assert brave["inactive"] is False
+    assert brave["disabled"] is False
+
+
+def test_searxng_template_drops_wikipedia() -> None:
+    """Wikipedia is removed: its engine treats the whole query as a page title (FRE-1584 AC-3).
+
+    The engine builds ``/page/summary/<quote(query)>``. ``quote`` keeps ``/`` literal, so
+    a query containing a slash adds a path segment and Wikipedia answers 400. A ``|``
+    answers 500. Neither is the one 400 detail the engine swallows, so each one raises,
+    and any unresponsive engine marks the whole search ``degraded_retrieval``. Measured
+    over 14 days: 28 of 482 searches (5.8%) were degraded by Wikipedia alone, which on
+    its own breaks the 5% target. The cause is upstream code, so no setting fixes it.
+    """
+    cfg = _load_searxng_example_config()
+    declared = {e["name"] for e in cfg["engines"]}
+    kept = set(cfg["use_default_settings"]["engines"]["keep_only"])
+    assert "wikipedia" not in declared | kept
+
+
+def _description_list(text: str, label: str) -> list[str]:
+    """Return the comma-separated names that follow ``label:`` up to the sentence end.
+
+    A sentence ends at a period followed by whitespace or the end of the text, so a
+    name that contains a period (``wttr.in``) is not cut short.
+    """
+    after = text.split(f"{label}:", 1)[1]
+    sentence = re.split(r"\.(?:\s|$)", after, maxsplit=1)[0]
+    names = (re.sub(r"\s*\(.*?\)", "", name).strip() for name in sentence.split(","))
+    return [name for name in names if name]
+
+
+def test_web_search_description_names_only_engines_and_categories_that_exist() -> None:
+    """The model addresses engines and categories by the names the tool text lists.
+
+    FRE-1331: a stale name silently returns nothing, and the two lists had drifted from
+    the running instance. This ties both lists to the template, so dropping an engine
+    without editing the tool text fails here instead of in a live search.
+    """
+    cfg = _load_searxng_example_config()
+    keep_only = set(cfg["use_default_settings"]["engines"]["keep_only"])
+    categories = {"general"}.union(*(_engine_categories(e) for e in cfg["engines"]))
+
+    engines_param = next(p for p in web_search_tool.parameters if p.name == "engines")
+    listed_engines: set[str] = set()
+    for label in ("General", "IT", "Science", "News", "Social", "Weather", "Recipes"):
+        listed_engines.update(_description_list(engines_param.description, label))
+    assert listed_engines <= keep_only, sorted(listed_engines - keep_only)
+
+    listed_categories = set(_description_list(web_search_tool.description, "Categories"))
+    assert listed_categories <= categories, sorted(listed_categories - categories)
 
 
 def _mock_searxng_response(

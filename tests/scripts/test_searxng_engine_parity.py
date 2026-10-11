@@ -17,9 +17,19 @@ silently lie.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
-from scripts.monitors.searxng_engine_parity import declared_engines, settings_path
+import scripts.monitors.searxng_engine_parity as parity
+from scripts.monitors.searxng_engine_parity import (
+    EXIT_MISSING,
+    EXIT_OK,
+    EXIT_UNEXPECTED,
+    declared_engines,
+    settings_path,
+    unexpected_engines,
+)
 
 
 def test_declared_engines_subtracts_the_remove_list() -> None:
@@ -111,3 +121,126 @@ def test_settings_path_prefers_the_real_file_when_it_exists() -> None:
 def test_settings_path_honours_an_explicit_override() -> None:
     """An explicit --settings path wins, which is what makes the seeded negative possible."""
     assert settings_path("/tmp/seeded.yml").as_posix() == "/tmp/seeded.yml"
+
+
+def test_declared_engines_includes_the_keep_only_list() -> None:
+    """Names in `keep_only` are expected to load even when `engines:` does not restate them.
+
+    FRE-1584: `keep_only` makes the settings file the whole engine set. An engine kept
+    with its upstream defaults needs no `engines:` block, so reading only `engines:`
+    would leave it out of the expected set and the check would never look for it.
+    """
+    config = yaml.safe_load(
+        """
+        use_default_settings:
+          engines:
+            keep_only:
+              - github
+              - arxiv
+        engines:
+          - name: arxiv
+          - name: exa
+        """
+    )
+    assert declared_engines(config) == {"github", "arxiv", "exa"}
+
+
+def test_declared_engines_refuses_a_non_list_keep_only() -> None:
+    """A `keep_only` that is not a list must REFUSE, never be read as "keep everything"."""
+    config = yaml.safe_load(
+        """
+        use_default_settings:
+          engines:
+            keep_only: github
+        engines:
+          - name: arxiv
+        """
+    )
+    with pytest.raises(ValueError, match="keep_only"):
+        declared_engines(config)
+
+
+def test_unexpected_engines_reports_a_running_engine_the_file_does_not_declare() -> None:
+    """An engine the instance runs but the file never named is the scraper this ticket removes.
+
+    FRE-1584 AC-1. `use_default_settings` inherits every upstream engine silently, so
+    the dangerous drift is not a declared engine failing to load (the old check) but an
+    undeclared one that loaded anyway. Seeded negative: `google cse` was enabled by an
+    upstream default and was never named in the file.
+    """
+    declared = {"braveapi", "exa", "github"}
+    registered = {"braveapi", "exa", "github", "google cse", "bing news"}
+    assert unexpected_engines(declared, registered) == ["bing news", "google cse"]
+
+
+def test_unexpected_engines_is_empty_when_the_instance_runs_exactly_the_file() -> None:
+    """No extras, no report: the positive case the seeded negative above is measured against."""
+    names = {"braveapi", "exa", "github"}
+    assert unexpected_engines(names, set(names)) == []
+
+
+_SETTINGS_TWO_ENGINES = """
+use_default_settings:
+  engines:
+    keep_only:
+      - braveapi
+      - exa
+engines:
+  - name: braveapi
+  - name: exa
+"""
+
+
+def _run_main(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    registered: set[str],
+) -> int:
+    """Run ``main`` against a seeded settings file and a seeded instance answer."""
+    settings = tmp_path / "settings.yml"
+    settings.write_text(_SETTINGS_TWO_ENGINES)
+    monkeypatch.setattr(parity, "registered_engines", lambda _base_url: registered)
+    return parity.main(["--settings", str(settings)])
+
+
+def test_main_exits_0_only_when_the_instance_runs_exactly_the_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Exact parity is the only green. Every other case below must differ from this one."""
+    assert _run_main(monkeypatch, tmp_path, {"braveapi", "exa"}) == EXIT_OK
+
+
+def test_main_exits_4_when_the_instance_runs_an_undeclared_engine(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The FRE-1584 failure: `google cse` runs, the file never named it, and the run is red.
+
+    Seeded negative on the wiring, not only on the helper. Deleting the
+    ``if unexpected: return EXIT_UNEXPECTED`` branch, or returning ``EXIT_OK`` when
+    ``unexpected`` is non-empty, must fail this test and nothing else needs to notice.
+    """
+    code = _run_main(monkeypatch, tmp_path, {"braveapi", "exa", "google cse"})
+    assert code == EXIT_UNEXPECTED
+    assert "google cse" in capsys.readouterr().out
+
+
+def test_main_exits_2_when_a_declared_engine_did_not_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A declared engine that never registered is still the original red."""
+    assert _run_main(monkeypatch, tmp_path, {"braveapi"}) == EXIT_MISSING
+
+
+def test_main_prefers_exit_2_and_prints_both_when_missing_and_unexpected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Both failures at once: the exit is 2, and neither list is hidden by the other."""
+    code = _run_main(monkeypatch, tmp_path, {"braveapi", "google cse"})
+    out = capsys.readouterr().out
+    assert code == EXIT_MISSING
+    assert "exa" in out
+    assert "google cse" in out

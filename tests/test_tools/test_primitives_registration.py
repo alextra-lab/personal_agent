@@ -1,6 +1,6 @@
 """Tests for FRE-261 PIVOT-2 primitive tool registration wiring.
 
-Verifies that the four primitive tools (read, write, bash, run_python) are
+Verifies that the primitive tools (read, write, edit, bash, run_python) are
 only registered when ``settings.primitive_tools_enabled`` is True.
 
 After FRE-265 (ADR-0063 PIVOT-6) the eight legacy curated tools (read_file,
@@ -40,13 +40,14 @@ class TestPrimitivesNotRegisteredByDefault:
         assert "run_python" not in tool_names
         assert "read" not in tool_names
         assert "write" not in tool_names
+        assert "edit" not in tool_names
 
 
 class TestPrimitivesRegisteredWhenFlagEnabled:
     """Primitives ARE registered when the flag is flipped on."""
 
     def test_primitives_registered_when_flag_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When primitive_tools_enabled=True, all four primitives are in the registry."""
+        """When primitive_tools_enabled=True, every primitive is in the registry."""
         monkeypatch.setattr(settings, "primitive_tools_enabled", True)
 
         # Create a fresh registry (bypass the module-level singleton so we
@@ -61,10 +62,11 @@ class TestPrimitivesRegisteredWhenFlagEnabled:
         assert "bash" in tool_names
         assert "read" in tool_names
         assert "write" in tool_names
+        assert "edit" in tool_names
         assert "run_python" in tool_names
 
     def test_primitives_absent_when_flag_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When primitive_tools_enabled=False, all four primitives are absent."""
+        """When primitive_tools_enabled=False, every primitive is absent."""
         monkeypatch.setattr(settings, "primitive_tools_enabled", False)
 
         from personal_agent.tools import register_mvp_tools
@@ -77,6 +79,7 @@ class TestPrimitivesRegisteredWhenFlagEnabled:
         assert "bash" not in tool_names
         assert "read" not in tool_names
         assert "write" not in tool_names
+        assert "edit" not in tool_names
         assert "run_python" not in tool_names
 
 

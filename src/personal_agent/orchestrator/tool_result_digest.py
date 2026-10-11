@@ -450,9 +450,9 @@ def _update_pins(ctx: "ExecutionContext", sidecar: dict[str, dict[str, Any]]) ->
     """Maintain read→write dependency pins from the current batch (ADR-0085 §D4).
 
     Records a pin for each ``read`` with a ``path``; releases prior-round pins
-    whose path saw a successful ``write`` this round (except a same-batch
+    whose path saw a successful ``write`` or ``edit`` this round (except a same-batch
     read+write to that path — Codex Q2, deferred); and releases pins past the
-    ``pin_ttl_turns`` abandonment bound. A failed ``write`` never releases.
+    ``pin_ttl_turns`` abandonment bound. A failed ``write`` or ``edit`` never releases.
     """
     round_now = ctx.tool_iteration_count
     from personal_agent.orchestrator.types import ToolResultPin
@@ -466,7 +466,12 @@ def _update_pins(ctx: "ExecutionContext", sidecar: dict[str, dict[str, Any]]) ->
         if tool_name == "read" and isinstance(path, str) and path:
             ctx.tool_result_pins[tool_call_id] = ToolResultPin(path=path, round_pinned=round_now)
             reads_this_batch.add(path)
-        elif tool_name == "write" and info.get("success") and isinstance(path, str) and path:
+        elif (
+            tool_name in ("write", "edit")
+            and info.get("success")
+            and isinstance(path, str)
+            and path
+        ):
             writes_ok_this_batch.add(path)
 
     # Release prior-round pins on a successful write — unless the same path was

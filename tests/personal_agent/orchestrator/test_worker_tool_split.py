@@ -46,6 +46,7 @@ SIDE_EFFECTING = frozenset(
     {
         "bash",
         "write",
+        "edit",
         "write_file",
         "notes_write",
         "artifact_write",
@@ -200,20 +201,22 @@ class TestToolsReachTheWorkers:
         conditional = {"notes_search"}
         assert (listed - conditional) <= offered, sorted((listed - conditional) - offered)
 
-    def test_the_primary_is_not_offered_the_worker_only_tool(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("mode", [Mode.NORMAL, Mode.ALERT, Mode.DEGRADED, Mode.RECOVERY])
+    def test_the_primary_is_offered_query_telemetry(
+        self, monkeypatch: pytest.MonkeyPatch, mode: Mode
     ) -> None:
-        """The primary keeps its bash route and its tool surface (and per-turn tokens)."""
+        """ADR-0156 D7.2 (FRE-1576 AC-3): the primary's tool list on a turn has query_telemetry.
+
+        ``get_tool_definitions_for_llm(mode=ctx.mode)`` is the call the primary's turn makes
+        (``orchestrator/executor.py``).
+        """
         from personal_agent.config import settings
 
         monkeypatch.setattr(settings, "primitive_tools_enabled", True)
         registry = ToolRegistry()
         register_mvp_tools(registry)
-        primary = {
-            d["function"]["name"] for d in registry.get_tool_definitions_for_llm(Mode.NORMAL)
-        }
-        assert "query_telemetry" not in primary
-        assert "query_telemetry" in registry.list_tool_names()
+        primary = {d["function"]["name"] for d in registry.get_tool_definitions_for_llm(mode)}
+        assert "query_telemetry" in primary
 
     def test_the_worker_loop_builds_the_declaration_from_the_full_registry(self) -> None:
         from unittest.mock import MagicMock, patch

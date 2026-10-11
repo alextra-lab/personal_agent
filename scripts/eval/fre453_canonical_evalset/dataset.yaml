@@ -29,9 +29,9 @@ coverage:
   # artifact-generation sub-agent, distilled into _HTML_GENERATION_SYSTEM_PROMPT; it is
   # not a user-routable skill and has no skill-loading mechanism wired yet, so no case.
   allowlist_skills: [get_location, artifact-design]
-  # query_telemetry (FRE-1564) is worker-only: the primary is never offered it, so no
-  # primary-facing case can exercise it.
-  allowlist_tools: [get_location, get_library_docs, expand_tool_result, query_telemetry]
+  # edit (ADR-0156 D7.1, FRE-1576) has no natural pedagogical case yet. query_telemetry is
+  # offered to the primary since FRE-1576 (D7.2) and is claimed by infra_triage_pedagogy.
+  allowlist_tools: [get_location, get_library_docs, expand_tool_result, edit]
   # MCP tools are enforced at family granularity (a real browser task exercises many
   # mcp_browser_* micro-tools in one turn; per-method cases are meaningless).
   tool_families:
@@ -275,7 +275,7 @@ cases:
       pedagogical_outcomes: []
       tools_used_nonempty: true
       skills: [infrastructure-health, system-diagnostics, system-metrics, bash]
-      tools_any_of: [bash]
+      tools_any_of: [bash, query_telemetry]
     rubric:
       - "Triage ORDERING has a rationale (blast radius first, then dependencies…)."
       - "Real health output drives the lesson; the pedagogy wraps actual signals."

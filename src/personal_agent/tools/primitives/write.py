@@ -49,6 +49,7 @@ write_tool = ToolDefinition(
         "Durable paths survive a restart: /app/agent_workspace/** and /app/telemetry/**. "
         "Any other path under /app/ is refused, because a rebuild destroys it; use /tmp/ for "
         "scratch work that need not survive. "
+        "To change part of an existing file, use edit. "
         "Do not use it to read a file (use read) or to run code (use run_python). "
         "A path outside the allowed paths is refused. "
         'Examples: write(path="/app/agent_workspace/notes/plan.md", content="# Plan\n...", '

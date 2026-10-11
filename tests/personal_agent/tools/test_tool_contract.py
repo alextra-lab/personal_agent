@@ -40,8 +40,8 @@ from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.telemetry_query import ALLOWED_FIELDS
 from personal_agent.tools.types import RESULT_TOKEN_CEILING, ToolDefinition, ToolParameter
 
-#: The 24 tools of the ADR-0156 migration table that T3 covers: the 28 rows minus the three
-#: MCP copies (D7.5) and ``edit`` (T4).
+#: The 25 tools of the ADR-0156 migration table: the 28 rows minus the three MCP copies
+#: (D7.5). ``edit`` joined in T4 (FRE-1576).
 EXPECTED_TOOLS = frozenset(
     {
         "search_memory",
@@ -64,6 +64,7 @@ EXPECTED_TOOLS = frozenset(
         "get_location",
         "read",
         "write",
+        "edit",
         "bash",
         "run_python",
         "read_skill",

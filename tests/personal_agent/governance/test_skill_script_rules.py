@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from personal_agent.governance import permissions
 from personal_agent.governance.permissions import (
     PermissionRuleError,
     evaluate_permission,
@@ -75,7 +76,7 @@ def test_ac1_the_mermaid_check_runs_without_a_card_in_normal_mode() -> None:
 
 
 def test_ac1_the_documented_timeline_pipeline_runs_without_a_card() -> None:
-    """docker logs has its own rule, in NORMAL only, so the whole pipeline is a NORMAL check."""
+    """Docker logs has its own rule, in NORMAL only, so the whole pipeline is a NORMAL check."""
     command = (
         f"docker logs cloud-sim-seshat-gateway --since=40m 2>&1 | python3 {_TIMELINE} 0a1b2c3d"
     )
@@ -108,7 +109,8 @@ def test_ac1_each_script_has_a_rule_in_the_real_file() -> None:
         "python3 docs/skills/neo4j-direct/cypher.py x",
         "python3 docs/skills/neo4j-direct/scripts/other.py",
         f"python3 ./{_PROBE} all",
-        f"python3 /app/{_PROBE} all",
+        # f"python3 /app/{_PROBE} all" asked here until FRE-1589: it names the same file when
+        # bash starts in /app, so it is allowed there (the FRE-1589 tests below).
         f"python3 -I {_PROBE} all",
         f"python3 -m {_PROBE} all",
         f"python {_PROBE} all",
@@ -219,6 +221,121 @@ def test_ac2_the_path_is_read_from_the_working_directory_of_bash(
 def test_ac2_an_exact_python3_rule_stays_as_d82_had_it() -> None:
     """D8.2: an exact rule may name the full command of a program-running word."""
     _load("bash(python3 /tmp/x.py)")
+
+
+# --- FRE-1589: the absolute /app/ form of a reviewed script ---------------------------------
+#
+# read_skill gives base_dir as /app/docs/skills/<skill>, so the model may run the script by its
+# absolute path. In the image, bash starts in /app, so that path names the reviewed file.
+
+
+@pytest.fixture
+def in_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the bash working directory /app, as in the gateway image."""
+    monkeypatch.setattr(permissions, "_bash_workdir", lambda: Path("/app"))
+
+
+@pytest.mark.usefixtures("in_app")
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"python3 /app/{_PROBE} all",
+        f"python3 /app/{_PROBE} postgres",
+        f'python3 /app/{_CYPHER} "MATCH (e:Entity) RETURN count(e) AS n"',
+        "curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' "
+        f"| grep '^agent-monitors-joinability-' "
+        f"| python3 /app/{_CLASSIFIER} agent-monitors-joinability",
+        f"python3 /app/{_TIMELINE} 0a1b2c3d-trace",
+    ],
+)
+@pytest.mark.parametrize("mode", ["NORMAL", "ALERT", "DEGRADED"])
+def test_fre1589_ac1_the_absolute_form_runs_without_a_card(command: str, mode: str) -> None:
+    assert _bash(command, mode) == "allow"
+
+
+@pytest.mark.usefixtures("in_app")
+def test_fre1589_ac1_the_absolute_mermaid_check_runs_in_normal_mode_only() -> None:
+    assert _bash(f"python3 /app/{_VALIDATE} /tmp/m.mmd") == "allow"
+    assert _bash(f"python3 /app/{_VALIDATE} /tmp/m.mmd", "ALERT") == "ask"
+
+
+@pytest.mark.usefixtures("in_app")
+def test_fre1589_ac1_each_reviewed_script_has_an_absolute_form() -> None:
+    for script in REVIEWED:
+        assert _bash(f"python3 /app/{script} x") == "allow", script
+
+
+@pytest.mark.usefixtures("in_app")
+@pytest.mark.parametrize(
+    "command",
+    [
+        f'python3 "/app/{_PROBE}" all',
+        "python3 /app/'docs'/skills/infrastructure-health/scripts/probe_services.py all",
+    ],
+)
+def test_fre1589_the_comparison_is_on_the_word_after_quote_removal(command: str) -> None:
+    """Quoting changes the command text, not the word that bash passes to python3."""
+    assert _bash(command) == "allow"
+
+
+@pytest.mark.usefixtures("in_app")
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"python3 /app/./{_PROBE} all",
+        f"python3 /app//{_PROBE} all",
+        f"python3 //app/{_PROBE} all",
+        f"python3 /app/{_PROBE}/ all",
+        f"python3 /app/{_PROBE}x all",
+        f"python3 app/{_PROBE} all",
+        f"python3 /app/./app/{_PROBE} all",
+        "python3 /app/docs/skills/x/scripts/../../y/scripts/z.py",
+        "python3 /app/docs/skills/neo4j-direct/scripts/../../infrastructure-health/scripts/"
+        "probe_services.py all",
+        f"python3 /opt/seshat/{_PROBE} all",
+        f"python3 /opt/seshat/.claude/worktrees/build2/{_PROBE} all",
+        "python3 /app/docs/skills/neo4j-direct/scripts/other.py",
+        "python3 /app/docs/skills/*/scripts/cypher.py x",
+        f"python3 /app/{_PROBE} all; rm x",
+        f"python3 /app/{_PROBE} $(id)",
+        f"python3 /app/{_PROBE} all > /tmp/out",
+        f"PATH=/tmp python3 /app/{_PROBE} all",
+        f"python /app/{_PROBE} all",
+        f"python3 -I /app/{_PROBE} all",
+        f"/usr/bin/python3 /app/{_PROBE} all",
+        f"timeout 5 python3 /app/{_PROBE} all",
+        # Codex plan review: a backslash-newline, ANSI-C quoting and lookalike slashes.
+        "python3 /app/docs/skills/infra\\\nstructure-health/scripts/probe_services.py all",
+        f"python3 $'/app/{_PROBE}' all",
+        f"python3 /app∕{_PROBE} all",
+        f"python3 /app／{_PROBE} all",
+    ],
+)
+def test_fre1589_ac2_no_other_absolute_form_is_allowed(command: str) -> None:
+    assert _bash(command) in ("ask", "deny"), command
+
+
+def test_fre1589_ac2_the_absolute_form_asks_when_bash_does_not_start_in_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside the image (a make dev run), /app/docs/… is not the file the rule names."""
+    monkeypatch.setattr(permissions, "_bash_workdir", lambda: _REPO)
+    assert _bash(f"python3 /app/{_PROBE} all") == "ask"
+    assert _bash(f"python3 {_PROBE} all") == "allow"  # the control: the relative form
+
+
+@pytest.mark.usefixtures("in_app")
+def test_fre1589_ac2_an_absolute_form_needs_a_skill_script_rule() -> None:
+    """A python3 prefix rule of another shape never gains the /app/ form."""
+    exact = parse_rules_document(
+        {"allow": [{"rule": f"bash(python3 {_PROBE} all)"}]}, source="test"
+    )
+    assert (
+        evaluate_permission(
+            "bash", {"command": f"python3 /app/{_PROBE} all"}, "NORMAL", exact
+        ).decision
+        == "ask"
+    )
 
 
 # --- the file the rule trusts cannot be changed without a card ------------------------------

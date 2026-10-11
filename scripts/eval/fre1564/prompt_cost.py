@@ -5,7 +5,8 @@ Measures, from the code in this tree, three things and prints a Markdown table:
 * per worker type: the tool declarations the type is offered on every worker call, before
   and after this change;
 * the planner system prompt (one call per fan-out), before and after;
-* the primary: ``query_telemetry`` is worker-only, so the primary's declarations do not change.
+* the primary: ``query_telemetry`` was worker-only at FRE-1564, so the primary's declarations
+  did not change. FRE-1576 (ADR-0156 D7.2) offers it to the primary.
 
 "Before" is the state of origin/main at 85ea515a, written down below. Tokens are estimated
 with tiktoken ``cl100k_base`` (``llm_client.token_counter``), which is not the served model's

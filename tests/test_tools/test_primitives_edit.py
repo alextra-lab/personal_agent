@@ -250,6 +250,46 @@ async def test_a_failed_write_maps_to_its_code_and_keeps_the_file(
 
 
 @pytest.mark.asyncio
+async def test_the_replace_keeps_the_permission_bits(tmp_path: Path) -> None:
+    """An executable script stays executable after an edit."""
+    target = _file(tmp_path, "#!/bin/sh\necho one\n")
+    target.chmod(0o755)
+
+    await _edit(target, "echo one", "echo two")
+
+    assert target.stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.asyncio
+async def test_a_successful_edit_leaves_no_temporary_file(tmp_path: Path) -> None:
+    """The temporary file becomes the target; nothing else stays in the directory."""
+    target = _file(tmp_path)
+
+    await _edit(target, "beta", "BETA")
+
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_replace_keeps_the_file_and_leaves_no_temporary_file(
+    tmp_path: Path,
+) -> None:
+    """os.replace failing removes the temporary file and keeps the original bytes."""
+    target = _file(tmp_path)
+
+    with patch(
+        "personal_agent.tools.primitives.edit.os.replace",
+        side_effect=OSError(28, "No space left on device"),
+    ):
+        with pytest.raises(EditError) as exc_info:
+            await _edit(target, "beta", "BETA")
+
+    assert exc_info.value.code == "io_error"
+    assert target.read_bytes() == _ORIGINAL.encode()
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.asyncio
 async def test_an_unreadable_file_is_permission_denied(tmp_path: Path) -> None:
     """A file the process cannot read is ``permission_denied``."""
     target = _file(tmp_path)

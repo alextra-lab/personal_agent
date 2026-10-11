@@ -330,6 +330,7 @@ def test_the_override_sets_the_same_run_values_on_both_arms() -> None:
         assert env["AGENT_ENABLE_SECOND_BRAIN"] == "false"
         assert env["AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS"] == "5"
         assert env["AGENT_TEMPO_URL"] == "http://tempo:3200"
+        assert env["AGENT_GROUNDING_VERIFICATION_MODE"] == "off"
         for key in (
             "AGENT_EXPANSION_ENABLED",
             "AGENT_SESSION_SUMMARY_ENABLED",

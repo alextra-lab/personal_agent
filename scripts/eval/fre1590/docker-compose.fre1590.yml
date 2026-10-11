@@ -44,6 +44,9 @@ x-fre1590-env: &fre1590-env
   AGENT_ENABLE_SECOND_BRAIN: "false"
   AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS: "5"
   AGENT_TEMPO_URL: http://tempo:3200
+  # Owner decision (FRE-1590, ~20:00Z): production runs "observe", which records and blocks
+  # nothing, so a reply does not change. "off" removes the Sonnet span-extraction cost per turn.
+  AGENT_GROUNDING_VERIFICATION_MODE: "off"
   # Owner decision (FRE-1590): production reads these from .env, and docker-compose.eval.yml
   # does not pass them. They can change a turn (expansion, for example), so both arms get the
   # production values, read from the --env-file at `up` time. AGENT_AGENT_ID stays unset, so the

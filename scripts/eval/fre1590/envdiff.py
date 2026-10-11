@@ -60,6 +60,7 @@ EXPECTED: Mapping[str, str] = {
     # FRE-1590 override
     "AGENT_ENABLE_SECOND_BRAIN": "FRE-1590: consolidation off, no extraction cost, no graph writes.",
     "AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS": "FRE-1581: no UI answers a pause on eval.",
+    "AGENT_GROUNDING_VERIFICATION_MODE": "FRE-1590 owner decision: off on eval; observe on production blocks nothing.",
     "AGENT_AGENT_ID": "FRE-1590 owner decision: eval keeps its own agent id, so its telemetry stays separate.",
     # Not passed to eval on purpose (docker-compose.eval.yml comments)
     "AGENT_LINEAR_API_KEY": "Write-capable credential, kept from eval (security review).",

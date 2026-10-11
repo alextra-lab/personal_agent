@@ -170,6 +170,14 @@ class TestMakeTargets:
         gateways = recipe.index("up -d --no-deps --build seshat-gateway-control")
         assert substrate < gateways
 
+    def test_eval_infra_up_applies_the_es_templates_to_eval_es_before_the_gateways(self) -> None:
+        """FRE-1581: without the templates, eval ES maps keyword fields as text."""
+        recipe = self._recipe("eval-infra-up")
+        substrate = recipe.index("up -d --no-deps --wait postgres-eval")
+        templates = recipe.index("ES_URL=http://localhost:9202 bash scripts/setup-elasticsearch.sh")
+        gateways = recipe.index("up -d --no-deps --build seshat-gateway-control")
+        assert substrate < templates < gateways
+
     def test_eval_infra_down_is_guarded_too(self) -> None:
         recipe = self._recipe("eval-infra-down")
         assert "--allow-empty-plan" in recipe, "a stopped stack must stay a no-op, not a refusal"

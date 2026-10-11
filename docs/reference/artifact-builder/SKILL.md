@@ -1,30 +1,23 @@
----
-name: artifact-design
-description: 'Guides the authoring of a rich, self-contained HTML artifact: the curated /lib/ toolkit
-  (KaTeX, Chart.js, three.js, highlight.js, OFL fonts, paged.js) and when to use a library or hand-roll
-  inline, each library''s boot recipe and gotchas, publishing-grade native CSS typography, the sealed-box
-  constraints, the portability decision, and the rule never to bake secrets into an artifact. Use when
-  generating an HTML document artifact: reports, explorables, charts, math, 3-D scenes, code walkthroughs,
-  or book and print layouts.'
----
+# Artifact Builder — Source of the HTML Generation Prompt
 
-# SKILL: Artifact Design
-
-> **Use this skill to** author a complete, standalone HTML artifact that runs inside the
-> sealed box: (a) decide when a curated `/lib/` library beats hand-rolling, (b) get each
-> library's boot recipe and gotcha right, (c) apply publishing-grade **native** typography,
-> (d) stay inside the sealed-box constraints, (e) choose the right **portability** lane, and
-> (f) never leak secrets into a file that may leave the sandbox.
-
-> **Tier:** runtime-guidance (not a CLI skill).
-> **Relationship to the generation prompt:** this doc is the **maintainable source-of-truth**;
-> the artifact generation system prompt (`_HTML_GENERATION_SYSTEM_PROMPT`,
-> `src/personal_agent/tools/artifact_tools.py`) is **distilled from it**. The generation
-> sub-agent is driven by that compressed prompt at runtime — it does **not** load this
-> file. Keep the two paired: when the manifest or a recipe changes, update this doc and
-> re-distill the prompt. Versions/URLs are anchored to `config/artifact_lib_manifest.json`.
-> **Not** an extension of the `frontend-design` harness skill (that guides the *developer*
-> agent; this guides the *runtime artifact-generation* sub-agent — a different consumer).
+> **What this is:** the source document for the artifact builder's generation prompt
+> (`_HTML_GENERATION_SYSTEM_PROMPT` in `src/personal_agent/tools/artifact_tools.py`). It is
+> **not** an agent skill and sits outside `docs/skills/`, so no model's skill catalog lists it.
+>
+> **Who reads it:** people who maintain the builder. No model loads it at runtime. Artifact
+> building is a dedicated, isolated process: the primary model writes a plan and calls
+> `artifact_draft`; the `artifact_builder` sub-agent writes the HTML from
+> `_HTML_GENERATION_SYSTEM_PROMPT` alone; `artifact_write` stores it. The primary model never
+> loads this doc and never writes the page itself.
+>
+> **To change the builder's behaviour:** update this doc (and the library file in
+> `references/`), then re-distill `_HTML_GENERATION_SYSTEM_PROMPT` from it. Versions and URLs
+> are anchored to `config/artifact_lib_manifest.json`; the tests
+> `tests/personal_agent/tools/test_artifact_tools.py::test_artifact_design_doc_matches_manifest`
+> and `tests/docs/test_artifact_design_split.py` hold this doc to the manifest.
+>
+> The body below is written to the builder ("you"), as the prompt is. A `read_skill` call in it
+> is historical: the builder has the distilled prompt, not this file.
 
 ---
 

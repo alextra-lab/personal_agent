@@ -2296,10 +2296,11 @@ def test_system_prompt_real_origin_substituted_when_setting_set(
 
 
 def test_artifact_design_doc_matches_manifest() -> None:
-    """FRE-529 (ADR-0089 A4): the docs/skills/artifact-design/ folder is the source-of-truth.
+    """FRE-529 (ADR-0089 A4): docs/reference/artifact-builder/ is the source-of-truth.
 
-    The skill is the maintainable superset the generation prompt is distilled
-    from. Since FRE-1579 (ADR-0156 D5.3) it is ``SKILL.md`` plus ``references/``:
+    The doc is the maintainable superset the generation prompt is distilled
+    from. FRE-1590 moved it out of ``docs/skills/`` (no skill catalog lists it).
+    Since FRE-1579 (ADR-0156 D5.3) it is ``SKILL.md`` plus ``references/``:
     the library recipes live in the reference files, so this test reads them all.
     This manifest-driven drift guard keeps doc ↔ manifest ↔ prompt in
     lockstep: every non-eval-gated asset must appear as its full absolute,
@@ -2312,14 +2313,14 @@ def test_artifact_design_doc_matches_manifest() -> None:
     )
 
     repo_root = DEFAULT_LIB_MANIFEST_PATH.resolve().parents[1]
-    skill_dir = repo_root / "docs" / "skills" / "artifact-design"
+    skill_dir = repo_root / "docs" / "reference" / "artifact-builder"
     parts = [skill_dir / "SKILL.md", *sorted((skill_dir / "references").glob("*.md"))]
     doc = "\n".join(path.read_text(encoding="utf-8") for path in parts)
 
     origin, assets = load_lib_manifest()
 
-    # Self-describing frontmatter (sibling to mermaid-diagrams.md).
-    assert "name: artifact-design" in doc
+    # The doc names the prompt it is the source of.
+    assert "_HTML_GENERATION_SYSTEM_PROMPT" in doc
 
     for asset in assets:
         url = f"{origin}/lib/{asset.path}"

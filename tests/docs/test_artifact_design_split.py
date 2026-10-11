@@ -1,9 +1,12 @@
 """ADR-0156 D5.3 (FRE-1579 AC-3): the split of artifact-design lost no library recipe.
 
-``docs/skills/artifact-design/`` holds ``SKILL.md`` and one file per curated library under
+``docs/reference/artifact-builder/`` holds ``SKILL.md`` and one file per curated library under
 ``references/``. Each file keeps its library's boot recipe, which is the version-pinned URLs of
 ``config/artifact_lib_manifest.json``, and its gotchas. paged.js is the exception: its asset is
 ``eval_gated``, so its file keeps the experimental prose and must not hold its URL.
+
+FRE-1590 moved the folder out of ``docs/skills/``: it is the source of the artifact builder's
+generation prompt, not an agent skill, so no skill catalog lists it.
 
 The wider drift guard (``test_artifact_design_doc_matches_manifest``) reads the whole folder.
 """
@@ -18,7 +21,7 @@ from personal_agent.observability.artifact_envelope.spec import (
     load_lib_manifest,
 )
 
-_SKILL = DEFAULT_LIB_MANIFEST_PATH.resolve().parents[1] / "docs" / "skills" / "artifact-design"
+_SKILL = DEFAULT_LIB_MANIFEST_PATH.resolve().parents[1] / "docs" / "reference" / "artifact-builder"
 _REFERENCES = _SKILL / "references"
 
 # Manifest asset name -> the reference file that holds its boot recipe.

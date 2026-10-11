@@ -47,11 +47,12 @@ _TIMEOUT_S = 15
 # The query is read as tokens, not searched as text. A search over text has two failure modes: a
 # quote inside a quoted name starts a false string, and a quoted name can hide a procedure name
 # (the form with backticks around each part is valid Cypher). A token is a string, a comment, a
-# quoted name, a word, white space, or one other character.
+# quoted name, a word, white space, or one other character. A line comment ends at every
+# character that can end a line, so a server that ends it sooner sees no text that was not read.
 _TOKEN = re.compile(
     r"""
     (?P<ws>\s+)
-    |(?P<comment>//[^\n]*|/\*.*?\*/)
+    |(?P<comment>//[^\n\r\x0b\x0c\x85\u2028\u2029]*|/\*.*?\*/)
     |(?P<string>'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")
     |(?P<quoted>`(?:``|[^`])*`)
     |(?P<word>[A-Za-z_]\w*)
@@ -64,13 +65,13 @@ _WRITE_WORDS = frozenset(
 )
 # Administration commands. A read transaction does not stop all of them: on Neo4j 5.26,
 # SHOW SETTINGS returns the server configuration and TERMINATE TRANSACTIONS stops another
-# session's transaction in read access mode (FRE-1585, seen on the test server). USE changes the
-# database, for example to system.
+# session's transaction in read access mode (FRE-1585, seen on the test server). The server
+# accepts them only at the start of a statement, after CYPHER options and EXPLAIN or PROFILE, so
+# they are refused there. Elsewhere the words are names (a variable called start).
 _ADMIN_WORDS = frozenset(
     {
         "SHOW",
         "TERMINATE",
-        "USE",
         "ALTER",
         "RENAME",
         "GRANT",
@@ -83,6 +84,10 @@ _ADMIN_WORDS = frozenset(
         "REALLOCATE",
     }
 )
+# USE changes the database (to system, for example). It is valid in a subquery too, so it is
+# refused anywhere.
+_USE = "USE"
+_PREFIX_WORDS = frozenset({"EXPLAIN", "PROFILE", "CYPHER"})
 # Functions in these namespaces are refused (FRE-1585). apoc.cypher.* runs Cypher text, so a
 # blocked procedure or LOAD CSV in a string ran inside a read transaction (seen on the test
 # server: dbms.listConfig through runFirstColumnSingle). apoc.xml.* parses XML on the server.
@@ -153,6 +158,55 @@ def _name(token: tuple[str, str]) -> str:
     return text[1:-1].replace("``", "`") if kind == "quoted" else text
 
 
+def _after_property_dot(tokens: Sequence[tuple[str, str]], index: int) -> bool:
+    """Report whether the token at ``index`` follows one dot, as a property name does.
+
+    Two dots are a range (``[0..x]``), not a property access, so the token after them is read.
+    """
+    return (
+        index > 0
+        and tokens[index - 1] == ("other", ".")
+        and not (index > 1 and tokens[index - 2] == ("other", "."))
+    )
+
+
+def _in_statement_prefix(tokens: Sequence[tuple[str, str]], index: int) -> bool:
+    """Report whether every token before ``index`` belongs to the statement's prefix.
+
+    The prefix is ``CYPHER`` with a version and ``name=value`` options, then ``EXPLAIN`` or
+    ``PROFILE``. An administration command is valid only directly after it.
+    """
+    for position in range(index):
+        kind, text = tokens[position]
+        if kind == "word" and text.upper() in _PREFIX_WORDS:
+            continue
+        if kind == "other" and (text.isdigit() or text in ".="):
+            continue
+        neighbours = tokens[max(position - 1, 0) : position + 2]
+        if kind == "word" and ("other", "=") in neighbours:
+            continue
+        return False
+    return True
+
+
+def find_escape(query: str) -> bool:
+    """Report whether ``query`` holds a backslash outside a string.
+
+    Neo4j reads ``\\u0063`` in a name as ``c`` (seen on the test server: ``apoc.\\u0063ypher``
+    ran). The checks below read the text as written, so an escape in a name is refused.
+
+    Args:
+        query: The Cypher text.
+
+    Returns:
+        ``True`` when a backslash stands outside a string literal.
+    """
+    return any(
+        (kind == "other" and text == "\\") or (kind == "quoted" and "\\" in text)
+        for kind, text in _tokens(query)
+    )
+
+
 def find_write_clause(query: str) -> str | None:
     """Return the first write clause in ``query``, or ``None``.
 
@@ -165,10 +219,12 @@ def find_write_clause(query: str) -> str | None:
     """
     tokens = _tokens(query)
     for index, (kind, text) in enumerate(tokens):
-        if kind != "word" or (index and tokens[index - 1] == ("other", ".")):
+        if kind != "word" or _after_property_dot(tokens, index):
             continue
         word = text.upper()
-        if word in _WRITE_WORDS or word in _ADMIN_WORDS:
+        if word in _WRITE_WORDS or word == _USE:
+            return word
+        if word in _ADMIN_WORDS and _in_statement_prefix(tokens, index):
             return word
         if word == "LOAD" and index + 1 < len(tokens) and tokens[index + 1][1].upper() == "CSV":
             return "LOAD CSV"
@@ -190,9 +246,7 @@ def find_blocked_procedure(query: str) -> str | None:
     """
     tokens = _tokens(query)
     for index, (kind, text) in enumerate(tokens):
-        if kind != "word" or text.upper() != "CALL":
-            continue
-        if index and tokens[index - 1] == ("other", "."):
+        if kind != "word" or text.upper() != "CALL" or _after_property_dot(tokens, index):
             continue
         cursor = index + 1
         if cursor < len(tokens) and tokens[cursor][1] in ("{", "("):
@@ -226,9 +280,9 @@ def find_blocked_function(query: str) -> str | None:
     tokens = _tokens(query)
     index = 0
     while index < len(tokens):
-        if tokens[index][0] not in ("word", "quoted") or (
-            index and tokens[index - 1] == ("other", ".")
-        ):
+        # Every chain is read from its first part, after a dot too: a range bound
+        # (``[0..apoc.cypher.x()]``) and ``(expr).name`` start a chain after a dot.
+        if tokens[index][0] not in ("word", "quoted"):
             index += 1
             continue
         parts = [_name(tokens[index])]
@@ -304,7 +358,13 @@ def run_query(
     Raises:
         CypherError: The check, the connection or the query failed.
     """
-    # The procedure check is first: the name apoc.nodes.delete holds the word DELETE.
+    # The escape check is first: every check below reads names as written.
+    if find_escape(query):
+        raise CypherError(
+            "a backslash outside a string is not allowed: Neo4j reads \\u escapes in names. "
+            "Write the name plainly."
+        )
+    # Then the procedure check: the name apoc.nodes.delete holds the word DELETE.
     procedure = find_blocked_procedure(query)
     if procedure:
         raise CypherError(

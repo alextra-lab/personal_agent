@@ -630,7 +630,24 @@ _BLOCKED_FUNCTIONS = [
     "RETURN `apoc.cypher.runFirstColumnSingle`('RETURN 1', {})",
     "RETURN apoc /* x */ . cypher . runFirstColumnSingle('RETURN 1', {})",
     "WITH 1 AS x RETURN apoc.xml.parse('<a/>') AS doc",
+    # A range bound starts a name after two dots (code review, FRE-1585).
+    "RETURN [1, 2, 3][0..apoc.cypher.runFirstColumnSingle('CALL dbms.listConfig() YIELD name "
+    "RETURN count(name)', {})] AS x",
+    "MATCH (n) RETURN (n).apoc.cypher.runFirstColumnSingle('RETURN 1', {})",
 ]
+
+# Neo4j reads a \u escape in a name: apoc.\u0063ypher ran on the test server (FRE-1585).
+_ESCAPES = [
+    "RETURN apoc.\\u0063ypher.runFirstColumnSingle('RETURN 1', {}) AS x",
+    "RETURN `apoc`.`\\u0063ypher`.runFirstColumnSingle('RETURN 1', {}) AS x",
+    "CALL dbms.\\u006cistConfig() YIELD name RETURN name",
+]
+
+# A line comment ends at every line terminator, so the text after it is read (FRE-1585).
+_COMMENT_ENDS = [
+    f"// x{end}SHOW SETTINGS YIELD name RETURN name"
+    for end in ("\r", "\x0b", "\x0c", "\x85", "\u2028", "\u2029")
+] + ["// x\rCALL dbms.listConfig() YIELD name RETURN name"]
 
 
 @pytest.mark.parametrize("query", _BLOCKED_FUNCTIONS)
@@ -652,6 +669,50 @@ def test_cypher_refuses_a_function_that_runs_cypher_text_or_parses_xml(query: st
 )
 def test_cypher_passes_other_functions_and_the_name_in_a_string(query: str) -> None:
     assert _load(_CYPHER).find_blocked_function(query) is None
+
+
+@pytest.mark.parametrize("query", _ESCAPES)
+def test_cypher_refuses_a_backslash_escape_in_a_name(query: str) -> None:
+    done = _run(_CYPHER, [query], env={"AGENT_NEO4J_PASSWORD": "s3cret"})
+    assert "backslash" in _plain_error(done, 1)
+
+
+def test_a_backslash_inside_a_string_is_data() -> None:
+    assert not _load(_CYPHER).find_escape("MATCH (n) WHERE n.p = 'a\\\\b' RETURN n")
+
+
+@pytest.mark.parametrize("query", _COMMENT_ENDS)
+def test_cypher_reads_the_text_after_every_line_end_of_a_comment(query: str) -> None:
+    cypher = _load(_CYPHER)
+    assert cypher.find_write_clause(query) or cypher.find_blocked_procedure(query)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SHOW SETTINGS YIELD name RETURN name",
+        "CYPHER 5 SHOW SETTINGS YIELD name RETURN name",
+        "CYPHER runtime=slotted SHOW SETTINGS YIELD name RETURN name",
+        "EXPLAIN SHOW SETTINGS YIELD name RETURN name",
+        "CYPHER 5 PROFILE TERMINATE TRANSACTIONS 'x'",
+        "MATCH (n) CALL { USE system MATCH (m) RETURN m } RETURN n",
+    ],
+)
+def test_an_administration_command_is_refused_where_the_server_accepts_it(query: str) -> None:
+    assert _load(_CYPHER).find_write_clause(query) is not None
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "MATCH (start:Entity {name: 'x'})-[:RELATES_TO*1..2]->(stop) RETURN start, stop",
+        "MATCH (n) WHERE n.ts > $start AND n.ts < $stop RETURN n",
+        "MATCH (a) RETURN {start: a.x, stop: a.y, show: a.z} AS m",
+        "MATCH (n:Show) RETURN n.grant, n.deny",
+    ],
+)
+def test_an_administration_word_used_as_a_name_is_not_refused(query: str) -> None:
+    assert _load(_CYPHER).find_write_clause(query) is None
 
 
 # --- AC-3 (FRE-1585): no argument makes a reviewed script write, spawn or read elsewhere ----
@@ -777,7 +838,9 @@ _HOSTILE = [
 ]
 
 
-def _assert_contained(report: dict[str, object], allowed_connects: set[str] = frozenset()) -> None:
+def _assert_contained(
+    report: dict[str, object], allowed_connects: frozenset[str] = frozenset()
+) -> None:
     assert _writes(report) == [], _writes(report)
     assert _reads_outside(report) == [], _reads_outside(report)
     assert _spawns(report) == [], _spawns(report)
@@ -837,7 +900,7 @@ def test_ac3_the_probe_spawns_only_the_fixed_psql_and_connects_only_to_the_envir
     assert set(_connects(report)) == expected
 
 
-_HOSTILE_QUERIES = [*_WRITES, *_BLOCKED_PROCEDURES, *_BLOCKED_FUNCTIONS]
+_HOSTILE_QUERIES = [*_WRITES, *_BLOCKED_PROCEDURES, *_BLOCKED_FUNCTIONS, *_ESCAPES, *_COMMENT_ENDS]
 
 
 @pytest.mark.parametrize("query", _HOSTILE_QUERIES)

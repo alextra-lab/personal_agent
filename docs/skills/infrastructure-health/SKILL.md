@@ -1,92 +1,73 @@
 ---
 name: infrastructure-health
-description: Probes the backend services (Postgres, Elasticsearch, Neo4j, Redis) for reachability with
-  live checks. Use when the task is to check whether the backend services are healthy or reachable, before
-  saying that a service is up or down.
+description: Probes whether Postgres, Elasticsearch, Neo4j and Redis answer, with a real connection or a
+  health endpoint for each, and reports one line for each service. Use when the task is whether a backend
+  service is up, reachable or healthy, before saying that a service is up or down.
 metadata:
   requires-tools: bash
 ---
 
-# infrastructure-health — Probe all infrastructure services for reachability
+# infrastructure-health — Is each backend service reachable?
 
 ## Rules
 
-Probe the live endpoints with bash curl before concluding a service is healthy or degraded.
+- Probe the live endpoint before you say that a service is healthy or down.
+- Use a real connection for Postgres, not a TCP probe. Port 5432 is the wire protocol, not HTTP: `curl http://postgres:5432` always gives a meaningless reply.
+- The names `postgres`, `neo4j`, `elasticsearch` and `redis` are Docker DNS names. They resolve only inside the `cloud-sim` network. From the host shell use `localhost:<port>`.
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `infra_health` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+## Step 1 — One service, or all four
 
-**Category:** `system_read` · **Risk:** none · **Approval:** a plain `bash curl` GET of a listed health endpoint runs without asking (FRE-1583); `psql`, `redis-cli` and `run_python(network=True)` ask the user (ADR-0156 D8)
-
-> **Container vs host:** Hostnames (`postgres`, `neo4j`, `elasticsearch`, `redis`) are Docker DNS names that only resolve from **inside** the `cloud-sim` network. From the VPS host shell, use `localhost:<port>` instead.
-
-## Single-service checks — preferred path (bash)
-
-For "is Postgres reachable?" use a real connection, not a TCP probe to port 5432:
+The script opens a real Postgres connection and runs `SELECT 1`, reads the Elasticsearch cluster
+health, reads the Neo4j HTTP page, and sends a Redis `PING`. It prints one line for each service.
 
 ```bash
-# Postgres — AGENT_DATABASE_URL uses postgresql+asyncpg:// which psql cannot parse.
-# Strip the driver specifier first:
-# ask: the shell expands $(…) and $AGENT_DATABASE_URL here, so this is not a plain command and asks for approval.
-bash psql "$(echo $AGENT_DATABASE_URL | sed 's|postgresql+asyncpg|postgresql|')" -c 'SELECT 1'
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/infrastructure-health/scripts/probe_services.py all
 ```
-
-> **`pg_isready` is NOT installed** on the agent image. Do not use it.
-> Do NOT probe Postgres with `curl http://postgres:5432` — port 5432 is the wire protocol, not HTTP; the response is always garbage and tells you nothing useful.
 
 ```bash
-# Elasticsearch
-bash curl -fsS http://elasticsearch:9200/_cluster/health | grep '"status"'
-
-# Redis
-# ask: no allow rule covers redis-cli (FRE-1572), so this asks for approval.
-bash redis-cli -h redis ping
-
-# Neo4j HTTP
-bash curl -fsS http://neo4j:7474/
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/infrastructure-health/scripts/probe_services.py postgres
 ```
 
-## Multi-service check — run_python fallback
+The argument is `postgres`, `elasticsearch`, `neo4j`, `redis` or `all`. Each line reads
+`<service>: ok <detail>` or `<service>: FAIL <detail>`. The exit code is 0 when every probed
+service answered, 1 when one did not, and 2 for bad usage. No password is printed.
 
-Use `run_python(network=True)` only when the prompt explicitly asks for all services at once. `run_python` depends on Docker-in-Docker socket availability and may fail when the Docker daemon is not mounted into the gateway container.
+## Step 2 — Without asking: the two HTTP endpoints
 
-```python
-import socket, json, urllib.request, urllib.error
+A plain `GET` of a listed health endpoint runs without asking:
 
-def tcp(host, port, timeout=3):
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return {"reachable": True}
-    except OSError as e:
-        return {"reachable": False, "error": str(e)}
-
-def http(url, timeout=5):
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
-            return {"reachable": True, "status": r.status}
-    except urllib.error.HTTPError as e:
-        return {"reachable": True, "status": e.code}
-    except Exception as e:
-        return {"reachable": False, "error": str(e)}
-
-result = {
-    "postgres":      tcp("postgres", 5432),
-    "neo4j_http":    http("http://neo4j:7474"),
-    "elasticsearch": http("http://elasticsearch:9200/_cluster/health"),
-    "redis":         tcp("redis", 6379),
-}
-result["all_reachable"] = all(v.get("reachable") for v in result.values())
-print(json.dumps(result, indent=2))
+```bash
+curl -fsS http://elasticsearch:9200/_cluster/health
+curl -fsS http://neo4j:7474/
 ```
 
-## Stop rules
+`status` in the first reply is `green`, `yellow` or `red`. A single-node cluster is often
+`yellow`: that is up. Only `red` is unhealthy.
 
-- Do not infer "service unreachable" from a curl TCP probe to a non-HTTP port.
-- If `run_python` fails to start (Docker unavailable), surface that clearly and fall back to single-service bash probes.
-- `pg_isready` is not installed — do not attempt it.
+## Success
+
+Check the result before you answer:
+
+- The answer has one line for each service that was asked about, with `ok` or the error text.
+- "Down" rests on a failed connection or a bad reply, not on a missing tool or a wrong name.
+- A `yellow` Elasticsearch status is reported as `yellow` and as up.
+- The answer says whether the probe ran inside the gateway container or on the host.
+
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `postgres: FAIL AGENT_DATABASE_URL is not set in this environment` | The script runs where the variable is not set | Say that Postgres cannot be probed from here. Do not guess |
+| `postgres: FAIL psql is not installed in this environment` | The host shell has no client | Run the probe through the `bash` tool in the gateway container |
+| `FAIL cannot connect to ...` | The service is down, or the name does not resolve from here | Check where the command runs (the Rules above). If it runs in the gateway, the service is down: say so |
+| `redis: ok ... asks for a password` | Redis needs authentication | The server is up. Say that PING was not tried with a password |
+| `elasticsearch: FAIL cluster status red` | Shards are missing | Report `red`. Use the `query-elasticsearch` skill for `_cat/indices` if asked for the cause |
+| The same failure twice | — | Stop. Tell the user the service, the error text and what was tried |
 
 ## Governance
 
-- `bash curl`: a `GET` of a listed health or telemetry read endpoint runs without asking in NORMAL/ALERT/DEGRADED. Any other host, path or method asks (FRE-1583). For Neo4j only `GET http://neo4j:7474/` runs without asking.
-- `bash psql`, `bash redis-cli`: ask the user (FRE-1572), in every mode.
-- `run_python(network=True)`: asks the user in every mode (ADR-0156 D8.6).
-- LOCKDOWN: bash and run_python both disabled.
+- `curl` `GET` of a listed health endpoint runs without asking in NORMAL, ALERT and DEGRADED (FRE-1583). Any other host, path or method asks. For Neo4j only `GET http://neo4j:7474/` runs without asking.
+- `python3` (the probe script), `psql` and `redis-cli` ask the user, in every mode (FRE-1572, ADR-0156 D8.2).
+- LOCKDOWN: `bash` is disabled.

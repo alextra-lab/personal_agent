@@ -82,9 +82,15 @@ other skill loads.
 skill: <name>
 scenarios:
   - prompt: "<a request that needs this skill>"
+    expected_skill: <name>
     expect: "<what a correct answer holds>"
   - prompt: "<a second request, in different words>"
+    expected_skill: <name>
     expect: "<…>"
   - prompt: "<a third request>"
+    expected_skill: <name>
     expect: "<…>"
 ```
+
+`expected_skill` is on each scenario, so a gate run can read a scenario without its file. A
+boundary scenario, where a neighbouring skill is right, sits in the neighbour's file.

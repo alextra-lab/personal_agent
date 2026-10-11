@@ -1,442 +1,146 @@
 ---
 name: query-elasticsearch
-description: Queries the Elasticsearch indices for agent logs, telemetry, errors and traces with the JSON
-  _search DSL through bash and curl, and keeps ES|QL for ad-hoc analytics. Use when the task needs live
-  agent logs, telemetry or errors from Elasticsearch. Always reads agent-logs-*, never logs-*, and answers
-  only from a live query.
+description: Reads agent logs and other telemetry from Elasticsearch - counts, breakdowns, error searches,
+  the events of one trace, and which fields and indices exist. Starts with the query_telemetry tool and
+  uses curl only for the data that the tool cannot read. Use when the task is a count, a breakdown, an
+  error search or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call
+  timing, spend and token totals, or interaction outcomes, which other skills hold.
 metadata:
   requires-tools: bash
 ---
 
-# query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
+# query-elasticsearch — Read agent logs and telemetry from Elasticsearch
 
 ## Rules
 
-These results must come from a live ES query — never answer from training-data priors about what the logs might contain.
+- Answer only from a live query. Never answer from what the logs probably hold.
+- Start with the `query_telemetry` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
+- Use curl only for what the tool cannot do. The table below says which.
+- Use only the index families in this file. Never write a guessed index name.
+- Model-call timing is not in Elasticsearch (retired, ADR-0129). Use the `query-tempo` skill.
+- Spend, token totals and interaction outcomes are in the `self-telemetry` skill.
 
-## Canonical patterns
+## Step 1 — Use the tool
 
-`agent-logs-*`, `agent-captains-captures-*`, `agent-captains-reflections-*`
+The tool description lists the fields of each family. The tool sorts hits newest first and
+returns at most 50. `since` is at most `30d`.
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `query_elasticsearch` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+```python
+# Count the errors of the last 24 hours
+query_telemetry(action="count", index="agent-logs", query={"term": {"level": "ERROR"}}, since="24h")
 
-**Category:** `system_read` · **Risk:** low · **Approval:** a `bash curl` read runs without asking (FRE-1583): `GET` of `_cat`, `_cluster/health`, `_mapping` and `_field_caps`, and `GET` or `POST` with a query body to `_search`, `_count` and `_query`. Every write endpoint and every other method asks; `run_python` runs without asking in NORMAL; with `network: true` it asks
+# The most common event types of the last hour
+query_telemetry(action="search", index="agent-logs", size=0, since="1h",
+                aggs={"by_event": {"terms": {"field": "event_type", "size": 20}}})
 
-**Latency is not here.** Model-call timing lives on OTel spans in Tempo, not in these logs (ADR-0129, FRE-1219: `duration_ms` and `latency_ms` are retired from `agent-logs-*`). For latency, p50/p90 or "what was slow", use the `query-tempo` skill (Pattern 5) or the `query_telemetry` tool, action `latency`.
+# The last 20 errors, with the fields that name them
+query_telemetry(action="search", index="agent-logs", query={"term": {"level": "ERROR"}}, size=20,
+                since="3h", fields=["@timestamp", "event_type", "message", "tool_name", "trace_id", "error"])
 
-## Known mistakes
+# The events of one trace
+query_telemetry(action="search", index="agent-logs", query={"term": {"trace_id": "<trace_id>"}},
+                size=50, since="7d", fields=["@timestamp", "event_type", "role", "tool_name", "input_tokens"])
 
-These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
+# Which events carry a field (find the event before you aggregate on the field)
+query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+                query={"exists": {"field": "input_tokens"}},
+                aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}})
+```
 
-- `/logs-*`: Generic '/logs-*' index does not exist in Seshat telemetry. Use '/agent-logs-*' — the correct index family starts with 'agent-'.
-- `agent-events-*`: Index 'agent-events-*' does not exist. Use 'agent-logs-*' for events; filter by 'event_type' field.
-- `agent-traces-*`: Index 'agent-traces-*' does not exist. Use 'agent-logs-*'; traces are logged events filtered by fields.
-- `agent-telemetry-*`: Index 'agent-telemetry-*' does not exist. Use 'agent-logs-*' for all structured telemetry.
+What the events carry (verified live 2026-10-11):
 
-## Actual indices (families verified 2026-04-28; date shapes verified 2026-07-31)
+| `event_type` | Fields to read |
+|---|---|
+| `model_call_completed` | `model`, `provider`, `role`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cost_usd`. LLM-only: it leaves out embedding and rerank cost |
+| `api_cost_recorded` | `provider`, `model`, `cost_usd`. Every priced call. This is the total-spend event |
+| `tool_call_started` | `tool_name` |
+| `tool_call_completed` | `tool_name`, `success` |
+| `tool_loop_gate` | `decision`: `warn_consecutive`, `block_consecutive`, `block_identity` |
+| `embedding_generated`, `reranker_applied` | `provider`, `cost_usd`. Part of total spend, not of `model_call_completed` |
 
-The cluster has these index families. **Do not guess index names** — use only these patterns:
+Other values that had events in the last 7 days: `session_created`, `state_transition`,
+`model_call_started`, `history_sanitised`, `budget_counter_snapshot`. Do not guess a value:
+run the last call above and read the buckets.
 
-| Pattern | Purpose | Example |
-|---------|---------|---------|
-| `agent-logs-*` | All structured log events (primary telemetry) | `agent-logs-2026.07.31`, `agent-logs-2026-07` |
-| `agent-captains-captures-*` | Captain's Log per-request captures | `agent-captains-captures-2026-07-31` |
-| `agent-captains-reflections-*` | DSPy self-reflection outputs | `agent-captains-reflections-2026-07-31` |
-| `agent-insights-*` | Cross-session insights and anomalies | `agent-insights-2026-07` |
+## Step 2 — When the tool cannot do it, use curl
 
-**Wildcard queries:** `agent-logs-*` (all days/months), `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*`.
+| Need | Why the tool cannot | Use |
+|---|---|---|
+| A family that is not `agent-logs`, `agent-topology` or `agent-monitors-slm-health` (captures, reflections, insights, other monitors) | `index` is a fixed list | `_search` with curl: see `references/curl-recipes.md` |
+| A field that the tool refuses and that exists | The allowlist is closed | Check the field first (below). Fields that hold conversation text are left out on purpose |
+| More than 50 hits, oldest first, or a window over 30 days | The caps | `_search` with curl |
+| ES\|QL | Not offered | `references/esql.md` |
+| The list of indices, or the fields of an index | Not offered | The two commands below |
 
-**Non-existent patterns** (404 errors): `agent-events-*`, `agent-traces-*`, `agent-telemetry-*` — these do not exist.
+**Check a field before a curl aggregation.** Elasticsearch gives empty buckets, not an
+error, for a field that does not exist. A field missing from `fields` in this reply does not
+exist:
 
-**Do not assume a date shape.** A family holds daily indices (`YYYY.MM.DD`), monthly indices (`YYYY-MM`), or both at once. Use the `<family>-*` wildcard. Never rebuild a date pattern by cutting another one: a cut name such as `agent-logs-2026` looks real and is not.
+```bash
+curl -fsS 'http://elasticsearch:9200/agent-logs-*/_field_caps?fields=event_type,level'
+curl -fsS 'http://elasticsearch:9200/_cat/indices?format=json&h=index,docs.count'
+```
 
-To classify a family, use the tested classifier, not `sed`:
+## Index families
+
+Use `<family>-*`. The tool takes the family name without `-*`.
+
+| Pattern | Holds | Date field |
+|---|---|---|
+| `agent-logs-*` | All structured log events | `@timestamp` |
+| `agent-topology-*` | Per-turn routing and planning facts | `@timestamp` |
+| `agent-captains-captures-*` | Captain's Log, one document for each request | `timestamp` |
+| `agent-captains-reflections-*` | DSPy self-reflection output | `timestamp` |
+| `agent-insights-*` | Cross-session insights and anomalies | `timestamp` |
+| `agent-monitors-slm-health-*` | Probes of the local model server | `probed_at` |
+| `agent-monitors-cache-reset-cadence-*`, `agent-monitors-projector-health-*` | Monitors | `@timestamp` |
+| `agent-monitors-cache-erosion-*`, `agent-monitors-delivery-ratio-*` | Monitors | `run_at` |
+| `agent-monitors-joinability-*` | Monitor | `started_at` |
+
+A time bound must use the date field of its own family. A range on the wrong field returns
+nothing and no error.
+
+A family holds daily indices (`YYYY.MM.DD`), monthly indices (`YYYY-MM`), or both. Never cut a
+date off a name: a cut name such as `agent-logs-2026` looks real and is not. To classify a
+family, use the tested script:
 
 ```bash
 # ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
-curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
+curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^agent-monitors-joinability-' \
-  | python3 scripts/es_index_granularity.py agent-monitors-joinability
+  | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py agent-monitors-joinability
 ```
 
-It reports daily and monthly counts, flags `MIXED`, and lists any name it does not recognise.
+The script prints the daily and monthly counts, flags `MIXED`, and lists every name that it
+does not recognise. It exits 1 if its input is empty, so a failed `curl` is never read as
+"no indices".
 
-**The date field differs by family.** The time bound in a query must use the family's own field (from `docker/elasticsearch/*-index-template.json`):
+## Field notes
 
-| Family | Date field |
-|--------|-----------|
-| `agent-logs-*`, `agent-topology-*`, `agent-monitors-cache-reset-cadence-*`, `agent-monitors-projector-health-*` | `@timestamp` |
-| `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*` | `timestamp` |
-| `agent-monitors-slm-health-*` | `probed_at` |
-| `agent-monitors-cache-erosion-*`, `agent-monitors-delivery-ratio-*` | `run_at` |
-| `agent-monitors-joinability-*` | `started_at` |
+- `level`, `event_type`, `trace_id`, `session_id`, `tool_name`, `model` and `provider` are plain `keyword`: use `term`, with no `.keyword` suffix.
+- `message` is `text`. Use `match` on it. Do not aggregate on it.
+- `error` is `text` with a `.keyword` subfield. Aggregate on `error.keyword`.
+- Today is ambiguous at midnight UTC. Use a rolling window (`since="24h"`).
 
-## Key fields in `agent-logs-*`
+## Success
 
-> **Mapping note (2026-05-10 cleanup):** All `keyword` fields below are now **pure `keyword`** (no `.keyword` subfield needed) on every daily index, including older snapshots — they were reindexed against a corrected template. ES|QL term equality (`WHERE level == "ERROR"`) works directly. If you ever see term equality silently returning null, double-check the field's mapping with `_mapping/field/<name>` — a regression in the template would manifest as `text + .keyword` again, and the query would need the `.keyword` suffix to work.
+Check the result before you answer:
 
-Most important fields for queries:
+- The answer names the index family and the window that the numbers cover.
+- A reply with `shards_failed`, `timed_out` or `truncated` is partial. Say so.
+- A `total` of 0 for a window in which the agent ran means the window or the filter is wrong.
+- A terms aggregation with no buckets and a `total` above 0 means the field is empty for these events. Find the event that carries it (the last call in Step 1).
+- A count that you quote is the count that the reply holds, with its window. Do not round it up.
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `@timestamp` | date | Event time |
-| `level` | keyword | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `message` | text | Log message (full-text search; not for term equality) |
-| `trace_id` | keyword | Request trace ID |
-| `session_id` | keyword | Session identifier |
-| `event_type` | keyword | What happened (e.g. `tool_call_started`, `model_call_completed`) |
-| `action` | keyword | Sub-event action |
-| `task_type` | keyword | Gateway intent classification |
-| `mode` | keyword | Agent mode: `NORMAL`, `ALERT`, etc. |
-| `tool_name` | keyword | Name of tool called |
-| `input_tokens` | long | Prompt tokens to LLM (on `model_call_completed`) |
-| `output_tokens` | long | Completion tokens from LLM (on `model_call_completed`) |
-| `cache_read_tokens` | long | Cache-hit tokens (on `model_call_completed`) |
-| `cache_read_input_tokens` | long | Cache-hit tokens (on `api_cost_recorded` — different field name, same meaning) |
-| `cache_creation_input_tokens` | long | Cache-miss tokens (new cache entry) |
-| `cost_usd` | float | Cost of LLM call |
-| `success` | boolean | Whether the operation succeeded |
-| `error` | text + `.keyword` | Free-form error message; use `error.keyword` for term equality / aggregations, `error` for full-text search |
-| `turn_count` | long | Number of LLM turns in request |
-| `model` / `model_id` | keyword | LLM model used |
+## Recovery
 
-## When to skip discovery
-
-**For known-pattern questions** (counts, recent errors, cost by task type, trace lookup), use the one-shot canned recipes below directly — no `/_cat/indices` call needed. The index names and field names in this doc are empirically verified (2026-04-28).
-
-**Run discovery only when:** the question involves an index pattern or field name not in this doc, or you're getting empty results/404s that suggest an assumption is wrong.
-
-## Discovery step — for unfamiliar queries only
-
-```bash
-# 1. Verify index pattern exists and has data
-curl -s 'http://elasticsearch:9200/_cat/indices?v&h=index,docs.count' | grep agent
-
-# 2. Get exact field names
-curl -s 'http://elasticsearch:9200/agent-logs-*/_mapping' \
-  | jq 'to_entries[0].value.mappings.properties | keys | sort'
-```
-
-## Querying Elasticsearch — prefer `_search` (JSON DSL)
-
-> **Use `_search` for everything in this skill.** ES|QL has subtle syntax gotchas (time-unit pluralisation, `KEEP` vs `PROJECT`, `COUNT_IF` vs ternaries) that send the agent into iteration loops trying variants that fail silently. The JSON DSL is verbose but deterministic — every field, query type, and aggregation is named explicitly. Post-2026-05-10 reindex, all named keyword fields are pure keyword so `term` filters work directly with no `.keyword` suffix.
-
-### Canonical recipes for `agent-logs-*`
-
-```bash
-# Count events in the last 3 hours by level (errors / warnings / etc.)
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"range": {"@timestamp": {"gte": "now-3h"}}},
-    "aggs": {"by_level": {"terms": {"field": "level", "size": 10}}}
-  }' | jq '.aggregations.by_level.buckets'
-
-# Top N event_types in the last hour
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"range": {"@timestamp": {"gte": "now-1h"}}},
-    "aggs": {"by_event": {"terms": {"field": "event_type", "size": 20}}}
-  }' | jq '.aggregations.by_event.buckets'
-
-# Recent ERROR events with details
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 20,
-    "query": {"bool": {"must": [
-      {"term": {"level": "ERROR"}},
-      {"range": {"@timestamp": {"gte": "now-3h"}}}
-    ]}},
-    "sort": [{"@timestamp": "desc"}],
-    "_source": ["@timestamp","level","event_type","message","tool_name","trace_id","error"]
-  }' | jq ".hits.hits[]._source"
-
-# All events for one trace (by trace_id)
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 200,
-    "query": {"term": {"trace_id": "<trace_id>"}},
-    "sort": [{"@timestamp": "asc"}],
-    "_source": ["@timestamp","event_type","level","tool_name","model_id"]
-  }' | jq ".hits.hits[]._source"
-
-# Total tokens / cost in last 24h, grouped by task_type
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"range": {"@timestamp": {"gte": "now-24h"}}},
-    "aggs": {
-      "by_task": {
-        "terms": {"field": "task_type", "size": 10},
-        "aggs": {
-          "input": {"sum": {"field": "input_tokens"}},
-          "output": {"sum": {"field": "output_tokens"}},
-          "cost": {"sum": {"field": "cost_usd"}}
-        }
-      }
-    }
-  }' | jq '.aggregations.by_task.buckets'
-
-# Daily spend trend, last 7 days — TOTAL across all providers (LLM + OVH embedding +
-# Voyage rerank). Uses api_cost_recorded, the unified per-call ledger (FRE-979).
-# model_call_completed alone would understate this — it excludes embedding/rerank cost.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "api_cost_recorded"}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}}
-    ]}},
-    "aggs": {
-      "by_day": {
-        "date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_day.buckets'
-
-# Total spend by provider, last 24h — the total-spend source of truth. api_cost_recorded
-# carries every priced call (anthropic, openai, ovh, voyage); model_call_completed alone
-# misses embedding_generated (OVH) and reranker_applied (Voyage) cost (FRE-979).
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "api_cost_recorded"}},
-      {"range": {"@timestamp": {"gte": "now-24h"}}}
-    ]}},
-    "aggs": {
-      "by_provider": {
-        "terms": {"field": "provider", "size": 10},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_provider.buckets'
-
-# Managed-inference cost, last 7 days — embedding (OVH) and reranker (Voyage) breakdowns
-# that api_cost_recorded's total rolls up but doesn't distinguish by purpose.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "embedding_generated"}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}}
-    ]}},
-    "aggs": {
-      "by_day": {
-        "date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_day.buckets'
-
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "reranker_applied"}},
-      {"term": {"provider": "voyage"}},
-      {"exists": {"field": "cost_usd"}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}}
-    ]}},
-    "aggs": {"total_cost": {"sum": {"field": "cost_usd"}}}
-  }' | jq '.aggregations.total_cost'
-
-# Spend by role, last 24h — LLM-only (model_call_completed — role is the factory role,
-# e.g. primary / sub_agent / artifact_builder; see Pattern 3b below to group by budget cap).
-# Excludes OVH embedding and Voyage rerank cost; use the total-spend-by-provider recipe
-# above for a figure that includes them.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "model_call_completed"}},
-      {"range": {"@timestamp": {"gte": "now-24h"}}},
-      {"exists": {"field": "cost_usd"}}
-    ]}},
-    "aggs": {
-      "by_role": {
-        "terms": {"field": "role", "size": 10},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_role.buckets'
-
-# Spend by model, last 24h — LLM-only (model_call_completed); same exclusion as above.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "model_call_completed"}},
-      {"range": {"@timestamp": {"gte": "now-24h"}}},
-      {"exists": {"field": "cost_usd"}}
-    ]}},
-    "aggs": {
-      "by_model": {
-        "terms": {"field": "model", "size": 10},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_model.buckets'
-
-# Spend by budget cap — budget_counter_snapshot already groups roles sharing a
-# cap (cost_gate.budget_role_for(), config/governance/budget.yaml) into running_total,
-# so no client-side join is needed. Take the latest snapshot per (role, time_window).
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "budget_counter_snapshot"}},
-      {"range": {"@timestamp": {"gte": "now-5m"}}}
-    ]}},
-    "aggs": {
-      "by_cap": {
-        "terms": {"field": "time_window", "size": 5},
-        "aggs": {
-          "by_role": {
-            "terms": {"field": "role", "size": 20},
-            "aggs": {
-              "running_total": {"max": {"field": "running_total"}},
-              "cap_usd": {"max": {"field": "cap_usd"}},
-              "utilization_ratio": {"max": {"field": "utilization_ratio"}}
-            }
-          }
-        }
-      }
-    }
-  }' | jq '.aggregations.by_cap.buckets'
-
-# Loop-gate fires (consecutive or identity blocks) in last 7 days
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "tool_loop_gate"}},
-      {"terms": {"decision": ["warn_consecutive","block_consecutive","block_identity"]}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}}
-    ]}},
-    "aggs": {"by_decision": {"terms": {"field": "decision", "size": 5}}}
-  }' | jq '.aggregations.by_decision.buckets'
-```
-
-**Time math** uses ES date math: `now-1h`, `now-3h`, `now-24h`, `now-7d`, `now-30d`, etc. No spaces, no plurals.
-
-**Term equality** uses `{"term": {"field": "value"}}` for keyword fields (most named fields). Use `{"match": ...}` for full-text in `message`, `user_message`, or `error` (the `error` field also has an `.keyword` subfield for term equality).
-
-### ES|QL — for ad-hoc analytics only
-
-ES|QL (`/_query`) can be useful for one-off analytics with `STATS … BY …` chains, but it has gotchas the JSON DSL doesn't:
-
-| ES\|QL gotcha | Symptom | Workaround |
+| Failure | Cause | Next step |
 |---|---|---|
-| Time units must be plural with space: `NOW()-3 hours`, NOT `NOW()-3hour` | Empty result, no error | Use the JSON DSL's `now-3h` instead |
-| Column selection uses `KEEP`, not `PROJECT` | Parse error or unexpected columns | Use the JSON DSL's `_source` filter instead |
-| Conditional aggregation: `COUNT_IF(condition)` (no ternaries) | Parse error | Use JSON `aggs` with `filter` instead |
-| Term equality on `text` fields silently returns null | Empty result, no error | After 2026-05-10 reindex this only affects `error` and `message` — use `_search` |
-
-If you must use ES|QL for an ad-hoc shape:
-
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE @timestamp > NOW()-3 hours | STATS count=COUNT(*) BY level | SORT count DESC"}' \
-  | jq '.values'
-```
-
-If you get an empty `values` array, switch to `_search` rather than iterating ES|QL syntax.
-
-## Index / schema inspection
-
-```bash
-# List all indices with doc count and size
-curl -s 'http://elasticsearch:9200/_cat/indices?format=json&h=index,docs.count,store.size' | jq .
-
-# Get field mappings for a specific index
-curl -s 'http://elasticsearch:9200/agent-logs-*/_mapping' | jq 'to_entries[0].value.mappings.properties | keys | sort'
-
-# Cluster health
-curl -s 'http://elasticsearch:9200/_cluster/health' | jq '{status, active_shards, unassigned_shards}'
-```
-
-## Self-telemetry (agent logs + Captain's Log captures)
-
-Use `bash` + `curl` to query ES. **Do NOT use `run_python` for project-module imports** — the
-sandbox container does not have project source installed (`from personal_agent import ...` will
-`ImportError`). Use the REST API instead.
-
-```bash
-# Recent agent log events (last 20, any type)
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 20,
-    "query": {"match_all": {}},
-    "sort": [{"@timestamp": "desc"}],
-    "_source": ["@timestamp","level","event_type","message","tool_name","trace_id"]
-  }' | jq ".hits.hits[]._source"
-
-# Recent Captain's Log captures (last 10, newest first)
-curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 10,
-    "sort": [{"timestamp": "desc"}],
-    "_source": ["trace_id","user_message","outcome","total_tokens","timestamp"]
-  }' | jq '.hits.hits[]._source'
-
-# Recent reflections — recurring ones only (seen_count >= 2, most persistent first)
-curl -s 'http://elasticsearch:9200/agent-captains-reflections-*/_search' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 10,
-    "query": {"range": {"seen_count": {"gte": 2}}},
-    "sort": [{"seen_count": "desc"}, {"created_at": "desc"}],
-    "_source": ["rationale","proposed_change_what","seen_count","category","created_at","linear_issue_id"]
-  }' | jq '.hits.hits[]._source'
-
-# Full event trace for a specific request (by trace_id)
-curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 100,
-    "query": {"term": {"trace_id.keyword": "<trace_id>"}},
-    "sort": [{"@timestamp": "asc"}],
-    "_source": ["event_type","@timestamp","model_id","tokens"]
-  }' | jq '.hits.hits[]._source'
-```
-
-## Common mistakes
-
-| Mistake | Fix |
-|---------|-----|
-| Using `agent-events-*` or `agent-traces-*` | These don't exist. Use `agent-logs-*` |
-| Iterating ES\|QL syntax variants when a query returns null | Switch to `_search` JSON DSL. ES\|QL gotchas (plural time units, `KEEP` vs `PROJECT`, `COUNT_IF`) waste turns. The JSON DSL is verbose but every name is explicit. |
-| `term` query on `error` text field | Use `error.keyword`. All other named fields (`level`, `event_type`, `tool_name`, `trace_id`, etc.) are pure keyword post-2026-05-10 reindex — `term` works directly. |
-| Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp >= now-24h` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index. |
-| Empty `_source` filter | Omit `_source` to get the full doc (it's small). Or list explicit fields to keep results small. |
-| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `api_cost_recorded`, `embedding_generated`, `reranker_applied`, `budget_counter_snapshot`, `history_sanitised`. |
-| Assuming a separate cloud-only cost event exists | The legacy per-provider event name was removed (FRE-376 Phase 3). Cost/tokens for **both** cloud and local model calls are unified on `model_call_completed` (has `role`). |
-| Using `model_call_completed` alone for TOTAL spend | It's LLM-completions only — it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost, which route through the unified ledger instead. Use `api_cost_recorded` for total spend across every provider (FRE-974/979); keep `model_call_completed` for by-role/by-model LLM-only breakdowns. |
-
-## Governance
-
-- `bash curl` to ES: the reads above run without asking in NORMAL/ALERT/DEGRADED (FRE-1583). `_bulk`, `_doc`, `_update_by_query`, `_delete_by_query`, `_settings`, `PUT`, `DELETE` and every other endpoint ask. No auth required — local cluster only. 30 s timeout.
-- LOCKDOWN: `bash` disabled. Use `read` primitive to read raw JSONL directly from log files.
-- `run_python` for self-telemetry: available in NORMAL/ALERT/DEGRADED; disabled in LOCKDOWN/RECOVERY.
-- Output cap: pipe large responses through `| head -c 50000` or use `LIMIT` in ES|QL.
-
-See also: the `bash` and `run_python` tool descriptions.
+| `refused: field 'x' is not available in agent-logs. Allowed fields: ...` | The field is not in the allowlist, or the name is wrong | Pick a field from the list in the message. If none fits, check the field with `_field_caps` and use curl |
+| `refused: index must be one of ...` | The family is not one of the three | Use the curl path in Step 2 |
+| `refused: since ...` | The window is malformed or over 30 days | Write a number and `m`, `h` or `d` |
+| `store_unavailable` or `store_timeout` | Elasticsearch is down or slow | Call once more. If it fails again, stop and tell the user. The `infrastructure-health` skill checks the service |
+| `store_rejected` (HTTP 400) | The query shape is wrong | Change the query as the message states |
+| HTTP 404 `index_not_found_exception` with curl | A guessed index name. The names `agent-events-*`, `agent-traces-*`, `agent-telemetry-*` and `logs-*` are retired or never existed | Use a family from the table. Events of every kind are in `agent-logs-*` |
+| A curl reply is `{"hits": {"total": {"value": 0}}}` and the agent ran | Wrong date field, or `since` too short | Check the date field of the family. Widen the window once |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |

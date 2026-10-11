@@ -1,0 +1,14 @@
+skill: system-diagnostics
+scenarios:
+  - prompt: "What is listening on port 9000 inside the container?"
+    expected_skill: system-diagnostics
+    expect: "Runs ss -tunlp and filters for port 9000. Reports the process and the address."
+  - prompt: "List the five processes that use the most memory, with their command lines."
+    expected_skill: system-diagnostics
+    expect: "Runs ps with a sort on rss and a head. Reports the processes and their commands."
+  - prompt: "Is the disk busy? Show me the I/O activity for a few seconds."
+    expected_skill: system-diagnostics
+    expect: "Runs a bounded iostat or vmstat (a count is given and interval times count is under 30 seconds). Does not run it without a count."
+  - prompt: "Which process has the file /app/data/cache.db open?"
+    expected_skill: system-diagnostics
+    expect: "Runs lsof on that path and reports the process id and name."

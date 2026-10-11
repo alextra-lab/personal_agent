@@ -182,14 +182,14 @@ stale again as soon as the next family migrates. Instead, check what's actually 
 relying on a shape:
 
 ```bash
-curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
+curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^<family-prefix>-' \
-  | python3 scripts/es_index_granularity.py <family-prefix>
+  | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py <family-prefix>
 ```
 
-See [query-elasticsearch skill](../skills/query-elasticsearch/SKILL.md#determining-a-familys-index-granularity--dont-strip-dates-in-the-shell)
-for the full recipe (tested classifier, guard against sibling-family name collisions, and the
-live-coverage aggregation as a secondary check) and FRE-1036's own plan
+The script moved into the skill folder in FRE-1578, so that it ships in the gateway image. See
+the [query-elasticsearch skill](../skills/query-elasticsearch/SKILL.md#index-families)
+for the recipe (tested classifier, guard against sibling-family name collisions) and FRE-1036's own plan
 (`docs/superpowers/plans/2026-07-31-fre-1036-es-ilm-monthly-rollover.md`) for the target design and
 per-family retention windows.
 

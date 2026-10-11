@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `7a5ff3f9` · Committed: 2026-10-11T07:06:05+02:00  
+> Source revision: `d848bb35` · Committed: 2026-10-11T08:08:38+02:00  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,22 +32,22 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 29,425  
+Total skill docs: 11 · Total tokens (all skills): 22,377  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
 | SKILL: Artifact Design | 5,558 | `docs/skills/artifact-design/SKILL.md` |
-| infrastructure-health — Probe all infrastructure services for reachability | 951 | `docs/skills/infrastructure-health/SKILL.md` |
+| infrastructure-health — Is each backend service reachable? | 889 | `docs/skills/infrastructure-health/SKILL.md` |
 | SKILL: Mermaid Diagrams | 2,985 | `docs/skills/mermaid-diagrams/SKILL.md` |
-| neo4j-direct — Run Cypher queries against the live knowledge graph | 1,133 | `docs/skills/neo4j-direct/SKILL.md` |
-| query-elasticsearch — Query ES indices, inspect schema, read self-telemetry | 6,175 | `docs/skills/query-elasticsearch/SKILL.md` |
-| query-tempo — Query Tempo traces, read span hierarchies, and investigate latency | 4,167 | `docs/skills/query-tempo/SKILL.md` |
-| self-telemetry — Agent self-introspection via ES + Captain's Log | 3,403 | `docs/skills/self-telemetry/SKILL.md` |
+| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,401 | `docs/skills/neo4j-direct/SKILL.md` |
+| query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,107 | `docs/skills/query-elasticsearch/SKILL.md` |
+| query-tempo — Model-call latency and the spans of one trace | 1,551 | `docs/skills/query-tempo/SKILL.md` |
+| self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `docs/skills/self-telemetry/SKILL.md` |
 | sequential-thinking — Structured Reasoning Discipline | 1,289 | `docs/skills/sequential-thinking/SKILL.md` |
-| system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …) | 603 | `docs/skills/system-diagnostics/SKILL.md` |
-| system-metrics — CPU, memory, and disk utilisation snapshot | 1,180 | `docs/skills/system-metrics/SKILL.md` |
-| SKILL: turn-forensics | 1,981 | `docs/skills/turn-forensics/SKILL.md` |
+| system-diagnostics — ps, ss, vmstat, iostat, lsof | 801 | `docs/skills/system-diagnostics/SKILL.md` |
+| system-metrics — CPU, memory and disk utilisation snapshot | 912 | `docs/skills/system-metrics/SKILL.md` |
+| turn-forensics — Reconstruct one turn end to end | 2,026 | `docs/skills/turn-forensics/SKILL.md` |
 
 ---
 
@@ -1228,98 +1228,79 @@ shelf entry stays *experimental/gated*); un-gating it — which would add paged.
 
 ---
 
-### infrastructure-health — Probe all infrastructure services for reachability
+### infrastructure-health — Is each backend service reachable?
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 951 |
+| **Token count** | 889 |
 | **Source** | `docs/skills/infrastructure-health/SKILL.md` |
 
 ```markdown
-# infrastructure-health — Probe all infrastructure services for reachability
+# infrastructure-health — Is each backend service reachable?
 
 ## Rules
 
-Probe the live endpoints with bash curl before concluding a service is healthy or degraded.
+- Probe the live endpoint before you say that a service is healthy or down.
+- Use a real connection for Postgres, not a TCP probe. Port 5432 is the wire protocol, not HTTP: `curl http://postgres:5432` always gives a meaningless reply.
+- The names `postgres`, `neo4j`, `elasticsearch` and `redis` are Docker DNS names. They resolve only inside the `cloud-sim` network. From the host shell use `localhost:<port>`.
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `infra_health` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+## Step 1 — One service, or all four
 
-**Category:** `system_read` · **Risk:** none · **Approval:** a plain `bash curl` GET of a listed health endpoint runs without asking (FRE-1583); `psql`, `redis-cli` and `run_python(network=True)` ask the user (ADR-0156 D8)
-
-> **Container vs host:** Hostnames (`postgres`, `neo4j`, `elasticsearch`, `redis`) are Docker DNS names that only resolve from **inside** the `cloud-sim` network. From the VPS host shell, use `localhost:<port>` instead.
-
-## Single-service checks — preferred path (bash)
-
-For "is Postgres reachable?" use a real connection, not a TCP probe to port 5432:
+The script opens a real Postgres connection and runs `SELECT 1`, reads the Elasticsearch cluster
+health, reads the Neo4j HTTP page, and sends a Redis `PING`. It prints one line for each service.
 
 ```bash
-# Postgres — AGENT_DATABASE_URL uses postgresql+asyncpg:// which psql cannot parse.
-# Strip the driver specifier first:
-# ask: the shell expands $(…) and $AGENT_DATABASE_URL here, so this is not a plain command and asks for approval.
-bash psql "$(echo $AGENT_DATABASE_URL | sed 's|postgresql+asyncpg|postgresql|')" -c 'SELECT 1'
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/infrastructure-health/scripts/probe_services.py all
 ```
-
-> **`pg_isready` is NOT installed** on the agent image. Do not use it.
-> Do NOT probe Postgres with `curl http://postgres:5432` — port 5432 is the wire protocol, not HTTP; the response is always garbage and tells you nothing useful.
 
 ```bash
-# Elasticsearch
-bash curl -fsS http://elasticsearch:9200/_cluster/health | grep '"status"'
-
-# Redis
-# ask: no allow rule covers redis-cli (FRE-1572), so this asks for approval.
-bash redis-cli -h redis ping
-
-# Neo4j HTTP
-bash curl -fsS http://neo4j:7474/
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/infrastructure-health/scripts/probe_services.py postgres
 ```
 
-## Multi-service check — run_python fallback
+The argument is `postgres`, `elasticsearch`, `neo4j`, `redis` or `all`. Each line reads
+`<service>: ok <detail>` or `<service>: FAIL <detail>`. The exit code is 0 when every probed
+service answered, 1 when one did not, and 2 for bad usage. No password is printed.
 
-Use `run_python(network=True)` only when the prompt explicitly asks for all services at once. `run_python` depends on Docker-in-Docker socket availability and may fail when the Docker daemon is not mounted into the gateway container.
+## Step 2 — Without asking: the two HTTP endpoints
 
-```python
-import socket, json, urllib.request, urllib.error
+A plain `GET` of a listed health endpoint runs without asking:
 
-def tcp(host, port, timeout=3):
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return {"reachable": True}
-    except OSError as e:
-        return {"reachable": False, "error": str(e)}
-
-def http(url, timeout=5):
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
-            return {"reachable": True, "status": r.status}
-    except urllib.error.HTTPError as e:
-        return {"reachable": True, "status": e.code}
-    except Exception as e:
-        return {"reachable": False, "error": str(e)}
-
-result = {
-    "postgres":      tcp("postgres", 5432),
-    "neo4j_http":    http("http://neo4j:7474"),
-    "elasticsearch": http("http://elasticsearch:9200/_cluster/health"),
-    "redis":         tcp("redis", 6379),
-}
-result["all_reachable"] = all(v.get("reachable") for v in result.values())
-print(json.dumps(result, indent=2))
+```bash
+curl -fsS http://elasticsearch:9200/_cluster/health
+curl -fsS http://neo4j:7474/
 ```
 
-## Stop rules
+`status` in the first reply is `green`, `yellow` or `red`. A single-node cluster is often
+`yellow`: that is up. Only `red` is unhealthy.
 
-- Do not infer "service unreachable" from a curl TCP probe to a non-HTTP port.
-- If `run_python` fails to start (Docker unavailable), surface that clearly and fall back to single-service bash probes.
-- `pg_isready` is not installed — do not attempt it.
+## Success
+
+Check the result before you answer:
+
+- The answer has one line for each service that was asked about, with `ok` or the error text.
+- "Down" rests on a failed connection or a bad reply, not on a missing tool or a wrong name.
+- A `yellow` Elasticsearch status is reported as `yellow` and as up.
+- The answer says whether the probe ran inside the gateway container or on the host.
+
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `postgres: FAIL AGENT_DATABASE_URL is not set in this environment` | The script runs where the variable is not set | Say that Postgres cannot be probed from here. Do not guess |
+| `postgres: FAIL psql is not installed in this environment` | The host shell has no client | Run the probe through the `bash` tool in the gateway container |
+| `FAIL cannot connect to ...` | The service is down, or the name does not resolve from here | Check where the command runs (the Rules above). If it runs in the gateway, the service is down: say so |
+| `redis: ok ... asks for a password` | Redis needs authentication | The server is up. Say that PING was not tried with a password |
+| `elasticsearch: FAIL cluster status red` | Shards are missing | Report `red`. Use the `query-elasticsearch` skill for `_cat/indices` if asked for the cause |
+| The same failure twice | — | Stop. Tell the user the service, the error text and what was tried |
 
 ## Governance
 
-- `bash curl`: a `GET` of a listed health or telemetry read endpoint runs without asking in NORMAL/ALERT/DEGRADED. Any other host, path or method asks (FRE-1583). For Neo4j only `GET http://neo4j:7474/` runs without asking.
-- `bash psql`, `bash redis-cli`: ask the user (FRE-1572), in every mode.
-- `run_python(network=True)`: asks the user in every mode (ADR-0156 D8.6).
-- LOCKDOWN: bash and run_python both disabled.
+- `curl` `GET` of a listed health endpoint runs without asking in NORMAL, ALERT and DEGRADED (FRE-1583). Any other host, path or method asks. For Neo4j only `GET http://neo4j:7474/` runs without asking.
+- `python3` (the probe script), `psql` and `redis-cli` ask the user, in every mode (FRE-1572, ADR-0156 D8.2).
+- LOCKDOWN: `bash` is disabled.
 ```
 
 ---
@@ -1681,1197 +1662,602 @@ External resources (use for syntax lookup, not as import targets):
 
 ---
 
-### neo4j-direct — Run Cypher queries against the live knowledge graph
+### neo4j-direct — Run read-only Cypher on the knowledge graph
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,133 |
+| **Token count** | 1,401 |
 | **Source** | `docs/skills/neo4j-direct/SKILL.md` |
 
 ```markdown
-# neo4j-direct — Run Cypher queries against the live knowledge graph
+# neo4j-direct — Run read-only Cypher on the knowledge graph
 
-**Status:** Primary path (FRE-327). Use when the task requires reading or inspecting
-Neo4j graph state directly — entity counts, relationships, schema, recent nodes.
+## Rules
 
-**Category:** `system_read` · **Risk:** none (read-only queries) · **Approval:** auto-approved
+- The skill is read-only. Use `MATCH` and `RETURN`. Never write to the graph from a diagnostic query: no `CREATE`, `MERGE`, `SET`, `DELETE`, `REMOVE`, `DROP`.
+- If the user asks to change the graph, do not do it. Show the `MATCH` that finds the nodes and leave the change to the user.
+- Use the script, not a hand-written driver call. The `run_python` sandbox has no `neo4j` driver.
+- Pass a value with `--param name=value`. Never put a value into the query text.
+- Do not use the `/db/data/transaction/commit` HTTP endpoint. It does not exist in Neo4j 5 (404 or 401).
 
-> **Do NOT use:** the deprecated `/db/data/transaction/commit` HTTP endpoint — it was removed
-> in Neo4j 5.x and always returns 404 or 401.
->
-> **Do NOT use:** `run_python` — the sandbox image does not have the `neo4j` driver installed.
-> Use `bash python3 -c "..."` instead; the gateway container has `neo4j>=5.15.0`.
-
----
-
-## Env vars (always use these — never hardcode)
-
-| Variable | Default (dev) | Purpose |
-|----------|--------------|---------|
-| `AGENT_NEO4J_URI` | `bolt://neo4j:7687` | Bolt connection URI (Docker DNS inside network) |
-| `AGENT_NEO4J_USER` | `neo4j` | Username |
-| `AGENT_NEO4J_PASSWORD` | *(see .env)* | Password |
-
----
-
-## Primary path — bash python3 (1 tool call)
+## Step 1 — Run one query
 
 ```bash
 # ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
-python3 - <<'EOF'
-from neo4j import GraphDatabase
-import os
-
-uri  = os.environ.get("AGENT_NEO4J_URI", "bolt://neo4j:7687")
-user = os.environ.get("AGENT_NEO4J_USER", "neo4j")
-pw   = os.environ.get("AGENT_NEO4J_PASSWORD", "")
-
-driver = GraphDatabase.driver(uri, auth=(user, pw))
-with driver.session() as s:
-    entities      = s.run("MATCH (e:Entity) RETURN count(e) AS n").single()["n"]
-    turns         = s.run("MATCH (t:Turn) RETURN count(t) AS n").single()["n"]
-    discusses     = s.run("MATCH ()-[r:DISCUSSES]->() RETURN count(r) AS n").single()["n"]
-    recent = [
-        dict(r)
-        for r in s.run(
-            "MATCH (e:Entity) "
-            "RETURN e.name AS name, e.created_at AS created "
-            "ORDER BY e.created_at DESC LIMIT 5"
-        )
-    ]
-
-driver.close()
-
-print(f"Entity nodes:        {entities}")
-print(f"Turn nodes:          {turns}")
-print(f"DISCUSSES relations: {discusses}")
-print("5 most recent entities:")
-for row in recent:
-    print(f"  {row['name']}  ({row['created']})")
-EOF
+python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN count(e) AS n"
 ```
 
----
+The reply is one JSON document: `{"rows": [...], "row_count": n, "truncated": false}`. The script
+returns at most 100 rows. Use `--limit N` (up to 1000) for more. `truncated: true` means that the
+query holds more rows than were returned.
 
-## Common diagnostic queries
+The script opens a read transaction, so the server refuses a write. It checks for a write clause
+first, to give a plain error before it connects.
 
-Adapt the script above by replacing the query lines:
+## Step 2 — Common diagnostic queries
 
-```python
-# All node labels and counts
-s.run("CALL db.labels() YIELD label RETURN label").data()
-s.run("MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY cnt DESC").data()
-
-# All relationship types and counts
-s.run("CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType").data()
-
-# Entities by type
-s.run("MATCH (e:Entity) RETURN e.entity_type AS type, count(e) AS n ORDER BY n DESC").data()
-
-# Recent turns (conversation history)
-s.run("MATCH (t:Turn) RETURN t.session_id, t.created_at ORDER BY t.created_at DESC LIMIT 10").data()
-
-# Specific entity search
-s.run("MATCH (e:Entity) WHERE toLower(e.name) CONTAINS $q RETURN e.name, e.entity_type LIMIT 10",
-      q="memory").data()
-
-# Entities with most relationships
-s.run(
-    "MATCH (e:Entity)-[r]-() "
-    "RETURN e.name, count(r) AS degree "
-    "ORDER BY degree DESC LIMIT 10"
-).data()
+```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY cnt DESC"
 ```
 
----
+```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/neo4j-direct/scripts/cypher.py "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
+```
 
-## Alternative — HTTP Cypher API (Neo4j 5.x)
+```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.created_at AS created ORDER BY e.created_at DESC LIMIT 5"
+```
 
-Use only if the Python driver is unavailable. Requires Basic auth:
+```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/neo4j-direct/scripts/cypher.py 'MATCH (e:Entity) WHERE toLower(e.name) CONTAINS $q RETURN e.name AS name, e.entity_type AS type LIMIT 10' --param q=memory
+```
+
+```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETURN e.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 10"
+```
+
+Labels in the graph include `Entity` and `Turn`. A relationship type of interest is `DISCUSSES`.
+Run the label query first when you are unsure what exists.
+
+## Environment
+
+The script reads these variables. Never write a value into a command.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGENT_NEO4J_URI` | `bolt://neo4j:7687` | Bolt address (a Docker DNS name inside the network) |
+| `AGENT_NEO4J_USER` | `neo4j` | User |
+| `AGENT_NEO4J_PASSWORD` | none | Password. The script stops with an error if it is empty |
+
+## Success
+
+Check the result before you answer:
+
+- The answer quotes the number or the rows from the script output, with the query that produced them.
+- `truncated` is `false`, or the answer says that only `row_count` rows are shown.
+- A count of 0 is checked once with the label query (Step 2): a wrong label name also gives 0.
+- No write was attempted.
+
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `error: this script is read-only and the query holds SET` | A write clause, or a property named like one | Remove the write. If it is a property or alias name, quote it with backticks |
+| `error: AGENT_NEO4J_PASSWORD is not set in this environment` | The script runs where the variable is not set | Say that the graph cannot be read from here. Do not look for the password |
+| `error: authentication failed` | The user or password is wrong | Stop. Tell the user. Do not try other credentials |
+| `error: cannot connect to bolt://...` | Neo4j is down, or the name does not resolve from here | Run the `infrastructure-health` skill for `neo4j`. Do not use `localhost` inside the container |
+| `error: the server refused the query: ...` | A syntax error, or the server refused a write | Fix the query as the message states |
+| `error: the neo4j driver is not importable by this python3` | The command ran with another Python | Run it with `/app/.venv/bin/python` in place of `python3` |
+| The driver is not usable at all | — | The HTTP API is the last resort (below). It asks the user |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |
+
+The HTTP Cypher API, only when the Python driver cannot be used:
 
 ```bash
 # ask: the shell expands ${AGENT_NEO4J_USER} and ${AGENT_NEO4J_PASSWORD} here, so this is not a plain command and asks for approval.
-curl -s -X POST \
+curl -fsS -X POST \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
   -u "${AGENT_NEO4J_USER}:${AGENT_NEO4J_PASSWORD}" \
   "http://neo4j:7474/db/neo4j/tx/commit" \
   -d '{"statements":[{"statement":"MATCH (e:Entity) RETURN count(e) AS n"}]}'
 ```
-
----
-
-## Stop rules
-
-- If `AGENT_NEO4J_PASSWORD` is empty, the driver will refuse to connect — check `.env` or `docker-compose.yml` for the actual password set on the neo4j container.
-- If `bolt://neo4j:7687` is unreachable, the gateway is not on the Docker network — try `bolt://localhost:7687` only when running outside the container stack.
-- Do not write to the graph during diagnostic queries — use `MATCH` / `RETURN` only.
 ```
 
 ---
 
-### query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
+### query-elasticsearch — Read agent logs and telemetry from Elasticsearch
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 6,175 |
+| **Token count** | 2,107 |
 | **Source** | `docs/skills/query-elasticsearch/SKILL.md` |
 
 ```markdown
-# query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
+# query-elasticsearch — Read agent logs and telemetry from Elasticsearch
 
 ## Rules
 
-These results must come from a live ES query — never answer from training-data priors about what the logs might contain.
+- Answer only from a live query. Never answer from what the logs probably hold.
+- Start with the `query_telemetry` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
+- Use curl only for what the tool cannot do. The table below says which.
+- Use only the index families in this file. Never write a guessed index name.
+- Model-call timing is not in Elasticsearch (retired, ADR-0129). Use the `query-tempo` skill.
+- Spend, token totals and interaction outcomes are in the `self-telemetry` skill.
 
-## Canonical patterns
+## Step 1 — Use the tool
 
-`agent-logs-*`, `agent-captains-captures-*`, `agent-captains-reflections-*`
+The tool description lists the fields of each family. The tool sorts hits newest first and
+returns at most 50. `since` is at most `30d`.
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `query_elasticsearch` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+```python
+# Count the errors of the last 24 hours
+query_telemetry(action="count", index="agent-logs", query={"term": {"level": "ERROR"}}, since="24h")
 
-**Category:** `system_read` · **Risk:** low · **Approval:** a `bash curl` read runs without asking (FRE-1583): `GET` of `_cat`, `_cluster/health`, `_mapping` and `_field_caps`, and `GET` or `POST` with a query body to `_search`, `_count` and `_query`. Every write endpoint and every other method asks; `run_python` runs without asking in NORMAL; with `network: true` it asks
+# The most common event types of the last hour
+query_telemetry(action="search", index="agent-logs", size=0, since="1h",
+                aggs={"by_event": {"terms": {"field": "event_type", "size": 20}}})
 
-**Latency is not here.** Model-call timing lives on OTel spans in Tempo, not in these logs (ADR-0129, FRE-1219: `duration_ms` and `latency_ms` are retired from `agent-logs-*`). For latency, p50/p90 or "what was slow", use the `query-tempo` skill (Pattern 5) or the `query_telemetry` tool, action `latency`.
+# The last 20 errors, with the fields that name them
+query_telemetry(action="search", index="agent-logs", query={"term": {"level": "ERROR"}}, size=20,
+                since="3h", fields=["@timestamp", "event_type", "message", "tool_name", "trace_id", "error"])
 
-## Known mistakes
+# The events of one trace
+query_telemetry(action="search", index="agent-logs", query={"term": {"trace_id": "<trace_id>"}},
+                size=50, since="7d", fields=["@timestamp", "event_type", "role", "tool_name", "input_tokens"])
 
-These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
+# Which events carry a field (find the event before you aggregate on the field)
+query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+                query={"exists": {"field": "input_tokens"}},
+                aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}})
+```
 
-- `/logs-*`: Generic '/logs-*' index does not exist in Seshat telemetry. Use '/agent-logs-*' — the correct index family starts with 'agent-'.
-- `agent-events-*`: Index 'agent-events-*' does not exist. Use 'agent-logs-*' for events; filter by 'event_type' field.
-- `agent-traces-*`: Index 'agent-traces-*' does not exist. Use 'agent-logs-*'; traces are logged events filtered by fields.
-- `agent-telemetry-*`: Index 'agent-telemetry-*' does not exist. Use 'agent-logs-*' for all structured telemetry.
+What the events carry (verified live 2026-10-11):
 
-## Actual indices (families verified 2026-04-28; date shapes verified 2026-07-31)
+| `event_type` | Fields to read |
+|---|---|
+| `model_call_completed` | `model`, `provider`, `role`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cost_usd`. LLM-only: it leaves out embedding and rerank cost |
+| `api_cost_recorded` | `provider`, `model`, `cost_usd`. Every priced call. This is the total-spend event |
+| `tool_call_started` | `tool_name` |
+| `tool_call_completed` | `tool_name`, `success` |
+| `tool_loop_gate` | `decision`: `warn_consecutive`, `block_consecutive`, `block_identity` |
+| `embedding_generated`, `reranker_applied` | `provider`, `cost_usd`. Part of total spend, not of `model_call_completed` |
 
-The cluster has these index families. **Do not guess index names** — use only these patterns:
+Other values that had events in the last 7 days: `session_created`, `state_transition`,
+`model_call_started`, `history_sanitised`, `budget_counter_snapshot`. Do not guess a value:
+run the last call above and read the buckets.
 
-| Pattern | Purpose | Example |
-|---------|---------|---------|
-| `agent-logs-*` | All structured log events (primary telemetry) | `agent-logs-2026.07.31`, `agent-logs-2026-07` |
-| `agent-captains-captures-*` | Captain's Log per-request captures | `agent-captains-captures-2026-07-31` |
-| `agent-captains-reflections-*` | DSPy self-reflection outputs | `agent-captains-reflections-2026-07-31` |
-| `agent-insights-*` | Cross-session insights and anomalies | `agent-insights-2026-07` |
+## Step 2 — When the tool cannot do it, use curl
 
-**Wildcard queries:** `agent-logs-*` (all days/months), `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*`.
+| Need | Why the tool cannot | Use |
+|---|---|---|
+| A family that is not `agent-logs`, `agent-topology` or `agent-monitors-slm-health` (captures, reflections, insights, other monitors) | `index` is a fixed list | `_search` with curl: see `references/curl-recipes.md` |
+| A field that the tool refuses and that exists | The allowlist is closed | Check the field first (below). Fields that hold conversation text are left out on purpose |
+| More than 50 hits, oldest first, or a window over 30 days | The caps | `_search` with curl |
+| ES\|QL | Not offered | `references/esql.md` |
+| The list of indices, or the fields of an index | Not offered | The two commands below |
 
-**Non-existent patterns** (404 errors): `agent-events-*`, `agent-traces-*`, `agent-telemetry-*` — these do not exist.
+**Check a field before a curl aggregation.** Elasticsearch gives empty buckets, not an
+error, for a field that does not exist. A field missing from `fields` in this reply does not
+exist:
 
-**Do not assume a date shape.** A family holds daily indices (`YYYY.MM.DD`), monthly indices (`YYYY-MM`), or both at once. Use the `<family>-*` wildcard. Never rebuild a date pattern by cutting another one: a cut name such as `agent-logs-2026` looks real and is not.
+```bash
+curl -fsS 'http://elasticsearch:9200/agent-logs-*/_field_caps?fields=event_type,level'
+curl -fsS 'http://elasticsearch:9200/_cat/indices?format=json&h=index,docs.count'
+```
 
-To classify a family, use the tested classifier, not `sed`:
+## Index families
+
+Use `<family>-*`. The tool takes the family name without `-*`.
+
+| Pattern | Holds | Date field |
+|---|---|---|
+| `agent-logs-*` | All structured log events | `@timestamp` |
+| `agent-topology-*` | Per-turn routing and planning facts | `@timestamp` |
+| `agent-captains-captures-*` | Captain's Log, one document for each request | `timestamp` |
+| `agent-captains-reflections-*` | DSPy self-reflection output | `timestamp` |
+| `agent-insights-*` | Cross-session insights and anomalies | `timestamp` |
+| `agent-monitors-slm-health-*` | Probes of the local model server | `probed_at` |
+| `agent-monitors-cache-reset-cadence-*`, `agent-monitors-projector-health-*` | Monitors | `@timestamp` |
+| `agent-monitors-cache-erosion-*`, `agent-monitors-delivery-ratio-*` | Monitors | `run_at` |
+| `agent-monitors-joinability-*` | Monitor | `started_at` |
+
+A time bound must use the date field of its own family. A range on the wrong field returns
+nothing and no error.
+
+A family holds daily indices (`YYYY.MM.DD`), monthly indices (`YYYY-MM`), or both. Never cut a
+date off a name: a cut name such as `agent-logs-2026` looks real and is not. To classify a
+family, use the tested script:
 
 ```bash
 # ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
-curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
+curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^agent-monitors-joinability-' \
-  | python3 scripts/es_index_granularity.py agent-monitors-joinability
+  | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py agent-monitors-joinability
 ```
 
-It reports daily and monthly counts, flags `MIXED`, and lists any name it does not recognise.
+The script prints the daily and monthly counts, flags `MIXED`, and lists every name that it
+does not recognise. It exits 1 if its input is empty, so a failed `curl` is never read as
+"no indices".
 
-**The date field differs by family.** The time bound in a query must use the family's own field (from `docker/elasticsearch/*-index-template.json`):
+## Field notes
 
-| Family | Date field |
-|--------|-----------|
-| `agent-logs-*`, `agent-topology-*`, `agent-monitors-cache-reset-cadence-*`, `agent-monitors-projector-health-*` | `@timestamp` |
-| `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*` | `timestamp` |
-| `agent-monitors-slm-health-*` | `probed_at` |
-| `agent-monitors-cache-erosion-*`, `agent-monitors-delivery-ratio-*` | `run_at` |
-| `agent-monitors-joinability-*` | `started_at` |
+- `level`, `event_type`, `trace_id`, `session_id`, `tool_name`, `model` and `provider` are plain `keyword`: use `term`, with no `.keyword` suffix.
+- `message` is `text`. Use `match` on it. Do not aggregate on it.
+- `error` is `text` with a `.keyword` subfield. Aggregate on `error.keyword`.
+- Today is ambiguous at midnight UTC. Use a rolling window (`since="24h"`).
 
-## Key fields in `agent-logs-*`
+## Success
 
-> **Mapping note (2026-05-10 cleanup):** All `keyword` fields below are now **pure `keyword`** (no `.keyword` subfield needed) on every daily index, including older snapshots — they were reindexed against a corrected template. ES|QL term equality (`WHERE level == "ERROR"`) works directly. If you ever see term equality silently returning null, double-check the field's mapping with `_mapping/field/<name>` — a regression in the template would manifest as `text + .keyword` again, and the query would need the `.keyword` suffix to work.
+Check the result before you answer:
 
-Most important fields for queries:
+- The answer names the index family and the window that the numbers cover.
+- A reply with `shards_failed`, `timed_out` or `truncated` is partial. Say so.
+- A `total` of 0 for a window in which the agent ran means the window or the filter is wrong.
+- A terms aggregation with no buckets and a `total` above 0 means the field is empty for these events. Find the event that carries it (the last call in Step 1).
+- A count that you quote is the count that the reply holds, with its window. Do not round it up.
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `@timestamp` | date | Event time |
-| `level` | keyword | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `message` | text | Log message (full-text search; not for term equality) |
-| `trace_id` | keyword | Request trace ID |
-| `session_id` | keyword | Session identifier |
-| `event_type` | keyword | What happened (e.g. `tool_call_started`, `model_call_completed`) |
-| `action` | keyword | Sub-event action |
-| `task_type` | keyword | Gateway intent classification |
-| `mode` | keyword | Agent mode: `NORMAL`, `ALERT`, etc. |
-| `tool_name` | keyword | Name of tool called |
-| `input_tokens` | long | Prompt tokens to LLM (on `model_call_completed`) |
-| `output_tokens` | long | Completion tokens from LLM (on `model_call_completed`) |
-| `cache_read_tokens` | long | Cache-hit tokens (on `model_call_completed`) |
-| `cache_read_input_tokens` | long | Cache-hit tokens (on `api_cost_recorded` — different field name, same meaning) |
-| `cache_creation_input_tokens` | long | Cache-miss tokens (new cache entry) |
-| `cost_usd` | float | Cost of LLM call |
-| `success` | boolean | Whether the operation succeeded |
-| `error` | text + `.keyword` | Free-form error message; use `error.keyword` for term equality / aggregations, `error` for full-text search |
-| `turn_count` | long | Number of LLM turns in request |
-| `model` / `model_id` | keyword | LLM model used |
+## Recovery
 
-## When to skip discovery
-
-**For known-pattern questions** (counts, recent errors, cost by task type, trace lookup), use the one-shot canned recipes below directly — no `/_cat/indices` call needed. The index names and field names in this doc are empirically verified (2026-04-28).
-
-**Run discovery only when:** the question involves an index pattern or field name not in this doc, or you're getting empty results/404s that suggest an assumption is wrong.
-
-## Discovery step — for unfamiliar queries only
-
-```bash
-# 1. Verify index pattern exists and has data
-curl -s 'http://elasticsearch:9200/_cat/indices?v&h=index,docs.count' | grep agent
-
-# 2. Get exact field names
-curl -s 'http://elasticsearch:9200/agent-logs-*/_mapping' \
-  | jq 'to_entries[0].value.mappings.properties | keys | sort'
-```
-
-## Querying Elasticsearch — prefer `_search` (JSON DSL)
-
-> **Use `_search` for everything in this skill.** ES|QL has subtle syntax gotchas (time-unit pluralisation, `KEEP` vs `PROJECT`, `COUNT_IF` vs ternaries) that send the agent into iteration loops trying variants that fail silently. The JSON DSL is verbose but deterministic — every field, query type, and aggregation is named explicitly. Post-2026-05-10 reindex, all named keyword fields are pure keyword so `term` filters work directly with no `.keyword` suffix.
-
-### Canonical recipes for `agent-logs-*`
-
-```bash
-# Count events in the last 3 hours by level (errors / warnings / etc.)
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"range": {"@timestamp": {"gte": "now-3h"}}},
-    "aggs": {"by_level": {"terms": {"field": "level", "size": 10}}}
-  }' | jq '.aggregations.by_level.buckets'
-
-# Top N event_types in the last hour
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"range": {"@timestamp": {"gte": "now-1h"}}},
-    "aggs": {"by_event": {"terms": {"field": "event_type", "size": 20}}}
-  }' | jq '.aggregations.by_event.buckets'
-
-# Recent ERROR events with details
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 20,
-    "query": {"bool": {"must": [
-      {"term": {"level": "ERROR"}},
-      {"range": {"@timestamp": {"gte": "now-3h"}}}
-    ]}},
-    "sort": [{"@timestamp": "desc"}],
-    "_source": ["@timestamp","level","event_type","message","tool_name","trace_id","error"]
-  }' | jq ".hits.hits[]._source"
-
-# All events for one trace (by trace_id)
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 200,
-    "query": {"term": {"trace_id": "<trace_id>"}},
-    "sort": [{"@timestamp": "asc"}],
-    "_source": ["@timestamp","event_type","level","tool_name","model_id"]
-  }' | jq ".hits.hits[]._source"
-
-# Total tokens / cost in last 24h, grouped by task_type
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"range": {"@timestamp": {"gte": "now-24h"}}},
-    "aggs": {
-      "by_task": {
-        "terms": {"field": "task_type", "size": 10},
-        "aggs": {
-          "input": {"sum": {"field": "input_tokens"}},
-          "output": {"sum": {"field": "output_tokens"}},
-          "cost": {"sum": {"field": "cost_usd"}}
-        }
-      }
-    }
-  }' | jq '.aggregations.by_task.buckets'
-
-# Daily spend trend, last 7 days — TOTAL across all providers (LLM + OVH embedding +
-# Voyage rerank). Uses api_cost_recorded, the unified per-call ledger (FRE-979).
-# model_call_completed alone would understate this — it excludes embedding/rerank cost.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "api_cost_recorded"}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}}
-    ]}},
-    "aggs": {
-      "by_day": {
-        "date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_day.buckets'
-
-# Total spend by provider, last 24h — the total-spend source of truth. api_cost_recorded
-# carries every priced call (anthropic, openai, ovh, voyage); model_call_completed alone
-# misses embedding_generated (OVH) and reranker_applied (Voyage) cost (FRE-979).
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "api_cost_recorded"}},
-      {"range": {"@timestamp": {"gte": "now-24h"}}}
-    ]}},
-    "aggs": {
-      "by_provider": {
-        "terms": {"field": "provider", "size": 10},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_provider.buckets'
-
-# Managed-inference cost, last 7 days — embedding (OVH) and reranker (Voyage) breakdowns
-# that api_cost_recorded's total rolls up but doesn't distinguish by purpose.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "embedding_generated"}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}}
-    ]}},
-    "aggs": {
-      "by_day": {
-        "date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_day.buckets'
-
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "reranker_applied"}},
-      {"term": {"provider": "voyage"}},
-      {"exists": {"field": "cost_usd"}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}}
-    ]}},
-    "aggs": {"total_cost": {"sum": {"field": "cost_usd"}}}
-  }' | jq '.aggregations.total_cost'
-
-# Spend by role, last 24h — LLM-only (model_call_completed — role is the factory role,
-# e.g. primary / sub_agent / artifact_builder; see Pattern 3b below to group by budget cap).
-# Excludes OVH embedding and Voyage rerank cost; use the total-spend-by-provider recipe
-# above for a figure that includes them.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "model_call_completed"}},
-      {"range": {"@timestamp": {"gte": "now-24h"}}},
-      {"exists": {"field": "cost_usd"}}
-    ]}},
-    "aggs": {
-      "by_role": {
-        "terms": {"field": "role", "size": 10},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_role.buckets'
-
-# Spend by model, last 24h — LLM-only (model_call_completed); same exclusion as above.
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "model_call_completed"}},
-      {"range": {"@timestamp": {"gte": "now-24h"}}},
-      {"exists": {"field": "cost_usd"}}
-    ]}},
-    "aggs": {
-      "by_model": {
-        "terms": {"field": "model", "size": 10},
-        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
-      }
-    }
-  }' | jq '.aggregations.by_model.buckets'
-
-# Spend by budget cap — budget_counter_snapshot already groups roles sharing a
-# cap (cost_gate.budget_role_for(), config/governance/budget.yaml) into running_total,
-# so no client-side join is needed. Take the latest snapshot per (role, time_window).
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "budget_counter_snapshot"}},
-      {"range": {"@timestamp": {"gte": "now-5m"}}}
-    ]}},
-    "aggs": {
-      "by_cap": {
-        "terms": {"field": "time_window", "size": 5},
-        "aggs": {
-          "by_role": {
-            "terms": {"field": "role", "size": 20},
-            "aggs": {
-              "running_total": {"max": {"field": "running_total"}},
-              "cap_usd": {"max": {"field": "cap_usd"}},
-              "utilization_ratio": {"max": {"field": "utilization_ratio"}}
-            }
-          }
-        }
-      }
-    }
-  }' | jq '.aggregations.by_cap.buckets'
-
-# Loop-gate fires (consecutive or identity blocks) in last 7 days
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"must": [
-      {"term": {"event_type": "tool_loop_gate"}},
-      {"terms": {"decision": ["warn_consecutive","block_consecutive","block_identity"]}},
-      {"range": {"@timestamp": {"gte": "now-7d"}}}
-    ]}},
-    "aggs": {"by_decision": {"terms": {"field": "decision", "size": 5}}}
-  }' | jq '.aggregations.by_decision.buckets'
-```
-
-**Time math** uses ES date math: `now-1h`, `now-3h`, `now-24h`, `now-7d`, `now-30d`, etc. No spaces, no plurals.
-
-**Term equality** uses `{"term": {"field": "value"}}` for keyword fields (most named fields). Use `{"match": ...}` for full-text in `message`, `user_message`, or `error` (the `error` field also has an `.keyword` subfield for term equality).
-
-### ES|QL — for ad-hoc analytics only
-
-ES|QL (`/_query`) can be useful for one-off analytics with `STATS … BY …` chains, but it has gotchas the JSON DSL doesn't:
-
-| ES\|QL gotcha | Symptom | Workaround |
+| Failure | Cause | Next step |
 |---|---|---|
-| Time units must be plural with space: `NOW()-3 hours`, NOT `NOW()-3hour` | Empty result, no error | Use the JSON DSL's `now-3h` instead |
-| Column selection uses `KEEP`, not `PROJECT` | Parse error or unexpected columns | Use the JSON DSL's `_source` filter instead |
-| Conditional aggregation: `COUNT_IF(condition)` (no ternaries) | Parse error | Use JSON `aggs` with `filter` instead |
-| Term equality on `text` fields silently returns null | Empty result, no error | After 2026-05-10 reindex this only affects `error` and `message` — use `_search` |
-
-If you must use ES|QL for an ad-hoc shape:
-
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE @timestamp > NOW()-3 hours | STATS count=COUNT(*) BY level | SORT count DESC"}' \
-  | jq '.values'
-```
-
-If you get an empty `values` array, switch to `_search` rather than iterating ES|QL syntax.
-
-## Index / schema inspection
-
-```bash
-# List all indices with doc count and size
-curl -s 'http://elasticsearch:9200/_cat/indices?format=json&h=index,docs.count,store.size' | jq .
-
-# Get field mappings for a specific index
-curl -s 'http://elasticsearch:9200/agent-logs-*/_mapping' | jq 'to_entries[0].value.mappings.properties | keys | sort'
-
-# Cluster health
-curl -s 'http://elasticsearch:9200/_cluster/health' | jq '{status, active_shards, unassigned_shards}'
-```
-
-## Self-telemetry (agent logs + Captain's Log captures)
-
-Use `bash` + `curl` to query ES. **Do NOT use `run_python` for project-module imports** — the
-sandbox container does not have project source installed (`from personal_agent import ...` will
-`ImportError`). Use the REST API instead.
-
-```bash
-# Recent agent log events (last 20, any type)
-curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 20,
-    "query": {"match_all": {}},
-    "sort": [{"@timestamp": "desc"}],
-    "_source": ["@timestamp","level","event_type","message","tool_name","trace_id"]
-  }' | jq ".hits.hits[]._source"
-
-# Recent Captain's Log captures (last 10, newest first)
-curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 10,
-    "sort": [{"timestamp": "desc"}],
-    "_source": ["trace_id","user_message","outcome","total_tokens","timestamp"]
-  }' | jq '.hits.hits[]._source'
-
-# Recent reflections — recurring ones only (seen_count >= 2, most persistent first)
-curl -s 'http://elasticsearch:9200/agent-captains-reflections-*/_search' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 10,
-    "query": {"range": {"seen_count": {"gte": 2}}},
-    "sort": [{"seen_count": "desc"}, {"created_at": "desc"}],
-    "_source": ["rationale","proposed_change_what","seen_count","category","created_at","linear_issue_id"]
-  }' | jq '.hits.hits[]._source'
-
-# Full event trace for a specific request (by trace_id)
-curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 100,
-    "query": {"term": {"trace_id.keyword": "<trace_id>"}},
-    "sort": [{"@timestamp": "asc"}],
-    "_source": ["event_type","@timestamp","model_id","tokens"]
-  }' | jq '.hits.hits[]._source'
-```
-
-## Common mistakes
-
-| Mistake | Fix |
-|---------|-----|
-| Using `agent-events-*` or `agent-traces-*` | These don't exist. Use `agent-logs-*` |
-| Iterating ES\|QL syntax variants when a query returns null | Switch to `_search` JSON DSL. ES\|QL gotchas (plural time units, `KEEP` vs `PROJECT`, `COUNT_IF`) waste turns. The JSON DSL is verbose but every name is explicit. |
-| `term` query on `error` text field | Use `error.keyword`. All other named fields (`level`, `event_type`, `tool_name`, `trace_id`, etc.) are pure keyword post-2026-05-10 reindex — `term` works directly. |
-| Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp >= now-24h` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index. |
-| Empty `_source` filter | Omit `_source` to get the full doc (it's small). Or list explicit fields to keep results small. |
-| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `api_cost_recorded`, `embedding_generated`, `reranker_applied`, `budget_counter_snapshot`, `history_sanitised`. |
-| Assuming a separate cloud-only cost event exists | The legacy per-provider event name was removed (FRE-376 Phase 3). Cost/tokens for **both** cloud and local model calls are unified on `model_call_completed` (has `role`). |
-| Using `model_call_completed` alone for TOTAL spend | It's LLM-completions only — it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost, which route through the unified ledger instead. Use `api_cost_recorded` for total spend across every provider (FRE-974/979); keep `model_call_completed` for by-role/by-model LLM-only breakdowns. |
-
-## Governance
-
-- `bash curl` to ES: the reads above run without asking in NORMAL/ALERT/DEGRADED (FRE-1583). `_bulk`, `_doc`, `_update_by_query`, `_delete_by_query`, `_settings`, `PUT`, `DELETE` and every other endpoint ask. No auth required — local cluster only. 30 s timeout.
-- LOCKDOWN: `bash` disabled. Use `read` primitive to read raw JSONL directly from log files.
-- `run_python` for self-telemetry: available in NORMAL/ALERT/DEGRADED; disabled in LOCKDOWN/RECOVERY.
-- Output cap: pipe large responses through `| head -c 50000` or use `LIMIT` in ES|QL.
-
-See also: the `bash` and `run_python` tool descriptions.
+| `refused: field 'x' is not available in agent-logs. Allowed fields: ...` | The field is not in the allowlist, or the name is wrong | Pick a field from the list in the message. If none fits, check the field with `_field_caps` and use curl |
+| `refused: index must be one of ...` | The family is not one of the three | Use the curl path in Step 2 |
+| `refused: since ...` | The window is malformed or over 30 days | Write a number and `m`, `h` or `d` |
+| `store_unavailable` or `store_timeout` | Elasticsearch is down or slow | Call once more. If it fails again, stop and tell the user. The `infrastructure-health` skill checks the service |
+| `store_rejected` (HTTP 400) | The query shape is wrong | Change the query as the message states |
+| HTTP 404 `index_not_found_exception` with curl | A guessed index name. The names `agent-events-*`, `agent-traces-*`, `agent-telemetry-*` and `logs-*` are retired or never existed | Use a family from the table. Events of every kind are in `agent-logs-*` |
+| A curl reply is `{"hits": {"total": {"value": 0}}}` and the agent ran | Wrong date field, or `since` too short | Check the date field of the family. Widen the window once |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |
 ```
 
 ---
 
-### query-tempo — Query Tempo traces, read span hierarchies, and investigate latency
+### query-tempo — Model-call latency and the spans of one trace
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 4,167 |
+| **Token count** | 1,551 |
 | **Source** | `docs/skills/query-tempo/SKILL.md` |
 
 ```markdown
-# query-tempo — Query Tempo traces, read span hierarchies, and investigate latency
+# query-tempo — Model-call latency and the spans of one trace
 
 ## Rules
 
-These results must come from a live Tempo query — never answer from training-data priors about what the trace might contain.
+- Answer only from a live Tempo query. Never answer from what a trace probably holds.
+- For latency over a window, start with `query_telemetry`, action `latency`. Elasticsearch holds no model-call timing (retired, ADR-0129).
+- For the spans of one trace, use curl on `http://tempo:3200`. The tool does not read one trace.
+- Write a trace id, a clock value and a number as a literal in the command. A shell variable or `$(...)` makes the command ask for approval.
 
-## Canonical patterns
+## Step 1 — Latency over a window: use the tool
 
-`trace_id`
+```python
+# p50, p90 and max of model calls, by role, over the last day
+query_telemetry(action="latency", since="24h", group_by=["role"])
 
-**Status:** Primary path (FRE-1321, 2026-08-29). Tempo v2.10.7 deployed with OTLP ingress (ADR-0129).
+# By role and model
+query_telemetry(action="latency", since="24h", group_by=["role", "model"])
 
-**Category:** `system_read` · **Risk:** low · **Approval:** a `bash curl` `GET` of `/api/traces/*`, `/api/v2/traces/*`, `/api/search*`, `/api/v2/search/*`, `/api/metrics/*`, `/api/echo`, `/ready` and `/status` runs without asking in NORMAL/ALERT/DEGRADED (FRE-1583). Any other path or method asks. Reachability is limited to the compose network
+# One role only
+query_telemetry(action="latency", since="24h", role="primary", group_by=["model"])
 
-## Known mistakes
+# The local server's side: prefill and decode time, by model, over the last week
+query_telemetry(action="latency", since="7d", span="slm_chat", group_by=["model"])
+```
 
-These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
+`since` is from 1 minute to 7 days (Tempo refuses a longer window). `limit` is the number of
+traces to read, 200 by default and 500 at most. The reply holds, for each group: `count`,
+`errors`, `p50_ms`, `p90_ms`, `max_ms` and token sums.
 
-- `api/v1/`: Tempo v1 API endpoints do not exist in our deployment. Documented Tempo API (upstream) uses v1, but our deployment (Tempo v2.10.7) has only the unprefixed and v2 APIs. Use '/api/traces/{traceID}' or '/api/v2/traces/{traceID}' for trace retrieval, '/api/search' for search. Never '/api/v1/*'.
-- `api/status`: /api/status returns 404. The correct endpoint for Tempo status is /status (not /api/status). Use '/status' or '/api/echo' for status checks.
+**Read `complete` before you report a number.** `complete: false` means a cap was hit and the
+numbers cover a sample. Name `incomplete_reasons` in the answer. An empty `groups` list means that
+no model-call span matched in the window. It does not mean zero latency.
 
-## Reachability
+## Step 2 — One trace: use curl
 
-- **Tempo answers on the compose network as `http://tempo:3200`**
-- Query API base: `http://tempo:3200/api/`
-- Available only from inside containers (compose network) or SSH tunnels with port forwarding
-- Test connectivity: `curl -s 'http://tempo:3200/status'` returns 200
-
-## Endpoints (verified live 2026-08-29)
-
-### Trace retrieval by ID
-
-**Preferred: `/api/v2/traces/{traceID}` (standard OpenTelemetry proto format)**
+Tempo answers on the compose network as `http://tempo:3200`. It is not reachable from the host
+shell. Trace ids are written as literals.
 
 ```bash
-# Put your trace id in place of the example id. Do not write {traceID}: curl expands braces.
-curl -s 'http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '.trace.resourceSpans[0].scopeSpans[0].spans'
+# The spans of one trace (the id below is an example)
+curl -fsS 'http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '.trace.resourceSpans[0].scopeSpans[0].spans'
 ```
-
-Returns standard OTel resourceSpans format:
-```json
-{
-  "trace": {
-    "resourceSpans": [
-      {
-        "resource": {
-          "attributes": [
-            {
-              "key": "service.name",
-              "value": {"stringValue": "seshat-vps"}
-            }
-          ]
-        },
-        "scopeSpans": [
-          {
-            "scope": {"name": "personal_agent.telemetry.otel_middleware"},
-            "spans": [
-              {
-                "traceId": "G8hJv5Tr+AFir5yXue6Rww==",
-                "spanId": "KPV6tY/gbzU=",
-                "name": "GET /health",
-                "kind": "SPAN_KIND_INTERNAL",
-                "startTimeUnixNano": "1788030491849226974",
-                "endTimeUnixNano": "1788030491854866238",
-                "attributes": [
-                  {
-                    "key": "http.method",
-                    "value": {"stringValue": "GET"}
-                  }
-                ],
-                "status": {}
-              }
-            ]
-          }
-        ]
-      }
-    ]
-  },
-  "metrics": {
-    "inspectedBytes": "72504"
-  }
-}
-```
-
-**Alternative: `/api/traces/{traceID}` (Tempo-native batches format)**
 
 ```bash
-curl -s 'http://tempo:3200/api/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '.batches[0].scopeSpans[0].spans'
+# Each span with its duration in milliseconds, in time order
+curl -fsS 'http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '[.trace.resourceSpans[].scopeSpans[].spans[] | {name, spanId, parentSpanId, start: (.startTimeUnixNano | tonumber), durationMs: (((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)) / 1000000)}] | sort_by(.start)'
 ```
 
-Returns Tempo's batches format (similar structure, different root key). Both endpoints work; v2 is the standard.
+Fields of a span: `name`, `spanId`, `parentSpanId` (absent for the root), `startTimeUnixNano`,
+`endTimeUnixNano`, `kind`, `attributes` (a list of key and value pairs), `status`. Times are in
+nanoseconds: divide by 1,000,000 for milliseconds. Span and trace ids are base64 in the reply and are
+used as they are in a later query.
 
-**Key fields per span:**
-- `traceId`, `spanId` — base64-encoded trace and span identifiers
-- `parentSpanId` — parent span ID (if set); empty/absent for root spans
-- `name` — semantic span name (e.g., `GET /health`, `model_call`)
-- `startTimeUnixNano`, `endTimeUnixNano` — Unix nanosecond timestamps
-- `kind` — `SPAN_KIND_INTERNAL`, `SPAN_KIND_SERVER`, `SPAN_KIND_CLIENT`, etc.
-- `attributes` — key-value metadata (HTTP method, status, service name, etc.)
-- `status` — `{}` for success; `{"code": "STATUS_CODE_ERROR"}` for errors
-
-### Search for traces (by service or attributes)
+## Step 3 — Search and status: use curl
 
 ```bash
-# Search with limit (required parameter)
-curl -s 'http://tempo:3200/api/search?limit=10' | jq '.traces'
+# Recent traces. limit is required: a search without it fails silently
+curl -fsS 'http://tempo:3200/api/search?limit=10' | jq '.traces'
 
-# Search for a specific service
-curl -s 'http://tempo:3200/api/search?q=service.name%3Dseshat-vps&limit=5' | jq '.traces'
+# Traces of a service in a window. start and end are Unix seconds, written as literals
+curl -fsS 'http://tempo:3200/api/search?start=1788026891&end=1788030491&q=service.name%3Dseshat-vps&limit=20' | jq '.traces'
 
-# Search for recent traces with time window
-curl -s 'http://tempo:3200/api/search?start=<unix_seconds>&end=<unix_seconds>&q=<query>&limit=10' | jq '.traces'
+# The attribute names that a search can use
+curl -fsS 'http://tempo:3200/api/search/tags' | jq '.tagNames'
+
+# Status and version
+curl -fsS 'http://tempo:3200/status'
 ```
 
-Returns:
-```json
-{
-  "traces": [
-    {
-      "traceID": "1bc849bf94ebf80162af9c97b9ee91c3",
-      "rootServiceName": "seshat-vps",
-      "rootTraceName": "GET /health",
-      "startTime": "1788030491849226974",
-      "duration": "5639264"
-    }
-  ],
-  "metrics": {
-    "inspectedBytes": "...",
-    "inspectedTraces": "..."
-  }
-}
-```
-
-**Parameters:**
-- `limit` — required, max traces to return
-- `start`, `end` — Unix seconds (optional; if omitted, searches recent traces only)
-- `q` — query string with attribute filters (optional)
-
-### Tag enumeration (search attributes)
+To get the clock for `start` and `end`, run two plain commands and write the two numbers into
+the search:
 
 ```bash
-curl -s 'http://tempo:3200/api/search/tags' | jq '.tagNames'
-```
-
-Returns available tag/attribute names that can be searched:
-```json
-{
-  "tagNames": ["service.name", "http.method", "http.status_code", ...]
-}
-```
-
-### Status / version
-
-```bash
-curl -s 'http://tempo:3200/status' | jq .
-```
-
-Returns:
-```json
-{
-  "version": "2.10.7",
-  "buildDate": "...",
-  "gitRevision": "..."
-}
-```
-
-### Echo endpoint (simple connectivity check)
-
-```bash
-curl -s 'http://tempo:3200/api/echo' | jq .
-```
-
-Returns:
-```json
-{}
-```
-
----
-
-## Common patterns
-
-### Pattern 1: Read a complete trace end-to-end (with spans and timing)
-
-Replace the trace id in the URL with the one you need. Write it as a literal: a shell variable or `$(…)` makes the command ask for approval.
-
-```bash
-curl -s "http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3" | jq '.trace.resourceSpans[0].scopeSpans[0].spans | 
-  map({
-    name,
-    spanId,
-    startTimeUnixNano: (.startTimeUnixNano | tonumber),
-    endTimeUnixNano: (.endTimeUnixNano | tonumber),
-    durationNano: ((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)),
-    attributes: ((.attributes // []) | map({(.key): (.value.stringValue // .value.intValue)}) | add)
-  }) | 
-  sort_by(.startTimeUnixNano)'
-```
-
-Output from real trace:
-```json
-[
-  {
-    "name": "GET /health",
-    "spanId": "KPV6tY/gbzU=",
-    "startTimeUnixNano": 1788030491849226974,
-    "endTimeUnixNano": 1788030491854866238,
-    "durationNano": 5639264,
-    "attributes": {
-      "http.method": "GET",
-      "http.target": "/health",
-      "http.status_code": 200
-    }
-  }
-]
-```
-
-**Interpretation:** Single span representing an HTTP GET to /health that took ~5.6ms and returned 200.
-
-### Pattern 2: Find recently active services
-
-```bash
-curl -s 'http://tempo:3200/api/search?limit=100' | jq '.traces | unique_by(.rootServiceName) | .[] | {service: .rootServiceName, recentTrace: .traceID}'
-```
-
-### Pattern 3: Calculate span duration in milliseconds
-
-```bash
-curl -s "http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3" | jq '.trace.resourceSpans[0].scopeSpans[0].spans[] | 
-  {
-    name,
-    durationMs: (((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)) / 1000000)
-  }'
-```
-
-### Pattern 4: Find traces by service name and time window
-
-Read the clock with two plain commands, then write the two numbers into the search. The numbers below are example values.
-
-```bash
+date +%s
 date -d '1 hour ago' +%s
-date +%s
-curl -s 'http://tempo:3200/api/search?start=1788026891&end=1788030491&q=service.name%3Dseshat-vps&limit=20' | jq '.traces[]'
 ```
 
-### Pattern 5: Model-call latency by role and model (p50, p90, max)
+`q` takes TraceQL. A search with a pipeline returns only the attributes that `select(...)` names.
+`spss` caps the spans returned for each trace and `limit` caps the traces. A reply that reaches
+either cap is a sample. For a latency summary that the tool cannot give, read
+`references/latency-recipe.md`.
 
-Use this for "how slow are model calls", "p50 and p90 by role" and any latency over a window.
-Elasticsearch holds no model-call timing (ADR-0129). Tempo does: one `model_call <model>` span
-per model call, with the role in `gen_ai.operation.name` and the model in
-`gen_ai.request.model`. The `query_telemetry` tool, action `latency`, returns the same kind of summary
-when that tool is available. This is the bash path.
+## Success
 
-1. Read the clock: `date +%s` is the end, `date -d '24 hours ago' +%s` is the start. Tempo
-   refuses a window over 168 hours.
-2. Write both numbers as literals in `start` and `end`. A `$(…)` makes the command ask for approval.
-3. Keep `limit` (traces) and `--argjson limit` equal. `spss` is the spans returned per trace.
+Check the result before you answer:
 
-```bash
-date +%s
-date -d '24 hours ago' +%s
-curl -s -G 'http://tempo:3200/api/search' \
-  --data-urlencode 'q={ span:name =~ "model_call .*" } | select(span.gen_ai.operation.name, span.gen_ai.request.model)' \
-  --data-urlencode 'start=1788000000' \
-  --data-urlencode 'end=1788086400' \
-  --data-urlencode 'limit=500' \
-  --data-urlencode 'spss=100' \
-| jq --argjson limit 500 'def pct($p): sort | .[((($p * length) | ceil) - 1)];
-def num: if type == "number" then . elif type == "string" then (tonumber? // null) else null end;
-def attr($k): ([.attributes[]? | select(.key == $k) | .value.stringValue] | first) // "unknown";
-[.traces[]? | (.spanSets // [.spanSet])[]? | select(. != null)] as $sets
-| (.metrics.totalJobs | num) as $total
-| (if $total != null then ((.metrics.completedJobs | num) // 0) else null end) as $done
-| [$sets[] | .spans[]? | select((.durationNanos | num) != null)] as $spans
-| (.traces | length) as $returned
-| ([.traces[]? | select((.spanSets // .spanSet) == null)] | length) as $noset
-| ([$sets[] | select((.matched | num) != null) | ((.matched | num) - ((.spans // []) | length)) | select(. > 0)] | add // 0) as $cut
-| ([$sets[] | select((.matched | num) == null)] | length) as $nomatch
-| ([$sets[] | .spans[]? | select((.durationNanos | num) == null)] | length) as $nodur
-| (if $done != null and $total != null and $done < $total then $total - $done else 0 end) as $unread
-| {
-    traces_returned: $returned,
-    trace_limit: $limit,
-    spans_used: ($spans | length),
-    spans_cut: $cut,
-    blocks_unread: $unread,
-    sets_without_match: $nomatch,
-    spans_without_duration: $nodur,
-    traces_without_span_set: $noset,
-    complete: ($returned < $limit and $cut == 0 and $unread == 0 and $nomatch == 0 and $nodur == 0 and $noset == 0),
-    groups: ($spans | group_by([attr("gen_ai.operation.name"), attr("gen_ai.request.model")])
-      | map({
-          role: (.[0] | attr("gen_ai.operation.name")),
-          model: (.[0] | attr("gen_ai.request.model")),
-          spans: length,
-          p50_ms: (map((.durationNanos | num) / 1000000) | pct(0.5)),
-          p90_ms: (map((.durationNanos | num) / 1000000) | pct(0.9)),
-          max_ms: (map((.durationNanos | num) / 1000000) | max)
-        })
-      | sort_by(-.spans))
-  }'
-```
+- A latency answer states the window, the group keys and the value of `complete`.
+- A percentile comes from `spans_used`. A role or model with few spans has a coarse p90: say how many spans.
+- A trace answer lists the span names with durations and says which span is the root.
+- A number that is in nanoseconds is converted: the answer states the unit.
 
-**Read `complete` before you report a number.** It is `false` when any of these holds:
+## Recovery
 
-| Field | Meaning when not zero (or `traces_returned` equals `trace_limit`) |
-|-------|------------------------------------------------------------------|
-| `traces_returned` = `trace_limit` | The `limit` cut the search. More traces can match. Narrow the window or add a filter to the TraceQL. |
-| `spans_cut` | Tempo matched more spans in a trace than `spss` returned. |
-| `blocks_unread` | Tempo stopped before it read every block. |
-| `sets_without_match` | A result had no match count, so its completeness is unknown. |
-| `spans_without_duration` | A span had no duration. It is left out of the percentiles. |
-| `traces_without_span_set` | A trace came back with no span set. Its spans are not counted. |
+| Failure | Cause | Next step |
+|---|---|---|
+| `refused: ...` from the tool | An argument is not allowed (a span kind, a group key, a window over 7 days) | Change the argument as the message states |
+| `store_unavailable`, `store_timeout`, `store_blocked` | Tempo is down, slow or blocked | Call once more. If it fails again, stop and tell the user |
+| `complete: false` | A trace or span cap was hit | Narrow `since`, or add `role` or `model`. Report the figure as a sample |
+| `could not resolve host: tempo` | The command ran on the host shell | Run it through the `bash` tool, which runs in the gateway container |
+| An empty `[]` from `/api/search` | `limit` is missing or the window is empty | Add `limit=10`. Try the search with no `start` and `end` |
+| HTTP 404 on `/api/v1/...` | Tempo v1 paths do not exist in this deployment (v2.10.7) | Use `/api/v2/traces/<id>`, `/api/traces/<id>` or `/api/search` |
+| HTTP 404 on `/api/status` | Wrong status path | Use `/status` or `/api/echo` |
+| A very large trace is slow | More than 1000 spans | Select the span fields with `jq`. Do not print the whole trace |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |
 
-When `complete` is `false`, say the percentiles come from a sample and name the field. An empty
-`groups` means no model-call span matched in the window. It does not mean zero latency.
-Percentiles are nearest-rank over `spans_used`. A role or model with few spans gives a
-coarse p90.
-
----
-
-## Known limitations
-
-**Search requires a limit parameter.** Unlike Elasticsearch, Tempo search always requires `?limit=N`. Without it, requests fail silently or return empty results.
-
-**Time format is Unix seconds only.** Unlike Elasticsearch's date-math (`now-1h`), Tempo requires explicit Unix-second timestamps for `start` and `end` parameters.
-
-**`q` takes TraceQL.** `{ span:name =~ "model_call .*" && span.gen_ai.operation.name = "primary" } | select(span.gen_ai.request.model)` works (verified live, FRE-1567). A search with a pipeline returns only the attributes named in `select(...)`. `spss` caps the spans returned per trace, and `limit` caps the traces. A reply that hits either cap is a sample, not the whole window.
-
-**Base64 encoding on IDs.** Trace and span IDs are base64-encoded in the response. To use them in subsequent queries, use them as-is (no decoding needed for another query).
-
----
-
-## Data discipline
-
-- **Run `curl` from `bash` as shown.** The bash tool runs inside the gateway container, where `http://tempo:3200` resolves. `docker exec` is not an allowlisted command and asks for approval
-- **Search requires a limit.** Always include `?limit=N` in search queries; omitting it causes silent failures
-- **Timestamps are nanoseconds.** Divide by 1e9 for seconds; divide by 1e6 for milliseconds
-- **v1 API does not exist here.** Documentation says v1, but our Tempo has only the unprefixed and v2 paths
-- **Traces are immutable.** Once written to Tempo, a trace cannot be updated
-
----
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `could not resolve host: tempo` | Running from the host instead of inside the gateway container | Run the command through the `bash` tool, which runs in the gateway container |
-| Empty `[]` on `/api/search` | Missing or empty `limit` parameter | Add `?limit=10` (or any positive integer) to the query |
-| `null` results on search | Trace time window is outside recent history | Use `/api/search?limit=10` with no time filter to get recent traces |
-| HTTP 404 on `/api/v1/traces` | Attempting to use the documented Tempo v1 API | Use `/api/v2/traces/{traceID}` or `/api/traces/{traceID}` instead |
-| HTTP 404 on `/api/status` | Using the wrong status endpoint | Use `/status` (not `/api/status`) |
-| Large trace (>10 MB) takes time to retrieve | Traces with many spans (1000+) are slower to deserialize | Use selective `jq` filtering to extract only needed span fields |
-
----
-
-## References
-
-- [Tempo upstream API docs](https://grafana.com/docs/tempo/latest/api_docs/) — official reference (our deployment differs; use this skill for our specifics)
-- [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/) — standard span attribute names
-- ADR-0129 (`docs/architecture_decisions/ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md`) — Tempo deployment and design rationale
-- The `query-elasticsearch` skill — analogue for log queries (Elasticsearch backs logs, Tempo backs traces)
+See also: ADR-0129 (`docs/architecture_decisions/ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md`)
+for the Tempo deployment, and the `query-elasticsearch` skill for log queries.
 ```
 
 ---
 
-### self-telemetry — Agent self-introspection via ES + Captain's Log
+### self-telemetry — The agent's own tokens, cost, budget and outcomes
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 3,403 |
+| **Token count** | 2,858 |
 | **Source** | `docs/skills/self-telemetry/SKILL.md` |
 
 ```markdown
-# self-telemetry — Agent self-introspection via ES + Captain's Log
+# self-telemetry — The agent's own tokens, cost, budget and outcomes
 
 ## Rules
 
-Cite real ES counts/traces in your answer — do not paraphrase what the telemetry 'probably' shows.
+- Cite real counts from a live query. Never describe what the telemetry probably shows.
+- Start with `query_telemetry`. Use curl only for the budget snapshot (Pattern 3b) and the Captain's Log (Pattern 4).
+- For total spend, use `api_cost_recorded`. `model_call_completed` is LLM-only: it leaves out embedding and rerank cost.
+- How long model calls took is in the `query-tempo` skill. The timeline of one turn is in the `turn-forensics` skill.
+- Elasticsearch mechanics (schema, ES|QL, the `_search` template) are in the `query-elasticsearch` skill. A path of the form `<skill>/<file>` names a file of another skill: load it with `read_skill`, with `name` set to `<skill>` and `path` set to `<file>`.
 
-## Canonical patterns
+## What the events hold
 
-`model_call_completed`, `agent-captains-captures-*`, `agent-captains-reflections-*`
+| `event_type` | Fields to read |
+|---|---|
+| `api_cost_recorded` | The total-spend ledger. Every priced call, by `provider` (`anthropic`, `openai`, `ovh`, `voyage`). `model`, `cost_usd`, `trace_id`, `session_id` |
+| `model_call_completed` | LLM-completions only, cloud and local. `model`, `provider`, `role`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cost_usd` (priced calls) |
+| `embedding_generated` | Managed embedding call. `provider`, `model`, `cost_usd` |
+| `reranker_applied` | Reranker call. `provider` (`voyage`), `cost_usd` is empty for the free local fallback |
+| `budget_counter_snapshot` | One document for each budget role and window, every 60 seconds. `role`, `time_window`, `running_total`, `cap_usd`, `utilization_ratio` |
 
-**Primary path:** `bash curl` to `http://elasticsearch:9200`. **No `run_python` project imports.**
+Two fields have different names for the same meaning. On `model_call_completed` the cache field
+is `cache_read_tokens`. On `api_cost_recorded` it is `cache_read_input_tokens`. A query for the
+second name on `model_call_completed` returns nothing.
 
-## Known mistakes
+## Pattern 1 — Token stats by model
 
-These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
-
-- `from personal_agent`: run_python sandbox has no project source installed — 'from personal_agent import ...' raises ImportError. Use bash+curl to the ES REST API instead.
-- `cache_read_input_tokens`: On 'model_call_completed' the ES field is 'cache_read_tokens', not 'cache_read_input_tokens' (internal usage object name). Use 'cache_read_tokens' when querying 'model_call_completed'.
-
-## Event types and what they cover
-
-| `event_type` | Path | Key fields |
-|---|---|---|
-| `api_cost_recorded` | **Total-spend source (FRE-979).** Unified per-call cost ledger (Postgres `api_costs` mirror) — every priced call lands here regardless of provider: `anthropic`/`openai` (LLM), `ovh` (managed embedding), `voyage` (reranker). Always carries `cost_usd`, no `role`. | `provider`, `model`, `cost_usd`, `latency_ms`, `record_id`, `trace_id`, `session_id`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
-| `model_call_completed` | **LLM-completions only.** Cloud (`LiteLLMClient`) AND local (`LocalLLMClient`) both emit this since FRE-376 Phase 3 (the per-provider event name was retired). Has the `role` dimension, so keep it for by-role/by-model LLM breakdowns — but it **excludes embedding and rerank cost**; do not use it alone for total spend. | `model`, `provider`, `role`, `endpoint`, `latency_ms`, `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cost_usd` (present on cloud/priced calls) |
-| `embedding_generated` | Managed-embedding call (FRE-974) — provider `ovh` only today | `provider` (`ovh`), `model`, `tokens`, `cost_usd`, `latency_ms`, `trace_id`, `session_id` |
-| `reranker_applied` | Reranker call, primary + fallback paths (FRE-851/974) — `cost_usd` is `None` for the free local fallback (`slm_local`) or a Voyage response with no reported usage | `provider` (`voyage` or `slm_local`), `model_id`, `cost_usd`, `duration_ms`, `fallback` |
-| `budget_counter_snapshot` | Cap-utilization gauge, one doc per configured budget-role cap every 60s (FRE-547) | `role` (the **budget-role** key, e.g. `main_inference`, `entity_extraction`, `artifact_builder` — already groups factory roles like `primary`/`sub_agent`/`compressor` via `cost_gate.budget_role_for()`), `time_window` (`daily`/`weekly`), `window_start`, `running_total`, `cap_usd`, `utilization_ratio` |
-| `llm_step_completed` | Orchestrator step wrapper | `model_role`, `duration_ms`, `tokens` (total) |
-
-Captain's Log:
-- `agent-captains-captures-*` — per-request outcome: `outcome`, `total_tokens`, `duration_ms`, `task_type`, `user_message`, `timestamp`
-- `agent-captains-reflections-*` — recurring pattern reflections: `rationale`, `seen_count`, `category`, `proposed_change_what`
-
----
-
-## Pattern 1 — Token stats by model, last 2 hours
-
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-2hours | STATS calls=COUNT(*), input=SUM(input_tokens), output=SUM(output_tokens), cost=SUM(cost_usd) BY model, provider | SORT input DESC"}' \
-  | jq '.columns[].name, .values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="2h",
+                query={"term": {"event_type": "model_call_completed"}},
+                aggs={"by_model": {"terms": {"field": "model", "size": 10},
+                                   "aggs": {"input": {"sum": {"field": "input_tokens"}},
+                                            "output": {"sum": {"field": "output_tokens"}},
+                                            "cost": {"sum": {"field": "cost_usd"}}}}})
 ```
-
----
 
 ## Pattern 2 — Prompt-cache hit rate
 
-Cache read tokens (served from cache) versus input tokens written fresh. A higher ratio = more cache reuse.
+Cache read tokens are served from the cache. A higher share means more reuse.
 
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND input_tokens IS NOT NULL | STATS total_input=SUM(input_tokens), total_cached=SUM(cache_read_tokens), calls=COUNT(*) BY provider"}' \
-  | jq '.values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+                query={"term": {"event_type": "model_call_completed"}},
+                aggs={"by_provider": {"terms": {"field": "provider", "size": 10},
+                                      "aggs": {"input": {"sum": {"field": "input_tokens"}},
+                                               "cached": {"sum": {"field": "cache_read_tokens"}}}}})
 ```
 
-Hit rate ≈ `total_cached / (total_input + total_cached)`. A ratio near zero means caching is not firing; near 1 means heavy reuse.
+Hit rate is `cached / (input + cached)`. Say which providers the rate covers. A rate near zero
+means caching does not fire. Some calls hold no `cache_read_tokens`: the sum covers only those
+that do.
 
----
+## Pattern 3 — Cost by role and by model, LLM only (last 24 hours)
 
-## Pattern 3 — Cost breakdown by role and by model (last 24 h)
+`role` is the factory role: `primary`, `sub_agent`, `compressor`, `artifact_builder`. It is
+not the budget cap (see Pattern 3b). This pattern is LLM-only and leaves out embedding and
+rerank cost. For total spend use Pattern 3c.
 
-**LLM-only** (`model_call_completed`) — excludes OVH embedding and Voyage rerank cost; see
-Pattern 3c for total spend across all providers.
-
-`role` is the factory role (`primary`, `sub_agent`, `compressor`, `artifact_builder`, ...) —
-not yet grouped into a budget cap. See Pattern 3b to group by budget cap instead.
-
-```bash
-# By role
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND cost_usd IS NOT NULL | STATS total_cost=SUM(cost_usd), calls=COUNT(*), avg_latency=AVG(latency_ms) BY role | SORT total_cost DESC"}' \
-  | jq '.values'
-
-# By model
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND cost_usd IS NOT NULL | STATS total_cost=SUM(cost_usd), calls=COUNT(*) BY model | SORT total_cost DESC"}' \
-  | jq '.values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+                query={"bool": {"must": [{"term": {"event_type": "model_call_completed"}},
+                                         {"exists": {"field": "cost_usd"}}]}},
+                aggs={"by_role": {"terms": {"field": "role", "size": 10},
+                                  "aggs": {"cost": {"sum": {"field": "cost_usd"}}}}})
 ```
 
----
+For the split by model, change `"field": "role"` to `"field": "model"`.
 
 ## Pattern 3a — Daily spend trend (last 7 days)
 
-Total spend across **all** providers (LLM + OVH embedding + Voyage rerank) — uses
-`api_cost_recorded`, the unified per-call ledger. `model_call_completed` alone would
-understate this (misses embedding/rerank cost).
+Total spend across all providers (LLM, OVH embedding, Voyage rerank). It uses
+`api_cost_recorded`, the unified per-call ledger.
 
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"api_cost_recorded\" AND @timestamp > NOW()-7days | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
-  | jq '.values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="7d",
+                query={"term": {"event_type": "api_cost_recorded"}},
+                aggs={"by_day": {"date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
+                                 "aggs": {"cost": {"sum": {"field": "cost_usd"}}}}})
 ```
 
----
+## Pattern 3b — Spend by budget cap
 
-## Pattern 3b — Spend by budget cap (grouped, not per-role)
-
-Several factory roles share one budget cap (`cost_gate.budget_role_for()` maps them —
-`primary`/`sub_agent`/`compressor` all count against the `main_inference` cap;
-`artifact_builder` has its own lane). `budget_counter_snapshot` already carries the grouped
-`running_total` per cap — no client-side join needed:
+Several factory roles share one budget cap. `budget_counter_snapshot` already holds the grouped
+`running_total` for each cap, so no join is needed. The tool does not list these fields, so this
+pattern uses curl. The role in this event is the budget role from `config/governance/budget.yaml`,
+not the factory role of Pattern 3.
 
 ```bash
-# Current utilization per budget cap (daily + weekly windows)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+curl -fsS -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"budget_counter_snapshot\" AND @timestamp > NOW()-5minutes | STATS running_total=MAX(running_total), cap_usd=MAX(cap_usd), utilization_ratio=MAX(utilization_ratio) BY role, time_window | SORT time_window, utilization_ratio DESC"}' \
-  | jq '.values'
+  -d '{
+    "size": 0,
+    "query": {"bool": {"filter": [
+      {"term": {"event_type": "budget_counter_snapshot"}},
+      {"range": {"@timestamp": {"gte": "now-5m"}}}
+    ]}},
+    "aggs": {"by_window": {
+      "terms": {"field": "time_window", "size": 5},
+      "aggs": {"by_role": {
+        "terms": {"field": "role", "size": 20},
+        "aggs": {
+          "running_total": {"max": {"field": "running_total"}},
+          "cap_usd": {"max": {"field": "cap_usd"}},
+          "utilization_ratio": {"max": {"field": "utilization_ratio"}}
+        }
+      }}
+    }}
+  }' | jq '.aggregations.by_window.buckets'
 ```
 
-The cap definitions themselves live in `config/governance/budget.yaml`; the `role` value on
-this event is the budget-role key from that file, not the factory `role` seen on
-`model_call_completed`.
+If the reply has no buckets, the last 5 minutes hold no snapshot. Widen `gte` to `now-30m` once.
 
----
+## Pattern 3c — Total spend by provider (last 24 hours)
 
-## Pattern 3c — Total spend by provider (last 24h)
+The total-spend source of truth. `api_cost_recorded` carries every priced call.
+`model_call_completed` alone understates spend, because it leaves out the `embedding_generated`
+(OVH) and `reranker_applied` (Voyage) cost.
 
-The **total-spend source of truth**. `api_cost_recorded` carries every priced call
-(`anthropic`, `openai`, `ovh`, `voyage`) — `model_call_completed` alone understates spend
-because it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost (FRE-979).
-
-```bash
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"api_cost_recorded\" AND @timestamp > NOW()-24hours | STATS total_cost=SUM(cost_usd), calls=COUNT(*) BY provider | SORT total_cost DESC"}' \
-  | jq '.values'
+```python
+query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+                query={"term": {"event_type": "api_cost_recorded"}},
+                aggs={"by_provider": {"terms": {"field": "provider", "size": 10},
+                                      "aggs": {"cost": {"sum": {"field": "cost_usd"}}}}})
 ```
 
----
+## Pattern 3d — Managed-inference cost: embedding and reranker (last 7 days)
 
-## Pattern 3d — Managed-inference cost: embedding + reranker (last 7 days)
+These are the two non-LLM cost paths that Pattern 3c adds up without a split by purpose.
 
-Breaks out the two non-LLM cost paths `api_cost_recorded`'s total rolls up but doesn't
-distinguish by purpose.
+```python
+# OVH embedding cost, by day
+query_telemetry(action="search", index="agent-logs", size=0, since="7d",
+                query={"term": {"event_type": "embedding_generated"}},
+                aggs={"by_day": {"date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
+                                 "aggs": {"cost": {"sum": {"field": "cost_usd"}}}}})
 
-```bash
-# OVH embedding cost, daily
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"embedding_generated\" AND @timestamp > NOW()-7days | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
-  | jq '.values'
-
-# Voyage reranker cost, total (excludes the free slm_local fallback — filter cost_usd IS NOT NULL)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"reranker_applied\" AND provider == \"voyage\" AND cost_usd IS NOT NULL AND @timestamp > NOW()-7days | STATS total_cost=SUM(cost_usd), calls=COUNT(*)"}' \
-  | jq '.values'
+# Voyage reranker cost, total. The free local fallback has no cost_usd, so it is left out
+query_telemetry(action="search", index="agent-logs", size=0, since="7d",
+                query={"bool": {"must": [{"term": {"event_type": "reranker_applied"}},
+                                         {"term": {"provider": "voyage"}},
+                                         {"exists": {"field": "cost_usd"}}]}},
+                aggs={"total": {"sum": {"field": "cost_usd"}}})
 ```
 
----
+## Pattern 4 — How recent interactions ended (Captain's Log)
 
-## Pattern 4 — Recent interaction outcomes
+The captures index is not one of the tool's families, so this pattern uses curl. A capture holds
+`trace_id`, `outcome`, `total_tokens` and `timestamp`. The date field is `timestamp`, not
+`@timestamp`: a range on `@timestamp` returns nothing and no error.
 
 ```bash
-# Last 10 interactions (newest first)
-curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
+# The last 10 interactions, newest first
+curl -fsS -X POST 'http://elasticsearch:9200/agent-captains-captures-*/_search?format=json' \
   -H 'Content-Type: application/json' \
   -d '{
     "size": 10,
     "sort": [{"timestamp": "desc"}],
-    "_source": ["trace_id","task_type","outcome","total_tokens","duration_ms","timestamp","user_message"]
+    "_source": ["trace_id", "outcome", "total_tokens", "timestamp"]
   }' | jq '.hits.hits[]._source'
 
-# Success rate over last 24 h (ES|QL on captures)
-# Captures use plain "timestamp", not "@timestamp" (FRE-1035) — filtering on @timestamp
-# here returns empty silently since the field doesn't exist on this index.
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-captains-captures-* | WHERE timestamp > NOW()-24hours | STATS total=COUNT(*), successes=COUNT_IF(outcome == \"success\"), avg_tokens=AVG(total_tokens), avg_duration=AVG(duration_ms)"}' \
-  | jq '.values'
-```
-
----
-
-## Pattern 5 — Latency breakdown for a specific trace
-
-Replace `<trace_id>` with the actual ID.
-
-```bash
-# Full timeline for a trace
-curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
+# Outcomes over the last 24 hours
+curl -fsS -X POST 'http://elasticsearch:9200/agent-captains-captures-*/_search?format=json' \
   -H 'Content-Type: application/json' \
   -d '{
-    "size": 100,
-    "query": {"term": {"trace_id.keyword": "<trace_id>"}},
-    "sort": [{"@timestamp": "asc"}],
-    "_source": ["event_type","@timestamp","latency_ms","duration_ms","model","input_tokens","output_tokens","tool_name","role"]
-  }' | jq '.hits.hits[]._source'
-
-# LLM-only events for a trace (model call + step wrapper)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE trace_id == \"<trace_id>\" AND event_type IN (\"model_call_completed\", \"llm_step_completed\") | FIELDS @timestamp, event_type, latency_ms, duration_ms, model, input_tokens, output_tokens, model_role | SORT @timestamp ASC"}' \
-  | jq '.values'
+    "size": 0,
+    "query": {"range": {"timestamp": {"gte": "now-24h"}}},
+    "aggs": {"by_outcome": {"terms": {"field": "outcome", "size": 10}}}
+  }' | jq '{total: .hits.total.value, outcomes: .aggregations.by_outcome.buckets}'
 ```
 
----
+Reflections (recurring patterns) are in `agent-captains-reflections-*`. They hold `rationale`,
+`seen_count`, `category` and `proposed_change_what`. Use the same `_search` form, with
+`"sort": [{"seen_count": "desc"}]` and `"query": {"range": {"seen_count": {"gte": 2}}}`.
 
-## Quick health check — am I running well right now?
+## Pattern 5 — Am I running well right now?
 
-```bash
-# Errors in the last hour
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE level == \"ERROR\" AND @timestamp > NOW()-1hour | STATS count=COUNT(*) BY message | SORT count DESC | LIMIT 10"}' \
-  | jq '.values'
+```python
+# Errors in the last hour, by event type
+query_telemetry(action="search", index="agent-logs", size=0, since="1h",
+                query={"term": {"level": "ERROR"}},
+                aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}})
 
-# LLM call count + avg latency last hour (cloud + local combined — one unified event)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-1hour | STATS calls=COUNT(*), avg_latency=AVG(latency_ms), p95_approx=PERCENTILE(latency_ms, 95)"}' \
-  | jq '.values'
+# Model calls in the last hour
+query_telemetry(action="count", index="agent-logs", since="1h",
+                query={"term": {"event_type": "model_call_completed"}})
 ```
 
----
+For how long those calls took, use the `query-tempo` skill.
 
-## Notes
+## Success
 
-- Always pipe large responses through `| head -c 50000` or use `LIMIT N` in ES|QL.
-- `trace_id` requires `.keyword` suffix for exact-match `_search` queries but not for ES|QL `==`.
-- Cloud and local paths emit the **same** `event_type` (`model_call_completed`) — filter by `provider` if you need to split them, not by a different event name.
-- For **total spend**, use `api_cost_recorded` — `model_call_completed` alone excludes OVH
-  embedding (`embedding_generated`) and Voyage rerank (`reranker_applied`) cost (FRE-979).
-- Reflections and captures use the Captain's Log indices (`agent-captains-*`), not `agent-logs-*`.
+Check the result before you answer:
 
-See also: the `query-elasticsearch` skill (`read_skill(name="query-elasticsearch")`).
+- The answer names the window (`since`) and says whether the figure is LLM-only or total spend.
+- A total-spend figure comes from `api_cost_recorded`. It is higher than the LLM-only figure by the embedding and rerank cost. If the two are equal, check the filter.
+- The buckets of an outcome count can sum to less than the total: a capture can hold no `outcome`. Say how many hold none.
+- A cache hit rate states the providers that it covers. A local provider and a cloud provider have different cache behaviour.
+- The budget figure is the latest snapshot for each role and window, not a sum of snapshots.
+
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `refused: field 'x' is not available in agent-logs. Allowed fields: ...` | A field outside the allowlist (for example `time_window` or `running_total`) | For the budget fields use Pattern 3b. Otherwise pick a field from the list |
+| An aggregation returns no buckets | The field does not exist for this event, or the window is empty | Run a terms aggregation on `event_type` with `exists` on the field (see `query-elasticsearch`). Widen the window once |
+| A query on `cache_read_input_tokens` returns nothing on `model_call_completed` | That name is for `api_cost_recorded` | Use `cache_read_tokens` on `model_call_completed` |
+| `run_python` raises `ImportError` on `personal_agent` | The sandbox holds no project source | Use the tool, or curl. Never import project modules |
+| A curl range on the captures index returns nothing | The range used `@timestamp` | Use `timestamp` |
+| `store_unavailable` or `store_timeout` | Elasticsearch is down or slow | Call once more. If it fails again, stop and tell the user |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |
 ```
 
 ---
@@ -2982,285 +2368,282 @@ engages on have no wrong turn at all — so ordinary answers do not turn into nu
 
 ---
 
-### system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …)
+### system-diagnostics — ps, ss, vmstat, iostat, lsof
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 603 |
+| **Token count** | 801 |
 | **Source** | `docs/skills/system-diagnostics/SKILL.md` |
 
 ```markdown
-# system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …)
+# system-diagnostics — ps, ss, vmstat, iostat, lsof
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `run_sysdiag` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+## Rules
 
-**Category:** `system_read` · **Risk:** low · **Approval:** listed commands auto-approved in NORMAL; subset in ALERT/DEGRADED
+- Run the command and read its output. Do not answer from memory of what is usually running.
+- Bound every sampling command with a count: `interval × count` is under 30 seconds. `vmstat` and `iostat` without a count run until the 30 second timeout and return nothing.
+- If a piped command fails, do not infer that the binary is not supported. Retry without the pipe, or run `<binary> --version`.
+- For a utilisation number (how much CPU, memory or disk) use the `system-metrics` skill.
 
-Pipes and composition work (`bash` now runs via `/bin/bash`). FRE-283.
-
-## Processes — preferred recipes
-
-```bash
-# Top memory consumers (preferred — pipe works)
-bash ps aux --sort=-%mem | head -15
-
-# No-pipe fallback (always works, shows full list)
-bash ps -eo pid,user,pcpu,pmem,rss,comm,args --sort=-rss
-
-# Find a specific process
-bash pgrep -fa uvicorn
-bash ps -ef | grep uvicorn
-```
-
-**Stop rule:** If a piped command fails, do NOT infer the binary is unsupported.
-Retry the same command without the pipe, or run `<binary> --version` to verify.
-
-## Network / ports
+## Processes
 
 ```bash
-bash ss -tunlp          # listening ports (TCP+UDP, with process)
-bash ss -tnp state established
-bash netstat -tunlp
+# The processes that use the most memory
+ps aux --sort=-%mem | head -15
 ```
-
-## Load and I/O — ALWAYS use bounded vmstat/iostat
-
-`vmstat` without a count runs until the 30 s timeout returns nothing useful.
 
 ```bash
-bash vmstat 1 3         # 3 samples, 1 s apart (terminates in 3 s)
-bash iostat 1 3
-bash uptime             # current load average
+# The full list, without a pipe (always works)
+ps -eo pid,user,pcpu,pmem,rss,comm,args --sort=-rss
 ```
 
-Rule: `interval × count < 30` seconds.
+```bash
+# One process by name
+pgrep -fa uvicorn
+```
 
-## Disk usage
+## Network and ports
+
+```bash
+# Listening ports, TCP and UDP, with the process
+ss -tunlp
+```
+
+```bash
+# Established connections
+ss -tnp state established
+```
+
+## Load and I/O
+
+```bash
+vmstat 1 3
+iostat 1 3
+uptime
+```
+
+`vmstat 1 3` takes 3 samples, 1 second apart, and ends in 3 seconds.
+
+## Disk usage and open files
 
 ```bash
 # ask: the shell expands the glob /app/* here, so this is not a plain command and asks for approval.
-bash du -sh /app/*
-bash du -sh /app/* | sort -rh | head -10
+du -sh /app/*
 ```
-
-## File handles
 
 ```bash
-bash lsof -i | head -c 30000
-bash lsof -p <pid>
+lsof -i | head -c 30000
 ```
+
+```bash
+# The process that holds one file open (the path below is an example)
+lsof /app/data/cache.db
+```
+
+## Success
+
+Check the result before you answer:
+
+- The answer quotes the lines of output that it rests on (the process, the port, the address).
+- A sampling answer states the interval and the count.
+- "Nothing is listening" rests on an `ss` that ran and printed no matching line, not on a failed command.
+
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `command not found` | The binary is not in the image | Say which binary is missing. Use another command in this file for the same fact |
+| A piped command prints an error | A pipe or an option failed | Run the same command without the pipe |
+| `vmstat` or `iostat` runs until the timeout | No count was given | Add `1 3` |
+| `Operation not permitted` from `lsof` or `ss -p` | The process runs as another user | Report the part that is visible. Do not try `sudo` |
+| The output is very long | A verbose command | Add `| head -c 30000` (the tool cap is 50 KiB) |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |
 
 ## Governance
 
-- **NORMAL auto-approve:** `ps`, `pgrep`, `ss`, `netstat`, `lsof`, `vmstat`, `iostat`, `uname`, `uptime`, `du`, `df`, `free`, `top`, `find`.
-- **ALERT/DEGRADED auto-approve subset:** `ps`, `top`, `free`, `df`, `ss`, `netstat`, `uname`, `pgrep`.
-- LOCKDOWN / RECOVERY: `bash` disabled.
-- Output capped at 50 KiB. Use `| head -c 30000` on verbose commands.
+- NORMAL runs without asking: `ps`, `pgrep`, `ss`, `netstat`, `lsof`, `vmstat`, `iostat`, `uname`, `uptime`, `du`, `df`, `free`, `top`, `find`.
+- ALERT and DEGRADED run without asking: `ps`, `top`, `free`, `df`, `ss`, `netstat`, `uname`, `pgrep`.
+- A glob such as `/app/*` asks (the shell expands it).
+- LOCKDOWN and RECOVERY: `bash` is disabled.
 ```
 
 ---
 
-### system-metrics — CPU, memory, and disk utilisation snapshot
+### system-metrics — CPU, memory and disk utilisation snapshot
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,180 |
+| **Token count** | 912 |
 | **Source** | `docs/skills/system-metrics/SKILL.md` |
 
 ```markdown
-# system-metrics — CPU, memory, and disk utilisation snapshot
+# system-metrics — CPU, memory and disk utilisation snapshot
 
 ## Rules
 
-Always run the metrics command before answering. Do not estimate or approximate values.
+- Run the command before you answer. Do not estimate or approximate a value.
+- `free -m` reports the memory of the **host**, not of the agent process. For "how much memory does the agent use" read the resident set size of the process.
+- To list or find processes and ports, use the `system-diagnostics` skill.
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `system_metrics_snapshot` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
-
-**Category:** `system_read` · **Risk:** none · **Approval:** auto-approved in all non-LOCKDOWN modes
-
-## Agent-process RSS (NOT `free -m`)
-
-`free -m` reports **host total memory**, not the agent process. For "how much memory is the agent using?":
+## The agent process
 
 ```bash
-# Preferred — pipe works (FRE-283)
-bash ps -eo pid,rss,pmem,args --sort=-rss | grep -E 'uvicorn|personal_agent' | head
+# Resident set size (RSS, in KB) of the agent processes
+ps -eo pid,rss,pmem,args --sort=-rss | grep -E 'uvicorn|personal_agent' | head
+```
 
-# No-pipe fallback
-bash pgrep -fa uvicorn
-bash ps -p <pid> -o pid,rss,pmem,args
+```bash
+# Without a pipe: find the process id, then read it
+pgrep -fa uvicorn
+ps -p <pid> -o pid,rss,pmem,args
 ```
 
 RSS is in KB. Divide by 1024 for MB.
 
-## Host-level metrics
+## The host
 
 ```bash
-bash top -bn1 | head -5   # load average + CPU
-bash free -m               # host total memory (not agent)
-bash df -h /               # root disk usage
-bash df -h                 # all mounts
-bash uptime                # load average shortcut
+top -bn1 | head -5
+free -m
+df -h /
+df -h
+uptime
 ```
 
-## Structured output via run_python
+`top -bn1 | head -5` gives the load average and the CPU line. `free -m` is the host total.
+`df -h /` is the root disk, and `df -h` lists every mount.
 
-Use `run_python` only when structured keys are needed by downstream code.
-Note: `/proc` inside the sandbox reflects cgroup namespace, not raw host. For
-host-level metrics the `bash` recipes above are more accurate.
+## Structured values from `run_python`
 
-```python
-import json, shutil
-with open('/proc/loadavg') as f:
-    la = f.read().split()
-mem = {}
-with open('/proc/meminfo') as f:
-    for line in f:
-        p = line.split()
-        if p[0] in ('MemTotal:', 'MemAvailable:'):
-            mem[p[0].rstrip(':')] = int(p[1])
-print(json.dumps({
-    "load_1m": float(la[0]), "load_5m": float(la[1]),
-    "mem_total_mb": mem.get('MemTotal', 0) // 1024,
-    "mem_available_mb": mem.get('MemAvailable', 0) // 1024,
-    "disk_used_pct": round(shutil.disk_usage('/').used / shutil.disk_usage('/').total * 100, 1),
-}, indent=2))
-```
-
-## Structured output via run_python
-
-Use `run_python` when downstream code needs structured key/value data. The sandbox image now includes `psutil` (installed in `seshat-sandbox-python:0.1`) as well as `/proc` access. No `network=True` needed — reads local files only.
-
-> **Scope note:** Inside the `seshat-sandbox-python:0.1` container, `/proc/meminfo`, `/proc/stat`, and `/proc/loadavg` reflect the **sandbox container's cgroup namespace**, not raw host metrics. Total memory may report the host total, but CPU stats are per-container. For host-level metrics, use the `bash top` / `bash free` / `bash df` recipes — those run in the seshat-gateway container which has direct `/proc` access.
+Use `run_python` only when downstream code needs keys and values. It needs no `network` setting
+(it reads local files only) and needs the sandbox image (`make sandbox-build`). The sandbox sees
+its own cgroup: `/proc/meminfo` may report the host total, but CPU figures are per container. For
+host values use the commands above.
 
 ```python
 import json, shutil
 
-# CPU load from /proc/loadavg
 with open('/proc/loadavg') as f:
-    loadavg = f.read().split()
-    load_1m, load_5m, load_15m = loadavg[0], loadavg[1], loadavg[2]
-
-# Memory from /proc/meminfo
+    load = f.read().split()
 mem = {}
 with open('/proc/meminfo') as f:
     for line in f:
         parts = line.split()
-        if parts[0] in ('MemTotal:', 'MemAvailable:', 'MemFree:'):
+        if parts[0] in ('MemTotal:', 'MemAvailable:'):
             mem[parts[0].rstrip(':')] = int(parts[1])
-
-# Disk from Python stdlib
 disk = shutil.disk_usage('/')
-
-result = {
-    "load_1m": float(load_1m),
-    "load_5m": float(load_5m),
-    "load_15m": float(load_15m),
+print(json.dumps({
+    "load_1m": float(load[0]), "load_5m": float(load[1]), "load_15m": float(load[2]),
     "mem_total_mb": mem.get('MemTotal', 0) // 1024,
     "mem_available_mb": mem.get('MemAvailable', 0) // 1024,
     "disk_used_pct": round(disk.used / disk.total * 100, 1),
-}
-print(json.dumps(result, indent=2))
+}, indent=2))
 ```
 
-## Gaps vs legacy `system_metrics_snapshot`
+GPU metrics are not available in this environment. If asked for GPU data, answer "GPU metrics
+unavailable in this environment".
 
-- **Structured keys** (`perf_system_*`): use `run_python` snippet above if needed.
-- **GPU metrics**: unavailable. Legacy tool polled Apple Silicon sensors not present in the Linux container. If asked for GPU data, answer "GPU metrics unavailable in this environment".
+## Success
+
+Check the result before you answer:
+
+- Each number comes from a command that ran in this turn. The answer names the command.
+- The unit is stated (KB or MB, percent, load over 1, 5 and 15 minutes).
+- A memory answer says whether it is the agent process or the host.
+- A load figure is read next to the CPU count if the answer calls it high or low.
+
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| `grep` prints nothing for the process name | The process has another name | Run `ps -eo pid,rss,pmem,args --sort=-rss` and read the first rows |
+| `command not found` | The binary is not in the image | Say which one. Use the `run_python` snippet for the values |
+| The `run_python` call fails to start | Docker is not available to the gateway | Use the `bash` commands. Report that the structured form was not available |
+| A GPU figure is asked for | The environment has no GPU sensor | Answer that GPU metrics are unavailable. Do not give a number |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |
 
 ## Governance
 
-- `top`, `free`, `df` are auto-approved in all non-LOCKDOWN modes — no PWA prompt.
-- Available in NORMAL, ALERT, and DEGRADED modes.
-- `bash` is disabled in LOCKDOWN and RECOVERY — no workaround for those modes.
-- `run_python` for `/proc`-based metrics: available in NORMAL/ALERT/DEGRADED; no `network=True` needed (reads local files only); requires sandbox image (`make sandbox-build`).
-- See also: the `bash` tool description (output cap 50 KiB) and the `run_python` tool description (sandbox details).
+- `top`, `free` and `df` run without asking in NORMAL, ALERT and DEGRADED.
+- `bash` is disabled in LOCKDOWN and RECOVERY. There is no other route for those modes.
+- `run_python` for `/proc` metrics runs in NORMAL, ALERT and DEGRADED.
 ```
 
 ---
 
-### SKILL: turn-forensics
+### turn-forensics — Reconstruct one turn end to end
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,981 |
+| **Token count** | 2,026 |
 | **Source** | `docs/skills/turn-forensics/SKILL.md` |
 
 ```markdown
-# SKILL: turn-forensics
+# turn-forensics — Reconstruct one turn end to end
 
 ## Rules
 
-Reconstruct the turn from live logs (gateway + Postgres + R2 + inference-server). Never infer the timeline or token counts from priors — pull them.
+- Pull the turn from live data. Never infer the timeline or a token count from priors.
+- Input: a `trace_id` (best) or a `session_id`. If the task names only "the last turn" or "the slowest turn", find the trace first (Step 0).
+- This skill explains one turn in depth. For a count or a breakdown over many turns use `query-elasticsearch`. For latency over a window use `query-tempo`.
+- Related: ADR-0074 (identity threading: `trace_id` and `session_id` join every substrate), FRE-401 (context bloat).
 
-> **Tier:** 2 — log/SQL analysis via `bash`
-> **Inputs:** a `trace_id` (preferred) or `session_id`. If only "the last/slowest turn" is given, find the trace first (step 0).
-> **Related:** ADR-0074 (identity threading — the join key); FRE-401 (context bloat prevention).
+## What each substrate answers
 
----
+| Substrate | Answers | How to read it |
+|---|---|---|
+| Elasticsearch `agent-logs-*` | The calls, the tokens, the tool calls | `query_telemetry` (Steps 0 and 1) |
+| Gateway log | The same events, complete, with time stamps | `call_timeline.py` (Step 1b) |
+| Tempo | The duration of each span | `query-tempo` Step 2 |
+| Postgres `session_events` | What the browser received (`RUN_ERROR`, `STATE_DELTA`) | `psql` (Step 2) |
+| R2 artifact store | The bytes of an artifact | Step 3 |
+| Inference-server log | The model server's view of each request | Step 4 |
 
-## What This Skill Does
+## Step 0 — Find the trace
 
-Takes one turn and reconstructs it end-to-end by joining the substrates on the shared identity tuple (`trace_id` / `session_id`, ADR-0074):
-
-- **Gateway logs** — per-call timeline (`model_call_started/completed`, `input_tokens`, `latency_ms`, `role`), tool calls, state transitions, errors.
-- **Postgres `session_events`** — what the PWA received (`RUN_ERROR`, `STATE_DELTA`, replay buffer).
-- **R2 artifact store** — bytes actually produced (when the turn wrote an artifact).
-- **Inference-server log** — the SLM's view of each request (optional; see §Caveats).
-
-The headline output is a **context-token attribution**: track `input_tokens` per primary call, find the jumps, and blame the preceding tool result (a whole-file `read` is the usual culprit — file bytes ÷ ~4 ≈ tokens).
-
----
-
-## When to Use
-
-- "Why was that turn slow?" / "Where did the time go?"
-- "The context counter jumped to 47K — what caused it?"
-- "Replay trace `<id>` step by step."
-- **Prefer `query-elasticsearch`** for fleet-wide log questions; this skill is for *one* turn in depth.
-
----
-
-## Commands
-
-All gateway commands strip ANSI colour first: `sed -r 's/\x1b\[[0-9;]*m//g'`. Container names come from `docker-compose.cloud.yml` (`cloud-sim-seshat-gateway`, `cloud-sim-postgres`).
-
-### 0. Find the trace (if not given)
-
-```bash
-# ask: sed can run a program, so this asks for approval (ADR-0156 D8.2).
-docker logs cloud-sim-seshat-gateway --since=30m 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' \
-  | grep -E "task_failed|model_call_completed" | grep -oE "trace_id=\S+" | sort | uniq -c | sort -rn | head
+```python
+# The traces of one session, newest first (a model call starts every one)
+query_telemetry(action="search", index="agent-logs", size=20, since="24h",
+                query={"bool": {"must": [{"term": {"session_id": "<session_id>"}},
+                                         {"term": {"event_type": "model_call_started"}}]}},
+                fields=["@timestamp", "trace_id", "role"])
 ```
 
-### 1. Per-call timeline + context attribution (the core)
+A turn with a model call has one trace id. Take the newest `trace_id` for "the last turn".
 
-```bash
-# ask: the shell expands $TRACE here, so this is not a plain command and asks for approval.
-TRACE=<trace_id>
-docker logs cloud-sim-seshat-gateway --since=40m 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' \
-  | grep "$TRACE" | grep -E "model_call_completed|tool_call_started|artifact_draft_sub_agent_complete" \
-  | python3 -c "
-import sys,re
-for l in sys.stdin:
-    ts=re.search(r'(\d\d:\d\d:\d\d)\.\d+Z', l); t=ts.group(1) if ts else '?'
-    if 'tool_call_started' in l:
-        a=re.search(r\"'path': '([^']+)'|'command': '([^']{0,60})\", l); n=re.search(r'tool_name=(\S+)', l)
-        print(t,'TOOL', n.group(1) if n else '?', (a.group(1) or a.group(2)) if a else '')
-    elif 'sub_agent_complete' in l:
-        print(t,'SUBAGENT done')
-    else:
-        it=re.search(r'input_tokens=(\d+)',l); lat=re.search(r'latency_ms=(\d+)',l); role=re.search(r'role=(\w+)',l)
-        print(t,'CALL in=%s lat=%ss %s'%(it.group(1) if it else '?', int(int(lat.group(1))/1000) if lat else '?', role.group(1) if role else ''))
-"
+## Step 1 — The per-call timeline and the context attribution
+
+```python
+query_telemetry(action="search", index="agent-logs", size=50, since="24h",
+                query={"bool": {"must": [{"term": {"trace_id": "<trace_id>"}},
+                                         {"terms": {"event_type": ["model_call_completed", "tool_call_started"]}}]}},
+                fields=["@timestamp", "event_type", "role", "model", "input_tokens", "output_tokens", "tool_name"])
 ```
 
-Read the `in=` column down the primary calls. A big step up = context bloat; the `TOOL read <path>` immediately before it is the cause. Cross-check file size: `wc -c <path>` (÷4 ≈ tokens).
+The reply is newest first. Sort it by `@timestamp`. Read `input_tokens` down the primary calls.
+A big step up is context growth. The `tool_call_started` before it is the cause. A whole-file
+`read` is the usual one: file bytes divided by 4 are about the tokens (`wc -c <path>` gives the bytes).
 
-### 2. What the PWA received (Postgres `session_events`)
+### Step 1b — The same timeline from the gateway log, with the time gaps
+
+Use this when the tool reply holds fewer events than expected, or when you need the gap in
+seconds between events. The script strips colour codes, keeps the trace, and prints one line for
+each model call, tool call and sub-agent end:
+
+```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
+  | python3 docs/skills/turn-forensics/scripts/call_timeline.py <trace_id>
+```
+
+Each line reads `HH:MM:SS  +Ns  CALL in=<tokens> role=<role>`, or `TOOL <name> <path>`. The
+`+Ns` is the gap since the previous line. The script exits 1 with one `error:` line when no event
+of the trace is in the window: widen `--since`, or use Step 1.
+
+## Step 2 — What the browser received (Postgres `session_events`)
 
 ```bash
 # ask: no allow rule covers docker exec, so this asks for approval.
@@ -3269,7 +2652,7 @@ docker exec cloud-sim-postgres psql -U agent -d personal_agent -c \
   from session_events where session_id='<session_id>' order by seq desc limit 20;"
 ```
 
-### 3. Artifact bytes (if the turn wrote one)
+## Step 3 — The bytes of an artifact, if the turn wrote one
 
 ```bash
 # ask: no allow rule covers docker exec, so this asks for approval.
@@ -3280,53 +2663,53 @@ import asyncio; from personal_agent.storage.artifact_store import get_artifact_s
 print(len(asyncio.run(get_artifact_store().get(\"<r2_key>\"))))"'
 ```
 
-### 4. Join the SLM request log (ES join on span_id)
+The first command gives the storage key. The second prints the size of the stored bytes.
 
-slm_server emits a `request_complete` event to `slm-requests-*` for every request,
-tagged with the harness's `X-Span-Id` / `X-Trace-Id` headers (FRE-411). Join on
-`span_id` for per-call granularity or `trace_id` for the whole turn:
+## Step 4 — Join the inference-server request log
+
+The model server writes a `request_complete` event for each request to `slm-requests-*`. It is
+tagged with the `X-Span-Id` and `X-Trace-Id` headers of the harness (FRE-411). Join on `span_id`
+for one call, or on `trace_id` for the turn:
 
 ```bash
-# ask: the shell expands $TRACE here, so this is not a plain command and asks for approval.
-TRACE=<trace_id>
-# All SLM request_complete docs for this turn
-curl -s -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+# ask: the shell expands $CF_ACCESS_CLIENT_ID and $CF_ACCESS_CLIENT_SECRET here, so this is not a plain command and asks for approval.
+curl -fsS -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
         -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-  "https://es.example.com/slm-requests-*/_search?q=trace_id:$TRACE&size=20" \
-  | python3 -c "
-import sys, json
-hits = json.load(sys.stdin)['hits']['hits']
-for h in hits:
-    s = h['_source']
-    print(s.get('ts','?'), 'span', s.get('span_id','?')[:8],
-          'in=%s out=%s' % (s.get('prompt_tokens'), s.get('completion_tokens')),
-          'prefill=%sms decode=%sms total=%sms' % (s.get('prefill_ms'), s.get('decode_ms'), s.get('total_ms')),
-          'cache=%s' % s.get('cache_reuse'))
-"
+  "https://es.example.com/slm-requests-*/_search?q=trace_id:<trace_id>&size=20" \
+  | jq -r '.hits.hits[]._source | [.ts, (.span_id // "?")[0:8], .prompt_tokens, .completion_tokens, .prefill_ms, .decode_ms, .total_ms, .cache_reuse] | @tsv'
 ```
 
-Cross-reference with step 1 (`model_call_completed`) using the shared `span_id`. A
-`cache_reuse > 0` value means the SLM reused a KV-cache prefix — prompt tokens were
-cheaper than they look in terms of compute. No timezone math: all times are UTC ISO-8601.
+Columns: time, span, prompt tokens, completion tokens, prefill ms, decode ms, total ms, cache
+reuse. A `cache_reuse` above 0 means the server reused a KV-cache prefix: the prompt was cheaper in
+compute than the token count shows. All times are UTC ISO-8601.
 
----
+## Reading the result
 
-## Interpreting Results
+- **A context jump after a `read`**: a whole-file read. `read` has a 1 MiB cap, so a source file under about 1 MB returns in full (`executor.py` is about 134 KB, about 33K tokens). The fix is in the tool (FRE-401).
+- **A slow primary call with no tool before it**: a large prefill (the grown context is sent again at each step), or a degraded model server (multi-minute calls, HTTP 524). A restart of the model server fixes the second case.
+- **A gap between the sub-agent end and the final reply**: the synthesis call on the grown context. The sub-agent was not slow.
+- **A terminal tool failure**: look for `tool_terminal_short_circuit` (FRE-402). The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.
+- `input_tokens` (the model's tokenizer) and `turn_status.context_tokens` (an estimate) differ by 10 to 20 percent. The trend is the same.
 
-- **Context jump after a `read`** → whole-file slurp. `read` defaults to a 1 MiB cap, so any source file under ~1 MB returns in full (e.g. `executor.py` ≈ 134 KB ≈ 33K tokens). Mitigation lives in the tool (ranged reads / lower token cap) — FRE-401.
-- **Slow primary call with no tool before it** → large prefill (the bloated context is re-sent every step) or a degraded SLM origin (multi-minute calls, 524s). Restarting the SLM server fixes the latter.
-- **Gap between `sub_agent_complete` and the final reply** → the post-tool *synthesis* primary call running on the now-bloated context (not the sub-agent being slow).
-- **Terminal tool failure** → look for `tool_terminal_short_circuit` (FRE-402); the turn should end in ~ms with a `tool_failure` `RUN_ERROR`, no recovery LLM call.
+## Success
 
----
+Check the result before you answer:
 
-## Caveats
+- The answer names the trace id and lists the calls with `input_tokens` and the gap before each.
+- A "why was it slow" answer names one step (a call or a tool) and gives its seconds, from Step 1b or from Tempo.
+- A "why did the context grow" answer names the tool result before the jump and its size.
+- The answer says which substrates were read. A substrate that was not reachable is named, not skipped.
 
-- §4 requires `es.example.com` to be reachable and slm_server to be running with
-  `SLM_ES_URL=https://es.example.com`. Steps 1–3 are fully self-contained on the gateway VPS.
-- `input_tokens` (model tokenizer) and the status bar's `turn_status.context_tokens`
-  (`estimate_messages_tokens` heuristic) differ by ~10–20%; same trend, different absolute.
-- UTC timestamp join (floor): if `span_id` is absent, match by `ts` within ±5s of the
-  gateway's `model_call_started` timestamp.
+## Recovery
+
+| Failure | Cause | Next step |
+|---|---|---|
+| The tool reply holds no event for the trace | The `since` window is too short, or the id is wrong | Widen `since` to `7d` once. Check the id against Step 0 |
+| `error: no model call or tool call of trace ...` from the script | The window of `--since` is too short, or `docker logs` failed | Use `--since=2h`, or use Step 1 |
+| `docker logs` prints nothing | The container name is wrong | List the names with `docker ps` and use the gateway container |
+| Step 4 returns HTTP 401 or 403 | The access headers are missing | Say that the model server log is not reachable. Do not guess its content |
+| Step 4 cannot resolve the host | `es.example.com` is not reachable from here | Use Steps 1 to 3. They are self-contained on the gateway host |
+| A `span_id` is absent | An older turn | Match by `ts` within 5 seconds of `model_call_started` in the gateway log |
+| The same failure twice | — | Stop. Tell the user what failed and what was tried |
 ```
 

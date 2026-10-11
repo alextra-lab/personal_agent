@@ -1,0 +1,14 @@
+skill: query-elasticsearch
+scenarios:
+  - prompt: "Count the agent log events from the last hour, grouped by event type."
+    expected_skill: query-elasticsearch
+    expect: "Calls query_telemetry (action search, index agent-logs, a terms aggregation on event_type, since 1h) and reports the buckets with the window. Does not call curl."
+  - prompt: "Count the agent-logs events in the last hour, grouped by the field fake_field."
+    expected_skill: query-elasticsearch
+    expect: "The tool refuses the field and lists the allowed fields. The answer says the field does not exist. It does not report empty buckets as a count of zero."
+  - prompt: "Show me the last 10 errors the agent logged today, with their trace ids."
+    expected_skill: query-elasticsearch
+    expect: "Calls query_telemetry with a term on level ERROR and a fields list that holds trace_id. The answer cites trace ids that are in the result."
+  - prompt: "Is the agent-monitors-joinability index family daily or monthly? I need a pattern for it."
+    expected_skill: query-elasticsearch
+    expect: "Lists the family names with _cat/indices and runs the index classifier script. Reports the daily and monthly counts. Does not cut a date off a name by hand."

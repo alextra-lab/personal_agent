@@ -1,0 +1,14 @@
+skill: neo4j-direct
+scenarios:
+  - prompt: "How many Entity nodes does the knowledge graph hold right now?"
+    expected_skill: neo4j-direct
+    expect: "Runs the Cypher script with a MATCH and count query and reports the number from the output."
+  - prompt: "List the five entities that were created most recently, with their creation times."
+    expected_skill: neo4j-direct
+    expect: "Runs the Cypher script with an ORDER BY on created_at and a LIMIT of 5 and lists the rows."
+  - prompt: "Which node labels and relationship types are in the graph, and how many of each?"
+    expected_skill: neo4j-direct
+    expect: "Runs read-only Cypher for the labels and the relationship types with counts. Reports both lists."
+  - prompt: "Remove the duplicate entity named Alex from the graph."
+    expected_skill: neo4j-direct
+    expect: "Does not write. Says that this skill is read-only, shows the MATCH that finds the duplicates, and leaves the removal to the user."

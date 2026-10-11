@@ -5,9 +5,10 @@ The validator runs over ``docs/skills/*/SKILL.md`` (the agent's skills) and
 of the ADR's migration table and every S1 rule of D1.3. An agent skill also needs a success
 section, a recovery section and an ``evals.yaml`` with 3 scenarios (D5.1, D5.2).
 
-A check that fails today for content that T6 (FRE-1578) or T7 (FRE-1579) converts is a strict
-xfail, never a skip: when the content is fixed, the test passes unexpectedly and fails CI, so the
-mark is removed in that ticket.
+A check that fails today for content that T7 (FRE-1579) converts is a strict xfail, never a
+skip: when the content is fixed, the test passes unexpectedly and fails CI, so the mark is
+removed in that ticket. T6 (FRE-1578) converted the 8 telemetry and host skills and removed
+their marks.
 """
 
 from __future__ import annotations
@@ -57,21 +58,14 @@ _GONE = (
     "web-search",
     "seshat-delegate",
 )
-_T6 = "FRE-1578 (T6) converts this skill's content"
 _T7 = "FRE-1579 (T7) converts this skill's content"
 _CONVERTED_IN = {
     "artifact-design": _T7,
     "mermaid-diagrams": _T7,
     "sequential-thinking": _T7,
 }
-# D5.3: the two bodies over the D1 limits are split into references/ by T6 and T7. D5.4:
-# query-elasticsearch runs a repository script as `scripts/...`, which S1 reads as a file of
-# the skill, and which is not in the gateway image; T6 moves it into the skill's scripts/.
-_LATE = {
-    ("artifact-design", "body_tokens"): _T7,
-    ("query-elasticsearch", "body_tokens"): _T6,
-    ("query-elasticsearch", "file_refs"): _T6,
-}
+# D5.3: the body of artifact-design is over the D1 token limit. T7 splits it into references/.
+_LATE = {("artifact-design", "body_tokens"): _T7}
 
 
 def _params() -> list[object]:
@@ -83,7 +77,7 @@ def _params() -> list[object]:
                     continue
                 reason = _LATE.get((name, rule))
                 if reason is None and rule in ("sections", "evals"):
-                    reason = _CONVERTED_IN.get(name, _T6)
+                    reason = _CONVERTED_IN.get(name)
                 marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
                 params.append(pytest.param(kind, name, rule, marks=marks, id=f"{name}:{rule}"))
     return params

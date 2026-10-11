@@ -1,0 +1,14 @@
+skill: system-metrics
+scenarios:
+  - prompt: "How much memory is the agent process using, in MB?"
+    expected_skill: system-metrics
+    expect: "Reads the resident set size of the agent process with ps and divides kilobytes by 1024. Does not report the host total from free."
+  - prompt: "How full is the root disk?"
+    expected_skill: system-metrics
+    expect: "Runs df -h / and reports the used percentage and the free space."
+  - prompt: "What are the load average and the CPU usage at the moment?"
+    expected_skill: system-metrics
+    expect: "Runs uptime and top in batch mode and reports the three load values and the CPU line."
+  - prompt: "Is there a GPU on this machine, and how busy is it?"
+    expected_skill: system-metrics
+    expect: "Answers that GPU metrics are unavailable in this environment. Does not invent a number."

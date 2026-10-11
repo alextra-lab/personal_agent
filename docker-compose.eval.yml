@@ -265,6 +265,9 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
+      # FRE-1581 (owner, 2026-10-11): the eval stack has no UI, so nobody answers a constraint
+      # pause. The 180 s default only adds a wait before the same safe default (answer_now).
+      AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS: "5"
       # ADR-0132 D4: the eval profile uses "the endpoint its compose file declares;
       # never the dead loopback default". Declared literally, NOT via ${AGENT_SLM_BASE_URL:-…}
       # — .env defines that variable, so the interpolation let production's value win over
@@ -436,6 +439,9 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis-eval:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_DEPLOYMENT_PROFILE: eval
+      # FRE-1581 (owner, 2026-10-11): the eval stack has no UI, so nobody answers a constraint
+      # pause. The 180 s default only adds a wait before the same safe default (answer_now).
+      AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS: "5"
       # ADR-0132 D4: the eval profile uses "the endpoint its compose file declares;
       # never the dead loopback default". Declared literally, NOT via ${AGENT_SLM_BASE_URL:-…}
       # — .env defines that variable, so the interpolation let production's value win over

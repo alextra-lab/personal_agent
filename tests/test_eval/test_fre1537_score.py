@@ -7,6 +7,7 @@ from collections.abc import Mapping
 
 import pytest
 from scripts.eval.fre1537 import score
+from scripts.eval.fre1537.common import LONGHIST_SIZES, PAIRED_DRAWS
 from scripts.eval.fre1537.fixtures import load_fixtures
 
 TRIALS = 3
@@ -93,15 +94,78 @@ def make_longhist_rows(cold: float = 40.2, extended: float = 5.9) -> list[dict[s
     ]
 
 
+DECLINE_LABELS = sorted(fx.label for fx in load_fixtures() if fx.expected == "decline")
+
+
+def _call(
+    secs: float, plan: dict[str, object] | None = None, reasoning: int = 0
+) -> dict[str, object]:
+    out: dict[str, object] = {
+        "secs": secs,
+        "ttft_any": secs,
+        "reasoning_chars": reasoning,
+        "timings": {"cache_n": 0, "prompt_n": 100},
+    }
+    if plan is not None:
+        out["plan"] = plan
+    return out
+
+
+def paired_row(
+    key: str | int,
+    draw: int,
+    *,
+    added_s: float = 1.0,
+    planner_s: float = 0.8,
+    declined: bool = True,
+    void: list[str] | None = None,
+) -> dict[str, object]:
+    """One pair as replay writes it. An int key is a long-history size."""
+    long = isinstance(key, int)
+    single_ttft = 5.0
+    return {
+        "arm": "longhist_paired" if long else "paired",
+        "size_chars" if long else "label": key,
+        "draw": draw,
+        "kind": "longhist" if long else "single",
+        "history_chars": key + 120 if isinstance(key, int) else 0,
+        "order": "single_first",
+        "single": {"nonce": "a" * 8, "prime": _call(0.5), "primary": _call(single_ttft)},
+        "planner": {
+            "nonce": "b" * 8,
+            "prime_planner": _call(0.1),
+            "prime_primary": _call(0.5),
+            "planner": _call(planner_s, _plan("decline" if declined else "expand")),
+            "primary": _call(round(single_ttft + added_s - planner_s, 3)),
+        },
+        "declined": declined,
+        "added_ms": round(added_s * 1000),
+        "void": void,
+    }
+
+
+def make_paired_rows(added_s: float = 1.0) -> list[dict[str, object]]:
+    return [paired_row(x, d, added_s=added_s) for d in range(PAIRED_DRAWS) for x in DECLINE_LABELS]
+
+
+def make_longhist_paired_rows(added_s: float = 4.0) -> list[dict[str, object]]:
+    return [paired_row(x, d, added_s=added_s) for d in range(PAIRED_DRAWS) for x in LONGHIST_SIZES]
+
+
 def run(
     decide: list[dict[str, object]] | None = None,
     longhist: list[dict[str, object]] | None = None,
     fingerprint: Mapping[str, object] | None = None,
+    paired: list[dict[str, object]] | None = None,
+    longhist_paired: list[dict[str, object]] | None = None,
 ) -> score.Report:
     return score.score(
         decide_rows=make_decide_rows() if decide is None else decide,
         longhist_rows=make_longhist_rows() if longhist is None else longhist,
-        timing_rows=[],
+        paired_rows=make_paired_rows() if paired is None else paired,
+        longhist_paired_rows=(
+            make_longhist_paired_rows() if longhist_paired is None else longhist_paired
+        ),
         fingerprint=GOOD_FINGERPRINT if fingerprint is None else fingerprint,
     )
 
@@ -113,9 +177,8 @@ def line(report: score.Report, name: str) -> score.Check:
 def test_a_clean_run_passes_every_threshold() -> None:
     report = run()
     assert report.passed, report.render()
-    assert (
-        len(report.checks) == 11
-    )  # 10 D7 thresholds (follow-ups split by direction) + fingerprint
+    # 10 D7 thresholds (follow-ups split by direction), 2 paired checks (Amendment 1), fingerprint
+    assert len(report.checks) == 13
     assert "RESULT: PASS" in report.render()
 
 
@@ -320,39 +383,135 @@ def test_percentile_uses_the_index_rule_of_appendix_a4() -> None:
     assert score.percentile([], 0.5) is None
 
 
-def timing_row(reasoning: int = 0, plan: dict[str, object] | None = None) -> dict[str, object]:
-    return {
-        "label": "greeting",
-        "trial": 0,
-        "T1_primary": {"ttft_any": 1.0},
-        "T3_planner": {
-            "secs": 1.0,
-            "reasoning_chars": reasoning,
-            "plan": plan or _plan("decline"),
-        },
-        "T3_primary": {"ttft_any": 1.0},
-    }
+SHORT = "Paired added delay, history < 8,000 chars (median)"
+LONG = "Paired added delay, history >= 8,000 chars (median)"
 
 
-def run_with_timing(rows: list[dict[str, object]]) -> score.Report:
-    return score.score(
-        decide_rows=make_decide_rows(),
-        longhist_rows=make_longhist_rows(),
-        timing_rows=rows,
-        fingerprint=GOOD_FINGERPRINT,
-    )
+def test_paired_rows_that_pass_in_both_splits_pass_both_checks() -> None:
+    """Amendment 1.6 test 1."""
+    report = run()
+    assert line(report, SHORT).passed and line(report, LONG).passed, report.render()
+    assert "30 of 30 counted" in line(report, SHORT).measured
+    assert "9 of 9 counted" in line(report, LONG).measured
 
 
-def test_a_reasoning_character_in_a_timing_planner_call_fails() -> None:
-    report = run_with_timing([timing_row(reasoning=900)])
-    assert not line(report, "Reasoning characters on any call").passed
-    assert line(report, "Reasoning characters on any call").measured == "900"
+@pytest.mark.parametrize(("added_s", "passes"), [(3.0, True), (3.1, False)])
+def test_a_short_median_above_3_s_fails(added_s: float, passes: bool) -> None:
+    """Amendment 1.6 test 2."""
+    report = run(paired=make_paired_rows(added_s=added_s))
+    assert line(report, SHORT).passed is passes
+    assert line(report, LONG).passed
 
 
-def test_an_invalid_plan_in_a_timing_planner_call_fails() -> None:
-    report = run_with_timing([timing_row(plan=_plan("invalid"))])
-    assert not line(report, "Plans that fail to parse or validate").passed
+def test_27_counted_short_pairs_fail_with_a_median_below_the_limit() -> None:
+    """Amendment 1.6 test 3: a split short of counted pairs is FAIL, never scaled."""
+    rows = make_paired_rows()
+    for r in rows[:3]:
+        r["void"] = ["primary_cache_reuse_single"]
+    check = line(run(paired=rows), SHORT)
+    assert not check.passed and "27 of 30 counted" in check.measured
+
+
+@pytest.mark.parametrize(("added_s", "passes"), [(10.0, True), (10.1, False)])
+def test_a_long_median_above_10_s_fails(added_s: float, passes: bool) -> None:
+    """Amendment 1.6 test 4, the limit."""
+    assert line(run(longhist_paired=make_longhist_paired_rows(added_s)), LONG).passed is passes
+
+
+def test_7_counted_long_pairs_fail_with_a_median_below_the_limit() -> None:
+    """Amendment 1.6 test 4, the count."""
+    rows = make_longhist_paired_rows()
+    rows[0]["declined"] = False
+    rows[1]["void"] = ["timings_missing"]
+    check = line(run(longhist_paired=rows), LONG)
+    assert not check.passed and "7 of 9 counted" in check.measured
+
+
+def test_a_missing_pair_key_fails() -> None:
+    """Amendment 1.6 test 5: a missing key is FAIL, even with 29 counted pairs above the minimum."""
+    check = line(run(paired=make_paired_rows()[1:]), SHORT)
+    assert not check.passed and "missing" in check.measured
+
+
+def test_an_unexpected_pair_key_fails() -> None:
+    """Amendment 1.6 test 5."""
+    rows = [*make_paired_rows(), paired_row(DECLINE_LABELS[0], PAIRED_DRAWS)]
+    check = line(run(paired=rows), SHORT)
+    assert not check.passed and "unexpected" in check.measured
+    long_rows = [*make_longhist_paired_rows(), paired_row(12345, 0)]
+    assert not line(run(longhist_paired=long_rows), LONG).passed
+
+
+def test_a_duplicated_pair_key_does_not_raise_the_count() -> None:
+    """Amendment 1.6 test 5: the scorer keeps the last row without an error for each key."""
+    rows = make_paired_rows()
+    # A good row for each of three keys, then the same keys again, void: 33 rows, 30 keys.
+    duplicates = [paired_row(r["label"], r["draw"]) for r in rows[:3]]  # type: ignore[arg-type]
+    rows[:3] = [{**r, "void": ["planner_cache_reuse"]} for r in rows[:3]]
+    check = line(run(paired=[*duplicates, *rows]), SHORT)
+    assert not check.passed and "27 of 30 counted" in check.measured
+
+
+def test_a_later_error_row_does_not_replace_a_good_row() -> None:
+    rows = make_paired_rows()
+    rows.append({"arm": "paired", "label": DECLINE_LABELS[0], "draw": 0, "error": "ReadTimeout"})
+    assert line(run(paired=rows), SHORT).passed
+
+
+def test_a_void_pair_does_not_count_and_the_report_names_the_reason() -> None:
+    """Amendment 1.6 test 6, at the scorer. The void rule itself is tested on the replay side."""
+    rows = make_paired_rows()
+    rows[0]["void"] = ["primary_cache_reuse_planner"]
+    rows[1]["void"] = ["timings_missing"]
+    report = run(paired=rows)
+    assert "28 of 30 counted" in line(report, SHORT).measured
+    short = report.to_json()["paired"]["short"]  # type: ignore[index]
+    assert short["void"] == {"primary_cache_reuse_planner": 1, "timings_missing": 1}
+
+
+def test_a_pair_whose_planner_call_expands_does_not_count() -> None:
+    """Amendment 1.6 test 7."""
+    rows = make_paired_rows()
+    for r in rows[:3]:
+        r.update(paired_row(r["label"], r["draw"], declined=False))  # type: ignore[arg-type]
+    check = line(run(paired=rows), SHORT)
+    assert not check.passed and "27 of 30 counted" in check.measured
+
+
+def test_the_report_json_carries_both_paired_blocks() -> None:
+    report = run(paired=make_paired_rows(added_s=2.0))
+    paired = report.to_json()["paired"]
+    short, long = paired["short"], paired["long"]  # type: ignore[index]
+    assert short["counted"] == 30 and short["of"] == 30 and long["of"] == 9
+    assert short["added_s_p50"] == 2.0 and short["planner_s_p50"] == 0.8
+    assert short["cache_loss_s_p50"] == pytest.approx(1.2)
+    assert short["void"] == {}
+    assert "paired" in report.render() and "timing" not in report.render().lower()
+
+
+def test_an_invalid_plan_in_a_paired_planner_call_fails_the_parse_threshold() -> None:
+    rows = make_paired_rows()
+    rows[0]["planner"]["planner"]["plan"] = _plan("invalid")  # type: ignore[index]
+    report = run(paired=rows)
     assert line(report, "Plans that fail to parse or validate").measured == "1"
+
+
+def test_reasoning_in_a_paired_planner_call_or_its_prime_fails() -> None:
+    for call in ("planner", "prime_planner"):
+        rows = make_longhist_paired_rows()
+        rows[0]["planner"][call]["reasoning_chars"] = 900  # type: ignore[index]
+        check = line(run(longhist_paired=rows), "Reasoning characters on any call")
+        assert not check.passed and check.measured == "900"
+
+
+def test_the_primary_calls_and_the_prime_plan_count_for_no_planner_threshold() -> None:
+    rows = make_paired_rows()
+    rows[0]["single"]["primary"]["reasoning_chars"] = 500  # type: ignore[index]
+    rows[0]["planner"]["primary"]["reasoning_chars"] = 500  # type: ignore[index]
+    rows[0]["planner"]["prime_planner"]["plan"] = _plan("invalid")  # type: ignore[index]
+    report = run(paired=rows)
+    assert line(report, "Reasoning characters on any call").passed
+    assert line(report, "Plans that fail to parse or validate").passed
 
 
 def test_an_invalid_plan_in_the_long_history_arm_fails() -> None:

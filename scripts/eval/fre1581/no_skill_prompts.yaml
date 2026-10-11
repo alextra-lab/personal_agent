@@ -1,0 +1,62 @@
+# FRE-1581 / ADR-0156 D10 G2: 20 prompts that need no skill.
+#
+# A prompt is wrong if any skill loads on it (ADR-0156 AC-2). At least 10 of the 20 contain a word that
+# the former keyword routing matched (AC-2). `former_keyword` names that word and the agent skill whose
+# `keywords` held it, at the ADR-0156 commit 0da803e1 (before FRE-1577 removed keyword routing). The
+# router matched a keyword as a substring of the lower-cased message (`kw.lower() in msg_lower`), so
+# " log" matched inside " logic" and "span" inside "Spanish".
+#
+# Written by the build seat on 2026-10-11 and posted on FRE-1581 before the run (AC-5).
+prompts:
+  - id: ns01
+    prompt: "Which model of reasoning is best for logic puzzles, in your opinion?"
+    former_keyword: {word: " log", skill: query-elasticsearch}
+  - id: ns02
+    prompt: "Please draw up a short paragraph on the drawbacks of Spanish trade policy in the 16th century."
+    former_keyword: {word: "span", skill: query-tempo}
+  - id: ns03
+    prompt: "What does the word typography mean? Answer in one sentence."
+    former_keyword: {word: "typography", skill: artifact-design}
+  - id: ns04
+    prompt: "How long should I boil an egg for a soft yolk?"
+    former_keyword: {word: "how long", skill: self-telemetry}
+  - id: ns05
+    prompt: "What does opportunity cost mean in economics? Give one everyday example."
+    former_keyword: {word: "cost", skill: self-telemetry}
+  - id: ns06
+    prompt: "What is the difference between the trace and the determinant of a matrix?"
+    former_keyword: {word: "trace", skill: query-tempo}
+  - id: ns07
+    prompt: "Write a two-line poem about logs burning in a fireplace."
+    former_keyword: {word: "logs", skill: query-elasticsearch}
+  - id: ns08
+    prompt: "In music, what decides the duration of a note?"
+    former_keyword: {word: "duration", skill: self-telemetry}
+  - id: ns09
+    prompt: "In graph theory, what is a spanning tree?"
+    former_keyword: {word: "span", skill: query-tempo}
+  - id: ns10
+    prompt: "What is a typical human reaction time, and why is latency higher when we are tired?"
+    former_keyword: {word: "latency", skill: query-tempo}
+  - id: ns11
+    prompt: "My bike feels slow uphill. What gear should I use on a steep climb?"
+    former_keyword: {word: "slow", skill: self-telemetry}
+  - id: ns12
+    prompt: "In a story, how do I make a sequence of events feel tense for the reader? Give me a simple flowchart-free tip."
+    former_keyword: {word: "flowchart", skill: mermaid-diagrams}
+  - id: ns13
+    prompt: "Hello! How are you today?"
+  - id: ns14
+    prompt: "Translate 'good morning, my friend' into Portuguese."
+  - id: ns15
+    prompt: "What is the capital of Australia?"
+  - id: ns16
+    prompt: "Give me three ideas for a quick vegetarian dinner."
+  - id: ns17
+    prompt: "Summarize the main idea of stoicism in two sentences."
+  - id: ns18
+    prompt: "What is 17 multiplied by 23?"
+  - id: ns19
+    prompt: "Suggest a name for a grey cat."
+  - id: ns20
+    prompt: "Explain the difference between weather and climate in plain words."

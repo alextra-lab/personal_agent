@@ -7,7 +7,8 @@ request bodies hold full prompts.
     <run>/stub-out/        the recording stub's calls
     <run>/captured/        one primary request body per fixture
     <run>/prompts.json     the design A planner prompts, rendered inside the gateway
-    <run>/rows/<tag>/      decide.jsonl, timing.jsonl, longhist.jsonl, fingerprint.json, report.*
+    <run>/rows/<tag>/      decide.jsonl, paired.jsonl, longhist.jsonl, longhist_paired.jsonl,
+                           fingerprint.json, report.*
 """
 
 from __future__ import annotations
@@ -19,6 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_RUNS_DIR = Path("telemetry") / "evaluation" / "fre1537-planner-probe"
+# ADR-0154 Amendment 1, 1.1: the paired arm's draws per fixture and per size, and the long arm's
+# history sizes. Here, and not in replay or longhist, because the scorer reads them too.
+PAIRED_DRAWS = 3
+LONGHIST_SIZES = (8000, 30000, 60000)
 
 
 @dataclass(frozen=True)
@@ -59,14 +64,19 @@ class RunPaths:
         return self.rows / "decide.jsonl"
 
     @property
-    def timing(self) -> Path:
-        """Return the timing rows file."""
-        return self.rows / "timing.jsonl"
+    def paired(self) -> Path:
+        """Return the paired rows file of the decline fixtures (ADR-0154 Amendment 1)."""
+        return self.rows / "paired.jsonl"
 
     @property
     def longhist(self) -> Path:
         """Return the long-history rows file."""
         return self.rows / "longhist.jsonl"
+
+    @property
+    def longhist_paired(self) -> Path:
+        """Return the paired rows file of the long-history turns (ADR-0154 Amendment 1)."""
+        return self.rows / "longhist_paired.jsonl"
 
     @property
     def fingerprint(self) -> Path:
@@ -103,6 +113,19 @@ def append_jsonl(path: Path, row: Mapping[str, object]) -> None:
 def done_keys(path: Path) -> set[tuple[str, int]]:
     """Return the ``(label, trial)`` keys of rows without an error, so a rerun resumes."""
     return {(str(r["label"]), int(str(r["trial"]))) for r in read_jsonl(path) if "error" not in r}
+
+
+def done_pair_keys(path: Path, key_field: str) -> set[tuple[str, int]]:
+    """Return the ``(key, draw)`` pairs of paired rows without an error, so a rerun resumes.
+
+    Args:
+        path: A paired rows file.
+        key_field: ``label`` for the decline fixtures, or ``size_chars`` for the long-history turns.
+
+    Returns:
+        The completed keys. The key is a string, so a size reads as ``"8000"``.
+    """
+    return {(str(r[key_field]), int(str(r["draw"]))) for r in read_jsonl(path) if "error" not in r}
 
 
 def iter_nonempty(items: Iterable[str]) -> Iterator[str]:

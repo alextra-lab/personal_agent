@@ -29,8 +29,8 @@ RUN=telemetry/evaluation/fre1537-planner-probe/$(date +%Y%m%d-%H%M)
 | 2 | `uv run python -m scripts.eval.fre1537.capture --run-dir $RUN` | `$RUN/captured/*.json` | no (stub) |
 | 3 | `uv run python -m scripts.eval.fre1537.gateway render --run-dir $RUN` | `$RUN/prompts.json` | no |
 | 4 | `uv run python -m scripts.eval.fre1537.gateway down` | removes the two containers | no |
-| 5 | `uv run python -m scripts.eval.fre1537.replay --run-dir $RUN --mode thinking_off` | `$RUN/rows/thinking_off/{decide,timing}.jsonl`, `fingerprint.json` | yes, about 100 calls |
-| 6 | `uv run python -m scripts.eval.fre1537.longhist --run-dir $RUN --mode thinking_off` | `$RUN/rows/thinking_off/longhist.jsonl` | yes, 6 planner calls and 3 primary calls |
+| 5 | `uv run python -m scripts.eval.fre1537.replay --run-dir $RUN --mode thinking_off` | `$RUN/rows/thinking_off/{decide,paired}.jsonl`, `fingerprint.json` | yes, 81 decision calls and 180 paired calls |
+| 6 | `uv run python -m scripts.eval.fre1537.longhist --run-dir $RUN --mode thinking_off` | `$RUN/rows/thinking_off/{longhist,longhist_paired}.jsonl` | yes, 9 cold-arm calls and 54 paired calls |
 | 7 | `uv run python -m scripts.eval.fre1537.score --run-dir $RUN --tag thinking_off` | `report.txt`, `report.json` | no |
 
 Steps 5 and 6 call the owner's llama.cpp. Ask the owner first.
@@ -61,10 +61,37 @@ that adds the `planner` mode.
 - **`render`** builds the planner prompts with the production functions `_build_planner_system_prompt` and
   `_render_planner_history`, inside the gateway, where the settings are those of the image. The ADR-0152 decline
   rule is inserted, because production code does not carry it yet.
-- **`replay`** sends the planner request of each fixture (3 draws each) and the timing arm to llama.cpp. It
+- **`replay`** sends the planner request of each fixture (3 draws each) and the paired arm to llama.cpp. It
   records the configuration fingerprint first. A rerun resumes. A tag refuses rows of a different configuration.
-- **`longhist`** runs the long-history arm at 8,000, 30,000 and 60,000 characters: a cold planner call, a primary
-  call, then the extended planner call.
+  `--arms` takes `decide` and `paired`, and the default is both.
+- **`longhist`** runs the long-history arms at 8,000, 30,000 and 60,000 characters. The `cold` arm makes a cold
+  planner call, a primary call, then the extended planner call. The `paired` arm runs each size for 3 draws.
+  `--arms` takes `cold` and `paired`, and the default is both.
+
+## The paired arm (ADR-0154 Amendment 1)
+
+A pair runs one turn twice on the same configuration. The `SINGLE` arm sends the primary call alone. The planner
+arm sends the planner call, then the same primary call. Each primary call stops at its first token
+(`max_tokens: 1`). The added delay of a pair is the planner call's wall clock, plus the planner arm's primary time
+to first token, minus the `SINGLE` arm's primary time to first token.
+
+- **Which turns.** The 10 decline fixtures, 3 draws each (`paired.jsonl`). The long-history turn at each size,
+  3 draws each (`longhist_paired.jsonl`). Each pair makes 6 calls.
+- **The engine state before each arm.** The `SINGLE` arm first sends the previous turn's primary request. The
+  planner arm first sends the previous turn's planner request, then the previous turn's primary request. These
+  primes have `max_tokens: 1` and are not measured.
+- **No reuse.** Each arm of each draw starts the system message of every request with `probe nonce <8 hex>`. The
+  long-history turn also renders a new history with that nonce. The rendered planner prompt does not hold the
+  nonce, so the fingerprint does not change.
+- **The order.** A pair runs the `SINGLE` arm first when (index + draw) is even. The index is the position of the
+  fixture in the sorted decline labels, or of the size in `SIZES`.
+- **A void pair.** A measured call is void when its `timings.cache_n` exceeds its prime's prompt tokens
+  (`cache_n + prompt_n`). A call without timings is void with the reason `timings_missing`. A void pair does not
+  count, and the report counts the reasons.
+- **The long history.** One function, `history_pairs`, builds the exchanges of a size. The planner reads them as
+  text, and the primary reads them as role messages. Since this change, the history's first exchange carries an
+  assistant reply, so the cold arm's history is about 30 characters longer than before.
+- A managed run (`--deployment`) refuses the paired arm. The managed paired path does not exist yet.
 - **`score`** checks every D7 threshold. See below.
 
 ## Planner modes
@@ -119,8 +146,9 @@ uv run python -m scripts.eval.fre1537.score    --run-dir $RUN --tag $D-planner
 - `--max-usd` is required. It caps the cost of every tag of the run directory together. A call is refused
   when the spent total plus its worst-case input cost reaches the cap. Output cost counts when the call
   returns. Every row records `cost_usd`.
-- The timing arm and the primary call of the long-history arm prime the llama.cpp prefix cache and decide no
-  threshold. A managed run skips both.
+- The primary call of the long-history `cold` arm primes the llama.cpp prefix cache and decides no threshold. A
+  managed run skips it. A managed run refuses both paired arms, so its paired checks are FAIL: no managed
+  deployment can qualify until the managed paired path exists (ADR-0154 Amendment 1, 1.2).
 - The production cloud client reports `reasoning_trace: None` whatever the model did. The probe reads the
   reasoning evidence from the provider message instead. The reasoning threshold fails on any reasoning
   character, any thinking block (a redacted one too) and any reasoning token that the provider reports.
@@ -162,6 +190,8 @@ and the digest leave, so the two can differ only when the history, the digest an
 | Declined call time, single-turn fixtures | p50 at most 2 s |
 | Planner call, 60,000 characters, extended | at most 10 s |
 | Planner call, 60,000 characters, cold | at most 60 s |
+| Paired added delay, history below 8,000 characters | median at most 3 s, at least 28 of 30 pairs counted |
+| Paired added delay, history at or above 8,000 characters | median at most 10 s, at least 8 of 9 pairs counted |
 | Configuration fingerprint | engine build, model, quant, planner mode and prompt hash all known |
 
 - A rate prints with its 95% Wilson interval. The report prints no pooled figure.
@@ -170,6 +200,12 @@ and the digest leave, so the two can differ only when the history, the digest an
   `HYBRID` or `DECOMPOSE` with at least one task. Any other reply is invalid, counts as incorrect, and counts
   in the parse line. This is the validation rule of ADR-0154 D2.
 - `c5_noverb` is not scored.
+- A pair counts when its planner call declines and the pair is not void. The scorer keeps the last row without an
+  error for each pair key. A missing key or an unexpected key fails the check of that file's split.
+- The measured planner call of each pair counts for the parse and the reasoning thresholds. The planner prime counts
+  for the reasoning threshold only. The primary calls count for neither.
+- `report.json` holds `paired.short` and `paired.long`: `counted`, `of`, `added_s_p50`, `planner_s_p50`,
+  `cache_loss_s_p50` and the void count per reason. ADR-0154 Amendment 1.4 reads `planner_s_p50`.
 - The p50 is the value at index `round(0.5 * (n - 1))` of the sorted values (ADR-0154 Appendix A4).
 - If llama.cpp does not report its build or quant, pass `--engine-build` and `--quant` to `replay`. An unknown
   value fails the fingerprint threshold.

@@ -1,8 +1,12 @@
-"""FRE-1511 / ADR-0154 D7 and Appendix A1: the long-history arm.
+"""FRE-1511 / ADR-0154 D7 and Appendix A1: the long-history arms.
 
 Design A in a chosen planner mode, with synthetic histories built from the four fixture conversations at
-8,000, 30,000 and 60,000 characters. Each size runs a cold planner call, then a primary call, then the next
-turn's planner call whose history extends the first by one exchange. Timing only.
+8,000, 30,000 and 60,000 characters. Timing only.
+
+    cold    per size, a cold planner call, then a primary call, then the next turn's planner call whose
+            history extends the first by one exchange                          -> rows/<tag>/longhist.jsonl
+    paired  per size and draw, the turn routed SINGLE and routed to a declining
+            planner (ADR-0154 Amendment 1)                                     -> rows/<tag>/longhist_paired.jsonl
 
     uv run python -m scripts.eval.fre1537.longhist --run-dir <run> --mode thinking_off
 """
@@ -12,13 +16,21 @@ from __future__ import annotations
 import argparse
 import secrets
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import httpx
 from scripts.eval.fre1537 import cloud as cloud_mod
 from scripts.eval.fre1537 import fingerprint as fp_mod
 from scripts.eval.fre1537 import render
-from scripts.eval.fre1537.common import RunPaths, append_jsonl, read_jsonl
+from scripts.eval.fre1537.common import (
+    LONGHIST_SIZES,
+    PAIRED_DRAWS,
+    RunPaths,
+    append_jsonl,
+    done_pair_keys,
+    read_jsonl,
+    utc_now,
+)
 from scripts.eval.fre1537.fixtures import load_histories
 from scripts.eval.fre1537.llama import (
     Inputs,
@@ -26,16 +38,61 @@ from scripts.eval.fre1537.llama import (
     parse_plan,
     planner_request,
     primary_body,
+    primary_from,
+    prime_from,
     reference_label,
     stream,
 )
-from scripts.eval.fre1537.replay import common_arguments, prepare, prepare_cloud
+from scripts.eval.fre1537.replay import (
+    PairBodies,
+    common_arguments,
+    prepare,
+    prepare_cloud,
+    run_pair,
+    with_nonce,
+)
 
-SIZES = (8000, 30000, 60000)
+SIZES = LONGHIST_SIZES
+ARMS = ("cold", "paired")
 FIRST_QUERY = "Thanks. Which of the three did you say is cheapest to install?"
 FIRST_REPLY = "Air-source is the cheapest to install."
 SECOND_QUERY = "So Tempo is the one with red days?"
 MAX_TOKENS = 4096
+
+
+OPENER_REPLY = "Hello. How can I help?"
+
+
+def history_pairs(n_chars: int, nonce: str) -> list[tuple[str, str]]:
+    """Build the (user, assistant) exchanges of a history of at least ``n_chars`` rendered characters.
+
+    The one source of a long history: :func:`render_history` makes the planner's text from it, and the
+    paired arm makes the primary's role messages from it, so the two views cannot differ.
+
+    Args:
+        n_chars: Minimum length, counted over the rendered lines without their newlines.
+        nonce: A per-run token in the first exchange, so that no size reuses the engine's cached prefix.
+
+    Returns:
+        The exchanges, oldest first. The first opens the session and carries the nonce.
+    """
+    sources = list(load_histories().values())
+    pairs = [(f"(session {nonce}) Hello.", OPENER_REPLY)]
+
+    def rendered() -> int:
+        return sum(len(f"user: {u}") + len(f"assistant: {a}") for u, a in pairs)
+
+    i = 0
+    while rendered() < n_chars:
+        user, assistant = sources[i % len(sources)]
+        pairs.append((f"{user} (part {i})", assistant))
+        i += 1
+    return pairs
+
+
+def render_pairs(pairs: Sequence[tuple[str, str]]) -> str:
+    """Render exchanges as the role-labelled history text the planner reads."""
+    return "\n".join(f"user: {u}\nassistant: {a}" for u, a in pairs)
 
 
 def render_history(n_chars: int, nonce: str) -> str:
@@ -48,14 +105,7 @@ def render_history(n_chars: int, nonce: str) -> str:
     Returns:
         The history text.
     """
-    pairs = list(load_histories().values())
-    lines = [f"user: (session {nonce}) Hello."]
-    i = 0
-    while sum(len(x) for x in lines) < n_chars:
-        user, assistant = pairs[i % len(pairs)]
-        lines += [f"user: {user} (part {i})", f"assistant: {assistant}"]
-        i += 1
-    return "\n".join(lines)
+    return render_pairs(history_pairs(n_chars, nonce))
 
 
 def _call(
@@ -176,6 +226,133 @@ def run_longhist(
         print("longhist", size, cold["secs"], row["extended"]["secs"], flush=True)  # type: ignore[index]
 
 
+def long_turn_bodies(
+    inputs: Inputs, mode: PlannerMode, size: int, nonce: str, digest: str | None = None
+) -> tuple[PairBodies, int]:
+    """Build the four requests of one long-history pair, for one arm's nonce (Amendment 1, 1.6).
+
+    The turn is the history H of the size, then ``FIRST_QUERY`` and ``FIRST_REPLY`` as one
+    exchange, then ``SECOND_QUERY``. The previous turn is H with ``FIRST_QUERY``. The primary
+    request starts from the reference fixture's captured body: its system message, tools and
+    sampling stay, the messages between the system message and the last user message become the
+    turn's history, the last user message becomes ``SECOND_QUERY``, and the messages after it stay.
+
+    Args:
+        inputs: The run inputs.
+        mode: The planner mode.
+        size: The history size in characters.
+        nonce: The arm's nonce. It starts every system message and the history's first exchange.
+        digest: Optional digest text, carried by the measured planner call only.
+
+    Returns:
+        The requests, and the length of the turn's rendered planner history.
+    """
+    h = history_pairs(size, nonce)
+    turn = [*h, (FIRST_QUERY, FIRST_REPLY)]
+    history = render_pairs(turn)
+    src = inputs.body(reference_label(inputs))
+    messages: list[Mapping[str, object]] = list(src["messages"])  # type: ignore[call-overload]
+    last_user = max(i for i, m in enumerate(messages) if m.get("role") == "user")
+    roles = [
+        msg
+        for u, a in turn
+        for msg in ({"role": "user", "content": u}, {"role": "assistant", "content": a})
+    ]
+    body = {
+        **src,
+        "messages": [
+            messages[0],
+            *roles,
+            {"role": "user", "content": SECOND_QUERY},
+            *messages[last_user + 1 :],
+        ],
+    }
+
+    def planner(
+        text: str, query: str, max_tokens: int, with_digest: str | None
+    ) -> dict[str, object]:
+        user = render.build_user_message(text, None, query)
+        return planner_request(inputs.system, user, src, mode, max_tokens, with_digest)
+
+    bodies = PairBodies(
+        prime_primary=with_nonce(prime_from(body), nonce),
+        primary=with_nonce(primary_from(body, max_tokens=1), nonce),
+        prime_planner=with_nonce(planner(render_pairs(h), FIRST_QUERY, 1, None), nonce),
+        planner=with_nonce(planner(history, SECOND_QUERY, MAX_TOKENS, digest), nonce),
+    )
+    return bodies, len(history)
+
+
+def run_longhist_paired(
+    client: httpx.Client,
+    url: str,
+    model: str,
+    paths: RunPaths,
+    inputs: Inputs,
+    mode: PlannerMode,
+    sizes: Sequence[int] = SIZES,
+    draws: int = PAIRED_DRAWS,
+    digest: str | None = None,
+) -> None:
+    """Run the long-history paired arm: each size for ``draws`` draws (ADR-0154 Amendment 1, 1.6).
+
+    A pair runs the ``SINGLE`` arm first when (index + draw) is even, where the index is the size's
+    position in ``sizes``. A rerun resumes on the size and draw.
+
+    Args:
+        client: HTTP client.
+        url: The chat-completions URL.
+        model: The served model name.
+        paths: The run paths.
+        inputs: The run inputs.
+        mode: The planner mode.
+        sizes: History sizes in characters.
+        draws: Draws per size.
+        digest: Optional digest text, carried by the measured planner call only.
+    """
+    seen = done_pair_keys(paths.longhist_paired, "size_chars")
+    for draw in range(draws):
+        for index, size in enumerate(sizes):
+            if (str(size), draw) in seen:
+                continue
+            lengths: list[int] = []
+
+            def build(nonce: str, size: int = size, lengths: list[int] = lengths) -> PairBodies:
+                bodies, history_chars = long_turn_bodies(inputs, mode, size, nonce, digest)
+                lengths.append(history_chars)
+                return bodies
+
+            row: dict[str, object] = {
+                "arm": "longhist_paired",
+                "tag": paths.tag,
+                "ts": utc_now(),
+                "size_chars": size,
+                "draw": draw,
+                "kind": "longhist",
+            }
+            try:
+                row.update(run_pair(client, url, model, build, (index + draw) % 2 == 0))
+                fp_mod.fill_engine_build(
+                    paths,
+                    row["planner"]["planner"].get("system_fingerprint"),  # type: ignore[index]
+                )
+            except (httpx.HTTPError, ValueError) as exc:
+                row["error"] = repr(exc)[:300]
+            # The planner arm's history: both arms render the same length, the nonces differ only.
+            row["history_chars"] = lengths[-1] if lengths else None
+            append_jsonl(paths.longhist_paired, row)
+            print(
+                "longhist_paired",
+                draw,
+                size,
+                row.get("added_ms"),
+                row.get("declined"),
+                row.get("void"),
+                str(row.get("error", ""))[:80],
+                flush=True,
+            )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the long-history arm.
 
@@ -187,8 +364,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     common_arguments(parser)
+    parser.add_argument("--arms", default=None, help="default: cold,paired (managed: cold)")
     args = parser.parse_args(argv)
+    arms = (args.arms or ("cold" if args.deployment else ",".join(ARMS))).split(",")
+    unknown = [a for a in arms if a not in ARMS]
+    if unknown:
+        raise SystemExit(f"unknown arm {unknown[0]!r}: use cold or paired")
     if args.deployment:
+        if "paired" in arms:
+            raise SystemExit(
+                "--arms paired runs on llama.cpp only, and the managed paired path does not exist "
+                "yet (ADR-0154 Amendment 1, 1.2): a managed run uses --arms cold"
+            )
         paths, inputs, target, digest, budget = prepare_cloud(args)
         mode = PlannerMode(target.mode_name, dict(target.declared))
         with cloud_mod.CloudSession(target) as session:
@@ -208,8 +395,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     with httpx.Client(timeout=900.0) as client:
         paths, inputs, mode, digest = prepare(args, client)
-        run_longhist(client, args.url, args.model, paths, inputs, mode, digest=digest)
-    print(f"rows in {paths.longhist}. Next: score --run-dir {args.run_dir} --tag {paths.tag}")
+        if "cold" in arms:
+            run_longhist(client, args.url, args.model, paths, inputs, mode, digest=digest)
+        if "paired" in arms:
+            run_longhist_paired(client, args.url, args.model, paths, inputs, mode, digest=digest)
+    print(f"rows in {paths.rows}. Next: score --run-dir {args.run_dir} --tag {paths.tag}")
     return 0
 
 

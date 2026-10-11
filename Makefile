@@ -383,6 +383,10 @@ EVAL_ENV_FILE := --env-file /opt/seshat/.env
 #
 # Before acting, a `--dry-run` of the same command is piped to `compose_plan_guard`, which
 # refuses a plan that touches any container `docker-compose.eval.yml` does not define.
+#
+# FRE-1581: once the substrate is up, the production index templates go onto eval ES (:9202).
+# Without them, eval ES maps event_type, level and trace_id as text, so a query written for
+# production (a `term` on the field itself, as the skills teach) fails on eval.
 EVAL_PROJECT ?= seshat
 EVAL_COMPOSE := docker compose -p $(EVAL_PROJECT) -f docker-compose.cloud.yml -f docker-compose.eval.yml $(EVAL_ENV_FILE)
 EVAL_SUBSTRATE := postgres-eval neo4j-eval elasticsearch-eval redis-eval
@@ -393,6 +397,7 @@ eval-infra-up:          ## Start eval infra (eval services only, --no-deps, plan
 	  || { printf '%s\n' "$$plan" >&2; exit 1; }; \
 	printf '%s\n' "$$plan" | uv run python -m scripts.eval.compose_plan_guard || exit 1; \
 	$(EVAL_COMPOSE) up -d --no-deps --wait $(EVAL_SUBSTRATE) || exit 1; \
+	ES_URL=http://localhost:9202 bash scripts/setup-elasticsearch.sh || exit 1; \
 	BUILD_FINGERPRINT=$$(uv run python -m scripts.eval.gateway_freshness --print-fingerprint) $(EVAL_COMPOSE) up -d --no-deps --build $(EVAL_GATEWAYS)
 
 eval-infra-down:        ## Stop eval infra (plan guarded — FRE-1542)

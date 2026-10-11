@@ -30,8 +30,8 @@ The reply is one JSON document: `{"rows": [...], "row_count": n, "truncated": fa
 returns at most 100 rows. Use `--limit N` (up to 1000) for more. `truncated: true` means that the
 query holds more rows than were returned.
 
-The script opens a read transaction, so the server refuses a write (checked live on 2026-10-11,
-including `apoc.cypher.doIt`). It checks for a write clause and for a procedure that is not on
+The script opens a read transaction, so the server refuses a write, including
+`apoc.cypher.doIt`. It checks for a write clause and for a procedure that is not on
 the list first, to give a plain error before it connects. A word inside a string, a comment or a
 backtick name is not read as a clause.
 
@@ -60,8 +60,8 @@ python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETU
 Labels in the graph include `Entity` and `Turn`. A relationship type of interest is `DISCUSSES`.
 Run the label query first when you are unsure what exists.
 
-When was an entity created? Use `first_seen` and `last_seen`: on 2026-10-11 all 9,743 `Entity`
-nodes held both. `created_at` is set on 1 node, so an `ORDER BY` on it gives no useful order.
+When was an entity created? Use `first_seen` and `last_seen`: `Entity`
+nodes hold both. `created_at` is set on almost no node, so an `ORDER BY` on it gives no useful order.
 Find the property keys of the graph with `CALL db.propertyKeys()`.
 
 ## Environment

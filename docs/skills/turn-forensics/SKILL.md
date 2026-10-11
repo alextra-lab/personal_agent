@@ -3,7 +3,8 @@ name: turn-forensics
 description: Explains one agent turn from its trace id or session id across the substrates - the per-call
   timeline, which part of the context used the tokens, where the time went, what the browser received, and
   the inference-server request log when present. Use when the task is to explain one turn - why it was
-  slow, why the context grew, or what it did step by step - or to replay a trace.
+  slow, why the context grew, or what it did step by step - or to replay a trace. Not for latency numbers
+  over a time window or the raw span list of a trace id - the query-tempo skill does those.
 metadata:
   requires-tools: bash
 ---
@@ -15,7 +16,7 @@ metadata:
 - Pull the turn from live data. Never infer the timeline or a token count from priors.
 - Input: a `trace_id` (best) or a `session_id`. If the task names only "the last turn" or "the slowest turn", find the trace first (Step 0).
 - This skill explains one turn in depth. For a count or a breakdown over many turns use `query-elasticsearch`. For latency over a window use `query-tempo`.
-- Related: ADR-0074 (identity threading: `trace_id` and `session_id` join every substrate), FRE-401 (context bloat).
+- `trace_id` and `session_id` join every substrate.
 
 ## What each substrate answers
 
@@ -93,7 +94,7 @@ The first command gives the storage key. The second prints the size of the store
 ## Step 4 — Join the inference-server request log
 
 The model server writes a `request_complete` event for each request to `slm-requests-*`. It is
-tagged with the `X-Span-Id` and `X-Trace-Id` headers of the harness (FRE-411). Join on `span_id`
+tagged with the `X-Span-Id` and `X-Trace-Id` headers of the harness. Join on `span_id`
 for one call, or on `trace_id` for the turn:
 
 ```bash
@@ -110,10 +111,10 @@ compute than the token count shows. All times are UTC ISO-8601.
 
 ## Reading the result
 
-- **A context jump after a `read`**: a large read. The default `read` returns the first 200 lines and at most 8 KiB. A jump means that the call named a large `max_bytes` or `limit`, or that the model paged through a file in many reads. The arguments of the `tool_call_started` before the jump show which (FRE-401).
+- **A context jump after a `read`**: a large read. The default `read` returns the first 200 lines and at most 8 KiB. A jump means that the call named a large `max_bytes` or `limit`, or that the model paged through a file in many reads. The arguments of the `tool_call_started` before the jump show which.
 - **A slow primary call with no tool before it**: a large prefill (the grown context is sent again at each step), or a degraded model server (multi-minute calls, HTTP 524). A restart of the model server fixes the second case.
 - **A gap between the sub-agent end and the final reply**: the synthesis call on the grown context. The sub-agent was not slow.
-- **A terminal tool failure**: look for `tool_terminal_short_circuit` (FRE-402). The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.
+- **A terminal tool failure**: look for `tool_terminal_short_circuit`. The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.
 - `input_tokens` (the model's tokenizer) and `turn_status.context_tokens` (an estimate) differ by 10 to 20 percent. The trend is the same.
 
 ## Success

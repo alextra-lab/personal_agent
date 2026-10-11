@@ -10,7 +10,7 @@ ES|QL (`/_query`) can chain `STATS ... BY ...` in one request. It has gotchas th
 | A conditional count is `COUNT_IF`, not a ternary | Parse error | Use `COUNT_IF(...)` or a `_search` aggregation |
 | Term equality on a `text` field (`message`, `error`) | An empty result, no error | Use `_search` with `match`, or `error.keyword` |
 
-A command that was run live on 2026-10-11 and returned rows:
+A command that returns rows:
 
 ```bash
 curl -fsS -X POST 'http://elasticsearch:9200/_query?format=json' \

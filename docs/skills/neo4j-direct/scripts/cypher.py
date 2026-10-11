@@ -44,6 +44,10 @@ _USAGE = 'usage: cypher.py [--param name=value ...] [--limit N] "<cypher>"'
 _DEFAULT_LIMIT = 100
 _MAX_LIMIT = 1000
 _TIMEOUT_S = 15
+# No managed-transaction retry. The driver default retries a refused connection for 30 s with
+# backoff, which kept the agent waiting about 66 s when Neo4j was down. A single Community server
+# does not recover within seconds, so the script reports the error at once.
+_MAX_TRANSACTION_RETRY_S = 0.0
 # The query is read as tokens, not searched as text. A search over text has two failure modes: a
 # quote inside a quoted name starts a false string, and a quoted name can hide a procedure name
 # (the form with backticks around each part is valid Cypher). A token is a string, a comment, a
@@ -466,6 +470,7 @@ def run_query(
                 uri,
                 auth=(env.get("AGENT_NEO4J_USER", "neo4j"), password),
                 connection_timeout=_TIMEOUT_S,
+                max_transaction_retry_time=_MAX_TRANSACTION_RETRY_S,
             )
         with client.session(default_access_mode=neo4j.READ_ACCESS) as session:
             rows = session.execute_read(neo4j.unit_of_work(timeout=_TIMEOUT_S)(read))

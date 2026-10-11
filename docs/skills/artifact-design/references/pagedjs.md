@@ -3,7 +3,7 @@
 Part of the `artifact-design` skill. Reference each asset by its exact absolute, version-pinned URL. Source of truth: `config/artifact_lib_manifest.json`.
 
 paged.js is on the shelf **but is `eval_gated`**: it may require `eval` under the live CSP
-(which omits `'unsafe-eval'`), pending runtime confirmation (FRE-531). Treat it as an
+(which omits `'unsafe-eval'`), pending runtime confirmation. Treat it as an
 **advanced, experimental** option that **may silently fail under the live page policy** — do
 **not** rely on it as a first-class library. For book/print layout, **lead with the native
 `@page` / `column-count` / `break-*` recipes of Native Typography in `SKILL.md`**; reach for paged.js only for

@@ -37,8 +37,7 @@ def _restore_executor_tool_globals() -> object:
     ``step_llm_call``, which seeds the module-level ``_tool_registry`` /
     ``_tool_execution_layer`` from the *patched* (empty) registry. Without this
     restore the patched registry leaks past the patch scope and pollutes later
-    tests in the process (mirrors the identical fixture in
-    ``test_skill_injection.py``).
+    tests in the process.
     """
     import personal_agent.orchestrator.executor as _ex
 
@@ -249,11 +248,7 @@ def _make_mock_llm_client(response: dict[str, object]) -> MagicMock:
 async def test_ac3_assembled_request_messages_preserve_image_block(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from personal_agent.config import settings
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
     ctx = _make_minimal_ctx_with_block_content()
     trace_ctx = TraceContext.new_trace()
@@ -263,20 +258,7 @@ async def test_ac3_assembled_request_messages_preserve_image_block(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch(
-            "personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        ),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        ),
-        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.orchestrator.skills.assemble_skill_catalog", return_value=""),
         patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
         patch(
             "personal_agent.orchestrator.executor.get_default_registry",
@@ -312,11 +294,7 @@ async def test_ac3_assembled_request_messages_preserve_image_block(
 async def test_fre1137_attachment_turn_carries_memory_section_in_wire_form(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from personal_agent.config import settings
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
     ctx = _make_minimal_ctx_with_block_content()
     ctx.memory_context = [
@@ -334,20 +312,7 @@ async def test_fre1137_attachment_turn_carries_memory_section_in_wire_form(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch(
-            "personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        ),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        ),
-        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.orchestrator.skills.assemble_skill_catalog", return_value=""),
         patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
         patch(
             "personal_agent.orchestrator.executor.get_default_registry",
@@ -375,7 +340,9 @@ async def test_fre1137_attachment_turn_carries_memory_section_in_wire_form(
         m for m in request_messages if m.get("role") == "tool" and m.get("name") == "memory_recall"
     ]
     assert len(memory_results) == 1
-    assert request_messages.index(memory_results[0]) == request_messages.index(user_messages[-1]) + 2
+    assert (
+        request_messages.index(memory_results[0]) == request_messages.index(user_messages[-1]) + 2
+    )
     assert "Fre1137MarkerEntity" in memory_results[0]["content"]
     assert "vintage telescopes" in memory_results[0]["content"]
     # The attachment blocks still ride along, untouched, after the fence.
@@ -397,12 +364,8 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
     """
     import structlog
 
-    from personal_agent.config import settings
     from personal_agent.orchestrator.types import AttachmentRef
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
     ctx = _make_minimal_ctx_with_block_content()
     ctx.attachments = (
@@ -420,20 +383,7 @@ async def test_vision_routing_decision_log_fires_for_raster_attachment(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch(
-            "personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        ),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        ),
-        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.orchestrator.skills.assemble_skill_catalog", return_value=""),
         patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
         patch(
             "personal_agent.orchestrator.executor.get_default_registry",
@@ -473,14 +423,10 @@ async def test_vision_escalation_labels_respond_call_role_vision(
     which would risk a second, divergent resolution (ADR-0141 D1 unified all
     placements onto LiteLLMClient, so this is now the only reachable case).
     """
-    from personal_agent.config import settings
     from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.llm_client.types import ModelRole
     from personal_agent.orchestrator.types import AttachmentRef
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
     ctx = _make_minimal_ctx_with_block_content()
     ctx.attachments = (
@@ -499,17 +445,7 @@ async def test_vision_escalation_labels_respond_call_role_vision(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch("personal_agent.orchestrator.skills.get_skill_bodies", return_value=("", ())),
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        ),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        ),
-        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.orchestrator.skills.assemble_skill_catalog", return_value=""),
         patch(
             "personal_agent.llm_client.factory.get_llm_client_for_key",
             return_value=mock_escalated_client,
@@ -534,11 +470,7 @@ async def test_vision_routing_decision_log_absent_for_no_attachments(
     """No attachment on the turn — no vision routing decision to log."""
     import structlog
 
-    from personal_agent.config import settings
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
     ctx = _make_minimal_ctx_with_block_content()
     trace_ctx = TraceContext.new_trace()
@@ -548,20 +480,7 @@ async def test_vision_routing_decision_log_absent_for_no_attachments(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch(
-            "personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        ),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        ),
-        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.orchestrator.skills.assemble_skill_catalog", return_value=""),
         patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
         patch(
             "personal_agent.orchestrator.executor.get_default_registry",
@@ -589,12 +508,8 @@ async def test_vision_routing_decision_log_fires_for_document_forced_routing(
     """
     import structlog
 
-    from personal_agent.config import settings
     from personal_agent.orchestrator.types import AttachmentRef
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
     ctx = _make_minimal_ctx_with_block_content()
     ctx.attachments = (
@@ -616,20 +531,7 @@ async def test_vision_routing_decision_log_fires_for_document_forced_routing(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch(
-            "personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        ),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        ),
-        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.orchestrator.skills.assemble_skill_catalog", return_value=""),
         patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
         patch(
             "personal_agent.llm_client.factory.get_llm_client_for_key",
@@ -667,12 +569,8 @@ async def test_vision_routing_decision_log_absent_for_tier1_pdf_attachment(
     """
     import structlog
 
-    from personal_agent.config import settings
     from personal_agent.orchestrator.types import AttachmentRef
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
     ctx = _make_minimal_ctx_with_block_content()
     ctx.attachments = (
@@ -693,20 +591,7 @@ async def test_vision_routing_decision_log_absent_for_tier1_pdf_attachment(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch(
-            "personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        ),
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        ),
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        ),
-        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch("personal_agent.orchestrator.skills.assemble_skill_catalog", return_value=""),
         patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
         patch(
             "personal_agent.orchestrator.executor.get_default_registry",

@@ -68,7 +68,7 @@ own, or to statements about what you searched for or found this turn.
 #
 # Unconditional and STATIC — spliced into the cached system prompt right after
 # the grounding contract, so it holds on every primary turn with no keyword and
-# no classifier. The text is the nudge of docs/skills/sequential-thinking.md;
+# no classifier. The text is the rule of docs/skills/sequential-thinking/SKILL.md;
 # that skill stays for depth. Native thinking already plans out of sight, so the
 # rule only asks for the visible part: a real false start, never an invented one
 # (FRE-1327's confabulation shape). Not added to the planner prompt (ADR-0154 D7).

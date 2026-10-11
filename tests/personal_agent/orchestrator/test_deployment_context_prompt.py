@@ -76,7 +76,6 @@ async def _dispatched_system_prompt(monkeypatch: pytest.MonkeyPatch) -> str:
     from personal_agent.telemetry.trace import TraceContext
 
     monkeypatch.setattr(settings, "environment", Environment.PRODUCTION)
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
 
     ctx = _make_ctx()
     client = _mock_llm()

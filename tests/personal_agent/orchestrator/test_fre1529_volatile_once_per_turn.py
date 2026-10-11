@@ -6,6 +6,9 @@ Before this fix, each one became the new "last user message", so the next
 ``step_llm_call`` round inlined a second, third and fourth ``<turn_context>`` fence, and
 with it the whole ``<skill_library>`` block (trace 91b57b5c: 154,096 prompt tokens).
 
+Since ADR-0156 D2 (FRE-1577) no skill body rides the fence, so these tests mark the fence with
+the session highlights, another member of the same volatile block.
+
 These tests drive the real ``step_llm_call`` across tool rounds, as the loop does, and
 read what reached the model.
 """
@@ -21,9 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 _QUERY = "Check the logs and tell me what failed overnight."
-_SKILL_BLOCK = "<skill_library>\nheader\n</skill_library>\n\nBASH BODY"
 _FENCE = "<turn_context>"
-_LIBRARY = "<skill_library>"
+_LIBRARY = "SALIENT HIGHLIGHTS MARKER"
 _TOOL_DEF = {
     "type": "function",
     "function": {
@@ -68,6 +70,7 @@ def _make_ctx(history: list[dict[str, Any]] | None = None) -> Any:
     )
     # Fixed clock, never the wall clock, in a test asserting on rendered bytes.
     ctx.turn_started_at = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    ctx.salient_highlights = _LIBRARY
     return ctx
 
 
@@ -99,21 +102,14 @@ async def _drive_loop(
     rounds: int,
     monkeypatch: pytest.MonkeyPatch,
     before_round: Callable[[int, Any], None] | None = None,
-    skill_bodies: MagicMock | None = None,
 ) -> list[dict[str, Any]]:
     """Drive the real ``step_llm_call`` ``rounds`` times, as the tool loop does.
 
     Returns:
         The ``respond()`` kwargs of each call, in call order.
     """
-    from personal_agent.config import settings
     from personal_agent.orchestrator.executor import step_llm_call
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-    monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
-    bodies = skill_bodies or MagicMock(return_value=(_SKILL_BLOCK, ("bash",)))
 
     client = MagicMock()
     client.model_configs = {}
@@ -137,7 +133,6 @@ async def _drive_loop(
             }
         )
         with (
-            patch("personal_agent.orchestrator.skills.get_skill_bodies", bodies),
             patch("personal_agent.llm_client.factory.get_llm_client", return_value=client),
             patch(
                 "personal_agent.orchestrator.executor.get_default_registry",
@@ -232,26 +227,6 @@ class TestOneBlockPerTurn:
         assert fenced == [0]
         assert ctx.messages[0]["content"].rstrip().endswith(_QUERY)
 
-    @pytest.mark.asyncio
-    async def test_skill_bodies_are_chosen_once_from_the_users_query(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Selection runs on the first call only, and keys on the query, not the fence.
-
-        Before FRE-1529 the match read the last user message, which after round 1 is the
-        fenced query (or a directive), and admitted about 7x more bodies (trace 1cd3b49e).
-        """
-        bodies = MagicMock(return_value=(_SKILL_BLOCK, ("bash",)))
-
-        def warn(i: int, ctx: Any) -> None:
-            if i >= 1:
-                _budget_warning(ctx)
-
-        await _drive_loop(_make_ctx(), 3, monkeypatch, warn, skill_bodies=bodies)
-
-        assert bodies.call_count == 1
-        assert bodies.call_args.kwargs["message"] == _QUERY
-
 
 class TestPrefixStaysStable:
     """AC-2: the frozen prefix replays byte-identically, so KV reuse is unaffected."""
@@ -298,71 +273,3 @@ class TestPrefixStaysStable:
         for s in sent:
             assert s["messages"][: len(persisted)] == persisted
             assert _count(s["messages"][len(persisted) :], _LIBRARY) == 1
-
-
-class TestModelDecidedBodiesBounded:
-    """AC-3 on the path that does not go through ``get_skill_bodies``."""
-
-    @pytest.mark.asyncio
-    async def test_preloaded_bodies_respect_the_budget(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from personal_agent.config import settings
-        from personal_agent.orchestrator.skills import SkillDoc
-
-        def doc(name: str, size: int) -> SkillDoc:
-            return SkillDoc(
-                name=name,
-                description="d",
-                when_to_use="w",
-                tools=(),
-                keywords=(),
-                canonical_patterns=(),
-                body=name.upper() * size,
-            )
-
-        docs = {"alpha": doc("alpha", 300), "beta": doc("beta", 300)}  # 1,500 chars each
-        ctx = _make_ctx()
-        ctx.loaded_skills = {"alpha", "beta"}
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        monkeypatch.setattr(settings, "skill_routing_model_key", "")
-        monkeypatch.setattr(settings, "skill_bodies_max_tokens", 400)  # 1,600 chars
-        monkeypatch.setattr(settings, "skill_nudge_enabled", False)
-        with patch("personal_agent.orchestrator.skills.get_all_skills", return_value=docs):
-            sent = await _drive_model_decided(ctx, monkeypatch)
-
-        carrier = _text(sent["messages"][0])
-        assert ("ALPHA" * 300 in carrier) != ("BETA" * 300 in carrier), (
-            "both 1,500-char bodies fit a 1,600-char budget — the cap was not applied"
-        )
-
-
-async def _drive_model_decided(ctx: Any, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """One ``step_llm_call`` in ``model_decided`` mode, with no router call."""
-    from personal_agent.config import settings
-    from personal_agent.orchestrator.executor import step_llm_call
-    from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "skill_routing_mode", "model_decided")
-    client = MagicMock()
-    client.model_configs = {}
-    client.respond = AsyncMock(
-        return_value={
-            "content": "done",
-            "tool_calls": [],
-            "response_id": None,
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        }
-    )
-    session = MagicMock()
-    session.add_message = AsyncMock()
-    session.get_messages = AsyncMock(return_value=[])
-    with (
-        patch("personal_agent.llm_client.factory.get_llm_client", return_value=client),
-        patch(
-            "personal_agent.orchestrator.executor.get_default_registry",
-            return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
-        ),
-    ):
-        await step_llm_call(ctx, session, TraceContext.new_trace())
-    return dict(client.respond.call_args.kwargs)

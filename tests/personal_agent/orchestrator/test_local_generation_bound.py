@@ -455,11 +455,7 @@ def _step_patches(mock_llm: MagicMock) -> ExitStack:
     """Patch set that drives ``step_llm_call`` up to the ``respond()`` boundary."""
     stack = ExitStack()
     for target, value in (
-        ("personal_agent.orchestrator.skills.get_skill_bodies", ("", ())),
-        ("personal_agent.orchestrator.skills.assemble_skill_index", ""),
-        ("personal_agent.orchestrator.skills.assemble_skill_index_directive", ""),
-        ("personal_agent.orchestrator.skills.assemble_skill_usage_directives", ""),
-        ("personal_agent.orchestrator.skills.get_all_skills", {}),
+        ("personal_agent.orchestrator.skills.assemble_skill_catalog", ""),
         ("personal_agent.llm_client.factory.get_llm_client", mock_llm),
     ):
         stack.enter_context(patch(target, return_value=value))

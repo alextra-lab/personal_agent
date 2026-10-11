@@ -29,9 +29,9 @@ class ModelRole(str, Enum):
     assignment) — ``tests/test_llm_client/test_types.py::test_model_role_matches_bindings_matrix``
     asserts every matrix role is representable here, so the two can't drift apart
     again the way they had (FRE-1037). ``SKILL_ROUTING`` and ``STUDY`` are the two
-    documented exceptions: real, live background roles that resolve outside the
-    matrix (a dedicated ``AppConfig`` field and a script-local convention,
-    respectively) rather than through ``config/model_roles.yaml``.
+    documented exceptions that resolve outside the matrix. ``STUDY`` is a script-local
+    convention. ``SKILL_ROUTING`` has no caller since ADR-0156 D2 (FRE-1577) deleted the
+    skill router; it stays because its budget role and stored cost rows still name it.
     """
 
     PRIMARY = "primary"  # Tier 1: orchestrator brain
@@ -48,7 +48,7 @@ class ModelRole(str, Enum):
     VISION = "vision"
     SPAN_EXTRACTION = "span_extraction"  # ADR-0138 D1 span classifier (FRE-1281)
     ENTAILMENT = "entailment"  # ADR-0138 D3(d) entailment judge (FRE-1286)
-    SKILL_ROUTING = "skill_routing"  # matrix-independent — AppConfig.skill_routing_model_key
+    SKILL_ROUTING = "skill_routing"  # no caller since FRE-1577; cost rows and budget keep it
     STUDY = "study"  # matrix-independent — scripts/study/categorizer.py
 
     @classmethod

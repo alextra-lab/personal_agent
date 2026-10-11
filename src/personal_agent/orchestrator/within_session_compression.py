@@ -150,17 +150,58 @@ def _extract_tail(
     return []
 
 
+def _split_kept_exchanges(
+    middle: list[dict[str, Any]], keep_call_ids: frozenset[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split the tool exchanges named by *keep_call_ids* out of the middle band.
+
+    An assistant message whose ``tool_calls`` mix kept and other calls is split in two: the
+    kept calls go with the kept results, the rest (and any text) stays in the middle. So each
+    side keeps every call paired with its result, and the sanitiser drops nothing.
+
+    Args:
+        middle: The middle-band messages, in order.
+        keep_call_ids: The tool-call ids to keep verbatim.
+
+    Returns:
+        ``(kept, rest)``, each in original order.
+    """
+    if not keep_call_ids:
+        return [], middle
+    kept: list[dict[str, Any]] = []
+    rest: list[dict[str, Any]] = []
+    for msg in middle:
+        calls = msg.get("tool_calls") if msg.get("role") == "assistant" else None
+        if calls:
+            mine = [c for c in calls if c.get("id") in keep_call_ids]
+            if mine:
+                kept.append({"role": "assistant", "content": "", "tool_calls": mine})
+                others = [c for c in calls if c.get("id") not in keep_call_ids]
+                if others:
+                    rest.append({**msg, "tool_calls": others})
+                elif msg.get("content"):
+                    rest.append({k: v for k, v in msg.items() if k != "tool_calls"})
+                continue
+        if msg.get("role") == "tool" and msg.get("tool_call_id") in keep_call_ids:
+            kept.append(msg)
+            continue
+        rest.append(msg)
+    return kept, rest
+
+
 def _assemble_compressed(
     head: list[dict[str, Any]],
     summary: str | None,
     pre_passed_middle: list[dict[str, Any]],
     tail: list[dict[str, Any]],
+    *,
+    kept: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble the final compressed message list.
 
-    Order: head → (summary marker if any) → pre-passed middle (only if
-    summariser was skipped or empty — when a summary exists, it replaces
-    the middle entirely) → tail.
+    Order: head → kept exchanges (ADR-0156 D2.4) → (summary marker if any) →
+    pre-passed middle (only if summariser was skipped or empty — when a summary
+    exists, it replaces the middle entirely) → tail.
 
     When a summary is present, the pre-passed middle is *not* re-appended:
     the LLM summary is the canonical compressed form.  When the
@@ -169,6 +210,7 @@ def _assemble_compressed(
     deterministic byte savings.
     """
     out: list[dict[str, Any]] = list(head)
+    out.extend(kept or [])
     if summary:
         out.append({"role": SUMMARY_ROLE, "content": summary})
     else:
@@ -359,6 +401,7 @@ async def compress_in_place(
     min_tail_tokens: int | None = None,
     max_tail_tokens: int | None = None,
     min_tail_turns: int = 4,
+    keep_call_ids: frozenset[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], WithinSessionCompressionRecord]:
     """Compress *messages* using head-middle-tail with deterministic pre-pass.
 
@@ -394,6 +437,9 @@ async def compress_in_place(
             settings.context_window_max_tokens)``.
         min_tail_turns: Hard floor on the number of trailing messages
             kept in the tail.
+        keep_call_ids: Tool-call ids whose exchanges stay verbatim: the ``read_skill``
+            calls of the current turn (ADR-0156 D2.4). They leave the middle before the
+            summariser sees it and come back between the head and the summary.
 
     Returns:
         Tuple of ``(compressed_messages, record)``.
@@ -430,7 +476,8 @@ async def compress_in_place(
     middle = messages[head_len:tail_idx_start]
 
     middle_tokens_in = estimate_messages_tokens(middle)
-    pre_passed, replacements = _pre_pass_tool_outputs(middle, threshold_tokens=threshold)
+    kept, rest = _split_kept_exchanges(middle, keep_call_ids)
+    pre_passed, replacements = _pre_pass_tool_outputs(rest, threshold_tokens=threshold)
 
     summariser_called = False
     summariser_duration_ms = 0
@@ -446,12 +493,23 @@ async def compress_in_place(
             summary = summary_text
             summariser_called = True
 
-    compressed = _assemble_compressed(head, summary, pre_passed, tail)
+    if summary is None and kept:
+        # No summary: the middle stays in its own order, pre-passed except the kept results.
+        pre_passed, replacements = _pre_pass_tool_outputs(middle, threshold_tokens=threshold)
+        pre_passed = [
+            original if original.get("tool_call_id") in keep_call_ids else rewritten
+            for original, rewritten in zip(middle, pre_passed, strict=True)
+        ]
+        kept = []
+    compressed = _assemble_compressed(head, summary, pre_passed, tail, kept=kept)
 
     head_tokens = estimate_messages_tokens(head)
     tail_tokens = estimate_messages_tokens(tail)
     if summary is not None:
-        middle_tokens_out = estimate_message_tokens({"role": SUMMARY_ROLE, "content": summary})
+        # The kept skill exchanges came out of the middle band, so they count against it.
+        middle_tokens_out = estimate_message_tokens(
+            {"role": SUMMARY_ROLE, "content": summary}
+        ) + estimate_messages_tokens(kept)
     else:
         middle_tokens_out = estimate_messages_tokens(pre_passed)
 

@@ -84,26 +84,8 @@ def _step_llm_call_patches(mock_llm: MagicMock) -> contextlib.ExitStack:
     """Common patch set to drive step_llm_call up to the llm_client.respond() boundary."""
     stack = contextlib.ExitStack()
     stack.enter_context(
-        patch("personal_agent.orchestrator.skills.get_skill_bodies",
-            return_value=("", ()),
-        )
+        patch("personal_agent.orchestrator.skills.assemble_skill_catalog", return_value="")
     )
-    stack.enter_context(
-        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value="")
-    )
-    stack.enter_context(
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
-            return_value="",
-        )
-    )
-    stack.enter_context(
-        patch(
-            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
-            return_value="",
-        )
-    )
-    stack.enter_context(patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}))
     stack.enter_context(
         patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm)
     )

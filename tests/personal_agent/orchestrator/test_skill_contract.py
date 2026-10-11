@@ -1,46 +1,15 @@
-"""Contract tests for skill frontmatter schema and tool-reference integrity.
+"""Every tool that a skill names in ``metadata.requires-tools`` is a real tool (ADR-0156 D4).
 
-Phase A (FRE-skill-routing): validates that every docs/skills/*.md file with
-frontmatter satisfies the schema contract defined in the plan:
-
-  Required fields:  name, description, when_to_use
-  Optional fields:  tools (list[str]), keywords (list[str]),
-                    canonical_patterns (list[str], ≤3)
-
-  known_bad_patterns left the skills (ADR-0156 D4, FRE-1574): no skill may hold it.
-
-  tools[] must resolve to registered tool names.
+D9 filters each worker type's skill catalog by this field, so a name that is not a tool would
+hide the skill from every worker. The S1 rules themselves (fields, name, description, body) are
+checked by ``tests/docs/test_skill_validator.py``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 import pytest
 
-from personal_agent.orchestrator.skills import _parse_frontmatter
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_SKILLS_DIR = Path(__file__).resolve().parents[3] / "docs" / "skills"
-
-# Files that intentionally have no frontmatter and are excluded from all checks
-_NO_FRONTMATTER_FILES = {"EMPIRICAL_TEST_RESULTS.md", "SKILL_TEMPLATE.md"}
-
-
-def _load_frontmatters() -> list[tuple[str, dict[str, Any]]]:
-    """Return (filename, frontmatter_dict) for all skill files that have frontmatter."""
-    results = []
-    for path in sorted(_SKILLS_DIR.glob("*.md")):
-        if path.name in _NO_FRONTMATTER_FILES:
-            continue
-        fm, _ = _parse_frontmatter(path)
-        if fm:
-            results.append((path.name, fm))
-    return results
+from personal_agent.orchestrator.skills import get_all_skills
 
 
 def _all_tool_names() -> set[str]:
@@ -88,49 +57,18 @@ def _all_tool_names() -> set[str]:
     }
 
 
-class TestRequiredFrontmatter:
-    """Every skill file with frontmatter has the three required fields."""
-
-    @pytest.mark.parametrize("filename,fm", _load_frontmatters())
-    def test_has_name(self, filename: str, fm: dict[str, Any]) -> None:
-        assert fm.get("name"), f"{filename}: 'name' is missing or empty"
-
-    @pytest.mark.parametrize("filename,fm", _load_frontmatters())
-    def test_has_description(self, filename: str, fm: dict[str, Any]) -> None:
-        assert fm.get("description"), f"{filename}: 'description' is missing or empty"
-
-    @pytest.mark.parametrize("filename,fm", _load_frontmatters())
-    def test_has_when_to_use(self, filename: str, fm: dict[str, Any]) -> None:
-        assert fm.get("when_to_use"), f"{filename}: 'when_to_use' is missing or empty"
+_SKILLS = sorted(get_all_skills().items())
 
 
-class TestToolsFieldIntegrity:
-    """Every entry in the optional tools: list resolves to a registered tool."""
-
-    @pytest.mark.parametrize("filename,fm", _load_frontmatters())
-    def test_tools_reference_real_tools(self, filename: str, fm: dict[str, Any]) -> None:
-        tools: list[str] = fm.get("tools") or []
-        if not tools:
-            pytest.skip(f"{filename}: no tools field")
-        registered = _all_tool_names()
-        for tool_name in tools:
-            assert tool_name in registered, (
-                f"{filename}: tools[] entry '{tool_name}' is not a registered tool. "
-                f"Registered: {sorted(registered)}"
-            )
+@pytest.mark.parametrize(("name", "skill"), _SKILLS, ids=[n for n, _ in _SKILLS])
+def test_requires_tools_names_real_tools(name: str, skill: object) -> None:
+    registered = _all_tool_names()
+    for tool_name in getattr(skill, "requires_tools"):
+        assert tool_name in registered, f"{name}: requires-tools names unknown tool {tool_name!r}"
 
 
-class TestBoundedPatternFields:
-    """canonical_patterns ≤ 3 entries; no known_bad_patterns (FRE-1574)."""
-
-    @pytest.mark.parametrize("filename,fm", _load_frontmatters())
-    def test_canonical_patterns_bounded(self, filename: str, fm: dict[str, Any]) -> None:
-        patterns: list[str] = fm.get("canonical_patterns") or []
-        assert len(patterns) <= 3, (
-            f"{filename}: canonical_patterns has {len(patterns)} entries (max 3)"
-        )
-
-    @pytest.mark.parametrize("filename,fm", _load_frontmatters())
-    def test_no_known_bad_patterns(self, filename: str, fm: dict[str, Any]) -> None:
-        """ADR-0156 D4 / FRE-1574 AC-7: the field left the skills with the global check."""
-        assert "known_bad_patterns" not in fm, f"{filename}: known_bad_patterns is retired"
+def test_the_telemetry_skills_require_bash() -> None:
+    """A positive control: the parser reads the field (a broken parser yields no names)."""
+    skills = get_all_skills()
+    assert skills["query-elasticsearch"].requires_tools == ("bash",)
+    assert skills["sequential-thinking"].requires_tools == ()

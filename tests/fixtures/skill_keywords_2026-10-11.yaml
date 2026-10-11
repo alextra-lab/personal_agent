@@ -1,0 +1,344 @@
+# ADR-0156 AC-7 (FRE-1577): every `keywords` entry of every skill on 2026-10-11, saved
+# before T5 deleted the field. The AC-2 test sends all of them in one user message and
+# checks that the system prompt does not change. Do not edit: it is a fixed record.
+artifact-design:
+- artifact
+- html artifact
+- rich artifact
+- artifact design
+- sealed box
+- curated toolkit
+- lib shelf
+- katex
+- math typesetting
+- latex
+- chart.js
+- data visualization
+- three.js
+- 3-d
+- webgl
+- highlight.js
+- syntax highlighting
+- code block
+- paged.js
+- pagination
+- book layout
+- print layout
+- drop cap
+- typography
+- font-feature-settings
+- hyphenation
+- text-wrap balance
+- column-count
+- portability
+- export standalone
+- data uri
+- never bake secrets
+fetch-url:
+- 'fetch '
+- https://
+- http://
+- readme on
+- github.com
+- anthropic.com
+- current pricing
+- what's on the page
+- check the url
+get_location:
+- near me
+- nearby
+- around here
+- in my city
+- local
+- where am I
+- my location
+- my timezone
+- what time is it here
+- restaurants near
+- weather here
+- my area
+- close to me
+- in my area
+- where I am
+- local time
+- local events
+- commute
+infrastructure-health:
+- infrastructure health
+- services healthy
+- postgres reachable
+- neo4j
+- backend services
+- health check
+- all services
+- is postgres
+- are neo4j
+- infra health
+- reachable
+- check infrastructure
+list-directory:
+- list files
+- files in /
+- what's in /
+- yaml files
+- python files
+- how many files
+- under /app
+- in /app/
+- /app/config
+- /app/src
+- directory
+- folder /
+- how many yaml
+- how many python
+mermaid-diagrams:
+- mermaid
+- diagram
+- flowchart
+- flow chart
+- sequence diagram
+- sequence chart
+- state machine
+- state diagram
+- ER diagram
+- entity relationship
+- gantt
+- gantt chart
+- class diagram
+- class hierarchy
+- pie chart
+- mindmap
+- mind map
+- C4 diagram
+- C4 architecture
+- system context diagram
+- container diagram
+- component diagram
+- git graph
+- git flow
+- architecture diagram
+- visualize
+- visualise
+- sketch
+- draw
+- graph
+- schema diagram
+- timeline
+- decision tree
+- swimlane
+- show me a diagram
+- can you draw
+- make a chart
+- map out
+- model
+- show the flow
+- data flow
+- dependency diagram
+neo4j-direct:
+- cypher
+- bolt://
+- entity nodes
+- entity count
+- turn nodes
+- knowledge graph state
+- graph state
+- query the graph
+- graph query
+- graph directly
+- connect to neo4j
+- neo4j query
+- query neo4j
+- discusses relationship
+- most recently created
+personal-history-recall:
+- what did we
+- what did I
+- we talked about
+- we discussed
+- did we
+- remind me what
+- last time we
+- my conversation
+- my history
+- I told you
+- I mentioned
+- I asked
+- last week
+- yesterday
+- earlier this week
+- days ago
+query-elasticsearch:
+- logs
+- ' log'
+- traces
+- telemetry
+- what happened
+- recent errors
+- app errors
+- check your logs
+- show me what
+- agent-log
+- trace_id
+- kibana
+- grafana
+- query_elasticsearch
+- loop gate
+- litellm
+- tool_call
+- last hour
+- last day
+- 24 hour
+- errors in the
+- event_type
+- esql
+- agent-logs
+- loop trace
+- warn_consecutive
+- block_consecutive
+- query elasticsearch
+- search elasticsearch
+query-tempo:
+- trace
+- latency
+- latencies
+- p50
+- p90
+- p95
+- percentile
+- response time
+- span
+- timing
+- what took so long
+- root span
+- latency breakdown
+- trace_id
+- tempo
+- trace retrieval
+- span breakdown
+- execution trace
+- query tempo
+- search traces
+- trace query
+- span hierarchy
+- trace analysis
+- duration by span
+- critical path
+read-write:
+- list files
+- files in /
+- what's in /
+- yaml files
+- python files
+- how many files
+- under /app
+- in /app/
+- /app/config
+- /app/src
+- directory
+- folder /
+- how many yaml
+- how many python
+run-python:
+- run python
+- python script
+- calculate using python
+- write a python
+self-telemetry:
+- token
+- token usage
+- token stats
+- prompt tokens
+- completion tokens
+- cache hit
+- cache rate
+- prompt cache
+- cache read
+- cache_creation
+- cost
+- spend
+- cost_usd
+- latency
+- latency_ms
+- duration
+- how fast
+- how long
+- slow
+- p95
+- response time
+- model usage
+- model calls
+- LLM calls
+- litellm
+- model_call
+- cloud path
+- local path
+- which model
+- success rate
+- interaction
+- outcomes
+- captures
+- reflection
+- my logs
+- my stats
+- my telemetry
+- my performance
+- self-introspect
+- self telemetry
+- self-diagnosis
+- how am I doing
+- check myself
+sequential-thinking:
+- think step by step
+- walk me through this step by step
+- reason through this
+- break this problem down
+- think this through carefully
+system-diagnostics:
+- top 10 process
+- processes by memory
+- listening ports
+- ports are listening
+- which ports
+- container ports
+- vmstat
+- system has been doing
+- load swap
+- io activity
+- network connections
+- iostat
+system-metrics:
+- cpu load
+- cpu usage
+- memory is the agent
+- disk space
+- disk usage
+- load average
+- how much memory
+- current cpu
+- is disk
+turn-forensics:
+- why was that slow
+- why so slow
+- context jump
+- context blew up
+- token jump
+- replay trace
+- replay the turn
+- what did the turn do
+- turn forensics
+- diagnose the turn
+- where did the time go
+- trace_id
+web-search:
+- which brand
+- where can i buy
+- where to buy
+- is it still
+- is x still
+- what is the best
+- what's the best
+- which is better
+- recommend a
+- is it true that
+- is it high in
+- does it cause

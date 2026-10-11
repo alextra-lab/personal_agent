@@ -64,7 +64,6 @@ SECRET_KEYS = frozenset(
 REQUIRED_HOST_ENV = ("POSTGRES_PASSWORD", "NEO4J_PASSWORD", "AGENT_OWNER_EMAIL")
 # Settings that shape the primary's prompt. They pass through from the caller's environment when set.
 PASSTHROUGH_KEYS = (
-    "AGENT_SKILL_ROUTING_MODE",
     "AGENT_OWNER_NAME",
     "AGENT_CONVERSATION_MAX_HISTORY_MESSAGES",
     "AGENT_LOCATION_ENABLED",
@@ -151,7 +150,6 @@ def gateway_env(host_env: Mapping[str, str]) -> tuple[dict[str, str], frozenset[
         "AGENT_GATEWAY_AUTH_ENABLED": "false",
         "AGENT_MCP_GATEWAY_ENABLED": "false",
         "AGENT_PRIMITIVE_TOOLS_ENABLED": "true",
-        "AGENT_PREFER_PRIMITIVES": "true",
         "AGENT_DELEGATION_ENABLED": "false",
         "AGENT_EXPANSION_ENABLED": "false",
     }

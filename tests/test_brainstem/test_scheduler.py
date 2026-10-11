@@ -1224,7 +1224,6 @@ class TestSchedulerRootSpans:
         scheduler.feedback_poller = None
         scheduler._linear_client = None
         scheduler.quality_monitor_enabled = False
-        scheduler.skill_routing_threshold_monitor_enabled = False
 
         async def stop_after_first_sleep(_: float) -> None:
             scheduler.running = False

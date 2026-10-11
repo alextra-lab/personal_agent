@@ -127,10 +127,7 @@ class TestEvidenceReachesTheCapture:
     """End to end through ``step_llm_call``: the record lands, and it names one call."""
 
     async def _run(self, ctx: object, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-        from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
-
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
 
         client = _mock_llm()
         session = MagicMock()

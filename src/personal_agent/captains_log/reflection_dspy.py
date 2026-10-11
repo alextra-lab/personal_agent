@@ -175,7 +175,7 @@ try:
             desc=(
                 "File path + symbol of the text to edit, if known. "
                 "Example: 'src/personal_agent/tools/fetch_url.py::DESCRIPTION' or "
-                "'docs/skills/fetch_url.md'. Empty string if had_errors is False or unknown."
+                "'docs/skills/query-tempo/SKILL.md'. Empty string if had_errors is False or unknown."
             )
         )
         # FRE-328 follow-up — capability gap recognition during reflection

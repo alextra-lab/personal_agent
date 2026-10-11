@@ -221,7 +221,6 @@ def render_content(
     error_detail: ToolErrorDetail | None,
     max_result_tokens: int = RESULT_TOKEN_CEILING,
     truncation_next_action: str = "Narrow the request and call again.",
-    extra: Mapping[str, object] | None = None,
 ) -> str:
     """Build the tool message content the model reads (ADR-0156 D6.1, D6.4).
 
@@ -230,7 +229,6 @@ def render_content(
         error_detail: The failure, or ``None`` for a success.
         max_result_tokens: The tool's result bound. Never above 25,000.
         truncation_next_action: Told to the model when the result is truncated.
-        extra: Harness keys added to a success payload (for example a skill hint).
 
     Returns:
         JSON text in the contract shape, within the token bound.
@@ -243,8 +241,6 @@ def render_content(
         payload.update(output)
     elif output is not None:
         payload["result"] = output
-    if extra:
-        payload.update(extra)
     content = json.dumps(payload, default=str)
     return _bound_content(
         content, min(max_result_tokens, RESULT_TOKEN_CEILING), truncation_next_action

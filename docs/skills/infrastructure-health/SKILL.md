@@ -1,0 +1,92 @@
+---
+name: infrastructure-health
+description: Probes the backend services (Postgres, Elasticsearch, Neo4j, Redis) for reachability with
+  live checks. Use when the task is to check whether the backend services are healthy or reachable, before
+  saying that a service is up or down.
+metadata:
+  requires-tools: bash
+---
+
+# infrastructure-health — Probe all infrastructure services for reachability
+
+## Rules
+
+Probe the live endpoints with bash curl before concluding a service is healthy or degraded.
+
+**Status:** Primary path (FRE-263, 2026-04-28). Legacy `infra_health` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+
+**Category:** `system_read` · **Risk:** none · **Approval:** a plain `bash curl` GET of a listed health endpoint runs without asking (FRE-1583); `psql`, `redis-cli` and `run_python(network=True)` ask the user (ADR-0156 D8)
+
+> **Container vs host:** Hostnames (`postgres`, `neo4j`, `elasticsearch`, `redis`) are Docker DNS names that only resolve from **inside** the `cloud-sim` network. From the VPS host shell, use `localhost:<port>` instead.
+
+## Single-service checks — preferred path (bash)
+
+For "is Postgres reachable?" use a real connection, not a TCP probe to port 5432:
+
+```bash
+# Postgres — AGENT_DATABASE_URL uses postgresql+asyncpg:// which psql cannot parse.
+# Strip the driver specifier first:
+# ask: the shell expands $(…) and $AGENT_DATABASE_URL here, so this is not a plain command and asks for approval.
+bash psql "$(echo $AGENT_DATABASE_URL | sed 's|postgresql+asyncpg|postgresql|')" -c 'SELECT 1'
+```
+
+> **`pg_isready` is NOT installed** on the agent image. Do not use it.
+> Do NOT probe Postgres with `curl http://postgres:5432` — port 5432 is the wire protocol, not HTTP; the response is always garbage and tells you nothing useful.
+
+```bash
+# Elasticsearch
+bash curl -fsS http://elasticsearch:9200/_cluster/health | grep '"status"'
+
+# Redis
+# ask: no allow rule covers redis-cli (FRE-1572), so this asks for approval.
+bash redis-cli -h redis ping
+
+# Neo4j HTTP
+bash curl -fsS http://neo4j:7474/
+```
+
+## Multi-service check — run_python fallback
+
+Use `run_python(network=True)` only when the prompt explicitly asks for all services at once. `run_python` depends on Docker-in-Docker socket availability and may fail when the Docker daemon is not mounted into the gateway container.
+
+```python
+import socket, json, urllib.request, urllib.error
+
+def tcp(host, port, timeout=3):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return {"reachable": True}
+    except OSError as e:
+        return {"reachable": False, "error": str(e)}
+
+def http(url, timeout=5):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return {"reachable": True, "status": r.status}
+    except urllib.error.HTTPError as e:
+        return {"reachable": True, "status": e.code}
+    except Exception as e:
+        return {"reachable": False, "error": str(e)}
+
+result = {
+    "postgres":      tcp("postgres", 5432),
+    "neo4j_http":    http("http://neo4j:7474"),
+    "elasticsearch": http("http://elasticsearch:9200/_cluster/health"),
+    "redis":         tcp("redis", 6379),
+}
+result["all_reachable"] = all(v.get("reachable") for v in result.values())
+print(json.dumps(result, indent=2))
+```
+
+## Stop rules
+
+- Do not infer "service unreachable" from a curl TCP probe to a non-HTTP port.
+- If `run_python` fails to start (Docker unavailable), surface that clearly and fall back to single-service bash probes.
+- `pg_isready` is not installed — do not attempt it.
+
+## Governance
+
+- `bash curl`: a `GET` of a listed health or telemetry read endpoint runs without asking in NORMAL/ALERT/DEGRADED. Any other host, path or method asks (FRE-1583). For Neo4j only `GET http://neo4j:7474/` runs without asking.
+- `bash psql`, `bash redis-cli`: ask the user (FRE-1572), in every mode.
+- `run_python(network=True)`: asks the user in every mode (ADR-0156 D8.6).
+- LOCKDOWN: bash and run_python both disabled.

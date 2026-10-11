@@ -2138,7 +2138,6 @@ async def chat(
     message: str,
     session_id: str | None = None,
     model: str | None = None,
-    skill_routing_mode: str | None = None,
     channel: str = "CHAT",
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
@@ -2159,7 +2158,6 @@ async def chat(
             selection store (unlike the PWA's stored-wins asymmetry, a CLI flag
             is a direct instruction, not a stale-reload risk). Omitted → the
             session's existing selection (or the binding default) governs.
-        skill_routing_mode: Override skill routing mode if provided
         channel: Request channel — pass "EVAL" from eval/benchmark harnesses to
             prevent side-effecting tools (e.g. create_linear_issue) from executing.
         request_user: Resolved user identity (injected by FastAPI)
@@ -2179,7 +2177,6 @@ async def chat(
             message=message,
             session_id=session_id,
             model=model,
-            skill_routing_mode=skill_routing_mode,
             channel=channel,
             request_user=request_user,
             db=db,
@@ -2198,7 +2195,6 @@ async def _chat_impl(
     message: str,
     session_id: str | None,
     model: str | None,
-    skill_routing_mode: str | None,
     channel: str,
     request_user: RequestUser,
     db: AsyncSession,
@@ -2211,7 +2207,6 @@ async def _chat_impl(
         message: User's message
         session_id: Optional existing session ID (creates new if not provided)
         model: Optional ``primary`` deployment key override — see ``chat``.
-        skill_routing_mode: Override skill routing mode if provided
         channel: Request channel — pass "EVAL" from eval/benchmark harnesses to
             prevent side-effecting tools (e.g. create_linear_issue) from executing.
         request_user: Resolved user identity (injected by FastAPI)
@@ -2310,10 +2305,7 @@ async def _chat_impl(
     # run_gateway_pipeline executes — unlike /chat/stream, this path is not a
     # separate asyncio.Task, so the ordering here is the only thing that
     # decides what Stage 7 sees.
-    from personal_agent.config.selection import (  # noqa: PLC0415
-        set_current_selection,
-        set_skill_routing_mode,
-    )
+    from personal_agent.config.selection import set_current_selection  # noqa: PLC0415
 
     explicit_selection: str | None = None
     if model is not None:
@@ -2350,9 +2342,6 @@ async def _chat_impl(
         )
 
     set_current_selection({"primary": resolved_selection})
-
-    if skill_routing_mode:
-        set_skill_routing_mode(skill_routing_mode)
 
     # --- Phase: gateway_pipeline ---
     # Compute expansion budget from brainstem sensors before pipeline.

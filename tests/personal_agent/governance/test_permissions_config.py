@@ -80,7 +80,7 @@ def test_ac7_a_grep_for_a_former_bad_pattern_is_allowed() -> None:
 
 def test_ac7_no_skill_holds_known_bad_patterns() -> None:
     skills = Path(__file__).resolve().parents[3] / "docs" / "skills"
-    holders = [p.name for p in skills.glob("*.md") if "known_bad_patterns:" in p.read_text()]
+    holders = [str(p) for p in skills.glob("*/SKILL.md") if "known_bad_patterns:" in p.read_text()]
     assert holders == []
 
 

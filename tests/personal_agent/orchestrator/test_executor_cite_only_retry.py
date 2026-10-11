@@ -146,9 +146,7 @@ def _prepare_retry(ctx: ExecutionContext) -> None:
 async def test_ac3_the_retry_pins_none_keeps_the_tools_and_grants_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from personal_agent.config import settings
 
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
     ctx = _ctx()
     first = await _call(ctx, _client(_tool_call_response()))
     _add_tool_result(ctx)
@@ -171,9 +169,7 @@ async def test_ac3_the_retry_pins_none_keeps_the_tools_and_grants_nothing(
 @pytest.mark.asyncio
 async def test_a_normal_pass_leaves_tool_choice_unpinned(monkeypatch: pytest.MonkeyPatch) -> None:
     """The seeded negative: the same second pass without a retry pins nothing."""
-    from personal_agent.config import settings
 
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
     ctx = _ctx()
     await _call(ctx, _client(_tool_call_response()))
     _add_tool_result(ctx)
@@ -207,9 +203,7 @@ async def test_ac3_a_retry_near_the_ceiling_gets_no_budget_countdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A countdown inviting "another round" contradicts a reply that cannot call a tool."""
-    from personal_agent.config import settings
 
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
     ctx = _ctx()
     await _call(ctx, _client(_tool_call_response()))
     _add_tool_result(ctx)
@@ -227,9 +221,7 @@ async def test_a_normal_pass_near_the_ceiling_gets_the_budget_countdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The seeded negative: the same count outside a retry does inject the countdown."""
-    from personal_agent.config import settings
 
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
     ctx = _ctx()
     await _call(ctx, _client(_tool_call_response()))
     _add_tool_result(ctx)
@@ -250,9 +242,7 @@ async def test_ac3_a_tool_call_on_the_retry_is_dropped_not_executed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A non-native strategy cannot carry the pin, and a backend may ignore it."""
-    from personal_agent.config import settings
 
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
     ctx = _ctx()
     await _call(ctx, _client(_tool_call_response()))
     _add_tool_result(ctx)
@@ -270,9 +260,7 @@ async def test_ac3_a_tool_call_on_the_retry_is_dropped_not_executed(
 @pytest.mark.asyncio
 async def test_a_tool_call_on_a_normal_pass_is_executed(monkeypatch: pytest.MonkeyPatch) -> None:
     """The seeded negative: the same response outside a retry goes to tool execution."""
-    from personal_agent.config import settings
 
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
     ctx = _ctx()
     await _call(ctx, _client(_tool_call_response()))
     _add_tool_result(ctx)
@@ -299,7 +287,6 @@ async def test_ac5_a_heavy_selection_forces_nothing(monkeypatch: pytest.MonkeyPa
     from personal_agent.config import settings
     from personal_agent.orchestrator.executor import _record_grounding
 
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
     monkeypatch.setattr(settings, "grounding_verification_mode", "enforce")
     ctx = _ctx()
     ctx.answering_model_key = "model-under-test"

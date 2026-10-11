@@ -3,7 +3,7 @@
 The unit tests in tests/personal_agent/llm_client/test_prompt_identity.py prove the
 derive_orchestrator_prompt_identity helper itself computes correctly. They do not
 prove step_llm_call passes it the right values — that is what these tests drive,
-following the mock-llm_client.respond pattern from test_skill_index_split.py.
+following the mock-llm_client.respond pattern.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from personal_agent.request_gateway.memory_status import RenderStageReport
 
 @pytest.fixture(autouse=True)
 def _reset_executor_tool_registry() -> object:
-    """See test_skill_index_split.py — same leak, same reset."""
+    """Reset the executor's cached tool registry: a patched registry must not leak."""
     import personal_agent.orchestrator.executor as _ex
 
     _ex._tool_registry = None
@@ -62,13 +62,7 @@ async def _drive(
     memory_section_text: str = "",
 ) -> object:
     """Run step_llm_call once; return the PromptIdentity passed to llm_client.respond."""
-    from personal_agent.config import settings
     from personal_agent.telemetry.trace import TraceContext
-
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-    monkeypatch.setattr(settings, "skill_routing_mode", "keyword")
-    monkeypatch.setattr(settings, "skill_routing_model_key", "")
-    monkeypatch.setattr(settings, "skill_nudge_enabled", False)
 
     memory_context = [{"type": "entity", "name": "placeholder"}] if memory_section_text else None
     ctx = _make_ctx(user_message=user_message, memory_context=memory_context)
@@ -79,10 +73,6 @@ async def _drive(
     mock_session.get_messages = AsyncMock(return_value=[])
 
     with (
-        patch(
-            "personal_agent.orchestrator.skills.get_all_skills",
-            return_value={},
-        ),
         patch(
             "personal_agent.llm_client.factory.get_llm_client",
             return_value=mock_llm,

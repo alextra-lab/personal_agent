@@ -21,10 +21,11 @@ from typing import Any
 import pytest
 
 from personal_agent.governance.permissions import evaluate_permission, load_permission_rules
+from personal_agent.orchestrator.skills import get_all_skills
 
 _SKILLS = Path(__file__).resolve().parents[3] / "docs" / "skills"
-_ELASTICSEARCH = (_SKILLS / "query-elasticsearch.md").read_text(encoding="utf-8")
-_TEMPO = (_SKILLS / "query-tempo.md").read_text(encoding="utf-8")
+_ELASTICSEARCH = (_SKILLS / "query-elasticsearch" / "SKILL.md").read_text(encoding="utf-8")
+_TEMPO = (_SKILLS / "query-tempo" / "SKILL.md").read_text(encoding="utf-8")
 _RULES = load_permission_rules()
 
 
@@ -66,16 +67,6 @@ def _recipe_jq_program(block: str) -> str:
     return match.group(1)
 
 
-def _frontmatter_keywords(text: str) -> list[str]:
-    block = re.search(r"^keywords:\n((?:  .*\n)+)", text, re.MULTILINE)
-    assert block is not None
-    return [
-        line.strip()[2:].strip().strip('"')
-        for line in block.group(1).splitlines()
-        if line.strip().startswith("- ")
-    ]
-
-
 # --------------------------------------------------------------------------- AC-1
 
 
@@ -90,15 +81,18 @@ def test_checker_flags_a_retired_field_line() -> None:
     assert _retired_field_lines("`duration_ms` is retired (ADR-0129).") == []
 
 
+def _description(name: str) -> str:
+    return get_all_skills()[name].description.lower()
+
+
 def test_elasticsearch_skill_sends_latency_to_tempo() -> None:
+    """The model chooses from the catalog descriptions (ADR-0156 D2, FRE-1577)."""
     assert "query-tempo" in _ELASTICSEARCH
-    words = _frontmatter_keywords(_ELASTICSEARCH)
-    assert "latency" not in words
-    assert "p95" not in words
+    assert "latency" not in _description("query-elasticsearch")
 
 
-def test_tempo_skill_keeps_the_latency_keyword() -> None:
-    assert re.search(r"^  - latency$", _TEMPO, re.MULTILINE)
+def test_tempo_description_names_latency() -> None:
+    assert "latency" in _description("query-tempo")
 
 
 # --------------------------------------------------------------------------- scope 4
@@ -134,24 +128,6 @@ def test_tempo_recipe_names_both_caps_and_they_agree() -> None:
     assert re.search(r"--data-urlencode 'spss=\d+'", block)
     assert "gen_ai.operation.name" in block
     assert "gen_ai.request.model" in block
-
-
-def test_latency_question_routes_to_tempo_before_self_telemetry() -> None:
-    """The AC-4 sentence and a bare "p95 latency" rank query-tempo first (skills.py routing)."""
-    docs = {
-        name: _frontmatter_keywords((_SKILLS / f"{name}.md").read_text(encoding="utf-8"))
-        for name in ("query-tempo", "query-elasticsearch", "self-telemetry")
-    }
-    for message in (
-        "Analyze the model call latencies over the last 24 hours. "
-        "Compare p50 and p90 by model role.",
-        "show p95 latency",
-    ):
-        lowered = message.lower()
-        hits = {n: sum(1 for kw in kws if kw.lower() in lowered) for n, kws in docs.items()}
-        # Ties keep file order, and "query-tempo" sorts before "self-telemetry".
-        assert hits["query-tempo"] >= hits["self-telemetry"], (message, hits)
-        assert hits["query-tempo"] > hits["query-elasticsearch"], (message, hits)
 
 
 # --------------------------------------------------------------------------- AC-2

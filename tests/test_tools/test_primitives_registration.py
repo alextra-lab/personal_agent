@@ -100,14 +100,11 @@ class TestLegacyToolsDeleted:
     They can no longer be registered under any setting combination.
     """
 
-    @pytest.mark.parametrize(
-        "primitive,prefer", [(False, False), (True, False), (False, True), (True, True)]
-    )
+    @pytest.mark.parametrize("primitive", [False, True])
     def test_legacy_tools_absent_under_all_flag_combinations(
-        self, monkeypatch: pytest.MonkeyPatch, primitive: bool, prefer: bool
+        self, monkeypatch: pytest.MonkeyPatch, primitive: bool
     ) -> None:
         monkeypatch.setattr(settings, "primitive_tools_enabled", primitive)
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", prefer)
 
         from personal_agent.tools import register_mvp_tools
         from personal_agent.tools.registry import ToolRegistry
@@ -136,5 +133,6 @@ class TestLegacyToolsDeleted:
             "fetch_url",
             "perplexity_query",
             "create_linear_issue",
+            "read_skill",  # ADR-0156 D3.3: no flag gates the skill loader
         ):
             assert name in tool_names, f"{name} should always be present"

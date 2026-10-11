@@ -40,7 +40,7 @@ The orchestrator prompt is assembled in `executor.py:1835–2244`. Assembly orde
 |----------------|---------|------------|---------------------|
 | `deployment_context` | VPS/cloud deployment env vars | SEMI_STATIC | 1840–1850 |
 | `operator_stanza` | Owner identity + instructions | SEMI_STATIC | 1852–1858 |
-| `skill_index` | Active skill metadata + matched skill bodies from `docs/skills/*.md` | SEMI_STATIC | 1860–1993 |
+| `skill_index` | The skill catalog: one name-and-description line per `docs/skills/<name>/SKILL.md` (ADR-0156 D2) | SEMI_STATIC | 1860–1993 |
 | `memory_section` | Recalled memory nodes for this turn | DYNAMIC | 2126–2149 |
 | `tool_awareness` | Tool list + capabilities from `get_tool_awareness_prompt()` | SEMI_STATIC | 2151–2171 |
 | `tool_use_rules` | `_TOOL_RULES` + `TOOL_USE_PROMPT_INJECTED` | STATIC | 2171–2194 |
@@ -162,10 +162,10 @@ Static prefix ends at: `skill_index` (before `memory_section`).
 
 ---
 
-## Skill Documents (`docs/skills/*.md`)
+## Skill Documents (`docs/skills/<name>/SKILL.md`)
 
 ### `{skill_name}` ({tokens} tok)
-**Source:** `docs/skills/{file}.md`
+**Source:** `docs/skills/{skill_name}/SKILL.md`
 ...
 ```
 

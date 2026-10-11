@@ -3,7 +3,7 @@
 # Tier `canonical` (7): the ADR-0084 §Open-decisions-3 pedagogical turn types — the M2
 # gate set. Tier `coverage` (11): realistic multi-tool queries, pedagogically framed,
 # whose UNION of expected skills/tools spans the toolbox (enforced by
-# tests/evaluation/test_fre453_canonical_evalset.py against docs/skills/ and
+# tests/evaluation/test_fre453_canonical_evalset.py against docs/skills/<name>/ and
 # config/governance/tools.yaml).
 #
 # EVERY `expected:` block is a HYPOTHESIS (RESULT_TYPE_TAXONOMY_SPEC §5 "[proposed — M2
@@ -26,9 +26,10 @@ coverage:
   # have no natural pedagogical case yet; expand_tool_result is internal plumbing the
   # model invokes opportunistically, not user-routable.
   # artifact-design (FRE-529, ADR-0089 A4) is runtime-guidance source-of-truth for the
-  # artifact-generation sub-agent, distilled into _HTML_GENERATION_SYSTEM_PROMPT; it is
-  # not a user-routable skill and has no skill-loading mechanism wired yet, so no case.
-  allowlist_skills: [get_location, artifact-design]
+  # artifact-generation sub-agent, distilled into _HTML_GENERATION_SYSTEM_PROMPT; it has
+  # no case yet. ADR-0156 (FRE-1577): 8 skills were folded into tool descriptions and the
+  # seshat-* skills moved to docs/external-skills/, so cases no longer claim them.
+  allowlist_skills: [artifact-design]
   # edit (ADR-0156 D7.1, FRE-1576) has no natural pedagogical case yet. query_telemetry is
   # offered to the primary since FRE-1576 (D7.2) and is claimed by infra_triage_pedagogy.
   allowlist_tools: [get_location, get_library_docs, expand_tool_result, edit]
@@ -224,7 +225,7 @@ cases:
       orchestration_event: delegate_called
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [read-write, list-directory, sequential-thinking]
+      skills: [sequential-thinking]
       tools_any_of: [read]
     rubric:
       - "Bounded discovery offloaded; synthesis and explanation kept by the primary."
@@ -274,7 +275,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [infrastructure-health, system-diagnostics, system-metrics, bash]
+      skills: [infrastructure-health, system-diagnostics, system-metrics]
       tools_any_of: [bash, query_telemetry]
     rubric:
       - "Triage ORDERING has a rationale (blast radius first, then dependencies…)."
@@ -297,7 +298,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: [cross_connection_made]
       tools_used_nonempty: true
-      skills: [fetch-url, web-search]
+      skills: []
       tools_any_of: [web_search, fetch_url, perplexity_query]
     rubric:
       - "Claims carry citations / sources I can check."
@@ -321,7 +322,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [run-python, query-elasticsearch]
+      skills: [query-elasticsearch]
       tools_any_of: [run_python]
     rubric:
       - >-
@@ -345,7 +346,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: [concept_extracted]
       tools_used_nonempty: true
-      skills: [mermaid-diagrams, read-write]
+      skills: [mermaid-diagrams]
       tools_any_of: [write_file, write]
     rubric:
       - "Diagram reflects the actual seven stages in order."
@@ -367,7 +368,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: [open_thread_preserved]
       tools_used_nonempty: true
-      skills: [seshat-sessions, seshat-observations, personal-history-recall]
+      skills: []
       tools_any_of: [recall_personal_history, notes_search]
     rubric:
       - "Threads come from real session history, not confabulated."
@@ -390,7 +391,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [seshat-knowledge, neo4j-direct, personal-history-recall]
+      skills: [neo4j-direct]
       tools_any_of: [recall_personal_history]
     rubric:
       - "Answer is graph-backed (cites what the substrate holds), not session-only."
@@ -435,7 +436,7 @@ cases:
       model_path: delegate
       orchestration_event: primary_handled
       pedagogical_outcomes: []
-      skills: [seshat-delegate]
+      skills: []
     rubric:
       - "The package carries learner context (level, goals), not a generic brief."
       - "Scope and deliverable for the external agent are explicit."

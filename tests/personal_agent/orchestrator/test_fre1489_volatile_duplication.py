@@ -96,12 +96,8 @@ async def _drive_loop(
     Returns:
         One wire-form message list per call, in call order.
     """
-    from personal_agent.config import settings
     from personal_agent.orchestrator.executor import build_wire_messages, step_llm_call
     from personal_agent.telemetry.trace import TraceContext
-
-    # Keep the volatile block deterministic: skill routing contributes no bytes here.
-    monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
 
     client = MagicMock()
     client.model_configs = {}

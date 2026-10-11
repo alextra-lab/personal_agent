@@ -294,13 +294,9 @@ def assemble_route_trace(
     planner_input_chars = getattr(planner_run, "input_chars", None)
     ctx_budget = getattr(ctx, "expansion_budget", None)
 
-    # FRE-1291: ctx.loaded_skills is written only by model_decided's pre-load path and the
-    # read_skill tool handler — it is also the dedup key those two paths (and the hybrid/
-    # keyword get_skill_bodies() call) read to suppress re-injecting an already-loaded body,
-    # so hybrid/keyword must never write to it. The FRE-1004 evidence record already carries
-    # what those two modes injected, gated on proof the block reached the model
-    # (turn_evidence.py's block_reached_input) — union it in rather than duplicating that
-    # gating here.
+    # ADR-0156 D2 (FRE-1577): ctx.loaded_skills holds the skills whose body read_skill
+    # returned in this turn, the only way a body reaches the model now. The FRE-1004
+    # evidence record's skill_bodies stays in the union for turns recorded before that.
     _turn_evidence = getattr(ctx, "turn_evidence", None)
     _assembled_context = getattr(_turn_evidence, "assembled_context", None)
     _evidence_skill_bodies = getattr(_assembled_context, "skill_bodies", None) or []

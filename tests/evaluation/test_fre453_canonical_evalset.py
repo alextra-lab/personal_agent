@@ -45,8 +45,6 @@ DATASET_PATH = REPO_ROOT / "scripts" / "eval" / "fre453_canonical_evalset" / "da
 SKILLS_DIR = REPO_ROOT / "docs" / "skills"
 TOOLS_YAML = REPO_ROOT / "config" / "governance" / "tools.yaml"
 
-# Non-skill markdown files living in docs/skills/.
-_SKILL_FILE_EXCLUSIONS = {"SKILL_TEMPLATE", "EMPIRICAL_TEST_RESULTS"}
 
 # The 7 required canonical turn types (ADR-0084 §Open decisions §3 / spec §7.2).
 _CANONICAL_IDS = {
@@ -182,9 +180,7 @@ class TestUnionCoverage:
 
     def test_all_repo_skills_claimed_or_allowlisted(self, evalset: EvalSet) -> None:
         """Every docs/skills skill is claimed by a case or allowlisted."""
-        repo_skills = {
-            p.stem for p in SKILLS_DIR.glob("*.md") if p.stem not in _SKILL_FILE_EXCLUSIONS
-        }
+        repo_skills = {p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md")}
         uncovered = (
             repo_skills - self._claimed_skills(evalset) - set(evalset.coverage.allowlist_skills)
         )
@@ -203,8 +199,8 @@ class TestUnionCoverage:
             assert family in self._claimed_tools(evalset), f"family {family!r} unclaimed"
 
     def test_claimed_skills_exist_in_repo(self, evalset: EvalSet) -> None:
-        """No typo'd skill names: every claim must be a real docs/skills file."""
-        repo_skills = {p.stem for p in SKILLS_DIR.glob("*.md")}
+        """No typo'd skill names: every claim must be a real docs/skills folder."""
+        repo_skills = {p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md")}
         ghost = self._claimed_skills(evalset) - repo_skills
         assert not ghost, f"claimed skills not in docs/skills/: {sorted(ghost)}"
 

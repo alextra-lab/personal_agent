@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Literal
 
-from personal_agent.config import settings
 from personal_agent.governance.sub_agent_tools import clamp_sub_agent_tool_params
 from personal_agent.orchestrator.loop_gate import GateResult, ToolLoopPolicy, stable_hash
 from personal_agent.telemetry import TOOL_CALL_COMPLETED, get_logger
@@ -198,8 +197,10 @@ async def dispatch_tool_call(
                 "tool_layer_error": "missing_required_params",
             }
 
-    # Skill dedup: if read_skill has already loaded this skill, return marker.
-    if tool_name == "read_skill":
+    # Skill dedup: a body that read_skill already returned this turn stays in the context
+    # (ADR-0156 D2.4), so a second body read returns a marker. A file read (``path``) is not
+    # deduplicated.
+    if tool_name == "read_skill" and not arguments.get("path"):
         _skill_name_arg = str(arguments.get("name", ""))
         if _skill_name_arg and _skill_name_arg in loaded_skills:
             log.debug(
@@ -213,7 +214,7 @@ async def dispatch_tool_call(
                 "content": render_content(
                     output={
                         "skill_name": _skill_name_arg,
-                        "body": f"<skill: {_skill_name_arg} already loaded earlier this conversation>",
+                        "body": f"<skill: {_skill_name_arg} already loaded earlier in this turn>",
                     },
                     error_detail=None,
                 ),
@@ -239,41 +240,20 @@ async def dispatch_tool_call(
 
         tool_info = tool_layer.registry.get_tool(tool_name)
         bound_def = tool_info[0] if tool_info else None
-        extra: dict[str, object] = {}
         output_hash: str | None = None
         if result.success:
             output_hash = stable_hash(result.output)
 
-            # Track loaded skills + post-execution hint for hybrid skill routing.
-            if tool_name == "read_skill" and isinstance(result.output, dict):
+            # Track the skills whose body is loaded (ADR-0156 D2). The read_skill tool logs
+            # read_skill_invoked itself; no other tool result carries a skill hint.
+            if (
+                tool_name == "read_skill"
+                and isinstance(result.output, dict)
+                and "body" in result.output
+            ):
                 _loaded_name = str(result.output.get("skill_name", ""))
                 if _loaded_name:
                     loaded_skills.add(_loaded_name)
-                    log.info(
-                        "read_skill_invoked",
-                        skill_name=_loaded_name,
-                        trace_id=trace_id,
-                    )
-            elif settings.skill_routing_mode == "hybrid":
-                # For non-read_skill tools in hybrid mode: hint if linked skill not loaded
-                from personal_agent.orchestrator.skills import find_skills_for_tool  # noqa: PLC0415
-
-                _hint_skill = next(
-                    (s for s in find_skills_for_tool(tool_name) if s.name not in loaded_skills),
-                    None,
-                )
-                if _hint_skill:
-                    # A key, not appended text, so the content stays one JSON object.
-                    extra["skill_hint"] = (
-                        f"skill {_hint_skill.name!r} is available — call read_skill to load "
-                        "full guidance"
-                    )
-                    log.debug(
-                        "tool_result_skill_hint_appended",
-                        tool_name=tool_name,
-                        linked_skill=_hint_skill.name,
-                        trace_id=trace_id,
-                    )
 
         # ADR-0156 D6: one shape for every result. A failure carries its full message
         # (bounded at 2,000 characters), never a clip; a success is bounded per tool.
@@ -286,7 +266,6 @@ async def dispatch_tool_call(
                 if bound_def
                 else "Narrow the request and call again."
             ),
-            extra=extra,
         )
 
         return {

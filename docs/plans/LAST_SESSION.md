@@ -1,69 +1,65 @@
-# Last session — master, 2026-10-03 15:00 UTC to 2026-10-05 12:10 UTC
+# Last session — master, 2026-10-05 to 2026-10-11 08:00 UTC
 
 ## Doing / discussing  (≤5 sentences)
-Both build streams are busy: build1 on FRE-1551 (stored history keeps one row per tool call),
-build2 on FRE-1550 (an alert when master itself is stuck), then FRE-1548 (Sonnet planner
-schema). The owner chose an ntfy-style webhook for FRE-1550. After it merges, the owner must
-put the ntfy URL in `/opt/seshat/.env`. Until then the alert logs an error and defers, as today.
-FRE-1515 is parked on purpose: re-add `stream:build1` around 2026-10-13, so its PR meets the
-AC-5 date (merge not before 2026-10-17 14:15 UTC).
+The owner stopped all model testing on 2026-10-10 and ordered the move of skills and tools to the
+industry standard (FRE-1573, ADR-0156, project "Skills and Tools Standard"). Seven of its tickets
+are Done; the rest run on the build streams (read `next_resolver`). Model testing reopens only when
+FRE-1581's gate passes (G1–G4, plus the ADR-0154 D7 planner probe that the owner moved into it).
+Explore is on a read-only study: can Neo4j's agent skills improve recall or KG search
+(https://neo4j.com/labs/genai-ecosystem/agent-skills/neo4j-skills/). The owner is waiting for
+nothing from master except the pending decisions below.
 
 ## What was decided and why
-
-**The planner chain (ADR-0154) is half done.** FRE-1541, FRE-1472 and FRE-1516 shipped. The live
-planner prompt hash is `feeeeac6…` (no decline rule before FRE-1515); the probe hash, which
-includes the decline rule, is `6947c986…`. Any planner prompt change needs a new D7 probe run
-before it ships, because the `planner` mode is live on qwen3.8-flash-next.
-
-**OVH 27B missed D7 (expand 37/48), and the owner accepted the miss:** OVH keeps today's routing.
-claude_sonnet missed on one malformed JSON in 81; FRE-1548 adds a schema and re-runs once
-(2 USD cap). The owner asked whether D7 demands an impossible perfect score: only the
-zero-parse-failure bar does, and a schema makes zero reachable by construction.
-
-**FRE-1514 is a measured negative (Canceled).** Its counting rule saturated at 100% in both arms,
-and the rule did not narrow the briefs by eye either. The planner prompt is probably not the
-lever; FRE-1487 (researcher prompt and rounds) is.
-
-**Sequential thinking moved into the primary prompt (FRE-1549, Done).** The skill never loaded
-(0 of 1,128 turns). AC-3 was accepted on its guard half by the owner: production stores only
-`reasoning_content_chars`, never the raw reasoning text, so a shown false start cannot be
-checked against reasoning in production.
-
-**The relevance bound moved to the reranker (FRE-1545, Done; FRE-1477 Done).** The owner: "use
-reranker too. We tested multiple embedders." The bound equals broad recall's 0.338891 by
-measurement, not copy.
-
-**FRE-1122 re-scoped:** a pre-FRE-1118 baseline is no longer possible (ADR-0148 work shipped).
-It is now a current-state measurement, blocked by FRE-1515. **FRE-1398 Done** (the cause was an
-unread stderr pipe in slm_server, fixed in 7693220). **FRE-1473 Done**; the owner called the
-30-day/10-turn values arbitrary, and master agreed: they cap volume, they are not a boundary.
-
-**September ES logs were reloaded** from the gateway disk log (owner "go"): 1,587,276 docs into
-`agent-logs-2026-07/08/09`, INFO and above only, retention dates set at month start. The disk
-archive is in `telemetry/log_archive/2026-10-03/` (git-ignored). FRE-1359 window 1: `notes_write`
-crossed the threshold; read window 2 on 2026-10-11.
-
-**The master input box can block the watcher.** On 2026-10-04 an unsent `/master 1218` draft
-in cc-master stalled the gate for about 5 hours, and the stall alert was routed to the stuck
-master. FRE-1550 fixes the alert path. Until it lands: if the board looks still, look at
-cc-master's input box first.
-
-**Permissions:** the owner added allow rules (`.claude/settings.local.json`) for the gateway/PWA
-rebuild and single-command checks. The deploy hook has no sentinel since 2026-08-16. The
-auto-mode classifier still reviews compound commands, so run deploy checks one at a time.
+- **Testing stopped because the studies measured our broken tools, not the models.** The PR #1242
+  audit found 36–45% of Flash-Next's tool calls fixable. Owner: "Tools are not working - we fix
+  them, then we come back to testing models." Do not propose model studies, D7 runs or live probes
+  until FRE-1581 passes. Owner-approved exceptions shipped: FRE-1568, 1570, 1572, 1583.
+- **The production planner prompt is currently unqualified.** FRE-1580 changed it; the owner chose
+  "Re-pin now, probe in T9" in build2's seat. FRE-1581 must run D7 on the current prompt.
+- **Owner decisions that changed the permission model (all in ADR-0156 or its tickets):**
+  `python3`/`awk`/`sed`/`env` ask (reverses the earlier "python3 stays allowed"); an "ask" with no
+  approval UI is refused (ADR-0063 Amendment B); `curl` runs unasked only for read requests to
+  internal telemetry (FRE-1583); reviewed skill scripts get exact allow rules (FRE-1585).
+- **MCP is off by owner decision (O1):** the three MCP copies of native tools were removed, so no MCP
+  server remains; `AGENT_MCP_GATEWAY_ENABLED=false` in production `.env` is deliberate.
+- **Primary model:** master recommends keeping Flash-Next (Gemma failed D7 three times: decline
+  24/30, misses `susan_3` and `tool_logs`; blind quality −7.5 to −8 on s2/s3). The owner has NOT
+  ruled. If Flash-Next is kept, remove the study-only Gemma `planner` mode from `config/models.yaml`.
+- **FRE-1517 stage-4 rulings:** s2 t13 = PASS (owner). Telemetry turns in stages 3–4 are confounded
+  by the tools, not model evidence (owner: "the skills/tools are wrong - for any model").
+- **Search:** FRE-1584 removes `google cse` (271 of 290 degraded searches were its quota) and keeps
+  `braveapi` + `exa`. Assessed and rejected for now: SerpApi (scraping by proxy), Tavily (overlaps
+  Exa; our fetch failures are guessed-URL 404s, 16 of 24). Kagi is first choice only if FRE-1584's
+  7-day read shows degraded > 5%; check its API availability first.
+- **Span extraction cap 4,096 → 16,384 (owner yes).** Its lane caps are USD 5/day, 7/week; the last
+  week spent 5.42, projected ~6.6. Owner informed; no cap changed.
+- **Master errors this session, now memories:** a listed field is not a populated one (FRE-1567 AC
+  was wrong); a 60-row truncated query read as complete; removing a stream label without clearing
+  `dispatch_state.json` wedged two streams; seats sat on "Switch model?" for 15 min to 3 h unseen.
 
 ## Worktrees — anything special
-- build2's worktree has `docker/searxng/settings.yml.example` flagged assume-unchanged and stale;
-  it fails `test_exa_content_mode_and_length` locally only. CI is unaffected.
-- Untracked `*.bak*` files at the root are the owner's.
+- `fre-1565-worker-side-effecting-tools` @ `7d261e99`: FRE-1565 parked (held, no stream label).
+  It must rebase on main; its per-call worker asks (D9.3) already shipped in FRE-1574.
+- `fre-1571-d7-tool-logs-fixture-truth`: empty branch. The Option A/B analysis is on FRE-1571.
 
 ## Answers for the fresh start
-- **State:** `next_resolver`, Linear and `telemetry/dispatch_state.json`. Nothing copied here.
-- **Owner decisions pending:** FRE-1546 item 6 (keep or delete the agent-inferred `LOCATED_IN`
-  link; master leans delete), item 7 (teardown for live-check identities, then purge 21 test
-  identities; counts are on FRE-1546), item 2 (when to start the typed-link recall ADR).
-- **Long live windows:** FRE-1394 AC-1/AC-5 (about 4 weeks of turns; baseline on the ticket),
-  FRE-1512 (first 20 qualifying turns), FRE-1359 window 2 (2026-10-11).
-- **FRE-1471** stays Awaiting Deploy, but FRE-1472's live turn 24a46192 shows its digest working
-  (4 items, longest line 69): check its criteria and close it.
-- **cc-explore is the owner's seat.** Reply when it asks; do not task it.
+- **Held tickets (stream labels removed on purpose):** FRE-1565, 1495, 1510, 1571, 1517. Re-label
+  only after FRE-1581 passes, except FRE-1565, which waits for an owner word.
+- **After every dispatch launch, look at the seat pane.** The "Switch model?" prompt holds the seat;
+  answer by the ticket's Tier label. This session ran a background watcher; it does not survive /clear.
+- **Production `.env` edits this session (all deliberate):** MCP gateway off (line 222); dead keys
+  commented 2026-10-11 (`AGENT_SKILL_ROUTING_MODE`, `AGENT_PREFER_PRIMITIVES`,
+  `AGENT_SECOND_BRAIN_CHECK_INTERVAL_SECONDS`, `AGENT_REFLECTION_RECALL_ENABLED`,
+  `AGENT_PLANNER_BRIEF_MODE`); backup `.env.bak-master-config-drift-20261011`. Consolidation
+  (`AGENT_ENABLE_SECOND_BRAIN`) is back to true.
+- **Owner decisions pending:** the primary model; whether to file the three keys read outside the
+  config manager (`AGENT_SESHAT_CHANNEL_SECRET`, `AGENT_SLM_TUNNEL_BASE_URL`, `AGENT_HOST`) for
+  the config-manager capstone; FRE-1571 Option A or B (when testing reopens).
+- **Live checks that need an owner PWA turn:** FRE-1580 AC-5 (test file
+  `/app/agent_workspace/fre1580-review.txt` is in place); FRE-1568 AC-4 (latency p50/p90 by role);
+  FRE-1585 AC-4 after it deploys. Test identity convention for master-fired turns:
+  a synthetic `fre<ticket>-live@` address on the owner's domain, `channel=EVAL`, consolidation paused first.
+- **Timed reads:** FRE-1570 AC-4 on or after 2026-10-17 20:09 UTC; FRE-1584 AC-2 seven days after
+  its deploy; FRE-1360 and FRE-1566 prompt-cache comparisons.
+- **First turn after a prompt-changing deploy takes ~30 s** (cold prefill, 13k tokens on
+  Flash-Next). Expected during this migration; G4 bounds prompt size.

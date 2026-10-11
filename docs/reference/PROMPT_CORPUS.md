@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `ae1b599a` · Committed: 2026-10-11T07:09:23Z  
+> Source revision: `4c2ee486` · Committed: 2026-10-11T07:27:26Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  

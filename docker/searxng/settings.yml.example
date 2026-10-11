@@ -18,23 +18,58 @@
 #
 # Everything else in this file (all other engines) carries no secrets and is
 # just the working config, kept here as a complete, deployable template.
+#
+# THE ENGINE SET IS THIS FILE (FRE-1584). `use_default_settings` alone keeps every
+# upstream engine the file does not remove: before this change 90 engines were enabled
+# and the file named 8 of them, so `google cse` (over quota, 271 of 290 degraded
+# searches in 14 days) and a dozen news/image/video scrapers ran without being declared.
+# `keep_only` below inverts that. An engine runs only if it is named there. Rule: keep an
+# engine only when it calls a documented API — not an HTML page, not a site-internal
+# endpoint. To add an engine, add its name to `keep_only` AND an `engines:` block; then
+# run `python -m scripts.monitors.searxng_engine_parity` against the running instance,
+# which fails on a declared engine that did not load and on a running one not declared.
 
 use_default_settings:
   engines:
-    # Completely remove engines that fail to load in this image build,
-    # rather than just disabling them (disabled still triggers a load attempt).
-    remove:
-      - ahmia        # missing Tor/onion deps
-      - torch        # missing sentence-transformers extras
-      - wikidata     # SPARQL init fails due to upstream API change
-      # Permanently 403 from this datacenter IP (2026-08-30). Removed rather than
-      # disabled so they never appear in unresponsive_engines and desensitise
-      # FRE-1339's degraded_retrieval signal.
-      - karmasearch
-      - karmasearch videos
-      - karmasearch news
-      # Removed upstream between 2026.4.17 and 2026.8.29 — engines/reddit.py no longer exists.
-      - reddit
+    # Exactly the engines that run. Anything not named here is dropped, including the
+    # upstream defaults that never appeared in this file. Dropped on purpose:
+    #   scrapers   google, bing, duckduckgo, startpage, qwant, brave (HTML), every
+    #              */news, */images, */videos variant, google scholar, lobste.rs, pypi
+    #              (parses pypi.org/search HTML; fetch_url on pypi.org/pypi/<pkg>/json
+    #              is the API route), reuters (site-internal endpoint)
+    #   google cse an API engine, but over quota: "Suspended: too many requests"
+    #   wikipedia  see the note where its block used to be
+    #   helpers    dictzone, lingva, mymemory translated — query-triggered translators
+    #              that rode along in `general`, not web search
+    # ahmia, torch, wikidata, karmasearch*, reddit were removed individually before this
+    # change because they failed to load in this image; `keep_only` makes that moot.
+    keep_only:
+      # general
+      - braveapi
+      - exa
+      - currency   # the one exception to the documented-API rule — see its block below
+      # it
+      - stackoverflow
+      - github
+      - hackernews
+      - mdn
+      - docker hub
+      - huggingface
+      - huggingface datasets
+      - huggingface spaces
+      # science
+      - arxiv
+      - semantic scholar
+      - pubmed
+      - crossref
+      - openalex
+      - openairepublications
+      # news / social / recipes / weather
+      - wikinews
+      - lemmy posts
+      - chefkoch
+      - openmeteo
+      - wttr.in
 
 general:
   instance_name: "PersonalAgent Search"
@@ -61,23 +96,14 @@ ui:
 
 engines:
   # ── General web search ──────────────────────────────────
-  - name: google
-    engine: google
-    shortcut: g
-    # Retired 2026-08-30: permanently blocked from this datacenter IP. `google cse`
-    # (keyed) covers this slot. Left enabled it would trip degraded_retrieval forever.
-    disabled: true
+  # Web search runs on braveapi + exa, two keyed API engines (FRE-1584). The scraped
+  # engines that used to sit beside them were refused by this datacenter IP (CAPTCHA,
+  # "access denied", "too many requests"); each refusal marked the whole search
+  # degraded_retrieval. They are gone from this file, not switched off — see keep_only.
 
-  - name: brave
-    engine: brave
-    shortcut: br
-    disabled: true   # superseded by braveapi below (master 2026-08-30)
-
-  # Added 2026-08-30 by master, owner-directed. The scraped `brave` engine above is
-  # disabled in the same change: scraping Brave from this datacenter IP is what earned
-  # the SearxEngineTooManyRequestsException suspensions, and a keyed call is not rate
-  # limited the same way. Brave runs its own 30B+ page index rather than proxying
-  # Google/Bing, so this is `general`'s independent backbone.
+  # Brave runs its own 30B+ page index rather than proxying Google/Bing, so this is
+  # `general`'s independent backbone. It is keyed, so it is not rate limited the way
+  # scraping Brave from this IP was (that earned SearxEngineTooManyRequestsException).
   - name: braveapi
     engine: braveapi
     shortcut: bapi
@@ -89,46 +115,27 @@ engines:
     inactive: false
     disabled: false
 
-  # Added 2026-08-29 by master. `general` had exactly one working engine
-  # (brave), so any single flap took web_search to zero results — measured at
-  # 68% empty on 08-28 and 100% empty on 08-29. Bing answers fine from this IP
-  # (verified: 10 results on four consecutive fresh queries) but was only
-  # configured as `bing news` under categories: news, so it never served a
-  # normal web search. This gives `general` a second working engine.
-  - name: bing
-    engine: bing
-    shortcut: bi
-    # Retired 2026-08-30: superseded by braveapi. Scraped bing answers this IP but
-    # returns junk unrelated to the query — it was an emergency stopgap, not a search.
-    disabled: true
+  # `currency` answers "10 EUR in USD", which the web_search tool text promises. It calls
+  # DuckDuckGo's undocumented JS endpoint (`use_official_api: False`), so it breaks the
+  # rule in the header; it is kept because it is a query-triggered converter, not a
+  # search engine, and it appears in none of the 14-day failure reasons. Dropping it
+  # costs currency conversion and nothing else: remove it from keep_only, delete this
+  # block, and delete the example from tools/web.py. Categories are upstream's
+  # (`general`, `currency`); they are deliberately not restated.
+  - name: currency
+    engine: currency_convert
+    shortcut: cc
 
-  # Disabled 2026-08-29 by master — these refuse this VPS's datacenter IP and
-  # will not recover by configuration. Measured via SearXNG's own
-  # unresponsive_engines: duckduckgo "CAPTCHA", startpage "Suspended: CAPTCHA",
-  # qwant "access denied". None has a public search API, so scraping is the only
-  # route and it is the route being blocked. Left in the file rather than
-  # deleted so the decision stays visible and is one-line reversible.
-  - name: duckduckgo
-    engine: duckduckgo
-    shortcut: ddg
-    disabled: true
-
-  - name: wikipedia
-    engine: wikipedia
-    shortcut: wp
-    disabled: false
-
-  - name: startpage
-    engine: startpage
-    shortcut: sp
-    disabled: true
-
-  - name: qwant
-    engine: qwant
-    qwant_categ: web
-    shortcut: qw
-    categories: [general, web]
-    disabled: true
+  # Wikipedia was removed (FRE-1584). Its engine uses the WHOLE query as a page title:
+  # GET /api/rest_v1/page/summary/<quote(query)>. `quote` keeps "/" literal, so a query
+  # containing a slash adds a path segment and Wikipedia answers 400; a "|" answers 500.
+  # The engine swallows only the 400 whose detail is `title-invalid-characters`, so both
+  # raise "HTTP error", and one unresponsive engine marks the whole search degraded.
+  # Measured over 14 days: 28 of 482 searches (5.8%) — more than the 5% target by itself.
+  # It is upstream code, so no setting here repairs it. It was also nearly redundant: a
+  # sentence-shaped query is not a page title (404, handled), and brave/exa return
+  # wikipedia.org pages themselves (38 of 482 searches). To restore it, add `wikipedia`
+  # to keep_only, and expect "HTTP error" on slash or pipe queries.
 
   # ── IT / Development ────────────────────────────────────
   - name: stackoverflow
@@ -147,20 +154,9 @@ engines:
     disabled: false
     categories: it
 
-  - name: pypi
-    engine: pypi
-    shortcut: pypi
-    disabled: false
-    categories: it
-
   - name: hackernews
     engine: hackernews
     shortcut: hn
-    disabled: false
-    categories: it
-
-  - name: lobste.rs
-    shortcut: lo
     disabled: false
     categories: it
 
@@ -203,12 +199,6 @@ engines:
     disabled: false
     categories: science
 
-  - name: google scholar
-    engine: google_scholar
-    shortcut: gos
-    disabled: false
-    categories: science
-
   - name: pubmed
     engine: pubmed
     shortcut: pm
@@ -235,95 +225,64 @@ engines:
   # springer nature and astrophysics data system were declared here but NEVER loaded.
   # Upstream ships both `inactive: true` AND requiring an `api_key` we do not hold, and
   # `use_default_settings` merges by name, so our `disabled: false` was inherited over —
-  # the same trap that silently disabled braveapi (FRE-1331). They advertised science
-  # coverage we never had. Found 2026-08-30 by scripts/monitors/searxng_engine_parity.py
-  # on its first run. Re-add only with real keys, and re-run that check to prove it.
+  # the same trap that silently disabled braveapi (FRE-1331). Re-add only with real keys,
+  # and re-run scripts/monitors/searxng_engine_parity.py to prove they loaded.
 
   # ── News ────────────────────────────────────────────────
-  - name: google news
-    engine: google_news
-    shortcut: gn
-    disabled: false
-    categories: news
-
-  - name: bing news
-    engine: bing_news
-    shortcut: bn
-    disabled: false
-    categories: news
-
-  - name: reuters
-    engine: reuters
-    shortcut: reu
-    disabled: false
-    categories: news
-
+  # Only wikinews (MediaWiki API) remains. google/bing/duckduckgo/startpage/qwant/brave
+  # news are scrapers and reuters calls a site-internal endpoint; all were refused or
+  # erroring from this IP. For current events, use general (braveapi + exa).
   - name: wikinews
     shortcut: wn
     disabled: false
     categories: news
 
-  - name: qwant news
-    engine: qwant
-    qwant_categ: news
-    shortcut: qwn
-    categories: news
-    network: qwant
-    disabled: false
-
-  # Note: google_news and bing_news validate language codes against internal
-  # traits and do not support arbitrary locale overrides in settings.yml.
-  # French press (LeMonde, Le Figaro, etc.) is surfaced via !qwn (Qwant News,
-  # a French engine) and !gn / !bn when querying in French.
-  # BBC / UK press is surfaced via !gn and !bn using English queries.
-
   # ── Social Media ─────────────────────────────────────────
-  # reddit: engine removed upstream (engines/reddit.py absent as of 2026.8.29). Block
-  # deleted 2026-08-30 — declaring it forced a failing load attempt and an ERROR at every
-  # startup, which is exactly the noise that trains people to ignore startup errors.
+  # reddit: engine removed upstream (engines/reddit.py absent as of 2026.8.29).
+  #
+  # `network: lemmy` is REQUIRED (FRE-1584). Upstream sets `lemmy posts` to share the
+  # HTTP network of `lemmy communities`. keep_only drops `lemmy communities`, and a
+  # `network:` that names a missing engine raises KeyError in searx/network/network.py
+  # at startup — SearXNG then exits and web search is down, with no result to blame.
+  # The `lemmy` network is defined under `outgoing.networks` below.
   - name: lemmy posts
     shortcut: lm
     disabled: false
     categories: social_media
+    network: lemmy
 
   # ── Recipes ──────────────────────────────────────────────
-  # Note: chefkoch is the primary recipe engine available in SearXNG.
-  # For English recipes, use !g site:allrecipes.com or !g site:seriouseats.com
-  # via the google engine — there is no dedicated English recipe engine upstream.
-  # FRE-796: was tagged categories: general, so every default-category web
-  # search included German recipe results (chefkoch titles loosely matched
-  # unrelated queries containing words like "American"). Scoped to its own
-  # category — still reachable via engines=chefkoch or categories=recipes.
+  # chefkoch (api.chefkoch.de) is the only recipe engine upstream. FRE-796: it was once
+  # tagged `general`, so every default web search returned German recipes for queries
+  # containing words like "American". Scoped to its own category — reachable via
+  # engines=chefkoch or categories=recipes.
   - name: chefkoch
     engine: chefkoch
     shortcut: ck
     disabled: false
     categories: recipes
 
-  # ── Semantic search (opt-in) ────────────────────────────
-  # FRE-1310. A dedicated `exa` category, NOT `general` — the owner has not
-  # opted every query into a managed third-party vendor seeing plaintext
-  # queries by default (SearXNG's other engines are self-hosted; Exa is not).
-  # Reachable via engines=exaapi or categories=exa (see tools/web.py's tool
-  # description for the model-facing framing).
+  # ── Semantic search ─────────────────────────────────────
+  # FRE-1310 shipped Exa in its own opt-in `exa` category, because it is a managed
+  # third-party vendor that sees plaintext queries. The owner reversed that on
+  # 2026-09-10: Exa joins `general`, so a default web_search reaches it, and it stays
+  # reachable alone as categories=exa. Cost, measured 2026-10-11 with one probe call to
+  # this exact payload: costDollars.total = $0.007 per search (10 results, highlights
+  # at 2000 chars; highlights are not billed on top). At 1,420 searches in 30 days that
+  # is about $9.94 per month.
+  #
+  # `weight: 3` ranks Exa above braveapi (implicit 1): Exa returns ~1,926 chars per
+  # result against braveapi's ~217, measured on the same query.
   #
   # search_type pinned to `auto` — never `deep-reasoning`: that mode's output
   # is model-generated, not retrieval, and under the authorship-independence
   # rule (FRE-1303) that is not EXTERNAL, it's another model's assertion
   # wearing a retrieval's identifier.
   #
-  # content_mode: text (not SearXNG's doc-page 'highlights' default) returns
-  # full page text in one call, collapsing search-then-fetch and handing the
-  # ADR-0138 grounding contract text to check containment against.
-  # content_max_characters matches fetch_url's own _DEFAULT_MAX_CHARS
-  # (tools/fetch.py) for consistency between the two full-text tools.
-  #
-  # Shipped disabled with a placeholder key — no live Exa key exists yet.
-  # See the file header above for activation instructions.
-  # Activated 2026-08-30 by master, owner-directed. content_mode is `highlights`, not
-  # `text`: highlights are the query-relevant excerpts and roughly 10x more token
-  # efficient, which matters because per-turn input already reaches 83k on an ordinary
-  # research turn (FRE-1138). Never set this to `text` without measuring the footprint.
+  # content_mode is `highlights`, not `text`: highlights are the query-relevant
+  # excerpts and roughly 5x more token efficient, which matters because per-turn input
+  # already reaches 83k on an ordinary research turn (FRE-1138). Never set this to
+  # `text` without measuring the footprint (FRE-1331).
   - name: exa
     engine: exaapi
     shortcut: exa
@@ -332,17 +291,18 @@ engines:
     search_type: auto
     content_mode: highlights
     content_max_characters: 2000
-    categories: exa
+    categories: [general, exa]
+    weight: 3
     # The TEMPLATE keeps shipping the pre-activation default, per its own contract and
     # test_exa_shipped_disabled_with_placeholder_key: activation (a real key plus
     # disabled: false) happens on the untracked settings.yml, never here. content_mode
-    # above is different in kind — it is policy, not activation, so it does belong in the
-    # template.
+    # and categories above are different in kind — they are policy, not activation, so
+    # they belong in the template.
     disabled: true
 
   # ── Weather ─────────────────────────────────────────────
-  # WeatherUnderground has no SearXNG engine. openmeteo is the
-  # best open-data alternative with hyperlocal forecast data.
+  # WeatherUnderground has no SearXNG engine. openmeteo is the best open-data
+  # alternative with hyperlocal forecast data; wttr.in answers a JSON endpoint.
   - name: wttr.in
     engine: wttr
     shortcut: wttr
@@ -355,9 +315,10 @@ engines:
     disabled: false
     categories: weather
 
-  # ── Additional Science ───────────────────────────────────
-
 outgoing:
+  # Own HTTP network for `lemmy posts` — see its block above.
+  networks:
+    lemmy: {}
   request_timeout: 8
   max_request_timeout: 15
   useragent_suffix: ""

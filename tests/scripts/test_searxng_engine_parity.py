@@ -19,7 +19,11 @@ from __future__ import annotations
 
 import pytest
 import yaml
-from scripts.monitors.searxng_engine_parity import declared_engines, settings_path
+from scripts.monitors.searxng_engine_parity import (
+    declared_engines,
+    settings_path,
+    unexpected_engines,
+)
 
 
 def test_declared_engines_subtracts_the_remove_list() -> None:
@@ -111,3 +115,59 @@ def test_settings_path_prefers_the_real_file_when_it_exists() -> None:
 def test_settings_path_honours_an_explicit_override() -> None:
     """An explicit --settings path wins, which is what makes the seeded negative possible."""
     assert settings_path("/tmp/seeded.yml").as_posix() == "/tmp/seeded.yml"
+
+
+def test_declared_engines_includes_the_keep_only_list() -> None:
+    """Names in `keep_only` are expected to load even when `engines:` does not restate them.
+
+    FRE-1584: `keep_only` makes the settings file the whole engine set. An engine kept
+    with its upstream defaults needs no `engines:` block, so reading only `engines:`
+    would leave it out of the expected set and the check would never look for it.
+    """
+    config = yaml.safe_load(
+        """
+        use_default_settings:
+          engines:
+            keep_only:
+              - github
+              - arxiv
+        engines:
+          - name: arxiv
+          - name: exa
+        """
+    )
+    assert declared_engines(config) == {"github", "arxiv", "exa"}
+
+
+def test_declared_engines_refuses_a_non_list_keep_only() -> None:
+    """A `keep_only` that is not a list must REFUSE, never be read as "keep everything"."""
+    config = yaml.safe_load(
+        """
+        use_default_settings:
+          engines:
+            keep_only: github
+        engines:
+          - name: arxiv
+        """
+    )
+    with pytest.raises(ValueError, match="keep_only"):
+        declared_engines(config)
+
+
+def test_unexpected_engines_reports_a_running_engine_the_file_does_not_declare() -> None:
+    """An engine the instance runs but the file never named is the scraper this ticket removes.
+
+    FRE-1584 AC-1. `use_default_settings` inherits every upstream engine silently, so
+    the dangerous drift is not a declared engine failing to load (the old check) but an
+    undeclared one that loaded anyway. Seeded negative: `google cse` was enabled by an
+    upstream default and was never named in the file.
+    """
+    declared = {"braveapi", "exa", "github"}
+    registered = {"braveapi", "exa", "github", "google cse", "bing news"}
+    assert unexpected_engines(declared, registered) == ["bing news", "google cse"]
+
+
+def test_unexpected_engines_is_empty_when_the_instance_runs_exactly_the_file() -> None:
+    """No extras, no report: the positive case the seeded negative above is measured against."""
+    names = {"braveapi", "exa", "github"}
+    assert unexpected_engines(names, set(names)) == []

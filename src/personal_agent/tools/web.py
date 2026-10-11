@@ -77,13 +77,14 @@ web_search_tool = ToolDefinition(
         "  - Unit conversion: query '20 °C in °F' or '10 EUR in USD' (use symbols, not words) → converted value\n"
         "  - Calculator: query '2^10 * 3' → computed result\n"
         "\nWeather: use engines='openmeteo' or categories='weather' for current conditions + hourly forecast.\n"
-        "\nCategories: general (default), it, science, news, weather, social_media, files, images, music, videos, recipes, exa.\n"
-        "Use 'it' for programming questions, 'science' for academic research, "
-        "'news' for current events, 'social_media' for Reddit/Lemmy discussions. "
-        "Use categories='exa' for semantic, long-tail, or non-English queries that keyword "
-        "engines miss — returns full page text in one call instead of a snippet. Opt-in only, "
-        "not included in 'general': Exa is a managed third-party vendor, unlike the other "
-        "self-hosted engines above."
+        "\nCategories: general (default), it, science, news, weather, social_media, recipes, exa.\n"
+        "'general' runs two keyed API engines, braveapi and exa; use it for current events "
+        "too. Use 'it' for programming questions, 'science' for academic research, "
+        "'social_media' for Lemmy discussions. 'news' holds Wikinews only. "
+        "Use categories='exa' to query Exa alone for semantic, long-tail, or non-English "
+        "queries that keyword engines miss — it returns longer, query-relevant excerpts "
+        "(about 2,000 characters per result). Exa is a managed third-party vendor that "
+        "sees the plaintext query."
         "\n\nIf underlying engines are failing, the result carries "
         "'degraded_retrieval': true and a 'retrieval_warning' naming which engines "
         "failed and which ones the results actually came from — treat such a result "
@@ -107,14 +108,13 @@ web_search_tool = ToolDefinition(
             type="string",
             description=(
                 "Comma-separated SearXNG categories to search. "
-                "Options: general, it, science, news, weather, social_media, files, images, "
-                "music, videos, recipes, exa. "
-                "Default: 'general'. Use 'it' for programming questions, "
+                "Options: general, it, science, news, weather, social_media, recipes, exa. "
+                "Default: 'general' (braveapi + exa). Use 'it' for programming questions, "
                 "'science' for academic research, 'weather' for forecasts, "
-                "'social_media' for Reddit/Lemmy community discussions, "
+                "'social_media' for Lemmy community discussions, "
                 "'recipes' for cooking/recipe results (chefkoch), "
-                "'exa' for semantic/long-tail/non-English queries needing full page text "
-                "(opt-in, not part of 'general' — a managed third-party vendor)."
+                "'exa' for Exa alone: semantic/long-tail/non-English queries "
+                "(a managed third-party vendor)."
             ),
             required=False,
             default=None,
@@ -127,20 +127,19 @@ web_search_tool = ToolDefinition(
                 "Comma-separated engine names to query directly. "
                 "Overrides categories if provided. "
                 # FRE-1331: this list is what the model addresses engines by name with, so a
-                # stale entry is a name that silently returns nothing. Verified 2026-08-30
-                # against the running instance's /config rather than transcribed from
-                # settings.yml — the two disagreed on six entries. Re-derive it with
-                # scripts/monitors/searxng_engine_parity.py whenever engines change.
-                "General: braveapi, google cse, wikipedia. "
-                "IT: stackoverflow, github, hackernews, lobste.rs, mdn, pypi, huggingface, "
+                # stale entry is a name that silently returns nothing. FRE-1584: it is now
+                # tied to docker/searxng/settings.yml.example's keep_only list by
+                # test_web_search_description_names_only_engines_and_categories_that_exist,
+                # so dropping an engine without editing this text fails a test.
+                "General: braveapi, exa. "
+                "IT: stackoverflow, github, hackernews, mdn, huggingface, "
                 "huggingface datasets, huggingface spaces, docker hub. "
-                "Science: arxiv, google scholar, pubmed, crossref, openalex, openairepublications, "
+                "Science: arxiv, pubmed, crossref, openalex, openairepublications, "
                 "semantic scholar. "
-                "News: google news, bing news, reuters, wikinews, qwant news. "
+                "News: wikinews. "
                 "Social: lemmy posts. "
                 "Weather: openmeteo, wttr.in. "
-                "Recipes: chefkoch. "
-                "Semantic (opt-in): exa."
+                "Recipes: chefkoch."
             ),
             required=False,
             default=None,

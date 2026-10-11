@@ -23,7 +23,8 @@ The frontmatter holds `name`, `description` and `metadata` only. No other field 
 - `description`: 1–1,024 characters, in the third person (no "I", "my", "you", "your"). It says
   what the skill does and when to use it. This text is all the model has to choose the skill.
 - `metadata.requires-tools`: optional, a comma-separated list of the tools the skill uses. It
-  filters the catalog per worker type (D9). It never routes and never blocks.
+  filters the catalog per worker type (D9). A worker sees the skill only if it holds every
+  listed tool, and every worker sees a skill that lists none. It never routes and never blocks.
 - The body: under 500 lines and under 5,000 tokens. Put more detail in `references/`.
 - Every file that the body names (`scripts/…`, `references/…`, `assets/…`, or a relative link)
   exists, one level below the skill folder.

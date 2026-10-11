@@ -184,7 +184,8 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "Output ONLY valid JSON matching this schema:\n"
         '{"strategy": "HYBRID|DECOMPOSE", "tasks": [{"name": "string", '
         f'"goal": "string", "constraints": ["string"], "type": "{type_names}", '
-        f'"thoroughness": "{level_names}"}}], "memory_relevance": "used|none_relevant"}}\n\n'
+        f'"thoroughness": "{level_names}", "read_paths": ["string"]}}], '
+        '"memory_relevance": "used|none_relevant"}\n\n'
         "Rules:\n"
         "- Each task must be independently answerable. No task sees another task's "
         "result, and the final answer is written from all task reports together, so "
@@ -198,6 +199,11 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "use the type's default. A round may hold several parallel tool calls. Scope "
         "every task so a worker can answer it inside its budget. Prefer one precise "
         "task over one broad one.\n"
+        # ADR-0156 D9.4: only this structured field grants a file. A path in the goal
+        # grants nothing.
+        "- read_paths: for a general task that must read a file, the absolute path of each "
+        "file the conversation names. The worker can read only these files. A path written "
+        "only in the goal cannot be read. Omit it otherwise\n"
         # ADR-0154 D5 / ADR-0147 D3: always present, so the system prompt is byte-identical
         # with and without a digest and the cached prefix holds.
         f'- The message may hold a "{_DIGEST_TITLE}" block. A worker cannot see it, so '
@@ -240,6 +246,7 @@ def planner_plan_schema(*, admit_single: bool = False) -> dict[str, Any]:
             "constraints": {"type": "array", "items": {"type": "string"}},
             "type": {"type": "string", "enum": [t.value for t in WORKER_TYPES]},
             "thoroughness": {"type": "string", "enum": list(THOROUGHNESS_LEVELS)},
+            "read_paths": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["name", "goal", "type"],
         "additionalProperties": False,
@@ -1592,6 +1599,8 @@ class ExpansionController:
                 # ADR-0150 D5: isolation by partition — each worker is told what
                 # its siblings own, so it stays inside its own task.
                 sibling_tasks=tuple(other.name for other in plan.tasks if other is not task),
+                # ADR-0156 D9.4: the files this task's worker may read.
+                read_paths=task.read_paths,
             )
             for task, grant in zip(plan.tasks, grants, strict=True)
         ]
@@ -1905,6 +1914,13 @@ class ExpansionController:
             worker_type=target_type,
             tools=list(new_grant.granted),
             denied_tools=new_grant.denied,
+            # A type that can send text out holds no conversation and no file (FRE-1564
+            # decision A, ADR-0156 D9.4). Without this a general worker's context and
+            # files would follow its task to a researcher.
+            context=(
+                spec.context if carries_conversation_context(WORKER_TYPES[target_type]) else []
+            ),
+            read_paths=_plan_read_paths(list(spec.read_paths), target_type),
         )
 
         interval_start = time.monotonic()
@@ -2063,6 +2079,25 @@ class ExpansionController:
         return "".join(parts)
 
 
+def _plan_read_paths(raw: object, worker_type: WorkerType) -> tuple[str, ...]:
+    """Keep the planner's ``read_paths`` that can name a file (ADR-0156 D9.4).
+
+    Only absolute path strings count, and only for a type that holds ``read``: the
+    researcher holds an outbound tool, so it never gets a file. A bad value never
+    invalidates the plan; it grants nothing. The grant itself is made at task start.
+
+    Args:
+        raw: The task's ``read_paths`` value from the planner's JSON.
+        worker_type: The task's type.
+
+    Returns:
+        The absolute path strings, in order, without duplicates.
+    """
+    if "read" not in WORKER_TYPES[worker_type].tools or not isinstance(raw, list):
+        return ()
+    return tuple(dict.fromkeys(p for p in raw if isinstance(p, str) and p.startswith("/")))
+
+
 def _validate_plan_json(
     raw: str,
     strategy: str = "HYBRID",
@@ -2134,6 +2169,7 @@ def _validate_plan_json(
                 type=worker_type,
                 thoroughness=thoroughness,
                 constraints=[str(c) for c in t.get("constraints", [])],
+                read_paths=_plan_read_paths(t.get("read_paths"), worker_type),
             )
         )
 

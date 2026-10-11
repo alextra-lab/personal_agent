@@ -139,7 +139,7 @@ class SubAgentCapture(BaseModel):
 
     # Input context — "what was the sub fed"
     system_prompt_chars: int
-    skill_index_block_chars: int
+    skill_index_block_chars: int  # the worker's skill catalog (ADR-0156 D9.1); name kept for ES
     spec_task: str
     context_message_count: int
     context_chars: int

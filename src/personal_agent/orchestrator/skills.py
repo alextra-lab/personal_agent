@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import stat
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
@@ -121,7 +122,18 @@ def _requires_tools(fm: dict[str, object]) -> tuple[str, ...]:
 
 
 def _skill_files_on_disk(skills_dir: Path) -> list[Path]:
-    return sorted(skills_dir.glob(f"*/{SKILL_FILE}"))
+    """Return every ``<name>/SKILL.md``, except one whose folder or file is a symlink.
+
+    A symlinked folder or ``SKILL.md`` would make ``read_skill`` return text from outside the
+    skill folders (ADR-0156 AC-10), so it is not a skill.
+    """
+    found = []
+    for path in sorted(skills_dir.glob(f"*/{SKILL_FILE}")):
+        if path.parent.is_symlink() or path.is_symlink():
+            log.warning("skill_doc_symlink_skipped", file=str(path))
+            continue
+        found.append(path)
+    return found
 
 
 def _load_all_skills(skills_dir: Path) -> _SkillCache:
@@ -216,16 +228,38 @@ _CATALOG_HEADER = (
 )
 
 
-def assemble_skill_catalog() -> str:
-    """Return the skill catalog: one line per skill, name and description only (D2.1).
+def skills_for_tools(held: Collection[str]) -> dict[str, SkillDoc]:
+    """Return the skills whose ``metadata.requires-tools`` an agent holds (ADR-0156 D9.1).
 
-    The text depends only on the skill files, never on the request, so it stays in the cached
-    prefix of the system prompt.
+    A skill that requires no tool is held by every agent.
+
+    Args:
+        held: The tool names the agent holds.
 
     Returns:
-        The catalog block, or an empty string when no skill is loaded.
+        Mapping of skill name to SkillDoc, for the visible skills only.
     """
-    docs = _get_cache().docs
+    tools = set(held)
+    return {
+        name: doc for name, doc in _get_cache().docs.items() if set(doc.requires_tools) <= tools
+    }
+
+
+def assemble_skill_catalog(held: Collection[str] | None = None) -> str:
+    """Return the skill catalog: one line per skill, name and description only (D2.1).
+
+    The text depends only on the skill files and on ``held``, never on the request, so it stays
+    in the cached prefix of the system prompt.
+
+    Args:
+        held: The tools a worker holds. Only the skills whose tools it holds are listed, and a
+            filtered skill is not mentioned at all (D9.1). ``None`` lists every skill (the
+            primary).
+
+    Returns:
+        The catalog block, or an empty string when no skill is listed.
+    """
+    docs = _get_cache().docs if held is None else skills_for_tools(held)
     if not docs:
         return ""
     lines = "".join(f"- {docs[name].name}: {docs[name].description}\n" for name in sorted(docs))

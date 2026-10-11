@@ -36,7 +36,10 @@ from personal_agent.tools.registry import ToolRegistry
 # A worker tool is exactly one of these. A new worker tool that is in none of them fails
 # `test_every_worker_tool_is_classified`, so the author must decide which side it is on.
 OUTBOUND = OUTBOUND_TOOLS
-PRIVATE = frozenset({"search_memory", "recall_personal_history", "notes_search", "query_telemetry"})
+# `read` reads local files (ADR-0156 D9.4: only the files a task names), so it is private.
+PRIVATE = frozenset(
+    {"search_memory", "recall_personal_history", "notes_search", "query_telemetry", "read"}
+)
 # Reads nothing private and sends nothing out. `run_python` is here only because its
 # `network` argument is pinned false for a worker (see the governance decision).
 NEUTRAL = frozenset({"run_python", "read_skill"})
@@ -142,8 +145,8 @@ class TestToolsReachTheWorkers:
     """AC-2 — the granted list, after governance, holds each added tool and no write tool."""
 
     _ADDED = {
-        WorkerType.RESEARCHER: ("fetch_url", "get_library_docs"),
-        WorkerType.GENERAL: ("query_telemetry", "notes_search", "read_skill"),
+        WorkerType.RESEARCHER: ("fetch_url", "get_library_docs", "read_skill"),
+        WorkerType.GENERAL: ("query_telemetry", "notes_search", "read_skill", "read"),
     }
 
     @pytest.mark.parametrize("worker_type", list(WorkerType))

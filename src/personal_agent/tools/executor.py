@@ -5,6 +5,7 @@ with permission checks, argument validation, execution, and telemetry.
 """
 
 import asyncio
+import inspect
 import json
 import os
 import time
@@ -46,6 +47,7 @@ from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolErrorDetail, ToolResult
 
 if TYPE_CHECKING:
+    from personal_agent.governance.worker_read_grant import ReadGrant
     from personal_agent.transport.agui.transport import AGUITransport
     from personal_agent.transport.agui.ws_endpoint import ApprovalDecision
 
@@ -55,6 +57,12 @@ log = get_logger(__name__)
 # (ADR-0153 D7). Reserved: the layer removes any model-supplied value of this name
 # and sets the real callable, so a tool definition cannot expose it to the model.
 _APPROVE_PARAM = "approve"
+
+# Name of the executor parameter that receives a worker task's file grant (ADR-0156
+# D9.4). Reserved the same way: a model-supplied value is removed, and the layer sets
+# the grant that the worker loop passed.
+_READ_GRANT_PARAM = "read_grant"
+_RESERVED_PARAMS = frozenset({_APPROVE_PARAM, _READ_GRANT_PARAM})
 
 
 class ApproveFn(Protocol):
@@ -639,6 +647,7 @@ class ToolExecutionLayer:
         trace_ctx: TraceContext,
         session_id: str | None = None,
         worker: str | None = None,
+        read_grant: "ReadGrant | None" = None,
     ) -> ToolResult:
         """Execute a tool with full governance and observability.
 
@@ -646,6 +655,11 @@ class ToolExecutionLayer:
         :class:`ApproveFn` bound to this call (ADR-0153 D7).  The name is
         reserved: a model-supplied ``approve`` argument is always dropped.  Only
         async executors may declare it.
+
+        An executor that declares a ``read_grant`` parameter receives
+        ``read_grant`` (ADR-0156 D9.4), and a model-supplied value is dropped.
+        A worker call to such an executor without a grant is refused before it
+        runs, so a worker path that forgets the grant cannot read without limit.
 
         Args:
             tool_name: Name of the tool to execute.
@@ -657,6 +671,8 @@ class ToolExecutionLayer:
             worker: The worker type that makes the call, or ``None`` for the
                 primary.  An ask from a worker shows the same card, per call,
                 with the worker named (ADR-0156 D8.3, D9.3).
+            read_grant: A worker task's file grant, injected into an executor
+                that declares ``read_grant``.
 
         Returns:
             ToolResult with execution outcome.
@@ -686,6 +702,27 @@ class ToolExecutionLayer:
             )
 
         tool_def, executor = tool_result
+
+        # 1b. ADR-0156 D9.4: a worker reads only through its task's grant.
+        sig = inspect.signature(executor)
+        if worker is not None and read_grant is None and _READ_GRANT_PARAM in sig.parameters:
+            log.warning(
+                "worker_read_without_grant_refused",
+                tool_name=tool_name,
+                worker=worker,
+                trace_id=trace_ctx.trace_id,
+                session_id=session_id,
+            )
+            return _failed(
+                tool_name,
+                dispatch_error(
+                    "not_available_to_worker",
+                    f"{tool_name} is not available to this sub-agent: it holds no file grant.",
+                    retryable=False,
+                    next_action=f"Do not call {tool_name}. Use the other tools you hold.",
+                ),
+                trace_ctx=trace_ctx,
+            )
 
         # 2. Check permissions (async — may perform interactive approval round-trip)
         current_mode = self.mode_manager.get_current_mode()
@@ -720,7 +757,9 @@ class ToolExecutionLayer:
         # This prevents LLM from sending extra/invalid parameters
         valid_param_names = {param.name for param in tool_def.parameters}
         filtered_arguments = {
-            k: v for k, v in arguments.items() if k in valid_param_names and k != _APPROVE_PARAM
+            k: v
+            for k, v in arguments.items()
+            if k in valid_param_names and k not in _RESERVED_PARAMS
         }
 
         # Log if LLM sent invalid parameters
@@ -775,10 +814,9 @@ class ToolExecutionLayer:
 
             try:
                 # Execute tool (async or sync executor). Pass ctx to executors that accept it.
-                import inspect
-
-                sig = inspect.signature(executor)
                 pass_ctx = "ctx" in sig.parameters
+                if _READ_GRANT_PARAM in sig.parameters:
+                    filtered_arguments = {**filtered_arguments, _READ_GRANT_PARAM: read_grant}
                 if pass_ctx:
                     filtered_arguments = {**filtered_arguments, "ctx": trace_ctx}
                 if _APPROVE_PARAM in sig.parameters:

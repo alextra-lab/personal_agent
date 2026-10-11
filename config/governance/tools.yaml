@@ -124,6 +124,18 @@ sub_agent_tools:
       Owner decision, 2026-10-10 (FRE-1564, option B). It returns checked-in skill
       documents by name from the repository. It reads nothing private and sends nothing
       out, so it is safe beside any worker's other tools. It goes to the `general` type.
+      ADR-0156 D9.2 (FRE-1580): every worker type holds it, the `researcher` too. A worker
+      sees and loads only the skills whose `metadata.requires-tools` it holds (D9.1).
+
+  read:
+    granted: true
+    reason: >-
+      Owner decision, 2026-10-10 (ADR-0156 D9.4, FRE-1580): the `general` worker may read
+      the files that its task names in the structured `read_paths` field, and no other file.
+      The real path and the device and inode of each file are recorded at task start, and
+      both are checked at read time (governance/worker_read_grant.py). The grant ends with
+      the task, and the read tool's own path rules still apply. It is a private read, so it
+      goes only to the `general` type, which holds no outbound tool and no write tool.
 
   notes_search:
     granted: true

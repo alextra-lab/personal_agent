@@ -66,6 +66,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
 from personal_agent.config import settings
+from personal_agent.governance.worker_read_grant import ReadGrant
 from personal_agent.llm_client.models import (
     Dialect,
     landing_accepts_json_schema,
@@ -79,6 +80,7 @@ from personal_agent.llm_client.types import (
 )
 from personal_agent.orchestrator.context_window import estimate_messages_tokens
 from personal_agent.orchestrator.prompts import render_current_datetime_block
+from personal_agent.orchestrator.skills import assemble_skill_catalog, skills_for_tools
 from personal_agent.orchestrator.sub_agent_types import (
     SubAgentReportKind,
     SubAgentResult,
@@ -101,6 +103,7 @@ from personal_agent.orchestrator.worker_types import (
 )
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.contract import dispatch_error
+from personal_agent.tools.read_skill import ReadSkillError
 
 logger = structlog.get_logger(__name__)
 
@@ -271,7 +274,8 @@ def _build_tool_defs(tool_names: list[str]) -> list[dict[str, Any]] | None:
         Tool definitions for exactly ``tool_names``, or ``None`` when the list
         is empty — ``None`` (not ``[]``) so ``respond()`` never receives a
         ``tools`` argument for a grant-less sub-agent, preserving today's exact
-        no-tools behavior.
+        no-tools behavior. ``read_skill``'s ``name`` enum lists only the skills
+        whose tools the worker holds (ADR-0156 D9.1: a filtered skill is hidden).
     """
     if not tool_names:
         return None
@@ -280,7 +284,34 @@ def _build_tool_defs(tool_names: list[str]) -> list[dict[str, Any]] | None:
         mode=None, include_worker_only=True
     )
     defs = [d for d in all_defs if d.get("function", {}).get("name") in granted]
-    return defs or None
+    return [_with_visible_skills(d, tool_names) for d in defs] or None
+
+
+def _visible_skill_names(tool_names: list[str]) -> list[str]:
+    """The skills a worker holding ``tool_names`` sees and may load (ADR-0156 D9.1)."""
+    return sorted(skills_for_tools(tool_names))
+
+
+def _with_visible_skills(definition: dict[str, Any], tool_names: list[str]) -> dict[str, Any]:
+    """Return ``definition`` with ``read_skill``'s ``name`` enum narrowed to the visible skills.
+
+    Every other definition is returned unchanged. The registry's definition is copied, never
+    mutated.
+    """
+    function = definition.get("function", {})
+    if function.get("name") != "read_skill":
+        return definition
+    names = _visible_skill_names(tool_names)
+    params = function.get("parameters", {})
+    properties = dict(params.get("properties", {}))
+    name_schema = {k: v for k, v in properties.get("name", {}).items() if k != "enum"}
+    if names:
+        name_schema["enum"] = names
+    properties["name"] = name_schema
+    return {
+        **definition,
+        "function": {**function, "parameters": {**params, "properties": properties}},
+    }
 
 
 def _normalize_tool_calls(
@@ -632,7 +663,7 @@ def _summarize_input_context(system_content: str, spec: SubAgentSpec) -> dict[st
     itself the answer the ticket asks for.
 
     Args:
-        system_content: The fully-built sub-agent system prompt (base + skill index).
+        system_content: The fully-built sub-agent system prompt (base + skill catalog).
         spec: The sub-agent specification.
 
     Returns:
@@ -656,7 +687,8 @@ def _summarize_input_context(system_content: str, spec: SubAgentSpec) -> dict[st
         )
     return {
         "system_prompt_chars": len(system_content),
-        "skill_index_block_chars": len(spec.skill_index_block),
+        # The field keeps its name (an ES template field); it records the skill catalog.
+        "skill_index_block_chars": len(_worker_skill_catalog(spec)),
         "context_message_count": len(spec.context),
         "context_chars": context_chars,
         "context_messages": context_messages,
@@ -860,21 +892,38 @@ def _terminal_error(outcome: "_ToolLoopOutcome", state: "_ToolLoopState") -> str
     return f"stopped: {outcome.stop_reason} (report: {outcome.report_kind})"
 
 
+def _worker_skill_catalog(spec: SubAgentSpec) -> str:
+    """The worker's skill catalog: the skills whose tools it holds (ADR-0156 D9.1).
+
+    Empty when the worker does not hold ``read_skill`` (for example in ALERT or DEGRADED,
+    where a worker holds no tool): a catalog it cannot load from is noise.
+
+    Args:
+        spec: The sub-agent specification. ``spec.tools`` is the granted list.
+
+    Returns:
+        The catalog block, or an empty string.
+    """
+    if "read_skill" not in spec.tools:
+        return ""
+    return assemble_skill_catalog(spec.tools)
+
+
 def _build_sub_agent_system_prompt(spec: SubAgentSpec) -> str:
-    """Build the worker's system prompt: base, budget mechanism, type block (ADR-0150 D5).
+    """Build the worker's system prompt: base, budget mechanism, type block, skills (ADR-0150 D5).
 
     A function of the worker's type, ``settings.sub_agent_researcher_min_search_rounds``
-    (a process constant, 0 by default: FRE-1561) and ``spec.skill_index_block``, which no
-    dispatch path sets today (measured at 0 characters on every worker, ADR-0150
-    Context). Nothing per-task is rendered here — not the date (ADR-0149 move 2),
-    not the round budget (ADR-0150 D3) — so every worker of one type has the same
-    system bytes across a fan-out, across turns and across thoroughness levels
-    (ADR-0150's revision of ADR-0149 AC-4a). A caller that starts setting the skill
-    index per turn gives up the across-turn half of that guarantee.
+    (a process constant, 0 by default: FRE-1561) and the skill catalog of the tools the
+    worker holds (ADR-0156 D9.1). The granted tools depend only on the type and the mode,
+    and the catalog only on them and the skill files. Nothing per-task is rendered here —
+    not the date (ADR-0149 move 2), not the round budget (ADR-0150 D3), not the files a task
+    names (ADR-0156 D9.4) — so every worker of one type has the same system bytes across a
+    fan-out, across turns and across thoroughness levels (ADR-0150's revision of ADR-0149
+    AC-4a).
 
     Args:
         spec: The sub-agent specification. Its ``worker_type`` selects the type
-            block; its ``skill_index_block``, when present, is appended last.
+            block; its skill catalog, when it holds ``read_skill``, is appended last.
 
     Returns:
         The complete system prompt.
@@ -885,37 +934,52 @@ def _build_sub_agent_system_prompt(spec: SubAgentSpec) -> str:
     )
     if type_block:
         parts.append(type_block)
-    if spec.skill_index_block:
-        parts.append(spec.skill_index_block)
+    catalog = _worker_skill_catalog(spec)
+    if catalog:
+        parts.append(catalog.rstrip("\n"))
     return "\n\n".join(parts)
 
 
-def _build_task_message(spec: SubAgentSpec, trace_id: str, session_id: str | None) -> str:
+# ADR-0156 D9.4: the task message names the files the worker may read. Only the
+# structured read_paths grant a file; this line tells the worker which ones it got.
+_READ_GRANT_LINE_TEMPLATE = "Files you may read with the read tool: {files}."
+
+
+def _build_task_message(
+    spec: SubAgentSpec,
+    trace_id: str,
+    session_id: str | None,
+    read_grant: ReadGrant | None = None,
+) -> str:
     """Build the worker's task user message (ADR-0149 move 2, ADR-0150 D5).
 
     Everything per-task lives here rather than in the system prompt, which is
     shared per type: the turn's date (on 2026-09-10 a worker with no date spent
-    all five of its rounds searching 2025 events), the sibling line, and the
-    task's round budget.
+    all five of its rounds searching 2025 events), the sibling line, the
+    task's round budget, and the files the task names (ADR-0156 D9.4).
 
     Args:
         spec: The sub-agent specification.
         trace_id: Parent request trace identifier.
         session_id: Originating session id.
+        read_grant: The task's file grant. A grant that holds a file adds a line naming the
+            granted real paths. ``None`` or an empty grant adds nothing.
 
     Returns:
         The task message content.
     """
-    body = "\n".join(
-        (
-            f"Task: {spec.task}",
-            _SIBLING_LINE_TEMPLATE.format(siblings=", ".join(spec.sibling_tasks) or "none"),
-            _BUDGET_BLOCK_TEMPLATE.format(
-                level=spec.thoroughness, n=settings.sub_agent_rounds_for(spec.thoroughness)
-            ),
-            render_report_instruction(spec.worker_type),
-        )
-    )
+    lines = [
+        f"Task: {spec.task}",
+        _SIBLING_LINE_TEMPLATE.format(siblings=", ".join(spec.sibling_tasks) or "none"),
+        _BUDGET_BLOCK_TEMPLATE.format(
+            level=spec.thoroughness, n=settings.sub_agent_rounds_for(spec.thoroughness)
+        ),
+        render_report_instruction(spec.worker_type),
+    ]
+    if read_grant is not None and read_grant.files:
+        files = ", ".join(f.real_path for f in read_grant.files)
+        lines.insert(1, _READ_GRANT_LINE_TEMPLATE.format(files=files))
+    body = "\n".join(lines)
     if spec.turn_started_at is None:
         # A caller outside a turn. The block is omitted rather than a date being
         # invented from `now`, which would silently differ from the turn's own
@@ -1807,6 +1871,7 @@ async def _run_tool_loop(
     session_id: str | None,
     effective_timeout: float,
     deadline_monotonic: float,
+    read_grant: ReadGrant,
 ) -> _ToolLoopOutcome:
     """Run inference/tool-execution rounds until the model stops or a limit fires.
 
@@ -1814,7 +1879,9 @@ async def _run_tool_loop(
     cancels this coroutine mid-round still sees every prior round's activity.
     A tool call for a name outside ``spec.tools`` is refused without dispatch
     (AC-3); refused names are deduplicated and bounded via
-    ``_MAX_REFUSED_TOOL_ATTEMPTS`` since they are untrusted model output.
+    ``_MAX_REFUSED_TOOL_ATTEMPTS`` since they are untrusted model output. A
+    ``read_skill`` call for a skill outside the worker's catalog is refused without
+    dispatch too (ADR-0156 D9.1).
 
     Args:
         state: Mutable accumulator, updated as each round completes.
@@ -1847,6 +1914,8 @@ async def _run_tool_loop(
             timeout untouched.
         deadline_monotonic: This call's absolute ``time.monotonic()`` deadline — the
             same bound the outer ``wait_for`` enforces.
+        read_grant: The task's file grant (ADR-0156 D9.4), passed with every dispatch so
+            that a ``read`` reads only the files the task names.
 
     Returns:
         The terminal :class:`_ToolLoopOutcome`, declaring both why the loop ended
@@ -2251,6 +2320,33 @@ async def _run_tool_loop(
                 )
                 continue
 
+            # ADR-0156 D9.1: a filtered skill is hidden entirely, so it cannot be loaded
+            # by name either. The refusal reads as an unknown name.
+            if tool_name == "read_skill" and isinstance(arguments, dict):
+                visible = _visible_skill_names(spec.tools)
+                requested = arguments.get("name")
+                if requested not in visible:
+                    _absorb(
+                        tool_call_id,
+                        tool_name,
+                        raw_arguments,
+                        undispatched_failure(
+                            tool_name,
+                            ReadSkillError(
+                                "unknown_skill",
+                                f"Unknown skill '{requested}'. Available skills: "
+                                f"{', '.join(visible) or 'none'}",
+                                retryable=False,
+                                next_action=(
+                                    "Call read_skill with one of the listed names, or go on "
+                                    "without it."
+                                ),
+                            ).detail,
+                            trace_id=trace_id,
+                        ),
+                    )
+                    continue
+
             dispatch_result = await dispatch_tool_call(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -2265,6 +2361,8 @@ async def _run_tool_loop(
                 # permission rules, and an ask shows the same card per call, with the
                 # worker named. FRE-1461's once-per-tool-per-turn answer is gone.
                 worker=spec.worker_type.value,
+                # ADR-0156 D9.4: a read reads only the files this task names.
+                read_grant=read_grant,
             )
             state.tools_used.append(tool_name)
             _absorb(tool_call_id, tool_name, raw_arguments, str(dispatch_result["content"]))
@@ -2353,7 +2451,7 @@ async def run_sub_agent(
         authenticated=authenticated,
     )
 
-    # Build system prompt: base + optional skill index inherited from parent (Phase B).
+    # Build system prompt: base, type block and the worker's skill catalog (ADR-0156 D9.1).
     # Built before the try so the FRE-505 input-context breakdown is available on every
     # terminal path (success/timeout/exception/cancel), and so cancellation — which
     # raises BaseException, not Exception — can still emit an audit record.
@@ -2367,11 +2465,20 @@ async def run_sub_agent(
     tool_defs = _build_tool_defs(spec.tools)
     loaded_skills: set[str] = set(spec.loaded_skills)
 
+    # ADR-0156 D9.4: grant time is the task start. The grant is closed in the `finally`
+    # below, so it ends with the task on every terminal path.
+    read_grant = ReadGrant.for_task(spec.read_paths, trace_id=trace_id)
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _system_content},
     ]
     messages.extend(spec.context)
-    messages.append({"role": "user", "content": _build_task_message(spec, trace_id, session_id)})
+    messages.append(
+        {
+            "role": "user",
+            "content": _build_task_message(spec, trace_id, session_id, read_grant),
+        }
+    )
     # External to the loop coroutine's own frame (see _ToolLoopState) so a
     # cancellation mid-round still leaves every completed round's activity
     # readable from here in the except blocks below.
@@ -2430,6 +2537,7 @@ async def run_sub_agent(
                 session_id,
                 effective_timeout,
                 deadline_monotonic,
+                read_grant,
             ),
             timeout=hard_deadline,
         )
@@ -2556,6 +2664,9 @@ async def run_sub_agent(
             stop_reason="origin_error" if isinstance(exc, LLMServerError) else "error",
             why=f"the worker raised before it could report: {exc}",
         )
+    finally:
+        # ADR-0156 D9.4: the grant ends with the task.
+        read_grant.close()
 
     _full_output_chars = len(result.full_output)
     _digest_chars = len(result.summary)

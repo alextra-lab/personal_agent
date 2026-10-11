@@ -1516,7 +1516,7 @@ class TestSubAgentToolGrant:
     async def test_type_tools_outside_grant_set_are_stripped(
         self, controller: ExpansionController
     ) -> None:
-        """AC-2/AC-3: of general's six tools, only the granted one is passed."""
+        """AC-2/AC-3: of general's seven tools, only the granted one is passed."""
         specs: list[Any] = []
         results = await _dispatch_hermetic(
             controller, _one_task_plan(), self._capture(specs), granted=("run_python",)
@@ -1529,6 +1529,7 @@ class TestSubAgentToolGrant:
             "query_telemetry",
             "notes_search",
             "read_skill",
+            "read",
         )
         assert specs[0].denied_tools == denied
         assert results[0].denied_tools == denied
@@ -1545,7 +1546,12 @@ class TestSubAgentToolGrant:
         )
         context = controller._build_synthesis_context(plan=plan, sub_results=results)
 
-        assert specs[0].denied_tools == ("web_search", "fetch_url", "get_library_docs")
+        assert specs[0].denied_tools == (
+            "web_search",
+            "fetch_url",
+            "get_library_docs",
+            "read_skill",
+        )
         assert "web_search" in context
         assert "not granted" in context
 
@@ -2332,8 +2338,9 @@ class TestPlanTypes:
             (WorkerType.RESEARCHER, "quick"),
             (WorkerType.GENERAL, "thorough"),
         ]
-        assert specs[0].tools == ["web_search"]
+        assert specs[0].tools == ["web_search", "read_skill"]
         assert specs[1].tools == list(_GENERAL_TOOLS)
+        assert "read" in specs[1].tools
 
     @pytest.mark.asyncio
     async def test_an_unknown_type_never_reaches_dispatch(self) -> None:
@@ -3272,3 +3279,122 @@ class TestWorkerConversationContext:
 
         assert history_in(WorkerType.RESEARCHER) == []
         assert history_in(WorkerType.GENERAL) == [m["content"] for m in self._HISTORY[-4:]]
+
+
+class TestReadPathsReachTheGeneralWorker:
+    """FRE-1580 (ADR-0156 D9.4): only the structured ``read_paths`` field grants a file.
+
+    The planner may set it on a ``general`` task. The validator keeps absolute path strings
+    only, and only for a type that holds ``read``. Dispatch hands it to the worker spec. A
+    redispatch to the researcher drops it, and the conversation context with it.
+    """
+
+    @staticmethod
+    def _plan_json(task_type: str, read_paths: object) -> str:
+        return json.dumps(
+            {
+                "strategy": "HYBRID",
+                "tasks": [
+                    {"name": "t", "goal": "review", "type": task_type, "read_paths": read_paths}
+                ],
+            }
+        )
+
+    def test_the_validator_keeps_absolute_paths_for_general(self) -> None:
+        plan = _validate_plan_json(
+            self._plan_json(
+                "general",
+                ["/app/agent_workspace/a.md", "relative.md", 7, "/app/agent_workspace/a.md"],
+            )
+        )
+        assert plan is not None
+        assert plan.tasks[0].read_paths == ("/app/agent_workspace/a.md",)
+
+    def test_the_researcher_never_gets_a_file(self) -> None:
+        plan = _validate_plan_json(self._plan_json("researcher", ["/app/agent_workspace/a.md"]))
+        assert plan is not None
+        assert plan.tasks[0].read_paths == ()
+
+    @pytest.mark.parametrize("bad", ["/app/a.md", {"path": "/app/a.md"}, None])
+    def test_a_malformed_value_grants_nothing_and_keeps_the_plan(self, bad: object) -> None:
+        plan = _validate_plan_json(self._plan_json("general", bad))
+        assert plan is not None
+        assert plan.tasks[0].read_paths == ()
+
+    def test_the_planner_is_told_about_read_paths(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import (
+            _build_planner_system_prompt,
+            planner_plan_schema,
+        )
+
+        prompt = _build_planner_system_prompt(["read"])
+        assert '"read_paths": ["string"]' in prompt
+        assert "- read_paths: for a general task that must read a file" in prompt
+        task_schema = planner_plan_schema()["properties"]["tasks"]["items"]
+        assert task_schema["properties"]["read_paths"] == {
+            "type": "array",
+            "items": {"type": "string"},
+        }
+        assert "read_paths" not in task_schema["required"]
+
+    @pytest.mark.asyncio
+    async def test_dispatch_hands_read_paths_to_the_worker_spec(self) -> None:
+        plan = ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[
+                PlanTask(
+                    name="review",
+                    goal="review the file",
+                    type=WorkerType.GENERAL,
+                    thoroughness="quick",
+                    read_paths=("/app/agent_workspace/a.md",),
+                )
+            ],
+        )
+        specs: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            specs.append(kwargs["spec"])
+            return _make_sub_agent_result("review")
+
+        await _dispatch_hermetic(ExpansionController(), plan, _run, granted=_GENERAL_TOOLS)
+        assert specs[0].read_paths == ("/app/agent_workspace/a.md",)
+        assert "read" in specs[0].tools
+
+    @pytest.mark.asyncio
+    async def test_a_redispatch_to_the_researcher_drops_the_files_and_the_history(self) -> None:
+        plan = ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[
+                PlanTask(
+                    name="review",
+                    goal="review the file",
+                    type=WorkerType.GENERAL,
+                    thoroughness="quick",
+                    read_paths=("/app/agent_workspace/a.md",),
+                )
+            ],
+        )
+        history = [{"role": "user", "content": "private turn"}]
+        specs: list[Any] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            specs.append(kwargs["spec"])
+            if len(specs) == 1:
+                return _make_sub_agent_result("review", stated_tool_gap="web_search")
+            return _make_sub_agent_result("review")
+
+        await _dispatch_hermetic(
+            ExpansionController(),
+            plan,
+            _run,
+            granted=(*_GENERAL_TOOLS, "web_search"),
+            known=("web_search",),
+            messages=history,
+        )
+        original, replacement = specs
+        assert original.context == history
+        assert original.read_paths == ("/app/agent_workspace/a.md",)
+        assert replacement.worker_type == WorkerType.RESEARCHER
+        assert replacement.read_paths == ()
+        assert replacement.context == []

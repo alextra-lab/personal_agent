@@ -40,8 +40,14 @@ from personal_agent.telemetry.trace import TraceContext
 # Re-pinned for FRE-1564 (2026-10-10): the `researcher` and `general` descriptions changed and
 # their tool lists grew. Before: with tools af31d592…, no tools b2da2a94…. The ADR-0154 D7
 # probe on qwen3.8-flash-next is run for this change and posted on FRE-1564.
-_MAIN_PLANNER_SHA256_WITH_TOOLS = "38fdec72f9b11945b720122ce302a27c4df7076b92eec7ded0f51eddc72a4719"
-_MAIN_PLANNER_SHA256_NO_TOOLS = "253510e7b0916df330966a3103bc44cce816e8b347ff85f2f88b075ac7dc7e1a"
+#
+# Re-pinned for FRE-1580 (2026-10-11): ADR-0156 D9.2 adds read_skill to the researcher, and
+# D9.4 adds `read` to general, the `read_paths` field to the schema line and its rule. Before:
+# with tools 38fdec72…, no tools 253510e7…. The ADR-0154 D7 probe is NOT run here: model
+# testing is stopped (FRE-1573). Owner decision, 2026-10-11: re-pin now, and run the D7 probe
+# in the FRE-1581 (T9) gate run.
+_MAIN_PLANNER_SHA256_WITH_TOOLS = "890df5867739c11c8b057f5bdf20d0fe1f018861b09a31e321be729b587174d1"
+_MAIN_PLANNER_SHA256_NO_TOOLS = "e58e730b60084751a99e289c87c24b14406651360a466149249f135f4c489f0f"
 _PINNED_ROUNDS = {"quick": 3, "standard": 10, "thorough": 20}
 
 # No skill keyword: nothing here can route the sequential-thinking skill.

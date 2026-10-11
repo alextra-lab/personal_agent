@@ -162,9 +162,7 @@ def failure_lines(module: ModuleType) -> list[FailureLine]:
             if name in namespace and _is_builder(namespace[name], name):
                 known = found.get(statement.lineno)
                 if known is None or (conditional and not known.conditional):
-                    found[statement.lineno] = FailureLine(
-                        path, statement.lineno, name, conditional
-                    )
+                    found[statement.lineno] = FailureLine(path, statement.lineno, name, conditional)
     return [found[line] for line in sorted(found)]
 
 

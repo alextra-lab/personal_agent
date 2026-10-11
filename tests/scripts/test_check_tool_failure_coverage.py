@@ -54,7 +54,7 @@ _SOURCE = textwrap.dedent(
 
 #: Builder calls that coverage.py credits whenever their statement runs, built or not.
 _CONDITIONAL_SOURCE = textwrap.dedent(
-    '''
+    """
     from personal_agent.tools.contract import dispatch_error
 
 
@@ -72,7 +72,7 @@ _CONDITIONAL_SOURCE = textwrap.dedent(
 
     def first(other: object) -> object:
         return dispatch_error("timeout", "seven", retryable=True, next_action="again") or other
-    '''
+    """
 )
 
 

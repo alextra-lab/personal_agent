@@ -39,6 +39,12 @@ from personal_agent.governance.bash_matcher import (
     Subcommand,
     parse_bash,
 )
+from personal_agent.governance.curl_request import (
+    CURL_READ_METHODS,
+    CurlReadRule,
+    CurlRefusal,
+    parse_curl_request,
+)
 from personal_agent.governance.models import Mode
 
 #: JSON scalar values a parameter pattern can hold.
@@ -84,6 +90,10 @@ _PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 _LIST_KEYS = ("deny", "ask", "allow")
 _ITEM_KEYS = frozenset({"rule", "modes", "reason"})
+_CURL_READ_KEY = "curl_read"
+_CURL_READ_KEYS = frozenset({"hosts", "methods", "paths", "body", "modes", "reason"})
+_CURL_HOST = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*:[0-9]+")
+_CURL_PATH = re.compile(r"/|(?:/(?:[A-Za-z0-9._,-]+|\*))+")
 _VALID_MODES = frozenset(mode.value for mode in Mode)
 
 
@@ -414,8 +424,8 @@ def _check_allow_rule(rule: PermissionRule) -> None:
         rule: A parsed allow rule.
 
     Raises:
-        PermissionRuleError: For bare ``bash``, and for ``bash(<word> *)`` where ``<word>`` runs
-            another program.
+        PermissionRuleError: For bare ``bash``, for ``bash(<word> *)`` where ``<word>`` runs
+            another program, and for a ``bash(curl … *)`` prefix rule (FRE-1583).
     """
     if rule.tool != "bash":
         return
@@ -424,6 +434,11 @@ def _check_allow_rule(rule: PermissionRule) -> None:
             f"{rule.text!r}: an allow rule for every bash command is not allowed"
         )
     first = rule.bash_words[0].rsplit("/", 1)[-1]
+    if rule.bash_prefix and first == "curl":
+        raise PermissionRuleError(
+            f"{rule.text!r}: a curl prefix rule would pass curl calls that curl_read does not "
+            "list (FRE-1583). List the request under curl_read, or name the full command"
+        )
     if rule.bash_prefix and first in PROGRAM_RUNNING_WORDS:
         raise PermissionRuleError(
             f"{rule.text!r}: {first!r} can run another program, so an allow rule must name "
@@ -439,11 +454,14 @@ class PermissionRules:
         deny: Deny rules, in file order.
         ask: Ask rules, in file order.
         allow: Allow rules, in file order.
+        curl_read: The curl requests that run without asking (FRE-1583). A ``curl`` subcommand
+            that no allow rule matches is allowed only when one of these lists its request.
     """
 
     deny: tuple[PermissionRule, ...] = ()
     ask: tuple[PermissionRule, ...] = ()
     allow: tuple[PermissionRule, ...] = ()
+    curl_read: tuple[CurlReadRule, ...] = ()
 
     def merged(self, other: PermissionRules) -> PermissionRules:
         """Return these rules with another set's rules added after them.
@@ -458,7 +476,75 @@ class PermissionRules:
             deny=self.deny + other.deny,
             ask=self.ask + other.ask,
             allow=self.allow + other.allow,
+            curl_read=self.curl_read + other.curl_read,
         )
+
+
+def _string_list(value: object) -> list[str] | None:
+    """Return a non-empty list of strings, or ``None`` when the value is not one.
+
+    Args:
+        value: A YAML value.
+
+    Returns:
+        The list, or ``None``.
+    """
+    if not isinstance(value, list) or not value or not all(isinstance(v, str) for v in value):
+        return None
+    return list(value)
+
+
+def _parse_curl_read(item: object, *, source: str) -> CurlReadRule:
+    """Validate and parse one ``curl_read`` entry.
+
+    Args:
+        item: The YAML entry.
+        source: Where it came from, for error messages.
+
+    Returns:
+        The parsed entry.
+
+    Raises:
+        PermissionRuleError: When the entry is not valid.
+    """
+    if not isinstance(item, dict):
+        raise PermissionRuleError(f"{source}: each curl_read item must be a mapping")
+    extra = set(item) - _CURL_READ_KEYS
+    if extra:
+        raise PermissionRuleError(f"{source}: curl_read item has unknown keys {sorted(extra)}")
+    hosts = _string_list(item.get("hosts"))
+    if hosts is None or not all(_CURL_HOST.fullmatch(h) for h in hosts):
+        raise PermissionRuleError(f"{source}: curl_read hosts must be lower-case host:port")
+    methods = _string_list(item.get("methods"))
+    if methods is None or set(methods) - CURL_READ_METHODS:
+        raise PermissionRuleError(
+            f"{source}: curl_read methods must be a list of {sorted(CURL_READ_METHODS)}"
+        )
+    paths = _string_list(item.get("paths"))
+    if paths is None or not all(_CURL_PATH.fullmatch(p) for p in paths):
+        raise PermissionRuleError(
+            f"{source}: curl_read paths must start with '/' and hold literal or '*' segments"
+        )
+    body = item.get("body", False)
+    if not isinstance(body, bool):
+        raise PermissionRuleError(f"{source}: curl_read body must be true or false")
+    modes = item.get("modes")
+    if modes is not None and (_string_list(modes) is None or set(modes) - _VALID_MODES):
+        raise PermissionRuleError(
+            f"{source}: curl_read modes must be a list of {sorted(_VALID_MODES)}"
+        )
+    reason = item.get("reason")
+    if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+        raise PermissionRuleError(f"{source}: curl_read reason must be text")
+    text = f"curl_read({','.join(hosts)} {','.join(methods)}{' +body' if body else ''})"
+    return CurlReadRule(
+        text=text,
+        hosts=frozenset(hosts),
+        methods=frozenset(methods),
+        paths=tuple(paths),
+        body=body,
+        modes=frozenset(modes) if modes is not None else None,
+    )
 
 
 def parse_rules_document(document: object, *, source: str) -> PermissionRules:
@@ -476,7 +562,7 @@ def parse_rules_document(document: object, *, source: str) -> PermissionRules:
     """
     if not isinstance(document, dict):
         raise PermissionRuleError(f"{source}: expected a mapping with deny, ask and allow")
-    unknown = set(document) - set(_LIST_KEYS)
+    unknown = set(document) - {*_LIST_KEYS, _CURL_READ_KEY}
     if unknown:
         raise PermissionRuleError(f"{source}: unknown keys {sorted(unknown)}")
     lists: dict[str, list[PermissionRule]] = {key: [] for key in _LIST_KEYS}
@@ -505,8 +591,14 @@ def parse_rules_document(document: object, *, source: str) -> PermissionRules:
             if key == "allow":
                 _check_allow_rule(rule)
             lists[key].append(rule)
+    curl_items = document.get(_CURL_READ_KEY) or []
+    if not isinstance(curl_items, list):
+        raise PermissionRuleError(f"{source}: {_CURL_READ_KEY} must be a list")
     return PermissionRules(
-        deny=tuple(lists["deny"]), ask=tuple(lists["ask"]), allow=tuple(lists["allow"])
+        deny=tuple(lists["deny"]),
+        ask=tuple(lists["ask"]),
+        allow=tuple(lists["allow"]),
+        curl_read=tuple(_parse_curl_read(item, source=source) for item in curl_items),
     )
 
 
@@ -611,7 +703,8 @@ def evaluate_permission(
     session = [r for r in session_rules if r.tool == tool]
 
     if tool == "bash":
-        return _evaluate_bash(arguments, deny, ask, allow, session)
+        curl_read = [r for r in rules.curl_read if r.applies_in(mode)]
+        return _evaluate_bash(arguments, deny, ask, allow, session, curl_read)
 
     for rule in deny:
         if rule.matches_call(arguments):
@@ -641,6 +734,7 @@ def _evaluate_bash(
     ask: Sequence[PermissionRule],
     allow: Sequence[PermissionRule],
     session: Sequence[PermissionRule],
+    curl_read: Sequence[CurlReadRule] = (),
 ) -> PermissionDecision:
     """Evaluate one bash call, subcommand by subcommand (D8.2).
 
@@ -650,6 +744,7 @@ def _evaluate_bash(
         ask: Ask rules for bash in this mode.
         allow: Allow rules for bash in this mode.
         session: This session's bash session rules.
+        curl_read: The ``curl_read`` entries for this mode (FRE-1583).
 
     Returns:
         The decision.
@@ -695,6 +790,19 @@ def _evaluate_bash(
                 "ask", f"the subcommand is not plain ({sub.refusal})", None, sub.text
             )
         allowing = next((r for r in allow if r.allows_subcommand(sub)), None)
+        if allowing is None and sub.words and sub.words[0] == "curl":
+            request = parse_curl_request(sub.words[1:])
+            if isinstance(request, CurlRefusal):
+                why = request.reason
+            else:
+                entry = next((r for r in curl_read if r.allows(request)), None)
+                if entry is not None:
+                    matched.append(entry.text)
+                    continue
+                why = f"{request.method} {request.authority}{request.path} is not listed"
+            return PermissionDecision(
+                "ask", f"curl is not a listed telemetry read ({why})", None, sub.text
+            )
         if allowing is None:
             why = (
                 "an indirect-execution word needs an exact allow rule"

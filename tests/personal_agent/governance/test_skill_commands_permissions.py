@@ -83,3 +83,32 @@ def test_recipe_is_allowed_or_a_documented_ask(skill: str, recipe: str, document
             f"{skill}: {decision.refused!r} asks ({decision.reason}) but the recipe has no "
             "'# ask: <reason>' line"
         )
+
+
+_TELEMETRY_SKILLS = {
+    "query-elasticsearch.md",
+    "query-tempo.md",
+    "self-telemetry.md",
+    "infrastructure-health.md",
+}
+_TELEMETRY_CURL = [
+    (skill, recipe)
+    for skill, recipe, documented in _ALL
+    if skill in _TELEMETRY_SKILLS and recipe.lstrip().startswith("curl ") and not documented
+]
+
+
+def test_the_telemetry_skills_have_curl_recipes() -> None:
+    assert {skill for skill, _ in _TELEMETRY_CURL} == _TELEMETRY_SKILLS
+    assert len(_TELEMETRY_CURL) >= 40
+
+
+@pytest.mark.parametrize(
+    ("skill", "recipe"),
+    _TELEMETRY_CURL,
+    ids=[f"{s}:{i}" for i, (s, _) in enumerate(_TELEMETRY_CURL)],
+)
+def test_a_telemetry_skill_curl_recipe_is_allowed(skill: str, recipe: str) -> None:
+    """FRE-1583 AC-2: a curl read in these skills runs without asking, unless it says it asks."""
+    decision = evaluate_permission("bash", {"command": recipe}, "NORMAL", _RULES)
+    assert decision.decision == "allow", f"{skill}: {decision.refused!r} ({decision.reason})"

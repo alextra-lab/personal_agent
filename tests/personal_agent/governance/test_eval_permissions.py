@@ -37,12 +37,16 @@ def _adr_ask_class(tool: str, args: dict[str, object], decision: PermissionDecis
 
     The classes: an explicit ask rule (D8.6 ``run_python`` network), a bash subcommand that
     fails the D8.2 closed condition, and a bash subcommand whose first word can run another
-    program (``python3``, ``awk``, ``sed``, ``env``: the owner's decision of 2026-10-10).
+    program (``python3``, ``awk``, ``sed``, ``env``: the owner's decision of 2026-10-10), and a
+    curl call that is not a listed read of internal telemetry (FRE-1583, the owner's rule of
+    2026-10-10, ADR-0156 D8.2 amendment).
     """
     if decision.explicit:
         return f"explicit ask rule {decision.rule}"
     if tool != "bash":
         return None
+    if decision.reason.startswith("curl is not a listed telemetry read"):
+        return decision.reason
     parsed = parse_bash(str(args.get("command", "")))
     if parsed.refusal is not None:
         return f"not a plain command ({parsed.refusal})"
@@ -83,8 +87,13 @@ def test_every_successful_call_is_allowed_or_an_adr_ask() -> None:
             classes[adr_class.split(" (")[0]] += 1
     assert unexplained == []
     # The counts the PR reports: 346 successful calls; 21 run_python network and 17 bash asks.
-    assert allowed == 308
-    assert sum(classes.values()) == 38
+    # FRE-1583 moved 5 curl calls from allow to ask: 4 to an outside host (site.api.espn.com,
+    # fn_s2 and gm_s2) and 1 POST to /_esql, which the curl_read table does not list (gm_s3).
+    assert allowed == 303
+    assert sum(classes.values()) == 43
+    # The class holds 6: those 5, and 1 call that asked before for its `$?` and now names its
+    # first subcommand, a curl to the outside host.
+    assert classes["curl is not a listed telemetry read"] == 6
 
 
 def test_seeded_negative_without_the_eval_file_a_call_is_unexplained() -> None:

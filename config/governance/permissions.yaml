@@ -94,9 +94,8 @@ allow:
 
   # bash: migrated from auto_approve_prefixes (D8.2). Not migrated, because they can run
   # another program, so they ask (owner, 2026-10-10, FRE-1573): env, awk, sed, python3.
-  # curl stays allowed only when no argument sends or writes a local file (FRE-1572 option
-  # rules); find, sort, uniq, rg, git and mmdc keep their FRE-1572 option rules too.
-  - {rule: "bash(curl *)", modes: [NORMAL, ALERT, DEGRADED]}
+  # curl has no allow rule: curl_read below decides it (FRE-1583). find, sort, uniq, rg, git
+  # and mmdc keep their FRE-1572 option rules.
   - {rule: "bash(grep *)", modes: [NORMAL, ALERT, DEGRADED]}
   - {rule: "bash(ls *)", modes: [NORMAL, ALERT, DEGRADED]}
   - {rule: "bash(cat *)", modes: [NORMAL, ALERT, DEGRADED]}
@@ -133,3 +132,63 @@ allow:
   - {rule: "bash(id *)", modes: [NORMAL]}
   - {rule: "bash(which *)", modes: [NORMAL]}
   - {rule: "bash(mmdc *)", modes: [NORMAL]}  # FRE-315: mermaid-cli for diagram validation
+
+# curl runs without asking only for a read of internal telemetry (owner, 2026-10-10, FRE-1583;
+# ADR-0156 D8.2 amendment). A bash subcommand whose first word is curl, and that no allow rule
+# matches, is reduced to one request: one http:// URL with an explicit host:port, one method, one
+# path. The parser accepts only read options (governance/curl_request.py). Anything it cannot
+# reduce, and any request that no entry below lists, asks: outside hosts, PUT/DELETE/PATCH,
+# redirects (-L), proxies, --resolve, --connect-to, --url, -K, and every other option.
+#
+# Path patterns: a literal segment matches itself, '*' matches one segment that does not start
+# with '_' (an index or a trace id). There is no open prefix: a route added later asks. A
+# 'bash(curl … *)' allow rule is refused when the rules load.
+# 'body: true' allows a request body (-d). Without it, a body asks.
+curl_read:
+  - hosts: ["elasticsearch:9200", "localhost:9200"]
+    methods: [GET]
+    paths: ["/", "/_cat", "/_cat/*", "/_cat/*/*", "/_cluster/health", "/_cluster/health/*",
+            "/_mapping", "/*/_mapping", "/_field_caps", "/*/_field_caps"]
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "Elasticsearch reads: cluster health, _cat, mappings, field capabilities."
+  # _query is ES|QL, which has no write command (owner, 2026-10-10, FRE-1583 build seat).
+  - hosts: ["elasticsearch:9200", "localhost:9200"]
+    methods: [GET, POST]
+    paths: ["/_search", "/*/_search", "/_count", "/*/_count", "/_query"]
+    body: true
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "Elasticsearch searches, counts and ES|QL queries, with a query body."
+  # The documented read routes, not every GET: Tempo documents GET on endpoints that change
+  # state (/live-store/prepare-downscale, /api/overrides), and /api/mcp is an MCP server.
+  - hosts: ["tempo:3200"]
+    methods: [GET]
+    paths: ["/ready", "/status", "/status/version", "/status/services", "/status/endpoints",
+            "/status/config", "/status/runtime_config", "/status/buildinfo",
+            "/status/usage-stats", "/api/echo", "/api/status/buildinfo",
+            "/api/traces/*", "/api/v2/traces/*", "/api/search", "/api/search/tags",
+            "/api/search/tag/*/values", "/api/v2/search/tags", "/api/v2/search/tag/*/values",
+            "/api/metrics/query", "/api/metrics/query_range"]
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "Tempo trace reads, searches and status."
+  # Health endpoints. Neo4j: only the body-less discovery GET (owner, 2026-10-10); every query
+  # path asks.
+  - hosts: ["neo4j:7474"]
+    methods: [GET]
+    paths: ["/"]
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "Neo4j health: the discovery page."
+  - hosts: ["searxng:8080"]
+    methods: [GET]
+    paths: ["/healthz"]
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "SearXNG health."
+  - hosts: ["grafana:3000"]
+    methods: [GET]
+    paths: ["/api/health"]
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "Grafana health."
+  - hosts: ["localhost:9001"]
+    methods: [GET]
+    paths: ["/health"]
+    modes: [NORMAL, ALERT, DEGRADED]
+    reason: "The gateway's own health endpoint, inside its container."

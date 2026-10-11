@@ -23,7 +23,7 @@ keywords:
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `infra_health` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
 
-**Category:** `system_read` · **Risk:** none · **Approval:** plain `bash curl` runs without asking; `psql`, `redis-cli` and `run_python(network=True)` ask the user (ADR-0156 D8)
+**Category:** `system_read` · **Risk:** none · **Approval:** a plain `bash curl` GET of a listed health endpoint runs without asking (FRE-1583); `psql`, `redis-cli` and `run_python(network=True)` ask the user (ADR-0156 D8)
 
 > **Container vs host:** Hostnames (`postgres`, `neo4j`, `elasticsearch`, `redis`) are Docker DNS names that only resolve from **inside** the `cloud-sim` network. From the VPS host shell, use `localhost:<port>` instead.
 
@@ -94,7 +94,7 @@ print(json.dumps(result, indent=2))
 
 ## Governance
 
-- `bash curl`: runs without asking in NORMAL/ALERT/DEGRADED.
+- `bash curl`: a `GET` of a listed health or telemetry read endpoint runs without asking in NORMAL/ALERT/DEGRADED. Any other host, path or method asks (FRE-1583). For Neo4j only `GET http://neo4j:7474/` runs without asking.
 - `bash psql`, `bash redis-cli`: ask the user (FRE-1572), in every mode.
 - `run_python(network=True)`: asks the user in every mode (ADR-0156 D8.6).
 - LOCKDOWN: bash and run_python both disabled.

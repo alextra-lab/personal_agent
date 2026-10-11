@@ -79,6 +79,12 @@ ask:
     reason: "Writes ask outside NORMAL mode."
 allow:
   - rule: "filesystem_write"
+# curl has no allow rule. A curl call runs without asking only when curl_request.py reduces it
+# to one request that a curl_read entry lists (FRE-1583). A bash(curl … *) allow rule is refused.
+curl_read:
+  - hosts: ["tempo:3200"]
+    methods: [GET]
+    paths: ["/ready", "/api/traces/*"]
 ```
 
 ## Dependencies

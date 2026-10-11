@@ -53,8 +53,12 @@ def test_ac2_a_plain_curl_is_allowed() -> None:
 
 
 def test_ac2_no_prefix_rule_for_a_program_running_word() -> None:
-    first_words = {r.bash_words[0] for r in RULES.allow if r.bash_words and r.bash_prefix}
-    assert not first_words & {"env", "awk", "sed", "python3"}
+    """The one exception is a reviewed skill script (FRE-1585): python3 plus its exact path."""
+    prefix_rules = [r.bash_words for r in RULES.allow if r.bash_words and r.bash_prefix]
+    assert not {words[0] for words in prefix_rules} & {"env", "awk", "sed"}
+    for words in prefix_rules:
+        if words[0] == "python3":
+            assert len(words) == 2 and words[1].startswith("docs/skills/"), words
 
 
 # --- AC-6: run_python with network asks in every mode ---------------------------------------

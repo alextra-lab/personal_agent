@@ -95,6 +95,9 @@ _CURL_READ_KEYS = frozenset({"hosts", "methods", "paths", "body", "modes", "reas
 _CURL_HOST = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*:[0-9]+")
 _CURL_PATH = re.compile(r"/|(?:/(?:[A-Za-z0-9._,-]+|\*))+")
 _VALID_MODES = frozenset(mode.value for mode in Mode)
+#: The only path form that a ``bash(python3 <path> *)`` allow rule may name (FRE-1585): relative,
+#: one skill, its ``scripts/`` directory, one ``.py`` file. No dot segment, no glob, no prefix.
+_SKILL_SCRIPT = re.compile(r"docs/skills/[a-z0-9][a-z0-9-]*/scripts/[A-Za-z0-9_][A-Za-z0-9_-]*\.py")
 
 
 class PermissionRuleError(ValueError):
@@ -417,15 +420,46 @@ def parse_rule(
     )
 
 
+def _skill_script_refusal(path: str) -> str | None:
+    """Return why ``path`` is not one reviewed skill script, or ``None`` (FRE-1585).
+
+    The bash tool starts every command in this process's directory (``/app`` in the image), so
+    the path is checked there, as bash will open it. The file must be a regular file, and no
+    part of the path may be a symbolic link, so the rule names the file that the image holds.
+
+    Args:
+        path: The script path of a ``bash(python3 <path> *)`` rule.
+
+    Returns:
+        A reason, or ``None`` when the path names one file under ``docs/skills/*/scripts/``.
+    """
+    if not _SKILL_SCRIPT.fullmatch(path):
+        return f"{path!r} is not docs/skills/<skill>/scripts/<file>.py"
+    base = Path.cwd()
+    current = base
+    for part in Path(path).parts:
+        current = current / part
+        if current.is_symlink():
+            return f"{path!r} passes through a symbolic link"
+    if not current.is_file():
+        return f"{path!r} is not a file in {base}"
+    return None
+
+
 def _check_allow_rule(rule: PermissionRule) -> None:
     """Reject an allow rule that would let a program run another program (D8.2).
+
+    One prefix form of a program-running word loads: ``bash(python3 <path> *)``, when
+    ``<path>`` names one reviewed script under ``docs/skills/*/scripts/`` (FRE-1585). The words
+    after the script are the script's own arguments.
 
     Args:
         rule: A parsed allow rule.
 
     Raises:
         PermissionRuleError: For bare ``bash``, for ``bash(<word> *)`` where ``<word>`` runs
-            another program, and for a ``bash(curl … *)`` prefix rule (FRE-1583).
+            another program (except the skill-script form above), and for a ``bash(curl … *)``
+            prefix rule (FRE-1583).
     """
     if rule.tool != "bash":
         return
@@ -434,6 +468,15 @@ def _check_allow_rule(rule: PermissionRule) -> None:
             f"{rule.text!r}: an allow rule for every bash command is not allowed"
         )
     first = rule.bash_words[0].rsplit("/", 1)[-1]
+    if rule.bash_prefix and rule.bash_words[0] == "python3" and len(rule.bash_words) == 2:
+        refusal = _skill_script_refusal(rule.bash_words[1])
+        if refusal is None:
+            return
+        raise PermissionRuleError(
+            f"{rule.text!r}: {refusal}. A python3 prefix rule must be "
+            "'bash(python3 docs/skills/<skill>/scripts/<file>.py *)' for one reviewed script "
+            "(FRE-1585)"
+        )
     if rule.bash_prefix and first == "curl":
         raise PermissionRuleError(
             f"{rule.text!r}: a curl prefix rule would pass curl calls that curl_read does not "

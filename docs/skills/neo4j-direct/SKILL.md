@@ -16,12 +16,12 @@ metadata:
 - Use the script, not a hand-written driver call. The `run_python` sandbox has no `neo4j` driver.
 - Pass a value with `--param name=value`. Never put a value into the query text.
 - A `CALL` is allowed only for the schema procedures `db.labels`, `db.relationshipTypes`, `db.propertyKeys`, `db.schema.visualization`, `db.schema.nodeTypeProperties` and `db.schema.relTypeProperties`. Any other procedure (an `apoc.*` call, `dbms.*`) is refused: it can write, reach a URL or show the configuration.
+- The script also refuses administration commands (`SHOW`, `TERMINATE`, `USE`, `ALTER`, `GRANT` and the like) and the `apoc.cypher.*` and `apoc.xml.*` functions. For the schema, use the procedures above.
 - Do not use the `/db/data/transaction/commit` HTTP endpoint. It does not exist in Neo4j 5 (404 or 401).
 
 ## Step 1 — Run one query
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN count(e) AS n"
 ```
 
@@ -37,27 +37,22 @@ backtick name is not read as a clause.
 ## Step 2 — Common diagnostic queries
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY cnt DESC"
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.first_seen AS first_seen ORDER BY e.first_seen DESC LIMIT 5"
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py 'MATCH (e:Entity) WHERE toLower(e.name) CONTAINS $q RETURN e.name AS name, e.entity_type AS type LIMIT 10' --param q=memory
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETURN e.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 10"
 ```
 

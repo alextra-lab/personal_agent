@@ -172,7 +172,7 @@ The migration table gives the verdict for each file.
      - it has no redirection, except output or errors to `/dev/null` and `2>&1`. An input redirection from a file asks, because it feeds a local file to the command.
    - A command that the parser cannot parse fully asks.
    - A function definition, a heredoc, and process substitution (`<(…)`, `>(…)`) are not simple commands, so they ask.
-   - An indirect-execution word can be allowed only by an allow rule whose pattern names the word and the full inner command, for example `Bash(timeout 30 git status)`. A rule of the form `Bash(<indirect word> *)` is rejected when the rules load.
+   - An indirect-execution word can be allowed only by an allow rule whose pattern names the word and the full inner command, for example `Bash(timeout 30 git status)`. A rule of the form `Bash(<indirect word> *)` is rejected when the rules load. **Amended 2026-10-11 (FRE-1585):** one prefix form of `python3` loads, for a reviewed skill script. See the amendment in Status Updates.
    - **Migrating `auto_approve_prefixes` is not a copy.** A prefix that can run another program does not become an allow rule: today's list holds `env`, `awk`, `sed` and `python3` (`config/governance/tools.yaml:648-691`). They ask. This is the owner's decision of 2026-10-10 (FRE-1573, 18:40 UTC: "Yes, they ask"). It reverses the owner's earlier choice in the FRE-1572 build seat that `python3` stays auto-approved. `curl` stays allowed only when no argument sends a local file (`-d @…`, `--data*` with `@`, `-F …=@…`, `-T`, `--upload-file`, `-K`, `--config`). Otherwise it asks. T2 lists every prefix of today with its outcome in the PR. **Amended 2026-10-10 (FRE-1583):** `curl` runs without asking only for a listed read of internal telemetry. See the amendment in Status Updates.
 3. **No match asks the user.** The approval card (FRE-1461, ADR-0063 Amendment A) shows the tool, the exact arguments, and the worker when a worker asks. The card offers "allow once" and "allow for this session".
    - "Allow for this session" adds a session allow rule for the exact tool and arguments of the call.
@@ -532,3 +532,23 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
 - A proxy environment variable redirects curl. No compose file sets one, and the model cannot set one without an approved call (an assignment and `export` ask).
 - `_search?scroll=…` keeps a search context open until it expires. It changes no data.
 
+### 2026-10-11 - Amendment to D8.2: reviewed skill scripts run without a card (FRE-1585)
+**Changed By:** Owner (decision), `build` seat (author)
+**Reason:** since FRE-1574, `python3` always asks. The skills converted in FRE-1578 ship tested, read-only scripts under `docs/skills/<skill>/scripts/`. Each call showed a card, although the scripts only read.
+
+**Owner decision (2026-10-11, FRE-1585):** "yes" to an allow rule that names each exact skill script, reviewed like code, so that these read-only calls run without a card.
+
+**The rule, added to D8.2:**
+- One prefix form of a program-running word loads: `bash(python3 <path> *)`. The loader accepts it only when `<path>` is relative, matches `docs/skills/<skill>/scripts/<file>.py` with no dot segment and no glob, names a regular file in the directory where the bash tool starts (`/app` in the image), and passes through no symbolic link. Any other `python3 … *` rule is refused when the rules load. An exact `bash(python3 …)` rule stays as D8.2 had it.
+- The matcher is unchanged. The words of the rule must equal the first two words of the subcommand. So `./docs/…`, `/app/docs/…`, a dot segment, an interpreter option (`python3 -I …`) and `python` do not match. The rest of D8.2 applies to the whole command: a separator starts a subcommand that its own rule must allow, and an expansion, a glob, an assignment or a redirection to a file asks.
+- One allow rule per reviewed script, each with a reason, in `config/governance/permissions.yaml`. A script gets a rule only in the PR that reviews it. A test fails if a rule names a script that `tests/docs/test_skill_scripts.py` does not test for argument safety.
+- The scripts in this change: `infrastructure-health/probe_services.py`, `neo4j-direct/cypher.py`, `query-elasticsearch/es_index_granularity.py`, `turn-forensics/call_timeline.py`. The mermaid validator of FRE-1579 gets its rule in the PR that reviews it.
+- `write` and `edit` refuse `/app/docs/skills/**` and `/app/.venv/**` through `forbidden_paths`. The durability check refuses these paths already, but it fails open when the mount table cannot be read.
+
+**Found in the review, fixed in the same change:** `cypher.py` sent three kinds of query that a read transaction does not stop. Each was seen on the test Neo4j in read access mode: `apoc.cypher.runFirstColumnSingle` ran `dbms.listConfig()` from inside a string, `SHOW SETTINGS` returned the configuration, and `TERMINATE TRANSACTIONS` ran. The script now refuses the `apoc.cypher.*` and `apoc.xml.*` functions and the administration commands (`SHOW`, `TERMINATE`, `USE`, `ALTER`, `RENAME`, `GRANT`, `DENY`, `REVOKE`, `START`, `STOP`, `ENABLE`, `DEALLOCATE`, `REALLOCATE`) before it connects. The server refuses data writes in read access mode (`CREATE` and `INSERT` were refused on the test server).
+
+**Accepted residual risks (Codex plan review):**
+- The allowed file is trusted as code. It is in the image, not on a mounted volume, and `write` and `edit` refuse it. A bash write to a file asks. The loader checks the file when the rules load, and bash opens it by name later, so a change by a process outside the gateway between the two is not detected. Only a reviewed PR and a rebuild change the file.
+- `probe_services.py` runs `psql` with a fixed argument list. The host, port, user and database come from the environment, not from an argument. The audit test sees the spawn but not what `psql` does inside.
+- `cypher.py` sends model-written Cypher to Neo4j in a read transaction. It can read any node of the graph. That is its purpose.
+- A command before the script in a pipeline is judged by its own rule. The scripts only filter and print their input.

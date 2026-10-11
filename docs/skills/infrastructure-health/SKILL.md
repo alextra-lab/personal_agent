@@ -21,12 +21,10 @@ The script opens a real Postgres connection and runs `SELECT 1`, reads the Elast
 health, reads the Neo4j HTTP page, and sends a Redis `PING`. It prints one line for each service.
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/infrastructure-health/scripts/probe_services.py all
 ```
 
 ```bash
-# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 docs/skills/infrastructure-health/scripts/probe_services.py postgres
 ```
 

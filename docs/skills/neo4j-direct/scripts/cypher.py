@@ -14,7 +14,10 @@ before a connection is made. The server is the guard, not the check.
 
 A read transaction does not stop a read-mode procedure that reaches out (``apoc.load.json``) or
 shows the configuration (``dbms.listConfig``). So a ``CALL`` is allowed only for the procedures
-in ``_ALLOWED_PROCEDURES``, which list the schema and nothing else.
+in ``_ALLOWED_PROCEDURES``, which list the schema and nothing else. For the same reason the
+script refuses administration commands (``SHOW SETTINGS`` shows the configuration and
+``TERMINATE TRANSACTIONS`` stops other work, both in read mode) and the ``apoc.cypher`` and
+``apoc.xml`` functions, which run Cypher text or parse XML (FRE-1585).
 
 Environment (the same names as ``config/``; the script is standalone, because importing
 ``personal_agent.config`` starts the app configuration and logs to stdout):
@@ -57,8 +60,33 @@ _TOKEN = re.compile(
     re.VERBOSE | re.DOTALL,
 )
 _WRITE_WORDS = frozenset(
-    {"CREATE", "MERGE", "DELETE", "DETACH", "SET", "REMOVE", "DROP", "FOREACH"}
+    {"CREATE", "INSERT", "MERGE", "DELETE", "DETACH", "SET", "REMOVE", "DROP", "FOREACH"}
 )
+# Administration commands. A read transaction does not stop all of them: on Neo4j 5.26,
+# SHOW SETTINGS returns the server configuration and TERMINATE TRANSACTIONS stops another
+# session's transaction in read access mode (FRE-1585, seen on the test server). USE changes the
+# database, for example to system.
+_ADMIN_WORDS = frozenset(
+    {
+        "SHOW",
+        "TERMINATE",
+        "USE",
+        "ALTER",
+        "RENAME",
+        "GRANT",
+        "DENY",
+        "REVOKE",
+        "START",
+        "STOP",
+        "ENABLE",
+        "DEALLOCATE",
+        "REALLOCATE",
+    }
+)
+# Functions in these namespaces are refused (FRE-1585). apoc.cypher.* runs Cypher text, so a
+# blocked procedure or LOAD CSV in a string ran inside a read transaction (seen on the test
+# server: dbms.listConfig through runFirstColumnSingle). apoc.xml.* parses XML on the server.
+_BLOCKED_FUNCTION_NAMESPACES = ("apoc.cypher.", "apoc.xml.")
 # A procedure call is allowed only if it is on this list (allow, never deny): a procedure can
 # write (apoc.cypher.doIt), read a file or a URL (apoc.load.json), or show the server
 # configuration (dbms.listConfig), and a read transaction stops only the first.
@@ -140,7 +168,7 @@ def find_write_clause(query: str) -> str | None:
         if kind != "word" or (index and tokens[index - 1] == ("other", ".")):
             continue
         word = text.upper()
-        if word in _WRITE_WORDS:
+        if word in _WRITE_WORDS or word in _ADMIN_WORDS:
             return word
         if word == "LOAD" and index + 1 < len(tokens) and tokens[index + 1][1].upper() == "CSV":
             return "LOAD CSV"
@@ -179,6 +207,42 @@ def find_blocked_procedure(query: str) -> str | None:
         name = ".".join(parts)
         if not parts or name not in _ALLOWED_PROCEDURES:
             return name or "<unreadable>"
+    return None
+
+
+def find_blocked_function(query: str) -> str | None:
+    """Return the first name in ``query`` that is in a blocked function namespace, or ``None``.
+
+    A name is a chain of words and quoted names joined by dots. Each part is unquoted, the
+    parts are joined, and the result is compared in lower case, so every quoting and spacing
+    form of ``apoc.cypher.runFirstColumnSingle`` is read as one name.
+
+    Args:
+        query: The Cypher text.
+
+    Returns:
+        The name as joined, or ``None``. Text in a string or a comment is not read.
+    """
+    tokens = _tokens(query)
+    index = 0
+    while index < len(tokens):
+        if tokens[index][0] not in ("word", "quoted") or (
+            index and tokens[index - 1] == ("other", ".")
+        ):
+            index += 1
+            continue
+        parts = [_name(tokens[index])]
+        while (
+            index + 2 < len(tokens)
+            and tokens[index + 1] == ("other", ".")
+            and tokens[index + 2][0] in ("word", "quoted")
+        ):
+            index += 2
+            parts.append(_name(tokens[index]))
+        name = ".".join(parts)
+        if (name.lower() + ".").startswith(_BLOCKED_FUNCTION_NAMESPACES):
+            return name
+        index += 1
     return None
 
 
@@ -248,11 +312,18 @@ def run_query(
             f"Allowed procedures: {', '.join(sorted(_ALLOWED_PROCEDURES))}. "
             "Use MATCH and RETURN for other data."
         )
+    function = find_blocked_function(query)
+    if function:
+        raise CypherError(
+            f"the function {function} is not allowed: apoc.cypher functions run Cypher text and "
+            "apoc.xml functions parse XML on the server. Write the query itself."
+        )
     clause = find_write_clause(query)
     if clause:
         raise CypherError(
             f"this script is read-only and the query holds {clause}. "
-            "Use MATCH and RETURN. If it is a property or alias name, quote it with backticks."
+            "Use MATCH and RETURN, and the listed procedures for the schema. "
+            "If it is a property or alias name, quote it with backticks."
         )
     uri = env.get("AGENT_NEO4J_URI", "bolt://neo4j:7687")
     password = env.get("AGENT_NEO4J_PASSWORD", "")

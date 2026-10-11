@@ -2009,7 +2009,12 @@ class TestTypedPrefix:
 
 
 # FRE-1561 AC-1: the full default system prompt (base, budget mechanism, type block and the
-# separators between them), as unchanged origin/main code produced it.
+# separators between them), as unchanged origin/main code produced it. FRE-1580 (ADR-0156
+# D9.1) appends the worker's skill catalog after the type block; the pin covers what precedes it.
+def _before_skill_catalog(system: str) -> str:
+    return system.split("\n\n## Skills", 1)[0]
+
+
 _MAIN_SYSTEM_PROMPT_FINGERPRINT = {
     WorkerType.RESEARCHER: (
         2116,
@@ -2037,7 +2042,7 @@ class TestResearcherMinSearchRounds:
         monkeypatch.setattr(settings, "sub_agent_researcher_min_search_rounds", 0)
         call = await _first_call(_typed_spec(worker_type, "standard"))
 
-        content = call["messages"][0]["content"]
+        content = _before_skill_catalog(call["messages"][0]["content"])
         length, digest = _MAIN_SYSTEM_PROMPT_FINGERPRINT[worker_type]
         assert len(content) == length
         assert hashlib.sha256(content.encode()).hexdigest() == digest
@@ -2051,7 +2056,7 @@ class TestResearcherMinSearchRounds:
         monkeypatch.setattr(settings, "sub_agent_researcher_min_search_rounds", 3)
         call = await _first_call(_typed_spec(WorkerType.RESEARCHER, "standard"))
 
-        content = call["messages"][0]["content"]
+        content = _before_skill_catalog(call["messages"][0]["content"])
         assert "you must make at least 3 rounds of searches" in content
         assert content.endswith("You will then be asked for your report.")
 

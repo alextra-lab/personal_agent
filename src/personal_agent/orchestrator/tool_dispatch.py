@@ -32,6 +32,7 @@ from personal_agent.tools.contract import dispatch_error, failure_payload, rende
 from personal_agent.tools.types import RESULT_TOKEN_CEILING, ToolErrorDetail
 
 if TYPE_CHECKING:
+    from personal_agent.governance.worker_read_grant import ReadGrant
     from personal_agent.tools import ToolExecutionLayer
 
 log = get_logger(__name__)
@@ -107,6 +108,7 @@ async def dispatch_tool_call(
     loop_policy: ToolLoopPolicy | None = None,
     principal: Literal["primary", "sub_agent"] = "primary",
     worker: str | None = None,
+    read_grant: ReadGrant | None = None,
 ) -> dict[str, Any]:
     """Execute one validated tool call and return its result payload.
 
@@ -138,6 +140,8 @@ async def dispatch_tool_call(
         worker: The worker type that makes the call, or ``None`` for the primary.
             An ask from a worker shows the same approval card, per call, with the
             worker named (ADR-0156 D8.3, D9.3).
+        read_grant: The worker task's file grant (ADR-0156 D9.4), passed on to ``read``.
+            A ``sub_agent`` call to ``read`` without one is refused before it runs.
 
     Returns:
         A dict with keys: ``tool_call_id``, ``tool_name``, ``content``,
@@ -161,6 +165,29 @@ async def dispatch_tool_call(
                 requested=clamp.requested,
                 applied=clamp.applied,
             )
+
+        # ADR-0156 D9.4: a worker reads only the files its task names. A worker path that
+        # passes no grant cannot read at all, rather than read without limit.
+        if tool_name == "read" and read_grant is None:
+            detail = dispatch_error(
+                "not_available_to_worker",
+                "read is not available to this sub-agent: it holds no file grant.",
+                retryable=False,
+                next_action="Do not call read. Use the other tools this sub-agent holds.",
+            )
+            return {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "content": undispatched_failure(tool_name, detail, trace_id=trace_id),
+                "success": False,
+                "latency_ms": 0,
+                "output_hash": None,
+                "gate_result": gate_result,
+                "args_hash": args_hash,
+                "loop_policy": loop_policy,
+                "tool_layer_output": None,
+                "tool_layer_error": "no_read_grant",
+            }
 
     # Validate required parameters against the tool definition.
     tool_info = tool_layer.registry.get_tool(tool_name)
@@ -236,6 +263,7 @@ async def dispatch_tool_call(
             trace_ctx,
             session_id=session_id,
             worker=worker,
+            read_grant=read_grant,
         )
 
         tool_info = tool_layer.registry.get_tool(tool_name)

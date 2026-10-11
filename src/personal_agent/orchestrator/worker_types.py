@@ -312,15 +312,17 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
                 "with sources and gaps"
             ),
             prompt_block=_RESEARCHER_BLOCK,
-            tools=("web_search", "fetch_url", "get_library_docs"),
+            # ADR-0156 D9.2: every type holds read_skill. It reads only bundled skill files,
+            # so the FRE-1564 outbound/private split holds.
+            tools=("web_search", "fetch_url", "get_library_docs", "read_skill"),
             report_schema=WORKER_REPORT_SCHEMA_NAME,
             default_thoroughness="standard",
         ),
         WorkerType.GENERAL: WorkerTypeSpec(
             description=(
                 "Answers a bounded question from its own knowledge, a computation, "
-                "the user's own memory or notes, or the system's own logs, metrics, "
-                "errors and health, and reports in text"
+                "the user's own memory or notes, the system's own logs, metrics, "
+                "errors and health, or a file the task names, and reports in text"
             ),
             prompt_block="",
             tools=(
@@ -330,6 +332,10 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
                 "query_telemetry",
                 "notes_search",
                 "read_skill",
+                # ADR-0156 D9.4: reads only the files its task names in read_paths
+                # (governance/worker_read_grant.py). Held on every task so every general
+                # worker has the same tool bytes; with no file named, a read is refused.
+                "read",
             ),
             report_schema=None,
             default_thoroughness="quick",

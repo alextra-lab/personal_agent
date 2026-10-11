@@ -232,7 +232,8 @@ def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
 
     granted = config.granted_sub_agent_tool_names()
     # Decisions of 2026-09-04 and 2026-09-08 (FRE-1388, FRE-1463, FRE-1467) and of
-    # 2026-10-10 (FRE-1564: option B, the telemetry tool, and fetch_url).
+    # 2026-10-10 (FRE-1564: option B, the telemetry tool, and fetch_url; ADR-0156 D9.4,
+    # FRE-1580: read, bounded to the files a general task names).
     assert set(granted) == {
         "run_python",
         "web_search",
@@ -243,6 +244,7 @@ def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
         "read_skill",
         "notes_search",
         "query_telemetry",
+        "read",
     }
     # write_file is a tool of the primary in NORMAL that no sub-agent holds — proves the
     # two policies are genuinely independent (fetch_url used to be the proof, until

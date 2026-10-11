@@ -77,6 +77,8 @@ class PlanTask:
             budget by ``settings.sub_agent_rounds_for``.
         constraints: Scope or focus limits for the sub-agent.
         mode: Execution mode (currently always PARALLEL_INFERENCE).
+        read_paths: The absolute paths of the files the task's worker may read (ADR-0156
+            D9.4). Set only for a type that holds ``read``. Paths in ``goal`` grant nothing.
     """
 
     name: str
@@ -85,6 +87,7 @@ class PlanTask:
     thoroughness: Thoroughness
     constraints: list[str] = field(default_factory=list)
     mode: SubAgentMode = SubAgentMode.PARALLEL_INFERENCE
+    read_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

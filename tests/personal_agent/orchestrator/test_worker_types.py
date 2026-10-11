@@ -28,7 +28,8 @@ class TestRegistryShape:
 
     def test_researcher_entry(self) -> None:
         spec = WORKER_TYPES[WorkerType.RESEARCHER]
-        assert spec.tools == ("web_search", "fetch_url", "get_library_docs")
+        # ADR-0156 D9.2 (FRE-1580): every type holds read_skill.
+        assert spec.tools == ("web_search", "fetch_url", "get_library_docs", "read_skill")
         assert spec.report_schema == "worker_report_v1"
         assert spec.default_thoroughness == "standard"
         assert spec.description.startswith("Finds facts on the open web")
@@ -43,6 +44,7 @@ class TestRegistryShape:
             "query_telemetry",
             "notes_search",
             "read_skill",
+            "read",  # ADR-0156 D9.4 (FRE-1580): only the files its task names
         )
         assert spec.report_schema is None
         assert spec.default_thoroughness == "quick"

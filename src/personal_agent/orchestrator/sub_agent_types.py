@@ -134,6 +134,9 @@ class SubAgentSpec:
         sibling_tasks: The names of the other tasks in this fan-out (ADR-0150
             D5), rendered into the task message so the worker stays inside its
             own partition. Empty renders as "none".
+        read_paths: The files the task names for ``read`` (ADR-0156 D9.4). The worker's
+            read grant is made from them at task start and ends with the task
+            (``governance/worker_read_grant.py``). Empty grants no file.
     """
 
     task: str
@@ -145,8 +148,6 @@ class SubAgentSpec:
     background: str = ""
     model_role: ModelRole = ModelRole.SUB_AGENT
     mode: SubAgentMode = SubAgentMode.PARALLEL_INFERENCE
-    # Phase B skill routing: compact index injected into sub-agent system prompt
-    skill_index_block: str = ""
     # Skills already loaded by parent — sub-agent inherits to avoid re-emitting bodies
     loaded_skills: frozenset[str] = field(default_factory=frozenset)
     denied_tools: tuple[str, ...] = field(default_factory=tuple)
@@ -154,6 +155,7 @@ class SubAgentSpec:
     worker_type: WorkerType = WorkerType.GENERAL
     thoroughness: Thoroughness = "quick"
     sibling_tasks: tuple[str, ...] = ()
+    read_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -17,11 +17,13 @@ FRE-410: per-read head cap + line-based offset/limit to stop whole-file context 
 FRE-1575: one tool contract — a failure raises :class:`ReadError`.
 """
 
+import os
 from pathlib import Path
 from typing import IO, Any, Literal
 
 import structlog
 
+from personal_agent.governance.worker_read_grant import GrantedFile, ReadGrant, ReadGrantRefused
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.primitives._governance import (
@@ -45,7 +47,16 @@ LEGACY_TAIL_CAP = 1_048_576  # tail mode keeps the old 1 MiB cap (no log regress
 # Failure codes (ADR-0156 D6.1)
 # ---------------------------------------------------------------------------
 
-ReadCode = Literal[PathCode, "not_a_file", "permission_denied", "io_error"]
+ReadCode = Literal[
+    PathCode,
+    "not_a_file",
+    "permission_denied",
+    "io_error",
+    # ADR-0156 D9.4: a worker read outside its task's file grant.
+    "not_granted",
+    "file_replaced",
+    "grant_ended",
+]
 
 
 class ReadError(ToolError[ReadCode]):
@@ -288,6 +299,38 @@ def _build_read_marker(
     )
 
 
+def _grant_error(
+    exc: ReadGrantRefused, resolved: Path, trace_id: str, session_id: str | None
+) -> ReadError:
+    """Log a read that the worker's file grant refuses, and build its failure (ADR-0156 D9.4).
+
+    Args:
+        exc: The grant's refusal.
+        resolved: The resolved path that the read asked for.
+        trace_id: Request trace identifier.
+        session_id: Originating session id.
+
+    Returns:
+        The ``read`` failure to raise.
+    """
+    log.warning(
+        "read_grant_refused",
+        reason=exc.code,
+        path=str(resolved),
+        trace_id=trace_id,
+        session_id=session_id,
+    )
+    return ReadError(
+        exc.code,
+        exc.message,
+        retryable=False,
+        next_action=(
+            "Do not retry this path. Read only the files that the task names, or report "
+            "that you could not read the file."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Executor
 # ---------------------------------------------------------------------------
@@ -301,6 +344,7 @@ async def read_executor(
     limit: int | None = None,
     *,
     ctx: TraceContext,
+    read_grant: ReadGrant | None = None,
 ) -> dict[str, Any]:
     """Execute the ``read`` primitive tool.
 
@@ -323,6 +367,10 @@ async def read_executor(
         limit: Number of lines to return in head/range mode (default
             ``DEFAULT_LINE_LIMIT``).
         ctx: Trace context for structured logging correlation.
+        read_grant: A worker task's file grant, injected by the execution layer (ADR-0156
+            D9.4). When set, the resolved path must be a granted real path, and the opened
+            file must have the device and inode recorded at grant time. ``None`` for the
+            primary, whose reads the path rules alone bound.
 
     Returns:
         In head/range mode::
@@ -343,7 +391,8 @@ async def read_executor(
 
     Raises:
         PathRefusalError: The path rules refuse the path.
-        ReadError: ``not_a_file``, ``permission_denied`` or ``io_error``.
+        ReadError: ``not_a_file``, ``permission_denied`` or ``io_error``; with a grant, also
+            ``not_granted``, ``file_replaced`` or ``grant_ended``.
     """
     trace_id = ctx.trace_id
     session_id = ctx.session_id
@@ -371,6 +420,16 @@ async def read_executor(
         )
         raise
 
+    # 2b. ADR-0156 D9.4, first check: the real path is a path the task named. This
+    # refuses an unnamed file, a ../ or symlink path to another file, a hard link at
+    # another path, and any read after the task ended.
+    granted: GrantedFile | None = None
+    if read_grant is not None:
+        try:
+            granted = read_grant.check_path(resolved)
+        except ReadGrantRefused as exc:
+            raise _grant_error(exc, resolved, trace_id, session_id) from exc
+
     # 3. Must be a regular file
     if not resolved.exists() or not resolved.is_file():
         raise ReadError(
@@ -388,6 +447,14 @@ async def read_executor(
 
     try:
         with resolved.open("rb") as fh:
+            # ADR-0156 D9.4, second check, before any byte is read: the opened file is
+            # the file recorded at grant time. This refuses a rename-over and a symlink
+            # swapped in after the grant, including between the first check and the open.
+            if read_grant is not None and granted is not None:
+                try:
+                    read_grant.check_opened(granted, os.fstat(fh.fileno()))
+                except ReadGrantRefused as exc:
+                    raise _grant_error(exc, resolved, trace_id, session_id) from exc
             if tail_lines is not None:
                 # 4a. Tail mode — read from EOF; keep the legacy 1 MiB cap unless overridden.
                 content, truncated = _read_tail(fh, tail_lines, tail_cap)

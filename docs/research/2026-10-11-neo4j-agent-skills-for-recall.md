@@ -230,8 +230,11 @@ Against the anti-pattern table of `neo4j-modeling-skill/SKILL.md:280-296`:
 **An embedding gap.** 1,188 entities (12.2%) have neither an embedding nor a description. The dense arm
 and the dedup check (`memory/dedup.py`, a vector top-5) cannot see them. Only the lexical arm, on the
 name, can. By `first_seen`: 2026-04 232, 2026-05 775, 2026-06 86, 2026-07 88, 2026-08 7, none later.
-1,187 of them have a `DISCUSSES` edge from a turn. This study did not check whether an existing ticket
-covers them. FRE-1115 measured empty descriptions on 2026-08-02.
+1,187 of them have a `DISCUSSES` edge from a turn. FRE-1115 (Done) covers this stock. On 2026-08-04 its
+fix stopped the write path from creating entities with no description. Its repair script merged 203
+duplicates and kept 1,203 distinct entities with no description on purpose. Its closing comment assigns
+their recall question to FRE-1114 (Done). No open ticket backfills their descriptions. The 1,188 agrees
+with that kept stock, and none was created after 2026-08. This is not a new defect (master, 2026-10-11).
 
 ### N6 — Seshat's model ran no Cypher query in 30 days; the memory tools ran 149 times
 
@@ -369,11 +372,11 @@ GDS Node Similarity and KNN).
 
 4. **Use the modeling anti-pattern table as a review of the graph, inside the existing tickets.** N5
    measures four items: `RELATED_TO` at 53%, `MERGE` on `Entity.name` with no constraint and no index,
-   one generic `:Entity` label, and one entity with degree 3,234 against a median of 3. N5 also measures
-   1,188 entities (12.2%) with no embedding and no description, which the dense arm and the dedup check
-   cannot see. Route these to FRE-1126 and to FRE-1546 proposals 3 and 5. Master checks whether a ticket
-   already covers the 1,188. A uniqueness constraint on `Entity.name` changes the write path, so it is a
-   design decision for the owner.
+   one generic `:Entity` label, and one entity with degree 3,234 against a median of 3. Route these to
+   FRE-1126 and to FRE-1546 proposals 3 and 5, as comments, with no new ticket (approved by master on
+   2026-10-11, comments posted). The 1,188 entities with no embedding are the stock that FRE-1115 kept
+   on purpose (N5), so no action is proposed for them. A uniqueness constraint on `Entity.name` changes
+   the write path, so it is a design decision for the owner.
 
 5. **Keep GDS in the study stack.** `neo4j-gds-skill` is a reference for FRE-854, FRE-855 and an
    offline candidate list for FRE-1126 (Node Similarity, WCC). ADR-0114 D5 already keeps GDS out of the

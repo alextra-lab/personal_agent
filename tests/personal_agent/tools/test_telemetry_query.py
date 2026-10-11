@@ -95,7 +95,7 @@ def test_definition_is_a_low_risk_read_only_tool() -> None:
     assert query_telemetry_tool.risk_level == "low"
     assert query_telemetry_tool.requires_approval is False
     # The primary reads telemetry with bash and curl; this tool is for workers (FRE-1564).
-    assert query_telemetry_tool.worker_only is True
+    assert query_telemetry_tool.worker_only is False  # ADR-0156 D7.2: the primary has it
     names = {p.name for p in query_telemetry_tool.parameters}
     # FRE-1567 added the five latency (Tempo) parameters.
     assert names == {

@@ -64,6 +64,7 @@ EXPECTED_TOOLS = frozenset(
         "get_location",
         "read",
         "write",
+        "edit",
         "bash",
         "run_python",
         "read_skill",

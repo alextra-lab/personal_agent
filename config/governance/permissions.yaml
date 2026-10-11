@@ -52,6 +52,9 @@ ask:
   - rule: "write"
     modes: [ALERT, DEGRADED, RECOVERY]
     reason: "File writes ask outside NORMAL mode."
+  - rule: "edit"
+    modes: [ALERT, DEGRADED, RECOVERY]
+    reason: "File edits ask outside NORMAL mode, as writes do (ADR-0156 D7.1)."
   - rule: "artifact_write"
     modes: [ALERT, DEGRADED]
     reason: "Artifact writes ask outside NORMAL mode."
@@ -84,6 +87,7 @@ allow:
   - rule: "read"
   - rule: "read_skill"
   - rule: "write"
+  - rule: "edit"
   - rule: "run_python"
   - rule: "artifact_write"
   - rule: "artifact_draft"

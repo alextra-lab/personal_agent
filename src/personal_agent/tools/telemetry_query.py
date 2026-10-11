@@ -330,6 +330,8 @@ def _render_description() -> str:
         [
             "Read the system's own logs, metrics, health and model-call timing. Read-only. "
             "Never use it for the user's conversation text: that is not available.",
+            "Use it instead of bash with curl to Elasticsearch or Tempo: it knows the fields, "
+            "a refusal lists the allowed fields, and the result is bounded.",
             "Actions: 'search' and 'count' read Elasticsearch and need 'index'. 'latency' "
             "reads model-call timing from Tempo trace spans and needs 'since'.",
             "Elasticsearch index families and the only fields each accepts:",
@@ -514,10 +516,6 @@ query_telemetry_tool = ToolDefinition(
     error_codes=error_codes(TelemetryQueryError),
     max_result_tokens=10_000,
     truncation_next_action="Ask for fewer hits (a lower size), fewer fields, or a narrower since.",
-    # The primary reads telemetry with bash and curl (docs/skills/query-elasticsearch.md).
-    # Offering it a second route would add prompt tokens to every turn and change its
-    # tool surface, which the ticket did not ask for.
-    worker_only=True,
 )
 
 

@@ -199,19 +199,21 @@ async def test_already_digested_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pin_released_on_prior_round_write() -> None:
+@pytest.mark.parametrize("tool", ["write", "edit"])  # an edit also makes the read stale (FRE-1576)
+async def test_pin_released_on_prior_round_write(tool: str) -> None:
     pins = {"r0": ToolResultPin(path="/a.py", round_pinned=1)}
     ctx = _ctx(round_=2, pins=pins)
-    sidecar = _sidecar(w1={"tool_name": "write", "success": True, "arguments": {"path": "/a.py"}})
+    sidecar = _sidecar(w1={"tool_name": tool, "success": True, "arguments": {"path": "/a.py"}})
     await apply_intra_turn_digest(ctx, [], sidecar, trace_ctx=None, store=_FakeStore())
     assert "r0" not in ctx.tool_result_pins  # released
 
 
 @pytest.mark.asyncio
-async def test_failed_write_does_not_release_pin() -> None:
+@pytest.mark.parametrize("tool", ["write", "edit"])
+async def test_failed_write_does_not_release_pin(tool: str) -> None:
     pins = {"r0": ToolResultPin(path="/a.py", round_pinned=1)}
     ctx = _ctx(round_=2, pins=pins)
-    sidecar = _sidecar(w1={"tool_name": "write", "success": False, "arguments": {"path": "/a.py"}})
+    sidecar = _sidecar(w1={"tool_name": tool, "success": False, "arguments": {"path": "/a.py"}})
     await apply_intra_turn_digest(ctx, [], sidecar, trace_ctx=None, store=_FakeStore())
     assert "r0" in ctx.tool_result_pins
 

@@ -268,6 +268,9 @@ services:
       # FRE-1581 (owner, 2026-10-11): the eval stack has no UI, so nobody answers a constraint
       # pause. The 180 s default only adds a wait before the same safe default (answer_now).
       AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS: "5"
+      # FRE-1581: this block lists each key, so without this line tempo_url fell back to
+      # localhost:3200 and every query_telemetry latency call failed. Same value as production.
+      AGENT_TEMPO_URL: http://tempo:3200
       # ADR-0132 D4: the eval profile uses "the endpoint its compose file declares;
       # never the dead loopback default". Declared literally, NOT via ${AGENT_SLM_BASE_URL:-…}
       # — .env defines that variable, so the interpolation let production's value win over
@@ -442,6 +445,9 @@ services:
       # FRE-1581 (owner, 2026-10-11): the eval stack has no UI, so nobody answers a constraint
       # pause. The 180 s default only adds a wait before the same safe default (answer_now).
       AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS: "5"
+      # FRE-1581: this block lists each key, so without this line tempo_url fell back to
+      # localhost:3200 and every query_telemetry latency call failed. Same value as production.
+      AGENT_TEMPO_URL: http://tempo:3200
       # ADR-0132 D4: the eval profile uses "the endpoint its compose file declares;
       # never the dead loopback default". Declared literally, NOT via ${AGENT_SLM_BASE_URL:-…}
       # — .env defines that variable, so the interpolation let production's value win over

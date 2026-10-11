@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `44673bf` · Committed: 2026-05-28T15:30:39Z  
+> Source revision: `7a5ff3f9` · Committed: 2026-10-11T07:06:05+02:00  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -17,43 +17,37 @@
 
 | component_id | cache tier | tokens | source |
 |---|---|---|---|
-| `entity_extraction_system` | 🟢 STATIC | 42 | `src/personal_agent/second_brain/entity_extraction.py:23` |
-| `entity_extraction_template` | 🟡 SEMI_STATIC | 1,254 | `src/personal_agent/second_brain/entity_extraction.py:28` |
-| `context_compressor_system` | 🟢 STATIC | 1,076 | `src/personal_agent/orchestrator/context_compressor.py:34` |
-| `router_system_prompt` | 🟢 STATIC | 124 | `src/personal_agent/orchestrator/prompts.py:21` |
-| `tool_rules` | 🟢 STATIC | 321 | `src/personal_agent/orchestrator/prompts.py:46` |
-| `tool_use_native_prompt` | 🟢 STATIC | 71 | `src/personal_agent/orchestrator/prompts.py:60` |
-| `tool_use_injected_prompt` | 🟢 STATIC | 202 | `src/personal_agent/orchestrator/prompts.py:70` |
-| `tool_awareness_prompt` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:104` |
-| `operator_stanza` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:203` |
-| `reflection_dspy_signature` | 🟢 STATIC | 623 | `src/personal_agent/captains_log/reflection_dspy.py:76` |
-| `reflection_manual_fallback` | 🟢 STATIC | 497 | `src/personal_agent/captains_log/reflection.py:158` |
-| `html_generation_system` | 🟢 STATIC | 500 | `src/personal_agent/tools/artifact_tools.py:656` |
+| `entity_extraction_system` | 🟢 STATIC | 113 | `src/personal_agent/second_brain/entity_extraction.py:60` |
+| `entity_extraction_template` | 🟡 SEMI_STATIC | 4,011 | `src/personal_agent/second_brain/entity_extraction.py:69` |
+| `context_compressor_system` | 🟢 STATIC | 1,076 | `src/personal_agent/orchestrator/context_compressor.py:118` |
+| `router_system_prompt` | 🟢 STATIC | 124 | `src/personal_agent/orchestrator/prompts.py:24` |
+| `tool_rules` | 🟢 STATIC | 476 | `src/personal_agent/orchestrator/prompts.py:137` |
+| `tool_use_native_prompt` | 🟢 STATIC | 71 | `src/personal_agent/orchestrator/prompts.py:152` |
+| `tool_use_injected_prompt` | 🟢 STATIC | 202 | `src/personal_agent/orchestrator/prompts.py:162` |
+| `tool_awareness_prompt` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:200` |
+| `operator_stanza` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:367` |
+| `reflection_dspy_signature` | 🟢 STATIC | 818 | `src/personal_agent/captains_log/reflection_dspy.py:79` |
+| `reflection_manual_fallback` | 🟢 STATIC | 558 | `src/personal_agent/captains_log/reflection.py:172` |
+| `html_generation_system` | 🟢 STATIC | 1,468 | `src/personal_agent/tools/artifact_tools.py:1154` |
 
 ### Skill Documents
 
-Total skill docs: 17 · Total tokens (all skills): 20,381  
-*(Only matched skills are injected per turn; max 2,048 tokens via `skill_index` budget)*
+Total skill docs: 11 · Total tokens (all skills): 29,425  
+*(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
-| bash — Shell Command Executor | 1,421 | `docs/skills/bash.md` |
-| fetch-url — Fetch a URL and return its content as plain text | 922 | `docs/skills/fetch-url.md` |
-| infrastructure-health — Probe all infrastructure services for reachability | 801 | `docs/skills/infrastructure-health.md` |
-| list-directory — List directory contents with type and size | 1,046 | `docs/skills/list-directory.md` |
-| SKILL: Mermaid Diagrams | 2,903 | `docs/skills/mermaid-diagrams.md` |
-| neo4j-direct — Run Cypher queries against the live knowledge graph | 1,071 | `docs/skills/neo4j-direct.md` |
-| SKILL: personal-history-recall | 802 | `docs/skills/personal-history-recall.md` |
-| query-elasticsearch — Query ES indices, inspect schema, read self-telemetry | 3,684 | `docs/skills/query-elasticsearch.md` |
-| Skill: read / write (primitive filesystem I/O) | 837 | `docs/skills/read-write.md` |
-| run_python — Python Docker Sandbox | 698 | `docs/skills/run-python.md` |
-| self-telemetry — Agent self-introspection via ES + Captain's Log | 1,877 | `docs/skills/self-telemetry.md` |
-| SKILL: Seshat Reverse Delegation | 423 | `docs/skills/seshat-delegate.md` |
-| SKILL: Seshat Knowledge Graph | 727 | `docs/skills/seshat-knowledge.md` |
-| SKILL: Seshat Observations & Performance Metrics | 817 | `docs/skills/seshat-observations.md` |
-| SKILL: Seshat Sessions & Conversation History | 617 | `docs/skills/seshat-sessions.md` |
-| system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …) | 578 | `docs/skills/system-diagnostics.md` |
-| system-metrics — CPU, memory, and disk utilisation snapshot | 1,157 | `docs/skills/system-metrics.md` |
+| SKILL: Artifact Design | 5,558 | `docs/skills/artifact-design/SKILL.md` |
+| infrastructure-health — Probe all infrastructure services for reachability | 951 | `docs/skills/infrastructure-health/SKILL.md` |
+| SKILL: Mermaid Diagrams | 2,985 | `docs/skills/mermaid-diagrams/SKILL.md` |
+| neo4j-direct — Run Cypher queries against the live knowledge graph | 1,133 | `docs/skills/neo4j-direct/SKILL.md` |
+| query-elasticsearch — Query ES indices, inspect schema, read self-telemetry | 6,175 | `docs/skills/query-elasticsearch/SKILL.md` |
+| query-tempo — Query Tempo traces, read span hierarchies, and investigate latency | 4,167 | `docs/skills/query-tempo/SKILL.md` |
+| self-telemetry — Agent self-introspection via ES + Captain's Log | 3,403 | `docs/skills/self-telemetry/SKILL.md` |
+| sequential-thinking — Structured Reasoning Discipline | 1,289 | `docs/skills/sequential-thinking/SKILL.md` |
+| system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …) | 603 | `docs/skills/system-diagnostics/SKILL.md` |
+| system-metrics — CPU, memory, and disk utilisation snapshot | 1,180 | `docs/skills/system-metrics/SKILL.md` |
+| SKILL: turn-forensics | 1,981 | `docs/skills/turn-forensics/SKILL.md` |
 
 ---
 
@@ -79,10 +73,10 @@ Total skill docs: 17 · Total tokens (all skills): 20,381
 VPS/cloud deployment environment variables injected into the system prompt.
 
 **`operator_stanza`** (🟡 SEMI_STATIC)  
-Owner identity + instructions from Neo4j profile (see operator_stanza leaf prompt).
+Authenticated user identity + precedence rule (see operator_stanza leaf prompt).
 
 **`skill_index`** (🟡 SEMI_STATIC)  
-Active skill metadata + matched skill bodies from docs/skills/*.md. Capped at 2,048 tokens. Populated by orchestrator/skills.py.
+The skill catalog: one line per skill (name and description) from docs/skills/<name>/SKILL.md. Populated by orchestrator/skills.py (ADR-0156 D2).
 
 **`memory_section`** (🔴 DYNAMIC)  
 Recalled memory nodes for this turn. Varies per turn. ⚠ DYNAMIC — marks the end of the cacheable prefix.
@@ -107,12 +101,16 @@ Task decomposition guidance for SINGLE/HYBRID/DECOMPOSE/DELEGATE paths.
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 42 |
-| **Source** | `src/personal_agent/second_brain/entity_extraction.py:23` |
+| **Token count** | 113 |
+| **Source** | `src/personal_agent/second_brain/entity_extraction.py:60` |
 
 ```
 You are a knowledge graph extraction expert building a personal memory system.
-Reason carefully about which entities and relationships have lasting knowledge value.
+Reason carefully about (a) which entities and relationships have lasting knowledge value,
+(b) the OUTPUT KIND of each entity (knowledge / ephemeral / finding) and, for knowledge
+items, the KNOWLEDGE CLASS (World / Personal), and (c) the user's explicit STANCES and
+personal situational CLAIMS — which you must emit as structured items, never flatten into
+an entity's description.
 Your final output must be valid JSON only — no markdown fences, no explanation text.
 ```
 
@@ -123,20 +121,56 @@ Your final output must be valid JSON only — no markdown fences, no explanation
 | | |
 |---|---|
 | **Cache tier** | 🟡 SEMI_STATIC — varies at session boundary |
-| **Token count** | 1,254 |
-| **Source** | `src/personal_agent/second_brain/entity_extraction.py:28` |
+| **Token count** | 4,011 |
+| **Source** | `src/personal_agent/second_brain/entity_extraction.py:69` |
 
 ```
 Analyze this conversation and extract knowledge graph elements.
 
-ENTITY TYPES — use EXACTLY one of these values, no others:
-  Person        — a real named individual (never extract "User" or "Assistant")
-  Organization  — a company, team, project group, or institution
-  Location      — a geographic place, city, country, or region
-  Technology    — a software tool, framework, language, model, or API
-  Concept       — an abstract idea, methodology, or domain principle
-  Event         — a specific named occurrence or milestone
-  Topic         — a well-defined subject area being discussed
+ENTITY TYPES — use EXACTLY one of these values, no others (ADR-0109 V2, 10-type):
+  Person              — a real, named individual human. Not "User"/"Assistant", generic
+                        roles, teams, orgs.
+  Organization        — a named company, institution, agency, department, team, or
+                        standards body. Not software products or locations.
+  Location            — a named geographic or physical place. Not organizations named
+                        after places, namespaces, repos.
+  TechnicalArtifact   — a concrete, named engineered/built thing you install, run, call,
+                        deploy, configure, process, or physically use — software or
+                        hardware, and the data assets a system runs on (datasets,
+                        benchmarks, gold files, prompts). Not a human-authored work you
+                        read to understand (-> KnowledgeArtifact); not an abstract
+                        method/idea (-> MethodOrConcept).
+                        e.g. Python, Neo4j, FastAPI, a GPU, an oscilloscope.
+  KnowledgeArtifact   — a concrete, named human-authored work whose purpose is to convey
+                        understanding to a reader — a document, ADR, report, paper,
+                        article, chapter, specification, or plan. Not a thing you
+                        run/deploy/process (-> TechnicalArtifact); not the facts
+                        extracted from it into the KG; not a broad field
+                        (-> DomainOrTopic). e.g. an ADR, a research paper, a drafted
+                        book chapter, an incident post-mortem report.
+  MethodOrConcept     — a specific human-invented abstract idea, method, technique,
+                        algorithm, data structure, pattern, or principle. Not a built
+                        artifact; not a broad field; not a natural phenomenon.
+                        e.g. GraphRAG, trie, Nash equilibrium, retrieval-augmented
+                        generation.
+  DomainOrTopic       — a broad field, domain, discipline, or subject area as a whole.
+                        Not a specific technique within it (-> MethodOrConcept).
+                        e.g. behavioral economics, cosmology, cybersecurity, game theory.
+  Phenomenon          — a naturally-occurring physical/natural phenomenon, process,
+                        effect, force, limit, or observable that exists independently of
+                        human design. Not a human-invented method (-> MethodOrConcept);
+                        not the quantity used to measure it (-> QuantityMeasure).
+                        e.g. cosmic microwave background, gravity, photosynthesis, the
+                        greenhouse effect, the diffraction limit.
+  QuantityMeasure     — a named physical quantity, property, dimension, or unit of
+                        measure — an axis along which things are measured. Not the
+                        naturally-occurring phenomenon/effect/limit that exhibits it
+                        (-> Phenomenon); not a human-invented method to compute it
+                        (-> MethodOrConcept); not a specific measured value.
+                        e.g. wavelength, mass, temperature, frequency, luminosity.
+  Event               — a specific named occurrence, milestone, incident, release, or
+                        time-bound activity. e.g. the Big Bang, ICLR 2024, a production
+                        outage.
 
 RELATIONSHIP TYPES — use EXACTLY one of these UPPER_SNAKE_CASE values, no others:
   PART_OF       — entity is a component or subset of another
@@ -145,6 +179,66 @@ RELATIONSHIP TYPES — use EXACTLY one of these UPPER_SNAKE_CASE values, no othe
   SIMILAR_TO    — entities are comparable or equivalent
   CREATED_BY    — entity was created or authored by another
   LOCATED_IN    — entity is geographically within another
+
+OUTPUT KIND — every entity MUST carry an "output_kind", EXACTLY one of these three
+  (ADR-0115 — the routing axis, orthogonal to "class" below):
+  knowledge  — durable user/world knowledge that belongs in the user's memory. This is the
+               default for real subject-matter content, whether about the world or the user.
+  finding    — the agent's OWN machinery discussed as a subject: infrastructure, tooling,
+               telemetry, operations. Examples: a database discussed as infra ("Postgres is
+               healthy"), healthchecks, log/telemetry review (sensor_poll,
+               cost_gate_reaper_swept, DEBUG counts), harness internals (executor.py,
+               ToolLoopGate, the consolidation job), connectivity pings. Judge by the SUBJECT
+               of the turn, not the word alone: "our graph store is up" → Postgres is
+               finding; "graph databases store nodes and edges" → Postgres is knowledge.
+  ephemeral  — a single item that is transient noise with no lasting value even as a system
+               observation. (A whole turn with no real content at all is handled by rule 8
+               below — return empty entities/relationships arrays for those; use this value
+               only for one item that is noise within an otherwise substantive turn.)
+
+KNOWLEDGE CLASS — for "knowledge" items ONLY, every such entity MUST also carry a "class",
+  EXACTLY one of these two (omit or ignore for finding/ephemeral items):
+  World     — reusable, impersonal know-how: facts, concepts, products, techniques, and
+              named people/orgs/places discussed as general knowledge. This is the default
+              for real subject-matter content.
+  Personal  — a named thing belonging to the USER'S OWN life: their doctor, employer, city of
+              residence, their own project. (A first-person SITUATIONAL FACT such as
+              "my lease ends in March" is NOT an entity — put it under "claims", below.)
+  (There is NO "Stance" or "System" entity class. A stance is a RELATION — emit it under
+  "stances", below. System-ness is expressed via output_kind=finding/ephemeral, above, never
+  as a class value.)
+
+STANCES — the user's explicit first-person affect toward, or mastery of, a World concept
+  ("I love X", "I prefer X over Y", "I'm learning X", "I've basically mastered X").
+  A stance is NOT an entity and must NEVER be written into an entity's description.
+  Each stance object:
+    subject — always the literal string "owner"
+    target  — the World concept it is about (this concept should ALSO appear in "entities")
+    affect  — a SHORT phrase for the sentiment/preference ("loves it", "prefers over CR-V",
+              "wants to learn"); use "" if the stance is purely a mastery/skill level
+    mastery — a number 0.0-1.0 if a skill/learning level is stated or clearly implied,
+              otherwise null (a pure preference like "I love it" has mastery = null)
+    description — one sentence of context
+
+CLAIMS — first-person SITUATIONAL FACTS about the user's own life/relationships/events that
+  are assertions, not named entities ("my lease ends in March", "I saw the cardiologist
+  today", "I'm actively shopping for a car"). These have no entity slot and are silently
+  DROPPED today — you MUST emit them here instead.
+  Each claim object:
+    subject — always the literal string "owner"
+    content — the fact as ONE self-contained declarative sentence
+    facet   — a SHORT stable slot key naming WHAT the fact is about, as lower_snake_case
+              (e.g. "lease_end_date", "employer", "current_city", "car_shopping_status").
+              Two claims about the SAME underlying thing must share the SAME facet so a
+              later value replaces the earlier one. Use "" if you cannot name a clear slot.
+    update_kind — one of "new" | "correction" | "evolution":
+              "correction" when the user is FIXING an earlier mistake ("actually…", "I was
+              wrong", "not X, it's Y"); "evolution" when the fact CHANGED ("now…", "as of…",
+              "we moved to…", "extended to…"); "new" otherwise (the default).
+    description — optional one sentence of context
+
+Do NOT put any provenance, timestamp, id, or record-date on stances or claims — the system
+adds those, not you.
 
 EXTRACTION RULES (follow strictly):
 1. NEVER extract the protocol role labels "User" / "Assistant" / "System" / "Reasoning" as Person
@@ -167,29 +261,68 @@ EXTRACTION RULES (follow strictly):
    - "Météo France" not "Meteo France" or "Météo-France" (use the official accented form, no hyphen)
    - "Forcalquier" not "Forcqlquier" (correct spelling, not typos)
 7. Deduplicate: if two names clearly refer to the same entity, use one canonical name only
-8. If the conversation is a system test, ping, or empty exchange with no real content,
-   return empty entities and relationships arrays
+8. If the exchange is an empty/placeholder/test artifact with no real content (e.g. "test
+   message", a bare ping with no substance), return empty entities and relationships arrays.
+   BUT a real operational turn the user actually engaged in — a healthcheck they ran, a
+   telemetry/log review, a harness explainer — is NOT empty: emit its subjects as entities
+   with output_kind=finding (see rule 11), do not drop them.
 9. Write summaries as one concrete sentence about what was accomplished or learned
-10. Descriptions should add context beyond the name — what makes this entity notable here?
+10. Describe the ENTITY, never the conversation. A description must be a standalone statement
+    of what the thing IS — true whether or not this exchange ever happened, and useful to someone
+    who never saw it. Write "A French baked dessert of cherries in a custard-like batter", not
+    "A French dessert discussed as a cherry dish". Never write that something "was discussed",
+    "was mentioned", "was reportedly" anything, and NEVER refer to the retrieval situation you
+    are running in (e.g. "in the memory search context") — that is machinery leaking into the
+    user's knowledge. If the exchange gave you no durable fact about the entity beyond its name,
+    write a short definition from what the name denotes; do not describe the occasion instead.
+11. Assign every entity an "output_kind" (knowledge | finding | ephemeral) and, for knowledge
+    items, a "class" (World | Personal) per the definitions above. When the turn's SUBJECT is
+    the agent's own infra/tooling/telemetry/healthcheck, the entity is output_kind=finding
+    even if it names a general technology.
+12. NEVER flatten a user stance into an entity description (no "a car the user loves",
+    "central to the user's preference"). Emit it as a structured object in "stances".
+13. NEVER drop a first-person situational fact. If it is an assertion about the user's life
+    rather than a named entity, emit it in "claims".
+14. Set each entity's "description_update_kind" from THIS TURN's intent (you are NOT comparing to
+    any stored description — you cannot see one; judge only the conversation in front of you):
+      "correction" — the turn EXPLICITLY corrects/contradicts an earlier statement about this
+                     entity ("actually X is Y, not Z"; "I was wrong, it's …").
+      "enrichment" — the turn SUBSTANTIVELY defines or explains the entity (a real definition or
+                     characterization), not just a passing mention.
+      "new"        — the default: a passing mention with no correction or defining intent.
+    Emit "new" whenever unsure. This signal is about the entity's DESCRIPTION only — never a
+    stance or a claim.
 
 GOOD EXAMPLES:
-  ✓ {{"name": "Paris", "type": "Location", "description": "Capital of France, subject of weather inquiry"}}
-  ✓ {{"name": "Qwen3.5", "type": "Technology", "description": "Local reasoning LLM used for entity extraction"}}
-  ✓ {{"name": "Neo4j", "type": "Technology", "description": "Graph database storing the personal memory graph"}}
-  ✓ {{"name": "GraphRAG", "type": "Concept", "description": "Technique combining knowledge graphs with RAG retrieval"}}
+  ✓ {{"name": "Paris", "type": "Location", "output_kind": "knowledge", "class": "World", "description": "Capital of France, subject of weather inquiry"}}
+  ✓ {{"name": "Qwen3.5", "type": "TechnicalArtifact", "output_kind": "knowledge", "class": "World", "description": "Local reasoning LLM used for entity extraction"}}
+  ✓ {{"name": "Postgres", "type": "TechnicalArtifact", "output_kind": "finding", "description": "The agent's own database, referenced in a healthcheck"}}  ← System-natured: finding, not a class value
+  ✓ {{"name": "GraphRAG", "type": "MethodOrConcept", "output_kind": "knowledge", "class": "World", "description": "Technique combining knowledge graphs with RAG retrieval"}}
+  ✓ {{"name": "Neo4j", "type": "TechnicalArtifact", "output_kind": "knowledge", "class": "World", "description": "A graph database management system storing data as nodes and typed relationships", "description_update_kind": "enrichment"}}  ← the turn substantively defines it
+  ✓ stance: {{"subject": "owner", "target": "Toyota RAV4 Hybrid", "affect": "loves the hybrid powertrain", "mastery": null, "description": "User strongly prefers the RAV4 Hybrid's drivetrain"}}
+  ✓ claim:  {{"subject": "owner", "content": "The user's current car lease ends in March.", "description": "Situational constraint driving purchase timing"}}
 
 BAD EXAMPLES (never produce these):
   ✗ {{"name": "User", "type": "Person", ...}}
   ✗ {{"name": "Assistant", "type": "Person", ...}}
-  ✗ {{"name": "mcp_perplexity_ask", "type": "Technology", ...}}  ← use "Perplexity" instead
-  ✗ {{"name": "mcp_docker", "type": "Technology", ...}}           ← use "Docker" instead
-  ✗ {{"name": "search_memory", "type": "Technology", ...}}        ← internal tool, not an entity
-  ✗ {{"name": "7°C", "type": "Concept", ...}}                    ← ephemeral data value
+  ✗ {{"name": "mcp_perplexity_ask", "type": "TechnicalArtifact", ...}}  ← use "Perplexity" instead
+  ✗ {{"name": "mcp_docker", "type": "TechnicalArtifact", ...}}           ← use "Docker" instead
+  ✗ {{"name": "search_memory", "type": "TechnicalArtifact", ...}}        ← internal tool, not an entity
+  ✗ {{"name": "Postgres", "type": "TechnicalArtifact", "class": "System", ...}}  ← System is not a class value; use output_kind=finding instead
+  ✗ {{"name": "7°C", "type": "QuantityMeasure", ...}}                   ← ephemeral data value
   ✗ {{"name": "Météo-France", ...}}                               ← use "Météo France" (no hyphen)
   ✗ {{"name": "Test message", "type": "Message", ...}}
-  ✗ {{"name": "Topic", "type": "Topic", ...}}
+  ✗ {{"name": "DomainOrTopic", "type": "DomainOrTopic", ...}}
+  ✗ {{"name": "Clafoutis", ..., "description": "A French baked dessert discussed as a cherry-filled dish in the memory search context"}}
+        ← describes the occasion and leaks the machinery; write what a clafoutis IS
+  ✗ {{"name": "Amlodipine", ..., "description": "A medication discussed as interacting with grapefruit"}}
+        ← "discussed as" framing; write "A calcium channel blocker used to treat high blood pressure"
+  ✗ {{"name": "Toyota RAV4 Hybrid", ..., "description": "a car the user loves"}}   ← stance flattened; emit a stance
+  ✗ (silently omitting "my lease ends in March")                                   ← emit it as a claim
+  ✗ {{"name": "my lease ends in March", "type": "Event", ...}}                     ← situational fact is a claim, not an entity
+  ✗ {{"subject": "owner", "target": "...", "provenance": {{...}}}}                 ← never emit provenance; the system adds it
 
-Conversation:
+{fewshot_exemplars}Conversation:
 User: {user_message}
 Assistant: {assistant_response}
 
@@ -199,8 +332,11 @@ Return ONLY valid JSON (no markdown fences, no explanation):
   "entities": [
     {{
       "name": "Canonical Entity Name",
-      "type": "Person|Organization|Location|Technology|Concept|Event|Topic",
+      "type": "Person|Organization|Location|TechnicalArtifact|KnowledgeArtifact|MethodOrConcept|DomainOrTopic|Phenomenon|QuantityMeasure|Event",
+      "output_kind": "knowledge|ephemeral|finding",
+      "class": "World|Personal",
       "description": "One sentence with useful context beyond the name",
+      "description_update_kind": "new|enrichment|correction",
       "properties": {{}}
     }}
   ],
@@ -211,6 +347,24 @@ Return ONLY valid JSON (no markdown fences, no explanation):
       "type": "PART_OF|USES|RELATED_TO|SIMILAR_TO|CREATED_BY|LOCATED_IN",
       "weight": 0.1-1.0,
       "properties": {{}}
+    }}
+  ],
+  "stances": [
+    {{
+      "subject": "owner",
+      "target": "World Concept Name",
+      "affect": "short phrase or empty string",
+      "mastery": null,
+      "description": "One sentence of context"
+    }}
+  ],
+  "claims": [
+    {{
+      "subject": "owner",
+      "content": "One self-contained declarative sentence about the user's situation",
+      "facet": "lower_snake_case slot key, or empty string",
+      "update_kind": "new|correction|evolution",
+      "description": "Optional one sentence of context"
     }}
   ]
 }}
@@ -224,7 +378,7 @@ Return ONLY valid JSON (no markdown fences, no explanation):
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
 | **Token count** | 1,076 |
-| **Source** | `src/personal_agent/orchestrator/context_compressor.py:34` |
+| **Source** | `src/personal_agent/orchestrator/context_compressor.py:118` |
 
 ```
 You are a context compressor. Given a sequence of conversation messages that are being evicted from the context window, produce a concise structured summary that preserves the most important information for continuing the conversation.
@@ -326,7 +480,7 @@ Anti-patterns to avoid:
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
 | **Token count** | 124 |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:21` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:24` |
 
 ```
 You are a routing classifier.
@@ -352,20 +506,21 @@ Rules:
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 321 |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:46` |
+| **Token count** | 476 |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:137` |
 
 ```
 Rules:
 - If no tool is needed to answer accurately, respond directly without calling any tool.
 - Do not invent tools or parameters. If no tool fits, say so directly.
+- Never describe the outcome of a system action (database write, file edit, API call, graph upsert) unless an actual tool call in this turn performed it and returned a result. If you have no tool for a requested action, say so plainly — do not narrate success, invent counts, or fabricate payloads you did not produce.
 - Provide ALL required parameters as specified by each tool's schema.
 - PARALLEL CALLS: When a task needs multiple independent tool calls (e.g. checking errors AND checking memory AND checking infra health), issue ALL of them in a SINGLE response as multiple tool_calls entries. Never call them one at a time when they are independent — batching saves iterations.
 - Step budget: Complete most requests in ≤ 6 tool calls. Prefer synthesizing with gathered data over additional lookups. If you have enough information to answer, synthesize immediately.
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
-- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call web_search for quick lookups (free, private, multi-engine). Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
-- After web_search returns URLs, use `bash` with curl (per docs/skills/fetch-url.md) to read full page content when snippets are insufficient.
-- Use perplexity_query only when you specifically need a synthesized answer with citations, or when web_search results are insufficient for a complex question.
+- Search is not gated on whether the topic "sounds recent". Call web_search for quick lookups (free, private, multi-engine) whenever you need to make a factual claim and memory, tool results, or the user's own words so far don't already give you a source for it — current events and CVEs need this exactly as much as any other unsourced claim does, and no more. Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
+- web_search results are directly citable. If snippets are insufficient, use fetch_url to read the full page — its fetched page content is an admissible citation source; the URL you pass is not, and a `bash`/curl fetch of the same page is not admissible at all.
+- perplexity_query's synthesized output cannot be cited under the grounding contract — reach for it only for background research you will re-verify from a citable source before asserting anything from it, never as the source itself.
 - Do NOT answer from your own knowledge when live information is needed; always search first.
 ```
 
@@ -377,7 +532,7 @@ Rules:
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
 | **Token count** | 71 |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:60` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:152` |
 
 ```
 [f-string template]
@@ -399,7 +554,7 @@ If you need to call a tool, use native function calling (the tool_calls mechanis
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
 | **Token count** | 202 |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:70` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:162` |
 
 ```
 [f-string template]
@@ -430,7 +585,7 @@ User: "Give me a comprehensive comparison of React vs Svelte with citations"
 |---|---|
 | **Cache tier** | 🟡 SEMI_STATIC — varies at session boundary |
 | **Token count** | runtime (see description) |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:104` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:200` |
 
 _Dynamically generated listing of available tools grouped by category. Cached for 60 s. Includes tool counts per category and key capability declarations (web search, file access, etc.). Content varies with the active tool registry — changes when tools are added or governance config is reloaded. Cannot be extracted statically; see function source._
 
@@ -442,9 +597,9 @@ _Dynamically generated listing of available tools grouped by category. Cached fo
 |---|---|
 | **Cache tier** | 🟡 SEMI_STATIC — varies at session boundary |
 | **Token count** | runtime (see description) |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:203` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:367` |
 
-_Async function. Renders a compact Markdown stanza with the owner's known profile fields (name, location, pronouns, role, languages) from Neo4j. Content varies per connected user — queried every turn via a sub-millisecond Neo4j MERGE. Cannot be extracted statically._
+_Async function. Renders the operator stanza: the authenticated user's name and the FRE-1150 identity-precedence rule. No Neo4j content — the :Person profile fields (location, pronouns, role, languages) ride the memory_recall tool result instead (FRE-1566, ADR-0140 T2). Content varies per connected user. Cannot be extracted statically._
 
 ---
 
@@ -453,8 +608,8 @@ _Async function. Renders a compact Markdown stanza with the owner's known profil
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 623 (docstring + field descriptors) |
-| **Source** | `src/personal_agent/captains_log/reflection_dspy.py:76` |
+| **Token count** | 818 (docstring + field descriptors) |
+| **Source** | `src/personal_agent/captains_log/reflection_dspy.py:79` |
 
 ```
 [Class docstring]
@@ -472,8 +627,6 @@ Focus areas:
 
 [user_message] The user's original message
 
-[trace_id] Trace ID for the task execution
-
 [steps_count] Number of orchestrator steps executed
 
 [final_state] Final task state (e.g., COMPLETED, FAILED)
@@ -487,6 +640,8 @@ Focus areas:
 [failure_excerpt] JSON-serialized FailureExcerpt with failed tool calls, error summary, and recovery actions. Empty string when had_errors is False.
 
 [had_errors] True when the trace contained at least one tool call failure or error event.
+
+[prompt_manifest] Snapshot of THIS turn's prompt composition: the ordered active component IDs, the cacheable static prefix hash, and a recent quality signal for the callsite (mean 0-3 rating over the trailing 7 days). Use it to notice composition problems and, when warranted, propose a prompt-composition change that names the specific component_id. Patterns to watch for: (1) A component that is always present yet never load-bearing — e.g. skill_index present but no skill content matched — propose trimming it. (2) A static prefix hash that changed recently — indicates cacheable prefix instability that erodes KV-cache reuse — propose stabilising it. (3) A declining or low mean rating for this callsite — suggest revisiting the prompt components driving those turns. When proposing a prompt change, name the component_id in proposed_change_what and set proposed_change_scope to 'llm_client' or 'orchestrator'. Empty string when no manifest is available — skip composition analysis.
 
 [rationale] Analysis of what happened and key observations about the execution
 
@@ -504,7 +659,7 @@ Focus areas:
 
 [failure_path_fix_what] Surgical fix (≤ 80 chars) that would have prevented this exact failure. Example: 'Add retry-with-scope-reduction note to query_elasticsearch tool description.' Return empty string if had_errors is False or no specific fix is identifiable.
 
-[failure_path_fix_location] File path + symbol of the text to edit, if known. Example: 'src/personal_agent/tools/fetch_url.py::DESCRIPTION' or 'docs/skills/fetch_url.md'. Empty string if had_errors is False or unknown.
+[failure_path_fix_location] File path + symbol of the text to edit, if known. Example: 'src/personal_agent/tools/fetch_url.py::DESCRIPTION' or 'docs/skills/query-tempo/SKILL.md'. Empty string if had_errors is False or unknown.
 
 [missing_skill_names] Skills you needed but didn't have. Format: {domain}-{noun}. Nouns: fetcher, runner, sender, writer, monitor, checker, scanner, analyzer, summarizer, generator, creator, tracker, detector, validator, notifier. Same gap = same name every time. Max 3, comma-separated. Empty string if nothing was missing.
 ```
@@ -516,8 +671,8 @@ Focus areas:
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 497 |
-| **Source** | `src/personal_agent/captains_log/reflection.py:158` |
+| **Token count** | 558 |
+| **Source** | `src/personal_agent/captains_log/reflection.py:172` |
 
 ```
 You are a personal AI agent analyzing your own task execution to generate insights and improvement proposals.
@@ -531,6 +686,9 @@ You are a personal AI agent analyzing your own task execution to generate insigh
 
 ## Telemetry Events
 {telemetry_summary}
+
+## Prompt Composition (this turn)
+{prompt_manifest}
 
 ## Your Task
 Analyze this task execution and generate a structured reflection entry with:
@@ -550,6 +708,9 @@ Focus on:
 - Tool effectiveness (did tool calls provide value or could LLM handle directly?)
 - Mode/governance interactions
 - Opportunities for optimization (caching, parallelization, reduced tool calls)
+- Prompt composition patterns (unused components, unstable static prefix hash, low/declining
+  callsite ratings); when proposing a prompt change, name the specific component_id from the
+  taxonomy and set scope to llm_client or orchestrator
 
 If this was a simple, successful task with no issues, keep the reflection lightweight.
 If there were errors, inefficiencies, or interesting patterns, provide deeper analysis.
@@ -580,8 +741,8 @@ Do not include markdown formatting, explanations, or any text outside the JSON o
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 500 |
-| **Source** | `src/personal_agent/tools/artifact_tools.py:656` |
+| **Token count** | 1,468 |
+| **Source** | `src/personal_agent/tools/artifact_tools.py:1154` |
 
 ```
 You are an HTML document generator. You receive a structured plan and produce a complete, standalone HTML document.
@@ -594,9 +755,37 @@ REQUIREMENTS:
   * Spacing scale: --spacing-1 through --spacing-8 (0.25rem increments).
   * Typography: --font-sans, --font-mono; size classes from text-xs to text-3xl.
   * Utility classes: flex, grid, gap-1 through gap-6, p-1 through p-8, m-1 through m-8, text-center, text-left, text-right, font-bold, font-medium, rounded, rounded-lg, shadow, shadow-lg, hidden, w-full.
-  * No external CDN links — the document must be fully self-contained.
-- SECURITY: No <script> tags whatsoever. No inline event handlers (onclick, onload, onerror, onmouseover, etc.). No external fetches, no iframes, no form actions. The document renders in a sandboxed iframe.
-- For diagrams and flowcharts, use <pre class="mermaid">…</pre> markup with Mermaid syntax — the server renders these to static inline SVG automatically. Never use <script>, CDN URLs, or the mermaid.js library. Example: <pre class="mermaid">graph LR; A[Start] --> B[End];</pre>
+- INTERACTIVITY: JavaScript is available. The document runs in a sandboxed, sealed page — inline <script> blocks and event handlers run normally, so use them freely for genuine interactivity: simulations, explorable diagrams, charts, animations, calculators, tabs, filters. Prefer plain CSS (:hover, :target, <details>/<summary>, transitions) when it does the job with less code; reach for JavaScript when the experience genuinely needs it.
+- CURATED TOOLKIT: a small, vetted /lib/ shelf is hosted on the artifact origin — it is the ONLY external origin this page may load. Reference each asset by its EXACT absolute, version-pinned URL below (a relative path will not load). Reach for one only when the document genuinely needs it; otherwise inline your own code.
+  * Math (KaTeX) — render TeX/LaTeX:
+    <link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.47/katex.min.css">
+    <script src="https://artifacts.example.com/lib/katex@0.16.47/katex.min.js"></script>
+  * Data viz (Chart.js — global `Chart`) — charts/graphs from inline data:
+    <script src="https://artifacts.example.com/lib/chartjs@4.4.7/chart.umd.js"></script>
+  * 3-D (three.js — global `THREE`, r171) — scenes/geometry; build meshes in code and embed any textures as data: URIs, never fetch them:
+    <script src="https://artifacts.example.com/lib/three@0.171.0/three.iife.min.js"></script>
+  * Code (highlight.js) — syntax-highlight code blocks:
+    <link rel="stylesheet" href="https://artifacts.example.com/lib/highlightjs@11.9.0/github-dark.min.css">
+    <script src="https://artifacts.example.com/lib/highlightjs@11.9.0/highlight.min.js"></script>
+  * Prose typography (OFL variable fonts) — declare with @font-face, then use the family in your design system:
+    @font-face { font-family: "Source Serif 4"; src: url("https://artifacts.example.com/lib/fonts/source-serif-4@4.005/source-serif-4.woff2") format("woff2"); }
+    @font-face { font-family: "Playfair Display"; src: url("https://artifacts.example.com/lib/fonts/playfair-display@2.103/playfair-display.woff2") format("woff2"); }
+    @font-face { font-family: "JetBrains Mono"; src: url("https://artifacts.example.com/lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2") format("woff2"); }
+    Use Source Serif 4 for body prose, Playfair Display for display headings, JetBrains Mono for code.
+  * Book/print layout: prefer the NATIVE CSS recipes below (@page, column-count, break-*). A paged.js polyfill is also on the shelf but is EXPERIMENTAL and may be restricted under the live page policy — do not rely on it.
+- NATIVE TYPOGRAPHY (no library) — reach for these before any font library for refined text:
+  * Drop cap: p::first-letter { float: left; font-size: 3.2em; line-height: 0.8; padding-right: 0.08em; }
+  * Justified prose: text-align: justify; hyphens: auto; (set lang on <html>).
+  * Balanced headings: text-wrap: balance;
+  * Ligatures / old-style figures: font-feature-settings: "liga", "onum", "kern";
+  * Multi-column flow: column-count, column-gap, column-rule.
+  * Print/book pages: @page { margin: ... } with break-inside: avoid; and widows/orphans control.
+- SEALED-BOX CONSTRAINTS (hard, enforced by the runtime — design within them):
+  * No network: fetch/XHR/WebSocket/beacon are blocked. Embed ALL of your own data inline; inline images and 3-D textures as data: URIs or inline SVG — never fetch them.
+  * No storage: localStorage, sessionStorage, IndexedDB, and cookies are unavailable. Keep state in JS variables or the DOM.
+  * No arbitrary CDN: only the curated /lib/ shelf above loads. Any other external script/style/font/image (Tailwind CDN, Alpine.js, jQuery, Google Fonts, unpkg, etc.) silently fails — inline it instead. Default to inline CSS and native JS wherever no shelf library is warranted.
+  * No popups, no form submission to external endpoints.
+- PORTABILITY (choose deliberately): for static diagrams that should travel with the file — flowcharts, architecture, sequence/class diagrams — use <pre class="mermaid">…</pre> markup with Mermaid syntax; the server renders these to static inline SVG, so the document stays self-contained and viewable anywhere. Example: <pre class="mermaid">graph LR; A[Start] --> B[End];</pre>. Use JavaScript instead when the experience is genuinely interactive — such an artifact is viewed on its hosted page.
 - Use semantic HTML5 elements: header, main, section, article, footer, nav, aside, figure, figcaption.
 - Responsive: use CSS media queries (@media) for mobile/tablet/desktop.
 - Accessibility: heading hierarchy (h1 > h2 > h3), alt text on images, ARIA labels where helpful, sufficient color contrast.
@@ -606,230 +795,435 @@ REQUIREMENTS:
 - Maximum document size: aim for under 200KB of HTML text.
 ```
 
----
-
-## Skill Documents (`docs/skills/*.md`)
-
-Skill bodies are injected into the `skill_index` component when the skill router matches them for a given turn. The index is capped at 2,048 tokens.  
-
-### bash — Shell Command Executor
-
-| | |
-|---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 1,421 |
-| **Source** | `docs/skills/bash.md` |
-
-```markdown
-# bash — Shell Command Executor
-
-**Status:** Primary path (FRE-263, 2026-04-28). Replaces 8 deprecated curated tools via `AGENT_LEGACY_TOOLS_ENABLED=false`. Use `bash`, `read`, `run_python` primitives for all shell operations.
-
-**Category:** `system_dangerous` · **Risk:** high · **Approval:** required (auto-approve list exempts safe commands)
-
-## Purpose
-
-The `bash` tool gives the agent direct shell access inside the seshat-gateway container. It is the escape hatch for operations not covered by specialised native tools: inspecting logs, querying local services, running one-off diagnostics, or piping commands together.
-
-Use it for:
-- `curl` to call local services (Elasticsearch, Postgres, Redis, Neo4j)
-- `grep` / `find` to search source files and application paths
-- `ps` / `top` / `free` / `vmstat` for process and memory diagnostics
-- `ss` / `lsof` for network and file-handle diagnostics
-- `psql -c "..."` for ad-hoc SQL queries
-- `redis-cli` for cache inspection
-- `docker ps` / `docker logs` — only in the development container (Docker socket not mounted in cloud eval containers)
-
-## Container environment
-
-The bash tool runs commands **inside the seshat-gateway container** (`python:3.12-slim` base, plus diagnostic tools). Key characteristics:
-
-| Tool | Available | Notes |
-|------|-----------|-------|
-| `curl`, `jq`, `grep`, `awk`, `sed`, `wc`, `find`, `ls`, `cat`, `df` | ✅ | Standard tools |
-| `ps`, `top`, `free`, `vmstat`, `uptime` | ✅ | procps-ng 4.0.4 — `--sort`, `-o` flags supported |
-| `iostat` | ✅ | sysstat 12.7.5 |
-| `ss`, `netstat`, `lsof` | ✅ | Network/file handles |
-| `psql` | ✅ | Use `postgresql://` URL (strip `+asyncpg`) |
-| `redis-cli` | ✅ | |
-| `git` | ❌ | Not installed. No `.git` directory in image |
-| `docker ps` / `docker logs` | ❌ in cloud | Docker socket not mounted in cloud/eval containers |
-| `rg` (ripgrep) | ❌ | Not installed; use `grep -rn` |
-
-## Pipes
-
-**Pipes work in a single bash call.** You can chain auto-approved commands without escaping:
-
-```bash
-bash command="find /app/src -name '*.py' | wc -l"
-bash command="ps aux --sort=-%mem | head -10"
-bash command="curl -s http://elasticsearch:9200/_cluster/health | jq .status"
-```
-
-## Shell semantics (FRE-283)
-
-`bash` runs commands via `/bin/bash -o pipefail -c <command>`. Pipes (`|`), logical operators (`&&`, `||`), separators (`;`), redirects (`>`, `>>`), globs, and env substitution all work — the command is passed as a single argument to the shell.
-
-The auto-approve check splits the command on top-level operators and verifies the first word of every segment. A command like `curl … | grep foo | wc -l` is auto-approved if all three first words (`curl`, `grep`, `wc`) are on the allowlist.
-
-## Auto-approve list (no PWA prompt required)
-
-**NORMAL mode** — auto-approved first words:
-
-`curl`, `grep`, `ls`, `cat`, `find`, `jq`, `docker ps`, `docker logs`, `git log`, `git status`, `git diff`, `psql -c`, `redis-cli`, `ps`, `top`, `free`, `df`, `uptime`, `wc`, `rg`, `awk`, `sed`, `ss`, `vmstat`, `iostat`, `lsof`, `netstat`, `uname`, `pgrep`, `pg_isready`, `tr`, `sort`, `uniq`, `head`, `tail`, `echo`, `date`, `du`, `id`, `env`, `which`, `python3`
-
-**ALERT/DEGRADED** — smaller subset: `curl`, `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `ss`, `netstat`, `uname`, `pgrep`, `echo`, `date`
-
-Commands whose first word is not in the list (or a piped segment whose first word is not) pause for user approval via the PWA before executing.
-
-## Hard-denied patterns (immediate block — no subprocess spawned)
-
-| Pattern | Reason |
-|---------|--------|
-| `rm\s+-rf` | Recursive deletion |
-| `dd\s+if=` | Raw disk write |
-| `mkfs` | Filesystem format |
-| `sudo` | Privilege escalation |
-| `wget` | Arbitrary file download |
-| `ssh` | Remote shell access |
-| `nc\s+-l` | Netcat listener |
-| `:\(\)\s*\{.*\};:` | Fork bomb |
-
-## Output cap
-
-Combined stdout + stderr is capped at **50 KiB**. If output exceeds this limit:
-- Both streams are truncated to 25 KiB each in memory.
-- The full output is written to a scratch file under `/tmp/agent_scratch/<trace_id>/bash_output_N.txt`.
-- The response includes a `truncated_path` key with the path to the overflow file.
-
-## Examples
-
-```bash
-# Search Python source for a function definition
-bash command="grep -rn 'def bash_executor' /app/src/"
-
-# Query Elasticsearch cluster health
-bash command="curl -s http://elasticsearch:9200/_cluster/health | jq ."
-
-# Top memory consumers
-bash command="ps aux --sort=-%mem | head -10"
-
-# Count Python files in source tree
-bash command="find /app/src -name '*.py' | wc -l"
-
-# Ad-hoc Postgres query (note: URL uses postgresql:// not postgresql+asyncpg://)
-bash command="psql -c 'SELECT count(*) FROM sessions;' postgresql://agent:<password>@postgres:5432/personal_agent"
-
-# Redis cache check
-bash command="redis-cli -h redis PING"
-
-# Disk usage
-bash command="df -h | head -5"
-```
-
-## Forbidden modes
-
-`bash` is **not available** in LOCKDOWN or RECOVERY mode.
-```
 
 ---
 
-### fetch-url — Fetch a URL and return its content as plain text
+## Skill Documents (`docs/skills/<name>/SKILL.md`)
+
+The `skill_index` component holds the catalog only. A body reaches the model as the result of a `read_skill` call (ADR-0156 D2).  
+
+### SKILL: Artifact Design
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 922 |
-| **Source** | `docs/skills/fetch-url.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 5,558 |
+| **Source** | `docs/skills/artifact-design/SKILL.md` |
 
 ```markdown
-# fetch-url — Fetch a URL and return its content as plain text
+# SKILL: Artifact Design
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `fetch_url` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+> **Use this skill to** author a complete, standalone HTML artifact that runs inside the
+> sealed box: (a) decide when a curated `/lib/` library beats hand-rolling, (b) get each
+> library's boot recipe and gotcha right, (c) apply publishing-grade **native** typography,
+> (d) stay inside the sealed-box constraints, (e) choose the right **portability** lane, and
+> (f) never leak secrets into a file that may leave the sandbox.
 
-**Category:** `network_read` · **Risk:** low · **Approval:** `curl` auto-approved (NORMAL/ALERT/DEGRADED); not available in LOCKDOWN
+> **Tier:** runtime-guidance (not a CLI skill). **ADR:** `docs/architecture_decisions/ADR-0089-artifact-execution-security-model.md` (§D2/D3/D4 + Addendum A).
+> **Relationship to the generation prompt:** this doc is the **maintainable source-of-truth**;
+> the artifact generation system prompt (`_HTML_GENERATION_SYSTEM_PROMPT`,
+> `src/personal_agent/tools/artifact_tools.py`) is **distilled from it**. The generation
+> sub-agent is driven by that compressed prompt at runtime today — it does **not** load this
+> file. Keep the two paired: when the manifest or a recipe changes, update this doc and
+> re-distill the prompt. Versions/URLs are anchored to `config/artifact_lib_manifest.json`.
+> **Not** an extension of the `frontend-design` harness skill (that guides the *developer*
+> agent; this guides the *runtime artifact-generation* sub-agent — a different consumer).
 
-## Default recipe — status + body together
+---
 
-Always get the HTTP status alongside the body so you can confirm the request succeeded:
+## What This Skill Does
 
-```bash
-# Status code on first line, then body — works for JSON and text
-curl -s -o /dev/stdout -w '\n--- HTTP %{http_code} ---\n' -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url>
+An artifact is a complete `<!DOCTYPE html>…</html>` document that renders in a **sealed box**:
+an opaque-origin, CSP-locked, network-denied, storage-denied iframe (ADR-0089 D2/D3). Inside
+that box JavaScript runs normally — inline `<script>` and event handlers work — so simulations,
+explorable diagrams, charts, animations, calculators, tabs, and filters are all fair game.
+
+The decisive split: **most dynamism needs no library.** Sliders, simulations, explorables,
+animation, tabs/filters are all reachable with inline JS + Canvas / WebGL / SVG / CSS, which
+ADR-0089 already unlocks. Reach for a curated `/lib/` library **only where the model genuinely
+cannot hand-roll the capability well** — real math typesetting, charts, 3-D, syntax
+highlighting, publishing-grade fonts, print pagination. Otherwise inline your own code: it is
+cheaper, more portable, and fully under your control.
+
+---
+
+## When to Use
+
+- **Reach for `/lib/`** when the capability is hand-roll-impossible at quality: TeX math
+  (KaTeX), real charts (Chart.js), 3-D scenes (three.js), syntax highlighting (highlight.js),
+  book-grade prose faces (OFL fonts), print pagination (paged.js — experimental).
+- **Reach for native CSS/JS** for everything else — design system, layout, interactivity,
+  typography refinements. This is the default.
+- **Prefer Mermaid server-SVG** for static diagrams that should travel with the file (see
+  Portability).
+
+---
+
+## The Curated `/lib/` Shelf
+
+A small, vetted shelf is hosted on the artifact origin (`https://artifacts.example.com`) —
+it is the **only** external origin a sealed artifact may load. Reference each asset by its
+**exact absolute, version-pinned URL** below; a relative `/lib/…` path is *not* the expected
+reach form and is not counted as a satisfied capability by the demand meter. URLs are immutable
+pins (ADR-0089 A3) — never edit a version in place. Source of truth:
+`config/artifact_lib_manifest.json`.
+
+### KaTeX → math / formula typesetting (MIT)
+
+```html
+<link rel="stylesheet" href="https://artifacts.example.com/lib/katex@0.16.47/katex.min.css">
+<script src="https://artifacts.example.com/lib/katex@0.16.47/katex.min.js"></script>
 ```
 
-Or: pipe to `jq` for JSON APIs and the exit code tells you if it failed:
-
-```bash
-curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | jq .
+```html
+<span id="eq"></span>
+<script>
+  katex.render("c = \\pm\\sqrt{a^2 + b^2}", document.getElementById("eq"),
+    { throwOnError: false, displayMode: true });
+</script>
 ```
 
-## HTML pages — fetch with text stripping
+**Gotchas:**
+- The **CSS `<link>` is mandatory** — without it KaTeX renders boxes/tofu (the glyph metrics
+  and math fonts live in the stylesheet). Loading only the JS is the most common KaTeX failure.
+- KaTeX's stylesheet resolves its math fonts from a **co-hosted `fonts/` directory relative to
+  the CSS** — do not rewrite or relocate the CSS `url(fonts/…)` references; the shelf hosts them
+  at the path the CSS expects.
+- Use `throwOnError: false` so a single bad expression degrades to a readable error instead of
+  aborting render. `displayMode: true` for block equations, omit for inline.
+- KaTeX is **not** auto-render: it does not scan the page for `$…$` delimiters by default.
+  Call `katex.render(tex, element, opts)` per equation (the auto-render extension is not on the
+  shelf — render explicitly).
 
-HTML responses need script/style removal and block-tag newline injection to be readable:
+### Chart.js → charts / data visualization (MIT, global `Chart`)
 
-```bash
-curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | python3 -c "
-import sys, re
-from html.parser import HTMLParser
-
-class TextExtractor(HTMLParser):
-    _SKIP = {'script','style','head','noscript','meta','link','svg','iframe'}
-    _BLOCK = {'p','div','h1','h2','h3','h4','h5','h6','li','tr','br'}
-    def __init__(self):
-        super().__init__()
-        self.text = []
-        self._skip = 0
-    def handle_starttag(self, tag, attrs):
-        if tag in self._SKIP: self._skip += 1
-        if tag in self._BLOCK: self.text.append('\n')
-    def handle_endtag(self, tag):
-        if tag in self._SKIP: self._skip -= 1
-    def handle_data(self, data):
-        if not self._skip: self.text.append(data)
-
-p = TextExtractor()
-p.feed(sys.stdin.read())
-print(re.sub(r'\n{3,}', '\n\n', ''.join(p.text)).strip()[:10000])
-"
+```html
+<script src="https://artifacts.example.com/lib/chartjs@4.4.7/chart.umd.js"></script>
 ```
 
-## Large responses
-
-Cap raw output at 50 KB to avoid truncation:
-
-```bash
-curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | head -c 50000
+```html
+<canvas id="spend" width="640" height="320"></canvas>
+<script>
+  new Chart(document.getElementById("spend"), {
+    type: "bar",
+    data: {
+      labels: ["Q1", "Q2", "Q3", "Q4"],
+      datasets: [{ label: "Spend", data: [12, 19, 8, 15] }]   // inline the data
+    },
+    options: { responsive: true, maintainAspectRatio: false }
+  });
+</script>
 ```
 
-## Common patterns
+**Gotchas:**
+- Give the `<canvas>` **explicit `width` and `height` attributes** (e.g.
+  `<canvas width="640" height="320">`). Chart.js reads the element's attributes for initial
+  layout; a CSS-sized parent alone is not enough and an unsized canvas collapses to 0×0 or
+  renders blurry. If you want it fluid, wrap the canvas in a sized container **and** set
+  `maintainAspectRatio: false`.
+- **Inline the data** as a JS array/object literal. There is no `fetch` — never point Chart.js
+  at a URL or load CSV/JSON over the network.
+- The global is `Chart` (UMD build). One `new Chart(...)` per canvas.
 
-```bash
-# Fetch a GitHub raw file
-curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
-  'https://raw.githubusercontent.com/org/repo/main/README.md'
+### three.js → 3-D / spatial / physics (MIT, global `THREE`, r171)
 
-# Fetch JSON API with specific header
-curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
-  -H 'Accept: application/json' \
-  'https://api.example.com/v1/status' | jq .
-
-# Follow redirects (included by default with -L)
-curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
-  'https://t.co/shortened-link'
+```html
+<script src="https://artifacts.example.com/lib/three@0.171.0/three.iife.min.js"></script>
 ```
 
-## Governance
+```html
+<div id="stage" style="width:100%;height:420px"></div>
+<script>
+  const el = document.getElementById("stage");
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, el.clientWidth / el.clientHeight, 0.1, 100);
+  camera.position.z = 4;
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(el.clientWidth, el.clientHeight);
+  el.appendChild(renderer.domElement);
 
-- `curl` is auto-approved in NORMAL, ALERT, and DEGRADED modes — no PWA prompt.
-- Not available in LOCKDOWN or RECOVERY.
-- Max content to surface to the model: 10,000–50,000 chars. The HTML stripper above caps at 10,000; increase the slice (`:10000`) if more is needed, up to 50,000.
-- Always use `--max-time 20` to prevent hanging on slow hosts.
-- Hard-denied: `wget` is blocked by the bash governance layer — always use `curl`.
+  const mesh = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(1, 0),
+    new THREE.MeshStandardMaterial({ color: 0x6366f1, flatShading: true })
+  );
+  scene.add(mesh);
+  scene.add(new THREE.DirectionalLight(0xffffff, 1).translateZ(5));
+  scene.add(new THREE.AmbientLight(0x404040));
 
-**ALERT-mode note:** `bash curl` is auto-approved in ALERT mode — unlike the legacy `fetch_url` tool (which was disabled in ALERT mode), primitive `curl` has no ALERT-mode restriction. Be aware outbound network calls continue in degraded states.
+  (function loop() {
+    requestAnimationFrame(loop);
+    mesh.rotation.x += 0.005; mesh.rotation.y += 0.008;
+    renderer.render(scene, camera);
+  })();
+</script>
+```
 
-See also: [bash — Shell Command Executor](bash.md)
+**Gotchas:**
+- **Textures and models must be `data:` URIs or generated in code — never fetched.**
+  `connect-src 'none'` blocks `TextureLoader`/`GLTFLoader` over the network. Build geometry
+  procedurally, embed textures as base64 `data:` URIs, or draw to an offscreen `<canvas>` and
+  use it as a `CanvasTexture`.
+- The shelf hosts a **bundled IIFE/global build** exposing `THREE` on `window` — there is no
+  ES-module import (the sealed null-origin can't resolve `import`/CORS). Use the global, not
+  `import * as THREE`.
+- Size the renderer to a container with an explicit height; on resize, update
+  `camera.aspect` + `renderer.setSize`. Dispose geometries/materials/renderer if you tear a
+  scene down to avoid GPU leaks in long-lived artifacts.
+
+### highlight.js → code / syntax highlighting (BSD-3, global `hljs`)
+
+```html
+<link rel="stylesheet" href="https://artifacts.example.com/lib/highlightjs@11.9.0/github-dark.min.css">
+<script src="https://artifacts.example.com/lib/highlightjs@11.9.0/highlight.min.js"></script>
+```
+
+```html
+<pre><code class="language-python">def greet(name): return f"hi {name}"</code></pre>
+<script>
+  document.addEventListener("DOMContentLoaded", () => hljs.highlightAll());
+</script>
+```
+
+**Gotchas:**
+- Put code inside `<pre><code class="language-XXX">…</code></pre>` and call
+  `hljs.highlightAll()` **after the DOM is ready** (`DOMContentLoaded`) — calling it before the
+  `<code>` elements exist highlights nothing.
+- The theme **`<link>` carries the colors**; without it highlighted tokens get class names but
+  no styling. `github-dark` is the hosted theme.
+- HTML-escape `<`, `>`, `&` inside the code text, or the browser parses them as markup.
+
+### OFL fonts → publishing-grade prose (SIL OFL, variable woff2)
+
+Declare each face with `@font-face`, then wire it into the design-system custom properties:
+
+```css
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("https://artifacts.example.com/lib/fonts/source-serif-4@4.005/source-serif-4.woff2") format("woff2");
+  font-weight: 200 900; font-display: swap;
+}
+@font-face {
+  font-family: "Playfair Display";
+  src: url("https://artifacts.example.com/lib/fonts/playfair-display@2.103/playfair-display.woff2") format("woff2");
+  font-weight: 400 900; font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("https://artifacts.example.com/lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2") format("woff2");
+  font-weight: 100 800; font-display: swap;
+}
+:root {
+  --font-serif: "Source Serif 4", Georgia, serif;       /* body prose */
+  --font-display: "Playfair Display", Georgia, serif;    /* display headings */
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;/* code */
+}
+```
+
+**Gotchas:**
+- These are **variable** woff2 fonts — declare a weight range (`font-weight: 200 900`) so the
+  whole axis is usable from one file.
+- `font-src https://artifacts.example.com data:` already admits them — **no CSP change**.
+  Google Fonts / other font CDNs silently fail; use these or inline `data:` woff2.
+- Use Source Serif 4 for body prose, Playfair Display for display headings, JetBrains Mono for
+  code, falling back to system faces only when no shelf font fits.
+
+### paged.js → book / print layout (MIT) — **experimental, gated**
+
+paged.js is on the shelf **but is `eval_gated`**: it may require `eval` under the live CSP
+(which omits `'unsafe-eval'`), pending runtime confirmation (FRE-531). Treat it as an
+**advanced, experimental** option that **may silently fail under the live page policy** — do
+**not** rely on it as a first-class library. For book/print layout, **lead with the native
+`@page` / `column-count` / `break-*` recipes below**; reach for paged.js only for
+hand-roll-impossible pagination (running heads, footnote placement, generated page numbers) and
+only after confirming it loads in the target environment.
+
+---
+
+## Native Typography (no library)
+
+Reach for these **before** any font library — they cost zero bytes and never fail under the CSP.
+
+```css
+/* Drop cap */
+p.lead::first-letter { float: left; font-size: 3.2em; line-height: 0.8; padding-right: 0.08em; font-weight: 700; }
+
+/* Justified prose with hyphenation — set lang on <html lang="en"> for the dictionary */
+.prose { text-align: justify; hyphens: auto; }
+
+/* Balanced headings (no orphan word on the last line) */
+h1, h2 { text-wrap: balance; }
+
+/* Ligatures + old-style figures + kerning */
+.prose { font-feature-settings: "liga", "onum", "kern"; }
+
+/* Multi-column flow */
+.columns { column-count: 2; column-gap: 2rem; column-rule: 1px solid var(--color-muted); }
+
+/* Print / book pages */
+@page { margin: 2cm; }
+.chapter { break-inside: avoid; }
+p { widows: 3; orphans: 3; }
+```
+
+**Notes:**
+- `hyphens: auto` needs a `lang` attribute on `<html>` (or the block) to pick the hyphenation
+  dictionary.
+- `text-wrap: balance` is for short blocks (headings, captions) — don't apply it to long body
+  paragraphs.
+- `font-feature-settings` requires the font to carry the features (the OFL faces above do).
+
+---
+
+## Design-System Conventions
+
+Define a complete design system in a `<style>` block in `<head>` (kept consistent with the
+generation prompt so this doc is its superset):
+
+- **Colors** as CSS custom properties: `--color-primary`, `--color-secondary`, `--color-accent`,
+  `--color-bg`, `--color-surface`, `--color-text`, `--color-muted`.
+- **Spacing scale**: `--spacing-1` … `--spacing-8` (0.25rem increments).
+- **Typography**: `--font-sans`, `--font-mono` (plus the OFL `--font-serif`/`--font-display`
+  above when prose-grade); size classes `text-xs` … `text-3xl`.
+- **Utility classes**: `flex`, `grid`, `gap-1`…`gap-6`, `p-1`…`p-8`, `m-1`…`m-8`, `text-center`,
+  `font-bold`, `rounded`, `rounded-lg`, `shadow`, `shadow-lg`, `w-full`.
+- **Semantic HTML5**: `header`/`main`/`section`/`article`/`footer`/`nav`/`aside`/`figure`.
+- **Responsive** via `@media`; **accessible** heading hierarchy, `alt` text, ARIA labels,
+  sufficient contrast.
+- Aim for **under 200KB** of HTML text.
+
+---
+
+## Sealed-Box Constraints (hard, enforced by the runtime — design within them)
+
+- **No network.** `fetch` / `XHR` / `WebSocket` / `sendBeacon` are blocked (`connect-src 'none'`).
+  Embed **all** your own data inline; inline images and 3-D textures as `data:` URIs or inline
+  SVG — never fetch them.
+- **No storage.** `localStorage`, `sessionStorage`, `IndexedDB`, and cookies are unavailable.
+  Keep state in JS variables or the DOM.
+- **No arbitrary CDN.** Only the curated `/lib/` shelf above loads. Any other external
+  script/style/font/image (Tailwind CDN, Alpine.js, jQuery, Google Fonts, unpkg, …) **silently
+  fails** at view time — the artifact commits intact but renders broken. Inline it instead.
+  Default to inline CSS + native JS wherever no shelf library is warranted.
+- **No popups, no form submission to external endpoints.**
+
+---
+
+## Portability — choose the lane deliberately
+
+Three distinct lanes; pick by how the artifact needs to travel.
+
+1. **static-SVG-travels.** For static diagrams — flowcharts, architecture, sequence/class
+   diagrams — use `<pre class="mermaid">…</pre>` markup. The server renders these to **inline
+   SVG** (FRE-396), so the document stays self-contained and viewable anywhere, including in an
+   exported file. Example: `<pre class="mermaid">graph LR; A[Start] --> B[End];</pre>`. This is
+   strictly better than a client diagram library for static diagrams.
+2. **interactive-viewed-on-origin.** JS-driven and `/lib/`-using artifacts run on their hosted,
+   Access-gated page. They reference the sealed shelf and are otherwise **view-on-origin-only** —
+   the live interactivity is the point, and it lives where the envelope is applied.
+3. **exported-standalone** (server-side export, FRE-530). Two modes, both driven by the per-asset
+   export substitution map:
+   - **Inline (default, offline-portable):** the referenced pinned `/lib/` assets + fonts are
+     inlined (scripts inline, CSS inline, fonts/images as `data:` URIs) into one self-contained
+     HTML file that renders **offline, anywhere**.
+   - **Substitution-map (opt-in, lean/online):** each `/lib/<name>@<version>` reference is
+     rewritten to the **same version on a public CDN** with **Subresource Integrity** (`integrity`
+     + `crossorigin`) — tiny, human-editable, byte-verified. **three.js and the fonts inline-only**
+     (no faithful public classic twin / UA-varying font CDNs); KaTeX / Chart.js / highlight.js
+     map cleanly.
+   - **Honest limit:** an exported file **leaves the envelope** — it runs **unsandboxed**
+     wherever opened (no CSP, no opaque origin), and substitution-map exports depend on a
+     third-party CDN at view time (bounded by SRI). This is why the next rule is absolute.
+   - **Realized as** `GET /api/v1/artifacts/{id}/export?mode=inline|substitute` (owner-scoped,
+     HTML-only). Inline mode SRI-verifies each fetched `/lib/` asset against the pinned map and
+     also inlines a stylesheet's own `url(...)` subresources (e.g. KaTeX glyph fonts) as `data:`
+     URIs so math renders offline; substitute mode emits the pinned `integrity` and lets the
+     **browser** byte-verify at view time. A reference to an **unmapped** `/lib/` path fails the
+     export closed (it would otherwise silently point a "portable" file back at the gated origin).
+
+> *Saving work produced **inside** a running artifact* (e.g. a draft typed into the artifact) is a
+> different problem — the sandbox omits downloads/storage/network, so a running artifact cannot
+> save out. That needs the future parent-brokered model-bridge (ADR-0089 D4a), not an export
+> mode. Out of scope here.
+
+---
+
+## Standing Rule: never bake secrets into an artifact (ADR-0089 D4)
+
+**Never bake secrets into an artifact.** Artifacts are untrusted LLM-authored bytes served from
+an opaque origin, and an exported file leaves the sandbox entirely — it can be opened, inspected,
+and shared anywhere with no envelope around it. Do **not** embed API keys, tokens, credentials,
+session identifiers, internal hostnames/URLs, personal data, or anything that must not travel in
+a plain file. Inline only the content the artifact is meant to display.
+
+---
+
+## Distillation Map (doc → generation prompt)
+
+The generation prompt (`_HTML_GENERATION_SYSTEM_PROMPT`) is a compressed distillation of this
+doc. Keep the pairs in sync when either changes:
+
+| This doc section | Prompt block it feeds |
+|---|---|
+| Curated `/lib/` Shelf (the absolute URLs) | `CURATED TOOLKIT` bullet (exact `<script>`/`<link>` snippets) |
+| Per-library "when to reach for each" | `CURATED TOOLKIT` per-asset one-liners |
+| three.js textures-as-data-URI gotcha | `CURATED TOOLKIT` three.js note + `SEALED-BOX` no-network |
+| paged.js experimental/gated | `CURATED TOOLKIT` book/print "experimental" line |
+| Native Typography | `NATIVE TYPOGRAPHY` bullet |
+| Design-System Conventions | `REQUIREMENTS` design-system bullets |
+| Sealed-Box Constraints | `SEALED-BOX CONSTRAINTS` bullet |
+| Portability (3 lanes) | `PORTABILITY` bullet |
+| Never bake secrets | (carried as the standing D4 rule) |
+
+---
+
+## E2E verification (FRE-531 · ADR-0089 Addendum A7)
+
+The done-bar for the curated toolkit is **"it renders under the live policy, and the
+envelope is provably applied"** — not "it renders". Two complementary gates cover it:
+
+**1. Hermetic render harness (in-repo, CI-able) — `make verify-artifact-e2e`.**
+Builds a real, SRI-pinned fixture set (the repository's `build_e2e_artifact_fixtures.py`: KaTeX
+0.16.11 + Chart.js 4.4.7 + paged.js fetched from the substitution-map CDN twins, each
+byte-verified against the pinned `sha384`), then runs `e2e/artifact-lib/` on **Chromium
+and WebKit**:
+
+- **A — hosted render** under the *exact* artifact CSP directive set (served by a local
+  CSP server whose header is emitted by the Python builder from `EXPECTED_CSP_DIRECTIVES`,
+  the single source of truth). Asserts the KaTeX MathML annotation echoes the source TeX,
+  the live `Chart.getChart()` instance holds the seeded dataset + the canvas painted, the
+  CSP header is present, and **zero CSP violations**.
+- **B — offline export** — the real `export_artifact_html(mode="inline")` output opened via
+  `file://` with **all network aborted**; same semantic render assertions; proves zero
+  network requests (truly self-contained).
+- **C — paged.js eval-gate** — loads paged.js under the eval-free CSP and asserts it runs
+  with **no `eval`/script CSP violation**.
+
+One-time browser install: `cd e2e/artifact-lib && npx playwright install --with-deps webkit chromium`.
+
+**Fidelity gap:** the harness rebinds the CSP host token to its localhost serving origin, so
+it proves render under the directive *shape*, not the exact `artifacts.example.com` tokens.
+
+**2. Live-origin gate (master, post-merge) — `make verify-envelope URL=…` + `make verify-lib`.**
+Closes the host-token gap on the real Access-gated origin: the served artifact carries the
+exact CSP directive set + MIME + `nosniff`, and every `/lib/` asset serves the correct
+executable/typed MIME + `nosniff` reachable under the artifact CSP. Requires a CF Access
+service token; runs at the deploy gate. A real-device iOS Safari pass is the owner's check.
+
+**paged.js Scenario C verdict (2026-06-09, record-only):** paged.js 0.4.3 runs **eval-free**
+under the eval-free artifact CSP and paginates on **both Chromium and WebKit** in the hermetic
+harness — corroborating the static-analysis claim. The `eval_gated` flag is **left set** (the
+shelf entry stays *experimental/gated*); un-gating it — which would add paged.js to the default
+`verify-lib` assert set — is a separate explicit decision pending the live-origin confirmation.
+
+---
+
+## References
+
+- ADR-0089 — Artifact Execution Security Model (`docs/architecture_decisions/ADR-0089-artifact-execution-security-model.md`), §D2/D3/D4 + **Addendum A** (A2 curated set, A3 hosting/pinning, A4 this doc, A5 export, A7 done-bar).
+- `config/artifact_lib_manifest.json` — the single cross-repo source of truth for `/lib/` origin + paths + versions.
+- `src/personal_agent/tools/artifact_tools.py` — `_HTML_GENERATION_SYSTEM_PROMPT` (the distilled runtime prompt) + `artifact_draft` tool.
+- The `mermaid-diagrams` skill — sibling skill; the static-diagram portability lane.
+- Linear: FRE-525 (Addendum A), FRE-527 (manifest + hosting), FRE-528 (prompt reframe), FRE-530 (export-to-standalone), FRE-531 (paged.js CSP confirmation + E2E live verify).
 ```
 
 ---
@@ -838,16 +1232,20 @@ See also: [bash — Shell Command Executor](bash.md)
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 801 |
-| **Source** | `docs/skills/infrastructure-health.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 951 |
+| **Source** | `docs/skills/infrastructure-health/SKILL.md` |
 
 ```markdown
 # infrastructure-health — Probe all infrastructure services for reachability
 
+## Rules
+
+Probe the live endpoints with bash curl before concluding a service is healthy or degraded.
+
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `infra_health` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
 
-**Category:** `system_read` · **Risk:** none · **Approval:** bash one-liners auto-approved in NORMAL; `run_python(network=True)` requires PWA approval in ALERT/DEGRADED
+**Category:** `system_read` · **Risk:** none · **Approval:** a plain `bash curl` GET of a listed health endpoint runs without asking (FRE-1583); `psql`, `redis-cli` and `run_python(network=True)` ask the user (ADR-0156 D8)
 
 > **Container vs host:** Hostnames (`postgres`, `neo4j`, `elasticsearch`, `redis`) are Docker DNS names that only resolve from **inside** the `cloud-sim` network. From the VPS host shell, use `localhost:<port>` instead.
 
@@ -858,6 +1256,7 @@ For "is Postgres reachable?" use a real connection, not a TCP probe to port 5432
 ```bash
 # Postgres — AGENT_DATABASE_URL uses postgresql+asyncpg:// which psql cannot parse.
 # Strip the driver specifier first:
+# ask: the shell expands $(…) and $AGENT_DATABASE_URL here, so this is not a plain command and asks for approval.
 bash psql "$(echo $AGENT_DATABASE_URL | sed 's|postgresql+asyncpg|postgresql|')" -c 'SELECT 1'
 ```
 
@@ -869,6 +1268,7 @@ bash psql "$(echo $AGENT_DATABASE_URL | sed 's|postgresql+asyncpg|postgresql|')"
 bash curl -fsS http://elasticsearch:9200/_cluster/health | grep '"status"'
 
 # Redis
+# ask: no allow rule covers redis-cli (FRE-1572), so this asks for approval.
 bash redis-cli -h redis ping
 
 # Neo4j HTTP
@@ -916,138 +1316,10 @@ print(json.dumps(result, indent=2))
 
 ## Governance
 
-- `bash curl`, `bash redis-cli`: auto-approved NORMAL/ALERT/DEGRADED.
-- `bash psql -c`: auto-approved NORMAL.
-- `run_python(network=True)`: NORMAL auto-approved; ALERT/DEGRADED require PWA approval.
+- `bash curl`: a `GET` of a listed health or telemetry read endpoint runs without asking in NORMAL/ALERT/DEGRADED. Any other host, path or method asks (FRE-1583). For Neo4j only `GET http://neo4j:7474/` runs without asking.
+- `bash psql`, `bash redis-cli`: ask the user (FRE-1572), in every mode.
+- `run_python(network=True)`: asks the user in every mode (ADR-0156 D8.6).
 - LOCKDOWN: bash and run_python both disabled.
-```
-
----
-
-### list-directory — List directory contents with type and size
-
-| | |
-|---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 1,046 |
-| **Source** | `docs/skills/list-directory.md` |
-
-```markdown
-# list-directory — List directory contents with type and size
-
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `list_directory` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
-
-**Category:** `filesystem_read` · **Risk:** none · **Approval:** auto-approved in all non-LOCKDOWN modes
-
-## Counting files — use `find | wc -l`
-
-`bash ls -R | wc -l` is **wrong** — it counts directory header lines and blank separators, not files. For any "how many files" question use `find`:
-
-```bash
-# Count all YAML files recursively (correct)
-bash find /app/config -name "*.yaml" -type f | wc -l
-
-# Count all Python files recursively
-bash find /app/src -name "*.py" -type f | wc -l
-```
-
-Single call, correct count across all subdirectories. Pipes work (FRE-283).
-
-## Quick reference
-
-| Task | Command |
-|------|---------|
-| Count files matching pattern **recursively** | `bash find /path -name "*.yaml" \| wc -l` |
-| List current directory | `bash ls -la /path` |
-| Count files at top level only | `bash find /path -maxdepth 1 -name "*.yaml" \| wc -l` |
-| All files recursively | `bash find /path -type f \| sort` |
-
-## Basic listing
-
-```bash
-# Human-readable, shows hidden files (matches legacy tool default)
-bash ls -la /path/to/dir
-
-# Shell auto-expands ~ and $HOME
-bash ls -la ~/
-bash ls -la /app/agent_workspace/
-```
-
-## Structured listing (machine-parseable)
-
-Use `find` when you need to parse type and size programmatically:
-
-```bash
-# Format: <type> <size_bytes> <filename>  (f=file, d=directory)
-bash find /path -maxdepth 1 -mindepth 1 -printf '%y %s %f\n' | sort
-```
-
-Example output:
-```
-d 4096 config
-f 12480 main.py
-f 2048 README.md
-```
-
-## Files only / directories only
-
-```bash
-# Files only
-bash find /path -maxdepth 1 -mindepth 1 -type f | sort
-
-# Directories only
-bash find /path -maxdepth 1 -mindepth 1 -type d | sort
-
-# Files only, with size
-bash find /path -maxdepth 1 -mindepth 1 -type f -printf '%s %f\n' | sort -n
-```
-
-## Filtering by pattern
-
-```bash
-# Count files by extension — RECURSIVE (no depth limit, spans all subdirectories)
-bash find /path -name "*.yaml" | wc -l
-
-# Count files by extension — NON-RECURSIVE (current directory only)
-bash find /path -maxdepth 1 -name "*.yaml" | wc -l
-
-# List Python files with sizes (current dir only)
-bash find /path -maxdepth 1 -type f -name "*.py" -printf '%s %f\n' | sort -rn
-```
-
-## Recursive listing
-
-```bash
-# All files under a directory, relative paths
-bash find /path -type f | sort
-
-# Limit depth
-bash find /path -maxdepth 3 -type f -name "*.py" | sort
-```
-
-## Gotchas
-
-**Count files recursively in one call — do not explore subdirectories one by one:**
-
-```bash
-# CORRECT — single pipe, counts across all subdirs, 2 turns max
-bash find /app/config -name "*.yaml" | wc -l
-
-# WRONG — exploring each subdir manually burns 4-6 turns and 25K extra tokens
-bash ls /app/config/governance    # turn 2
-bash ls /app/config/profiles      # turn 3  ... etc.
-```
-
-`-maxdepth 1` limits to the current directory only. Drop it when the question asks "under" or "in" a path — those words imply recursive search across subdirectories.
-
-## Governance
-
-- `ls` is auto-approved in NORMAL, ALERT, and DEGRADED — no PWA prompt.
-- `find` is auto-approved in NORMAL only — in ALERT/DEGRADED it requires PWA approval. Prefer `ls -la` in ALERT/DEGRADED modes.
-- Available in LOCKDOWN via the `read` primitive for single-file inspection (not directory listing).
-- Read-only; neither `ls` nor `find` modifies the filesystem.
-- Hidden files: `ls -la` includes dotfiles; `ls -l` omits them. Use `-la` to match legacy `list_directory` behaviour.
-- See also: `bash.md` for the full auto-approve list and output cap (50 KiB).
 ```
 
 ---
@@ -1056,12 +1328,17 @@ bash ls /app/config/profiles      # turn 3  ... etc.
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 2,903 |
-| **Source** | `docs/skills/mermaid-diagrams.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 2,985 |
+| **Source** | `docs/skills/mermaid-diagrams/SKILL.md` |
 
 ```markdown
 # SKILL: Mermaid Diagrams
+
+## Rules
+
+Before emitting any non-trivial mermaid block to the user, validate it with `mmdc` (see Validation section).
+The first content line MUST be the diagram-type keyword. Do not invent syntax — every arrow, keyword, and bracket must be from the v11 spec.
 
 > **Use this skill to** (a) decide when a diagram beats prose, (b) pick the right type, (c) get v11 syntax exactly right, (d) **validate the fence with `mmdc` before sending it to the user**.
 
@@ -1244,6 +1521,7 @@ The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed. **Valida
 Write the diagram body to a temp file (no fence), run `mmdc`, check the output file:
 
 ```bash
+# ask: a here-doc written to a file is not a plain command, so this asks for approval.
 cat > /tmp/m.mmd <<'EOF'
 flowchart LR
     A[Open PR] --> B{CI passes?}
@@ -1407,9 +1685,9 @@ External resources (use for syntax lookup, not as import targets):
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 1,071 |
-| **Source** | `docs/skills/neo4j-direct.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 1,133 |
+| **Source** | `docs/skills/neo4j-direct/SKILL.md` |
 
 ```markdown
 # neo4j-direct — Run Cypher queries against the live knowledge graph
@@ -1440,6 +1718,7 @@ Neo4j graph state directly — entity counts, relationships, schema, recent node
 ## Primary path — bash python3 (1 tool call)
 
 ```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
 python3 - <<'EOF'
 from neo4j import GraphDatabase
 import os
@@ -1512,6 +1791,7 @@ s.run(
 Use only if the Python driver is unavailable. Requires Basic auth:
 
 ```bash
+# ask: the shell expands ${AGENT_NEO4J_USER} and ${AGENT_NEO4J_PASSWORD} here, so this is not a plain command and asks for approval.
 curl -s -X POST \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
@@ -1531,148 +1811,77 @@ curl -s -X POST \
 
 ---
 
-### SKILL: personal-history-recall
-
-| | |
-|---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 802 |
-| **Source** | `docs/skills/personal-history-recall.md` |
-
-```markdown
-# SKILL: personal-history-recall
-
-> **Tier:** 1 — native tool
-> **Tool:** `recall_personal_history`
-> **ADR:** [ADR-0052 §Update 2026-05-14](../architecture_decisions/ADR-0052-seshat-owner-identity-primitive.md)
-
----
-
-## What this skill does
-
-Retrieve the **connected user's own past turns** within a time window. This is the explicit, opt-in narrowing of memory recall — the agent's default is the shared knowledge graph (`search_memory`), which surfaces what *anyone* has contributed. Use this skill only when the user's phrasing scopes to themselves.
-
----
-
-## When to use vs `search_memory`
-
-<when_to_use>
-  Use recall_personal_history when the user scopes to themselves:
-    - "we talked about …", "what did we discuss …"
-    - "I asked", "I told you", "I mentioned"
-    - "my conversation last week", "remind me what I said"
-
-  Use search_memory (the default) when the user asks a general question:
-    - "what do we know about X"
-    - "tell me about the Acropolis"
-    - "find conversations about travel planning"
-
-  The shared graph is the default. Personal-history is an explicit narrowing.
-</when_to_use>
-
----
-
-## Worked examples
-
-<example>
-  User: What did we talk about last Tuesday?
-  Today is Wednesday; "last Tuesday" = 8 days ago.
-  Call: recall_personal_history(days_ago=8)
-</example>
-
-<example>
-  User: Remind me what I told you about the Athens trip.
-  "Remind me" — personal scope. Topic substring: "Athens". 30 days is a safe default.
-  Call: recall_personal_history(days_ago=30, topic="Athens")
-</example>
-
-<anti_example>
-  User: What do we know about the Acropolis?
-  This is a general knowledge question — the agent should surface anyone's
-  contributions, not just the connected user's. Use the shared graph.
-  Call: search_memory(query_text="Acropolis")
-  Do NOT call recall_personal_history — that would hide shared knowledge.
-</anti_example>
-
----
-
-## Time-phrase cheat sheet
-
-| Phrase | `days_ago` |
-|---|---|
-| yesterday | 1 |
-| earlier this week | 3 |
-| last week | 7 |
-| earlier this month | 14 |
-| last month | 30 |
-| last quarter | 90 |
-
-For specific weekdays ("last Tuesday"), compute the offset from today. The LLM does the math; the tool only takes integer `days_ago`.
-
----
-
-## Returned shape
-
-```json
-{
-  "turns": [
-    {
-      "turn_id": "trace-abc123",
-      "timestamp": "2026-05-12T18:30:00+00:00",
-      "session_id": "sess-xyz",
-      "user_message": "Let's plan a trip to Athens...",
-      "summary": "discussed Athens itinerary",
-      "entities": ["Athens", "Acropolis"]
-    }
-  ],
-  "total": 1,
-  "window_days": 7,
-  "user_id": "..."
-}
-```
-
----
-
-## Notes
-
-- The tool fails loudly if `ctx.user_id` is missing — that is a bug after FRE-343, not a fallback condition.
-- For purely topical recall ("what's a good Greek restaurant?"), prefer `search_memory` — it surfaces other users' contributions.
-- The `topic` filter is a case-insensitive substring on `user_message`. It does not yet do semantic search; for fuzzy matches use `search_memory(query_text=..., recency_days=N)`.
-
-See also: [search_memory tool](../skills/seshat-knowledge.md)
-```
-
----
-
 ### query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 3,684 |
-| **Source** | `docs/skills/query-elasticsearch.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 6,175 |
+| **Source** | `docs/skills/query-elasticsearch/SKILL.md` |
 
 ```markdown
 # query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
 
+## Rules
+
+These results must come from a live ES query — never answer from training-data priors about what the logs might contain.
+
+## Canonical patterns
+
+`agent-logs-*`, `agent-captains-captures-*`, `agent-captains-reflections-*`
+
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `query_elasticsearch` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
 
-**Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); `run_python` auto-approved (NORMAL/ALERT/DEGRADED)
+**Category:** `system_read` · **Risk:** low · **Approval:** a `bash curl` read runs without asking (FRE-1583): `GET` of `_cat`, `_cluster/health`, `_mapping` and `_field_caps`, and `GET` or `POST` with a query body to `_search`, `_count` and `_query`. Every write endpoint and every other method asks; `run_python` runs without asking in NORMAL; with `network: true` it asks
 
-## Actual indices (empirically verified 2026-04-28)
+**Latency is not here.** Model-call timing lives on OTel spans in Tempo, not in these logs (ADR-0129, FRE-1219: `duration_ms` and `latency_ms` are retired from `agent-logs-*`). For latency, p50/p90 or "what was slow", use the `query-tempo` skill (Pattern 5) or the `query_telemetry` tool, action `latency`.
 
-The cluster has four index families. **Do not guess index names** — use only these patterns:
+## Known mistakes
+
+These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
+
+- `/logs-*`: Generic '/logs-*' index does not exist in Seshat telemetry. Use '/agent-logs-*' — the correct index family starts with 'agent-'.
+- `agent-events-*`: Index 'agent-events-*' does not exist. Use 'agent-logs-*' for events; filter by 'event_type' field.
+- `agent-traces-*`: Index 'agent-traces-*' does not exist. Use 'agent-logs-*'; traces are logged events filtered by fields.
+- `agent-telemetry-*`: Index 'agent-telemetry-*' does not exist. Use 'agent-logs-*' for all structured telemetry.
+
+## Actual indices (families verified 2026-04-28; date shapes verified 2026-07-31)
+
+The cluster has these index families. **Do not guess index names** — use only these patterns:
 
 | Pattern | Purpose | Example |
 |---------|---------|---------|
-| `agent-logs-YYYY.MM.DD` | All structured log events (primary telemetry) | `agent-logs-2026.04.28` |
-| `agent-captains-captures-YYYY-MM-DD` | Captain's Log per-request captures | `agent-captains-captures-2026-04-28` |
-| `agent-captains-reflections-YYYY-MM-DD` | DSPy self-reflection outputs | `agent-captains-reflections-2026-04-28` |
-| `agent-insights-YYYY-MM-DD` | Cross-session insights and anomalies | `agent-insights-2026-04-28` |
+| `agent-logs-*` | All structured log events (primary telemetry) | `agent-logs-2026.07.31`, `agent-logs-2026-07` |
+| `agent-captains-captures-*` | Captain's Log per-request captures | `agent-captains-captures-2026-07-31` |
+| `agent-captains-reflections-*` | DSPy self-reflection outputs | `agent-captains-reflections-2026-07-31` |
+| `agent-insights-*` | Cross-session insights and anomalies | `agent-insights-2026-07` |
 
-**Wildcard queries:** `agent-logs-*` (all days), `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*`.
+**Wildcard queries:** `agent-logs-*` (all days/months), `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*`.
 
 **Non-existent patterns** (404 errors): `agent-events-*`, `agent-traces-*`, `agent-telemetry-*` — these do not exist.
+
+**Do not assume a date shape.** A family holds daily indices (`YYYY.MM.DD`), monthly indices (`YYYY-MM`), or both at once. Use the `<family>-*` wildcard. Never rebuild a date pattern by cutting another one: a cut name such as `agent-logs-2026` looks real and is not.
+
+To classify a family, use the tested classifier, not `sed`:
+
+```bash
+# ask: python3 can run any program, so this asks for approval (ADR-0156 D8.2).
+curl -s 'http://elasticsearch:9200/_cat/indices?h=index' \
+  | grep '^agent-monitors-joinability-' \
+  | python3 scripts/es_index_granularity.py agent-monitors-joinability
+```
+
+It reports daily and monthly counts, flags `MIXED`, and lists any name it does not recognise.
+
+**The date field differs by family.** The time bound in a query must use the family's own field (from `docker/elasticsearch/*-index-template.json`):
+
+| Family | Date field |
+|--------|-----------|
+| `agent-logs-*`, `agent-topology-*`, `agent-monitors-cache-reset-cadence-*`, `agent-monitors-projector-health-*` | `@timestamp` |
+| `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-insights-*` | `timestamp` |
+| `agent-monitors-slm-health-*` | `probed_at` |
+| `agent-monitors-cache-erosion-*`, `agent-monitors-delivery-ratio-*` | `run_at` |
+| `agent-monitors-joinability-*` | `started_at` |
 
 ## Key fields in `agent-logs-*`
 
@@ -1687,18 +1896,17 @@ Most important fields for queries:
 | `message` | text | Log message (full-text search; not for term equality) |
 | `trace_id` | keyword | Request trace ID |
 | `session_id` | keyword | Session identifier |
-| `event_type` | keyword | What happened (e.g. `tool_call_started`, `litellm_request_complete`) |
+| `event_type` | keyword | What happened (e.g. `tool_call_started`, `model_call_completed`) |
 | `action` | keyword | Sub-event action |
 | `task_type` | keyword | Gateway intent classification |
 | `mode` | keyword | Agent mode: `NORMAL`, `ALERT`, etc. |
 | `tool_name` | keyword | Name of tool called |
-| `prompt_tokens` | long | Input tokens to LLM |
-| `completion_tokens` | long | Output tokens from LLM |
-| `cache_read_input_tokens` | long | Cache-hit tokens (prompt caching) |
+| `input_tokens` | long | Prompt tokens to LLM (on `model_call_completed`) |
+| `output_tokens` | long | Completion tokens from LLM (on `model_call_completed`) |
+| `cache_read_tokens` | long | Cache-hit tokens (on `model_call_completed`) |
+| `cache_read_input_tokens` | long | Cache-hit tokens (on `api_cost_recorded` — different field name, same meaning) |
 | `cache_creation_input_tokens` | long | Cache-miss tokens (new cache entry) |
 | `cost_usd` | float | Cost of LLM call |
-| `elapsed_s` | float | Elapsed wall time in seconds |
-| `elapsed_ms` / `duration_ms` | long | Elapsed time in milliseconds |
 | `success` | boolean | Whether the operation succeeded |
 | `error` | text + `.keyword` | Free-form error message; use `error.keyword` for term equality / aggregations, `error` for full-text search |
 | `turn_count` | long | Number of LLM turns in request |
@@ -1766,7 +1974,7 @@ curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
     "size": 200,
     "query": {"term": {"trace_id": "<trace_id>"}},
     "sort": [{"@timestamp": "asc"}],
-    "_source": ["@timestamp","event_type","level","tool_name","duration_ms","latency_ms","model_id"]
+    "_source": ["@timestamp","event_type","level","tool_name","model_id"]
   }' | jq ".hits.hits[]._source"
 
 # Total tokens / cost in last 24h, grouped by task_type
@@ -1779,13 +1987,149 @@ curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
       "by_task": {
         "terms": {"field": "task_type", "size": 10},
         "aggs": {
-          "input": {"sum": {"field": "prompt_tokens"}},
-          "output": {"sum": {"field": "completion_tokens"}},
+          "input": {"sum": {"field": "input_tokens"}},
+          "output": {"sum": {"field": "output_tokens"}},
           "cost": {"sum": {"field": "cost_usd"}}
         }
       }
     }
   }' | jq '.aggregations.by_task.buckets'
+
+# Daily spend trend, last 7 days — TOTAL across all providers (LLM + OVH embedding +
+# Voyage rerank). Uses api_cost_recorded, the unified per-call ledger (FRE-979).
+# model_call_completed alone would understate this — it excludes embedding/rerank cost.
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "api_cost_recorded"}},
+      {"range": {"@timestamp": {"gte": "now-7d"}}}
+    ]}},
+    "aggs": {
+      "by_day": {
+        "date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_day.buckets'
+
+# Total spend by provider, last 24h — the total-spend source of truth. api_cost_recorded
+# carries every priced call (anthropic, openai, ovh, voyage); model_call_completed alone
+# misses embedding_generated (OVH) and reranker_applied (Voyage) cost (FRE-979).
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "api_cost_recorded"}},
+      {"range": {"@timestamp": {"gte": "now-24h"}}}
+    ]}},
+    "aggs": {
+      "by_provider": {
+        "terms": {"field": "provider", "size": 10},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_provider.buckets'
+
+# Managed-inference cost, last 7 days — embedding (OVH) and reranker (Voyage) breakdowns
+# that api_cost_recorded's total rolls up but doesn't distinguish by purpose.
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "embedding_generated"}},
+      {"range": {"@timestamp": {"gte": "now-7d"}}}
+    ]}},
+    "aggs": {
+      "by_day": {
+        "date_histogram": {"field": "@timestamp", "calendar_interval": "day"},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_day.buckets'
+
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "reranker_applied"}},
+      {"term": {"provider": "voyage"}},
+      {"exists": {"field": "cost_usd"}},
+      {"range": {"@timestamp": {"gte": "now-7d"}}}
+    ]}},
+    "aggs": {"total_cost": {"sum": {"field": "cost_usd"}}}
+  }' | jq '.aggregations.total_cost'
+
+# Spend by role, last 24h — LLM-only (model_call_completed — role is the factory role,
+# e.g. primary / sub_agent / artifact_builder; see Pattern 3b below to group by budget cap).
+# Excludes OVH embedding and Voyage rerank cost; use the total-spend-by-provider recipe
+# above for a figure that includes them.
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "model_call_completed"}},
+      {"range": {"@timestamp": {"gte": "now-24h"}}},
+      {"exists": {"field": "cost_usd"}}
+    ]}},
+    "aggs": {
+      "by_role": {
+        "terms": {"field": "role", "size": 10},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_role.buckets'
+
+# Spend by model, last 24h — LLM-only (model_call_completed); same exclusion as above.
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "model_call_completed"}},
+      {"range": {"@timestamp": {"gte": "now-24h"}}},
+      {"exists": {"field": "cost_usd"}}
+    ]}},
+    "aggs": {
+      "by_model": {
+        "terms": {"field": "model", "size": 10},
+        "aggs": {"cost": {"sum": {"field": "cost_usd"}}}
+      }
+    }
+  }' | jq '.aggregations.by_model.buckets'
+
+# Spend by budget cap — budget_counter_snapshot already groups roles sharing a
+# cap (cost_gate.budget_role_for(), config/governance/budget.yaml) into running_total,
+# so no client-side join is needed. Take the latest snapshot per (role, time_window).
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "budget_counter_snapshot"}},
+      {"range": {"@timestamp": {"gte": "now-5m"}}}
+    ]}},
+    "aggs": {
+      "by_cap": {
+        "terms": {"field": "time_window", "size": 5},
+        "aggs": {
+          "by_role": {
+            "terms": {"field": "role", "size": 20},
+            "aggs": {
+              "running_total": {"max": {"field": "running_total"}},
+              "cap_usd": {"max": {"field": "cap_usd"}},
+              "utilization_ratio": {"max": {"field": "utilization_ratio"}}
+            }
+          }
+        }
+      }
+    }
+  }' | jq '.aggregations.by_cap.buckets'
 
 # Loop-gate fires (consecutive or identity blocks) in last 7 days
 curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
@@ -1863,7 +2207,7 @@ curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
   -d '{
     "size": 10,
     "sort": [{"timestamp": "desc"}],
-    "_source": ["trace_id","user_message","outcome","total_tokens","duration_ms","timestamp"]
+    "_source": ["trace_id","user_message","outcome","total_tokens","timestamp"]
   }' | jq '.hits.hits[]._source'
 
 # Recent reflections — recurring ones only (seen_count >= 2, most persistent first)
@@ -1883,7 +2227,7 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
     "size": 100,
     "query": {"term": {"trace_id.keyword": "<trace_id>"}},
     "sort": [{"@timestamp": "asc"}],
-    "_source": ["event_type","@timestamp","duration_ms","latency_ms","model_id","tokens"]
+    "_source": ["event_type","@timestamp","model_id","tokens"]
   }' | jq '.hits.hits[]._source'
 ```
 
@@ -1896,224 +2240,392 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
 | `term` query on `error` text field | Use `error.keyword`. All other named fields (`level`, `event_type`, `tool_name`, `trace_id`, etc.) are pure keyword post-2026-05-10 reindex — `term` works directly. |
 | Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp >= now-24h` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index. |
 | Empty `_source` filter | Omit `_source` to get the full doc (it's small). Or list explicit fields to keep results small. |
-| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `litellm_request_complete`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `history_sanitised`. |
+| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `api_cost_recorded`, `embedding_generated`, `reranker_applied`, `budget_counter_snapshot`, `history_sanitised`. |
+| Assuming a separate cloud-only cost event exists | The legacy per-provider event name was removed (FRE-376 Phase 3). Cost/tokens for **both** cloud and local model calls are unified on `model_call_completed` (has `role`). |
+| Using `model_call_completed` alone for TOTAL spend | It's LLM-completions only — it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost, which route through the unified ledger instead. Use `api_cost_recorded` for total spend across every provider (FRE-974/979); keep `model_call_completed` for by-role/by-model LLM-only breakdowns. |
 
 ## Governance
 
-- `bash curl` to ES: auto-approved in all non-LOCKDOWN modes. No auth required — local cluster only. 30 s timeout.
+- `bash curl` to ES: the reads above run without asking in NORMAL/ALERT/DEGRADED (FRE-1583). `_bulk`, `_doc`, `_update_by_query`, `_delete_by_query`, `_settings`, `PUT`, `DELETE` and every other endpoint ask. No auth required — local cluster only. 30 s timeout.
 - LOCKDOWN: `bash` disabled. Use `read` primitive to read raw JSONL directly from log files.
 - `run_python` for self-telemetry: available in NORMAL/ALERT/DEGRADED; disabled in LOCKDOWN/RECOVERY.
 - Output cap: pipe large responses through `| head -c 50000` or use `LIMIT` in ES|QL.
 
-See also: [bash — Shell Command Executor](bash.md) · [run_python — Python Docker Sandbox](run-python.md)
+See also: the `bash` and `run_python` tool descriptions.
 ```
 
 ---
 
-### Skill: read / write (primitive filesystem I/O)
+### query-tempo — Query Tempo traces, read span hierarchies, and investigate latency
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 837 |
-| **Source** | `docs/skills/read-write.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 4,167 |
+| **Source** | `docs/skills/query-tempo/SKILL.md` |
 
 ```markdown
-# Skill: read / write (primitive filesystem I/O)
+# query-tempo — Query Tempo traces, read span hierarchies, and investigate latency
 
-**Status:** Primary path (FRE-263, 2026-04-28). Legacy `read_file` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+## Rules
 
-> FRE-261 Step 3 — supersedes legacy `read_file` and `write_file` tools.
+These results must come from a live Tempo query — never answer from training-data priors about what the trace might contain.
 
-## When to use `read` vs legacy `read_file`
+## Canonical patterns
 
-| Situation | Use |
-|-----------|-----|
-| Reading any file in an allowed path | `read` (has explicit path governance) |
-| Legacy code that already uses `read_file` | keep `read_file` until it is removed |
-| Need byte-level size cap (e.g. cap at 64 KB) | `read` with `max_bytes=65536` |
+`trace_id`
 
-`read` applies `allowed_paths` / `forbidden_paths` from `config/governance/tools.yaml`
-at executor time, so bad paths are rejected before the filesystem is touched.
+**Status:** Primary path (FRE-1321, 2026-08-29). Tempo v2.10.7 deployed with OTLP ingress (ADR-0129).
 
-## When to use `write` vs legacy `write_file`
+**Category:** `system_read` · **Risk:** low · **Approval:** a `bash curl` `GET` of `/api/traces/*`, `/api/v2/traces/*`, `/api/search*`, `/api/v2/search/*`, `/api/metrics/*`, `/api/echo`, `/ready` and `/status` runs without asking in NORMAL/ALERT/DEGRADED (FRE-1583). Any other path or method asks. Reachability is limited to the compose network
 
-| Situation | Use |
-|-----------|-----|
-| Writing to a scratch area (`/tmp/`, sandbox) | `write` — proceeds unattended |
-| Writing to a project file | `write` — advisory flag emitted in result; no automatic blocking (Planned: FRE-261 follow-up) |
-| Appending log lines to an existing file | `write` with `mode="append"` |
-| Legacy code using `write_file` | keep until `write_file` is removed |
+## Known mistakes
 
-## Scratch-dir convention (unattended)
+These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
 
-Paths that don't require interactive approval:
+- `api/v1/`: Tempo v1 API endpoints do not exist in our deployment. Documented Tempo API (upstream) uses v1, but our deployment (Tempo v2.10.7) has only the unprefixed and v2 APIs. Use '/api/traces/{traceID}' or '/api/v2/traces/{traceID}' for trace retrieval, '/api/search' for search. Never '/api/v1/*'.
+- `api/status`: /api/status returns 404. The correct endpoint for Tempo status is /status (not /api/status). Use '/status' or '/api/echo' for status checks.
 
-- `/tmp/**` — OS temp directory
-- `/app/agent_workspace/sandbox/<trace_id>/` — per-task scratch area
+## Reachability
 
-Write to scratch dirs when the output is ephemeral (analysis intermediates,
-generated drafts before review). Always use a `trace_id`-scoped subdirectory
-to avoid cross-task collisions.
+- **Tempo answers on the compose network as `http://tempo:3200`**
+- Query API base: `http://tempo:3200/api/`
+- Available only from inside containers (compose network) or SSH tunnels with port forwarding
+- Test connectivity: `curl -s 'http://tempo:3200/status'` returns 200
 
-## Path restrictions
+## Endpoints (verified live 2026-08-29)
 
-Both tools check against `config/governance/tools.yaml`:
+### Trace retrieval by ID
 
-- **`allowed_paths`** — globs the path must match (if list is non-empty)
-- **`forbidden_paths`** — globs the path must NOT match (checked first)
-- **`unattended_paths`** (`write` only) — paths exempt from approval advisory
+**Preferred: `/api/v2/traces/{traceID}` (standard OpenTelemetry proto format)**
 
-See `config/governance/tools.yaml` entries `read` and `write` for exact patterns.
+```bash
+# Put your trace id in place of the example id. Do not write {traceID}: curl expands braces.
+curl -s 'http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '.trace.resourceSpans[0].scopeSpans[0].spans'
+```
 
-## Usage examples
-
-### read — load a config file
-
+Returns standard OTel resourceSpans format:
 ```json
 {
-  "tool": "read",
-  "arguments": {
-    "path": "/app/config/governance/tools.yaml"
+  "trace": {
+    "resourceSpans": [
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": {"stringValue": "seshat-vps"}
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {"name": "personal_agent.telemetry.otel_middleware"},
+            "spans": [
+              {
+                "traceId": "G8hJv5Tr+AFir5yXue6Rww==",
+                "spanId": "KPV6tY/gbzU=",
+                "name": "GET /health",
+                "kind": "SPAN_KIND_INTERNAL",
+                "startTimeUnixNano": "1788030491849226974",
+                "endTimeUnixNano": "1788030491854866238",
+                "attributes": [
+                  {
+                    "key": "http.method",
+                    "value": {"stringValue": "GET"}
+                  }
+                ],
+                "status": {}
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "metrics": {
+    "inspectedBytes": "72504"
   }
 }
 ```
 
-### read — read first 4 KB of a large file
+**Alternative: `/api/traces/{traceID}` (Tempo-native batches format)**
 
+```bash
+curl -s 'http://tempo:3200/api/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '.batches[0].scopeSpans[0].spans'
+```
+
+Returns Tempo's batches format (similar structure, different root key). Both endpoints work; v2 is the standard.
+
+**Key fields per span:**
+- `traceId`, `spanId` — base64-encoded trace and span identifiers
+- `parentSpanId` — parent span ID (if set); empty/absent for root spans
+- `name` — semantic span name (e.g., `GET /health`, `model_call`)
+- `startTimeUnixNano`, `endTimeUnixNano` — Unix nanosecond timestamps
+- `kind` — `SPAN_KIND_INTERNAL`, `SPAN_KIND_SERVER`, `SPAN_KIND_CLIENT`, etc.
+- `attributes` — key-value metadata (HTTP method, status, service name, etc.)
+- `status` — `{}` for success; `{"code": "STATUS_CODE_ERROR"}` for errors
+
+### Search for traces (by service or attributes)
+
+```bash
+# Search with limit (required parameter)
+curl -s 'http://tempo:3200/api/search?limit=10' | jq '.traces'
+
+# Search for a specific service
+curl -s 'http://tempo:3200/api/search?q=service.name%3Dseshat-vps&limit=5' | jq '.traces'
+
+# Search for recent traces with time window
+curl -s 'http://tempo:3200/api/search?start=<unix_seconds>&end=<unix_seconds>&q=<query>&limit=10' | jq '.traces'
+```
+
+Returns:
 ```json
 {
-  "tool": "read",
-  "arguments": {
-    "path": "/app/logs/agent.log",
-    "max_bytes": 4096
+  "traces": [
+    {
+      "traceID": "1bc849bf94ebf80162af9c97b9ee91c3",
+      "rootServiceName": "seshat-vps",
+      "rootTraceName": "GET /health",
+      "startTime": "1788030491849226974",
+      "duration": "5639264"
+    }
+  ],
+  "metrics": {
+    "inspectedBytes": "...",
+    "inspectedTraces": "..."
   }
 }
 ```
 
-### read — tail the last 200 lines of a large log file
+**Parameters:**
+- `limit` — required, max traces to return
+- `start`, `end` — Unix seconds (optional; if omitted, searches recent traces only)
+- `q` — query string with attribute filters (optional)
 
-Use `tail_lines` when the file exceeds the 10 MB default cap (e.g. `telemetry/logs/current.jsonl`).
-The `max_bytes` size gate is bypassed; output is still capped at `max_bytes` bytes of text.
+### Tag enumeration (search attributes)
 
+```bash
+curl -s 'http://tempo:3200/api/search/tags' | jq '.tagNames'
+```
+
+Returns available tag/attribute names that can be searched:
 ```json
 {
-  "tool": "read",
-  "arguments": {
-    "path": "/opt/seshat/telemetry/logs/current.jsonl",
-    "tail_lines": 200
-  }
+  "tagNames": ["service.name", "http.method", "http.status_code", ...]
 }
 ```
 
-### write — create a scratch analysis file
+### Status / version
 
+```bash
+curl -s 'http://tempo:3200/status' | jq .
+```
+
+Returns:
 ```json
 {
-  "tool": "write",
-  "arguments": {
-    "path": "/tmp/analysis-abc123/summary.txt",
-    "content": "Key findings:\n- ...",
-    "mode": "overwrite"
-  }
+  "version": "2.10.7",
+  "buildDate": "...",
+  "gitRevision": "..."
 }
 ```
 
-### write — append to an existing notes file
+### Echo endpoint (simple connectivity check)
 
-```json
-{
-  "tool": "write",
-  "arguments": {
-    "path": "/tmp/notes.md",
-    "content": "\n## New section\n...",
-    "mode": "append"
-  }
-}
+```bash
+curl -s 'http://tempo:3200/api/echo' | jq .
 ```
+
+Returns:
+```json
+{}
 ```
 
 ---
 
-### run_python — Python Docker Sandbox
+## Common patterns
 
-| | |
-|---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 698 |
-| **Source** | `docs/skills/run-python.md` |
+### Pattern 1: Read a complete trace end-to-end (with spans and timing)
 
-```markdown
-# run_python — Python Docker Sandbox
+Replace the trace id in the URL with the one you need. Write it as a literal: a shell variable or `$(…)` makes the command ask for approval.
 
-> **Sandbox isolation:** runs in a **separate Docker container** (`seshat-sandbox-python:0.1`), not the agent service container. Consequences:
-> - **May be unavailable** when the Docker socket is not mounted into the gateway container (e.g. some cloud eval environments). Surface the failure plainly rather than retrying in a loop.
-> - **App source is NOT importable.** `from personal_agent import ...` will `ImportError`. Use file reads (`/sandbox/` bind-mount) or HTTP calls (with `network=True`) to inspect the app.
-> - **`/proc` reflects the container's cgroup**, not raw host metrics. For host-level metrics, use `bash top`/`bash free` instead.
-
-Execute Python scripts in an isolated, hardened Docker container.
-
-## When to use
-
-Use `run_python` for:
-- Computation (maths, stats, data analysis)
-- Data transformation (CSV/JSON parsing, reshaping with pandas)
-- Inspection tasks (parsing a file, decoding a format)
-- Any task needing libraries not available in the agent runtime
-
-Do **not** use for file I/O that modifies the host filesystem outside `/sandbox` — use `write` for that.
-
-## Pre-installed libraries
-
-`requests`, `httpx`, `pandas`, `numpy`, `pyyaml`, `psutil`
-
-System tools also available in the sandbox: `ps`, `top`, `free`, `vmstat`, `iostat`, `ss`, `lsof`, `curl`, `jq`, `redis-cli`, `psql` (same set as the gateway container).
-
-## Scratch directory
-
-The container's `/sandbox` is a host bind-mount scoped to the current trace. Files written there persist in `settings.sandbox_scratch_root/<trace_id>/` and are returned in `scratch_files`.
-
-## Network
-
-Network access is **disabled by default** (`--network=none`). Pass `network=true` to attach to the `cloud-sim` Docker network. Network access requires approval in ALERT and DEGRADED modes.
-
-## Timeout
-
-Default: 60 s. Maximum: 300 s. Minimum: 5 s. Pass `timeout_seconds` to override.
-
-## Output cap
-
-Combined stdout + stderr is capped at 50 KiB. Excess is truncated; `truncated: true` is set in the response.
-
-## Availability
-
-Requires the `docker` binary on `PATH` and the image `seshat-sandbox-python:0.1` to be built (`make sandbox-build`). Not available in LOCKDOWN or RECOVERY modes.
-
-## Examples
-
-```python
-# Simple computation
-script = "print(2 ** 10)"
-# → stdout: "1024\n"
-
-# pandas data manipulation
-script = """
-import pandas as pd, json
-data = [{"x": i, "y": i**2} for i in range(5)]
-df = pd.DataFrame(data)
-print(df.to_json(orient="records"))
-"""
-
-# Write output to scratch
-script = """
-import json
-result = {"answer": 42}
-with open("/sandbox/result.json", "w") as f:
-    json.dump(result, f)
-print("written")
-"""
-# → scratch_files: ["/tmp/agent_sandbox/<trace_id>/result.json"]
+```bash
+curl -s "http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3" | jq '.trace.resourceSpans[0].scopeSpans[0].spans | 
+  map({
+    name,
+    spanId,
+    startTimeUnixNano: (.startTimeUnixNano | tonumber),
+    endTimeUnixNano: (.endTimeUnixNano | tonumber),
+    durationNano: ((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)),
+    attributes: ((.attributes // []) | map({(.key): (.value.stringValue // .value.intValue)}) | add)
+  }) | 
+  sort_by(.startTimeUnixNano)'
 ```
+
+Output from real trace:
+```json
+[
+  {
+    "name": "GET /health",
+    "spanId": "KPV6tY/gbzU=",
+    "startTimeUnixNano": 1788030491849226974,
+    "endTimeUnixNano": 1788030491854866238,
+    "durationNano": 5639264,
+    "attributes": {
+      "http.method": "GET",
+      "http.target": "/health",
+      "http.status_code": 200
+    }
+  }
+]
+```
+
+**Interpretation:** Single span representing an HTTP GET to /health that took ~5.6ms and returned 200.
+
+### Pattern 2: Find recently active services
+
+```bash
+curl -s 'http://tempo:3200/api/search?limit=100' | jq '.traces | unique_by(.rootServiceName) | .[] | {service: .rootServiceName, recentTrace: .traceID}'
+```
+
+### Pattern 3: Calculate span duration in milliseconds
+
+```bash
+curl -s "http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3" | jq '.trace.resourceSpans[0].scopeSpans[0].spans[] | 
+  {
+    name,
+    durationMs: (((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)) / 1000000)
+  }'
+```
+
+### Pattern 4: Find traces by service name and time window
+
+Read the clock with two plain commands, then write the two numbers into the search. The numbers below are example values.
+
+```bash
+date -d '1 hour ago' +%s
+date +%s
+curl -s 'http://tempo:3200/api/search?start=1788026891&end=1788030491&q=service.name%3Dseshat-vps&limit=20' | jq '.traces[]'
+```
+
+### Pattern 5: Model-call latency by role and model (p50, p90, max)
+
+Use this for "how slow are model calls", "p50 and p90 by role" and any latency over a window.
+Elasticsearch holds no model-call timing (ADR-0129). Tempo does: one `model_call <model>` span
+per model call, with the role in `gen_ai.operation.name` and the model in
+`gen_ai.request.model`. The `query_telemetry` tool, action `latency`, returns the same kind of summary
+when that tool is available. This is the bash path.
+
+1. Read the clock: `date +%s` is the end, `date -d '24 hours ago' +%s` is the start. Tempo
+   refuses a window over 168 hours.
+2. Write both numbers as literals in `start` and `end`. A `$(…)` makes the command ask for approval.
+3. Keep `limit` (traces) and `--argjson limit` equal. `spss` is the spans returned per trace.
+
+```bash
+date +%s
+date -d '24 hours ago' +%s
+curl -s -G 'http://tempo:3200/api/search' \
+  --data-urlencode 'q={ span:name =~ "model_call .*" } | select(span.gen_ai.operation.name, span.gen_ai.request.model)' \
+  --data-urlencode 'start=1788000000' \
+  --data-urlencode 'end=1788086400' \
+  --data-urlencode 'limit=500' \
+  --data-urlencode 'spss=100' \
+| jq --argjson limit 500 'def pct($p): sort | .[((($p * length) | ceil) - 1)];
+def num: if type == "number" then . elif type == "string" then (tonumber? // null) else null end;
+def attr($k): ([.attributes[]? | select(.key == $k) | .value.stringValue] | first) // "unknown";
+[.traces[]? | (.spanSets // [.spanSet])[]? | select(. != null)] as $sets
+| (.metrics.totalJobs | num) as $total
+| (if $total != null then ((.metrics.completedJobs | num) // 0) else null end) as $done
+| [$sets[] | .spans[]? | select((.durationNanos | num) != null)] as $spans
+| (.traces | length) as $returned
+| ([.traces[]? | select((.spanSets // .spanSet) == null)] | length) as $noset
+| ([$sets[] | select((.matched | num) != null) | ((.matched | num) - ((.spans // []) | length)) | select(. > 0)] | add // 0) as $cut
+| ([$sets[] | select((.matched | num) == null)] | length) as $nomatch
+| ([$sets[] | .spans[]? | select((.durationNanos | num) == null)] | length) as $nodur
+| (if $done != null and $total != null and $done < $total then $total - $done else 0 end) as $unread
+| {
+    traces_returned: $returned,
+    trace_limit: $limit,
+    spans_used: ($spans | length),
+    spans_cut: $cut,
+    blocks_unread: $unread,
+    sets_without_match: $nomatch,
+    spans_without_duration: $nodur,
+    traces_without_span_set: $noset,
+    complete: ($returned < $limit and $cut == 0 and $unread == 0 and $nomatch == 0 and $nodur == 0 and $noset == 0),
+    groups: ($spans | group_by([attr("gen_ai.operation.name"), attr("gen_ai.request.model")])
+      | map({
+          role: (.[0] | attr("gen_ai.operation.name")),
+          model: (.[0] | attr("gen_ai.request.model")),
+          spans: length,
+          p50_ms: (map((.durationNanos | num) / 1000000) | pct(0.5)),
+          p90_ms: (map((.durationNanos | num) / 1000000) | pct(0.9)),
+          max_ms: (map((.durationNanos | num) / 1000000) | max)
+        })
+      | sort_by(-.spans))
+  }'
+```
+
+**Read `complete` before you report a number.** It is `false` when any of these holds:
+
+| Field | Meaning when not zero (or `traces_returned` equals `trace_limit`) |
+|-------|------------------------------------------------------------------|
+| `traces_returned` = `trace_limit` | The `limit` cut the search. More traces can match. Narrow the window or add a filter to the TraceQL. |
+| `spans_cut` | Tempo matched more spans in a trace than `spss` returned. |
+| `blocks_unread` | Tempo stopped before it read every block. |
+| `sets_without_match` | A result had no match count, so its completeness is unknown. |
+| `spans_without_duration` | A span had no duration. It is left out of the percentiles. |
+| `traces_without_span_set` | A trace came back with no span set. Its spans are not counted. |
+
+When `complete` is `false`, say the percentiles come from a sample and name the field. An empty
+`groups` means no model-call span matched in the window. It does not mean zero latency.
+Percentiles are nearest-rank over `spans_used`. A role or model with few spans gives a
+coarse p90.
+
+---
+
+## Known limitations
+
+**Search requires a limit parameter.** Unlike Elasticsearch, Tempo search always requires `?limit=N`. Without it, requests fail silently or return empty results.
+
+**Time format is Unix seconds only.** Unlike Elasticsearch's date-math (`now-1h`), Tempo requires explicit Unix-second timestamps for `start` and `end` parameters.
+
+**`q` takes TraceQL.** `{ span:name =~ "model_call .*" && span.gen_ai.operation.name = "primary" } | select(span.gen_ai.request.model)` works (verified live, FRE-1567). A search with a pipeline returns only the attributes named in `select(...)`. `spss` caps the spans returned per trace, and `limit` caps the traces. A reply that hits either cap is a sample, not the whole window.
+
+**Base64 encoding on IDs.** Trace and span IDs are base64-encoded in the response. To use them in subsequent queries, use them as-is (no decoding needed for another query).
+
+---
+
+## Data discipline
+
+- **Run `curl` from `bash` as shown.** The bash tool runs inside the gateway container, where `http://tempo:3200` resolves. `docker exec` is not an allowlisted command and asks for approval
+- **Search requires a limit.** Always include `?limit=N` in search queries; omitting it causes silent failures
+- **Timestamps are nanoseconds.** Divide by 1e9 for seconds; divide by 1e6 for milliseconds
+- **v1 API does not exist here.** Documentation says v1, but our Tempo has only the unprefixed and v2 paths
+- **Traces are immutable.** Once written to Tempo, a trace cannot be updated
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `could not resolve host: tempo` | Running from the host instead of inside the gateway container | Run the command through the `bash` tool, which runs in the gateway container |
+| Empty `[]` on `/api/search` | Missing or empty `limit` parameter | Add `?limit=10` (or any positive integer) to the query |
+| `null` results on search | Trace time window is outside recent history | Use `/api/search?limit=10` with no time filter to get recent traces |
+| HTTP 404 on `/api/v1/traces` | Attempting to use the documented Tempo v1 API | Use `/api/v2/traces/{traceID}` or `/api/traces/{traceID}` instead |
+| HTTP 404 on `/api/status` | Using the wrong status endpoint | Use `/status` (not `/api/status`) |
+| Large trace (>10 MB) takes time to retrieve | Traces with many spans (1000+) are slower to deserialize | Use selective `jq` filtering to extract only needed span fields |
+
+---
+
+## References
+
+- [Tempo upstream API docs](https://grafana.com/docs/tempo/latest/api_docs/) — official reference (our deployment differs; use this skill for our specifics)
+- [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/) — standard span attribute names
+- ADR-0129 (`docs/architecture_decisions/ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md`) — Tempo deployment and design rationale
+- The `query-elasticsearch` skill — analogue for log queries (Elasticsearch backs logs, Tempo backs traces)
 ```
 
 ---
@@ -2122,21 +2634,39 @@ print("written")
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 1,877 |
-| **Source** | `docs/skills/self-telemetry.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 3,403 |
+| **Source** | `docs/skills/self-telemetry/SKILL.md` |
 
 ```markdown
 # self-telemetry — Agent self-introspection via ES + Captain's Log
 
+## Rules
+
+Cite real ES counts/traces in your answer — do not paraphrase what the telemetry 'probably' shows.
+
+## Canonical patterns
+
+`model_call_completed`, `agent-captains-captures-*`, `agent-captains-reflections-*`
+
 **Primary path:** `bash curl` to `http://elasticsearch:9200`. **No `run_python` project imports.**
+
+## Known mistakes
+
+These calls fail. Until FRE-1574 a global check refused any bash command that held one of these strings; now the server's own error reports the mistake.
+
+- `from personal_agent`: run_python sandbox has no project source installed — 'from personal_agent import ...' raises ImportError. Use bash+curl to the ES REST API instead.
+- `cache_read_input_tokens`: On 'model_call_completed' the ES field is 'cache_read_tokens', not 'cache_read_input_tokens' (internal usage object name). Use 'cache_read_tokens' when querying 'model_call_completed'.
 
 ## Event types and what they cover
 
 | `event_type` | Path | Key fields |
 |---|---|---|
-| `litellm_request_complete` | Cloud LLM (all cloud providers) | `model`, `endpoint`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `latency_ms`, `cost_usd`, `cache_read_tokens`, `cache_creation_input_tokens` |
-| `model_call_completed` | Local LLM (llama.cpp / MLX) | `model_id`, `endpoint`, `api_type`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `latency_ms`, `cache_read_tokens` |
+| `api_cost_recorded` | **Total-spend source (FRE-979).** Unified per-call cost ledger (Postgres `api_costs` mirror) — every priced call lands here regardless of provider: `anthropic`/`openai` (LLM), `ovh` (managed embedding), `voyage` (reranker). Always carries `cost_usd`, no `role`. | `provider`, `model`, `cost_usd`, `latency_ms`, `record_id`, `trace_id`, `session_id`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
+| `model_call_completed` | **LLM-completions only.** Cloud (`LiteLLMClient`) AND local (`LocalLLMClient`) both emit this since FRE-376 Phase 3 (the per-provider event name was retired). Has the `role` dimension, so keep it for by-role/by-model LLM breakdowns — but it **excludes embedding and rerank cost**; do not use it alone for total spend. | `model`, `provider`, `role`, `endpoint`, `latency_ms`, `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, `cost_usd` (present on cloud/priced calls) |
+| `embedding_generated` | Managed-embedding call (FRE-974) — provider `ovh` only today | `provider` (`ovh`), `model`, `tokens`, `cost_usd`, `latency_ms`, `trace_id`, `session_id` |
+| `reranker_applied` | Reranker call, primary + fallback paths (FRE-851/974) — `cost_usd` is `None` for the free local fallback (`slm_local`) or a Voyage response with no reported usage | `provider` (`voyage` or `slm_local`), `model_id`, `cost_usd`, `duration_ms`, `fallback` |
+| `budget_counter_snapshot` | Cap-utilization gauge, one doc per configured budget-role cap every 60s (FRE-547) | `role` (the **budget-role** key, e.g. `main_inference`, `entity_extraction`, `artifact_builder` — already groups factory roles like `primary`/`sub_agent`/`compressor` via `cost_gate.budget_role_for()`), `time_window` (`daily`/`weekly`), `window_start`, `running_total`, `cap_usd`, `utilization_ratio` |
 | `llm_step_completed` | Orchestrator step wrapper | `model_role`, `duration_ms`, `tokens` (total) |
 
 Captain's Log:
@@ -2148,16 +2678,9 @@ Captain's Log:
 ## Pattern 1 — Token stats by model, last 2 hours
 
 ```bash
-# Cloud path (litellm)
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"litellm_request_complete\" AND @timestamp > NOW()-2hours | STATS calls=COUNT(*), prompt=SUM(prompt_tokens), completion=SUM(completion_tokens), cost=SUM(cost_usd) BY model | SORT prompt DESC"}' \
-  | jq '.columns[].name, .values'
-
-# Local path (llama.cpp / MLX)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-2hours | STATS calls=COUNT(*), prompt=SUM(prompt_tokens), completion=SUM(completion_tokens) BY model_id, endpoint | SORT prompt DESC"}' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-2hours | STATS calls=COUNT(*), input=SUM(input_tokens), output=SUM(output_tokens), cost=SUM(cost_usd) BY model, provider | SORT input DESC"}' \
   | jq '.columns[].name, .values'
 ```
 
@@ -2165,32 +2688,110 @@ curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
 
 ## Pattern 2 — Prompt-cache hit rate
 
-Cache read tokens (served from cache) versus prompt tokens written fresh. A higher ratio = more cache reuse.
+Cache read tokens (served from cache) versus input tokens written fresh. A higher ratio = more cache reuse.
 
 ```bash
-# Cloud path cache stats (last 24 h)
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"litellm_request_complete\" AND @timestamp > NOW()-24hours AND prompt_tokens IS NOT NULL | STATS total_prompt=SUM(prompt_tokens), total_cached=SUM(cache_read_tokens), total_written=SUM(cache_creation_input_tokens), calls=COUNT(*)"}' \
-  | jq '.values'
-
-# Local path cache stats (last 24 h)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND cache_read_tokens IS NOT NULL | STATS total_prompt=SUM(prompt_tokens), total_cached=SUM(cache_read_tokens), calls=COUNT(*)"}' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND input_tokens IS NOT NULL | STATS total_input=SUM(input_tokens), total_cached=SUM(cache_read_tokens), calls=COUNT(*) BY provider"}' \
   | jq '.values'
 ```
 
-Hit rate ≈ `total_cached / (total_prompt + total_cached)`. A ratio near zero means caching is not firing; near 1 means heavy reuse.
+Hit rate ≈ `total_cached / (total_input + total_cached)`. A ratio near zero means caching is not firing; near 1 means heavy reuse.
 
 ---
 
-## Pattern 3 — Cost breakdown by model role (last 24 h)
+## Pattern 3 — Cost breakdown by role and by model (last 24 h)
+
+**LLM-only** (`model_call_completed`) — excludes OVH embedding and Voyage rerank cost; see
+Pattern 3c for total spend across all providers.
+
+`role` is the factory role (`primary`, `sub_agent`, `compressor`, `artifact_builder`, ...) —
+not yet grouped into a budget cap. See Pattern 3b to group by budget cap instead.
+
+```bash
+# By role
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND cost_usd IS NOT NULL | STATS total_cost=SUM(cost_usd), calls=COUNT(*), avg_latency=AVG(latency_ms) BY role | SORT total_cost DESC"}' \
+  | jq '.values'
+
+# By model
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-24hours AND cost_usd IS NOT NULL | STATS total_cost=SUM(cost_usd), calls=COUNT(*) BY model | SORT total_cost DESC"}' \
+  | jq '.values'
+```
+
+---
+
+## Pattern 3a — Daily spend trend (last 7 days)
+
+Total spend across **all** providers (LLM + OVH embedding + Voyage rerank) — uses
+`api_cost_recorded`, the unified per-call ledger. `model_call_completed` alone would
+understate this (misses embedding/rerank cost).
 
 ```bash
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"litellm_request_complete\" AND @timestamp > NOW()-24hours AND cost_usd IS NOT NULL | STATS total_cost=SUM(cost_usd), calls=COUNT(*), avg_latency=AVG(latency_ms) BY model_role | SORT total_cost DESC"}' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"api_cost_recorded\" AND @timestamp > NOW()-7days | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
+  | jq '.values'
+```
+
+---
+
+## Pattern 3b — Spend by budget cap (grouped, not per-role)
+
+Several factory roles share one budget cap (`cost_gate.budget_role_for()` maps them —
+`primary`/`sub_agent`/`compressor` all count against the `main_inference` cap;
+`artifact_builder` has its own lane). `budget_counter_snapshot` already carries the grouped
+`running_total` per cap — no client-side join needed:
+
+```bash
+# Current utilization per budget cap (daily + weekly windows)
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"budget_counter_snapshot\" AND @timestamp > NOW()-5minutes | STATS running_total=MAX(running_total), cap_usd=MAX(cap_usd), utilization_ratio=MAX(utilization_ratio) BY role, time_window | SORT time_window, utilization_ratio DESC"}' \
+  | jq '.values'
+```
+
+The cap definitions themselves live in `config/governance/budget.yaml`; the `role` value on
+this event is the budget-role key from that file, not the factory `role` seen on
+`model_call_completed`.
+
+---
+
+## Pattern 3c — Total spend by provider (last 24h)
+
+The **total-spend source of truth**. `api_cost_recorded` carries every priced call
+(`anthropic`, `openai`, `ovh`, `voyage`) — `model_call_completed` alone understates spend
+because it excludes `embedding_generated` (OVH) and `reranker_applied` (Voyage) cost (FRE-979).
+
+```bash
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"api_cost_recorded\" AND @timestamp > NOW()-24hours | STATS total_cost=SUM(cost_usd), calls=COUNT(*) BY provider | SORT total_cost DESC"}' \
+  | jq '.values'
+```
+
+---
+
+## Pattern 3d — Managed-inference cost: embedding + reranker (last 7 days)
+
+Breaks out the two non-LLM cost paths `api_cost_recorded`'s total rolls up but doesn't
+distinguish by purpose.
+
+```bash
+# OVH embedding cost, daily
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"embedding_generated\" AND @timestamp > NOW()-7days | EVAL day = DATE_TRUNC(1 day, @timestamp) | STATS daily_cost=SUM(cost_usd), calls=COUNT(*) BY day | SORT day ASC"}' \
+  | jq '.values'
+
+# Voyage reranker cost, total (excludes the free slm_local fallback — filter cost_usd IS NOT NULL)
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"reranker_applied\" AND provider == \"voyage\" AND cost_usd IS NOT NULL AND @timestamp > NOW()-7days | STATS total_cost=SUM(cost_usd), calls=COUNT(*)"}' \
   | jq '.values'
 ```
 
@@ -2209,9 +2810,11 @@ curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
   }' | jq '.hits.hits[]._source'
 
 # Success rate over last 24 h (ES|QL on captures)
+# Captures use plain "timestamp", not "@timestamp" (FRE-1035) — filtering on @timestamp
+# here returns empty silently since the field doesn't exist on this index.
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-captains-captures-* | WHERE @timestamp > NOW()-24hours | STATS total=COUNT(*), successes=COUNT_IF(outcome == \"success\"), avg_tokens=AVG(total_tokens), avg_duration=AVG(duration_ms)"}' \
+  -d '{"query": "FROM agent-captains-captures-* | WHERE timestamp > NOW()-24hours | STATS total=COUNT(*), successes=COUNT_IF(outcome == \"success\"), avg_tokens=AVG(total_tokens), avg_duration=AVG(duration_ms)"}' \
   | jq '.values'
 ```
 
@@ -2229,13 +2832,13 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
     "size": 100,
     "query": {"term": {"trace_id.keyword": "<trace_id>"}},
     "sort": [{"@timestamp": "asc"}],
-    "_source": ["event_type","@timestamp","latency_ms","duration_ms","model","model_id","prompt_tokens","completion_tokens","tool_name","model_role"]
+    "_source": ["event_type","@timestamp","latency_ms","duration_ms","model","input_tokens","output_tokens","tool_name","role"]
   }' | jq '.hits.hits[]._source'
 
-# LLM-only events for a trace (cloud + local + step)
+# LLM-only events for a trace (model call + step wrapper)
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE trace_id == \"<trace_id>\" AND event_type IN (\"litellm_request_complete\", \"model_call_completed\", \"llm_step_completed\") | FIELDS @timestamp, event_type, latency_ms, duration_ms, model, model_id, prompt_tokens, completion_tokens, model_role | SORT @timestamp ASC"}' \
+  -d '{"query": "FROM agent-logs-* | WHERE trace_id == \"<trace_id>\" AND event_type IN (\"model_call_completed\", \"llm_step_completed\") | FIELDS @timestamp, event_type, latency_ms, duration_ms, model, input_tokens, output_tokens, model_role | SORT @timestamp ASC"}' \
   | jq '.values'
 ```
 
@@ -2250,10 +2853,10 @@ curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -d '{"query": "FROM agent-logs-* | WHERE level == \"ERROR\" AND @timestamp > NOW()-1hour | STATS count=COUNT(*) BY message | SORT count DESC | LIMIT 10"}' \
   | jq '.values'
 
-# LLM call count + avg latency last hour (both paths combined)
+# LLM call count + avg latency last hour (cloud + local combined — one unified event)
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type IN (\"litellm_request_complete\", \"model_call_completed\") AND @timestamp > NOW()-1hour | STATS calls=COUNT(*), avg_latency=AVG(latency_ms), p95_approx=PERCENTILE(latency_ms, 95)"}' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"model_call_completed\" AND @timestamp > NOW()-1hour | STATS calls=COUNT(*), avg_latency=AVG(latency_ms), p95_approx=PERCENTILE(latency_ms, 95)"}' \
   | jq '.values'
 ```
 
@@ -2263,418 +2866,118 @@ curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
 
 - Always pipe large responses through `| head -c 50000` or use `LIMIT N` in ES|QL.
 - `trace_id` requires `.keyword` suffix for exact-match `_search` queries but not for ES|QL `==`.
-- Cloud and local paths use different `event_type` values — see table above. Never mix them in a single `==` filter without `IN (...)`.
+- Cloud and local paths emit the **same** `event_type` (`model_call_completed`) — filter by `provider` if you need to split them, not by a different event name.
+- For **total spend**, use `api_cost_recorded` — `model_call_completed` alone excludes OVH
+  embedding (`embedding_generated`) and Voyage rerank (`reranker_applied`) cost (FRE-979).
 - Reflections and captures use the Captain's Log indices (`agent-captains-*`), not `agent-logs-*`.
 
-See also: [query-elasticsearch](query-elasticsearch.md) · [seshat-observations](seshat-observations.md)
+See also: the `query-elasticsearch` skill (`read_skill(name="query-elasticsearch")`).
 ```
 
 ---
 
-### SKILL: Seshat Reverse Delegation
+### sequential-thinking — Structured Reasoning Discipline
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 423 |
-| **Source** | `docs/skills/seshat-delegate.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 1,289 |
+| **Source** | `docs/skills/sequential-thinking/SKILL.md` |
 
 ```markdown
-# SKILL: Seshat Reverse Delegation
-
-> **ADR:** `docs/architecture_decisions/ADR-0050-remote-agent-harness-integration.md` (D5)
-
-Reverse delegation allows an external agent (Claude Code, Codex) to hand tasks back to Seshat — creating Linear issues, requesting decomposition, or delegating knowledge queries.
-
----
-
-## Works Now
-
-**Nothing.** The gateway has no `/delegate` route yet (FRE-265 scope). The MCP server returns stubs.
-
-For ad-hoc delegation-like operations from an external agent, use:
-
-```bash
-# Create a Linear issue directly
-uv run agent "Create a Linear issue: <title>"
-
-# Or use the native Linear tool via the chat API
-```
-
----
-
-## 🚫 Planned — endpoint not implemented (do not call)
-
-The commands below describe the future `/delegate` API. They will return 404 today.
-**Do not use them** — calling a non-existent endpoint trains the model to fabricate responses.
-
-<details>
-<summary>Future API (Phase C/E)</summary>
-
-**Delegate a task back to Seshat:**
-
-```bash
-# ⚠️ 404 TODAY — Future Phase C/E only
-curl -X POST \
-  -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task": "Create a Linear issue: Refactor memory query path for performance",
-    "type": "linear_issue",
-    "context": {
-      "discovered_during": "memory module code review",
-      "urgency": "medium"
-    }
-  }' \
-  "$SESHAT_API_URL/api/v1/delegate"
-```
-
-**Check delegation status:**
-
-```bash
-# ⚠️ 404 TODAY
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/api/v1/delegate/{delegation_id}/status"
-```
-
-</details>
-```
-
----
-
-### SKILL: Seshat Knowledge Graph
-
-| | |
-|---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 727 |
-| **Source** | `docs/skills/seshat-knowledge.md` |
-
-```markdown
-# SKILL: Seshat Knowledge Graph
-
-> **Tier:** 2 — CLI tool + HTTP API
-> **Auth:** `SESHAT_API_TOKEN` environment variable (Gateway API)
-> **ADR:** `docs/architecture_decisions/ADR-0050-remote-agent-harness-integration.md`
-
-Query and manage the persistent knowledge graph — entities, relationships, and metadata captured from conversation turns.
-
----
-
-## Works Now
-
-### CLI (no auth required)
-
-```bash
-uv run agent memory search "query string"
-uv run agent memory entities --limit 20 --sort mentions
-uv run agent memory entities --type "Decision" --limit 10
-uv run agent memory entities --json > entities.json
-```
-
-### Gateway API
-
-The gateway is mounted at `/api/v1` when the service is running. Set the base URL once:
-
-```bash
-export SESHAT_API_TOKEN="<your-api-token>"
-export SESHAT_API_URL="http://localhost:9000/api/v1"
-```
-
-**Search entities (GET /knowledge/search)**
-
-```bash
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/knowledge/search?q=memory+promotion&limit=5"
-```
-
-Response — **bare list** (not a wrapper object):
-
-```json
-[
-  {
-    "id": "ent-123",
-    "name": "memory_promotion_pipeline",
-    "type": "Process",
-    "metadata": {"source": "session-42"}
-  }
-]
-```
-
-**Get entity by ID (GET /knowledge/entities/{entity_id})**
-
-```bash
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/knowledge/entities/{entity_id}"
-```
-
-**Store a new entity (POST /knowledge/entities)**
-
-Required fields: `entity` (name), `entity_type`. Optional: `metadata` (free-form dict).
-
-```bash
-curl -X POST \
-  -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "entity": "delegation_pattern",
-    "entity_type": "Pattern",
-    "metadata": {
-      "discovered_date": "2026-04-28",
-      "source": "Claude Code session"
-    }
-  }' \
-  "$SESHAT_API_URL/knowledge/entities"
-```
-
-> **Common mistake:** do NOT send `"type"` or `"description"` — the request model uses `entity_type` and `metadata` only. A `description` field is not accepted and will be silently ignored (Pydantic ignores extra fields by default).
-
-**Get entity relationships (GET /knowledge/entities/{entity_id}/relationships)**
-
-```bash
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/knowledge/entities/{entity_id}/relationships"
-```
-
----
-
-## Planned — not yet implemented
-
-- `/knowledge/graph` — full graph export
-- Topic-graph traversal endpoints
-- Relationship write API
-
----
-
-## Error handling
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `neo4j_connection_failed` | Neo4j not running | `./scripts/init-services.sh` |
-| `401 Unauthorized` | Bad or missing token | `export SESHAT_API_TOKEN="..."` |
-| `404 Not Found` | Entity ID doesn't exist | Search first to get IDs |
-```
-
----
-
-### SKILL: Seshat Observations & Performance Metrics
-
-| | |
-|---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 817 |
-| **Source** | `docs/skills/seshat-observations.md` |
-
-```markdown
-# SKILL: Seshat Observations & Performance Metrics
-
-> **Auth:** `SESHAT_API_TOKEN` (Gateway API)
-> **ADR:** `docs/architecture_decisions/ADR-0050-remote-agent-harness-integration.md`
-
-Query execution traces, telemetry data, cost metrics, and performance observations.
-
----
-
-## Works Now
-
-### Kibana (local, no auth)
-
-Open **Kibana** at `http://localhost:5601` → **Discover** → select index pattern **`agent-logs-*`**.
-
-> **Correct index:** `agent-logs-*` — **not** `elasticsearch-observations-*` (that pattern does not exist).
-
-Key fields in `agent-logs-*`:
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `@timestamp` | date | Event time |
-| `level` | keyword | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `trace_id` | keyword | Per-request trace |
-| `event_type` | keyword | e.g. `tool_call_started`, `litellm_request_complete` |
-| `tool_name` | keyword | Tool invoked |
-| `cost_usd` | float | LLM call cost (**not** `cost_dollars`) |
-| `prompt_tokens`, `completion_tokens` | long | Token counts |
-| `success` | boolean | Operation outcome |
-
-Sample Kibana queries:
-
-```
-level: "error"
-tool_name: "query_elasticsearch" AND success: false
-trace_id.keyword: "abc-123"
-```
-
-### Gateway API
-
-```bash
-export SESHAT_API_TOKEN="<your-api-token>"
-export SESHAT_API_URL="http://localhost:9000/api/v1"
-```
-
-**Recent observations (GET /observations/recent)**
-
-```bash
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/observations/recent?limit=20"
-```
-
-Response — **bare list** (not a wrapper object):
-
-```json
-[
-  {
-    "trace_id": "tr-xyz789",
-    "timestamp": "2026-04-28T08:30:15Z",
-    "event_type": "tool_call_started",
-    "tool_name": "bash",
-    "cost_usd": 0.00012
-  }
-]
-```
-
-**Observations by trace ID (GET /observations/{trace_id})**
-
-```bash
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/observations/{trace_id}"
-```
-
-**Query observations (POST /observations/query)**
-
-```bash
-curl -X POST \
-  -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"from": "2026-04-27T00:00:00Z", "limit": 50}' \
-  "$SESHAT_API_URL/observations/query"
-```
-
----
-
-## 🚫 Planned — not implemented (do not call)
-
-- `GET /observations?type=...` — filter-by-type query param (404)
-- `GET /observations/health` — system health metrics endpoint (404)
-
-Use `agent-logs-*` in Kibana or the ES API (`bash curl http://elasticsearch:9200/agent-logs-*/_search`) for filter-based queries.
-
----
-
-## Error handling
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| Kibana not available | Elasticsearch down | `./scripts/init-services.sh` |
-| `401 Unauthorized` | Missing token | `export SESHAT_API_TOKEN="..."` |
-| `404` on observations endpoint | Wrong path or unimplemented | Use `/api/v1/observations/recent` |
-| Empty results | No data in time range | Widen the time window |
-```
-
----
-
-### SKILL: Seshat Sessions & Conversation History
-
-| | |
-|---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 617 |
-| **Source** | `docs/skills/seshat-sessions.md` |
-
-```markdown
-# SKILL: Seshat Sessions & Conversation History
-
-> **Auth:** `SESHAT_API_TOKEN` (Gateway API)
-> **ADR:** `docs/architecture_decisions/ADR-0050-remote-agent-harness-integration.md`
-
-Query conversation history and session context.
-
----
-
-## Works Now
-
-### CLI (no auth)
-
-```bash
-uv run agent memory sessions --last 10
-uv run agent memory sessions --last 5 --json > recent_sessions.json
-```
-
-### Gateway API
-
-```bash
-export SESHAT_API_TOKEN="<your-api-token>"
-export SESHAT_API_URL="http://localhost:9000/api/v1"
-```
-
-**List recent sessions (GET /sessions)**
-
-```bash
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/sessions?limit=10"
-```
-
-Response — **bare list** (not a wrapper object):
-
-```json
-[
-  {
-    "id": "sess-1001",
-    "created_at": "2026-04-28T06:30:00Z",
-    "title": "Memory consolidation discussion",
-    "turn_count": 12
-  }
-]
-```
-
-**Get a single session (GET /sessions/{session_id})**
-
-```bash
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/sessions/{session_id}"
-```
-
-**Get messages from a session (GET /sessions/{session_id}/messages)**
-
-```bash
-curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
-  "$SESHAT_API_URL/sessions/{session_id}/messages?limit=20"
-```
-
-Response — **bare list** (not a wrapper object):
-
-```json
-[
-  {
-    "role": "user",
-    "content": "How does memory consolidation work?",
-    "created_at": "2026-04-28T06:30:05Z"
-  },
-  {
-    "role": "assistant",
-    "content": "Memory consolidation is the process...",
-    "created_at": "2026-04-28T06:30:15Z"
-  }
-]
-```
-
----
-
-## 🚫 Planned — not implemented (do not call)
-
-- `GET /sessions/search?topic=delegation` — topic-search endpoint (404)
-- `GET /sessions?topics=...` — topic filter on list endpoint (404)
-
-For topic-based queries, use Kibana (`agent-logs-*`, filter by `session_id`) or the CLI.
-
----
-
-## Error handling
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `401 Unauthorized` | Bad or missing token | `export SESHAT_API_TOKEN="..."` |
-| `404 Not Found` | Session archived or wrong ID | List sessions first to get valid IDs |
-| `422 Unprocessable` | Invalid session_id format | Must be a valid UUID |
+# sequential-thinking — Structured Reasoning Discipline
+
+## Rules
+
+Keep the discipline below internally on every turn this skill engages.
+When the problem has a genuine false start, show the step you tried and
+abandoned, alongside the correct path. Never invent a wrong step you did
+not actually take. An unremarkable linear chain of reasoning with no false
+start must stay invisible to the reader.
+
+> **Tier:** N/A — prompt technique, not a tool.
+> **Provenance:** `docs/architecture_decisions/ADR-0028-external-tool-cli-migration.md:83` ruled
+> `mcp_sequentialthinking` "Not a real tool — prompt technique", recommendation 5 said to remove
+> it, and FRE-1358 executed that removal. This skill replaces the discipline the removed tool's
+> instruction text imposed, without re-adding a tool ADR-0028 already ruled against.
+>
+> **Delivery (FRE-1549):** this skill reached the model only on a keyword match or a `read_skill`
+> call, and `route_traces` recorded 0 loads in 1,128 turns. The standing rule now lives in the
+> primary system prompt (`REASONING_DISCIPLINE_PROMPT`, `orchestrator/prompts.py`) on every turn.
+> This file stays for depth and for the keyword path.
+
+## What this replaces
+
+The removed MCP server did no reasoning. It type-checked its inputs, extended its own step
+estimate by one line of logic, appended to two in-memory arrays, and printed a formatted box to
+**stderr** that neither the model nor the user ever saw. What it actually bought was:
+
+1. **The instruction text** — a discipline for estimating steps, marking revisions, and naming
+   branch points. This skill reproduces that text.
+2. **A forcing function** — calling the tool required committing to a step number and a
+   continue/stop decision each time. A skill cannot force a call-per-thought loop; it can only
+   ask for the discipline. Follow it because it is asked for, not because anything enforces it.
+
+The reasoning itself is not the gap. The primary model already runs with a
+32,768-token thinking budget (`config/models.yaml`, `thinking_budget_tokens`) — native thinking
+is unstructured and invisible, and does not itself oblige a model to admit it is revising an
+earlier conclusion. This skill supplies the discipline, not more thinking.
+
+## The discipline
+
+When this skill engages, hold yourself to the following, internally, for the whole turn:
+
+- **Estimate first.** Before working the problem, form a rough count of the steps it will take.
+  Revise that count as you go — do not silently overrun it.
+- **State the current step.** Know which step you are on and how many you believe remain.
+- **Mark a revision as a revision.** When a later step contradicts an earlier one, that is a
+  revision — name what is being reconsidered and why, not just the new conclusion.
+- **Name a branch when you take one.** When two genuine alternatives are worth pursuing, name
+  the branch point and which line you are following.
+- **Gate completion on done-ness.** Only treat the problem as finished when the answer actually
+  holds up — not when you have produced a plausible-looking response.
+
+## When to surface structure in the answer
+
+**Owner decision, 2026-09-05 — not always, and not never.** Do not surface anything for an
+ordinary linear chain of reasoning that needed no revision or branch — that case must **stay
+clean**, exactly as invisible as it was under the removed tool, which never surfaced anything to
+the model or the user either way.
+
+**Owner decision, 2026-09-08 — the mechanism changed; the "not always, not never" boundary did
+not.** Master's live verification of the 2026-09-05 design ("surface only on a spontaneous
+reversal") found it structurally unmeetable: the primary runs with a 32,768-token thinking
+budget, so a reversal happens inside the invisible thinking block, and by the time the visible
+answer is written the question is already settled. There is no live reversal left to mark.
+
+The owner ruled: "not achievable. We can force the model to think through a problem and include
+a step that was wrong." The replacement mechanism is a **false start**, not a spontaneous
+reversal — when the problem genuinely has one:
+
+- If the obvious first line of attack on this problem fails, show that **tried and abandoned**
+  step in the answer, alongside the correct path, and name what was wrong with it — for example:
+  "First attempt: X — that fails because Y, so this answer instead does Z."
+- Show it only when a false start actually exists. An unremarkable linear chain of reasoning
+  with no false start available must stay clean, per the 2026-09-05 boundary above.
+- Do not renumber the whole answer into an essay around it — one short line at the point in the
+  answer where the false start belongs.
+
+**Never invent a false start you did not actually take.** A plausible-looking wrong step
+manufactured for presentation, rather than reasoning the model genuinely did, is confabulation —
+the same failure shape FRE-1327 is open on. If the problem has no real false start, show none;
+a fabricated one is worse than showing nothing.
+
+Rationale: a false start the reader cannot see is what native thinking already discards once the
+question is settled, so it is the part worth surfacing. It stays rare — most problems this skill
+engages on have no wrong turn at all — so ordinary answers do not turn into numbered essays.
+
+## When NOT to engage
+
+- A short factual question with one obvious answer.
+- A single-step lookup or command.
+- Any turn where no assumption is at risk of being wrong and no real alternative is being
+  weighed. Engaging here just manufactures a numbered essay out of a simple answer, which is a
+  net loss over saying nothing.
 ```
 
 ---
@@ -2683,9 +2986,9 @@ For topic-based queries, use Kibana (`agent-logs-*`, filter by `session_id`) or 
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 578 |
-| **Source** | `docs/skills/system-diagnostics.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 603 |
+| **Source** | `docs/skills/system-diagnostics/SKILL.md` |
 
 ```markdown
 # system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …)
@@ -2736,6 +3039,7 @@ Rule: `interval × count < 30` seconds.
 ## Disk usage
 
 ```bash
+# ask: the shell expands the glob /app/* here, so this is not a plain command and asks for approval.
 bash du -sh /app/*
 bash du -sh /app/* | sort -rh | head -10
 ```
@@ -2761,12 +3065,16 @@ bash lsof -p <pid>
 
 | | |
 |---|---|
-| **Cache tier** | 🟡 SEMI_STATIC — included when skill is matched |
-| **Token count** | 1,157 |
-| **Source** | `docs/skills/system-metrics.md` |
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 1,180 |
+| **Source** | `docs/skills/system-metrics/SKILL.md` |
 
 ```markdown
 # system-metrics — CPU, memory, and disk utilisation snapshot
+
+## Rules
+
+Always run the metrics command before answering. Do not estimate or approximate values.
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `system_metrics_snapshot` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
 
@@ -2868,6 +3176,157 @@ print(json.dumps(result, indent=2))
 - Available in NORMAL, ALERT, and DEGRADED modes.
 - `bash` is disabled in LOCKDOWN and RECOVERY — no workaround for those modes.
 - `run_python` for `/proc`-based metrics: available in NORMAL/ALERT/DEGRADED; no `network=True` needed (reads local files only); requires sandbox image (`make sandbox-build`).
-- See also: `bash.md` (output cap 50 KiB), `run-python.md` (sandbox details).
+- See also: the `bash` tool description (output cap 50 KiB) and the `run_python` tool description (sandbox details).
+```
+
+---
+
+### SKILL: turn-forensics
+
+| | |
+|---|---|
+| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
+| **Token count** | 1,981 |
+| **Source** | `docs/skills/turn-forensics/SKILL.md` |
+
+```markdown
+# SKILL: turn-forensics
+
+## Rules
+
+Reconstruct the turn from live logs (gateway + Postgres + R2 + inference-server). Never infer the timeline or token counts from priors — pull them.
+
+> **Tier:** 2 — log/SQL analysis via `bash`
+> **Inputs:** a `trace_id` (preferred) or `session_id`. If only "the last/slowest turn" is given, find the trace first (step 0).
+> **Related:** ADR-0074 (identity threading — the join key); FRE-401 (context bloat prevention).
+
+---
+
+## What This Skill Does
+
+Takes one turn and reconstructs it end-to-end by joining the substrates on the shared identity tuple (`trace_id` / `session_id`, ADR-0074):
+
+- **Gateway logs** — per-call timeline (`model_call_started/completed`, `input_tokens`, `latency_ms`, `role`), tool calls, state transitions, errors.
+- **Postgres `session_events`** — what the PWA received (`RUN_ERROR`, `STATE_DELTA`, replay buffer).
+- **R2 artifact store** — bytes actually produced (when the turn wrote an artifact).
+- **Inference-server log** — the SLM's view of each request (optional; see §Caveats).
+
+The headline output is a **context-token attribution**: track `input_tokens` per primary call, find the jumps, and blame the preceding tool result (a whole-file `read` is the usual culprit — file bytes ÷ ~4 ≈ tokens).
+
+---
+
+## When to Use
+
+- "Why was that turn slow?" / "Where did the time go?"
+- "The context counter jumped to 47K — what caused it?"
+- "Replay trace `<id>` step by step."
+- **Prefer `query-elasticsearch`** for fleet-wide log questions; this skill is for *one* turn in depth.
+
+---
+
+## Commands
+
+All gateway commands strip ANSI colour first: `sed -r 's/\x1b\[[0-9;]*m//g'`. Container names come from `docker-compose.cloud.yml` (`cloud-sim-seshat-gateway`, `cloud-sim-postgres`).
+
+### 0. Find the trace (if not given)
+
+```bash
+# ask: sed can run a program, so this asks for approval (ADR-0156 D8.2).
+docker logs cloud-sim-seshat-gateway --since=30m 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' \
+  | grep -E "task_failed|model_call_completed" | grep -oE "trace_id=\S+" | sort | uniq -c | sort -rn | head
+```
+
+### 1. Per-call timeline + context attribution (the core)
+
+```bash
+# ask: the shell expands $TRACE here, so this is not a plain command and asks for approval.
+TRACE=<trace_id>
+docker logs cloud-sim-seshat-gateway --since=40m 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' \
+  | grep "$TRACE" | grep -E "model_call_completed|tool_call_started|artifact_draft_sub_agent_complete" \
+  | python3 -c "
+import sys,re
+for l in sys.stdin:
+    ts=re.search(r'(\d\d:\d\d:\d\d)\.\d+Z', l); t=ts.group(1) if ts else '?'
+    if 'tool_call_started' in l:
+        a=re.search(r\"'path': '([^']+)'|'command': '([^']{0,60})\", l); n=re.search(r'tool_name=(\S+)', l)
+        print(t,'TOOL', n.group(1) if n else '?', (a.group(1) or a.group(2)) if a else '')
+    elif 'sub_agent_complete' in l:
+        print(t,'SUBAGENT done')
+    else:
+        it=re.search(r'input_tokens=(\d+)',l); lat=re.search(r'latency_ms=(\d+)',l); role=re.search(r'role=(\w+)',l)
+        print(t,'CALL in=%s lat=%ss %s'%(it.group(1) if it else '?', int(int(lat.group(1))/1000) if lat else '?', role.group(1) if role else ''))
+"
+```
+
+Read the `in=` column down the primary calls. A big step up = context bloat; the `TOOL read <path>` immediately before it is the cause. Cross-check file size: `wc -c <path>` (÷4 ≈ tokens).
+
+### 2. What the PWA received (Postgres `session_events`)
+
+```bash
+# ask: no allow rule covers docker exec, so this asks for approval.
+docker exec cloud-sim-postgres psql -U agent -d personal_agent -c \
+ "select seq, event_type, payload->'data'->>'category' as cat, created_at \
+  from session_events where session_id='<session_id>' order by seq desc limit 20;"
+```
+
+### 3. Artifact bytes (if the turn wrote one)
+
+```bash
+# ask: no allow rule covers docker exec, so this asks for approval.
+docker exec cloud-sim-postgres psql -U agent -d personal_agent -t -c \
+ "select r2_key from artifacts where id='<artifact_id>';"
+docker exec cloud-sim-seshat-gateway sh -c 'cd /app && /app/.venv/bin/python -c "
+import asyncio; from personal_agent.storage.artifact_store import get_artifact_store
+print(len(asyncio.run(get_artifact_store().get(\"<r2_key>\"))))"'
+```
+
+### 4. Join the SLM request log (ES join on span_id)
+
+slm_server emits a `request_complete` event to `slm-requests-*` for every request,
+tagged with the harness's `X-Span-Id` / `X-Trace-Id` headers (FRE-411). Join on
+`span_id` for per-call granularity or `trace_id` for the whole turn:
+
+```bash
+# ask: the shell expands $TRACE here, so this is not a plain command and asks for approval.
+TRACE=<trace_id>
+# All SLM request_complete docs for this turn
+curl -s -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+  "https://es.example.com/slm-requests-*/_search?q=trace_id:$TRACE&size=20" \
+  | python3 -c "
+import sys, json
+hits = json.load(sys.stdin)['hits']['hits']
+for h in hits:
+    s = h['_source']
+    print(s.get('ts','?'), 'span', s.get('span_id','?')[:8],
+          'in=%s out=%s' % (s.get('prompt_tokens'), s.get('completion_tokens')),
+          'prefill=%sms decode=%sms total=%sms' % (s.get('prefill_ms'), s.get('decode_ms'), s.get('total_ms')),
+          'cache=%s' % s.get('cache_reuse'))
+"
+```
+
+Cross-reference with step 1 (`model_call_completed`) using the shared `span_id`. A
+`cache_reuse > 0` value means the SLM reused a KV-cache prefix — prompt tokens were
+cheaper than they look in terms of compute. No timezone math: all times are UTC ISO-8601.
+
+---
+
+## Interpreting Results
+
+- **Context jump after a `read`** → whole-file slurp. `read` defaults to a 1 MiB cap, so any source file under ~1 MB returns in full (e.g. `executor.py` ≈ 134 KB ≈ 33K tokens). Mitigation lives in the tool (ranged reads / lower token cap) — FRE-401.
+- **Slow primary call with no tool before it** → large prefill (the bloated context is re-sent every step) or a degraded SLM origin (multi-minute calls, 524s). Restarting the SLM server fixes the latter.
+- **Gap between `sub_agent_complete` and the final reply** → the post-tool *synthesis* primary call running on the now-bloated context (not the sub-agent being slow).
+- **Terminal tool failure** → look for `tool_terminal_short_circuit` (FRE-402); the turn should end in ~ms with a `tool_failure` `RUN_ERROR`, no recovery LLM call.
+
+---
+
+## Caveats
+
+- §4 requires `es.example.com` to be reachable and slm_server to be running with
+  `SLM_ES_URL=https://es.example.com`. Steps 1–3 are fully self-contained on the gateway VPS.
+- `input_tokens` (model tokenizer) and the status bar's `turn_status.context_tokens`
+  (`estimate_messages_tokens` heuristic) differ by ~10–20%; same trend, different absolute.
+- UTC timestamp join (floor): if `span_id` is absent, match by `ts` within ±5s of the
+  gateway's `model_call_started` timestamp.
 ```
 

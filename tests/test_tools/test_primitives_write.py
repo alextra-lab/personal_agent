@@ -11,7 +11,8 @@ import pytest
 
 from personal_agent.governance.models import ToolPolicy
 from personal_agent.telemetry.trace import TraceContext
-from personal_agent.tools.primitives.write import write_executor
+from personal_agent.tools.primitives._governance import PathRefusalError
+from personal_agent.tools.primitives.write import WriteError, write_executor
 
 _DURABLE_MOUNTS = frozenset({"/app/agent_workspace", "/app/telemetry", "/"})
 
@@ -50,7 +51,6 @@ async def test_write_overwrite() -> None:
 
         result = await write_executor(str(target), content=content, mode="overwrite", ctx=_CTX)
 
-        assert result["success"] is True
         assert result["path"] == str(target.resolve())
         assert result["mode"] == "overwrite"
         assert result["bytes_written"] == len(content.encode("utf-8"))
@@ -88,10 +88,10 @@ async def test_write_invalid_mode() -> None:
     with TemporaryDirectory() as tmpdir:
         target = Path(tmpdir) / "file.txt"
 
-        result = await write_executor(str(target), content="data", mode="invalid", ctx=_CTX)
+        with pytest.raises(WriteError) as exc_info:
+            await write_executor(str(target), content="data", mode="invalid", ctx=_CTX)
 
-        assert result["success"] is False
-        assert result["error"] == "invalid_mode"
+        assert exc_info.value.code == "invalid_mode"
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +106,8 @@ async def test_write_creates_parent_dirs() -> None:
         target = Path(tmpdir) / "subdir" / "nested" / "file.txt"
         assert not target.parent.exists()
 
-        result = await write_executor(str(target), content="deep write", mode="overwrite", ctx=_CTX)
+        await write_executor(str(target), content="deep write", mode="overwrite", ctx=_CTX)
 
-        assert result["success"] is True
         assert target.parent.exists()
         assert target.read_text(encoding="utf-8") == "deep write"
 
@@ -136,10 +135,10 @@ async def test_write_forbidden_path() -> None:
         "personal_agent.tools.primitives._governance.load_governance_config",
         return_value=mock_config,
     ):
-        result = await write_executor("/etc/shadow", content="pwned", mode="overwrite", ctx=_CTX)
+        with pytest.raises(PathRefusalError) as exc_info:
+            await write_executor("/etc/shadow", content="pwned", mode="overwrite", ctx=_CTX)
 
-    assert result["success"] is False
-    assert result["error"] == "forbidden_path"
+    assert exc_info.value.code == "forbidden_path"
 
 
 # ---------------------------------------------------------------------------
@@ -169,11 +168,11 @@ async def test_write_path_not_in_allowed_paths() -> None:
             "personal_agent.tools.primitives._governance.load_governance_config",
             return_value=mock_config,
         ):
-            result = await write_executor(str(target), content="data", mode="overwrite", ctx=_CTX)
+            with pytest.raises(PathRefusalError) as exc_info:
+                await write_executor(str(target), content="data", mode="overwrite", ctx=_CTX)
 
-    assert result["success"] is False
-    assert result["error"] == "path_not_allowed"
-    assert "path" in result
+    assert exc_info.value.code == "path_not_allowed"
+    assert "allowed_paths" in exc_info.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -202,13 +201,13 @@ async def test_write_rejects_nonmounted_app_path() -> None:
             return_value=_DURABLE_MOUNTS,
         ),
     ):
-        result = await write_executor(
-            "/app/nfl-predictor/x.py", content="junk", mode="overwrite", ctx=_CTX
-        )
+        with pytest.raises(PathRefusalError) as exc_info:
+            await write_executor(
+                "/app/nfl-predictor/x.py", content="junk", mode="overwrite", ctx=_CTX
+            )
 
-    assert result["success"] is False
-    assert result["error"] == "not_durable"
-    assert "agent_workspace" in result["detail"]
+    assert exc_info.value.code == "not_durable"
+    assert "agent_workspace" in exc_info.value.next_action
 
 
 @pytest.mark.asyncio
@@ -236,5 +235,33 @@ async def test_write_allows_mounted_app_path() -> None:
     ):
         result = await write_executor(target, content="model code", mode="overwrite", ctx=_CTX)
 
-    assert result["success"] is True
     assert result["path"] == target
+
+
+# ---------------------------------------------------------------------------
+# Write failures map to permission_denied / io_error (FRE-1575)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raised", "code", "retryable"),
+    [
+        (PermissionError(13, "Permission denied"), "permission_denied", False),
+        (OSError(28, "No space left on device"), "io_error", True),
+    ],
+)
+async def test_write_os_failure_maps_to_code(raised: OSError, code: str, retryable: bool) -> None:
+    """A write the OS refuses fails with the code for its OS error, not a crash."""
+    with TemporaryDirectory() as tmpdir:
+        target = Path(tmpdir) / "out.txt"
+
+        with patch.object(Path, "write_text", side_effect=raised):
+            with pytest.raises(WriteError) as exc_info:
+                await write_executor(str(target), content="x", mode="overwrite", ctx=_CTX)
+
+        assert not target.exists()
+
+    assert exc_info.value.code == code
+    assert exc_info.value.retryable is retryable
+    assert str(target.resolve()) in exc_info.value.message

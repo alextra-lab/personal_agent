@@ -28,6 +28,7 @@ from personal_agent.tools.primitives.bash import (
     EVAL_CHILD_ENV_NAMES,
     EVAL_CHILD_GID,
     EVAL_CHILD_UID,
+    BashError,
     bash_executor,
 )
 
@@ -48,17 +49,27 @@ _GATEWAY_STANDIN = (
 import asyncio, json
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools import register_mvp_tools
+from personal_agent.tools.contract import ToolError
 from personal_agent.tools.registry import ToolRegistry
 
 registry = ToolRegistry()
 register_mvp_tools(registry)
 entry = registry.get_tool("bash")
 out = {"bash_registered": entry is not None}
+
+
+def call(command):
+    try:
+        return asyncio.run(executor(command=command, ctx=ctx))
+    except ToolError as exc:
+        return {"error_code": exc.code, "message": exc.message}
+
+
 if entry is not None:
     executor = entry[1]
     ctx = TraceContext.new_trace()
-    out["leak"] = asyncio.run(executor(command=%r, ctx=ctx))
-    out["ok"] = asyncio.run(executor(command="echo ok", ctx=ctx))
+    out["leak"] = call(%r)
+    out["ok"] = call("echo ok")
 print("RESULT:" + json.dumps(out))
 """
     % _LEAK_COMMAND
@@ -125,10 +136,32 @@ def test_eval_bash_without_root_refuses_and_runs_nothing() -> None:
     for key in ("leak", "ok"):
         call = result[key]
         assert isinstance(call, dict)
-        assert call["success"] is False
-        assert call["error"] == "credential_isolation_unavailable"
+        assert call["error_code"] == "credential_isolation_unavailable"
     serialized = json.dumps(result)
     assert not [name for name, value in _SEEDED.items() if value in serialized]
+
+
+@pytest.mark.asyncio
+async def test_eval_bash_without_root_refuses_in_process() -> None:
+    """Fail closed, in process (FRE-1575): coverage does not measure the subprocess above.
+
+    A non-root eval gateway raises ``credential_isolation_unavailable`` and spawns nothing.
+    """
+    with (
+        patch("personal_agent.tools.primitives.bash.settings") as ms,
+        patch("personal_agent.tools.primitives.bash.os.geteuid", return_value=1000),
+        patch(
+            "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=_mock_proc()),
+        ) as mock_exec,
+    ):
+        ms.deployment_profile = "eval"
+        with pytest.raises(BashError) as exc_info:
+            await bash_executor("echo ok", ctx=_CTX)
+
+    assert exc_info.value.code == "credential_isolation_unavailable"
+    assert exc_info.value.retryable is False
+    mock_exec.assert_not_called()
 
 
 def _mock_proc() -> MagicMock:
@@ -158,7 +191,7 @@ async def test_eval_spawn_drops_to_nobody_with_allowlisted_env() -> None:
         ms.deployment_profile = "eval"
         result = await bash_executor("echo ok", ctx=_CTX)
 
-    assert result["success"] is True
+    assert result["exit_code"] == 0
     assert EVAL_CHILD_UID == EVAL_CHILD_GID == 65534
     assert mock_exec.call_args.args == (
         "/usr/bin/setpriv",
@@ -216,7 +249,7 @@ def test_production_bash_runs_on_served_event_loop(profile: str) -> None:
         ms.deployment_profile = profile
         result = uvloop.run(bash_executor("echo ok", ctx=_CTX))
 
-    assert result["success"] is True
+    assert result["exit_code"] == 0
     assert result["stdout"] == "ok\n"
 
 

@@ -87,10 +87,6 @@ allow:
   - rule: "run_python"
   - rule: "artifact_write"
   - rule: "artifact_draft"
-  # The MCP tools that the gateway discovers today (T3 removes them, ADR-0156 D7.5).
-  - rule: "mcp_query-docs"
-  - rule: "mcp_resolve-library-id"
-  - rule: "mcp_sequentialthinking"
 
   # bash: migrated from auto_approve_prefixes (D8.2). Not migrated, because they can run
   # another program, so they ask (owner, 2026-10-10, FRE-1573): env, awk, sed, python3.

@@ -5,13 +5,16 @@ with permission checks, argument validation, execution, and telemetry.
 """
 
 import asyncio
+import json
 import os
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from fnmatch import fnmatch
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import uuid4
 
+import httpx
 from opentelemetry.trace import Status, StatusCode
 
 from personal_agent.brainstem import ModeManager, get_mode_manager
@@ -27,8 +30,20 @@ from personal_agent.telemetry import (
 )
 from personal_agent.telemetry.events import TOOL_SCHEMA_VALIDATION_FAILED
 from personal_agent.telemetry.spans import tool_call_span
+from personal_agent.tools.contract import (
+    DispatchCode,
+    ToolError,
+    dispatch_error,
+    legacy_failure_marker,
+)
+from personal_agent.tools.contract import (
+    TerminalToolError as TerminalToolError,
+)
+from personal_agent.tools.contract import (
+    ToolExecutionError as ToolExecutionError,
+)
 from personal_agent.tools.registry import ToolRegistry
-from personal_agent.tools.types import ToolResult
+from personal_agent.tools.types import ToolErrorDetail, ToolResult
 
 if TYPE_CHECKING:
     from personal_agent.transport.agui.transport import AGUITransport
@@ -58,23 +73,29 @@ class ApproveFn(Protocol):
         ...
 
 
-class PermissionResult:
-    """Result of a permission check."""
+@dataclass(frozen=True)
+class PermissionGranted:
+    """A permission check that lets the call run."""
 
-    def __init__(
-        self, allowed: bool, reason: str = "", error: dict[str, object] | None = None
-    ) -> None:
-        """Initialize permission result.
+    allowed: Literal[True] = True
 
-        Args:
-            allowed: Whether permission is granted.
-            reason: Reason for denial (if not allowed).
-            error: For a refusal by the permission rules (ADR-0156 D8), the error the model
-                gets: ``code``, ``message``, ``retryable`` and ``next_action`` (the D6 shape).
-        """
-        self.allowed = allowed
-        self.reason = reason
-        self.error = error
+
+@dataclass(frozen=True)
+class PermissionRefused:
+    """A permission check that refuses the call.
+
+    Attributes:
+        reason: Short machine-readable reason, logged and kept in ``ToolResult.error``.
+        error: The failure the model gets (ADR-0156 D6.1). A refusal cannot exist without it.
+    """
+
+    reason: str
+    error: ToolErrorDetail
+    allowed: Literal[False] = False
+
+
+#: Result of a permission check.
+PermissionResult = PermissionGranted | PermissionRefused
 
 
 #: One approval card at a time per session. The PWA shows a single card, and a round's tool
@@ -82,18 +103,15 @@ class PermissionResult:
 #: would replace the first, which would then time out unanswered (FRE-1574 review).
 _APPROVAL_LOCKS: dict[str, asyncio.Lock] = {}
 
-#: Longest model-facing permission message (ADR-0156 D6.2 bound).
-_PERMISSION_MESSAGE_LIMIT = 2000
-
 
 def _permission_refusal(
     *,
     tool_name: str,
     reason: str,
-    code: str,
+    code: DispatchCode,
     message: str,
     next_action: str,
-) -> PermissionResult:
+) -> PermissionRefused:
     """Build a refusal whose error tells the model what was refused and what to do next.
 
     Args:
@@ -104,15 +122,13 @@ def _permission_refusal(
         next_action: The next call that can work, or that none exists.
 
     Returns:
-        A refused :class:`PermissionResult`.
+        The refusal.
     """
-    text = f"{tool_name}: {message}"
-    if len(text) > _PERMISSION_MESSAGE_LIMIT:
-        text = text[: _PERMISSION_MESSAGE_LIMIT - 15] + " [truncated]"
-    return PermissionResult(
-        allowed=False,
+    return PermissionRefused(
         reason=reason,
-        error={"code": code, "message": text, "retryable": False, "next_action": next_action},
+        error=dispatch_error(
+            code, f"{tool_name}: {message}", retryable=False, next_action=next_action
+        ),
     )
 
 
@@ -130,34 +146,6 @@ def _quote(text: str | None, limit: int = 600) -> str:
     if len(value) > limit:
         value = value[:limit] + "…"
     return f"`{value}`"
-
-
-class ToolExecutionError(Exception):
-    """Raised when tool execution fails."""
-
-    pass
-
-
-class TerminalToolError(ToolExecutionError):
-    """A tool failure the model cannot recover from — short-circuit the turn.
-
-    Tools raise this (instead of :class:`ToolExecutionError`) when a failure is
-    non-recoverable, so the orchestrator can surface a classified error without a
-    recovery LLM round-trip (FRE-402). The ``reason`` and ``next_step`` are
-    user-facing strings carried into the :class:`ClassifiedError` shown in the PWA.
-    """
-
-    def __init__(self, message: str, *, reason: str, next_step: str) -> None:
-        """Initialize a terminal tool error.
-
-        Args:
-            message: Internal error message (used for logging and ``ToolResult.error``).
-            reason: User-facing explanation of what happened (no internals).
-            next_step: Concrete guidance for what the user can do next.
-        """
-        super().__init__(message)
-        self.reason = reason
-        self.next_step = next_step
 
 
 def _expand_path(path: str) -> str:
@@ -186,6 +174,26 @@ def _validate_path_against_patterns(path: str, patterns: list[str]) -> bool:
     return any(fnmatch(expanded_path, _expand_path(pattern)) for pattern in patterns)
 
 
+def _governance_refusal(
+    code: DispatchCode, reason: str, next_action: str, *, retryable: bool = False
+) -> PermissionRefused:
+    """Build a mode or argument refusal with its model-facing failure.
+
+    Args:
+        code: The dispatch failure code.
+        reason: What was refused and why; also the logged reason.
+        next_action: The next call that can work.
+        retryable: Whether a corrected call can succeed.
+
+    Returns:
+        The refusal.
+    """
+    return PermissionRefused(
+        reason=reason,
+        error=dispatch_error(code, reason, retryable=retryable, next_action=next_action),
+    )
+
+
 def _validate_tool_arguments(
     tool_name: str, arguments: dict[str, Any], governance_config: GovernanceConfig
 ) -> PermissionResult:
@@ -202,36 +210,49 @@ def _validate_tool_arguments(
     tool_policy = governance_config.tools.get(tool_name)
     if not tool_policy:
         # No specific policy, allow (will be checked by mode check)
-        return PermissionResult(allowed=True)
+        return PermissionGranted()
 
     # Check path allowlists/denylists for file operations
     if "path" in arguments:
         path = arguments["path"]
         if not isinstance(path, str):
-            return PermissionResult(allowed=False, reason="Path must be a string")
+            return _governance_refusal(
+                "invalid_arguments",
+                "Path must be a string",
+                "Call again with path as a string.",
+                retryable=True,
+            )
 
         # Check forbidden paths first (more restrictive)
         if tool_policy.forbidden_paths:
             if _validate_path_against_patterns(path, tool_policy.forbidden_paths):
-                return PermissionResult(allowed=False, reason=f"Path {path} is in forbidden paths")
+                return _governance_refusal(
+                    "path_refused",
+                    f"Path {path} is in forbidden paths",
+                    "Do not retry this path. Use a path that the path rules allow.",
+                )
 
         # Check allowed paths (if specified)
         if tool_policy.allowed_paths:
             if not _validate_path_against_patterns(path, tool_policy.allowed_paths):
-                return PermissionResult(
-                    allowed=False, reason=f"Path {path} is not in allowed paths"
+                return _governance_refusal(
+                    "path_refused",
+                    f"Path {path} is not in allowed paths",
+                    "Do not retry this path. Use a path that the path rules allow.",
                 )
 
     # Check file size limits
     if "max_size_mb" in arguments and tool_policy.max_file_size_mb:
         max_size_mb = arguments.get("max_size_mb")
         if max_size_mb and max_size_mb > tool_policy.max_file_size_mb:
-            return PermissionResult(
-                allowed=False,
-                reason=f"Requested max_size_mb {max_size_mb} exceeds limit {tool_policy.max_file_size_mb}",
+            return _governance_refusal(
+                "invalid_arguments",
+                f"Requested max_size_mb {max_size_mb} exceeds limit {tool_policy.max_file_size_mb}",
+                f"Call again with max_size_mb at most {tool_policy.max_file_size_mb}.",
+                retryable=True,
             )
 
-    return PermissionResult(allowed=True)
+    return PermissionGranted()
 
 
 async def _request_approval(
@@ -339,20 +360,28 @@ async def _check_permissions(
     # with no governance entry.
     mode_str = current_mode.value
     tool_policy = governance_config.tools.get(tool_name)
+    mode_next = (
+        f"Do not retry {tool_name} while the agent is in {mode_str} mode. "
+        "Use another tool, or tell the user that the mode blocks it."
+    )
     if tool_policy is not None:
         if mode_str not in tool_policy.allowed_in_modes:
-            return PermissionResult(allowed=False, reason=f"Tool not allowed in {mode_str} mode")
+            return _governance_refusal(
+                "mode_refused", f"Tool not allowed in {mode_str} mode", mode_next
+            )
     elif mode_str not in tool_def.allowed_modes:
-        return PermissionResult(allowed=False, reason=f"Tool not allowed in {mode_str} mode")
+        return _governance_refusal(
+            "mode_refused", f"Tool not allowed in {mode_str} mode", mode_next
+        )
 
     # Check tool policy for forbidden modes
     if tool_policy and mode_str in tool_policy.forbidden_in_modes:
-        return PermissionResult(allowed=False, reason=f"Tool forbidden in {mode_str} mode")
+        return _governance_refusal("mode_refused", f"Tool forbidden in {mode_str} mode", mode_next)
 
     # 2. Argument validation, before the card: never ask the user about a call that a path
     # rule refuses anyway.
     validation_result = _validate_tool_arguments(tool_name, arguments, governance_config)
-    if not validation_result.allowed:
+    if isinstance(validation_result, PermissionRefused):
         return validation_result
 
     # 3. The permission rules (ADR-0156 D8).
@@ -373,7 +402,7 @@ async def _check_permissions(
         session_id=session_id,
     )
     if decision.decision == "allow":
-        return PermissionResult(allowed=True)
+        return PermissionGranted()
     if decision.decision == "deny":
         return _permission_refusal(
             tool_name=tool_name,
@@ -457,7 +486,7 @@ async def _check_permissions(
             trace_id=trace_ctx.trace_id,
             session_id=session_id,
         )
-        return PermissionResult(allowed=True)
+        return PermissionGranted()
     if answer.decision == "approve_session":
         # Only an unmatched call may add a session rule; an explicit ask is never
         # overridden (D8.3). A session answer to an explicit ask runs this call once.
@@ -481,9 +510,9 @@ async def _check_permissions(
             trace_id=trace_ctx.trace_id,
             session_id=session_id,
         )
-        return PermissionResult(allowed=True)
+        return PermissionGranted()
 
-    outcome = {
+    outcomes: dict[str, tuple[str, str, DispatchCode]] = {
         "deny": ("the user denied it", "approval_denied_by_user", "denied_by_user"),
         "timeout": (
             "the card timed out with no answer",
@@ -495,7 +524,8 @@ async def _check_permissions(
             "approval_no_client",
             "approval_unavailable",
         ),
-    }.get(
+    }
+    outcome = outcomes.get(
         answer.decision,
         ("the answer was not an approval", "approval_not_approved", "denied_by_user"),
     )
@@ -640,15 +670,19 @@ class ToolExecutionLayer:
                 TOOL_CALL_FAILED,
                 tool_name=tool_name,
                 error=error_msg,
+                error_code="unknown_tool",
                 trace_id=trace_ctx.trace_id,
                 session_id=session_id,
             )
-            return ToolResult(
-                tool_name=tool_name,
-                success=False,
-                output={},
-                error=error_msg,
-                latency_ms=0.0,
+            return _failed(
+                tool_name,
+                dispatch_error(
+                    "unknown_tool",
+                    error_msg,
+                    retryable=False,
+                    next_action=f"Call one of the available tools: {', '.join(available_tools)}.",
+                ),
+                trace_ctx=trace_ctx,
             )
 
         tool_def, executor = tool_result
@@ -667,7 +701,7 @@ class ToolExecutionLayer:
             worker=worker,
         )
 
-        if not permission.allowed:
+        if isinstance(permission, PermissionRefused):
             log.warning(
                 POLICY_VIOLATION,
                 tool_name=tool_name,
@@ -675,15 +709,11 @@ class ToolExecutionLayer:
                 mode=current_mode.value,
                 trace_id=trace_ctx.trace_id,
             )
-            return ToolResult(
-                tool_name=tool_name,
-                success=False,
-                output={},
+            return _failed(
+                tool_name,
+                permission.error,
+                trace_ctx=trace_ctx,
                 error=f"Permission denied: {permission.reason}",
-                latency_ms=0.0,
-                metadata=(
-                    {"permission_error": permission.error} if permission.error is not None else {}
-                ),
             )
 
         # 3. Validate and filter arguments to match tool definition
@@ -709,7 +739,6 @@ class ToolExecutionLayer:
 
         schema_errors = validate_tool_arguments(tool_def, filtered_arguments)
         if schema_errors:
-            error_summary = "; ".join(schema_errors[:3])
             log.warning(
                 TOOL_SCHEMA_VALIDATION_FAILED,
                 tool_name=tool_name,
@@ -717,12 +746,15 @@ class ToolExecutionLayer:
                 arguments_preview={k: repr(v)[:80] for k, v in filtered_arguments.items()},
                 trace_id=trace_ctx.trace_id,
             )
-            return ToolResult(
-                tool_name=tool_name,
-                success=False,
-                output={},
-                error=f"Invalid arguments: {error_summary}. Retry with corrected params.",
-                latency_ms=0.0,
+            return _failed(
+                tool_name,
+                dispatch_error(
+                    "invalid_arguments",
+                    f"Invalid arguments for {tool_name}: {'; '.join(schema_errors)}",
+                    retryable=True,
+                    next_action="Call again with the arguments corrected as the message states.",
+                ),
+                trace_ctx=trace_ctx,
             )
 
         # 4. Emit telemetry (start) — ADR-0129 D3 / FRE-1067: a real OTel span,
@@ -738,7 +770,7 @@ class ToolExecutionLayer:
                 span_id=span_id,
             )
 
-            # 5. Execute (with timeout handling)
+            # 5. Execute
             start_time = time.time()
 
             try:
@@ -764,47 +796,25 @@ class ToolExecutionLayer:
                     result = await executor(**filtered_arguments)
                 else:
                     # Sync executor - run in thread pool to avoid blocking
-                    import asyncio
-
                     loop = asyncio.get_event_loop()
                     result = await loop.run_in_executor(
                         None, lambda: executor(**filtered_arguments)
                     )
-
-                latency_ms = (time.time() - start_time) * 1000
-
-                # 6. Emit telemetry (complete)
-                log.info(
-                    TOOL_CALL_COMPLETED,
-                    tool_name=tool_name,
-                    success=True,
-                    trace_id=trace_ctx.trace_id,
-                    span_id=span_id,
-                )
-
-                return ToolResult(
-                    tool_name=tool_name,
-                    success=True,
-                    output=result,
-                    error=None,
-                    latency_ms=latency_ms,
-                )
-
             except Exception as e:
                 latency_ms = (time.time() - start_time) * 1000
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
-
-                log.error(
+                detail = _exception_detail(tool_name, tool_def.error_codes, e, trace_ctx)
+                (log.warning if isinstance(e, ToolError) else log.error)(
                     TOOL_CALL_FAILED,
                     tool_name=tool_name,
                     error=str(e),
+                    error_code=detail.code,
                     trace_id=trace_ctx.trace_id,
                     session_id=session_id,
                     span_id=span_id,
-                    exc_info=True,
+                    exc_info=not isinstance(e, ToolError),
                 )
-
                 # FRE-402: preserve terminality (and its user-facing guidance) through
                 # the flatten so the orchestrator can short-circuit the reasoning loop.
                 metadata: dict[str, Any] = {}
@@ -814,12 +824,191 @@ class ToolExecutionLayer:
                         "terminal_reason": e.reason,
                         "terminal_next_step": e.next_step,
                     }
-
-                return ToolResult(
-                    tool_name=tool_name,
-                    success=False,
-                    output={},
-                    error=str(e),
+                return _completed_failure(
+                    tool_name,
+                    detail,
                     latency_ms=latency_ms,
+                    error=str(e),
                     metadata=metadata,
+                    trace_ctx=trace_ctx,
+                    span_id=span_id,
                 )
+
+            latency_ms = (time.time() - start_time) * 1000
+
+            # 6. A returned error dict is not a success (ADR-0156 D6.3): refuse it.
+            violation = legacy_failure_marker(result)
+            if violation is not None:
+                log.error(
+                    "tool_contract_violation",
+                    tool_name=tool_name,
+                    violation=violation,
+                    trace_id=trace_ctx.trace_id,
+                    span_id=span_id,
+                )
+                span.set_status(Status(StatusCode.ERROR, violation))
+                return _completed_failure(
+                    tool_name,
+                    dispatch_error(
+                        "contract_violation",
+                        f"{tool_name} returned an error in a pre-contract shape ({violation}): "
+                        f"{json.dumps(result, default=str)}",
+                        retryable=False,
+                        next_action="Do not retry this call. Use another tool.",
+                    ),
+                    latency_ms=latency_ms,
+                    error=violation,
+                    metadata={},
+                    trace_ctx=trace_ctx,
+                    span_id=span_id,
+                )
+
+            # 7. Emit telemetry (complete)
+            log.info(
+                TOOL_CALL_COMPLETED,
+                tool_name=tool_name,
+                success=True,
+                trace_id=trace_ctx.trace_id,
+                span_id=span_id,
+            )
+
+            return ToolResult(
+                tool_name=tool_name,
+                success=True,
+                output=result,
+                error=None,
+                latency_ms=latency_ms,
+            )
+
+
+def _failed(
+    tool_name: str,
+    detail: ToolErrorDetail,
+    *,
+    trace_ctx: TraceContext,
+    error: str | None = None,
+) -> ToolResult:
+    """Log a call refused before it ran as a failure, and build its result (ADR-0156 D6.3).
+
+    Args:
+        tool_name: The refused tool.
+        detail: The model-facing failure.
+        trace_ctx: Trace context of the call.
+        error: The durable error text; ``detail.message`` when omitted.
+
+    Returns:
+        A failed :class:`ToolResult` with zero latency.
+    """
+    log.info(
+        TOOL_CALL_COMPLETED,
+        tool_name=tool_name,
+        success=False,
+        error_code=detail.code,
+        retryable=detail.retryable,
+        executed=False,
+        trace_id=trace_ctx.trace_id,
+    )
+    return ToolResult(
+        tool_name=tool_name,
+        success=False,
+        output={},
+        error=error if error is not None else detail.message,
+        error_detail=detail,
+        latency_ms=0.0,
+    )
+
+
+def _completed_failure(
+    tool_name: str,
+    detail: ToolErrorDetail,
+    *,
+    latency_ms: float,
+    error: str,
+    metadata: dict[str, Any],
+    trace_ctx: TraceContext,
+    span_id: str,
+) -> ToolResult:
+    """Log a call that ran and failed as a failure, and build its result (ADR-0156 D6.3).
+
+    Args:
+        tool_name: The tool that ran.
+        detail: The model-facing failure.
+        latency_ms: How long the call ran.
+        error: The durable error text.
+        metadata: Extra result context (for example terminality).
+        trace_ctx: Trace context of the call.
+        span_id: The tool span's id.
+
+    Returns:
+        A failed :class:`ToolResult`.
+    """
+    log.info(
+        TOOL_CALL_COMPLETED,
+        tool_name=tool_name,
+        success=False,
+        error_code=detail.code,
+        retryable=detail.retryable,
+        executed=True,
+        trace_id=trace_ctx.trace_id,
+        span_id=span_id,
+    )
+    return ToolResult(
+        tool_name=tool_name,
+        success=False,
+        output={},
+        error=error,
+        error_detail=detail,
+        latency_ms=latency_ms,
+        metadata=metadata,
+    )
+
+
+def _exception_detail(
+    tool_name: str,
+    declared: frozenset[str],
+    exc: Exception,
+    trace_ctx: TraceContext,
+) -> ToolErrorDetail:
+    """Map an executor exception onto the one failure shape.
+
+    Args:
+        tool_name: The tool that raised.
+        declared: The tool's declared failure codes.
+        exc: The exception.
+        trace_ctx: Trace context of the call.
+
+    Returns:
+        The tool's own failure when it raised its typed error with a declared code. A
+        ``timeout`` for a timeout, an ``undeclared_error_code`` for a typed error whose code
+        the tool did not declare, and a ``tool_exception`` for anything else.
+    """
+    if isinstance(exc, ToolError):
+        if exc.code in declared:
+            return exc.detail
+        log.error(
+            "tool_contract_violation",
+            tool_name=tool_name,
+            violation="undeclared_error_code",
+            error_code=exc.code,
+            trace_id=trace_ctx.trace_id,
+        )
+        return dispatch_error(
+            "undeclared_error_code",
+            f"{tool_name} failed with code {exc.code!r}, which it does not declare: {exc.message}",
+            retryable=exc.retryable,
+            next_action=exc.next_action,
+        )
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return dispatch_error(
+            "timeout",
+            f"{tool_name} timed out: {exc or type(exc).__name__}",
+            retryable=True,
+            next_action="Call again once, or with a narrower request; if it times out again, "
+            "use another tool.",
+        )
+    return dispatch_error(
+        "tool_exception",
+        f"{tool_name} failed: {type(exc).__name__}: {exc}",
+        retryable=False,
+        next_action="Do not repeat the same call. Change the arguments or use another tool.",
+    )

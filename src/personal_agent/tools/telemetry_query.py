@@ -38,17 +38,37 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, TypeGuard
+from typing import Any, Literal, TypeGuard
 
 import httpx
 
 from personal_agent.config import settings
 from personal_agent.security import EgressBlockedError, create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, ToolExecutionError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+TelemetryCode = Literal[
+    "refused",
+    "store_blocked",
+    "store_unavailable",
+    "store_timeout",
+    "store_failed",
+    "store_rejected",
+    "reply_too_large",
+    "bad_reply",
+]
+"""``query_telemetry`` failure codes (ADR-0156 D6.1)."""
+
+
+class TelemetryQueryError(ToolError[TelemetryCode]):
+    """A ``query_telemetry`` failure."""
+
+
+_REFUSED_NEXT = "Nothing was sent. Correct the request as the message states and call again."
+_RETRY_NEXT = "Call query_telemetry once more; if it fails again, tell the user."
 
 # family -> the date field the time bound applies to. Indices are addressed as ``<family>-*``.
 FAMILY_TIME_FIELD: Mapping[str, str] = MappingProxyType(
@@ -336,6 +356,11 @@ def _render_description() -> str:
             "count, errors, p50_ms, p90_ms, max_ms and token sums over the spans it read. "
             "complete=false means a cap was hit and the numbers cover a sample.",
             "A name outside these lists is refused.",
+            'Examples: query_telemetry(action="count", index="agent-logs", '
+            'query={"term": {"level": "ERROR"}}, since="24h"), '
+            'query_telemetry(action="search", index="agent-logs", size=5, '
+            'aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}}), '
+            'query_telemetry(action="latency", since="24h", group_by=["model"]).',
         ]
     )
 
@@ -486,6 +511,9 @@ query_telemetry_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=20,
     rate_limit_per_hour=120,
+    error_codes=error_codes(TelemetryQueryError),
+    max_result_tokens=10_000,
+    truncation_next_action="Ask for fewer hits (a lower size), fewer fields, or a narrower since.",
     # The primary reads telemetry with bash and curl (docs/skills/query-elasticsearch.md).
     # Offering it a second route would add prompt tokens to every turn and change its
     # tool surface, which the ticket did not ask for.
@@ -493,16 +521,19 @@ query_telemetry_tool = ToolDefinition(
 )
 
 
-def _refuse(reason: str) -> ToolExecutionError:
+def _refuse(reason: str) -> TelemetryQueryError:
     """Build the error for a request the tool will not send.
 
     Args:
-        reason: Why the request was refused.
+        reason: Why the request was refused. A field refusal lists the allowed fields, so the
+            model can correct the call (ADR-0156 D6.2).
 
     Returns:
-        An error whose message starts with ``refused:``.
+        A ``refused`` error whose message starts with ``refused:``.
     """
-    return ToolExecutionError(f"refused: {reason}")
+    return TelemetryQueryError(
+        "refused", f"refused: {reason}", retryable=False, next_action=_REFUSED_NEXT
+    )
 
 
 def _is_number(value: object) -> TypeGuard[int | float]:
@@ -953,7 +984,7 @@ def _refuse_foreign_args(action: str, args: Mapping[str, object], names: Sequenc
         names: The names that ``action`` does not take.
 
     Raises:
-        ToolExecutionError: One of ``names`` was given a value.
+        TelemetryQueryError: ``refused``. One of ``names`` was given a value.
     """
     given = [name for name in names if not _is_absent(args.get(name))]
     if given:
@@ -1182,7 +1213,12 @@ def _summarise_tempo(data: Mapping[str, object], request: _TempoRequest) -> dict
     """
     traces = data.get("traces", [])
     if not isinstance(traces, list):
-        raise ToolExecutionError("Tempo returned a reply of an unexpected shape.")
+        raise TelemetryQueryError(
+            "bad_reply",
+            "Tempo returned a reply of an unexpected shape.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        )
     reasons: dict[str, None] = {}
     if len(traces) >= request.limit:
         reasons["trace limit reached: more traces can match; narrow the window or raise limit"] = (
@@ -1294,18 +1330,38 @@ async def _read_tempo(
                     async for chunk in response.aiter_bytes():
                         body.extend(chunk)
                         if len(body) > _TEMPO_MAX_BYTES:
-                            raise ToolExecutionError(
-                                "Tempo's reply is too large. Narrow the window, add a role or "
-                                "model filter, or lower limit."
+                            raise TelemetryQueryError(
+                                "reply_too_large",
+                                "Tempo's reply is larger than 16 MB.",
+                                retryable=False,
+                                next_action=(
+                                    "Narrow the window, add a role or model filter, or lower "
+                                    "limit, then call again."
+                                ),
                             )
     except EgressBlockedError as exc:
-        raise ToolExecutionError("Tempo is blocked by the egress guard.") from exc
+        raise TelemetryQueryError(
+            "store_blocked",
+            "Tempo is blocked by the egress guard.",
+            retryable=False,
+            next_action="Tempo cannot be read from here. Tell the user.",
+        ) from exc
     except httpx.ConnectError as exc:
         log.error("query_telemetry_tempo_connect_failed", trace_id=trace_id, session_id=session_id)
-        raise ToolExecutionError("Cannot connect to Tempo. Is the tempo service running?") from exc
+        raise TelemetryQueryError(
+            "store_unavailable",
+            "Cannot connect to Tempo. Is the tempo service running?",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
     except (httpx.TimeoutException, TimeoutError) as exc:
         log.error("query_telemetry_tempo_timeout", trace_id=trace_id, session_id=session_id)
-        raise ToolExecutionError("Tempo request timed out.") from exc
+        raise TelemetryQueryError(
+            "store_timeout",
+            "Tempo request timed out.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
     except httpx.HTTPError as exc:
         log.error(
             "query_telemetry_tempo_failed",
@@ -1313,7 +1369,12 @@ async def _read_tempo(
             session_id=session_id,
             error=type(exc).__name__,
         )
-        raise ToolExecutionError("Tempo request failed.") from exc
+        raise TelemetryQueryError(
+            "store_failed",
+            "Tempo request failed.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
 
     if response.is_error:
         # A 400 or 422 describes the query, which the tool built. Any other body (a proxy
@@ -1329,15 +1390,28 @@ async def _read_tempo(
             status=response.status_code,
             reason=reason,
         )
-        raise ToolExecutionError(
-            f"Tempo rejected the query (HTTP {response.status_code}): {reason}"
+        raise TelemetryQueryError(
+            "store_rejected",
+            f"Tempo rejected the query (HTTP {response.status_code}): {reason}",
+            retryable=False,
+            next_action="Change the filters or the window as the message states, then call again.",
         )
     try:
         data = json.loads(body)
     except ValueError as exc:
-        raise ToolExecutionError("Tempo returned a reply that is not JSON.") from exc
+        raise TelemetryQueryError(
+            "bad_reply",
+            "Tempo returned a reply that is not JSON.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
     if not isinstance(data, dict):
-        raise ToolExecutionError("Tempo returned a reply that is not a JSON object.")
+        raise TelemetryQueryError(
+            "bad_reply",
+            "Tempo returned a reply that is not a JSON object.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        )
     return data
 
 
@@ -1472,15 +1546,28 @@ async def query_telemetry_executor(
                 params={"ignore_unavailable": "true", "allow_no_indices": "true"},
             )
     except EgressBlockedError as exc:
-        raise ToolExecutionError("Elasticsearch is blocked by the egress guard.") from exc
+        raise TelemetryQueryError(
+            "store_blocked",
+            "Elasticsearch is blocked by the egress guard.",
+            retryable=False,
+            next_action="Elasticsearch cannot be read from here. Tell the user.",
+        ) from exc
     except httpx.ConnectError as exc:
         log.error("query_telemetry_connect_failed", trace_id=trace_id, session_id=session_id)
-        raise ToolExecutionError(
-            "Cannot connect to Elasticsearch. Is the elasticsearch service running?"
+        raise TelemetryQueryError(
+            "store_unavailable",
+            "Cannot connect to Elasticsearch. Is the elasticsearch service running?",
+            retryable=True,
+            next_action=_RETRY_NEXT,
         ) from exc
     except httpx.TimeoutException as exc:
         log.error("query_telemetry_timeout", trace_id=trace_id, session_id=session_id)
-        raise ToolExecutionError("Elasticsearch request timed out.") from exc
+        raise TelemetryQueryError(
+            "store_timeout",
+            "Elasticsearch request timed out.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
     except httpx.HTTPError as exc:
         log.error(
             "query_telemetry_failed",
@@ -1488,7 +1575,12 @@ async def query_telemetry_executor(
             session_id=session_id,
             error=type(exc).__name__,
         )
-        raise ToolExecutionError("Elasticsearch request failed.") from exc
+        raise TelemetryQueryError(
+            "store_failed",
+            "Elasticsearch request failed.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
 
     if response.is_error:
         reason = _short_reason(response)
@@ -1499,13 +1591,26 @@ async def query_telemetry_executor(
             status=response.status_code,
             reason=reason,
         )
-        raise ToolExecutionError(
-            f"Elasticsearch rejected the query (HTTP {response.status_code}): {reason}"
+        raise TelemetryQueryError(
+            "store_rejected",
+            f"Elasticsearch rejected the query (HTTP {response.status_code}): {reason}",
+            retryable=False,
+            next_action="Change the query as the message states, then call again.",
         )
     try:
         data = response.json()
     except ValueError as exc:
-        raise ToolExecutionError("Elasticsearch returned a reply that is not JSON.") from exc
+        raise TelemetryQueryError(
+            "bad_reply",
+            "Elasticsearch returned a reply that is not JSON.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
     if not isinstance(data, dict):
-        raise ToolExecutionError("Elasticsearch returned a reply that is not a JSON object.")
+        raise TelemetryQueryError(
+            "bad_reply",
+            "Elasticsearch returned a reply that is not a JSON object.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        )
     return _shape_result(action, data)

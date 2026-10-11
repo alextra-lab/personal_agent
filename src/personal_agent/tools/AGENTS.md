@@ -33,7 +33,7 @@ registry = ToolRegistry()
 @registry.register("filesystem_read")
 async def filesystem_read(path: str, ctx: TraceContext) -> dict[str, Any]:
     """Read file contents."""
-    return {"success": True, "output": contents, "error": None}
+    return {"content": contents}  # the success payload; a failure raises its typed error
 ```
 
 ## Tool Execution
@@ -49,29 +49,19 @@ async def safe_execute(name: str, args: dict[str, Any], ctx: TraceContext):
     return await execute_tool(name, args, ctx)
 ```
 
-## Result Format
+## Result Format (ADR-0156 D6 — the one tool contract)
 
-All tools return:
-
-```python
-{
-    "success": bool,      # Did tool succeed?
-    "output": Any,        # Tool-specific output
-    "error": str | None,  # Error message if failed
-}
-```
+An executor returns its success payload and raises its typed `ToolError` subclass on a
+failure. The model reads `{"ok": true, ...payload}` or
+`{"ok": false, "error": {"code", "message", "retryable", "next_action"}}`, built only by
+`tools/contract.py:render_content`. See `docs/reference/TOOL_INTEGRATION_GUIDE.md`
+("The tool contract").
 
 ## Telemetry
 
-```python
-log.info("tool_start", tool=name, args=args, trace_id=ctx.trace_id)
-try:
-    result = await registry.execute(name, args)
-    log.info("tool_success", tool=name, trace_id=ctx.trace_id)
-except Exception as e:
-    log.error("tool_failed", tool=name, error=str(e), trace_id=ctx.trace_id)
-    return {"success": False, "output": None, "error": str(e)}
-```
+`ToolExecutionLayer.execute_tool` logs `tool_call_started`, then exactly one
+`tool_call_completed` with `success` equal to `ok` (and `error_code` on a failure). A tool's
+own events (for example `bash_completed`) add detail; the outcome is the layer's event.
 
 ## Dependencies
 
@@ -90,7 +80,8 @@ rg -n "result\[\"success\"\]" src/
 ## Critical
 
 - **Always check permissions** - never execute without governance check
-- All tools return `{success, output, error}` dict
+- Executors return the success payload and raise a typed `ToolError` on failure (never a
+  returned error dict)
 - Tools should be async for I/O
 - **Never** direct file operations - use Path, handle errors gracefully
 - Pass TraceContext through execution chain

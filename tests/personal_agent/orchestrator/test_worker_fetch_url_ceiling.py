@@ -34,6 +34,7 @@ from personal_agent.orchestrator.worker_types import WORKER_TYPES, WorkerType
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.fetch import _MAX_CHARS_CAP, fetch_url_executor, fetch_url_tool
 from personal_agent.tools.schema_validator import validate_tool_arguments
+from personal_agent.tools.contract import dispatch_error
 from personal_agent.tools.types import ToolResult
 
 #: A page longer than the tool's own 50,000-character cap, so the cap is what bounds it.
@@ -90,6 +91,12 @@ def _fetch_tool_layer(config: GovernanceConfig) -> MagicMock:
                 success=False,
                 output={},
                 error="; ".join(errors),
+                error_detail=dispatch_error(
+                    "invalid_arguments",
+                    "; ".join(errors),
+                    retryable=True,
+                    next_action="Fix the arguments and call again.",
+                ),
                 latency_ms=0.0,
             )
         # The novelty tracker keeps a cwd-relative cache file; a test must not write to it.

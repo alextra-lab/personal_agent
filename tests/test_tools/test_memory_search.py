@@ -589,3 +589,20 @@ async def test_include_history_true_empty_chain_omits_target_from_dict() -> None
         )
 
     assert result["stance_history"] == {}
+
+
+@pytest.mark.asyncio
+async def test_search_memory_executor_query_failure_raises_search_failed() -> None:
+    """FRE-1575: an unexpected failure inside the search becomes ``search_failed``."""
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(side_effect=RuntimeError("neo4j session closed"))
+    mock_service.query_claims = AsyncMock(return_value=[])
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await search_memory_executor(query_text="Athens", entity_names=["Athens"])
+
+    assert exc_info.value.code == "search_failed"
+    assert exc_info.value.retryable is False
+    assert "RuntimeError: neo4j session closed" in exc_info.value.message

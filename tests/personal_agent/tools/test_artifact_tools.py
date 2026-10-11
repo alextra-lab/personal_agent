@@ -311,13 +311,14 @@ async def test_artifact_write_requires_user_id(
     """Missing ctx.user_id is a programming bug — refuse with ToolExecutionError."""
     _install_fakes(monkeypatch, store=_FakeStore())
 
-    with pytest.raises(ToolExecutionError, match="user_id"):
+    with pytest.raises(ToolExecutionError, match="user_id") as exc_info:
         await artifact_tools.artifact_write_executor(
             slug="x",
             content_type="text/html; charset=utf-8",
             content="<p>x</p>",
             ctx=SimpleNamespace(trace_id="t"),
         )
+    assert exc_info.value.code == "missing_identity"
 
 
 @pytest.mark.asyncio
@@ -326,13 +327,14 @@ async def test_artifact_write_substrate_not_configured(
 ) -> None:
     monkeypatch.setattr(artifact_tools, "get_artifact_store", lambda: None)
 
-    with pytest.raises(ToolExecutionError, match="substrate"):
+    with pytest.raises(ToolExecutionError, match="substrate") as exc_info:
         await artifact_tools.artifact_write_executor(
             slug="x",
             content_type="text/html; charset=utf-8",
             content="<p>y</p>",
             ctx=_ctx(),
         )
+    assert exc_info.value.code == "not_configured"
 
 
 @pytest.mark.asyncio
@@ -342,13 +344,14 @@ async def test_artifact_write_rejects_unknown_content_type(
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
 
-    with pytest.raises(ToolExecutionError, match="content_type"):
+    with pytest.raises(ToolExecutionError, match="content_type") as exc_info:
         await artifact_tools.artifact_write_executor(
             slug="bad",
             content_type="application/pdf",  # not in allowlist
             content="bytes",
             ctx=_ctx(),
         )
+    assert exc_info.value.code == "unsupported_content_type"
 
     assert store.put_calls == []
 
@@ -360,13 +363,14 @@ async def test_artifact_write_rejects_empty_content(
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
 
-    with pytest.raises(ToolExecutionError, match="content"):
+    with pytest.raises(ToolExecutionError, match="content") as exc_info:
         await artifact_tools.artifact_write_executor(
             slug="empty",
             content_type="text/html; charset=utf-8",
             content="",
             ctx=_ctx(),
         )
+    assert exc_info.value.code == "empty_content"
 
     assert store.put_calls == []
 
@@ -380,13 +384,14 @@ async def test_artifact_write_rejects_oversized_content(
     _install_fakes(monkeypatch, store=store)
 
     too_big = "x" * (5 * 1024 * 1024 + 1)
-    with pytest.raises(ToolExecutionError, match="5 MB"):
+    with pytest.raises(ToolExecutionError, match="5 MB") as exc_info:
         await artifact_tools.artifact_write_executor(
             slug="big",
             content_type="text/html; charset=utf-8",
             content=too_big,
             ctx=_ctx(),
         )
+    assert exc_info.value.code == "too_large"
 
     assert store.put_calls == []
 
@@ -399,13 +404,14 @@ async def test_artifact_write_invalid_slug_rejected_before_r2(
     store = _FakeStore()
     session = _install_fakes(monkeypatch, store=store)
 
-    with pytest.raises(ToolExecutionError):
+    with pytest.raises(ToolExecutionError) as exc_info:
         await artifact_tools.artifact_write_executor(
             slug="../etc/passwd",
             content_type="text/html; charset=utf-8",
             content="<p>x</p>",
             ctx=_ctx(),
         )
+    assert exc_info.value.code == "invalid_slug"
 
     assert store.put_calls == []
     assert session.calls == []
@@ -418,13 +424,14 @@ async def test_artifact_write_rejects_slug_with_slash(
     store = _FakeStore()
     session = _install_fakes(monkeypatch, store=store)
 
-    with pytest.raises(ToolExecutionError):
+    with pytest.raises(ToolExecutionError) as exc_info:
         await artifact_tools.artifact_write_executor(
             slug="path/traversal",
             content_type="text/html; charset=utf-8",
             content="<p>x</p>",
             ctx=_ctx(),
         )
+    assert exc_info.value.code == "invalid_slug"
 
     assert store.put_calls == []
     assert session.calls == []
@@ -438,13 +445,14 @@ async def test_artifact_write_rejects_invalid_base64_for_png(
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
 
-    with pytest.raises(ToolExecutionError, match="base64"):
+    with pytest.raises(ToolExecutionError, match="base64") as exc_info:
         await artifact_tools.artifact_write_executor(
             slug="bad-png",
             content_type="image/png",
             content="not-valid-base64!!!",
             ctx=_ctx(),
         )
+    assert exc_info.value.code == "invalid_base64"
 
     assert store.put_calls == []
 
@@ -500,8 +508,9 @@ async def test_artifact_list_requires_user_id(
 ) -> None:
     _install_fakes(monkeypatch, store=_FakeStore())
 
-    with pytest.raises(ToolExecutionError, match="user_id"):
+    with pytest.raises(ToolExecutionError, match="user_id") as exc_info:
         await artifact_tools.artifact_list_executor(ctx=SimpleNamespace(trace_id="t"))
+    assert exc_info.value.code == "missing_identity"
 
 
 @pytest.mark.asyncio
@@ -776,8 +785,9 @@ async def test_artifact_read_cross_user_raises_toolexec_error(
     # Canned result: no row found (existence-hiding per ADR-0064 D3)
     session.enqueue(SimpleNamespace(first=lambda: None))
 
-    with pytest.raises(ToolExecutionError, match="not found"):
+    with pytest.raises(ToolExecutionError, match="not found") as exc_info:
         await artifact_tools.artifact_read_executor(artifact_id=str(uuid4()), ctx=_ctx())
+    assert exc_info.value.code == "not_found"
 
 
 @pytest.mark.asyncio
@@ -786,8 +796,9 @@ async def test_artifact_read_invalid_uuid_raises(
 ) -> None:
     _install_fakes(monkeypatch, store=_FakeStore())
 
-    with pytest.raises(ToolExecutionError):
+    with pytest.raises(ToolExecutionError) as exc_info:
         await artifact_tools.artifact_read_executor(artifact_id="not-a-uuid", ctx=_ctx())
+    assert exc_info.value.code == "invalid_artifact_id"
 
 
 @pytest.mark.asyncio
@@ -796,10 +807,11 @@ async def test_artifact_read_requires_user_id(
 ) -> None:
     _install_fakes(monkeypatch, store=_FakeStore())
 
-    with pytest.raises(ToolExecutionError, match="user_id"):
+    with pytest.raises(ToolExecutionError, match="user_id") as exc_info:
         await artifact_tools.artifact_read_executor(
             artifact_id=str(uuid4()), ctx=SimpleNamespace(trace_id="t")
         )
+    assert exc_info.value.code == "missing_identity"
 
 
 # ---------------------------------------------------------------------------
@@ -972,7 +984,7 @@ async def test_artifact_draft_phase_end_fires_on_error(
 
     monkeypatch.setattr(client, "respond", _boom)
 
-    with pytest.raises(artifact_tools.ToolExecutionError):
+    with pytest.raises(ToolExecutionError) as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="report",
             title="My Report",
@@ -980,6 +992,7 @@ async def test_artifact_draft_phase_end_fires_on_error(
             plan="Section 1.",
             ctx=_ctx(session_id=uuid4()),
         )
+    assert exc_info.value.code == "generation_failed"
 
     build = [e for e in events if e.phase is Phase.ARTIFACT_BUILD]
     # Start AND end both present despite the raise (phase never left spinning).
@@ -1860,10 +1873,11 @@ async def test_artifact_draft_empty_plan_raises(
 ) -> None:
     _install_draft_fakes(monkeypatch)
 
-    with pytest.raises(ToolExecutionError, match="plan"):
+    with pytest.raises(ToolExecutionError, match="plan") as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="", ctx=_ctx()
         )
+    assert exc_info.value.code == "invalid_argument"
 
 
 @pytest.mark.asyncio
@@ -1930,7 +1944,7 @@ async def test_artifact_draft_requires_user_id(
     """Missing user_id propagates from artifact_write_executor."""
     _install_draft_fakes(monkeypatch)
 
-    with pytest.raises(ToolExecutionError, match="user_id"):
+    with pytest.raises(ToolExecutionError, match="user_id") as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="x",
             title="T",
@@ -1938,6 +1952,7 @@ async def test_artifact_draft_requires_user_id(
             plan="A plan.",
             ctx=SimpleNamespace(trace_id="t"),
         )
+    assert exc_info.value.code == "missing_identity"
 
 
 # ---------------------------------------------------------------------------
@@ -1962,6 +1977,7 @@ async def test_artifact_draft_rejects_missing_doctype(
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
         )
+    assert exc_info.value.code == "malformed_html"
     assert not isinstance(exc_info.value, TerminalToolError)
 
 
@@ -2099,14 +2115,16 @@ def test_validate_html_output_accepts_scripts() -> None:
 def test_validate_html_output_rejects_truncated() -> None:
     """Malformation check: a document missing </html> still rejects (quality, recoverable)."""
     truncated = "<!DOCTYPE html><html><body><p>a document body that was cut off mid-stream"
-    with pytest.raises(ToolExecutionError, match="</html>"):
+    with pytest.raises(ToolExecutionError, match="</html>") as exc_info:
         artifact_tools._validate_html_output(truncated)
+    assert exc_info.value.code == "malformed_html"
 
 
 def test_validate_html_output_rejects_tiny() -> None:
     """Malformation check: trivially small output still rejects (quality, recoverable)."""
-    with pytest.raises(ToolExecutionError, match="small"):
+    with pytest.raises(ToolExecutionError, match="small") as exc_info:
         artifact_tools._validate_html_output("<p>x</p>")
+    assert exc_info.value.code == "malformed_html"
 
 
 def test_event_handler_detector_ignores_data_on_attributes() -> None:
@@ -2126,10 +2144,11 @@ async def test_artifact_draft_subagent_empty_html_raises(
 ) -> None:
     _install_draft_fakes(monkeypatch, html_content="")
 
-    with pytest.raises(ToolExecutionError, match="trivially small"):
+    with pytest.raises(ToolExecutionError, match="trivially small") as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
         )
+    assert exc_info.value.code == "malformed_html"
 
 
 @pytest.mark.asyncio
@@ -2158,6 +2177,7 @@ async def test_artifact_draft_subagent_timeout_raises(
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
         )
+    assert exc_info.value.code == "generation_timeout"
     assert exc_info.value.reason
     assert exc_info.value.next_step
 
@@ -2166,7 +2186,7 @@ async def test_artifact_draft_subagent_timeout_raises(
 async def test_artifact_draft_subagent_exception_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Arbitrary sub-agent exception surfaces as ToolExecutionError with fallback guidance."""
+    """Arbitrary sub-agent exception surfaces as generation_failed with fallback guidance."""
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
 
@@ -2179,10 +2199,13 @@ async def test_artifact_draft_subagent_exception_raises(
         lambda role_name="primary": _FailingClient(),
     )
 
-    with pytest.raises(ToolExecutionError, match="artifact_write directly"):
+    with pytest.raises(ToolExecutionError, match="GPU OOM") as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
         )
+    assert exc_info.value.code == "generation_failed"
+    assert exc_info.value.retryable is False
+    assert "artifact_write" in exc_info.value.next_action
 
 
 # ---------------------------------------------------------------------------

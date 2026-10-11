@@ -27,7 +27,7 @@ import base64
 import os
 import re
 import tempfile
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -43,10 +43,63 @@ from personal_agent.storage import (
     get_artifact_store,
 )
 from personal_agent.telemetry import get_logger
-from personal_agent.tools.executor import TerminalToolError, ToolExecutionError
+from personal_agent.tools.contract import TerminalToolError, ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Failure codes (ADR-0156 D6.1)
+# ---------------------------------------------------------------------------
+
+ArtifactSharedCode = Literal["missing_identity"]
+"""Failures raised by helpers that several artifact tools call."""
+
+ArtifactWriteCode = Literal[
+    ArtifactSharedCode,
+    "not_configured",
+    "unsupported_content_type",
+    "empty_content",
+    "invalid_base64",
+    "too_large",
+    "invalid_slug",
+]
+ArtifactListCode = ArtifactSharedCode
+ArtifactReadCode = Literal[ArtifactSharedCode, "invalid_artifact_id", "not_found"]
+# artifact_draft commits through artifact_write_executor, so every artifact_write code
+# can surface from an artifact_draft call.
+ArtifactDraftCode = Literal[
+    ArtifactWriteCode,
+    "invalid_argument",
+    "generation_timeout",
+    "generation_failed",
+    "malformed_html",
+]
+
+
+class ArtifactError(ToolError[ArtifactSharedCode]):
+    """A failure in a helper shared by the artifact tools."""
+
+
+class ArtifactWriteError(ToolError[ArtifactWriteCode]):
+    """An ``artifact_write`` failure."""
+
+
+class ArtifactListError(ToolError[ArtifactListCode]):
+    """An ``artifact_list`` failure (it raises only the shared codes)."""
+
+
+class ArtifactReadError(ToolError[ArtifactReadCode]):
+    """An ``artifact_read`` failure."""
+
+
+class ArtifactDraftError(ToolError[ArtifactDraftCode]):
+    """An ``artifact_draft`` failure."""
+
+
+class ArtifactDraftTerminalError(TerminalToolError[ArtifactDraftCode]):
+    """An ``artifact_draft`` failure that ends the turn without a recovery call (FRE-402)."""
+
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -97,13 +150,18 @@ _TEXTUAL_CONTENT_TYPES: frozenset[str] = frozenset(
 artifact_write_tool = ToolDefinition(
     name="artifact_write",
     description=(
-        "Persist a pre-rendered artifact (CSV, JSON, markdown, SVG, PNG, or "
-        "pre-built HTML) to the R2 substrate. Returns a stable public URL. "
-        "For generating NEW HTML documents, prefer artifact_draft instead — "
-        "it delegates HTML generation to a fast sub-agent and saves tokens. "
-        "Use artifact_write directly only when you already have the final "
-        "content (e.g. CSV export, JSON data, image, or pre-existing HTML). "
-        "Use notes_write for agent-internal durable notes."
+        "Save finished content (CSV, JSON, markdown, SVG, base64 PNG, or ready HTML) as a "
+        "user-facing artifact and return its artifact_id and public URL, shown to the user "
+        "as a card. "
+        "Use it when you already hold the final content, such as a CSV export or a JSON data "
+        "file. "
+        "Do not use it to build a new HTML document (use artifact_draft, which writes the HTML "
+        "for you) or for your own durable notes (use notes_write). "
+        "content_type must be one of the listed types, and content is capped at 5 MB. "
+        'Examples: artifact_write(slug="q3-spend", content_type="text/csv; charset=utf-8", '
+        'content="month,spend\\nJul,120", title="Q3 spend"), '
+        'artifact_write(slug="trip-plan", content_type="text/markdown; charset=utf-8", '
+        'content="# Trip plan\\n...", summary="Five-day Crete itinerary").'
     ),
     category="artifact_write",
     parameters=[
@@ -171,15 +229,21 @@ artifact_write_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=30,
     rate_limit_per_hour=30,
+    error_codes=error_codes(ArtifactWriteError),
 )
 
 
 artifact_list_tool = ToolDefinition(
     name="artifact_list",
     description=(
-        "List recent artifacts owned by the current user, newest first. "
-        "Returns metadata and public URLs only — call artifact_read to "
-        "ingest content for revision."
+        "List the current user's artifacts, newest first, with artifact_id, slug, title, "
+        "summary, content_type, tags and public URL. "
+        "Use it to find an earlier artifact before reading or revising it with artifact_read. "
+        "Do not use it for notes (use notes_search). "
+        "It returns metadata only, at most k results (1-50, default 10), filtered by slug "
+        "prefix and an ISO-8601 'since' time. "
+        'Examples: artifact_list(), artifact_list(prefix="q3", k=5), '
+        'artifact_list(since="2026-10-01T00:00:00Z").'
     ),
     category="memory_read",
     parameters=[
@@ -211,17 +275,21 @@ artifact_list_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=10,
     rate_limit_per_hour=200,
+    error_codes=error_codes(ArtifactListError),
 )
 
 
 artifact_read_tool = ToolDefinition(
     name="artifact_read",
     description=(
-        "Fetch an artifact's metadata and (for textual artifacts under "
-        "256 KB) its content inline, so the agent can revise or build upon "
-        "a prior artifact. For binary or image artifacts no bytes are returned "
-        "inline; the result carries a human-display-only URL (openable in a "
-        "browser by the user) — the agent cannot fetch that URL."
+        "Fetch one of the user's artifacts by artifact_id: its metadata and, for a textual "
+        "artifact under 256 KB, its content inline. "
+        "Use it to revise or build on an earlier artifact; get the id from artifact_list or "
+        "artifact_write. "
+        "Do not use it for notes (use notes_search). "
+        "A binary or image artifact returns no bytes, only a human_display_url the user can "
+        "open in a browser; you cannot fetch that URL. "
+        'Example: artifact_read(artifact_id="3f2b9c1e-8a4d-4f6e-9b2a-1c7d5e8f0a12").'
     ),
     category="memory_read",
     parameters=[
@@ -238,6 +306,12 @@ artifact_read_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=10,
     rate_limit_per_hour=60,
+    error_codes=error_codes(ArtifactReadError),
+    max_result_tokens=25_000,
+    truncation_next_action=(
+        "The content was cut at the result bound. Work from the part shown, or give the "
+        "user the artifact's public_url."
+    ),
 )
 
 
@@ -251,10 +325,24 @@ def _resolve_user_id(ctx: Any) -> UUID:
 
     Refuses to fall back — every gateway path sets ctx.user_id (ADR-0064).
     A missing id is a programming bug, not a runtime condition.
+
+    Args:
+        ctx: The orchestrator context, or ``None``.
+
+    Returns:
+        The caller's user id.
+
+    Raises:
+        ArtifactError: When the context carries no user id.
     """
     user_id = getattr(ctx, "user_id", None) if ctx else None
     if user_id is None:
-        raise ToolExecutionError("artifact tools require ctx.user_id (set by the request gateway).")
+        raise ArtifactError(
+            "missing_identity",
+            "artifact tools require ctx.user_id (set by the request gateway).",
+            retryable=False,
+            next_action="No artifact call can work without a user identity. Tell the user.",
+        )
     return user_id if isinstance(user_id, UUID) else UUID(str(user_id))
 
 
@@ -287,17 +375,36 @@ def _decode_content(content_type: str, content: str) -> bytes:
     """Decode the string content param to bytes according to content_type.
 
     Text types: UTF-8 encode.
-    Binary types (image/png, image/svg+xml): base64 decode.
-    Raises ToolExecutionError on decode failure.
+    Binary types (image/png): base64 decode.
+
+    Args:
+        content_type: An allowed MIME type.
+        content: The content parameter.
+
+    Returns:
+        The bytes to store.
+
+    Raises:
+        ArtifactWriteError: On empty content or a PNG body that is not base64.
     """
     if not content:
-        raise ToolExecutionError("content is required and cannot be empty.")
+        raise ArtifactWriteError(
+            "empty_content",
+            "content is required and cannot be empty.",
+            retryable=False,
+            next_action="Call artifact_write again with the content to save.",
+        )
 
     if content_type == "image/png":
         try:
             return base64.b64decode(content, validate=True)
         except Exception as exc:
-            raise ToolExecutionError("image/png content must be base64-encoded bytes.") from exc
+            raise ArtifactWriteError(
+                "invalid_base64",
+                "image/png content must be base64-encoded bytes.",
+                retryable=False,
+                next_action="Call artifact_write again with the PNG bytes base64-encoded.",
+            ) from exc
 
     # All other allowed types are UTF-8 text.
     return content.encode("utf-8")
@@ -346,26 +453,38 @@ async def artifact_write_executor(
         "title", "summary"}``.
 
     Raises:
-        ToolExecutionError: On missing identity, disallowed content_type,
-            empty/oversized content, invalid slug, base64 decode failure,
-            or substrate-not-configured.
+        ArtifactWriteError: On an unconfigured substrate, disallowed content_type,
+            empty/oversized content, invalid slug, or base64 decode failure.
+        ArtifactError: On missing identity.
     """
     store = get_artifact_store()
     if store is None:
-        raise ToolExecutionError("artifact substrate is not configured on this deployment.")
+        raise ArtifactWriteError(
+            "not_configured",
+            "artifact substrate is not configured on this deployment.",
+            retryable=False,
+            next_action="Artifacts cannot be saved here. Give the content in your answer instead.",
+        )
 
     if content_type not in _ALLOWED_CONTENT_TYPES:
-        raise ToolExecutionError(
-            f"unsupported content_type {content_type!r}. Allowed: {sorted(_ALLOWED_CONTENT_TYPES)}"
+        raise ArtifactWriteError(
+            "unsupported_content_type",
+            f"unsupported content_type {content_type!r}. Allowed: {sorted(_ALLOWED_CONTENT_TYPES)}",
+            retryable=False,
+            next_action="Call artifact_write again with one of the allowed content types.",
         )
 
     payload = _decode_content(content_type, content)
     size_bytes = len(payload)
 
     if size_bytes > _MAX_CONTENT_BYTES:
-        raise ToolExecutionError(
-            f"artifact exceeds the 5 MB cap ({size_bytes} bytes). "
-            "Split it into smaller artifacts or link to external content."
+        raise ArtifactWriteError(
+            "too_large",
+            f"artifact exceeds the 5 MB cap ({size_bytes} bytes).",
+            retryable=False,
+            next_action=(
+                "Split it into smaller artifacts, each under 5 MB, or link to external content."
+            ),
         )
 
     user_id = _resolve_user_id(ctx)
@@ -384,7 +503,15 @@ async def artifact_write_executor(
             ext=ext,
         )
     except ArtifactKeyError as exc:
-        raise ToolExecutionError(str(exc)) from exc
+        raise ArtifactWriteError(
+            "invalid_slug",
+            str(exc),
+            retryable=False,
+            next_action=(
+                "Call again with a slug that starts with a letter or digit and uses only "
+                "letters, digits, '.', '_' or '-' (max 64 chars)."
+            ),
+        ) from exc
 
     # Build embedding text from metadata fields — skip if all empty.
     emb_text = "\n".join(filter(None, [title, summary, " ".join(tags or []), slug]))
@@ -535,7 +662,7 @@ async def artifact_list_executor(
         ``{"results": [...], "result_count": int}`` with per-item metadata.
 
     Raises:
-        ToolExecutionError: On missing user identity.
+        ArtifactError: On missing user identity.
     """
     user_id = _resolve_user_id(ctx)
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
@@ -624,8 +751,8 @@ async def artifact_read_executor(
         ``public_url`` for text-like artifacts, else ``human_display_url`` + ``note``.
 
     Raises:
-        ToolExecutionError: On invalid UUID, not found (incl. cross-user),
-            or missing identity.
+        ArtifactReadError: On an invalid UUID, or not found (incl. cross-user).
+        ArtifactError: On missing identity.
     """
     user_id = _resolve_user_id(ctx)
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
@@ -633,7 +760,12 @@ async def artifact_read_executor(
     try:
         parsed_id = UUID(artifact_id)
     except ValueError as exc:
-        raise ToolExecutionError(f"artifact_id is not a valid UUID: {artifact_id!r}") from exc
+        raise ArtifactReadError(
+            "invalid_artifact_id",
+            f"artifact_id is not a valid UUID: {artifact_id!r}",
+            retryable=False,
+            next_action="Call artifact_list to get the artifact_id, then call artifact_read.",
+        ) from exc
 
     store = get_artifact_store()
 
@@ -664,7 +796,12 @@ async def artifact_read_executor(
             artifact_id=str(parsed_id),
             user_id=str(user_id),
         )
-        raise ToolExecutionError(f"artifact {parsed_id} not found (or not owned by current user).")
+        raise ArtifactReadError(
+            "not_found",
+            f"artifact {parsed_id} not found (or not owned by current user).",
+            retryable=False,
+            next_action="Call artifact_list to find the right artifact_id.",
+        )
 
     # Text-like content keeps a plain ``public_url``; binary/image content does not
     # (AC-8, below). ``_TEXTUAL_CONTENT_TYPES`` covers the charset-tagged artifact
@@ -1121,11 +1258,18 @@ def _html_generation_system_prompt() -> str:
 artifact_draft_tool = ToolDefinition(
     name="artifact_draft",
     description=(
-        "Plan a rich HTML artifact and delegate HTML generation to a fast "
-        "sub-agent. Use this instead of artifact_write when creating HTML "
-        "documents — provide a structured plan with content, data, and style "
-        "guidance; the sub-agent generates the final HTML. For non-HTML "
-        "artifacts (CSV, JSON, markdown, images), use artifact_write directly."
+        "Build a new HTML artifact (report, dashboard, explainer, interactive page) from your "
+        "structured plan: a builder model writes the HTML, which is saved and shown to the "
+        "user as a card with a public URL. "
+        "Use it whenever the user wants a rich HTML document; give the content, data and "
+        "style guidance in plan, not HTML. "
+        "Do not use it for CSV, JSON, markdown or images, or for HTML you already have (use "
+        "artifact_write). "
+        "A build can take minutes; a plan over about 16,000 characters is truncated, and the "
+        "page runs sealed (no network, no storage). "
+        'Example: artifact_draft(slug="q3-spend-report", title="Q3 spend", '
+        'summary="Spend by month with the top three categories", '
+        'plan="Sections: KPI cards (total 3,400 EUR), a bar chart of Jul-Sep, a table ...").'
     ),
     category="artifact_write",
     parameters=[
@@ -1183,6 +1327,7 @@ artifact_draft_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=120,
     rate_limit_per_hour=20,
+    error_codes=error_codes(ArtifactDraftError),
 )
 
 
@@ -1344,6 +1489,12 @@ async def _render_mermaid_blocks(
     return result
 
 
+_MALFORMED_NEXT = (
+    "Call artifact_draft again with a shorter, more specific plan, or call artifact_write "
+    "with HTML you write yourself."
+)
+
+
 def _validate_html_output(html: str) -> None:
     """Validate sub-agent HTML for malformation before persisting (ADR-0077 D9).
 
@@ -1352,24 +1503,36 @@ def _validate_html_output(html: str) -> None:
     permitted content). It catches truncated or trivially broken generations so the
     model can retry instead of committing a husk.
 
+    Args:
+        html: The generated document.
+
     Raises:
-        ToolExecutionError: On recoverable malformation (too small, missing
+        ArtifactDraftError: On recoverable malformation (too small, missing
             DOCTYPE / closing tag) — the model may fix this on retry.
     """
     if len(html) < _MIN_HTML_LENGTH:
-        raise ToolExecutionError(
+        raise ArtifactDraftError(
+            "malformed_html",
             f"HTML generation produced trivially small output ({len(html)} chars). "
-            "Refine the plan or use artifact_write directly."
+            "Refine the plan or use artifact_write directly.",
+            retryable=False,
+            next_action=_MALFORMED_NEXT,
         )
     if "<!doctype html>" not in html[:200].lower():
-        raise ToolExecutionError(
+        raise ArtifactDraftError(
+            "malformed_html",
             "Generated HTML is missing <!DOCTYPE html> declaration. "
-            "Refine the plan or use artifact_write directly."
+            "Refine the plan or use artifact_write directly.",
+            retryable=False,
+            next_action=_MALFORMED_NEXT,
         )
     if "</html>" not in html[-200:].lower():
-        raise ToolExecutionError(
+        raise ArtifactDraftError(
+            "malformed_html",
             "Generated HTML is missing closing </html> tag. "
-            "Refine the plan or use artifact_write directly."
+            "Refine the plan or use artifact_write directly.",
+            retryable=False,
+            next_action=_MALFORMED_NEXT,
         )
 
 
@@ -1419,9 +1582,10 @@ async def artifact_draft_executor(
         rather than rejected (FRE-471).
 
     Raises:
-        TerminalToolError: On a sub-agent timeout (FRE-402).
-        ToolExecutionError: On missing identity, empty plan, sub-agent failure,
-            HTML malformation, or any ``artifact_write_executor`` error.
+        ArtifactDraftTerminalError: On a sub-agent timeout (FRE-402).
+        ArtifactDraftError: On an empty plan, sub-agent failure, or HTML malformation.
+        ArtifactWriteError: On any ``artifact_write_executor`` failure.
+        ArtifactError: On missing identity.
     """
     import asyncio  # noqa: PLC0415
     import time  # noqa: PLC0415
@@ -1432,7 +1596,12 @@ async def artifact_draft_executor(
 
     # --- Input validation ---
     if not plan or not plan.strip():
-        raise ToolExecutionError("plan is required and cannot be empty.")
+        raise ArtifactDraftError(
+            "invalid_argument",
+            "plan is required and cannot be empty.",
+            retryable=False,
+            next_action="Call artifact_draft again with a structured content plan.",
+        )
 
     trace_id: str = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
     session_id: str | None = getattr(ctx, "session_id", None) if ctx else None
@@ -1619,7 +1788,8 @@ async def artifact_draft_executor(
         )
         # FRE-402: a sub-agent timeout is non-recoverable — surface immediately
         # instead of spending a full primary-model call to explain the failure.
-        raise TerminalToolError(
+        raise ArtifactDraftTerminalError(
+            "generation_timeout",
             f"HTML generation sub-agent timed out after {draft_timeout}s.",
             reason="The artifact generator timed out — the document was too complex to build in time.",
             next_step="Try a simpler artifact, or switch to Cloud for more capacity.",
@@ -1634,8 +1804,11 @@ async def artifact_draft_executor(
             success=False,
             error=str(exc),
         )
-        raise ToolExecutionError(
-            f"HTML generation sub-agent failed: {exc}. Use artifact_write directly as fallback."
+        raise ArtifactDraftError(
+            "generation_failed",
+            f"HTML generation sub-agent failed: {exc}.",
+            retryable=False,
+            next_action="Call artifact_write with HTML you write yourself, or tell the user.",
         ) from exc
 
     sub_agent_duration_ms = int(time.monotonic() * 1000) - start_ms

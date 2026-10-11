@@ -88,6 +88,7 @@ from personal_agent.orchestrator.sub_agent_types import (
 from personal_agent.orchestrator.tool_dispatch import (
     dispatch_tool_call,
     get_shared_tool_execution_layer,
+    undispatched_failure,
 )
 from personal_agent.orchestrator.worker_types import (
     WORKER_REPORT_RESPONSE_FORMAT,
@@ -99,6 +100,7 @@ from personal_agent.orchestrator.worker_types import (
     render_worker_report_summary,
 )
 from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.contract import dispatch_error
 
 logger = structlog.get_logger(__name__)
 
@@ -2210,11 +2212,18 @@ async def _run_tool_loop(
                     tool_call_id,
                     tool_name,
                     raw_arguments,
-                    json.dumps(
-                        {
-                            "status": "error",
-                            "hint": f"{tool_name} is not available to this sub-agent.",
-                        }
+                    undispatched_failure(
+                        tool_name,
+                        dispatch_error(
+                            "not_available_to_worker",
+                            f"{tool_name} is not available to this sub-agent.",
+                            retryable=False,
+                            next_action=(
+                                f"Use one of the tools this sub-agent holds: "
+                                f"{', '.join(sorted(spec.tools))}."
+                            ),
+                        ),
+                        trace_id=trace_id,
                     ),
                 )
                 continue
@@ -2226,13 +2235,15 @@ async def _run_tool_loop(
                     tool_call_id,
                     tool_name,
                     raw_arguments,
-                    json.dumps(
-                        {
-                            "status": "retry",
-                            "hint": (
-                                "Arguments were not valid JSON. Retry with valid JSON arguments."
-                            ),
-                        }
+                    undispatched_failure(
+                        tool_name,
+                        dispatch_error(
+                            "invalid_json_arguments",
+                            f"Arguments for {tool_name} were not valid JSON.",
+                            retryable=True,
+                            next_action=f"Call {tool_name} again with valid JSON arguments.",
+                        ),
+                        trace_id=trace_id,
                     ),
                 )
                 continue

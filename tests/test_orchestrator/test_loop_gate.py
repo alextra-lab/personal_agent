@@ -480,3 +480,40 @@ def test_begin_turn_does_not_affect_signature_terminal_block():
     assert r2.decision == GateDecision.ADVISE_IDENTITY
     assert r3.decision == GateDecision.ADVISE_IDENTITY
     assert r4.decision == GateDecision.BLOCK_IDENTITY  # exceeded max+offset
+
+
+@pytest.mark.parametrize(
+    ("decision", "hint"),
+    [
+        (GateDecision.BLOCK_IDENTITY, "Already retrieved these results"),
+        (GateDecision.BLOCK_OUTPUT, "Retrieved the same result before"),
+        (GateDecision.BLOCK_CONSECUTIVE, "too many times consecutively"),
+    ],
+)
+def test_gate_blocked_result_is_a_loop_blocked_failure(decision: GateDecision, hint: str) -> None:
+    """FRE-1575: a gate block reaches the model as a ``loop_blocked`` contract failure."""
+    import json
+
+    from personal_agent.orchestrator.executor import _gate_blocked_result
+
+    gate_result = GateResult(
+        decision=decision,
+        tool_name="web_search",
+        state_before=ToolCallState.ACTIVE,
+        state_after=ToolCallState.BLOCKED,
+        reason="test",
+        consecutive_count=3,
+        total_calls=3,
+    )
+
+    out = _gate_blocked_result("tc-9", "web_search", gate_result, trace_id="t-9")
+
+    assert out["tool_call_id"] == "tc-9"
+    assert out["role"] == "tool"
+    assert out["name"] == "web_search"
+    content = json.loads(out["content"])
+    assert content["ok"] is False
+    assert content["error"]["code"] == "loop_blocked"
+    assert content["error"]["retryable"] is False
+    assert decision.value in content["error"]["message"]
+    assert hint in content["error"]["next_action"]

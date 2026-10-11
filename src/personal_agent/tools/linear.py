@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -17,10 +17,67 @@ from personal_agent.config import settings
 from personal_agent.linear_labels import AGENT_AUTHORED_LABEL, AGENT_AUTHORED_LABEL_COLOR
 from personal_agent.security import EgressBlockedError, create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+# ── Failure codes (ADR-0156 D6.1) ─────────────────────────────────────────
+
+LinearApiCode = Literal[
+    "eval_deployment",
+    "not_configured",
+    "egress_blocked",
+    "upstream_unavailable",
+    "upstream_timeout",
+    "upstream_rejected",
+    "graphql_error",
+]
+"""Failures of the shared GraphQL call, which every Linear tool makes."""
+
+LinearSharedCode = Literal[LinearApiCode, "team_not_found"]
+"""Failures raised by helpers that several Linear tools call."""
+
+CreateLinearIssueCode = Literal[
+    LinearSharedCode,
+    "invalid_argument",
+    "invalid_priority",
+    "eval_session",
+    "rate_limited",
+    "state_not_found",
+    "label_not_found",
+    "label_not_configured",
+    "label_create_failed",
+    "duplicate_issue",
+    "bad_reply",
+]
+FindLinearIssuesCode = Literal[LinearApiCode, "invalid_argument"]
+ListLinearProjectsCode = LinearSharedCode
+CreateLinearProjectCode = Literal[LinearSharedCode, "invalid_argument", "bad_reply"]
+
+
+class LinearError(ToolError[LinearSharedCode]):
+    """A failure in a helper shared by the Linear tools."""
+
+
+class CreateLinearIssueError(ToolError[CreateLinearIssueCode]):
+    """A ``create_linear_issue`` failure."""
+
+
+class FindLinearIssuesError(ToolError[FindLinearIssuesCode]):
+    """A ``find_linear_issues`` failure."""
+
+
+class ListLinearProjectsError(ToolError[ListLinearProjectsCode]):
+    """A ``list_linear_projects`` failure (it raises only the shared codes)."""
+
+
+class CreateLinearProjectError(ToolError[CreateLinearProjectCode]):
+    """A ``create_linear_project`` failure."""
+
+
+_RETRY_NEXT = "Call the same Linear tool once more; if it fails again, tell the user."
+_NOT_CONFIGURED_NEXT = "Linear is unavailable on this deployment. Tell the user; do not retry."
 
 _LINEAR_URL = "https://api.linear.app/graphql"
 
@@ -43,14 +100,17 @@ _rate_log: dict[str, list[float]] = defaultdict(list)
 create_linear_issue_tool = ToolDefinition(
     name="create_linear_issue",
     description=(
-        "Create a Linear issue from agent log analysis, error detection, or self-reflection. "
-        "Issues land in 'Needs Approval' state with 'PersonalAgent' and 'agent-filed' labels — "
-        "they require human approval before implementation. "
-        "REQUIRED: call find_linear_issues with the proposed title before creating — if a matching "
-        "issue exists, do NOT create a duplicate. "
-        "Only file issues about components that exist in this project (src/personal_agent/). "
-        "Do not reference files, frameworks, or paths from other projects. "
-        "Set dry_run=true to preview the payload without creating the issue."
+        "Create a Linear issue in the FrenchForest team, in 'Needs Approval' state with the "
+        "'PersonalAgent' and 'agent-filed' labels, so a human approves it before any work. "
+        "Use it to file a bug, gap or improvement found in agent logs, errors or "
+        "self-reflection, about components that exist in this project (src/personal_agent/). "
+        "Do not use it before calling find_linear_issues with the proposed title: if a match "
+        "exists, do not file a duplicate (a title match is refused). Do not use it in eval "
+        "sessions or for other projects' files. "
+        "Agent filing is rate-limited per project per day; dry_run=true previews the payload "
+        "without creating anything. "
+        'Example: create_linear_issue(title="Recall drops tags on notes_search", '
+        'description="## Evidence\\n...\\n## Proposed action\\n...", priority=3).'
     ),
     category="network",
     parameters=[
@@ -101,16 +161,21 @@ create_linear_issue_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=30,
     rate_limit_per_hour=20,
+    error_codes=error_codes(CreateLinearIssueError),
 )
 
 find_linear_issues_tool = ToolDefinition(
     name="find_linear_issues",
     description=(
-        "Search or list Linear issues. "
-        "Use before create_linear_issue to avoid filing duplicates. "
-        "Pass a query string to search by title, or leave query empty and set state "
-        "to list all issues in a given state (e.g. 'Needs Approval', 'In Progress'). "
-        "Returns up to 25 matching issues with their status and URLs."
+        "Search Linear issues by title text, or list the issues in one workflow state, "
+        "newest-updated first, with identifier, title, state, priority and URL. "
+        "Use it before create_linear_issue to check for duplicates, or to see what is "
+        "queued in a state. "
+        "Do not use it for projects (use list_linear_projects). "
+        "Give query, state, or both; it returns at most 'limit' issues (default 25, max 50) "
+        "and matches titles only, not descriptions. "
+        'Examples: find_linear_issues(query="notes_search tags"), '
+        'find_linear_issues(state="Needs Approval", limit=10).'
     ),
     category="network",
     parameters=[
@@ -145,14 +210,19 @@ find_linear_issues_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=15,
     rate_limit_per_hour=100,
+    error_codes=error_codes(FindLinearIssuesError),
 )
 
 list_linear_projects_tool = ToolDefinition(
     name="list_linear_projects",
     description=(
-        "List all Linear projects for the team. "
-        "Use to discover project names before assigning an issue to a project, "
-        "or to get an overview of active work."
+        "List the FrenchForest team's Linear projects with id, name, state, URL and the first "
+        "200 characters of each description. "
+        "Use it to find the exact project name before passing project= to "
+        "create_linear_issue, or for an overview of active work. "
+        "Do not use it to find issues (use find_linear_issues). "
+        "It returns at most 100 projects and takes no arguments. "
+        "Example: list_linear_projects()."
     ),
     category="network",
     parameters=[],
@@ -162,14 +232,19 @@ list_linear_projects_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=15,
     rate_limit_per_hour=60,
+    error_codes=error_codes(ListLinearProjectsError),
 )
 
 create_linear_project_tool = ToolDefinition(
     name="create_linear_project",
     description=(
-        "Create a new Linear project for the team. "
-        "Use when a body of related issues needs a new container project. "
-        "Projects created by the agent land without a specific state — human review recommended."
+        "Create a new Linear project in the FrenchForest team and return its id, name and URL. "
+        "Use it only when a body of related issues needs a container that does not exist yet. "
+        "Do not use it before list_linear_projects shows no fitting project, and do not use it "
+        "to file a single piece of work (use create_linear_issue). "
+        "The project is created with no state; a human should review it. "
+        'Example: create_linear_project(name="Notes recall quality", '
+        'description="Issues about notes_search ranking and tag filters.").'
     ),
     category="network",
     parameters=[
@@ -196,6 +271,7 @@ create_linear_project_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=15,
     rate_limit_per_hour=10,
+    error_codes=error_codes(CreateLinearProjectError),
 )
 
 
@@ -213,19 +289,27 @@ async def _gql(query: str, variables: dict[str, Any] | None = None) -> dict[str,
         The ``data`` field from the GraphQL response.
 
     Raises:
-        ToolExecutionError: On an eval deployment, missing API key, HTTP error, or
-            GraphQL error.
+        LinearError: On an eval deployment, missing API key, egress refusal, connection
+            failure, timeout, HTTP error, or GraphQL error.
     """
     # FRE-1505: an eval gateway must never reach the real Linear workspace. Every Linear
     # tool routes through here, so refusing before the client is built covers all of them.
     if settings.deployment_profile == "eval":
-        raise ToolExecutionError(
+        raise LinearError(
+            "eval_deployment",
             "Linear API calls are disabled on an eval deployment "
-            "(deployment_profile=eval); no request was sent."
+            "(deployment_profile=eval); no request was sent.",
+            retryable=False,
+            next_action="No Linear call can work on this deployment. Do not retry.",
         )
     api_key = settings.linear_api_key
     if not api_key:
-        raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
+        raise LinearError(
+            "not_configured",
+            "Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.",
+            retryable=False,
+            next_action=_NOT_CONFIGURED_NEXT,
+        )
     try:
         async with create_guarded_http_client(timeout=25) as client:
             resp = await client.post(
@@ -234,18 +318,45 @@ async def _gql(query: str, variables: dict[str, Any] | None = None) -> dict[str,
                 headers={"Authorization": api_key, "Content-Type": "application/json"},
             )
     except EgressBlockedError as exc:
-        raise ToolExecutionError(f"Linear API call refused by egress policy: {exc.reason}") from exc
+        raise LinearError(
+            "egress_blocked",
+            f"Linear API call refused by egress policy: {exc.reason}",
+            retryable=False,
+            next_action="Linear cannot be reached from here. Tell the user; do not retry.",
+        ) from exc
     except httpx.ConnectError as exc:
-        raise ToolExecutionError("Cannot connect to Linear API (api.linear.app).") from exc
+        raise LinearError(
+            "upstream_unavailable",
+            "Cannot connect to Linear API (api.linear.app).",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
     except httpx.TimeoutException as exc:
-        raise ToolExecutionError("Linear API request timed out.") from exc
+        raise LinearError(
+            "upstream_timeout",
+            "Linear API request timed out.",
+            retryable=True,
+            next_action=_RETRY_NEXT,
+        ) from exc
 
     if resp.is_error:
-        raise ToolExecutionError(f"Linear API HTTP {resp.status_code}: {resp.text[:400]}")
+        transient = resp.status_code == 429 or resp.status_code >= 500
+        raise LinearError(
+            "upstream_rejected",
+            f"Linear API HTTP {resp.status_code}: {resp.text[:400]}",
+            retryable=transient,
+            next_action=_RETRY_NEXT if transient else "Do not repeat this call. Tell the user.",
+        )
     body = resp.json()
     if errors := body.get("errors"):
         msgs = "; ".join(e.get("message", str(e)) for e in errors)
-        raise ToolExecutionError(f"Linear GraphQL error: {msgs}")
+        raise LinearError(
+            "graphql_error",
+            f"Linear GraphQL error: {msgs}",
+            retryable=False,
+            next_action="Correct the arguments as the message states and call again, or tell "
+            "the user.",
+        )
     return body.get("data") or {}
 
 
@@ -253,6 +364,17 @@ async def _gql(query: str, variables: dict[str, Any] | None = None) -> dict[str,
 
 
 async def _get_team_id(team_name: str) -> str:
+    """Return the Linear team's id, cached for the process.
+
+    Args:
+        team_name: The team name (case-insensitive).
+
+    Returns:
+        The team id.
+
+    Raises:
+        LinearError: When no team has that name, or the GraphQL call fails.
+    """
     global _team_id_cache
     if _team_id_cache:
         return _team_id_cache
@@ -263,10 +385,28 @@ async def _get_team_id(team_name: str) -> str:
             _team_id_cache = str(t["id"])
             return _team_id_cache
     names = [t.get("name") for t in teams]
-    raise ToolExecutionError(f"Linear team '{team_name}' not found. Available: {names}")
+    raise LinearError(
+        "team_not_found",
+        f"Linear team '{team_name}' not found. Available: {names}",
+        retryable=False,
+        next_action="The API key cannot see the team. Tell the user; do not retry.",
+    )
 
 
 async def _get_state_id(team_id: str, state_name: str) -> str:
+    """Return a workflow state's id for ``create_linear_issue``, cached for the process.
+
+    Args:
+        team_id: The team id.
+        state_name: The workflow state name.
+
+    Returns:
+        The state id.
+
+    Raises:
+        CreateLinearIssueError: When the team has no state with that name.
+        LinearError: When the GraphQL call fails.
+    """
     if state_name in _state_id_cache:
         return _state_id_cache[state_name]
     data = await _gql(
@@ -284,8 +424,11 @@ async def _get_state_id(team_id: str, state_name: str) -> str:
         _state_id_cache[str(s["name"])] = str(s["id"])
     if state_name not in _state_id_cache:
         names = list(_state_id_cache.keys())
-        raise ToolExecutionError(
-            f"Linear workflow state '{state_name}' not found. Available: {names}"
+        raise CreateLinearIssueError(
+            "state_not_found",
+            f"Linear workflow state '{state_name}' not found. Available: {names}",
+            retryable=False,
+            next_action="The team's workflow lacks this state. Tell the user; do not retry.",
         )
     return _state_id_cache[state_name]
 
@@ -297,6 +440,22 @@ async def _get_label_id(
     auto_create_color: str | None = None,
     trace_id: str | None = None,
 ) -> str:
+    """Return a label's id for ``create_linear_issue``, creating it when asked.
+
+    Args:
+        team_id: The team id.
+        label_name: The label name.
+        auto_create_color: Create the label with this color when it is missing.
+        trace_id: Trace id of the call.
+
+    Returns:
+        The label id.
+
+    Raises:
+        CreateLinearIssueError: When the label is missing and not auto-created, or its
+            creation returns no id.
+        LinearError: When a GraphQL call fails.
+    """
     if label_name in _label_id_cache:
         return _label_id_cache[label_name]
     # Fetch the label list once per team — subsequent calls skip this if team was already fetched.
@@ -317,7 +476,12 @@ async def _get_label_id(
         _labels_fetched_for_teams.add(team_id)
     if label_name not in _label_id_cache:
         if auto_create_color is None:
-            raise ToolExecutionError(f"Linear label '{label_name}' not found.")
+            raise CreateLinearIssueError(
+                "label_not_found",
+                f"Linear label '{label_name}' not found.",
+                retryable=False,
+                next_action="The team lacks this label. Tell the user; do not retry.",
+            )
         mut = await _gql(
             """
             mutation($input: IssueLabelCreateInput!) {
@@ -330,7 +494,12 @@ async def _get_label_id(
         )
         new_label = (mut.get("issueLabelCreate") or {}).get("issueLabel") or {}
         if not new_label.get("id"):
-            raise ToolExecutionError(f"Failed to create Linear label '{label_name}'.")
+            raise CreateLinearIssueError(
+                "label_create_failed",
+                f"Failed to create Linear label '{label_name}': the reply had no label id.",
+                retryable=True,
+                next_action=_RETRY_NEXT,
+            )
         _label_id_cache[label_name] = str(new_label["id"])
         log.info("linear_label_created", label=label_name, trace_id=trace_id)
     return _label_id_cache[label_name]
@@ -369,14 +538,17 @@ def _require_personal_agent_label_id() -> str:
         UUID string for the PersonalAgent Linear label.
 
     Raises:
-        ToolExecutionError: When AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID is not set.
+        CreateLinearIssueError: When AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID is not set.
     """
     label_id = settings.linear_personal_agent_label_id
     if not isinstance(label_id, str) or not label_id.strip():
-        raise ToolExecutionError(
+        raise CreateLinearIssueError(
+            "label_not_configured",
             "PersonalAgent label ID not configured. "
             "Set AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID in .env "
-            "(expected value: 25004aac-3b32-4fa4-bdc2-55ff348ea842)."
+            "(expected value: 25004aac-3b32-4fa4-bdc2-55ff348ea842).",
+            retryable=False,
+            next_action=_NOT_CONFIGURED_NEXT,
         )
     return label_id.strip()
 
@@ -385,15 +557,26 @@ def _require_personal_agent_label_id() -> str:
 
 
 def _check_rate_limit(project_key: str) -> None:
+    """Refuse an issue over the per-project daily filing limit.
+
+    Args:
+        project_key: The project name, or ``__unassigned__``.
+
+    Raises:
+        CreateLinearIssueError: When the limit is reached.
+    """
     limit = settings.linear_agent_rate_limit_per_day
     now = time.time()
     cutoff = now - 86400.0
     fresh = [t for t in _rate_log[project_key] if t > cutoff]
     _rate_log[project_key] = fresh
     if len(fresh) >= limit:
-        raise ToolExecutionError(
+        raise CreateLinearIssueError(
+            "rate_limited",
             f"Rate limit: already filed {limit} agent issues in the last 24h "
-            f"(project='{project_key}'). Wait before creating more."
+            f"(project='{project_key}'). Wait before creating more.",
+            retryable=False,
+            next_action="Do not file more issues today. Tell the user what you would have filed.",
         )
 
 
@@ -423,28 +606,58 @@ async def create_linear_issue_executor(
         Dict with ``identifier``, ``url``, ``title``, and ``dry_run`` keys.
 
     Raises:
-        ToolExecutionError: On validation failure, rate limit, or API error.
+        CreateLinearIssueError: On validation failure, an eval session, the rate limit, a
+            missing state or label, a duplicate title, or an empty creation reply.
+        LinearError: On a missing API key, team, or a failed GraphQL call.
     """
     title = (title or "").strip()
     if not title:
-        raise ToolExecutionError("'title' is required and cannot be empty.")
+        raise CreateLinearIssueError(
+            "invalid_argument",
+            "'title' is required and cannot be empty.",
+            retryable=False,
+            next_action="Call create_linear_issue again with a short title.",
+        )
     description = (description or "").strip()
     if not description:
-        raise ToolExecutionError("'description' is required and cannot be empty.")
+        raise CreateLinearIssueError(
+            "invalid_argument",
+            "'description' is required and cannot be empty.",
+            retryable=False,
+            next_action="Call create_linear_issue again with a markdown description.",
+        )
     if len(title) > 255:
-        raise ToolExecutionError(f"'title' exceeds 255 characters ({len(title)}).")
+        raise CreateLinearIssueError(
+            "invalid_argument",
+            f"'title' exceeds 255 characters ({len(title)}).",
+            retryable=False,
+            next_action="Call create_linear_issue again with a title under 120 characters.",
+        )
 
     priority = int(priority) if priority is not None else 3
     if priority not in (1, 2, 3, 4):
-        raise ToolExecutionError("'priority' must be 1 (Urgent), 2 (High), 3 (Normal), or 4 (Low).")
+        raise CreateLinearIssueError(
+            "invalid_priority",
+            "'priority' must be 1 (Urgent), 2 (High), 3 (Normal), or 4 (Low).",
+            retryable=False,
+            next_action="Call create_linear_issue again with priority 1, 2, 3 or 4.",
+        )
 
     if not settings.linear_api_key:
-        raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
+        raise CreateLinearIssueError(
+            "not_configured",
+            "Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.",
+            retryable=False,
+            next_action=_NOT_CONFIGURED_NEXT,
+        )
 
     if ctx.eval_mode:
-        raise ToolExecutionError(
+        raise CreateLinearIssueError(
+            "eval_session",
             "Issue creation is disabled in evaluation sessions. "
-            "This avoids filing tickets about synthetic eval prompts."
+            "This avoids filing tickets about synthetic eval prompts.",
+            retryable=False,
+            next_action="Do not file issues in this session. Describe the issue in your answer.",
         )
 
     project_key = project or "__unassigned__"
@@ -518,9 +731,14 @@ async def create_linear_issue_executor(
     existing = (dedup_data.get("issues") or {}).get("nodes") or []
     if existing:
         ids = ", ".join(n.get("identifier", "?") for n in existing)
-        raise ToolExecutionError(
-            f"Duplicate: similar issue(s) already exist: {ids}. "
-            "Use find_linear_issues to review before creating a new issue."
+        raise CreateLinearIssueError(
+            "duplicate_issue",
+            f"Duplicate: similar issue(s) already exist: {ids}.",
+            retryable=False,
+            next_action=(
+                "Do not file it. Call find_linear_issues to review the existing issue(s), and "
+                "name them to the user."
+            ),
         )
 
     data = await _gql(
@@ -535,7 +753,15 @@ async def create_linear_issue_executor(
     )
     issue = (data.get("issueCreate") or {}).get("issue") or {}
     if not issue.get("identifier"):
-        raise ToolExecutionError("Linear issue creation returned no identifier.")
+        raise CreateLinearIssueError(
+            "bad_reply",
+            "Linear issue creation returned no identifier; the issue may or may not exist.",
+            retryable=False,
+            next_action=(
+                "Call find_linear_issues with the title to check whether it was created before "
+                "filing again."
+            ),
+        )
 
     _rate_log[project_key].append(time.time())
     log.info(
@@ -571,14 +797,18 @@ async def find_linear_issues_executor(
         Dict with ``issues`` list (each with identifier, title, state, url).
 
     Raises:
-        ToolExecutionError: On missing API key, empty search with no state, or API error.
+        FindLinearIssuesError: On an empty search with no state.
+        LinearError: On a missing API key or a failed GraphQL call.
     """
     query = (query or "").strip()
     state = (state or "").strip() or None
 
     if not query and not state:
-        raise ToolExecutionError(
-            "Provide 'query' to search by title or 'state' to list issues in a state."
+        raise FindLinearIssuesError(
+            "invalid_argument",
+            "Provide 'query' to search by title or 'state' to list issues in a state.",
+            retryable=False,
+            next_action='Call find_linear_issues with query="..." or state="Needs Approval".',
         )
 
     cap = max(1, min(int(limit) if limit else 25, 50))
@@ -629,7 +859,7 @@ async def list_linear_projects_executor(
         Dict with ``projects`` list (each with id, name, description, url).
 
     Raises:
-        ToolExecutionError: On missing API key or API error.
+        LinearError: On a missing API key or team, or a failed GraphQL call.
     """
     trace_id = ctx.trace_id
     log.info("linear_list_projects_start", trace_id=trace_id)
@@ -682,13 +912,25 @@ async def create_linear_project_executor(
         Dict with ``id``, ``name``, and ``url`` of the created project.
 
     Raises:
-        ToolExecutionError: On validation failure or API error.
+        CreateLinearProjectError: On an empty name, a missing API key, or an empty creation
+            reply.
+        LinearError: On a missing team or a failed GraphQL call.
     """
     name = (name or "").strip()
     if not name:
-        raise ToolExecutionError("'name' is required and cannot be empty.")
+        raise CreateLinearProjectError(
+            "invalid_argument",
+            "'name' is required and cannot be empty.",
+            retryable=False,
+            next_action="Call create_linear_project again with a project name.",
+        )
     if not settings.linear_api_key:
-        raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
+        raise CreateLinearProjectError(
+            "not_configured",
+            "Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.",
+            retryable=False,
+            next_action=_NOT_CONFIGURED_NEXT,
+        )
 
     trace_id = ctx.trace_id
     log.info("linear_create_project_start", trace_id=trace_id, name=name[:80])
@@ -710,7 +952,15 @@ async def create_linear_project_executor(
     )
     project = (data.get("projectCreate") or {}).get("project") or {}
     if not project.get("id"):
-        raise ToolExecutionError("Linear project creation returned no id.")
+        raise CreateLinearProjectError(
+            "bad_reply",
+            "Linear project creation returned no id; the project may or may not exist.",
+            retryable=False,
+            next_action=(
+                "Call list_linear_projects to check whether it was created before creating "
+                "it again."
+            ),
+        )
 
     log.info(
         "linear_create_project_done",

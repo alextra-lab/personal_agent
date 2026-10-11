@@ -13,7 +13,7 @@ import pytest
 
 from personal_agent.governance.permissions import evaluate_permission, load_permission_rules
 from personal_agent.telemetry.trace import TraceContext
-from personal_agent.tools.primitives.bash import bash_executor, bash_tool
+from personal_agent.tools.primitives.bash import BashError, bash_executor, bash_tool
 
 _CTX = TraceContext.new_trace()
 
@@ -86,11 +86,9 @@ async def test_unclosed_quote_fails_via_bash() -> None:
     which exits non-zero with a syntax-error message in stderr.
     """
     result = await bash_executor("echo 'unclosed", ctx=_CTX)
-    assert result["success"] is False
-    # bash reports a syntax error and exits with code 2
-    assert result.get("exit_code") in (1, 2)
-    # error key is absent (no hard-deny or guard fired) — check stderr or exit_code
-    assert "error" not in result or result["error"] != "parse_error"
+    # a non-zero exit is a normal result; bash reports a syntax error and exits with code 2
+    assert result["exit_code"] in (1, 2)
+    assert "error" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +98,7 @@ async def test_unclosed_quote_fails_via_bash() -> None:
 
 @pytest.mark.asyncio
 async def test_happy_path() -> None:
-    """A command returning exit_code=0 with stdout produces success=True."""
+    """A command returning exit_code=0 with stdout is returned as a normal result."""
     mock_proc = _make_mock_proc(exit_code=0, stdout=b"hello\n", stderr=b"")
 
     with patch(
@@ -109,7 +107,6 @@ async def test_happy_path() -> None:
     ):
         result = await bash_executor("echo hello", ctx=_CTX)
 
-    assert result["success"] is True
     assert result["exit_code"] == 0
     assert result["stdout"] == "hello\n"
     assert result["stderr"] == ""
@@ -123,20 +120,35 @@ async def test_happy_path() -> None:
 
 @pytest.mark.asyncio
 async def test_timeout() -> None:
-    """asyncio.TimeoutError from communicate() must surface as error='timeout'."""
+    """asyncio.TimeoutError from communicate() must raise BashError timeout."""
     mock_proc = _make_mock_proc(timeout=True)
 
     with patch(
         "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=mock_proc),
     ):
-        result = await bash_executor("sleep 999", timeout_seconds=1, ctx=_CTX)
+        with pytest.raises(BashError) as exc_info:
+            await bash_executor("sleep 999", timeout_seconds=1, ctx=_CTX)
 
-    assert result["success"] is False
-    assert result["error"] == "timeout"
-    assert "timeout_seconds" in result
+    assert exc_info.value.code == "timeout"
+    assert "1 seconds" in exc_info.value.message
     # kill() must have been called
     mock_proc.kill.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_shell_start_failure_raises_os_error() -> None:
+    """FRE-1575: an OSError while starting the shell raises BashError os_error."""
+    with patch(
+        "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
+        new=AsyncMock(side_effect=OSError(24, "Too many open files")),
+    ):
+        with pytest.raises(BashError) as exc_info:
+            await bash_executor("echo hello", ctx=_CTX)
+
+    assert exc_info.value.code == "os_error"
+    assert exc_info.value.retryable is True
+    assert "Too many open files" in exc_info.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +202,6 @@ async def test_output_cap_truncates_with_ctx() -> None:
     ):
         result = await bash_executor("cat bigfile", ctx=ctx)
 
-    assert result["success"] is True
     # truncated_path must be set (not None) when output overflows
     assert result["truncated_path"] is not None
     # In-memory stdout + stderr must be within byte budget (+2 for UTF-8 replace tolerance)

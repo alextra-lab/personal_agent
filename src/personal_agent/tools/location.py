@@ -9,10 +9,20 @@ from typing import Literal, Protocol, cast
 
 from personal_agent.config import settings
 from personal_agent.telemetry import TraceContext, get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+LocationCode = Literal["location_disabled", "memory_unavailable"]
+
+
+class LocationError(ToolError[LocationCode]):
+    """A ``get_location`` failure (ADR-0156 D6.1).
+
+    An unresolved location (``resolved: false`` with a reason) is an answer, not a failure.
+    """
+
 
 _EXPLICIT_LOCATION_RE = re.compile(
     r"\b(?:i\s+am|i'm|im|i\s+was|currently|today)\s+(?:in|near|at)\s+"
@@ -169,9 +179,18 @@ class ClientCoordinatesProvider:
 get_location_tool = ToolDefinition(
     name="get_location",
     description=(
-        "Resolve the user's current location when operator and per-user consent "
-        "gates are enabled. Prefers explicit session notes and otherwise returns "
-        "the user's stored client-provided device location."
+        "Return the user's current location: coordinates, IANA timezone and source. "
+        "Call it first for anything location-dependent (near me, nearby places, local "
+        "weather, local time or timezone, commute, events) and never ask the user where they "
+        "are. "
+        "It reads a place the user named in session_notes ('I'm in Lisbon today') before the "
+        "stored device location; city and country are null for a device location, so use "
+        "the coordinates with a search tool. "
+        "resolved=false with reason consent_not_given means location sharing is off: tell "
+        "the user they can turn it on in the PWA settings drawer. no_location_stored and "
+        "no_user are answers too, not errors. "
+        "Do not use it for a place the user asks about that is not where they are. "
+        'Examples: get_location(), get_location(session_notes="I\'m in Lisbon today").'
     ),
     category="network",
     parameters=[
@@ -190,6 +209,8 @@ get_location_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=10,
     rate_limit_per_hour=60,
+    error_codes=error_codes(LocationError),
+    max_result_tokens=1_000,
 )
 
 
@@ -209,14 +230,19 @@ async def get_location_executor(
         reason when no location can be returned.
 
     Raises:
-        ToolExecutionError: When location features or memory service are unavailable.
+        LocationError: When location features or memory service are unavailable.
     """
     trace_id = ctx.trace_id
     log.info("get_location_called", trace_id=trace_id)
 
     if not settings.location_enabled:
         log.info("get_location_disabled", trace_id=trace_id)
-        raise ToolExecutionError("Location features are disabled.")
+        raise LocationError(
+            "location_disabled",
+            "Location features are disabled.",
+            retryable=False,
+            next_action="Do not retry. Ask the user for the place if the answer needs it.",
+        )
 
     user_id = ctx.user_id
     if user_id is None:
@@ -227,7 +253,12 @@ async def get_location_executor(
     svc = _get_memory_service()
     if svc is None or not getattr(svc, "connected", False):
         log.warning("get_location_memory_unavailable", trace_id=trace_id)
-        raise ToolExecutionError("Memory service unavailable or not connected.")
+        raise LocationError(
+            "memory_unavailable",
+            "Memory service unavailable or not connected.",
+            retryable=True,
+            next_action="Call get_location once more later; if it fails again, ask the user.",
+        )
 
     consent = await svc.get_person_location_consent(str(user_id), trace_id)
     if not consent:

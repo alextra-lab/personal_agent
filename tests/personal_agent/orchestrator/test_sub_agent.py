@@ -3388,7 +3388,10 @@ class TestToolCallTruncated:
         assert _history_tool_arguments(sent[1]) == ["{}"]
         retry_hints = [m for m in sent[1] if m.get("role") == "tool"]
         assert len(retry_hints) == 1
-        assert json.loads(retry_hints[0]["content"])["status"] == "retry"
+        retry = json.loads(retry_hints[0]["content"])
+        assert retry["ok"] is False
+        assert retry["error"]["code"] == "invalid_json_arguments"
+        assert retry["error"]["retryable"] is True
 
 
 class TestOriginErrorStopReason:

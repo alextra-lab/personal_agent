@@ -23,6 +23,7 @@ import pytest
 
 from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
 from personal_agent.orchestrator.worker_types import WORKER_TYPES, WorkerType
+from personal_agent.security import EgressBlockedError
 from personal_agent.telemetry import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.telemetry_query import (
@@ -574,8 +575,9 @@ async def test_an_empty_window_is_complete_with_no_groups() -> None:
 async def test_an_oversized_reply_is_a_tool_error() -> None:
     big = b"x" * (16 * 1024 * 1024 + 1)
     rec = _Recorder(lambda _r: httpx.Response(200, content=big))
-    with pytest.raises(ToolExecutionError, match="too large"):
+    with pytest.raises(ToolExecutionError, match="larger than 16 MB") as err:
         await _run(rec, action="latency", since="24h")
+    assert err.value.code == "reply_too_large"
 
 
 @pytest.mark.asyncio
@@ -627,6 +629,32 @@ async def test_a_reply_of_the_wrong_shape_is_a_tool_error(body: bytes) -> None:
     rec = _Recorder(lambda _r: httpx.Response(200, content=body))
     with pytest.raises(ToolExecutionError, match="Tempo"):
         await _run(rec, action="latency", since="24h")
+
+
+@pytest.mark.asyncio
+async def test_an_egress_block_becomes_store_blocked() -> None:
+    """FRE-1575: the egress guard refusing Tempo is ``store_blocked``, not retryable."""
+
+    def blocked(request: httpx.Request) -> httpx.Response:
+        raise EgressBlockedError(request, "domain not allowlisted", None)
+
+    with pytest.raises(ToolExecutionError, match="Tempo") as err:
+        await _run(_Recorder(blocked), action="latency", since="24h")
+    assert err.value.code == "store_blocked"
+    assert err.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_another_transport_failure_becomes_store_failed() -> None:
+    """FRE-1575: an httpx failure that is not a connect or timeout is ``store_failed``."""
+
+    def broken(_r: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("peer closed connection")
+
+    with pytest.raises(ToolExecutionError, match="Tempo request failed") as err:
+        await _run(_Recorder(broken), action="latency", since="24h")
+    assert err.value.code == "store_failed"
+    assert err.value.retryable is True
 
 
 # ── Elasticsearch: the retired fields, and the FRE-1564 rules kept proven ─────

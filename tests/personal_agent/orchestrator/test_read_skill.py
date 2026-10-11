@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from personal_agent.orchestrator.skills import assemble_skill_index, get_all_skills, get_skill_block
-from personal_agent.tools.read_skill import read_skill_executor
+from personal_agent.tools.read_skill import ReadSkillError, read_skill_executor
 
 # ---------------------------------------------------------------------------
 # read_skill tool executor
@@ -37,22 +37,32 @@ class TestReadSkillExecutor:
             name="query-elasticsearch",
             ctx=TraceContext.new_trace(),
         )
-        assert result["status"] == "ok"
         assert result["skill_name"] == "query-elasticsearch"
         assert "agent-logs-" in result["body"]
 
     @pytest.mark.asyncio
     async def test_unknown_skill_returns_error(self) -> None:
-        """read_skill('nonexistent') returns structured error with available list."""
+        """read_skill('nonexistent') raises unknown_skill with the available list."""
         from personal_agent.telemetry.trace import TraceContext
 
-        result = await read_skill_executor(
-            name="nonexistent-skill-xyz",
-            ctx=TraceContext.new_trace(),
-        )
-        assert result["status"] == "error"
-        assert "nonexistent-skill-xyz" in result["hint"]
-        assert "bash" in result["hint"]  # known skills listed
+        with pytest.raises(ReadSkillError) as exc_info:
+            await read_skill_executor(
+                name="nonexistent-skill-xyz",
+                ctx=TraceContext.new_trace(),
+            )
+        assert exc_info.value.code == "unknown_skill"
+        assert "nonexistent-skill-xyz" in exc_info.value.message
+        assert "bash" in exc_info.value.message  # known skills listed
+
+    @pytest.mark.asyncio
+    async def test_empty_name_raises_missing_name(self) -> None:
+        """read_skill('') raises missing_name and lists the skill names (ADR-0156 D6)."""
+        from personal_agent.telemetry.trace import TraceContext
+
+        with pytest.raises(ReadSkillError) as exc_info:
+            await read_skill_executor(name="", ctx=TraceContext.new_trace())
+        assert exc_info.value.code == "missing_name"
+        assert "bash" in exc_info.value.message
 
     @pytest.mark.asyncio
     async def test_unknown_skill_emits_missing_skill_requested_event(
@@ -74,13 +84,13 @@ class TestReadSkillExecutor:
         monkeypatch.setattr(read_skill_mod.log, "warning", fake_warning)
 
         trace_ctx = TraceContext.new_trace()
-        result = await read_skill_executor(
-            name="nonexistent-skill-xyz",
-            ctx=trace_ctx,
-            session_id="session-abc",
-        )
+        with pytest.raises(ReadSkillError):
+            await read_skill_executor(
+                name="nonexistent-skill-xyz",
+                ctx=trace_ctx,
+                session_id="session-abc",
+            )
 
-        assert result["status"] == "error"
         missing_events = [(e, kw) for e, kw in captured if e == "missing_skill_requested"]
         assert len(missing_events) == 1, f"captured: {captured}"
         _, kw = missing_events[0]
@@ -97,7 +107,7 @@ class TestReadSkillExecutor:
         from personal_agent.telemetry.trace import TraceContext
 
         result = await read_skill_executor(name="bash", ctx=TraceContext.new_trace())
-        assert result["status"] == "ok"
+        assert result["skill_name"] == "bash"
         assert "bash — Shell Command Executor" in result["body"]
 
 

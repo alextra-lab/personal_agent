@@ -158,3 +158,44 @@ async def test_patch_does_not_store_coords_without_consent(
 
     assert result["location_consent_enabled"] is False
     mock_memory.update_person_location.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_executor_disabled_raises_location_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1575: with location features off, the executor refuses with ``location_disabled``.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+    """
+    from personal_agent.tools.location import LocationError, get_location_executor
+
+    monkeypatch.setattr(settings, "location_enabled", False)
+
+    with pytest.raises(LocationError) as exc_info:
+        await get_location_executor(ctx=TraceContext.new_trace(user_id=uuid4()))
+
+    assert exc_info.value.code == "location_disabled"
+    assert exc_info.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_executor_memory_unavailable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1575: a disconnected memory service fails with ``memory_unavailable``.
+
+    Args:
+        monkeypatch: Pytest monkeypatch fixture.
+    """
+    from personal_agent.service import app as service_app
+    from personal_agent.tools.location import LocationError, get_location_executor
+
+    mock_memory = AsyncMock()
+    mock_memory.connected = False
+    monkeypatch.setattr(settings, "location_enabled", True)
+    monkeypatch.setattr(service_app, "memory_service", mock_memory)
+
+    with pytest.raises(LocationError) as exc_info:
+        await get_location_executor(ctx=TraceContext.new_trace(user_id=uuid4()))
+
+    assert exc_info.value.code == "memory_unavailable"
+    assert exc_info.value.retryable is True
+    mock_memory.get_person_location_consent.assert_not_awaited()

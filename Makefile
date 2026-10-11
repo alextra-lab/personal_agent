@@ -49,7 +49,7 @@ else
     CLOUD_EXEC = ssh $(SSH_HOST) "cd $(VPS_DEPLOY_PATH) && docker compose -f docker-compose.cloud.yml"
 endif
 
-.PHONY: help services up down stop restart ps logs rebuild shell health \
+.PHONY: help services up down stop restart ps logs rebuild shell health tool-failure-coverage \
         infra-up infra-down dev \
         deploy build build-full vps-bootstrap \
         tunnel-up tunnel-down tunnel-status _tunnel-guard \
@@ -316,6 +316,15 @@ test-k:
 
 test-cov:
 	@uv run pytest -m "not integration" --cov=src/personal_agent --cov-report=term-missing
+
+# ADR-0156 AC-1 (FRE-1575): every line that builds a tool failure must be executed by a test.
+# Runs the unit suite under coverage (7+ min), then the check CI runs.
+tool-failure-coverage:
+	@uv run --with "pytest-cov>=5.0.0" python -m pytest -m "not integration" -q \
+		--cov=src/personal_agent/tools \
+		--cov=src/personal_agent/mcp --cov=src/personal_agent/orchestrator \
+		--cov-report=json:coverage-tools.json
+	@uv run python scripts/check_tool_failure_coverage.py coverage-tools.json
 
 # ─── Sandbox image ────────────────────────────────────────────────────────────
 

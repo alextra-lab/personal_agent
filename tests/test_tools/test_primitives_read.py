@@ -12,7 +12,8 @@ import pytest
 
 from personal_agent.governance.models import ToolPolicy
 from personal_agent.telemetry.trace import TraceContext
-from personal_agent.tools.primitives.read import read_executor
+from personal_agent.tools.primitives._governance import PathRefusalError
+from personal_agent.tools.primitives.read import ReadError, read_executor
 
 _CTX = TraceContext.new_trace()
 # ---------------------------------------------------------------------------
@@ -47,7 +48,6 @@ async def test_read_happy_path() -> None:
 
         result = await read_executor(str(test_file), ctx=_CTX)
 
-        assert result["success"] is True
         assert result["content"] == expected
         assert result["size_bytes"] == len(expected.encode("utf-8"))
         assert result["path"] == str(test_file.resolve())
@@ -63,11 +63,11 @@ async def test_read_not_a_file() -> None:
     """Reading a directory path returns error='not_a_file'."""
     with TemporaryDirectory() as tmpdir:
         # tmpdir is a directory, not a file
-        result = await read_executor(tmpdir, ctx=_CTX)
+        with pytest.raises(ReadError) as exc_info:
+            await read_executor(tmpdir, ctx=_CTX)
 
-        assert result["success"] is False
-        assert result["error"] == "not_a_file"
-        assert "path" in result
+        assert exc_info.value.code == "not_a_file"
+        assert tmpdir in exc_info.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +85,6 @@ async def test_read_no_too_large_truncates() -> None:
 
         result = await read_executor(str(large_file), max_bytes=1000, ctx=_CTX)
 
-        assert result["success"] is True
         assert "error" not in result
         assert result["truncated"] is True
         # degenerate single-line-larger-than-cap case: clipped to the byte cap
@@ -118,10 +117,10 @@ async def test_read_path_traversal() -> None:
         "personal_agent.tools.primitives._governance.load_governance_config",
         return_value=mock_config,
     ):
-        result = await read_executor("/etc/shadow", ctx=_CTX)
+        with pytest.raises(PathRefusalError) as exc_info:
+            await read_executor("/etc/shadow", ctx=_CTX)
 
-    assert result["success"] is False
-    assert result["error"] == "forbidden_path"
+    assert exc_info.value.code == "forbidden_path"
 
 
 # ---------------------------------------------------------------------------
@@ -151,11 +150,11 @@ async def test_read_path_not_in_allowed_paths() -> None:
             "personal_agent.tools.primitives._governance.load_governance_config",
             return_value=mock_config,
         ):
-            result = await read_executor(str(test_file), ctx=_CTX)
+            with pytest.raises(PathRefusalError) as exc_info:
+                await read_executor(str(test_file), ctx=_CTX)
 
-    assert result["success"] is False
-    assert result["error"] == "path_not_allowed"
-    assert "path" in result
+    assert exc_info.value.code == "path_not_allowed"
+    assert "allowed_paths" in exc_info.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +172,6 @@ async def test_read_tail_lines_basic() -> None:
 
         result = await read_executor(str(test_file), tail_lines=3, ctx=_CTX)
 
-        assert result["success"] is True
         assert result["tail_lines"] == 3
         content_lines = result["content"].strip().splitlines()
         assert content_lines == ["line8", "line9", "line10"]
@@ -196,12 +194,10 @@ async def test_read_tail_bypasses_size_gate() -> None:
 
         # Without tail_lines: truncates (no more too_large error, FRE-410)
         normal = await read_executor(str(large_file), max_bytes=1000, ctx=_CTX)
-        assert normal["success"] is True
         assert normal["truncated"] is True
 
         # With tail_lines: succeeds
         tail = await read_executor(str(large_file), max_bytes=1000, tail_lines=5, ctx=_CTX)
-        assert tail["success"] is True
         assert tail["tail_lines"] == 5
         tail_lines_content = tail["content"].strip().splitlines()
         assert len(tail_lines_content) == 5
@@ -222,7 +218,6 @@ async def test_read_tail_more_than_file_has() -> None:
 
         result = await read_executor(str(test_file), tail_lines=100, ctx=_CTX)
 
-        assert result["success"] is True
         lines = result["content"].strip().splitlines()
         assert lines == ["only", "two lines"]
 
@@ -243,7 +238,6 @@ async def test_read_tail_output_capped_by_max_bytes() -> None:
 
         result = await read_executor(str(test_file), max_bytes=300, tail_lines=20, ctx=_CTX)
 
-        assert result["success"] is True
         assert result["truncated"] is True
         assert len(result["content"].encode()) <= 300
 
@@ -262,7 +256,6 @@ async def test_read_tail_no_trailing_newline() -> None:
 
         result = await read_executor(str(test_file), tail_lines=2, ctx=_CTX)
 
-        assert result["success"] is True
         lines = result["content"].splitlines()
         assert lines == ["beta", "gamma"]
 
@@ -281,7 +274,6 @@ async def test_read_default_truncates_head() -> None:
 
         result = await read_executor(str(test_file), ctx=_CTX)
 
-        assert result["success"] is True
         assert result["truncated"] is True
         assert result["lines_returned"] == 200
         assert result["total_lines"] == 500
@@ -306,7 +298,6 @@ async def test_read_small_file_not_truncated() -> None:
 
         result = await read_executor(str(test_file), ctx=_CTX)
 
-        assert result["success"] is True
         assert result["truncated"] is False
         assert result["marker"] is None
         assert result["lines_returned"] == 3
@@ -327,7 +318,6 @@ async def test_read_offset_limit_range() -> None:
 
         result = await read_executor(str(test_file), offset=10, limit=5, ctx=_CTX)
 
-        assert result["success"] is True
         assert result["content"].splitlines() == [f"line{i}" for i in range(10, 15)]
         assert result["offset"] == 10
         assert result["limit"] == 5
@@ -343,7 +333,6 @@ async def test_read_offset_beyond_eof() -> None:
 
         result = await read_executor(str(test_file), offset=100, ctx=_CTX)
 
-        assert result["success"] is True
         assert result["content"] == ""
         assert result["lines_returned"] == 0
         assert result["total_lines"] == 5
@@ -365,7 +354,6 @@ async def test_read_byte_cap_truncates_head() -> None:
 
         result = await read_executor(str(test_file), max_bytes=1000, ctx=_CTX)
 
-        assert result["success"] is True
         assert result["truncated"] is True
         assert len(result["content"].encode("utf-8")) <= 1000
         # whole-line boundary: every returned line is a full 100-char line
@@ -384,7 +372,6 @@ async def test_read_explicit_max_bytes_allows_large() -> None:
 
         result = await read_executor(str(test_file), max_bytes=200_000, ctx=_CTX)
 
-        assert result["success"] is True
         assert result["truncated"] is False
         assert result["lines_returned"] == 50
 
@@ -427,7 +414,6 @@ async def test_read_empty_file() -> None:
 
         result = await read_executor(str(test_file), ctx=_CTX)
 
-        assert result["success"] is True
         assert result["content"] == ""
         assert result["lines_returned"] == 0
         assert result["total_lines"] == 0
@@ -444,7 +430,6 @@ async def test_read_head_no_trailing_newline() -> None:
 
         result = await read_executor(str(test_file), ctx=_CTX)
 
-        assert result["success"] is True
         assert result["truncated"] is False
         assert result["content"].splitlines() == ["alpha", "beta", "gamma"]
         assert result["total_lines"] == 3
@@ -465,7 +450,6 @@ async def test_read_tail_default_cap_unchanged() -> None:
 
         result = await read_executor(str(test_file), tail_lines=200, ctx=_CTX)
 
-        assert result["success"] is True
         assert result["truncated"] is False
         assert len(result["content"].splitlines()) == 200
 
@@ -484,7 +468,6 @@ async def test_read_oversized_single_line_marker_recovers() -> None:
         test_file.write_text(giant, encoding="utf-8")
 
         clipped = await read_executor(str(test_file), max_bytes=1000, ctx=_CTX)
-        assert clipped["success"] is True
         assert clipped["truncated"] is True
         assert clipped["lines_returned"] == 1
         assert len(clipped["content"].encode("utf-8")) <= 1000
@@ -511,7 +494,41 @@ async def test_read_limit_zero_clamped() -> None:
 
         result = await read_executor(str(test_file), offset=3, limit=0, ctx=_CTX)
 
-        assert result["success"] is True
         assert result["lines_returned"] >= 1
         # the line at the requested offset must be present, not skipped
         assert result["content"].splitlines()[0] == "line3"
+
+
+# ---------------------------------------------------------------------------
+# Open failures map to permission_denied / io_error (FRE-1575)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raised", "code", "retryable"),
+    [
+        (PermissionError(13, "Permission denied"), "permission_denied", False),
+        (OSError(5, "Input/output error"), "io_error", True),
+    ],
+)
+async def test_read_open_failure_maps_to_code(raised: OSError, code: str, retryable: bool) -> None:
+    """A file that exists but cannot be opened fails with the code for its OS error."""
+    with TemporaryDirectory() as tmpdir:
+        test_file = Path(tmpdir) / "locked.txt"
+        test_file.write_text("secret", encoding="utf-8")
+        target = test_file.resolve()
+        real_open = Path.open
+
+        def _open(self: Path, *args: object, **kwargs: object):
+            if self == target:
+                raise raised
+            return real_open(self, *args, **kwargs)
+
+        with patch.object(Path, "open", _open):
+            with pytest.raises(ReadError) as exc_info:
+                await read_executor(str(test_file), ctx=_CTX)
+
+    assert exc_info.value.code == code
+    assert exc_info.value.retryable is retryable
+    assert str(target) in exc_info.value.message

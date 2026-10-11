@@ -33,6 +33,7 @@ dmypy.json
 # Coverage reports
 .coverage
 .coverage.*
+coverage-tools.json
 htmlcov/
 cover/
 

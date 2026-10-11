@@ -17,22 +17,31 @@
 # requires a Docker Desktop secrets engine socket (engine.sock) that is not
 # present on a plain VPS.  Passing LINEAR_PERSONAL_ACCESS_TOKEN in /.env does
 # not bypass the OAuth path — the gateway still tries DCR and fails with
-# "no DCR client found".  sequentialthinking and context7 use no credentials
-# so they work fine.  Linear MCP must be wired up separately (see ADR or
+# "no DCR client found".  Linear MCP must be wired up separately (see ADR or
 # future work to spawn mcp/linear container directly with the PAT).
+#
+# ADR-0156 D7.5 (FRE-1575): no MCP server is enabled by default. sequentialthinking
+# and context7 copied native tools (the sequential-thinking skill, get_library_docs),
+# so they left the default set. With no server, set AGENT_MCP_GATEWAY_ENABLED=false;
+# this launcher exits with an error rather than start an empty gateway.
 
 set -euo pipefail
 
 : "${MCP_SECRETS_FILE:=/opt/seshat/mcp-secrets.env}"
 
-# Parse MCP server list from JSON array env var, with sensible default.
-# The env var is expected to be a JSON array (e.g., ["sequentialthinking", "context7"]).
+# Parse MCP server list from JSON array env var. The default is empty (ADR-0156 D7.5).
+# The env var is expected to be a JSON array (e.g., ["github"]).
 # We convert it to CSV for the --servers flag.
 # Note: linear is intentionally excluded (see comment above) — no DCR on VPS.
 # Requires jq for JSON→CSV parsing (hard dependency under set -euo pipefail).
-DEFAULT_SERVERS='["sequentialthinking","context7"]'
+DEFAULT_SERVERS='[]'
 SERVERS_JSON="${AGENT_MCP_GATEWAY_ENABLED_SERVERS:-$DEFAULT_SERVERS}"
 SERVERS_CSV=$(echo "$SERVERS_JSON" | jq -r 'join(",")')
+
+if [ -z "$SERVERS_CSV" ]; then
+  echo "run-gateway.sh: no MCP server is enabled; set AGENT_MCP_GATEWAY_ENABLED=false (ADR-0156 D7.5)" >&2
+  exit 1
+fi
 
 exec docker run \
   --rm \

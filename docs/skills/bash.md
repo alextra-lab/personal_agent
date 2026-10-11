@@ -58,7 +58,7 @@ The permission check parses the command and judges every subcommand on its own (
 
 ### SIGPIPE / exit 141 (FRE-470)
 
-When a downstream pipeline consumer closes the pipe early — e.g. `find … | head` or `… | grep -q` — the upstream producer is killed by SIGPIPE (signal 13), and under `pipefail` the pipeline's exit code becomes `141` (128 + 13). This is normal early-exit behavior, not a failure. The executor therefore reports `success: true` for exit `141` **when the command is a pipeline**, and adds an explanatory `note` field. A standalone `exit 141` (no pipe) still reports `success: false`, so genuine errors are never masked.
+When a downstream pipeline consumer closes the pipe early — e.g. `find … | head` or `… | grep -q` — the upstream producer is killed by SIGPIPE (signal 13), and under `pipefail` the pipeline's exit code becomes `141` (128 + 13). This is normal early-exit behavior, not a failure. The executor therefore adds an explanatory `note` field to exit `141` **when the command is a pipeline**. A standalone `exit 141` (no pipe) gets no note, so genuine errors are never masked. A non-zero `exit_code` is a normal result (`ok: true`); only a guard failure (empty command, timeout) is `ok: false` (ADR-0156 D6).
 
 ## Allow, ask and deny (`config/governance/permissions.yaml`)
 

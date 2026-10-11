@@ -9,7 +9,7 @@ from personal_agent.config import settings
 from personal_agent.mcp.client import MCPClientWrapper
 from personal_agent.mcp.governance import MCPGovernanceManager
 from personal_agent.mcp.linear_issue_args import normalize_save_issue_arguments
-from personal_agent.mcp.types import mcp_tool_to_definition
+from personal_agent.mcp.types import MCPToolError, mcp_tool_to_definition
 from personal_agent.mcp_server_allowlist import mcp_tool_matches_enabled_server
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import TraceContext
@@ -234,10 +234,17 @@ class MCPGatewayAdapter:
                 Dict with tool output on success.
 
             Raises:
-                RuntimeError: If gateway not connected or tool execution fails.
+                MCPToolError: ``mcp_unavailable`` when the gateway is not connected,
+                    ``mcp_tool_error`` for a result with ``isError: true``, and
+                    ``mcp_call_failed`` for any other failure (ADR-0156 D6.6).
             """
             if not self.client:
-                raise RuntimeError("MCP gateway not connected")
+                raise MCPToolError(
+                    "mcp_unavailable",
+                    "MCP gateway not connected",
+                    retryable=False,
+                    next_action="Do not retry. Use a native tool instead.",
+                )
 
             trace_id = ctx.trace_id if ctx is not None else None
             try:
@@ -264,8 +271,12 @@ class MCPGatewayAdapter:
                     import json
 
                     return json.dumps(result, default=str)
-                return dict(result) if isinstance(result, dict) else result
+                # A server's dict goes under "result": its own "ok"/"error" keys must not
+                # overwrite the contract's top level (ADR-0156 D6.6).
+                return {"result": dict(result)} if isinstance(result, dict) else result
 
+            except MCPToolError:
+                raise
             except Exception as e:
                 log.error(
                     "mcp_tool_execution_failed",
@@ -274,7 +285,12 @@ class MCPGatewayAdapter:
                     exc_info=True,
                     trace_id=trace_id,
                 )
-                raise RuntimeError(f"MCP tool '{mcp_tool_name}' failed: {e}") from e
+                raise MCPToolError(
+                    "mcp_call_failed",
+                    f"MCP tool '{mcp_tool_name}' failed: {type(e).__name__}: {e}",
+                    retryable=False,
+                    next_action="Do not repeat the same call. Use another tool.",
+                ) from e
 
         return executor
 

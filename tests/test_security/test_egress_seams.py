@@ -567,8 +567,9 @@ class TestPerplexityToolSeam:
             "personal_agent.tools.perplexity.settings.perplexity_base_url",
             "https://not-allowed.example",
         )
-        with _unreachable_transport(), pytest.raises(ToolExecutionError):
+        with _unreachable_transport(), pytest.raises(ToolExecutionError) as exc_info:
             await perplexity_query_executor(query="what is python?", mode="ask", ctx=_CTX)
+        assert exc_info.value.code == "egress_blocked"
 
     @pytest.mark.asyncio
     async def test_allowed_domain_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -612,8 +613,9 @@ class TestContext7ToolSeam:
         monkeypatch.setattr(
             "personal_agent.tools.context7._CONTEXT7_BASE", "https://not-allowed.example"
         )
-        with _unreachable_transport(), pytest.raises(ToolExecutionError):
+        with _unreachable_transport(), pytest.raises(ToolExecutionError) as exc_info:
             await get_library_docs_executor(library="react", ctx=_CTX)
+        assert exc_info.value.code == "egress_blocked"
 
     @pytest.mark.asyncio
     async def test_allowed_domain_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -659,8 +661,9 @@ class TestLinearToolSeam:
         monkeypatch.setattr(
             "personal_agent.tools.linear._LINEAR_URL", "https://not-allowed.example/graphql"
         )
-        with _unreachable_transport(), pytest.raises(ToolExecutionError):
+        with _unreachable_transport(), pytest.raises(ToolExecutionError) as exc_info:
             await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+        assert exc_info.value.code == "egress_blocked"
 
     @pytest.mark.asyncio
     async def test_allowed_domain_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:

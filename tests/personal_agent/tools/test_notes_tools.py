@@ -160,18 +160,20 @@ async def test_notes_write_requires_user_id(monkeypatch: pytest.MonkeyPatch) -> 
     """A ctx without user_id is a programming bug — refuse cleanly."""
     _install_fakes(monkeypatch, store=_FakeStore())
 
-    with pytest.raises(ToolExecutionError, match="user_id"):
+    with pytest.raises(ToolExecutionError, match="user_id") as exc_info:
         await notes_tools.notes_write_executor(
             slug="a", content="b", ctx=SimpleNamespace(trace_id="t")
         )
+    assert exc_info.value.code == "missing_identity"
 
 
 @pytest.mark.asyncio
 async def test_notes_write_rejects_unknown_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fakes(monkeypatch, store=_FakeStore())
 
-    with pytest.raises(ToolExecutionError, match="mode"):
+    with pytest.raises(ToolExecutionError, match="mode") as exc_info:
         await notes_tools.notes_write_executor(slug="a", content="b", mode="replace", ctx=_ctx())
+    assert exc_info.value.code == "invalid_mode"
 
 
 @pytest.mark.asyncio
@@ -180,8 +182,9 @@ async def test_notes_write_invalid_slug_rejected_pre_id(monkeypatch: pytest.Monk
     store = _FakeStore()
     session = _install_fakes(monkeypatch, store=store)
 
-    with pytest.raises(ToolExecutionError):
+    with pytest.raises(ToolExecutionError) as exc_info:
         await notes_tools.notes_write_executor(slug="../etc/passwd", content="x", ctx=_ctx())
+    assert exc_info.value.code == "invalid_slug"
 
     assert store.put_calls == []
     assert session.calls == []  # SELECT for prior revision happens only after slug passes
@@ -193,8 +196,9 @@ async def test_notes_write_substrate_not_configured_is_toolexec_error(
 ) -> None:
     monkeypatch.setattr(notes_tools, "get_artifact_store", lambda: None)
 
-    with pytest.raises(ToolExecutionError, match="substrate"):
+    with pytest.raises(ToolExecutionError, match="substrate") as exc_info:
         await notes_tools.notes_write_executor(slug="a", content="b", ctx=_ctx())
+    assert exc_info.value.code == "not_configured"
 
 
 @pytest.mark.asyncio
@@ -296,11 +300,70 @@ async def test_notes_write_rejects_oversized_payload(monkeypatch: pytest.MonkeyP
     _install_fakes(monkeypatch, store=store)
 
     too_big = "x" * (256 * 1024 + 1)
-    with pytest.raises(ToolExecutionError, match="exceeds"):
+    with pytest.raises(ToolExecutionError, match="exceeds") as exc_info:
         await notes_tools.notes_write_executor(
             slug="big", content=too_big, mode="overwrite", ctx=_ctx()
         )
+    assert exc_info.value.code == "too_large"
     assert store.put_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("slug", "content"),
+    [("", "body"), ("   ", "body"), ("a-slug", "")],
+    ids=["empty-slug", "blank-slug", "empty-content"],
+)
+async def test_notes_write_rejects_empty_slug_or_content(
+    monkeypatch: pytest.MonkeyPatch, slug: str, content: str
+) -> None:
+    """An empty slug or content is refused as invalid_argument before any side effect."""
+    store = _FakeStore()
+    session = _install_fakes(monkeypatch, store=store)
+
+    with pytest.raises(ToolExecutionError) as exc_info:
+        await notes_tools.notes_write_executor(slug=slug, content=content, ctx=_ctx())
+    assert exc_info.value.code == "invalid_argument"
+    assert exc_info.value.retryable is False
+    assert "notes_write" in exc_info.value.next_action
+    assert store.put_calls == []
+    assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_notes_write_append_refuses_non_utf8_prior(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A prior revision that is not UTF-8 refuses the append and names overwrite as the fix."""
+    store = _FakeStore()
+    prior_key = "note/aaa/GLOBAL/old.md"
+    store.stash(prior_key, b"\xff\xfe not utf-8")
+    session = _install_fakes(monkeypatch, store=store)
+    session.enqueue(SimpleNamespace(first=lambda: SimpleNamespace(id=uuid4(), r2_key=prior_key)))
+
+    with pytest.raises(ToolExecutionError, match="utf-8") as exc_info:
+        await notes_tools.notes_write_executor(
+            slug="continuing", content="more", mode="append", ctx=_ctx()
+        )
+    assert exc_info.value.code == "prior_not_utf8"
+    assert "overwrite" in exc_info.value.next_action
+    assert store.put_calls == []
+
+
+def test_notes_tools_declare_their_codes() -> None:
+    """Each tool declares its own codes, the shared missing_identity among them (ADR-0156 D6.1)."""
+    assert notes_tools.notes_write_tool.error_codes == frozenset(
+        {
+            "missing_identity",
+            "not_configured",
+            "invalid_mode",
+            "invalid_argument",
+            "invalid_slug",
+            "prior_not_utf8",
+            "too_large",
+        }
+    )
+    assert notes_tools.notes_search_tool.error_codes == frozenset(
+        {"missing_identity", "invalid_argument"}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -312,16 +375,18 @@ async def test_notes_write_rejects_oversized_payload(monkeypatch: pytest.MonkeyP
 async def test_notes_search_requires_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fakes(monkeypatch, store=_FakeStore())
 
-    with pytest.raises(ToolExecutionError, match="user_id"):
+    with pytest.raises(ToolExecutionError, match="user_id") as exc_info:
         await notes_tools.notes_search_executor(query="hello", ctx=SimpleNamespace(trace_id="t"))
+    assert exc_info.value.code == "missing_identity"
 
 
 @pytest.mark.asyncio
 async def test_notes_search_rejects_empty_query(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fakes(monkeypatch, store=_FakeStore())
 
-    with pytest.raises(ToolExecutionError, match="query"):
+    with pytest.raises(ToolExecutionError, match="query") as exc_info:
         await notes_tools.notes_search_executor(query="   ", ctx=_ctx())
+    assert exc_info.value.code == "invalid_argument"
 
 
 @pytest.mark.asyncio

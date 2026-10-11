@@ -246,10 +246,16 @@ async def test_execute_nonexistent_tool_logs_session_id(execution_layer, trace_c
 @pytest.mark.asyncio
 async def test_execute_tool_terminal_failure_sets_metadata(execution_layer, trace_ctx) -> None:
     """TerminalToolError is preserved as ToolResult.metadata for short-circuit (FRE-402)."""
-    from personal_agent.tools.executor import TerminalToolError
+    from typing import Literal
+
+    from personal_agent.tools.contract import TerminalToolError, error_codes
+
+    class _TerminalError(TerminalToolError[Literal["generation_timeout"]]):
+        """A typed terminal failure, as a tool declares one (ADR-0156 D6.1)."""
 
     def terminal_executor() -> dict:
-        raise TerminalToolError(
+        raise _TerminalError(
+            "generation_timeout",
             "sub-agent timed out",
             reason="The artifact generator timed out.",
             next_step="Try a simpler artifact, or switch to Cloud.",
@@ -262,12 +268,16 @@ async def test_execute_tool_terminal_failure_sets_metadata(execution_layer, trac
         parameters=[],
         risk_level="low",
         allowed_modes=["NORMAL"],
+        error_codes=error_codes(_TerminalError),
     )
     execution_layer.registry.register(terminal_tool, terminal_executor)
 
     result = await execution_layer.execute_tool("terminal_tool", {}, trace_ctx)
 
     assert result.success is False
+    assert result.error_detail is not None
+    assert result.error_detail.code == "generation_timeout"
+    assert result.error_detail.retryable is False
     assert result.metadata.get("terminal") is True
     assert result.metadata.get("terminal_reason") == "The artifact generator timed out."
     assert (
@@ -443,8 +453,9 @@ async def test_approval_ui_disabled_denies_an_ask(governance_config, monkeypatch
     assert call_args.kwargs["refused"] == "ls"
     assert "trace_id" in call_args.kwargs
     assert result.error is not None
-    assert "`ls`" in str(result.error["message"])
-    assert "connection_lost" not in str(result.error["message"])
+    assert result.error.code == "approval_unavailable"
+    assert "`ls`" in result.error.message
+    assert "connection_lost" not in result.error.message
 
 
 def test_get_default_registry() -> None:
@@ -481,3 +492,99 @@ def test_register_mvp_tools() -> None:
     # Legacy tools absent by default (FRE-263)
     assert "read_file" not in registry.list_tool_names()
     assert "system_metrics_snapshot" not in registry.list_tool_names()
+
+
+# ── Layer refusals, by code (FRE-1575, ADR-0156 AC-1) ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("arguments", "code", "retryable"),
+    [
+        ({"path": 42}, "invalid_arguments", True),
+        ({"path": "/tmp/System/x"}, "path_refused", False),
+        ({"path": "/etc/passwd"}, "path_refused", False),
+        ({"path": "/tmp/f.txt", "max_size_mb": 50}, "invalid_arguments", True),
+    ],
+    ids=["non_string_path", "forbidden_path", "outside_allowed_paths", "max_size_over_limit"],
+)
+def test_validate_tool_arguments_refusals_carry_their_code(
+    arguments, code, retryable, governance_config, monkeypatch
+) -> None:
+    """Each argument refusal returns a failure with its own dispatch code."""
+    from personal_agent.governance.models import ToolPolicy
+    from personal_agent.tools.executor import _validate_tool_arguments
+
+    monkeypatch.setitem(
+        governance_config.tools,
+        "fre_1575_probe_file",
+        ToolPolicy(
+            category="read_only",
+            allowed_in_modes=["NORMAL"],
+            forbidden_paths=["/tmp/System/**"],
+            allowed_paths=["/tmp/**"],
+            max_file_size_mb=10,
+        ),
+    )
+
+    result = _validate_tool_arguments("fre_1575_probe_file", arguments, governance_config)
+
+    assert result.allowed is False
+    assert result.error is not None
+    assert result.error.code == code
+    assert result.error.retryable is retryable
+
+
+@pytest.mark.asyncio
+async def test_check_permissions_forbidden_in_modes_is_mode_refused(
+    governance_config, trace_ctx, monkeypatch
+) -> None:
+    """A mode named in the policy's forbidden_in_modes refuses with ``mode_refused``."""
+    from personal_agent.governance.models import ToolPolicy
+    from personal_agent.tools.executor import _check_permissions
+
+    tool_def = ToolDefinition(
+        name="fre_1575_probe_forbidden",
+        description="Probe tool forbidden in NORMAL",
+        category="read_only",
+        parameters=[],
+        risk_level="low",
+        allowed_modes=["NORMAL"],
+    )
+    monkeypatch.setitem(
+        governance_config.tools,
+        "fre_1575_probe_forbidden",
+        ToolPolicy(
+            category="read_only",
+            allowed_in_modes=["NORMAL"],
+            forbidden_in_modes=["NORMAL"],
+        ),
+    )
+
+    result = await _check_permissions(
+        tool_name="fre_1575_probe_forbidden",
+        tool_def=tool_def,
+        arguments={},
+        current_mode=Mode.NORMAL,
+        governance_config=governance_config,
+        transport=None,
+        trace_ctx=trace_ctx,
+    )
+
+    assert result.allowed is False
+    assert result.error is not None
+    assert result.error.code == "mode_refused"
+    assert "forbidden in NORMAL" in result.error.message
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_schema_violation_is_invalid_arguments(
+    execution_layer, trace_ctx
+) -> None:
+    """Arguments that fail the tool's schema return ``invalid_arguments`` and never run."""
+    result = await execution_layer.execute_tool("test_tool", {"path": 42}, trace_ctx)
+
+    assert result.success is False
+    assert result.error_detail is not None
+    assert result.error_detail.code == "invalid_arguments"
+    assert result.error_detail.retryable is True
+    assert "Invalid arguments for test_tool" in result.error_detail.message

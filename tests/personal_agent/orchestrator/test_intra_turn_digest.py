@@ -254,12 +254,13 @@ async def test_expand_tool_result_happy_and_hash_validation(
     monkeypatch.setattr(mod, "get_artifact_store", lambda: store)
 
     ok = await mod.expand_tool_result_executor(key=key, content_hash=compute_content_hash(full))
-    assert ok["success"] is True
     assert ok["content"] == full
+    assert ok["truncated"] is False
 
-    bad = await mod.expand_tool_result_executor(key=key, content_hash="deadbeef")
-    assert bad["success"] is False
-    assert "hash" in str(bad).lower()
+    with pytest.raises(mod.ExpandToolResultError) as exc_info:
+        await mod.expand_tool_result_executor(key=key, content_hash="deadbeef")
+    assert exc_info.value.code == "hash_mismatch"
+    assert "hash" in exc_info.value.message.lower()
 
 
 @pytest.mark.asyncio
@@ -275,7 +276,7 @@ async def test_expand_tool_result_ranged_and_cap(monkeypatch: pytest.MonkeyPatch
     ranged = await mod.expand_tool_result_executor(
         key=key, content_hash=compute_content_hash(full), offset=0, limit=5
     )
-    assert ranged["success"] is True
+    assert ranged["key"] == key
     assert ranged["content"].count("\n") <= 5
 
 
@@ -284,8 +285,26 @@ async def test_expand_tool_result_store_unwired(monkeypatch: pytest.MonkeyPatch)
     from personal_agent.tools import tool_result_expand as mod
 
     monkeypatch.setattr(mod, "get_artifact_store", lambda: None)
-    res = await mod.expand_tool_result_executor(key="tool-results/s/t/c", content_hash="x")
-    assert res["success"] is False
+    with pytest.raises(mod.ExpandToolResultError) as exc_info:
+        await mod.expand_tool_result_executor(key="tool-results/s/t/c", content_hash="x")
+    assert exc_info.value.code == "store_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_expand_tool_result_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A store error is a retryable ``fetch_failed`` (ADR-0156 D6)."""
+    from personal_agent.storage.artifact_store import ArtifactStoreError
+    from personal_agent.tools import tool_result_expand as mod
+
+    class _FailingStore(_FakeStore):
+        async def get(self, r2_key, *, trace_id=None) -> bytes:
+            raise ArtifactStoreError("gone")
+
+    monkeypatch.setattr(mod, "get_artifact_store", lambda: _FailingStore())
+    with pytest.raises(mod.ExpandToolResultError) as exc_info:
+        await mod.expand_tool_result_executor(key="tool-results/s/t/c", content_hash="x")
+    assert exc_info.value.code == "fetch_failed"
+    assert exc_info.value.retryable is True
 
 
 # ---------------------------------------------------------------------------

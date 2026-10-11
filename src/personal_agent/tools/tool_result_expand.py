@@ -13,16 +13,23 @@ The contract is deliberately kept separate from the future
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from personal_agent.config import settings
 from personal_agent.llm_client.token_counter import estimate_tokens
 from personal_agent.orchestrator.tool_result_digest import compute_content_hash
 from personal_agent.storage.artifact_store import ArtifactStoreError, get_artifact_store
 from personal_agent.telemetry import get_logger
+from personal_agent.tools.contract import ToolError, error_codes
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
+
+ExpandCode = Literal["store_unavailable", "fetch_failed", "hash_mismatch"]
+
+
+class ExpandToolResultError(ToolError[ExpandCode]):
+    """An ``expand_tool_result`` failure (ADR-0156 D6.1)."""
 
 
 expand_tool_result_tool = ToolDefinition(
@@ -32,7 +39,11 @@ expand_tool_result_tool = ToolDefinition(
         "durable storage. Pass the `key` and `content_hash` shown in the digest "
         "placeholder. Use `offset`/`limit` (0-based line range) to page through a "
         "large result; the returned content is capped to a token budget. Call this "
-        "before acting on lines a digest omitted."
+        "before acting on lines a digest omitted. "
+        "Do not use it for a result that was not digested: it reads only the keys that a "
+        "digest placeholder shows. "
+        'Example: expand_tool_result(key="<key from the digest>", '
+        'content_hash="<hash from the digest>", offset=0, limit=200).'
     ),
     category="memory_read",
     parameters=[
@@ -69,6 +80,7 @@ expand_tool_result_tool = ToolDefinition(
     requires_sandbox=False,
     timeout_seconds=10,
     rate_limit_per_hour=60,
+    error_codes=error_codes(ExpandToolResultError),
 )
 
 
@@ -89,20 +101,31 @@ async def expand_tool_result_executor(
         ctx: Trace context (injected by the tool layer); used for log threading.
 
     Returns:
-        ``{"success": True, "content": str, "truncated": bool, "key": str}`` on
-        success, or ``{"success": False, "error": str}`` when the store is
-        unwired, the fetch fails, or the hash does not match.
+        ``{"content": str, "truncated": bool, "key": str}``.
+
+    Raises:
+        ExpandToolResultError: ``store_unavailable``, ``fetch_failed`` or ``hash_mismatch``.
     """
     trace_id = getattr(ctx, "trace_id", None)
     store = get_artifact_store()
     if store is None:
-        return {"success": False, "error": "artifact store unavailable (R2 not configured)"}
+        raise ExpandToolResultError(
+            "store_unavailable",
+            "artifact store unavailable (R2 not configured)",
+            retryable=False,
+            next_action="The full result cannot be read here. Work from the digest.",
+        )
 
     try:
         raw = await store.get(key, trace_id=trace_id)
     except ArtifactStoreError as exc:
         log.warning("expand_tool_result_fetch_failed", key=key, trace_id=trace_id, error=str(exc))
-        return {"success": False, "error": f"fetch failed for {key}: {exc}"}
+        raise ExpandToolResultError(
+            "fetch_failed",
+            f"fetch failed for {key}: {exc}",
+            retryable=True,
+            next_action="Call expand_tool_result once more; if it fails again, use the digest.",
+        ) from exc
 
     full = raw.decode("utf-8", errors="replace")
     actual_hash = compute_content_hash(full)
@@ -114,10 +137,12 @@ async def expand_tool_result_executor(
             expected=content_hash,
             actual=actual_hash,
         )
-        return {
-            "success": False,
-            "error": f"content_hash mismatch for {key}: stored bytes do not match the digest.",
-        }
+        raise ExpandToolResultError(
+            "hash_mismatch",
+            f"content_hash mismatch for {key}: stored bytes do not match the digest.",
+            retryable=False,
+            next_action="Check that key and content_hash are copied exactly from the digest.",
+        )
 
     content = full
     if offset is not None or limit is not None:
@@ -140,4 +165,4 @@ async def expand_tool_result_executor(
         truncated=truncated,
         ranged=offset is not None or limit is not None,
     )
-    return {"success": True, "content": content, "truncated": truncated, "key": key}
+    return {"content": content, "truncated": truncated, "key": key}

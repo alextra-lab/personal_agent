@@ -5,11 +5,17 @@ from __future__ import annotations
 import importlib.util
 import sys
 import textwrap
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
 import pytest
-from scripts.check_tool_failure_coverage import executed_lines, failure_lines, uncovered
+from scripts.check_tool_failure_coverage import (
+    conditional,
+    executed_lines,
+    failure_lines,
+    uncovered,
+)
 
 _SOURCE = textwrap.dedent(
     '''
@@ -46,18 +52,52 @@ _SOURCE = textwrap.dedent(
 )
 
 
-@pytest.fixture
-def probe_module(tmp_path: Path) -> ModuleType:
-    """Import a small tool module written for the test."""
-    path = tmp_path / "probe_tool.py"
-    path.write_text(_SOURCE)
-    spec = importlib.util.spec_from_file_location("probe_tool", path)
+#: Builder calls that coverage.py credits whenever their statement runs, built or not.
+_CONDITIONAL_SOURCE = textwrap.dedent(
+    '''
+    from personal_agent.tools.contract import dispatch_error
+
+
+    def fallback(detail: object | None) -> object:
+        return detail or dispatch_error("timeout", "four", retryable=True, next_action="again")
+
+
+    def choose(flag: bool) -> object:
+        return None if flag else dispatch_error("timeout", "five", retryable=True, next_action="a")
+
+
+    def later() -> object:
+        return lambda: dispatch_error("timeout", "six", retryable=True, next_action="again")
+
+
+    def first(other: object) -> object:
+        return dispatch_error("timeout", "seven", retryable=True, next_action="again") or other
+    '''
+)
+
+
+def _load(tmp_path: Path, name: str, source: str) -> Iterator[ModuleType]:
+    path = tmp_path / f"{name}.py"
+    path.write_text(source)
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules["probe_tool"] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     yield module
-    del sys.modules["probe_tool"]
+    del sys.modules[name]
+
+
+@pytest.fixture
+def probe_module(tmp_path: Path) -> Iterator[ModuleType]:
+    """Import a small tool module written for the test."""
+    yield from _load(tmp_path, "probe_tool", _SOURCE)
+
+
+@pytest.fixture
+def conditional_module(tmp_path: Path) -> Iterator[ModuleType]:
+    """Import a module whose builders sit in conditional expressions."""
+    yield from _load(tmp_path, "probe_conditional", _CONDITIONAL_SOURCE)
 
 
 def _line_of(module: ModuleType, text: str) -> int:
@@ -104,3 +144,24 @@ def test_it_reads_relative_paths_from_a_coverage_report() -> None:
     executed = executed_lines(report)
     path = (Path(__file__).parents[2] / "src/personal_agent/tools/fetch.py").resolve()
     assert executed == {path: frozenset({3, 5})}
+
+
+def test_a_plain_module_has_no_conditional_builder(probe_module: ModuleType) -> None:
+    """A builder in its own statement is not reported as conditional."""
+    assert conditional(failure_lines(probe_module)) == []
+
+
+def test_seeded_negative_a_conditional_builder_is_reported(
+    conditional_module: ModuleType,
+) -> None:
+    """An ``or`` fallback, a conditional branch and a lambda body are each reported.
+
+    Coverage.py records lines per statement, so it credits these builders whenever the
+    statement runs. The first operand of ``or`` always runs, so it is not reported.
+    """
+    reported = {line.line for line in conditional(failure_lines(conditional_module))}
+    assert reported == {
+        _line_of(conditional_module, '"four"'),
+        _line_of(conditional_module, '"five"'),
+        _line_of(conditional_module, '"six"'),
+    }

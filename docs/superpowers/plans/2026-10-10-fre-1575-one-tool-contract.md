@@ -92,7 +92,7 @@ The PR body holds the AC-3 table: skill → lines kept → description.
 
 ### 9. Failure-line coverage (AC-1)
 
-- `scripts/ci/check_tool_failure_coverage.py <coverage.json>`: imports each registered tool's executor module (registry with every flag on, plus `primitives/_governance.py`, `mcp/client.py`, `mcp/gateway.py`), finds every AST `Call` whose callee resolves to a `ToolError` subclass or a function annotated to return one, and fails listing each such line that coverage did not execute.
+- `scripts/check_tool_failure_coverage.py <coverage.json>`: imports each registered tool's executor module (registry with every flag on, plus `primitives/_governance.py`, `mcp/client.py`, `mcp/gateway.py`), finds every AST `Call` whose callee resolves to a `ToolError` subclass or a function annotated to return one, and fails listing each such line that coverage did not execute.
 - CI (`.github/workflows/ci.yml`): the unit-test step adds `--cov=src/personal_agent/tools --cov=src/personal_agent/mcp --cov-report=json:coverage-tools.json`; a next step runs the checker. `make tool-failure-coverage` runs both locally.
 - `tests/scripts/test_check_tool_failure_coverage.py`: the checker fails on a seeded uncovered failure line, passes when covered.
 

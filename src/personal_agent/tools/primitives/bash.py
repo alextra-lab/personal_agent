@@ -153,8 +153,8 @@ bash_tool = ToolDefinition(
     error_codes=error_codes(BashError),
     max_result_tokens=16_000,
     truncation_next_action=(
-        "Narrow the command (grep, head, a smaller path) and run it again; the full output "
-        "is in truncated_path."
+        "Narrow the command (grep, head, a smaller path) and run it again. If truncated_path "
+        "is a path, read the full output there with offset and limit."
     ),
 )
 

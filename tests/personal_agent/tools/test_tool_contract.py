@@ -4,7 +4,7 @@ Every registered tool, built with every registration flag on, and every dispatch
 gives the model ``{"ok": true, ...}`` or ``{"ok": false, "error": {code, message, retryable,
 next_action}}``. A failure logs ``tool_call_completed`` with ``success: false`` and reaches the
 model with its full message. The failure-line coverage half of AC-1 is
-``scripts/ci/check_tool_failure_coverage.py`` (run in CI).
+``scripts/check_tool_failure_coverage.py`` (run in CI).
 """
 
 from __future__ import annotations

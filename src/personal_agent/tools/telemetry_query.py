@@ -984,7 +984,7 @@ def _refuse_foreign_args(action: str, args: Mapping[str, object], names: Sequenc
         names: The names that ``action`` does not take.
 
     Raises:
-        ToolExecutionError: One of ``names`` was given a value.
+        TelemetryQueryError: ``refused``. One of ``names`` was given a value.
     """
     given = [name for name in names if not _is_absent(args.get(name))]
     if given:

@@ -12,6 +12,7 @@ import pytest
 from personal_agent.mcp.gateway import MCPGatewayAdapter
 from personal_agent.mcp.types import MCPToolError
 from personal_agent.telemetry import TraceContext
+from personal_agent.tools.contract import legacy_failure_marker
 from personal_agent.tools.registry import ToolRegistry
 
 _CTX = TraceContext.new_trace()
@@ -66,3 +67,19 @@ async def test_executor_passes_a_tool_error_through_unchanged() -> None:
 
     assert exc_info.value is original
     assert exc_info.value.code == "mcp_tool_error"
+
+
+@pytest.mark.asyncio
+async def test_a_third_party_dict_is_kept_under_result() -> None:
+    """A server's own ``ok``/``error``/``success`` keys never reach the contract's top level.
+
+    Spread into ``{"ok": true, ...}``, a server's ``ok: false`` would overwrite the contract
+    field, and its ``error`` key would turn a call that ran into a ``contract_violation``.
+    """
+    client = MagicMock()
+    server_payload = {"ok": False, "error": "no match", "success": False}
+    client.call_tool = AsyncMock(return_value=server_payload)
+    executor = _adapter(client)._create_executor("search")
+
+    assert await executor(ctx=_CTX, query="x") == {"result": server_payload}
+    assert legacy_failure_marker({"result": server_payload}) is None

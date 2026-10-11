@@ -9,8 +9,9 @@ import json
 import os
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from fnmatch import fnmatch
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import uuid4
 
 import httpx
@@ -72,22 +73,29 @@ class ApproveFn(Protocol):
         ...
 
 
-class PermissionResult:
-    """Result of a permission check."""
+@dataclass(frozen=True)
+class PermissionGranted:
+    """A permission check that lets the call run."""
 
-    def __init__(
-        self, allowed: bool, reason: str = "", error: ToolErrorDetail | None = None
-    ) -> None:
-        """Initialize permission result.
+    allowed: Literal[True] = True
 
-        Args:
-            allowed: Whether permission is granted.
-            reason: Reason for denial (if not allowed).
-            error: For a refusal, the failure the model gets (ADR-0156 D6.1).
-        """
-        self.allowed = allowed
-        self.reason = reason
-        self.error = error
+
+@dataclass(frozen=True)
+class PermissionRefused:
+    """A permission check that refuses the call.
+
+    Attributes:
+        reason: Short machine-readable reason, logged and kept in ``ToolResult.error``.
+        error: The failure the model gets (ADR-0156 D6.1). A refusal cannot exist without it.
+    """
+
+    reason: str
+    error: ToolErrorDetail
+    allowed: Literal[False] = False
+
+
+#: Result of a permission check.
+PermissionResult = PermissionGranted | PermissionRefused
 
 
 #: One approval card at a time per session. The PWA shows a single card, and a round's tool
@@ -103,7 +111,7 @@ def _permission_refusal(
     code: DispatchCode,
     message: str,
     next_action: str,
-) -> PermissionResult:
+) -> PermissionRefused:
     """Build a refusal whose error tells the model what was refused and what to do next.
 
     Args:
@@ -114,10 +122,9 @@ def _permission_refusal(
         next_action: The next call that can work, or that none exists.
 
     Returns:
-        A refused :class:`PermissionResult`.
+        The refusal.
     """
-    return PermissionResult(
-        allowed=False,
+    return PermissionRefused(
         reason=reason,
         error=dispatch_error(
             code, f"{tool_name}: {message}", retryable=False, next_action=next_action
@@ -169,7 +176,7 @@ def _validate_path_against_patterns(path: str, patterns: list[str]) -> bool:
 
 def _governance_refusal(
     code: DispatchCode, reason: str, next_action: str, *, retryable: bool = False
-) -> PermissionResult:
+) -> PermissionRefused:
     """Build a mode or argument refusal with its model-facing failure.
 
     Args:
@@ -179,10 +186,9 @@ def _governance_refusal(
         retryable: Whether a corrected call can succeed.
 
     Returns:
-        A refused :class:`PermissionResult`.
+        The refusal.
     """
-    return PermissionResult(
-        allowed=False,
+    return PermissionRefused(
         reason=reason,
         error=dispatch_error(code, reason, retryable=retryable, next_action=next_action),
     )
@@ -204,7 +210,7 @@ def _validate_tool_arguments(
     tool_policy = governance_config.tools.get(tool_name)
     if not tool_policy:
         # No specific policy, allow (will be checked by mode check)
-        return PermissionResult(allowed=True)
+        return PermissionGranted()
 
     # Check path allowlists/denylists for file operations
     if "path" in arguments:
@@ -246,7 +252,7 @@ def _validate_tool_arguments(
                 retryable=True,
             )
 
-    return PermissionResult(allowed=True)
+    return PermissionGranted()
 
 
 async def _request_approval(
@@ -375,7 +381,7 @@ async def _check_permissions(
     # 2. Argument validation, before the card: never ask the user about a call that a path
     # rule refuses anyway.
     validation_result = _validate_tool_arguments(tool_name, arguments, governance_config)
-    if not validation_result.allowed:
+    if isinstance(validation_result, PermissionRefused):
         return validation_result
 
     # 3. The permission rules (ADR-0156 D8).
@@ -396,7 +402,7 @@ async def _check_permissions(
         session_id=session_id,
     )
     if decision.decision == "allow":
-        return PermissionResult(allowed=True)
+        return PermissionGranted()
     if decision.decision == "deny":
         return _permission_refusal(
             tool_name=tool_name,
@@ -480,7 +486,7 @@ async def _check_permissions(
             trace_id=trace_ctx.trace_id,
             session_id=session_id,
         )
-        return PermissionResult(allowed=True)
+        return PermissionGranted()
     if answer.decision == "approve_session":
         # Only an unmatched call may add a session rule; an explicit ask is never
         # overridden (D8.3). A session answer to an explicit ask runs this call once.
@@ -504,7 +510,7 @@ async def _check_permissions(
             trace_id=trace_ctx.trace_id,
             session_id=session_id,
         )
-        return PermissionResult(allowed=True)
+        return PermissionGranted()
 
     outcomes: dict[str, tuple[str, str, DispatchCode]] = {
         "deny": ("the user denied it", "approval_denied_by_user", "denied_by_user"),
@@ -695,7 +701,7 @@ class ToolExecutionLayer:
             worker=worker,
         )
 
-        if not permission.allowed:
+        if isinstance(permission, PermissionRefused):
             log.warning(
                 POLICY_VIOLATION,
                 tool_name=tool_name,
@@ -703,15 +709,9 @@ class ToolExecutionLayer:
                 mode=current_mode.value,
                 trace_id=trace_ctx.trace_id,
             )
-            detail = permission.error or dispatch_error(
-                "permission_denied",
-                f"{tool_name}: {permission.reason}",
-                retryable=False,
-                next_action="Do not retry this call. Use another tool.",
-            )
             return _failed(
                 tool_name,
-                detail,
+                permission.error,
                 trace_ctx=trace_ctx,
                 error=f"Permission denied: {permission.reason}",
             )

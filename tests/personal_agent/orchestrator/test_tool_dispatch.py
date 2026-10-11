@@ -16,6 +16,7 @@ import pytest
 from personal_agent.governance.models import GovernanceConfig, SubAgentToolDecision
 from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.contract import dispatch_error
 from personal_agent.tools.types import ToolDefinition, ToolResult
 
 _EMPTY_GOVERNANCE_CONFIG = GovernanceConfig(
@@ -95,6 +96,9 @@ class TestDispatchToolCall:
             success=False,
             output={},
             error="boom",
+            error_detail=dispatch_error(
+                "tool_exception", "read: boom", retryable=False, next_action="Use another tool."
+            ),
             latency_ms=1.0,
         )
         layer = _fake_tool_layer(result)
@@ -123,6 +127,9 @@ class TestDispatchToolCall:
             success=False,
             output={},
             error=long_error,
+            error_detail=dispatch_error(
+                "tool_exception", long_error, retryable=False, next_action="Use another tool."
+            ),
             latency_ms=1.0,
         )
         layer = _fake_tool_layer(result)

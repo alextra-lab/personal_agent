@@ -271,7 +271,9 @@ class MCPGatewayAdapter:
                     import json
 
                     return json.dumps(result, default=str)
-                return dict(result) if isinstance(result, dict) else result
+                # A server's dict goes under "result": its own "ok"/"error" keys must not
+                # overwrite the contract's top level (ADR-0156 D6.6).
+                return {"result": dict(result)} if isinstance(result, dict) else result
 
             except MCPToolError:
                 raise

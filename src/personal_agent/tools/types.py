@@ -4,9 +4,9 @@ This module defines the Pydantic models for tool definitions, parameters,
 and results used by the tool execution system.
 """
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: Longest error message the model sees (ADR-0156 D6.2).
 ERROR_MESSAGE_LIMIT = 2000
@@ -126,3 +126,17 @@ class ToolResult(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="Extra context (e.g., files touched)"
     )
+
+    @model_validator(mode="after")
+    def _failure_carries_detail(self) -> Self:
+        """Refuse a failure that has no model-facing error (ADR-0156 D6.1).
+
+        Returns:
+            The result, unchanged.
+
+        Raises:
+            ValueError: ``success`` is false and ``error_detail`` is not set.
+        """
+        if not self.success and self.error_detail is None:
+            raise ValueError("a failed ToolResult must carry error_detail (ADR-0156 D6.1)")
+        return self

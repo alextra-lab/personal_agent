@@ -279,17 +279,7 @@ async def dispatch_tool_call(
         # (bounded at 2,000 characters), never a clip; a success is bounded per tool.
         content = render_content(
             output=result.output,
-            error_detail=(
-                None
-                if result.success
-                else result.error_detail
-                or dispatch_error(
-                    "tool_exception",
-                    f"{tool_name}: {result.error or 'execution failed'}",
-                    retryable=False,
-                    next_action="Do not repeat the same call. Use another tool.",
-                )
-            ),
+            error_detail=None if result.success else result.error_detail,
             max_result_tokens=bound_def.max_result_tokens if bound_def else RESULT_TOKEN_CEILING,
             truncation_next_action=(
                 bound_def.truncation_next_action

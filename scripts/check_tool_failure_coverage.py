@@ -15,6 +15,11 @@ A failure-building line is the first line of a statement that calls:
 The scanned modules are the executor module of every tool registered with every registration
 flag on, plus the fixed layer, dispatch and MCP modules in :data:`FIXED_MODULES`.
 
+Coverage.py records executed lines per statement, not per sub-expression. A builder call in
+the second operand of ``and``/``or``, in a branch of a conditional expression, in a lambda or in
+a comprehension is credited whenever its statement runs, built or not. The script therefore
+refuses such a call: build the failure in a statement of its own.
+
 Usage:
     uv run python -m pytest -m "not integration" --cov=src/personal_agent \
         --cov-report=json:coverage-tools.json
@@ -64,11 +69,14 @@ class FailureLine:
         path: Source file.
         line: First line of the statement.
         builder: The name of the called builder.
+        conditional: The call sits in a part of the statement that may not run, so the
+            statement's coverage does not prove the failure was built.
     """
 
     path: Path
     line: int
     builder: str
+    conditional: bool = False
 
 
 def _is_builder(obj: object, name: str) -> bool:
@@ -98,18 +106,37 @@ def _is_builder(obj: object, name: str) -> bool:
     return False
 
 
-def _own_calls(statement: ast.stmt) -> Iterator[ast.Call]:
-    """Yield the calls that belong to a statement, not to the statements nested in it."""
-    stack: list[ast.AST] = [
-        child for child in ast.iter_child_nodes(statement) if not isinstance(child, ast.stmt)
-    ]
+#: Expressions whose every part may not run when the statement holding them runs.
+_DEFERRED = (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _children(node: ast.AST, conditional: bool) -> Iterator[tuple[ast.AST, bool]]:
+    """Yield a node's expression children, each marked if it may not run."""
+    if isinstance(node, ast.BoolOp):
+        yield node.values[0], conditional
+        yield from ((value, True) for value in node.values[1:])
+    elif isinstance(node, ast.IfExp):
+        yield node.test, conditional
+        yield node.body, True
+        yield node.orelse, True
+    else:
+        deferred = conditional or isinstance(node, _DEFERRED)
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, ast.stmt):
+                yield child, deferred
+
+
+def _own_calls(statement: ast.stmt) -> Iterator[tuple[ast.Call, bool]]:
+    """Yield the calls that belong to a statement, not to the statements nested in it.
+
+    Each call comes with a flag: True when it sits in a part of the statement that may not run.
+    """
+    stack = list(_children(statement, False))
     while stack:
-        node = stack.pop()
+        node, conditional = stack.pop()
         if isinstance(node, ast.Call):
-            yield node
-        stack.extend(
-            child for child in ast.iter_child_nodes(node) if not isinstance(child, ast.stmt)
-        )
+            yield node, conditional
+        stack.extend(_children(node, conditional))
 
 
 def failure_lines(module: ModuleType) -> list[FailureLine]:
@@ -128,12 +155,16 @@ def failure_lines(module: ModuleType) -> list[FailureLine]:
     for statement in ast.walk(tree):
         if not isinstance(statement, ast.stmt):
             continue
-        for call in _own_calls(statement):
+        for call, conditional in _own_calls(statement):
             if not isinstance(call.func, ast.Name):
                 continue
             name = call.func.id
             if name in namespace and _is_builder(namespace[name], name):
-                found.setdefault(statement.lineno, FailureLine(path, statement.lineno, name))
+                known = found.get(statement.lineno)
+                if known is None or (conditional and not known.conditional):
+                    found[statement.lineno] = FailureLine(
+                        path, statement.lineno, name, conditional
+                    )
     return [found[line] for line in sorted(found)]
 
 
@@ -203,6 +234,18 @@ def uncovered(
     return [line for line in lines if line.line not in executed.get(line.path, frozenset())]
 
 
+def conditional(lines: Iterable[FailureLine]) -> list[FailureLine]:
+    """Return the failure lines whose builder call may not run with its statement.
+
+    Args:
+        lines: The failure-building lines.
+
+    Returns:
+        The lines that statement coverage cannot prove.
+    """
+    return [line for line in lines if line.conditional]
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the check.
 
@@ -224,14 +267,24 @@ def main(argv: list[str] | None = None) -> int:
 
     all_lines = [line for module in modules.values() for line in failure_lines(module)]
     missing = uncovered(all_lines, executed)
+    unprovable = conditional(all_lines)
     for line in missing:
-        rel = line.path.relative_to(REPO_ROOT) if line.path.is_relative_to(REPO_ROOT) else line.path
-        print(f"{rel}:{line.line}: failure built by {line.builder}() is not executed by a test")
+        print(f"{_rel(line.path)}:{line.line}: failure built by {line.builder}() is not executed")
+    for line in unprovable:
+        print(
+            f"{_rel(line.path)}:{line.line}: {line.builder}() sits in an expression that may not "
+            "run; build the failure in a statement of its own"
+        )
     print(
         f"{len(all_lines) - len(missing)}/{len(all_lines)} failure-building lines executed "
-        f"across {len(modules)} modules"
+        f"across {len(modules)} modules; {len(unprovable)} conditional"
     )
-    return 1 if missing else 0
+    return 1 if missing or unprovable else 0
+
+
+def _rel(path: Path) -> Path:
+    """Show a path relative to the repository when it is inside it."""
+    return path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
 
 
 if __name__ == "__main__":

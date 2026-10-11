@@ -87,7 +87,9 @@ Rules:
 - **Description (S5).** At least 3 sentences: what it does, when to use it, when not (name the
   better tool), its limits, and 1–3 example calls written as `my_tool(query="...")`.
 - **Coverage.** Every line that raises a failure is executed by a test
-  (`scripts/check_tool_failure_coverage.py`, run in CI). The contract test is
+  (`scripts/check_tool_failure_coverage.py`, run in CI). Build each failure in a statement of
+  its own: the script refuses a builder in `x or ...`, in a branch of `a if c else b`, in a
+  lambda or in a comprehension, because statement coverage cannot prove that it ran. The contract test is
   `tests/personal_agent/tools/test_tool_contract.py`.
 
 ### Minimal template

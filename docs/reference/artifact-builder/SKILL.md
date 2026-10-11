@@ -16,8 +16,7 @@
 > `tests/personal_agent/tools/test_artifact_tools.py::test_artifact_design_doc_matches_manifest`
 > and `tests/docs/test_artifact_design_split.py` hold this doc to the manifest.
 >
-> The body below is written to the builder ("you"), as the prompt is. A `read_skill` call in it
-> is historical: the builder has the distilled prompt, not this file.
+> The body below is written to the builder ("you"), as the prompt is.
 
 ---
 
@@ -58,9 +57,8 @@ reach form and is not counted as a satisfied capability by the demand meter. URL
 pins — never edit a version in place. Source of truth:
 `config/artifact_lib_manifest.json`.
 
-Each library has its own file in `references/`, with its boot recipe and its gotchas. Before you
-write the artifact, read the file of each library that it uses, for example
-`read_skill(name="artifact-design", path="references/katex.md")`:
+Each library has its own file in `references/`, with its boot recipe and its gotchas. When you
+change the prompt for a library, read that library's file, for example `references/katex.md`:
 
 | Library | Use for | File |
 |---|---|---|

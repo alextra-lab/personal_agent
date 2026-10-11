@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import yaml
 from scripts.eval.fre1581 import g2_skill_choice as g2
 
@@ -89,3 +90,53 @@ def test_the_report_names_each_wrong_turn() -> None:
     rows[0]["skills_loaded"] = ["mermaid-diagrams"]
     text = g2.score(rows).render()
     assert "s#0 loaded ['mermaid-diagrams']" in text and "32/33" in text
+
+
+class _FakeES:
+    """Answer ``agent-logs-*`` searches the way production-mapped ES does.
+
+    A ``term`` on a ``.keyword`` sub-field matches nothing, because the fields are ``keyword``.
+    """
+
+    def __init__(self, events: list[dict]) -> None:
+        self.events = events
+
+    def post(self, url: str, json: dict, timeout: float) -> object:
+        hits = []
+        if "agent-logs-" in url:
+            terms = [f["term"] for f in json["query"]["bool"]["filter"]]
+            hits = [
+                e for e in self.events if all(e.get(k) == v for t in terms for k, v in t.items())
+            ]
+        body = {"hits": {"hits": [{"_source": h} for h in hits]}}
+        return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: body})()
+
+
+def test_the_turn_query_uses_the_production_field_shape() -> None:
+    """FRE-1581 review: eval ES has the production templates, so no `.keyword` sub-field."""
+    terms = g2.turn_events_query("t1", "read_skill_invoked")["query"]["bool"]["filter"]
+    assert terms == [{"term": {"trace_id": "t1"}}, {"term": {"event_type": "read_skill_invoked"}}]
+
+
+def test_read_turn_reads_a_skill_load_on_a_production_mapped_index() -> None:
+    es = _FakeES(
+        [
+            {
+                "trace_id": "t1",
+                "event_type": "model_call_completed",
+                "role": "primary",
+                "model": "m",
+            },
+            {"trace_id": "t1", "event_type": "read_skill_invoked", "skill_name": "query-tempo"},
+            {"trace_id": "t2", "event_type": "read_skill_invoked", "skill_name": "neo4j-direct"},
+        ]
+    )
+    turn = g2.read_turn(es, "t1", settle_s=0)  # type: ignore[arg-type]
+    assert turn["skills_loaded"] == ["query-tempo"] and turn["primary_models"] == ["m"]
+
+
+def test_a_turn_with_no_model_call_is_an_error_not_a_no_skill_row() -> None:
+    """Seeded negative: a query that matches nothing must not score as "no skill loaded"."""
+    es = _FakeES([{"trace_id": "t1", "event_type": "read_skill_invoked", "skill_name": "x"}])
+    with pytest.raises(ValueError, match="no model_call_completed"):
+        g2.read_turn(es, "t1", settle_s=0)  # type: ignore[arg-type]

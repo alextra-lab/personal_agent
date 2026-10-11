@@ -212,6 +212,33 @@ def _search(es: httpx.Client, index: str, body: Mapping[str, object]) -> list[di
     return [h["_source"] for h in r.json()["hits"]["hits"]]
 
 
+def turn_events_query(trace_id: str, event_type: str) -> dict[str, object]:
+    """Build the ``agent-logs-*`` search for one event type of one turn.
+
+    The fields are those of the production ``agent-logs`` template, where ``trace_id`` and
+    ``event_type`` are ``keyword``. ``make eval-infra-up`` applies that template to eval ES.
+
+    Args:
+        trace_id: The turn's trace id.
+        event_type: The event type.
+
+    Returns:
+        The search body.
+    """
+    return {
+        "size": 500,
+        "sort": [{"@timestamp": "asc"}],
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"trace_id": trace_id}},
+                    {"term": {"event_type": event_type}},
+                ]
+            }
+        },
+    }
+
+
 def read_turn(es: httpx.Client, trace_id: str, settle_s: float = 20.0) -> dict[str, object]:
     """Read one turn's skill loads, read_skill calls and primary model from the eval ES.
 
@@ -223,32 +250,23 @@ def read_turn(es: httpx.Client, trace_id: str, settle_s: float = 20.0) -> dict[s
     Returns:
         ``skills_loaded``, ``read_skill_calls`` (``tool_call_started`` count, a cross-check),
         ``worker_read_skill`` and ``primary_models``.
+
+    Raises:
+        ValueError: If the turn shows no ``model_call_completed`` event. Every completed turn has
+            one, so the query or the index mapping is wrong, and an empty skill list would be
+            scored as "no skill loaded".
     """
     time.sleep(settle_s)
 
     def events(event_type: str) -> list[dict[str, object]]:
-        return _search(
-            es,
-            "agent-logs-*",
-            {
-                "size": 500,
-                "sort": [{"@timestamp": "asc"}],
-                "query": {
-                    "bool": {
-                        "filter": [
-                            {"term": {"trace_id.keyword": trace_id}},
-                            {"term": {"event_type.keyword": event_type}},
-                        ]
-                    }
-                },
-            },
-        )
+        return _search(es, "agent-logs-*", turn_events_query(trace_id, event_type))
 
+    completed = events("model_call_completed")
+    if not completed:
+        raise ValueError(f"no model_call_completed event for trace {trace_id}")
     invoked = events("read_skill_invoked")
     started = [e for e in events("tool_call_started") if e.get("tool_name") == "read_skill"]
-    models = sorted(
-        {str(e.get("model")) for e in events("model_call_completed") if e.get("role") == "primary"}
-    )
+    models = sorted({str(e.get("model")) for e in completed if e.get("role") == "primary"})
     subs = _search(
         es,
         "agent-captains-captures-subagents-*",

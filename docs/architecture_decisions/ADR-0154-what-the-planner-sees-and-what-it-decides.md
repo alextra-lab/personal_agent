@@ -209,7 +209,7 @@ Every turn gains these durable fields, in `route_traces` and in the ES projectio
 | `synthesis_appended` | true when a synthesis message was added | always |
 | `first_token_ms` | from request receipt to the first token streamed to the user | always |
 
-`first_token_ms` is new. Nothing records it today: `latency_total_ms` and `latency_breakdown` are null on all 12 conversational turns since 2026-09-15. It is the measure the owner experiences, and AC-5 compares against it.
+`first_token_ms` is new. Nothing records it today: `latency_total_ms` and `latency_breakdown` are null on all 12 conversational turns since 2026-09-15. It is the measure the owner experiences, and AC-5 compares against it. *Amended by Amendment 1:* `first_token_ms` stays recorded, as telemetry and as context for the floor check (1.4). AC-5 is now decided by the paired arm of the D7 probe (1.3).
 
 `conversation_history_chars` is recorded on every turn of the four types, whether or not the planner runs. The render is a pure function of the session messages and costs no model call. On a turn before the routing change, it gives the history size the planner would have received, so that AC-5 can compare like with like.
 
@@ -367,7 +367,7 @@ The sample is small (Appendix A4). Each rejection below is an operational choice
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| The delay on long sessions is higher than measured, because the cache misses more often under real load | High | AC-5 compares `first_token_ms` per history size against the pre-change baseline. D6 records the input sizes and prompt tokens, so a cold-cache pattern is visible. |
+| The delay on long sessions is higher than measured, because the cache misses more often under real load | High | AC-5 compares `first_token_ms` per history size against the pre-change baseline. D6 records the input sizes and prompt tokens, so a cold-cache pattern is visible. *Amended by Amendment 1:* the paired arm measures the cache loss per configuration before the routing change (1.1, 1.3), and the floor check compares the live planner call with it (1.4). |
 | The fixtures overfit: 27 messages, 10 of them decline-type | Medium | AC-4 scores the planner against owner labels on real turns, with separate rates. |
 | The digest changes the decision for the worse | Medium | AC-8 runs the probe with relevant and unrelated seeded digests before the umbrella closes. |
 | A selectable deployment expands most turns | Medium | D7: it keeps today's routing until it qualifies. |
@@ -515,7 +515,7 @@ The probe does not run a gateway turn, for two reasons:
 - No gateway can make a declined `planner_asked` turn before FRE-1515 ships, and FRE-1515 merges on this result.
 - Production `first_token_ms` measures the whole reply today, because nothing streams token by token (master, FRE-1515, 2026-10-03).
 
-**The precondition.** The measure is valid only if a declined `planner_asked` turn sends the same primary request as a `SINGLE` turn with the same session state: the same messages, tools and sampling. FRE-1515 asserts this in a test (1.3).
+**The precondition.** The measure is valid only if a declined `planner_asked` turn sends the same primary request as a `SINGLE` turn with the same session state. "The same" means the complete request that the executor passes to the LLM client for the first primary call: messages, tools, `tool_choice`, `parallel_tool_calls`, sampling, model mode, response format and token limit. Only trace and request identifiers may differ. FRE-1515 asserts this in a test (1.3).
 
 **Which turns.**
 
@@ -527,6 +527,7 @@ The probe does not run a gateway turn, for two reasons:
 - The limits are the original AC-5 limits, unchanged.
 - The expand fixtures give no pair. The planner expands on them, and a turn that expands is not a declined turn.
 - A pair counts when its planner call declines under D2's validation rule, no call of the pair errors, and the pair is not void (below).
+- Each split has a fixed set of pair keys: (fixture, draw) for the 10 fixtures and draws 0 to 2, and (size, draw) for the 3 sizes and draws 0 to 2. The scorer keeps the last row without an error for each key. A missing key or an unexpected key is FAIL for that split.
 - A split with fewer counted pairs than it needs is FAIL. It is never scaled.
 - The median uses the index rule of Appendix A4.
 - The split of a pair is set by the length of the planner's rendered history for that turn (`history_chars`).
@@ -541,9 +542,11 @@ A prime is a request that sets this state. It has `max_tokens: 1`, and the probe
 - **The previous primary request** is the turn's own primary request cut before its last user message, as `prime_body` cuts it today. For a single-turn fixture, that is the system prompt and tools with the user message ".".
 - **The previous planner request** is the planner request of the previous turn, built with the production `build_planner_user_message`. Its history is the turn's history without its last exchange, and its query is the user message of that last exchange. A single-turn fixture has no previous turn, so its previous planner request is the planner system prompt with the user message ".".
 
-**No reuse across arms or draws.** Each arm of each draw puts a line `probe nonce <8 hex characters>` at the start of the system message of every request in that arm. The nonce is new for each arm and draw. So no arm can reuse a prompt that another arm or draw cached. The rendered planner prompt does not hold the nonce, so the configuration fingerprint does not change. The arm order alternates: even draws run the `SINGLE` arm first, and odd draws run the planner arm first. Appendix A4 found a bias from a fixed order.
+**No reuse across arms or draws.** Each arm of each draw puts a line `probe nonce <8 hex characters>` at the start of the system message of every request in that arm. The nonce is new for each arm and draw. So no arm can reuse a prompt that another arm or draw cached. The rendered planner prompt does not hold the nonce, so the configuration fingerprint does not change.
 
-**A void pair.** A pair is void when a measured call's `cache_n` exceeds the prompt tokens (`cache_n + prompt_n`) of the prime before it in the same arm. The planner call is compared with the planner prime. Each primary call is compared with its primary prime. A void pair means that the engine reused more than the previous turn left, so the instrument failed on that pair. A void pair does not count. The report states the void count and the reasons.
+**The arm order.** A pair runs the `SINGLE` arm first when (index + draw) is even, and the planner arm first when it is odd. The index is the fixture's position in the sorted list of decline fixture labels, or the size's position in `SIZES`. So 15 of the 30 short pairs and 5 of the 9 long pairs run `SINGLE` first. Appendix A4 found a bias from a fixed order.
+
+**A void pair.** A pair is void when a measured call's `timings.cache_n` exceeds the prompt tokens (`timings.cache_n + timings.prompt_n`) of the prime before it in the same arm. The planner call is compared with the planner prime. Each primary call is compared with its primary prime. A void pair means that the engine reused more than the previous turn left, so the instrument failed on that pair. A void pair does not count. The report states the void count and the reasons.
 
 **Cost.** Every call goes to the local engine and costs no money. Each pair makes 6 calls: 180 calls in the short split and 54 in the long split. The long primes prefill up to about 15,000 tokens cold. The run time is not measured yet. An estimate is about one hour.
 
@@ -566,7 +569,7 @@ The original AC-5 is replaced by this text:
 
 - **AC-5 — The planner's added delay passes the paired arm on the production configuration.** · **Check:**
   - The scorer report of FRE-1581's D7 run, on the production configuration, posted on FRE-1515 with its fingerprint before FRE-1515 merges. The production configuration is the default local primary binding at its deployed engine build, model, quant, `planner` mode and planner prompt hash.
-  - FRE-1515's test of the precondition in 1.1. The test drives the same input once routed `SINGLE` and once routed `planner_asked` with a declining planner stub. It captures the first primary request of each, and it asserts equal messages, tools and sampling.
+  - FRE-1515's test of the precondition in 1.1. The test drives the same input once routed `SINGLE` and once routed `planner_asked` with a declining planner stub. It captures the complete first primary request of each, as 1.1 defines it, and it asserts that they are equal except for trace and request identifiers.
 
   · *Fails if*:
   - either paired check in the report is FAIL;
@@ -603,6 +606,7 @@ The FRE-1581 seat builds this change, with its tests, before its D7 run. It make
 
 - Replace the `timing` arm with a `paired` arm, in a function `run_paired`. `--arms` takes `decide` and `paired`, and the default is `decide,paired`. `--arms timing` exits with a message that names `paired`.
 - The arm runs the fixtures whose `expected` is `decline` (10 fixtures), with `PAIRED_DRAWS = 3` draws each. It writes one row per fixture and draw to `rows/<tag>/paired.jsonl`. A rerun resumes on the fixture and draw.
+- `common.py`: `RunPaths` gains `paired` and `longhist_paired`, and loses `timing` with the arm. A new helper `done_pair_keys(path, key_field)` returns the `(key, draw)` pairs of rows without an error, with `key_field` `label` or `size_chars`. The existing `done_keys` stays for the decision arm.
 - A managed run (`--deployment`) still refuses every arm except `decide` (1.2).
 
 **`scripts/eval/fre1537/longhist.py`**
@@ -629,16 +633,16 @@ The FRE-1581 seat builds this change, with its tests, before its D7 run. It make
 | `planner` | `{nonce, prime_planner, prime_primary, planner, primary}` |
 | `declined` | true when `classify` of the planner call's plan is a decline |
 | `added_ms` | (`planner.planner.secs` + `planner.primary.ttft_any` − `single.primary.ttft_any`) × 1000, rounded. Null when an input is missing |
-| `void` | null, or a list of reasons from `planner_cache_reuse`, `primary_cache_reuse_single` and `primary_cache_reuse_planner` |
+| `void` | null, or a list of reasons from `planner_cache_reuse`, `primary_cache_reuse_single` and `primary_cache_reuse_planner`. A call with a null `timings.cache_n` or `timings.prompt_n` gives the reason `timings_missing` |
 | `error` | as today |
 
-Each call in `single` and `planner` holds the `stream` result without `content`: `secs`, `ttft_any`, `ttft_content`, `cache_n`, `prompt_n`, `prompt_ms`, `predicted_n` and `predicted_ms`. The measured planner call also holds `plan` and the reasoning fields, as the decision arm records them.
+Each call in `single` and `planner` holds the `stream` result, with its shape unchanged and without `content`: `secs`, `ttft_any`, `ttft_content`, `reasoning_chars`, `system_fingerprint`, `usage`, and `timings` with `cache_n`, `prompt_n`, `prompt_ms`, `predicted_n` and `predicted_ms`. The void rule reads `timings.cache_n` and `timings.prompt_n`. The measured planner call also holds `plan`, as the decision arm records it.
 
 **`scripts/eval/fre1537/score.py`**
 
 - Constants: `PAIRED_SPLIT_CHARS = 8000`, `PAIRED_SHORT_MAX_S = 3.0`, `PAIRED_SHORT_MIN = 28`, `PAIRED_SHORT_OF = 30`, `PAIRED_LONG_MAX_S = 10.0`, `PAIRED_LONG_MIN = 8` and `PAIRED_LONG_OF = 9`.
-- `score()` reads both paired files, puts their rows together, and splits them on `history_chars` at 8,000. A pair counts when `declined` is true, `void` is null and `error` is absent.
-- Two checks: "Paired added delay, history < 8,000 chars (median)" and "Paired added delay, history >= 8,000 chars (median)". Each is FAIL when its counted pairs are below its minimum, or its median is above its limit. The measured text shows the median and "k of n counted".
+- `score()` reads both paired files. It keeps the last row without an error for each pair key, and it checks each file's keys against its fixed set (1.1). It then puts the rows together and splits them on `history_chars` at 8,000. A pair counts when `declined` is true and `void` is null.
+- Two checks: "Paired added delay, history < 8,000 chars (median)" and "Paired added delay, history >= 8,000 chars (median)". Each is FAIL when a pair key is missing or unexpected, when its counted pairs are below its minimum, or when its median is above its limit. The measured text shows the median and "k of n counted".
 - The measured planner call of each pair counts for the parse threshold and the reasoning threshold, as `T3_planner` counts today. The planner prime counts for the reasoning threshold only. The primary calls count for neither.
 - `report.json` gains `paired.short` and `paired.long`. Each holds `counted`, `of`, `added_s_p50`, `planner_s_p50` (the median planner-call time over counted pairs, which 1.4 reads), `cache_loss_s_p50` (the median of `planner.primary.ttft_any` − `single.primary.ttft_any` over counted pairs) and `void` (the count per reason).
 - The info lines show the same figures and the median `added_ms` per fixture. The old timing line is removed.
@@ -648,9 +652,11 @@ Each call in `single` and `planner` holds the `stream` result without `content`:
 1. Rows that pass in both splits give PASS on both checks.
 2. A short median above 3 s gives FAIL.
 3. 27 counted short pairs give FAIL, with a median below the limit.
-4. A pair whose measured primary `cache_n` exceeds its prime's prompt tokens is void and does not count.
-5. A pair whose planner call expands does not count.
-6. `run_paired` against a fake engine: the nonce differs for each arm and draw, the order alternates, and each arm sends its calls in the order of 1.1.
+4. A long median above 10 s gives FAIL, and 7 counted long pairs give FAIL with a median below the limit.
+5. A run with a missing pair key gives FAIL, and a duplicated key does not raise the count.
+6. A pair whose measured primary `timings.cache_n` exceeds its prime's prompt tokens is void and does not count. A call with no `timings` is void too.
+7. A pair whose planner call expands does not count.
+8. `run_paired` against a fake engine: the nonce differs for each arm and draw, the order follows the rule of 1.1, and each arm sends its calls in the order of 1.1.
 
 **`scripts/eval/fre1537/README.md`:** steps 5 and 6 name the new files and their call counts, and the scorer's table gains the two rows.
 

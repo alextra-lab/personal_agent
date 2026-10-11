@@ -98,6 +98,19 @@ _VALID_MODES = frozenset(mode.value for mode in Mode)
 #: The only path form that a ``bash(python3 <path> *)`` allow rule may name (FRE-1585): relative,
 #: one skill, its ``scripts/`` directory, one ``.py`` file. No dot segment, no glob, no prefix.
 _SKILL_SCRIPT = re.compile(r"docs/skills/[a-z0-9][a-z0-9-]*/scripts/[A-Za-z0-9_][A-Za-z0-9_-]*\.py")
+#: The directory where the bash tool starts in the gateway image: ``WORKDIR /app`` in
+#: ``Dockerfile.gateway``, and ``bash.py`` passes no ``cwd=``. There, ``/app/<path>`` names the
+#: file that ``<path>`` names (FRE-1589).
+_IMAGE_WORKDIR = "/app"
+
+
+def _bash_workdir() -> Path:
+    """Return the directory where the bash tool starts a command.
+
+    Returns:
+        This process's working directory, which ``bash.py`` passes on to every command.
+    """
+    return Path.cwd()
 
 
 class PermissionRuleError(ValueError):
@@ -241,13 +254,33 @@ class PermissionRule:
 
         Returns:
             ``True`` only when the subcommand meets the closed condition and the words match. An
-            indirect-execution word matches only an exact rule.
+            indirect-execution word matches only an exact rule. A skill-script rule also matches
+            its script named as ``/app/<path>`` when bash starts in ``/app`` (FRE-1589).
         """
         if sub.refusal is not None or sub.words is None or self.bash_words is None:
             return False
         if sub.indirect and self.bash_prefix:
             return False
-        return _words_match(sub.words, self.bash_words, self.bash_prefix)
+        if _words_match(sub.words, self.bash_words, self.bash_prefix):
+            return True
+        return (
+            self._is_skill_script_rule
+            and _bash_workdir() == Path(_IMAGE_WORKDIR)
+            and _words_match(
+                sub.words, ("python3", f"{_IMAGE_WORKDIR}/{self.bash_words[1]}"), prefix=True
+            )
+        )
+
+    @property
+    def _is_skill_script_rule(self) -> bool:
+        """Whether the rule is ``bash(python3 docs/skills/<skill>/scripts/<file>.py *)``."""
+        return (
+            self.bash_prefix
+            and self.bash_words is not None
+            and len(self.bash_words) == 2
+            and self.bash_words[0] == "python3"
+            and _SKILL_SCRIPT.fullmatch(self.bash_words[1]) is not None
+        )
 
 
 def _words_match(words: Sequence[str], rule_words: Sequence[str], prefix: bool) -> bool:
@@ -435,7 +468,7 @@ def _skill_script_refusal(path: str) -> str | None:
     """
     if not _SKILL_SCRIPT.fullmatch(path):
         return f"{path!r} is not docs/skills/<skill>/scripts/<file>.py"
-    base = Path.cwd()
+    base = _bash_workdir()
     current = base
     for part in Path(path).parts:
         current = current / part

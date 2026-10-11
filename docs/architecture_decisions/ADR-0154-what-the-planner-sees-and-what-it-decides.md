@@ -1,6 +1,6 @@
 # ADR-0154: What the Planner Sees and What It Decides — an Isolated Planner, Thinking Off, Asked on Every Turn of the Four Register Types
 
-**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196).
+**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it.
 **Date:** 2026-10-03
 **Deciders:** Owner (one ADR in place of two, 2026-10-02; the design choice, the memory digest and the measurement budget, 2026-10-03), `master` (the five ADR-0152 review findings and the scope of FRE-1537), `adr` seat at Opus 5.5 (author, the 2026-10-03 planner measurement)
 **Tags:** routing, expansion, planner, memory, decomposition, latency
@@ -238,6 +238,8 @@ The probe used for Appendix A must be committed under `scripts/eval/` before the
 | Planner call, 60,000-char history, extended | at most 10 s | 5.9 s |
 | Planner call, 60,000-char history, cold | at most 60 s | 40.2 s |
 
+*Amended by Amendment 1 (2026-10-11):* the table gains two paired added-delay rows, one per history split. A configuration qualifies only if both pass (Amendment 1, 1.2).
+
 The decision thresholds sit one to three draws below the measured counts. The delay thresholds sit at about twice the measured values. The thresholds are a regression floor for this fixture set, not a claim about real-traffic accuracy. AC-4 measures real traffic.
 
 **Qualification is the gate.** A deployment receives a `planner` mode in `config/models.yaml` only in a change that posts its passing probe result on FRE-1537 (or, later, on the ticket of that change). Without a `planner` mode, D2 does not apply to the deployment (D2). So a deployment that misses any threshold keeps today's routing until it passes. Only an amendment to this ADR, approved by the owner, can change a threshold or admit a deployment that missed one.
@@ -387,7 +389,7 @@ The sample is small (Appendix A4). Each rejection below is an operational choice
 
 **Order:**
 1. The committed probe (D7), because AC-8 and AC-10 need it.
-2. The decision record with `first_token_ms` and `conversation_history_chars` (D6). It ships first and runs long enough to give the pre-change baseline of AC-5.
+2. The decision record with `first_token_ms` and `conversation_history_chars` (D6). It ships first and runs long enough to give the pre-change baseline of AC-5. *Amended by Amendment 1:* the baseline no longer gates the routing change. Step 5 waits for the paired arm instead (1.3).
 3. The digest (D5).
 4. The planner mode for the local binding (D4), with its passing probe result.
 5. The routing change (D2, D3), after 1 to 4.
@@ -400,7 +402,7 @@ The sample is small (Appendix A4). Each rejection below is an operational choice
 ## Verification / Acceptance Criteria
 
 These criteria belong to this ADR. They are adjudicated on FRE-1537 after the implementation chain deploys, not at the merge of this ADR. Two periods are used:
-- **The baseline:** from the D6 deploy to the routing change: at least 14 days, and at least 20 `SINGLE` turns of the four types below 8,000 characters of history. The routing change waits until both hold.
+- **The baseline:** from the D6 deploy to the routing change: at least 14 days, and at least 20 `SINGLE` turns of the four types below 8,000 characters of history. The routing change waits until both hold. *Amended by Amendment 1:* the baseline is no longer a condition of the routing change. Its turns stay as context for the floor check (1.4).
 - **The window:** 60 days after the routing change, or until AC-4's natural sample is full, whichever is first.
 
 Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and mostly declines. Each criterion states the minimum count it needs, and what happens when real traffic cannot reach it.
@@ -421,7 +423,7 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 
   · **Check:** decline-correct over the natural "should not" turns, and expand-correct over the challenge sample, each with a 95% Wilson interval. The natural "should expand" turns are reported with their interval as exploratory. · *Fails if* fewer than 95% of the window's `planner_asked` turns have a joinable capture, the natural sample holds fewer than 30 "should not" turns at the end of the window, or more than 2 of them were expanded (decline-correct below 28 of 30), or the challenge sample shows expand-correct below 12 of 15, or one pooled figure is reported in place of the two. At these sizes, a pass still allows a true rate as low as the interval's lower bound (78.7% for 28/30, 54.8% for 12/15). The ADR states that limit, and a real-traffic result stays a floor check, not an accuracy estimate.
 
-- **AC-5 — The delay the owner experiences is the one measured.** · **Check:** `first_token_ms` on declined `planner_asked` turns in the window, against `SINGLE` turns of the same task types in the baseline, on the same deployment. Both are split by `conversation_history_chars` at 8,000. · *Fails if*:
+- **AC-5 — The delay the owner experiences is the one measured.** *Replaced by Amendment 1 (1.3), 2026-10-11. The text below is the original and no longer applies.* · **Check:** `first_token_ms` on declined `planner_asked` turns in the window, against `SINGLE` turns of the same task types in the baseline, on the same deployment. Both are split by `conversation_history_chars` at 8,000. · *Fails if*:
   - the short split (below 8,000 characters) holds fewer than 20 turns in either period, or its median added delay exceeds 3 s; or
   - the median added delay exceeds 10 s at or above 8,000 characters, when each period holds at least 10 such turns; or
   - the comparison uses `planner_duration_ms` in place of `first_token_ms`.
@@ -478,6 +480,181 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 ### 2026-10-03 - Proposed
 **Changed By:** `adr` seat (FRE-1537)
 **Reason:** Drafted on the owner's "Draft it" after the 2026-10-03 measurement, the choice of design A with thinking off, and the choice to keep the ADR-0147 digest. Codex round 1 (8 blocking): an enforced input bound, a per-deployment planner gate with response evidence of thinking off, the relevance matrix keyed on the planner's decision, a counterfactual history size for the baseline, paired per-fixture delays with two contaminated rows excluded, statistics stated as "no difference detected", and the router alternative restored. Codex round 2 (5 blocking): no owner bypass of the gate except an ADR amendment, a completion-token threshold in D7, a separate `planner_gate_reason`, capture coverage and a pre-registered challenge list in AC-4, and a minimum short-history sample in AC-5. Codex round 3 (2 blocking): a minimum sample for AC-7 and one terminal event per planner run in AC-11. The round budget is exhausted at three.
+
+### 2026-10-11 - Amendment 1 accepted
+**Changed By:** `adr` seat (FRE-1587)
+**Reason:** The owner, 2026-10-11, relayed by master: the planner assessment "could and should be integrated into our model testing", then "Go now" for both steps (amend AC-5, and add the measurement to the FRE-1581 run). On FRE-1515, the same day: "no 14 day delay". In the ADR session of 2026-10-11, the owner chose four points that the ticket left open: the pair measures to the primary's first token, direct on the engine; the 10 decline fixtures give the short pairs; every configuration needs the paired arm, and the managed path is built later; and the missing engine field is a stated limit, with FRE-1588 filed to close it.
+
+---
+
+## Amendment 1 — The planner's added delay is measured per configuration, in the D7 probe (FRE-1587, 2026-10-11)
+
+**Status:** Accepted. The owner decided it on 2026-10-11 (Status Updates). It changes D7 and AC-5, and it adds a precondition that FRE-1515 must test. Every other part of this ADR is unchanged.
+
+### Why
+
+The original AC-5 compared production turns from two periods: `SINGLE` turns before the routing change, and declined `planner_asked` turns after it. Master's read of the baseline on 2026-10-11 (FRE-1515) found three faults:
+
+- The two periods hold different questions. Answer length and tool calls add noise, and at 20 turns a 3 s limit is hard to separate from that noise.
+- Model testing changed the answering model. The 40 short-history baseline turns split as Flash-Next 19, Gemma 19 and Sonnet 2.
+- `model_call_completed` records no engine. The FRE-1517 study served Flash-Next through more than one engine on the same tunnel.
+
+A paired measure removes all three faults. Both arms of a pair send the same turn to the same configuration. So the difference between the arms is the planner's own cost.
+
+### 1.1 — The paired arm
+
+The D7 probe gains a paired arm. A pair is two runs of the same turn on the same configuration (engine, model, quant, planner mode and planner prompt hash):
+
+- **The `SINGLE` arm:** the primary call alone, as a turn routed `SINGLE` sends it.
+- **The planner arm:** the planner call, then the same primary call, as a declined `planner_asked` turn sends them.
+
+**The measure.** The added delay of a pair is the planner call's wall clock, plus the planner arm's primary time to first token, minus the `SINGLE` arm's primary time to first token. So the difference holds the planner call and any loss of the primary's prompt cache. The probe stops each primary call at its first token (`max_tokens: 1`). After the first token, the answer and the tool loop do the same work in both arms. They add noise and no planner cost.
+
+The probe does not run a gateway turn, for two reasons:
+
+- No gateway can make a declined `planner_asked` turn before FRE-1515 ships, and FRE-1515 merges on this result.
+- Production `first_token_ms` measures the whole reply today, because nothing streams token by token (master, FRE-1515, 2026-10-03).
+
+**The precondition.** The measure is valid only if a declined `planner_asked` turn sends the same primary request as a `SINGLE` turn with the same session state: the same messages, tools and sampling. FRE-1515 asserts this in a test (1.3).
+
+**Which turns.**
+
+| Split | Turns | Draws | Pairs | Counted pairs needed | Limit |
+|---|---|---|---|---|---|
+| History below 8,000 characters | the 10 decline fixtures: 6 single-turn and 4 follow-ups | 3 per fixture | 30 | at least 28 | median added delay at most 3 s |
+| History at or above 8,000 characters | the long-history turn at 8,000, 30,000 and 60,000 characters | 3 per size | 9 | at least 8 | median added delay at most 10 s |
+
+- The limits are the original AC-5 limits, unchanged.
+- The expand fixtures give no pair. The planner expands on them, and a turn that expands is not a declined turn.
+- A pair counts when its planner call declines under D2's validation rule, no call of the pair errors, and the pair is not void (below).
+- A split with fewer counted pairs than it needs is FAIL. It is never scaled.
+- The median uses the index rule of Appendix A4.
+- The split of a pair is set by the length of the planner's rendered history for that turn (`history_chars`).
+
+**The engine state before each arm.** Each arm starts from the state that the previous turn left under that arm's routing:
+
+- `SINGLE` arm: send the previous turn's primary request, then measure the primary call.
+- Planner arm: send the previous turn's planner request, then the previous turn's primary request. Then measure the planner call and the primary call.
+
+A prime is a request that sets this state. It has `max_tokens: 1`, and the probe does not measure it.
+
+- **The previous primary request** is the turn's own primary request cut before its last user message, as `prime_body` cuts it today. For a single-turn fixture, that is the system prompt and tools with the user message ".".
+- **The previous planner request** is the planner request of the previous turn, built with the production `build_planner_user_message`. Its history is the turn's history without its last exchange, and its query is the user message of that last exchange. A single-turn fixture has no previous turn, so its previous planner request is the planner system prompt with the user message ".".
+
+**No reuse across arms or draws.** Each arm of each draw puts a line `probe nonce <8 hex characters>` at the start of the system message of every request in that arm. The nonce is new for each arm and draw. So no arm can reuse a prompt that another arm or draw cached. The rendered planner prompt does not hold the nonce, so the configuration fingerprint does not change. The arm order alternates: even draws run the `SINGLE` arm first, and odd draws run the planner arm first. Appendix A4 found a bias from a fixed order.
+
+**A void pair.** A pair is void when a measured call's `cache_n` exceeds the prompt tokens (`cache_n + prompt_n`) of the prime before it in the same arm. The planner call is compared with the planner prime. Each primary call is compared with its primary prime. A void pair means that the engine reused more than the previous turn left, so the instrument failed on that pair. A void pair does not count. The report states the void count and the reasons.
+
+**Cost.** Every call goes to the local engine and costs no money. Each pair makes 6 calls: 180 calls in the short split and 54 in the long split. The long primes prefill up to about 15,000 tokens cold. The run time is not measured yet. An estimate is about one hour.
+
+### 1.2 — D7 qualification includes the paired arm
+
+A configuration qualifies only if both paired checks pass, together with every row of D7's table. So every candidate model in model testing is measured on the paired arm. D7's table gains two rows:
+
+| Criterion | Threshold | Measured before this amendment |
+|---|---|---|
+| Paired added delay, history below 8,000 chars | median at most 3 s, at least 28 of 30 pairs counted | about 1.0 s median. Appendix A3 "A planner + primary" minus "SINGLE" on the 9 decline rows, one draw each, with no nonce and no void rule |
+| Paired added delay, history at or above 8,000 chars | median at most 10 s, at least 8 of 9 pairs counted | not measured |
+
+**Managed deployments.** Every configuration needs the paired arm, including a managed one. The probe's managed path calls the planner only, so it cannot run a pair today. The ticket that next qualifies a managed deployment for a `planner` mode builds the managed paired path. It uses the production client, under the probe's `--max-usd` cap. Until that path exists, no managed deployment can qualify. Today no managed deployment has a `planner` mode, so this changes nothing in production.
+
+**A `planner` mode from before this amendment.** A deployment with a `planner` mode in `config/models.yaml` reaches D2 when FRE-1515 ships. So, before FRE-1515 merges, each such mode needs a passing D7 result that includes the paired arm, or it is removed (AC-10).
+
+### 1.3 — AC-5 moves to the probe
+
+The original AC-5 is replaced by this text:
+
+- **AC-5 — The planner's added delay passes the paired arm on the production configuration.** · **Check:**
+  - The scorer report of FRE-1581's D7 run, on the production configuration, posted on FRE-1515 with its fingerprint before FRE-1515 merges. The production configuration is the default local primary binding at its deployed engine build, model, quant, `planner` mode and planner prompt hash.
+  - FRE-1515's test of the precondition in 1.1. The test drives the same input once routed `SINGLE` and once routed `planner_asked` with a declining planner stub. It captures the first primary request of each, and it asserts equal messages, tools and sampling.
+
+  · *Fails if*:
+  - either paired check in the report is FAIL;
+  - the posted fingerprint differs from the configuration that FRE-1515 deploys;
+  - the precondition test is absent, or it finds a difference; or
+  - the result reports `planner_duration_ms` alone in place of the paired measure.
+
+**FRE-1515's merge condition** becomes: the paired arm passes on the production configuration in FRE-1581's D7 run. The 14-day and 20-turn baseline is no longer a merge condition. FRE-1515's other conditions do not change: the full D7 pass on the current planner prompt, and AC-10.
+
+### 1.4 — The production check stays, as a floor and not a gate
+
+After the routing change, the four types have no `SINGLE` turns on a planner deployment. So the live added delay cannot be seen directly. Master checks instead that the live planner call matches the probe. The check runs over the window, on the production deployment, in each split at 8,000 characters:
+
+- **The comparison:** the median live `planner_duration_ms` on declined `planner_asked` turns, against the median planner-call time over the counted pairs of the D7 run that qualified the configuration, in the same split. The scorer reports that median per split (1.6).
+- **The trigger:** a split with at least 10 live declined turns has a median more than twice the probe's median. Then master posts both figures on FRE-1537, tells the owner, and re-runs the paired arm on the deployed configuration.
+- **Context only:** the live median `first_token_ms` of declined turns, against the `SINGLE` turns of the four types that the same deployment recorded before the routing change. The two sets hold different questions and whole replies, so this decides nothing.
+
+The check is not a gate. No result of it reverts the routing change by itself.
+
+**Limits, stated in advance:**
+
+- The live check sees the planner call, not the loss of the primary's cache. Only the probe measures that loss.
+- `model_call_completed` records no engine, and `planner_deployment` names a catalog key, not the engine behind it. So a live turn that another engine served on the same tunnel cannot be excluded. Until FRE-1588 records the engine, master counts only turns outside model-testing periods on that deployment.
+
+### 1.5 — The owner's words
+
+The dated entry in Status Updates records them.
+
+### 1.6 — The probe change that FRE-1581 makes
+
+The FRE-1581 seat builds this change, with its tests, before its D7 run. It makes no design decision beyond this text.
+
+**`scripts/eval/fre1537/replay.py`**
+
+- Replace the `timing` arm with a `paired` arm, in a function `run_paired`. `--arms` takes `decide` and `paired`, and the default is `decide,paired`. `--arms timing` exits with a message that names `paired`.
+- The arm runs the fixtures whose `expected` is `decline` (10 fixtures), with `PAIRED_DRAWS = 3` draws each. It writes one row per fixture and draw to `rows/<tag>/paired.jsonl`. A rerun resumes on the fixture and draw.
+- A managed run (`--deployment`) still refuses every arm except `decide` (1.2).
+
+**`scripts/eval/fre1537/longhist.py`**
+
+- Add `--arms` with `cold` and `paired`. The default is `cold,paired`. `cold` is today's arm, unchanged, and it still writes `rows/<tag>/longhist.jsonl`.
+- `paired` runs each size in `SIZES` for 3 draws. It writes one row per size and draw to `rows/<tag>/longhist_paired.jsonl`.
+- The turn: the history H of that size, then `FIRST_QUERY` and `FIRST_REPLY` as one exchange, then `SECOND_QUERY`. The previous turn is H with `FIRST_QUERY`. The planner calls render the history with `render.build_user_message`, as `_call` does today.
+- The primary request of the turn starts from the captured body of `reference_label(inputs)`. It keeps that body's system message (with the nonce line), tools and sampling. The messages between the system message and the last user message become the turn's history as role messages. The last user message becomes `SECOND_QUERY`. The messages after the last user message stay unchanged.
+- One function builds the history pairs of a size and a nonce. `render_history` makes the planner's text from them, and the primary request makes role messages from them. So the two views of one history cannot differ.
+- Every draw renders a new history with the arm's nonce, so no size or draw reuses another's cache.
+
+**The row of both paired files**
+
+| Field | Value |
+|---|---|
+| `arm` | `paired` or `longhist_paired` |
+| `tag`, `ts` | as today |
+| `label` or `size_chars` | the fixture, or the history size |
+| `draw` | 0, 1 or 2 |
+| `kind` | `single`, `followup` or `longhist` |
+| `history_chars` | the length of the planner's rendered history for the turn. From `inputs.fixture(label)["history_chars"]`, or the length of the long arm's rendered history |
+| `order` | `single_first` or `planner_first` |
+| `single` | `{nonce, prime, primary}` |
+| `planner` | `{nonce, prime_planner, prime_primary, planner, primary}` |
+| `declined` | true when `classify` of the planner call's plan is a decline |
+| `added_ms` | (`planner.planner.secs` + `planner.primary.ttft_any` − `single.primary.ttft_any`) × 1000, rounded. Null when an input is missing |
+| `void` | null, or a list of reasons from `planner_cache_reuse`, `primary_cache_reuse_single` and `primary_cache_reuse_planner` |
+| `error` | as today |
+
+Each call in `single` and `planner` holds the `stream` result without `content`: `secs`, `ttft_any`, `ttft_content`, `cache_n`, `prompt_n`, `prompt_ms`, `predicted_n` and `predicted_ms`. The measured planner call also holds `plan` and the reasoning fields, as the decision arm records them.
+
+**`scripts/eval/fre1537/score.py`**
+
+- Constants: `PAIRED_SPLIT_CHARS = 8000`, `PAIRED_SHORT_MAX_S = 3.0`, `PAIRED_SHORT_MIN = 28`, `PAIRED_SHORT_OF = 30`, `PAIRED_LONG_MAX_S = 10.0`, `PAIRED_LONG_MIN = 8` and `PAIRED_LONG_OF = 9`.
+- `score()` reads both paired files, puts their rows together, and splits them on `history_chars` at 8,000. A pair counts when `declined` is true, `void` is null and `error` is absent.
+- Two checks: "Paired added delay, history < 8,000 chars (median)" and "Paired added delay, history >= 8,000 chars (median)". Each is FAIL when its counted pairs are below its minimum, or its median is above its limit. The measured text shows the median and "k of n counted".
+- The measured planner call of each pair counts for the parse threshold and the reasoning threshold, as `T3_planner` counts today. The planner prime counts for the reasoning threshold only. The primary calls count for neither.
+- `report.json` gains `paired.short` and `paired.long`. Each holds `counted`, `of`, `added_s_p50`, `planner_s_p50` (the median planner-call time over counted pairs, which 1.4 reads), `cache_loss_s_p50` (the median of `planner.primary.ttft_any` − `single.primary.ttft_any` over counted pairs) and `void` (the count per reason).
+- The info lines show the same figures and the median `added_ms` per fixture. The old timing line is removed.
+
+**Tests** (offline, in `tests/test_eval/test_fre1537_score.py` and `tests/test_eval/test_fre1537_replay.py`):
+
+1. Rows that pass in both splits give PASS on both checks.
+2. A short median above 3 s gives FAIL.
+3. 27 counted short pairs give FAIL, with a median below the limit.
+4. A pair whose measured primary `cache_n` exceeds its prime's prompt tokens is void and does not count.
+5. A pair whose planner call expands does not count.
+6. `run_paired` against a fake engine: the nonce differs for each arm and draw, the order alternates, and each arm sends its calls in the order of 1.1.
+
+**`scripts/eval/fre1537/README.md`:** steps 5 and 6 name the new files and their call counts, and the scorer's table gains the two rows.
+
+The FRE-1581 run then uses `replay --arms decide,paired` and `longhist` with its default arms, in `--mode planner`, and posts the scorer report on FRE-1515 (1.3).
 
 ---
 

@@ -244,6 +244,13 @@ class TestTheGrantIsBounded:
         )
         assert [f.real_path for f in grant.files] == [str(files["named"].resolve())]
 
+    def test_a_path_with_a_nul_byte_grants_nothing_and_never_raises(
+        self, files: dict[str, Path]
+    ) -> None:
+        """A planner value must grant nothing, not drop the task (code review, FRE-1580)."""
+        grant = ReadGrant.for_task([f"{files['named']}\x00x", str(files["named"])], trace_id="t")
+        assert [f.real_path for f in grant.files] == [str(files["named"].resolve())]
+
     def test_at_most_ten_files_are_granted(self, files: dict[str, Path]) -> None:
         paths = []
         for i in range(12):

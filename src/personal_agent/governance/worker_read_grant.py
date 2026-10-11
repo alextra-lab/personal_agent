@@ -60,7 +60,13 @@ class ReadGrantRefused(Exception):
 
 @dataclass(frozen=True)
 class GrantedFile:
-    """One file a task may read: its real path, and its device and inode at grant time."""
+    """One file a task may read, as recorded at grant time.
+
+    Attributes:
+        real_path: The fully resolved path.
+        device: The file's device number.
+        inode: The file's inode number.
+    """
 
     real_path: str
     device: int
@@ -180,6 +186,8 @@ def _drop_reason(raw: object) -> str | None:
     """Return why an entry cannot name a file, or ``None`` when it is an absolute path string."""
     if not isinstance(raw, str) or not raw:
         return "not_a_path_string"
+    if "\x00" in raw:
+        return "nul_byte"
     if not os.path.isabs(raw):
         return "not_absolute"
     return None
@@ -190,7 +198,8 @@ def _record(path: str) -> GrantedFile | None:
     try:
         real = Path(path).resolve(strict=True)
         info = os.lstat(real)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
+        # A planner value must grant nothing, never raise (ValueError: an unusable path).
         return None
     if not stat.S_ISREG(info.st_mode):
         return None

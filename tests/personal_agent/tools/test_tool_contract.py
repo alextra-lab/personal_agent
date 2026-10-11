@@ -512,9 +512,12 @@ async def test_a_query_telemetry_refusal_reaches_the_model_with_the_allowed_fiel
 
 #: For each folded skill: the tool description, and phrases that carry the skill's rule.
 FOLDED_RULES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "bash (bash.md)": ("bash", ("absolute paths", "plain command", "always ask", "refused")),
+    "bash (bash.md)": (
+        "bash",
+        ("absolute paths", "plain command", "always ask", "refused", "curl runs without asking"),
+    ),
     "bash (list-directory.md)": ("bash", ("wc -l", "not ls -R")),
-    "fetch-url.md": ("fetch_url", ("citable", "bash curl", "web_search")),
+    "fetch-url.md": ("fetch_url", ("citable", "bash curl", "web_search", "asks the user")),
     "get_location.md": ("get_location", ("never ask", "consent_not_given", "session_notes")),
     "personal-history-recall.md (recall)": (
         "recall_personal_history",

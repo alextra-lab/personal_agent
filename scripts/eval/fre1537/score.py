@@ -17,13 +17,14 @@ import argparse
 import json
 import math
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from scripts.eval.fre1537.common import RunPaths, read_jsonl
+from scripts.eval.fre1537.common import LONGHIST_SIZES, PAIRED_DRAWS, RunPaths, read_jsonl
+from scripts.eval.fre1537.fixtures import load_fixtures
 
 Outcome = Literal["decline", "expand", "invalid"]
 
@@ -36,6 +37,14 @@ DECLINED_SINGLE_TURN_P50_MAX_S = 2.0
 LONG_HISTORY_CHARS = 60_000
 LONG_EXTENDED_MAX_S = 10.0
 LONG_COLD_MAX_S = 60.0
+# ADR-0154 Amendment 1, 1.2: the paired added delay, per history split.
+PAIRED_SPLIT_CHARS = 8000
+PAIRED_SHORT_MAX_S = 3.0
+PAIRED_SHORT_MIN = 28
+PAIRED_SHORT_OF = 30
+PAIRED_LONG_MAX_S = 10.0
+PAIRED_LONG_MIN = 8
+PAIRED_LONG_OF = 9
 
 _FINGERPRINT_FIELDS: tuple[tuple[str, ...], ...] = (
     ("engine", "build"),
@@ -161,11 +170,13 @@ class Report:
         fingerprint: The configuration fingerprint of the run.
         checks: One entry per D7 threshold, plus the fingerprint check.
         info: Informational lines. They decide nothing.
+        paired: The ``short`` and ``long`` blocks of the paired arm (ADR-0154 Amendment 1, 1.6).
     """
 
     fingerprint: Mapping[str, object]
     checks: Sequence[Check]
     info: Sequence[str]
+    paired: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
@@ -206,6 +217,7 @@ class Report:
                 }
                 for c in self.checks
             ],
+            "paired": {k: dict(v) for k, v in self.paired.items()},
         }
 
 
@@ -265,10 +277,155 @@ def _max_check(name: str, limit: float, measured: float | None) -> Check:
     return Check(name, requirement, f"{measured:.1f} s", measured <= limit)
 
 
+@dataclass(frozen=True)
+class PairSplit:
+    """The pairs of one history split, after the key check.
+
+    Attributes:
+        name: ``short`` or ``long``.
+        rows: The last row without an error for each pair key in the split.
+        key_problems: The missing and unexpected keys of the file that feeds the split.
+    """
+
+    name: str
+    rows: Sequence[Mapping[str, object]]
+    key_problems: Sequence[str]
+
+    def counted(self) -> list[Mapping[str, object]]:
+        """Return the pairs that count: the planner declined and the pair is not void."""
+        return [r for r in self.rows if r.get("declined") is True and not r.get("void")]
+
+
+def _pair_key(row: Mapping[str, object], key_field: str) -> tuple[str, int]:
+    return (str(row.get(key_field)), int(_num(row.get("draw")) or 0))
+
+
+def _keyed_pairs(
+    rows: Sequence[Mapping[str, object]], key_field: str, expected: set[tuple[str, int]]
+) -> tuple[list[Mapping[str, object]], list[str]]:
+    """Keep the last row without an error for each pair key, and check the keys.
+
+    Args:
+        rows: One paired rows file.
+        key_field: ``label`` or ``size_chars``.
+        expected: The fixed key set of the file (ADR-0154 Amendment 1, 1.1).
+
+    Returns:
+        The kept rows and a description of each missing or unexpected key.
+    """
+    kept: dict[tuple[str, int], Mapping[str, object]] = {}
+    for r in rows:
+        if "error" not in r:
+            kept[_pair_key(r, key_field)] = r
+    missing = sorted(expected - set(kept))
+    unexpected = sorted(set(kept) - expected)
+    problems = [f"missing {k}/{d}" for k, d in missing] + [
+        f"unexpected {k}/{d}" for k, d in unexpected
+    ]
+    return list(kept.values()), problems
+
+
+def expected_pair_keys() -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
+    """Return the fixed pair keys: the decline fixtures and the long-history sizes, each by draw."""
+    labels = [fx.label for fx in load_fixtures() if fx.expected == "decline"]
+    draws = range(PAIRED_DRAWS)
+    return (
+        {(label, d) for label in labels for d in draws},
+        {(str(size), d) for size in LONGHIST_SIZES for d in draws},
+    )
+
+
+def paired_splits(
+    paired_rows: Sequence[Mapping[str, object]],
+    longhist_paired_rows: Sequence[Mapping[str, object]],
+) -> tuple[PairSplit, PairSplit]:
+    """Check each paired file's keys, then split the pairs on ``history_chars`` at 8,000.
+
+    A key problem of ``paired.jsonl`` fails the short split, and one of ``longhist_paired.jsonl``
+    fails the long split, because each file holds the fixed key set of one split.
+
+    Args:
+        paired_rows: The rows of the decline fixtures.
+        longhist_paired_rows: The rows of the long-history turns.
+
+    Returns:
+        The short split and the long split.
+    """
+    short_keys, long_keys = expected_pair_keys()
+    short_file, short_problems = _keyed_pairs(paired_rows, "label", short_keys)
+    long_file, long_problems = _keyed_pairs(longhist_paired_rows, "size_chars", long_keys)
+    rows = [*short_file, *long_file]
+
+    def is_long(r: Mapping[str, object]) -> bool:
+        return (_num(r.get("history_chars")) or 0) >= PAIRED_SPLIT_CHARS
+
+    return (
+        PairSplit("short", [r for r in rows if not is_long(r)], short_problems),
+        PairSplit("long", [r for r in rows if is_long(r)], long_problems),
+    )
+
+
+def _secs(row: Mapping[str, object], arm: str, call: str, key: str) -> float | None:
+    return _num(_mapping(_mapping(row.get(arm)).get(call)).get(key))
+
+
+def paired_block(split: PairSplit, of: int) -> dict[str, object]:
+    """Return the ``report.json`` block of one split (ADR-0154 Amendment 1, 1.6).
+
+    Args:
+        split: The split.
+        of: The number of pairs the split must hold.
+
+    Returns:
+        ``counted``, ``of``, ``added_s_p50``, ``planner_s_p50``, ``cache_loss_s_p50`` and ``void``,
+        the count of void pairs per reason. The medians are over the counted pairs.
+    """
+    counted = split.counted()
+    added = [x / 1000 for r in counted if (x := _num(r.get("added_ms"))) is not None]
+    planner = [x for r in counted if (x := _secs(r, "planner", "planner", "secs")) is not None]
+    loss = []
+    for r in counted:
+        with_planner = _secs(r, "planner", "primary", "ttft_any")
+        alone = _secs(r, "single", "primary", "ttft_any")
+        if with_planner is not None and alone is not None:
+            loss.append(with_planner - alone)
+    void: Counter[str] = Counter()
+    for r in split.rows:
+        reasons = r.get("void")
+        if isinstance(reasons, list):
+            void.update(str(x) for x in reasons)
+    return {
+        "counted": len(counted),
+        "of": of,
+        "added_s_p50": percentile(added, 0.5),
+        "planner_s_p50": percentile(planner, 0.5),
+        "cache_loss_s_p50": percentile(loss, 0.5),
+        "void": dict(sorted(void.items())),
+    }
+
+
+def _paired_check(
+    name: str, split: PairSplit, block: Mapping[str, object], minimum: int, limit: float
+) -> Check:
+    of = int(_num(block["of"]) or 0)
+    requirement = f"<= {limit:g} s, >= {minimum}/{of}"
+    median = _num(block["added_s_p50"])
+    counted = int(_num(block["counted"]) or 0)
+    text = "no counted pair" if median is None else f"median {median:.2f} s"
+    text += f", {counted} of {len(split.rows)} counted"
+    if split.key_problems:
+        text += "; " + ", ".join(split.key_problems)
+    passed = (
+        not split.key_problems and counted >= minimum and median is not None and median <= limit
+    )
+    return Check(name, requirement, text, passed)
+
+
 def score(
     decide_rows: Sequence[Mapping[str, object]],
     longhist_rows: Sequence[Mapping[str, object]],
-    timing_rows: Sequence[Mapping[str, object]],
+    paired_rows: Sequence[Mapping[str, object]],
+    longhist_paired_rows: Sequence[Mapping[str, object]],
     fingerprint: Mapping[str, object],
 ) -> Report:
     """Check every D7 threshold against the rows of one configuration.
@@ -276,11 +433,12 @@ def score(
     Args:
         decide_rows: Decision-arm rows, one per planner call.
         longhist_rows: Long-history arm rows, one per size.
-        timing_rows: Timing-arm rows (informational only).
+        paired_rows: Paired-arm rows of the decline fixtures, one per fixture and draw.
+        longhist_paired_rows: Paired-arm rows of the long-history turns, one per size and draw.
         fingerprint: The configuration fingerprint.
 
     Returns:
-        The report. A threshold with too few draws is FAIL, never scaled.
+        The report. A threshold with too few draws or pairs is FAIL, never scaled.
     """
     good, errored = _dedupe(decide_rows)
     draws = [_draw(r) for r in good]
@@ -294,17 +452,23 @@ def score(
     fu_dec = [d for d in dec if d.kind == "followup"]
     fu_exp = [d for d in exp if d.kind == "followup"]
 
-    # Every planner call of the run counts for these two thresholds: the decision draws, the planner call
-    # of the timing arm, and both planner calls of the long-history arm.
-    side_calls = [_mapping(r.get("T3_planner")) for r in timing_rows] + [
-        _mapping(r.get(k)) for r in longhist_rows for k in ("cold", "extended")
+    short, long = paired_splits(paired_rows, longhist_paired_rows)
+    pairs = [*short.rows, *long.rows]
+    # Every planner call of the run counts for the parse threshold: the decision draws, both planner
+    # calls of the long-history arm, and the measured planner call of each pair. The planner prime of
+    # a pair counts for the reasoning threshold only (Amendment 1, 1.6). No primary call counts.
+    parsed_calls = [_mapping(r.get(k)) for r in longhist_rows for k in ("cold", "extended")] + [
+        _mapping(_mapping(r.get("planner")).get("planner")) for r in pairs
+    ]
+    reasoning_calls = parsed_calls + [
+        _mapping(_mapping(r.get("planner")).get("prime_planner")) for r in pairs
     ]
     invalid = sum(d.outcome == "invalid" for d in draws) + sum(
-        classify(c.get("plan")) == "invalid" for c in side_calls if c
+        classify(c.get("plan")) == "invalid" for c in parsed_calls if c
     )
     # A managed provider can think without a visible character: a redacted thinking block, or a
     # reasoning-token count with the text hidden. Both count (FRE-1516). Local rows carry neither field.
-    side = [_draw({**c, "label": "side"}) for c in side_calls if c]
+    side = [_draw({**c, "label": "side"}) for c in reasoning_calls if c]
     reasoning = max(
         [d.reasoning_chars for d in draws] + [d.reasoning_chars for d in side], default=0
     )
@@ -315,6 +479,10 @@ def score(
     single_secs = [d.secs for d in declined if d.kind == "single" and d.secs is not None]
     tokens_p50 = percentile(tokens, 0.5)
     secs_p50 = percentile(single_secs, 0.5)
+    paired = {
+        "short": paired_block(short, PAIRED_SHORT_OF),
+        "long": paired_block(long, PAIRED_LONG_OF),
+    }
 
     checks = [
         _count_check("Decline-correct", DECLINE_MIN, DECLINE_OF, *correct(dec, "decline")),
@@ -352,16 +520,32 @@ def score(
         _max_check(
             "Planner call, 60,000 chars, cold", LONG_COLD_MAX_S, _long_call(longhist_rows, "cold")
         ),
+        _paired_check(
+            "Paired added delay, history < 8,000 chars (median)",
+            short,
+            paired["short"],
+            PAIRED_SHORT_MIN,
+            PAIRED_SHORT_MAX_S,
+        ),
+        _paired_check(
+            "Paired added delay, history >= 8,000 chars (median)",
+            long,
+            paired["long"],
+            PAIRED_LONG_MIN,
+            PAIRED_LONG_MAX_S,
+        ),
         _fingerprint_check(fingerprint),
     ]
-    return Report(fingerprint, checks, _info(draws, errored, longhist_rows, timing_rows))
+    info = _info(draws, errored, longhist_rows, (short, long), paired)
+    return Report(fingerprint, checks, info, paired)
 
 
 def _info(
     draws: Sequence[Draw],
     errored: int,
     longhist_rows: Sequence[Mapping[str, object]],
-    timing_rows: Sequence[Mapping[str, object]],
+    splits: Sequence[PairSplit],
+    paired: Mapping[str, Mapping[str, object]],
 ) -> list[str]:
     out = [f"call errors: {errored}", f"draws scored: {len(draws)}"]
     per: dict[str, list[Outcome]] = defaultdict(list)
@@ -384,20 +568,23 @@ def _info(
             f"cold {_num(_mapping(r.get('cold')).get('secs'))} s, "
             f"extended {_num(_mapping(r.get('extended')).get('secs'))} s"
         )
-    base = []
-    with_planner = []
-    for r in timing_rows:
-        t1 = _num(_mapping(r.get("T1_primary")).get("ttft_any"))
-        planner = _num(_mapping(r.get("T3_planner")).get("secs"))
-        t3 = _num(_mapping(r.get("T3_primary")).get("ttft_any"))
-        if t1 is not None and planner is not None and t3 is not None:
-            base.append(t1)
-            with_planner.append(planner + t3 - t1)
-    if with_planner:
+    for split in splits:
+        b = paired[split.name]
         out.append(
-            f"added time to first token, paired per fixture (n={len(with_planner)}): "
-            f"p50 {percentile(with_planner, 0.5):.1f} s, p90 {percentile(with_planner, 0.9):.1f} s"
+            f"paired {split.name}: {b['counted']} of {b['of']} counted, "
+            f"added p50 {b['added_s_p50']} s, planner call p50 {b['planner_s_p50']} s, "
+            f"cache loss p50 {b['cache_loss_s_p50']} s, void {b['void'] or 'none'}"
         )
+        per_key: dict[str, list[float]] = defaultdict(list)
+        for r in split.counted():
+            key = str(r.get("label", r.get("size_chars")))
+            if (ms := _num(r.get("added_ms"))) is not None:
+                per_key[key].append(ms)
+        if per_key:
+            out.append(
+                f"paired {split.name} median added_ms per key: "
+                + ", ".join(f"{k} {percentile(v, 0.5):g}" for k, v in sorted(per_key.items()) if v)
+            )
     return out
 
 
@@ -417,7 +604,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     paths = RunPaths(args.run_dir, args.tag)
     fingerprint = json.loads(paths.fingerprint.read_text()) if paths.fingerprint.exists() else {}
     report = score(
-        read_jsonl(paths.decide), read_jsonl(paths.longhist), read_jsonl(paths.timing), fingerprint
+        read_jsonl(paths.decide),
+        read_jsonl(paths.longhist),
+        read_jsonl(paths.paired),
+        read_jsonl(paths.longhist_paired),
+        fingerprint,
     )
     text = report.render()
     paths.rows.mkdir(parents=True, exist_ok=True)

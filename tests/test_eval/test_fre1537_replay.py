@@ -9,7 +9,8 @@ from pathlib import Path
 import httpx
 import pytest
 from scripts.eval.fre1537 import fingerprint, llama, longhist, render, replay
-from scripts.eval.fre1537.common import RunPaths, read_jsonl
+from scripts.eval.fre1537.common import RunPaths, append_jsonl, done_pair_keys, read_jsonl
+from scripts.eval.fre1537.fixtures import load_histories
 
 URL = "http://llama.test/v1/chat/completions"
 SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0, "cache_prompt": True}
@@ -278,18 +279,6 @@ def test_run_decide_records_an_error_row_and_retries_it(tmp_path: Path) -> None:
     assert len(rows) == 2 and "error" not in rows[1]
 
 
-def test_run_timing_row_shape(tmp_path: Path) -> None:
-    paths, inputs = make_inputs(tmp_path)
-    with client_for(lambda req: sse_response(content=DECLINE)) as client:
-        replay.run_timing(
-            client, URL, "m", paths, inputs, llama.MODES["thinking_off"], ["greeting"]
-        )
-    (row,) = read_jsonl(paths.timing)
-    assert {"T1_primary", "T3_planner", "T3_primary"} <= set(row)
-    assert row["T3_planner"]["plan"]["declined"] is True  # type: ignore[index]
-    assert "content" not in row["T3_planner"]  # type: ignore[operator]
-
-
 def test_long_history_arm_builds_each_size_and_extends_the_history(tmp_path: Path) -> None:
     paths, inputs = make_inputs(tmp_path)
     bodies: list[dict[str, object]] = []
@@ -449,34 +438,6 @@ def test_reasoning_written_inline_in_the_content_counts_as_reasoning() -> None:
     client = client_for(lambda req: sse_response(content="<think>abcde</think>" + DECLINE))
     res = llama.stream(client, URL, "m", {"messages": []})
     assert res["reasoning_chars"] == 5
-
-
-def test_timing_arm_sends_the_digest_as_a_tool_result(tmp_path: Path) -> None:
-    """FRE-1360: the timing arm's planner request carries the digest the production way."""
-    paths, inputs = make_inputs(tmp_path)
-    requests: list[list[dict[str, object]]] = []
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        body = json.loads(req.content)
-        if body.get("response_format"):
-            requests.append(body["messages"])
-        return sse_response(content=DECLINE)
-
-    with client_for(handler) as client:
-        replay.run_timing(
-            client,
-            URL,
-            "m",
-            paths,
-            inputs,
-            llama.MODES["thinking_off"],
-            ["boiler_expand"],
-            digest="DIGEST",
-        )
-    (messages,) = requests
-    # The fixture's own rendered user message, unchanged: the digest is not in it.
-    assert messages[1]["content"] == inputs.fixture("boiler_expand")["user"]
-    assert messages[-1]["role"] == "tool" and "DIGEST" in str(messages[-1]["content"])
 
 
 def sse_with_fingerprint(build: str) -> httpx.Response:
@@ -672,3 +633,253 @@ def test_the_long_history_step_runs_the_mode_that_prepare_resolved(
     )
     longhist.main(["--run-dir", str(tmp_path), "--mode", "planner"])
     assert seen == [sentinel]
+
+
+# ── ADR-0154 Amendment 1: the paired arm ──────────────────────────────────────────────────────
+
+
+def test_done_pair_keys_returns_only_the_keys_of_rows_without_an_error(tmp_path: Path) -> None:
+    """Amendment 1.6 test 8: a rerun skips only the completed (key, draw) pairs."""
+    path = tmp_path / "paired.jsonl"
+    append_jsonl(path, {"label": "greeting", "draw": 0, "added_ms": 900})
+    append_jsonl(path, {"label": "greeting", "draw": 1, "error": "ReadTimeout"})
+    append_jsonl(path, {"label": "tool_logs", "draw": 2, "added_ms": 800})
+    assert done_pair_keys(path, "label") == {("greeting", 0), ("tool_logs", 2)}
+    sizes = tmp_path / "longhist_paired.jsonl"
+    append_jsonl(sizes, {"size_chars": 8000, "draw": 0})
+    assert done_pair_keys(sizes, "size_chars") == {("8000", 0)}
+    assert done_pair_keys(tmp_path / "absent.jsonl", "label") == set()
+
+
+def add_decline_followup(inputs: llama.Inputs) -> None:
+    """Add ``boiler_decline``, a two-turn decline fixture, to the test inputs."""
+    user, assistant = load_histories()["boiler"]
+    inputs.prompts["fixtures"]["boiler_decline"] = {  # type: ignore[index]
+        "user": "H-boiler\n\nQ-decline",
+        "history": f"user: {user}\nassistant: {assistant}",
+        "query": "thanks",
+        "history_chars": 900,
+    }
+    inputs.prompts["history_max_chars"] = 60000  # type: ignore[index]
+    inputs.captured["boiler_decline"] = {  # type: ignore[index]
+        "label": "boiler_decline",
+        "expected": "decline",
+        "history": "boiler",
+        "message": "thanks",
+        "body": {
+            "messages": [
+                {"role": "system", "content": "S"},
+                {"role": "user", "content": user},
+                {"role": "assistant", "content": assistant},
+                {"role": "user", "content": "thanks"},
+            ],
+            "tools": [{"function": {"name": "t1"}}],
+            **SAMPLING,
+        },
+    }
+
+
+def call_kind(body: dict[str, object]) -> str:
+    """Name a paired-arm request by its shape."""
+    if body.get("response_format"):
+        return "prime_planner" if body.get("max_tokens") == 1 else "planner"
+    return "prime_primary" if body.get("chat_template_kwargs") else "primary"
+
+
+def nonce_of(body: dict[str, object]) -> str:
+    first = str(body["messages"][0]["content"]).splitlines()[0]  # type: ignore[index]
+    assert first.startswith("probe nonce ")
+    return first.removeprefix("probe nonce ")
+
+
+def recording_engine(plan: str = DECLINE) -> tuple[list[dict[str, object]], httpx.Client]:
+    bodies: list[dict[str, object]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content)
+        bodies.append(body)
+        return sse_response(content=plan if body.get("response_format") else "x")
+
+    return bodies, client_for(handler)
+
+
+def test_run_paired_nonces_order_and_call_sequence(tmp_path: Path) -> None:
+    """Amendment 1.6 test 9: against a fake engine."""
+    paths, inputs = make_inputs(tmp_path)
+    add_decline_followup(inputs)
+    bodies, client = recording_engine()
+    with client:
+        replay.run_paired(client, URL, "m", paths, inputs, llama.MODES["thinking_off"])
+    rows = read_jsonl(paths.paired)
+    # Only the decline fixtures run, 3 draws each.
+    assert sorted((r["label"], r["draw"]) for r in rows) == [
+        (label, d) for label in ("boiler_decline", "greeting") for d in range(3)
+    ]
+    single_arm = ["prime_primary", "primary"]
+    planner_arm = ["prime_planner", "prime_primary", "planner", "primary"]
+    nonces: list[str] = []
+    for i, row in enumerate(rows):
+        calls = bodies[6 * i : 6 * i + 6]
+        index = ["boiler_decline", "greeting"].index(str(row["label"]))
+        single_first = (index + int(str(row["draw"]))) % 2 == 0
+        assert row["order"] == ("single_first" if single_first else "planner_first")
+        expected = single_arm + planner_arm if single_first else planner_arm + single_arm
+        assert [call_kind(b) for b in calls] == expected
+        arms = (calls[:2], calls[2:]) if single_first else (calls[4:], calls[:4])
+        single_nonce = {nonce_of(b) for b in arms[0]}
+        planner_nonce = {nonce_of(b) for b in arms[1]}
+        assert len(single_nonce) == 1 and len(planner_nonce) == 1  # one nonce per arm
+        assert row["single"]["nonce"] in single_nonce  # type: ignore[index]
+        assert row["planner"]["nonce"] in planner_nonce  # type: ignore[index]
+        nonces += [*single_nonce, *planner_nonce]
+    assert len(set(nonces)) == len(nonces) == 12  # new for each arm and draw
+
+
+def test_run_paired_sends_the_previous_turns_requests_as_primes(tmp_path: Path) -> None:
+    """Amendment 1.1: the primes are the previous turn's requests, cut as 1.1 states."""
+    paths, inputs = make_inputs(tmp_path)
+    add_decline_followup(inputs)
+    bodies, client = recording_engine()
+    with client:
+        replay.run_paired(
+            client, URL, "m", paths, inputs, llama.MODES["thinking_off"], labels=["boiler_decline"]
+        )
+    calls = {call_kind(b): b for b in bodies[:6]}
+    user, _assistant = load_histories()["boiler"]
+    # The planner prime: no history, and turn 1's user message as the query.
+    prime_planner_user = calls["prime_planner"]["messages"][1]["content"]  # type: ignore[index]
+    assert user in prime_planner_user and "Conversation so far" not in prime_planner_user
+    assert calls["prime_planner"]["max_tokens"] == 1
+    # The primary prime ends before this turn's user message.
+    assert calls["prime_primary"]["messages"][-1]["role"] == "assistant"  # type: ignore[index]
+    # The measured calls are the fixture's own requests, with the nonce line only added.
+    planner_system = calls["planner"]["messages"][0]["content"]  # type: ignore[index]
+    assert planner_system.split("\n", 1)[1] == "SYSTEM PROMPT"
+    assert calls["planner"]["messages"][1]["content"] == "H-boiler\n\nQ-decline"  # type: ignore[index]
+    assert calls["primary"]["max_tokens"] == 1 and calls["primary"]["messages"][-1] == {  # type: ignore[index]
+        "role": "user",
+        "content": "thanks",
+    }
+
+
+def test_a_single_turn_planner_prime_is_the_system_prompt_with_a_dot(tmp_path: Path) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    bodies, client = recording_engine()
+    with client:
+        replay.run_paired(client, URL, "m", paths, inputs, llama.MODES["thinking_off"])
+    prime = next(b for b in bodies if call_kind(b) == "prime_planner")
+    assert prime["messages"][1] == {"role": "user", "content": "."}  # type: ignore[index]
+
+
+def _timed(cache_n: int | None, prompt_n: int | None, secs: float = 1.0) -> dict[str, object]:
+    return {"secs": secs, "ttft_any": secs, "timings": {"cache_n": cache_n, "prompt_n": prompt_n}}
+
+
+def test_the_void_rule_compares_each_measured_call_with_its_own_prime() -> None:
+    """Amendment 1.6 test 6: a measured call that reused more than its prime left is void."""
+
+    def outcome(**over: dict[str, object]) -> dict[str, object]:
+        single = {"prime": _timed(500, 100), "primary": _timed(600, 50, 5.0)}
+        planner = {
+            "prime_planner": _timed(0, 700),
+            "prime_primary": _timed(500, 100),
+            "planner": {**_timed(700, 30, 0.8), "plan": llama.parse_plan(DECLINE)},
+            "primary": _timed(600, 40, 5.4),
+        }
+        for k, v in over.items():
+            arm, call = k.split("__")
+            (single if arm == "single" else planner)[call] = v
+        return replay.pair_outcome(single, planner)
+
+    clean = outcome()
+    assert clean["void"] is None and clean["declined"] is True
+    assert clean["added_ms"] == 1200  # 0.8 + 5.4 - 5.0
+    assert outcome(single__primary=_timed(601, 0))["void"] == ["primary_cache_reuse_single"]
+    assert outcome(planner__primary=_timed(601, 0))["void"] == ["primary_cache_reuse_planner"]
+    assert outcome(planner__planner={**_timed(701, 0), "plan": {}})["void"] == [
+        "planner_cache_reuse"
+    ]
+    assert outcome(single__prime=_timed(None, 100))["void"] == ["timings_missing"]
+    no_timings = {"secs": 1.0, "ttft_any": 1.0}
+    assert outcome(planner__primary=no_timings)["void"] == ["timings_missing"]
+    expanded = outcome(planner__planner={**_timed(0, 30), "plan": llama.parse_plan(EXPAND)})
+    assert expanded["declined"] is False
+    assert outcome(single__primary={"secs": 1.0, "ttft_any": None})["added_ms"] is None
+
+
+def test_run_paired_resumes_and_retries_an_error(tmp_path: Path) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    state = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        state["n"] += 1
+        if state["n"] == 1:
+            return httpx.Response(500)
+        return sse_response(content=DECLINE)
+
+    with client_for(handler) as client:
+        replay.run_paired(client, URL, "m", paths, inputs, llama.MODES["thinking_off"])
+        assert sum("error" in r for r in read_jsonl(paths.paired)) == 1
+        calls = state["n"]
+        replay.run_paired(client, URL, "m", paths, inputs, llama.MODES["thinking_off"])
+    assert state["n"] == calls + 6  # only the errored pair runs again
+    assert done_pair_keys(paths.paired, "label") == {("greeting", d) for d in range(3)}
+
+
+def test_the_timing_arm_is_gone_and_its_name_points_to_paired(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="paired"):
+        replay.main(["--run-dir", str(tmp_path), "--arms", "timing"])
+
+
+def test_long_history_paired_turn_shows_one_history_to_both_calls(tmp_path: Path) -> None:
+    """Amendment 1.6: the planner text and the primary's role messages come from one history."""
+    paths, inputs = make_inputs(tmp_path)
+    inputs.captured["greeting"]["body"] = {  # type: ignore[index]
+        **inputs.captured["greeting"]["body"],
+        "messages": [
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": "u"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c"}]},
+            {"role": "tool", "tool_call_id": "c", "content": "m"},
+        ],
+    }
+    bodies, client = recording_engine()
+    with client:
+        longhist.run_longhist_paired(
+            client, URL, "m", paths, inputs, llama.MODES["thinking_off"], sizes=(2000,), draws=1
+        )
+    (row,) = read_jsonl(paths.longhist_paired)
+    assert row["kind"] == "longhist" and row["size_chars"] == 2000 and row["draw"] == 0
+    calls = {call_kind(b): b for b in bodies if nonce_of(b) == row["planner"]["nonce"]}  # type: ignore[index]
+    planner_user = str(calls["planner"]["messages"][1]["content"])  # type: ignore[index]
+    history = planner_user.split("Conversation so far:\n", 1)[1].split("\n\nStrategy:", 1)[0]
+    assert row["history_chars"] == len(history) and len(history) >= 2000
+    primary = calls["primary"]["messages"]  # type: ignore[index]
+    last_user = max(i for i, m in enumerate(primary) if m["role"] == "user")
+    as_text = "\n".join(f"{m['role']}: {m['content']}" for m in primary[1:last_user])
+    assert as_text == history
+    assert primary[last_user]["content"] == longhist.SECOND_QUERY
+    assert [m["role"] for m in primary[last_user + 1 :]] == ["assistant", "tool"]  # tail kept
+    assert row["planner"]["nonce"] in history  # type: ignore[index,operator]
+    # The primes are the previous turn: history H with FIRST_QUERY.
+    prime_user = str(calls["prime_planner"]["messages"][1]["content"])  # type: ignore[index]
+    assert longhist.FIRST_QUERY in prime_user and longhist.FIRST_REPLY not in prime_user
+    prime_primary = calls["prime_primary"]["messages"]  # type: ignore[index]
+    assert prime_primary[-1] == {"role": "assistant", "content": longhist.FIRST_REPLY}
+
+
+def test_long_history_runs_both_arms_by_default_and_refuses_paired_when_managed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    paths, inputs = make_inputs(tmp_path)
+    ran: list[str] = []
+    mode = llama.MODES["thinking_off"]
+    monkeypatch.setattr(longhist, "prepare", lambda args, client: (paths, inputs, mode, None))
+    monkeypatch.setattr(longhist, "run_longhist", lambda *a, **k: ran.append("cold"))
+    monkeypatch.setattr(longhist, "run_longhist_paired", lambda *a, **k: ran.append("paired"))
+    longhist.main(["--run-dir", str(tmp_path), "--mode", "thinking_off"])
+    assert ran == ["cold", "paired"]
+    with pytest.raises(SystemExit, match="paired"):
+        longhist.main(
+            ["--run-dir", str(tmp_path), "--deployment", "x", "--max-usd", "1", "--arms", "paired"]
+        )

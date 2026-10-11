@@ -342,7 +342,9 @@ def _reasoning_check(row: Mapping[str, object]) -> score.Check:
             **row,
         }
     ]
-    return next(c for c in score.score(rows, [], [], {}).checks if c.name.startswith("Reasoning"))
+    return next(
+        c for c in score.score(rows, [], [], [], {}).checks if c.name.startswith("Reasoning")
+    )
 
 
 def test_a_clean_response_records_no_reasoning() -> None:

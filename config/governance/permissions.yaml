@@ -138,9 +138,9 @@ allow:
   # accepts it only for one regular file under docs/skills/*/scripts/, with no glob, no dot
   # segment and no symbolic link. The words after the script are its own arguments. When bash
   # starts in /app (the image), the matcher also accepts 'python3 /app/docs/skills/…', the same
-  # file (FRE-1589). Every other python3 command asks. A script gets a rule only in the PR that reviews it, with a test that
-  # its arguments cannot write, run another program or read outside its purpose
-  # (tests/docs/test_skill_scripts.py).
+  # file (FRE-1589). Every other python3 command asks. A script gets a rule only in the PR that
+  # reviews it, with a test that its arguments cannot write, run another program or read outside
+  # its purpose (tests/docs/test_skill_scripts.py).
   - rule: "bash(python3 docs/skills/infrastructure-health/scripts/probe_services.py *)"
     modes: [NORMAL, ALERT, DEGRADED]
     reason: "Reachability probes of postgres, elasticsearch, neo4j and redis. The argument only picks the services; psql runs with a fixed argv."

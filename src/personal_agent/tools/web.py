@@ -65,7 +65,7 @@ web_search_tool = ToolDefinition(
     description=(
         "Search the live web when you need a fact about the real world that you are not "
         "certain of from training data — a specific brand, product, shop, price, current "
-        "name, or availability. Returns titles, URLs, snippets, infoboxes, and plugin answers "
+        "name, or availability. Returns titles, URLs, snippets, and plugin answers "
         "from a private self-hosted metasearch engine. "
         "A question about the world goes here, not to search_memory (what this system already "
         "knows) or recall_personal_history (the user's own past conversations). Naming a "
@@ -74,7 +74,8 @@ web_search_tool = ToolDefinition(
         "To read a page whose URL you have, use fetch_url."
         "\n\nPlugin capabilities (returned in the 'answers' field — no engine needed):\n"
         "  - Timezone: query 'time Berlin' or 'clock Tokyo' → current local time\n"
-        "  - Unit conversion: query '20 °C in °F' or '10 EUR in USD' (use symbols, not words) → converted value\n"
+        "  - Unit conversion: query '20 °C in °F' or '10 EUR in USD' (use symbols, not words) → converted value "
+        "(currency conversion runs in the default 'general' category)\n"
         "  - Calculator: query '2^10 * 3' → computed result\n"
         "\nWeather: use engines='openmeteo' or categories='weather' for current conditions + hourly forecast.\n"
         "\nCategories: general (default), it, science, news, weather, social_media, recipes, exa.\n"

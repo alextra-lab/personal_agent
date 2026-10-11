@@ -162,7 +162,9 @@ def test_exa_shipped_disabled_with_placeholder_key() -> None:
 
 # FRE-1584: the planned engine set. Pinned by name so any change to it is a visible edit
 # here, not a silent inheritance from SearXNG's upstream defaults. Rule: an engine stays
-# only if it calls a documented API (not an HTML page, not a site-internal endpoint).
+# only if it calls a JSON or XML API (not an HTML page). The template header names the
+# three kept exceptions whose module marks `use_official_api: False`: currency,
+# chefkoch and mdn.
 _PLANNED_ENGINES: dict[str, frozenset[str]] = {
     "general": frozenset({"braveapi", "exa", "currency"}),
     "it": frozenset(
@@ -226,8 +228,8 @@ def test_searxng_template_names_exactly_the_planned_engine_set() -> None:
     """The template's running set is its own file, not an upstream default (FRE-1584 AC-1).
 
     ``use_default_settings`` keeps every upstream engine the file does not remove, so
-    the file alone used to show 8 of the 90 enabled engines. ``keep_only`` makes the
-    file the whole set. This asserts the set is exactly the planned one, and that every
+    the file declared 28 of the 90 enabled engines and 62 ran unnamed. ``keep_only``
+    makes the file the whole set. This asserts the set is exactly the planned one, and that every
     engine the file configures is also kept, so nothing is configured but dropped.
     """
     cfg = _load_searxng_example_config()

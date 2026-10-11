@@ -17,9 +17,15 @@ silently lie.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
+import scripts.monitors.searxng_engine_parity as parity
 from scripts.monitors.searxng_engine_parity import (
+    EXIT_MISSING,
+    EXIT_OK,
+    EXIT_UNEXPECTED,
     declared_engines,
     settings_path,
     unexpected_engines,
@@ -171,3 +177,70 @@ def test_unexpected_engines_is_empty_when_the_instance_runs_exactly_the_file() -
     """No extras, no report: the positive case the seeded negative above is measured against."""
     names = {"braveapi", "exa", "github"}
     assert unexpected_engines(names, set(names)) == []
+
+
+_SETTINGS_TWO_ENGINES = """
+use_default_settings:
+  engines:
+    keep_only:
+      - braveapi
+      - exa
+engines:
+  - name: braveapi
+  - name: exa
+"""
+
+
+def _run_main(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    registered: set[str],
+) -> int:
+    """Run ``main`` against a seeded settings file and a seeded instance answer."""
+    settings = tmp_path / "settings.yml"
+    settings.write_text(_SETTINGS_TWO_ENGINES)
+    monkeypatch.setattr(parity, "registered_engines", lambda _base_url: registered)
+    return parity.main(["--settings", str(settings)])
+
+
+def test_main_exits_0_only_when_the_instance_runs_exactly_the_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Exact parity is the only green. Every other case below must differ from this one."""
+    assert _run_main(monkeypatch, tmp_path, {"braveapi", "exa"}) == EXIT_OK
+
+
+def test_main_exits_4_when_the_instance_runs_an_undeclared_engine(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The FRE-1584 failure: `google cse` runs, the file never named it, and the run is red.
+
+    Seeded negative on the wiring, not only on the helper. Deleting the
+    ``if unexpected: return EXIT_UNEXPECTED`` branch, or returning ``EXIT_OK`` when
+    ``unexpected`` is non-empty, must fail this test and nothing else needs to notice.
+    """
+    code = _run_main(monkeypatch, tmp_path, {"braveapi", "exa", "google cse"})
+    assert code == EXIT_UNEXPECTED
+    assert "google cse" in capsys.readouterr().out
+
+
+def test_main_exits_2_when_a_declared_engine_did_not_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A declared engine that never registered is still the original red."""
+    assert _run_main(monkeypatch, tmp_path, {"braveapi"}) == EXIT_MISSING
+
+
+def test_main_prefers_exit_2_and_prints_both_when_missing_and_unexpected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Both failures at once: the exit is 2, and neither list is hidden by the other."""
+    code = _run_main(monkeypatch, tmp_path, {"braveapi", "google cse"})
+    out = capsys.readouterr().out
+    assert code == EXIT_MISSING
+    assert "exa" in out
+    assert "google cse" in out

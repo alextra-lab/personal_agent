@@ -20,13 +20,17 @@
 # just the working config, kept here as a complete, deployable template.
 #
 # THE ENGINE SET IS THIS FILE (FRE-1584). `use_default_settings` alone keeps every
-# upstream engine the file does not remove: before this change 90 engines were enabled
-# and the file named 8 of them, so `google cse` (over quota, 271 of 290 degraded
-# searches in 14 days) and a dozen news/image/video scrapers ran without being declared.
-# `keep_only` below inverts that. An engine runs only if it is named there. Rule: keep an
-# engine only when it calls a documented API — not an HTML page, not a site-internal
-# endpoint. To add an engine, add its name to `keep_only` AND an `engines:` block; then
-# run `python -m scripts.monitors.searxng_engine_parity` against the running instance,
+# upstream engine the file does not remove. Before this change 90 engines were enabled
+# and the file declared 28 of them, so 62 ran without being named. Among them were
+# `google cse` (over quota, 257 of the 290 degraded searches in 14 days) and the news,
+# image and video scrapers.
+# `keep_only` below inverts that. An engine runs only if it is named there.
+# Rule: keep an engine only when it calls a JSON or XML API. Engines that parse HTML
+# pages are dropped. Three kept engines have a module that marks `use_official_api:
+# False` — currency, chefkoch and mdn. They are kept on purpose: each answers only a
+# query shape or an explicit category, and none appears in the 14-day failure reasons.
+# To add an engine, add its name to `keep_only` AND an `engines:` block; then run
+# `python -m scripts.monitors.searxng_engine_parity` against the running instance,
 # which fails on a declared engine that did not load and on a running one not declared.
 
 use_default_settings:
@@ -47,7 +51,7 @@ use_default_settings:
       # general
       - braveapi
       - exa
-      - currency   # the one exception to the documented-API rule — see its block below
+      - currency   # a kept exception to the API rule — see the header and its block below
       # it
       - stackoverflow
       - github
@@ -116,9 +120,10 @@ engines:
     disabled: false
 
   # `currency` answers "10 EUR in USD", which the web_search tool text promises. It calls
-  # DuckDuckGo's undocumented JS endpoint (`use_official_api: False`), so it breaks the
-  # rule in the header; it is kept because it is a query-triggered converter, not a
-  # search engine, and it appears in none of the 14-day failure reasons. Dropping it
+  # DuckDuckGo's undocumented JS endpoint (`use_official_api: False`), so it is one of
+  # the three kept exceptions named in the header. It is kept because it is a
+  # query-triggered converter, not a search engine, and it appears in none of the
+  # 14-day failure reasons. Dropping it
   # costs currency conversion and nothing else: remove it from keep_only, delete this
   # block, and delete the example from tools/web.py. Categories are upstream's
   # (`general`, `currency`); they are deliberately not restated.

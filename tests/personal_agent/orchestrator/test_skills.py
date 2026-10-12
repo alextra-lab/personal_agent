@@ -25,8 +25,12 @@ def _write(root: Path, folder: str, frontmatter: str, body: str = "Body text.") 
 class TestDiscovery:
     """The repository's own skills load."""
 
-    def test_the_eleven_agent_skills_load(self) -> None:
-        assert len(get_all_skills()) == 11
+    def test_the_ten_agent_skills_load(self) -> None:
+        assert len(get_all_skills()) == 10
+
+    def test_artifact_design_is_not_a_skill(self) -> None:
+        """FRE-1590: the artifact builder's prompt source is no skill; no catalog lists it."""
+        assert "artifact-design" not in get_all_skills()
 
     def test_a_folded_skill_is_gone(self) -> None:
         skills = get_all_skills()

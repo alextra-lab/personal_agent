@@ -27,10 +27,10 @@ _REPO = Path(__file__).resolve().parents[2]
 _AGENT_DIR = _REPO / "docs" / "skills"
 _EXTERNAL_DIR = _REPO / "docs" / "external-skills"
 
-# The ADR-0156 migration table: 11 agent skills, 3 external skills.
+# The ADR-0156 migration table: 11 agent skills, 3 external skills. FRE-1590 moved
+# artifact-design to docs/reference/artifact-builder/ (the builder's prompt source, no skill).
 _AGENT_SKILLS = frozenset(
     {
-        "artifact-design",
         "infrastructure-health",
         "mermaid-diagrams",
         "neo4j-direct",

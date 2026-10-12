@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `e0f3b3a6` · Committed: 2026-10-11T08:33:02Z  
+> Source revision: `0ebdfc62` · Committed: 2026-10-11T21:26:30+02:00  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,22 +32,21 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 21,410  
+Total skill docs: 10 · Total tokens (all skills): 17,293  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
-| SKILL: Artifact Design | 3,279 | `docs/skills/artifact-design/SKILL.md` |
-| infrastructure-health — Is each backend service reachable? | 842 | `docs/skills/infrastructure-health/SKILL.md` |
+| infrastructure-health — Is each backend service reachable? | 820 | `docs/skills/infrastructure-health/SKILL.md` |
 | SKILL: Mermaid Diagrams | 3,595 | `docs/skills/mermaid-diagrams/SKILL.md` |
-| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,732 | `docs/skills/neo4j-direct/SKILL.md` |
-| query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,082 | `docs/skills/query-elasticsearch/SKILL.md` |
-| query-tempo — Model-call latency and the spans of one trace | 1,665 | `docs/skills/query-tempo/SKILL.md` |
+| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,709 | `docs/skills/neo4j-direct/SKILL.md` |
+| query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,063 | `docs/skills/query-elasticsearch/SKILL.md` |
+| query-tempo — Model-call latency and the spans of one trace | 1,621 | `docs/skills/query-tempo/SKILL.md` |
 | self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `docs/skills/self-telemetry/SKILL.md` |
-| sequential-thinking — Structured Reasoning Discipline | 1,596 | `docs/skills/sequential-thinking/SKILL.md` |
+| sequential-thinking — Structured Reasoning Discipline | 901 | `docs/skills/sequential-thinking/SKILL.md` |
 | system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `docs/skills/system-diagnostics/SKILL.md` |
 | system-metrics — CPU, memory and disk utilisation snapshot | 917 | `docs/skills/system-metrics/SKILL.md` |
-| turn-forensics — Reconstruct one turn end to end | 2,018 | `docs/skills/turn-forensics/SKILL.md` |
+| turn-forensics — Reconstruct one turn end to end | 1,983 | `docs/skills/turn-forensics/SKILL.md` |
 
 ---
 
@@ -802,248 +801,12 @@ REQUIREMENTS:
 
 The `skill_index` component holds the catalog only. A body reaches the model as the result of a `read_skill` call (ADR-0156 D2).  
 
-### SKILL: Artifact Design
-
-| | |
-|---|---|
-| **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 3,279 |
-| **Source** | `docs/skills/artifact-design/SKILL.md` |
-
-```markdown
-# SKILL: Artifact Design
-
-> **Use this skill to** author a complete, standalone HTML artifact that runs inside the
-> sealed box: (a) decide when a curated `/lib/` library beats hand-rolling, (b) get each
-> library's boot recipe and gotcha right, (c) apply publishing-grade **native** typography,
-> (d) stay inside the sealed-box constraints, (e) choose the right **portability** lane, and
-> (f) never leak secrets into a file that may leave the sandbox.
-
-> **Tier:** runtime-guidance (not a CLI skill). **ADR:** `docs/architecture_decisions/ADR-0089-artifact-execution-security-model.md` (§D2/D3/D4 + Addendum A).
-> **Relationship to the generation prompt:** this doc is the **maintainable source-of-truth**;
-> the artifact generation system prompt (`_HTML_GENERATION_SYSTEM_PROMPT`,
-> `src/personal_agent/tools/artifact_tools.py`) is **distilled from it**. The generation
-> sub-agent is driven by that compressed prompt at runtime today — it does **not** load this
-> file. Keep the two paired: when the manifest or a recipe changes, update this doc and
-> re-distill the prompt. Versions/URLs are anchored to `config/artifact_lib_manifest.json`.
-> **Not** an extension of the `frontend-design` harness skill (that guides the *developer*
-> agent; this guides the *runtime artifact-generation* sub-agent — a different consumer).
-
----
-
-## What This Skill Does
-
-An artifact is a complete `<!DOCTYPE html>…</html>` document that renders in a **sealed box**:
-an opaque-origin, CSP-locked, network-denied, storage-denied iframe (ADR-0089 D2/D3). Inside
-that box JavaScript runs normally — inline `<script>` and event handlers work — so simulations,
-explorable diagrams, charts, animations, calculators, tabs, and filters are all fair game.
-
-The decisive split: **most dynamism needs no library.** Sliders, simulations, explorables,
-animation, tabs/filters are all reachable with inline JS + Canvas / WebGL / SVG / CSS, which
-ADR-0089 already unlocks. Reach for a curated `/lib/` library **only where the model genuinely
-cannot hand-roll the capability well** — real math typesetting, charts, 3-D, syntax
-highlighting, publishing-grade fonts, print pagination. Otherwise inline your own code: it is
-cheaper, more portable, and fully under your control.
-
----
-
-## When to Use
-
-- **Reach for `/lib/`** when the capability is hand-roll-impossible at quality: TeX math
-  (KaTeX), real charts (Chart.js), 3-D scenes (three.js), syntax highlighting (highlight.js),
-  book-grade prose faces (OFL fonts), print pagination (paged.js — experimental).
-- **Reach for native CSS/JS** for everything else — design system, layout, interactivity,
-  typography refinements. This is the default.
-- **Prefer Mermaid server-SVG** for static diagrams that should travel with the file (see
-  Portability).
-
----
-
-## The Curated `/lib/` Shelf
-
-A small, vetted shelf is hosted on the artifact origin (`https://artifacts.example.com`) —
-it is the **only** external origin a sealed artifact may load. Reference each asset by its
-**exact absolute, version-pinned URL** in its reference file; a relative `/lib/…` path is *not* the expected
-reach form and is not counted as a satisfied capability by the demand meter. URLs are immutable
-pins (ADR-0089 A3) — never edit a version in place. Source of truth:
-`config/artifact_lib_manifest.json`.
-
-Each library has its own file in `references/`, with its boot recipe and its gotchas. Before you
-write the artifact, read the file of each library that it uses, for example
-`read_skill(name="artifact-design", path="references/katex.md")`:
-
-| Library | Use for | File |
-|---|---|---|
-| KaTeX (MIT) | math / formula typesetting | `references/katex.md` |
-| Chart.js (MIT, global `Chart`) | charts / data visualization | `references/chartjs.md` |
-| three.js (MIT, global `THREE`, r171) | 3-D / spatial / physics | `references/threejs.md` |
-| highlight.js (BSD-3, global `hljs`) | code / syntax highlighting | `references/highlightjs.md` |
-| OFL fonts (SIL OFL, variable woff2) | publishing-grade prose | `references/ofl-fonts.md` |
-| paged.js (MIT), experimental and gated | book / print pagination | `references/pagedjs.md` |
-
----
-
-## Native Typography (no library)
-
-Reach for these **before** any font library — they cost zero bytes and never fail under the CSP.
-
-```css
-/* Drop cap */
-p.lead::first-letter { float: left; font-size: 3.2em; line-height: 0.8; padding-right: 0.08em; font-weight: 700; }
-
-/* Justified prose with hyphenation — set lang on <html lang="en"> for the dictionary */
-.prose { text-align: justify; hyphens: auto; }
-
-/* Balanced headings (no orphan word on the last line) */
-h1, h2 { text-wrap: balance; }
-
-/* Ligatures + old-style figures + kerning */
-.prose { font-feature-settings: "liga", "onum", "kern"; }
-
-/* Multi-column flow */
-.columns { column-count: 2; column-gap: 2rem; column-rule: 1px solid var(--color-muted); }
-
-/* Print / book pages */
-@page { margin: 2cm; }
-.chapter { break-inside: avoid; }
-p { widows: 3; orphans: 3; }
-```
-
-**Notes:**
-- `hyphens: auto` needs a `lang` attribute on `<html>` (or the block) to pick the hyphenation
-  dictionary.
-- `text-wrap: balance` is for short blocks (headings, captions) — don't apply it to long body
-  paragraphs.
-- `font-feature-settings` requires the font to carry the features (the OFL faces of `references/ofl-fonts.md` do).
-
----
-
-## Design-System Conventions
-
-Define a complete design system in a `<style>` block in `<head>` (kept consistent with the
-generation prompt so this doc is its superset):
-
-- **Colors** as CSS custom properties: `--color-primary`, `--color-secondary`, `--color-accent`,
-  `--color-bg`, `--color-surface`, `--color-text`, `--color-muted`.
-- **Spacing scale**: `--spacing-1` … `--spacing-8` (0.25rem increments).
-- **Typography**: `--font-sans`, `--font-mono` (plus the OFL `--font-serif`/`--font-display`
-  of `references/ofl-fonts.md` when prose-grade); size classes `text-xs` … `text-3xl`.
-- **Utility classes**: `flex`, `grid`, `gap-1`…`gap-6`, `p-1`…`p-8`, `m-1`…`m-8`, `text-center`,
-  `font-bold`, `rounded`, `rounded-lg`, `shadow`, `shadow-lg`, `w-full`.
-- **Semantic HTML5**: `header`/`main`/`section`/`article`/`footer`/`nav`/`aside`/`figure`.
-- **Responsive** via `@media`; **accessible** heading hierarchy, `alt` text, ARIA labels,
-  sufficient contrast.
-- Aim for **under 200KB** of HTML text.
-
----
-
-## Sealed-Box Constraints (hard, enforced by the runtime — design within them)
-
-- **No network.** `fetch` / `XHR` / `WebSocket` / `sendBeacon` are blocked (`connect-src 'none'`).
-  Embed **all** your own data inline; inline images and 3-D textures as `data:` URIs or inline
-  SVG — never fetch them.
-- **No storage.** `localStorage`, `sessionStorage`, `IndexedDB`, and cookies are unavailable.
-  Keep state in JS variables or the DOM.
-- **No arbitrary CDN.** Only the curated `/lib/` shelf above loads. Any other external
-  script/style/font/image (Tailwind CDN, Alpine.js, jQuery, Google Fonts, unpkg, …) **silently
-  fails** at view time — the artifact commits intact but renders broken. Inline it instead.
-  Default to inline CSS + native JS wherever no shelf library is warranted.
-- **No popups, no form submission to external endpoints.**
-
----
-
-## Portability — choose the lane deliberately
-
-Three distinct lanes; pick by how the artifact needs to travel.
-
-1. **static-SVG-travels.** For static diagrams — flowcharts, architecture, sequence/class
-   diagrams — use `<pre class="mermaid">…</pre>` markup. The server renders these to **inline
-   SVG** (FRE-396), so the document stays self-contained and viewable anywhere, including in an
-   exported file. Example: `<pre class="mermaid">graph LR; A[Start] --> B[End];</pre>`. This is
-   strictly better than a client diagram library for static diagrams.
-2. **interactive-viewed-on-origin.** JS-driven and `/lib/`-using artifacts run on their hosted,
-   Access-gated page. They reference the sealed shelf and are otherwise **view-on-origin-only** —
-   the live interactivity is the point, and it lives where the envelope is applied.
-3. **exported-standalone** (server-side export, FRE-530). Two modes, both driven by the per-asset
-   export substitution map:
-   - **Inline (default, offline-portable):** the referenced pinned `/lib/` assets + fonts are
-     inlined (scripts inline, CSS inline, fonts/images as `data:` URIs) into one self-contained
-     HTML file that renders **offline, anywhere**.
-   - **Substitution-map (opt-in, lean/online):** each `/lib/<name>@<version>` reference is
-     rewritten to the **same version on a public CDN** with **Subresource Integrity** (`integrity`
-     + `crossorigin`) — tiny, human-editable, byte-verified. **three.js and the fonts inline-only**
-     (no faithful public classic twin / UA-varying font CDNs); KaTeX / Chart.js / highlight.js
-     map cleanly.
-   - **Honest limit:** an exported file **leaves the envelope** — it runs **unsandboxed**
-     wherever opened (no CSP, no opaque origin), and substitution-map exports depend on a
-     third-party CDN at view time (bounded by SRI). This is why the next rule is absolute.
-   - **Realized as** `GET /api/v1/artifacts/{id}/export?mode=inline|substitute` (owner-scoped,
-     HTML-only). Inline mode SRI-verifies each fetched `/lib/` asset against the pinned map and
-     also inlines a stylesheet's own `url(...)` subresources (e.g. KaTeX glyph fonts) as `data:`
-     URIs so math renders offline; substitute mode emits the pinned `integrity` and lets the
-     **browser** byte-verify at view time. A reference to an **unmapped** `/lib/` path fails the
-     export closed (it would otherwise silently point a "portable" file back at the gated origin).
-
-> *Saving work produced **inside** a running artifact* (e.g. a draft typed into the artifact) is a
-> different problem — the sandbox omits downloads/storage/network, so a running artifact cannot
-> save out. That needs the future parent-brokered model-bridge (ADR-0089 D4a), not an export
-> mode. Out of scope here.
-
----
-
-## Standing Rule: never bake secrets into an artifact (ADR-0089 D4)
-
-**Never bake secrets into an artifact.** Artifacts are untrusted LLM-authored bytes served from
-an opaque origin, and an exported file leaves the sandbox entirely — it can be opened, inspected,
-and shared anywhere with no envelope around it. Do **not** embed API keys, tokens, credentials,
-session identifiers, internal hostnames/URLs, personal data, or anything that must not travel in
-a plain file. Inline only the content the artifact is meant to display.
-
----
-
-## Success
-
-Check the artifact before the answer is final:
-
-- It is one complete `<!DOCTYPE html>…</html>` document of under about 200KB.
-- Every external file is an exact absolute, version-pinned URL of the shelf. No other origin is used.
-- No `fetch`, `XHR`, `WebSocket`, `sendBeacon`, storage or popup is used. All data, images and
-  textures are inline.
-- Each library that is used follows its reference file. For example, the KaTeX stylesheet link is
-  present, the Chart.js canvas has `width` and `height`, and the three.js scene uses the global
-  `THREE`.
-- No secret, token, credential, session identifier or internal host name is in the file.
-
-## Recovery
-
-What to do on each failure, with a stop rule:
-
-| Failure | Cause | Next step |
-|---|---|---|
-| Math shows as boxes | The KaTeX stylesheet `<link>` is missing | Add the stylesheet link (`references/katex.md`). |
-| A chart is blank, blurry or 0×0 | The `<canvas>` has no `width` and `height` | Set both attributes, or wrap it and set `maintainAspectRatio: false` (`references/chartjs.md`). |
-| A 3-D scene is blank, or a texture fails | A texture is fetched, or `import * as THREE` is used | Use a `data:` URI or a generated texture, and the global `THREE` (`references/threejs.md`). |
-| Code has no colors | `hljs.highlightAll()` ran before the DOM was ready, or the theme `<link>` is missing | Call it on `DOMContentLoaded` and link the theme (`references/highlightjs.md`). |
-| Text falls back to a system face | A font CDN is used | Declare the shelf faces with `@font-face` (`references/ofl-fonts.md`). |
-| The artifact renders broken after it commits | A script, style or font comes from an origin that is not on the shelf | Inline it, or use the shelf library (Sealed-Box Constraints). |
-| paged.js does nothing | The live policy can block it (`eval_gated`) | Use the native `@page` recipes (`references/pagedjs.md`, Native Typography). |
-| The same failure twice | The cause is not found | Stop. Tell the user what failed and what was tried. |
-
-## Maintenance
-
-The distillation map (this skill to the generation prompt), the E2E verification runbook and the
-reference links are in `references/maintenance.md`. Read it only when you change this skill, the
-manifest or the generation prompt.
-```
-
----
-
 ### infrastructure-health — Is each backend service reachable?
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 842 |
+| **Token count** | 820 |
 | **Source** | `docs/skills/infrastructure-health/SKILL.md` |
 
 ```markdown
@@ -1106,8 +869,8 @@ Check the result before you answer:
 
 ## Governance
 
-- `curl` `GET` of a listed health endpoint runs without asking in NORMAL, ALERT and DEGRADED (FRE-1583). Any other host, path or method asks. For Neo4j only `GET http://neo4j:7474/` runs without asking.
-- `python3` (the probe script), `psql` and `redis-cli` ask the user, in every mode (FRE-1572, ADR-0156 D8.2).
+- `curl` `GET` of a listed health endpoint runs without asking in NORMAL, ALERT and DEGRADED. Any other host, path or method asks. For Neo4j only `GET http://neo4j:7474/` runs without asking.
+- `python3` (the probe script), `psql` and `redis-cli` ask the user, in every mode.
 - LOCKDOWN and RECOVERY: `bash` is disabled.
 ```
 
@@ -1495,7 +1258,7 @@ External resources (use for syntax lookup, not as import targets):
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,732 |
+| **Token count** | 1,709 |
 | **Source** | `docs/skills/neo4j-direct/SKILL.md` |
 
 ```markdown
@@ -1522,8 +1285,8 @@ The reply is one JSON document: `{"rows": [...], "row_count": n, "truncated": fa
 returns at most 100 rows. Use `--limit N` (up to 1000) for more. `truncated: true` means that the
 query holds more rows than were returned.
 
-The script opens a read transaction, so the server refuses a write (checked live on 2026-10-11,
-including `apoc.cypher.doIt`). It checks for a write clause and for a procedure that is not on
+The script opens a read transaction, so the server refuses a write, including
+`apoc.cypher.doIt`. It checks for a write clause and for a procedure that is not on
 the list first, to give a plain error before it connects. A word inside a string, a comment or a
 backtick name is not read as a clause.
 
@@ -1552,8 +1315,8 @@ python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETU
 Labels in the graph include `Entity` and `Turn`. A relationship type of interest is `DISCUSSES`.
 Run the label query first when you are unsure what exists.
 
-When was an entity created? Use `first_seen` and `last_seen`: on 2026-10-11 all 9,743 `Entity`
-nodes held both. `created_at` is set on 1 node, so an `ORDER BY` on it gives no useful order.
+When was an entity created? Use `first_seen` and `last_seen`: `Entity`
+nodes hold both. `created_at` is set on almost no node, so an `ORDER BY` on it gives no useful order.
 Find the property keys of the graph with `CALL db.propertyKeys()`.
 
 ## Environment
@@ -1610,7 +1373,7 @@ curl -fsS -X POST \
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,082 |
+| **Token count** | 2,063 |
 | **Source** | `docs/skills/query-elasticsearch/SKILL.md` |
 
 ```markdown
@@ -1622,7 +1385,7 @@ curl -fsS -X POST \
 - Start with the `query_telemetry` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
 - Use curl only for what the tool cannot do. The table below says which.
 - Use only the index families in this file. Never write a guessed index name.
-- Model-call timing is not in Elasticsearch (retired, ADR-0129). Use the `query-tempo` skill.
+- Model-call timing is not in Elasticsearch. Use the `query-tempo` skill.
 - Spend, token totals and interaction outcomes are in the `self-telemetry` skill.
 
 ## Step 1 — Use the tool
@@ -1652,7 +1415,7 @@ query_telemetry(action="search", index="agent-logs", size=0, since="24h",
                 aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}})
 ```
 
-What the events carry (verified live 2026-10-11):
+What the events carry:
 
 | `event_type` | Fields to read |
 |---|---|
@@ -1757,7 +1520,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,665 |
+| **Token count** | 1,621 |
 | **Source** | `docs/skills/query-tempo/SKILL.md` |
 
 ```markdown
@@ -1766,7 +1529,7 @@ Check the result before you answer:
 ## Rules
 
 - Answer only from a live Tempo query. Never answer from what a trace probably holds.
-- For latency over a window, start with `query_telemetry`, action `latency`. Elasticsearch holds no model-call timing (retired, ADR-0129).
+- For latency over a window, start with `query_telemetry`, action `latency`. Elasticsearch holds no model-call timing.
 - For the spans of one trace, use curl on `http://tempo:3200`. The tool does not read one trace.
 - Write a trace id, a clock value and a number as a literal in the command. A shell variable or `$(...)` makes the command ask for approval.
 
@@ -1881,8 +1644,7 @@ Check the result before you answer:
 | A very large trace is slow | More than 1000 spans | Select the span fields with `jq`. Do not print the whole trace |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |
 
-See also: ADR-0129 (`docs/architecture_decisions/ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md`)
-for the Tempo deployment, and the `query-elasticsearch` skill for log queries.
+See also: the `query-elasticsearch` skill for log queries.
 ```
 
 ---
@@ -2114,7 +1876,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,596 |
+| **Token count** | 901 |
 | **Source** | `docs/skills/sequential-thinking/SKILL.md` |
 
 ```markdown
@@ -2127,34 +1889,6 @@ When the problem has a genuine false start, show the step you tried and
 abandoned, alongside the correct path. Never invent a wrong step you did
 not actually take. An unremarkable linear chain of reasoning with no false
 start must stay invisible to the reader.
-
-> **Tier:** N/A — prompt technique, not a tool.
-> **Provenance:** `docs/architecture_decisions/ADR-0028-external-tool-cli-migration.md:83` ruled
-> `mcp_sequentialthinking` "Not a real tool — prompt technique", recommendation 5 said to remove
-> it, and FRE-1358 executed that removal. This skill replaces the discipline the removed tool's
-> instruction text imposed, without re-adding a tool ADR-0028 already ruled against.
->
-> **Delivery (FRE-1549):** this skill reached the model only on a keyword match or a `read_skill`
-> call, and `route_traces` recorded 0 loads in 1,128 turns. The standing rule now lives in the
-> primary system prompt (`REASONING_DISCIPLINE_PROMPT`, `orchestrator/prompts.py`) on every turn.
-> This file stays for depth. The model loads it with `read_skill`.
-
-## What this replaces
-
-The removed MCP server did no reasoning. It type-checked its inputs, extended its own step
-estimate by one line of logic, appended to two in-memory arrays, and printed a formatted box to
-**stderr** that neither the model nor the user ever saw. What it actually bought was:
-
-1. **The instruction text** — a discipline for estimating steps, marking revisions, and naming
-   branch points. This skill reproduces that text.
-2. **A forcing function** — calling the tool required committing to a step number and a
-   continue/stop decision each time. A skill cannot force a call-per-thought loop; it can only
-   ask for the discipline. Follow it because it is asked for, not because anything enforces it.
-
-The reasoning itself is not the gap. The primary model already runs with a
-32,768-token thinking budget (`config/models.yaml`, `thinking_budget_tokens`) — native thinking
-is unstructured and invisible, and does not itself oblige a model to admit it is revising an
-earlier conclusion. This skill supplies the discipline, not more thinking.
 
 ## The discipline
 
@@ -2172,37 +1906,23 @@ When this skill engages, hold yourself to the following, internally, for the who
 
 ## When to surface structure in the answer
 
-**Owner decision, 2026-09-05 — not always, and not never.** Do not surface anything for an
-ordinary linear chain of reasoning that needed no revision or branch — that case must **stay
-clean**, exactly as invisible as it was under the removed tool, which never surfaced anything to
-the model or the user either way.
-
-**Owner decision, 2026-09-08 — the mechanism changed; the "not always, not never" boundary did
-not.** Master's live verification of the 2026-09-05 design ("surface only on a spontaneous
-reversal") found it structurally unmeetable: the primary runs with a 32,768-token thinking
-budget, so a reversal happens inside the invisible thinking block, and by the time the visible
-answer is written the question is already settled. There is no live reversal left to mark.
-
-The owner ruled: "not achievable. We can force the model to think through a problem and include
-a step that was wrong." The replacement mechanism is a **false start**, not a spontaneous
-reversal — when the problem genuinely has one:
+Surface structure only when the problem has a real false start. An ordinary linear chain of
+reasoning that needed no revision or branch stays clean: no step numbers, no scaffold.
 
 - If the obvious first line of attack on this problem fails, show that **tried and abandoned**
   step in the answer, alongside the correct path, and name what was wrong with it — for example:
   "First attempt: X — that fails because Y, so this answer instead does Z."
 - Show it only when a false start actually exists. An unremarkable linear chain of reasoning
-  with no false start available must stay clean, per the 2026-09-05 boundary above.
+  with no false start available must stay clean.
 - Do not renumber the whole answer into an essay around it — one short line at the point in the
   answer where the false start belongs.
 
 **Never invent a false start you did not actually take.** A plausible-looking wrong step
-manufactured for presentation, rather than reasoning the model genuinely did, is confabulation —
-the same failure shape FRE-1327 is open on. If the problem has no real false start, show none;
-a fabricated one is worse than showing nothing.
+manufactured for presentation, rather than reasoning you actually did, is confabulation. If the
+problem has no real false start, show none; a fabricated one is worse than showing nothing.
 
-Rationale: a false start the reader cannot see is what native thinking already discards once the
-question is settled, so it is the part worth surfacing. It stays rare — most problems this skill
-engages on have no wrong turn at all — so ordinary answers do not turn into numbered essays.
+A false start stays rare — most problems this skill engages on have no wrong turn at all — so
+ordinary answers do not turn into numbered essays.
 
 ## When NOT to engage
 
@@ -2449,7 +2169,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,018 |
+| **Token count** | 1,983 |
 | **Source** | `docs/skills/turn-forensics/SKILL.md` |
 
 ```markdown
@@ -2460,7 +2180,7 @@ Check the result before you answer:
 - Pull the turn from live data. Never infer the timeline or a token count from priors.
 - Input: a `trace_id` (best) or a `session_id`. If the task names only "the last turn" or "the slowest turn", find the trace first (Step 0).
 - This skill explains one turn in depth. For a count or a breakdown over many turns use `query-elasticsearch`. For latency over a window use `query-tempo`.
-- Related: ADR-0074 (identity threading: `trace_id` and `session_id` join every substrate), FRE-401 (context bloat).
+- `trace_id` and `session_id` join every substrate.
 
 ## What each substrate answers
 
@@ -2538,7 +2258,7 @@ The first command gives the storage key. The second prints the size of the store
 ## Step 4 — Join the inference-server request log
 
 The model server writes a `request_complete` event for each request to `slm-requests-*`. It is
-tagged with the `X-Span-Id` and `X-Trace-Id` headers of the harness (FRE-411). Join on `span_id`
+tagged with the `X-Span-Id` and `X-Trace-Id` headers of the harness. Join on `span_id`
 for one call, or on `trace_id` for the turn:
 
 ```bash
@@ -2555,10 +2275,10 @@ compute than the token count shows. All times are UTC ISO-8601.
 
 ## Reading the result
 
-- **A context jump after a `read`**: a large read. The default `read` returns the first 200 lines and at most 8 KiB. A jump means that the call named a large `max_bytes` or `limit`, or that the model paged through a file in many reads. The arguments of the `tool_call_started` before the jump show which (FRE-401).
+- **A context jump after a `read`**: a large read. The default `read` returns the first 200 lines and at most 8 KiB. A jump means that the call named a large `max_bytes` or `limit`, or that the model paged through a file in many reads. The arguments of the `tool_call_started` before the jump show which.
 - **A slow primary call with no tool before it**: a large prefill (the grown context is sent again at each step), or a degraded model server (multi-minute calls, HTTP 524). A restart of the model server fixes the second case.
 - **A gap between the sub-agent end and the final reply**: the synthesis call on the grown context. The sub-agent was not slow.
-- **A terminal tool failure**: look for `tool_terminal_short_circuit` (FRE-402). The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.
+- **A terminal tool failure**: look for `tool_terminal_short_circuit`. The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.
 - `input_tokens` (the model's tokenizer) and `turn_status.context_tokens` (an estimate) differ by 10 to 20 percent. The trend is the same.
 
 ## Success

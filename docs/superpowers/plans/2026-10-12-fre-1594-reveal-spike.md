@@ -223,6 +223,19 @@ population, because the dry draw showed two harness defects.
   control cannot. The whole-context baseline charges the control for that (cache-safe k = 2: treatment 1, control
   108). The proposed rule is `max(0, cache_n + prompt_n of the previous call - cache_n)`.
 - **Recorded:** the rows now keep the MTP counts `draft_n` and `draft_n_accepted`. They are not scored.
+- **Server log** (`--verbose`): every scored control call (2 and 3) restored the checkpoint 4 tokens before the end
+  of its previous prompt. Each treatment call that followed its own generation continued from the live state. The
+  log shows "forcing full prompt re-processing" only on calls with `cache_n` 0: the call-1s, a warm-up and the
+  simple treatment call 2. The stop condition did not hold.
+- **Template order:** the first calls of the two arms share about 78.6% of their tokens. The Qwen3.8 template
+  renders the tool block before the system text, so the nonce does not open the token stream. Cross-arm reuse
+  needs a checkpoint inside that shared prefix. None existed (the first checkpoint was at about 8814 tokens).
+  Calls 1 are not scored.
+- **Known co-tenant:** the production gateway's SLM health probe (`slm_health_probe_interval_seconds` = 300 s,
+  `brainstem/scheduler.py:218`) sent three 11-token requests on slots 0 and 2 during the window (tasks 512, 567,
+  568). They generate nothing and do not touch the spike's slot, so the scored cache numbers are not affected.
+  They can add a little decode time, which is not scored. Expect about 20 probe rounds in a 1.64 h local run.
+  The probe is not paused, because that changes production. The research note records it.
 
 ## Risks
 

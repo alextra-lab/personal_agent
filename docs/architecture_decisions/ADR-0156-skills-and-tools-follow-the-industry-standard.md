@@ -664,13 +664,15 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
 4. **The reveal lasts for the session, and only the server writes its record.**
    - The record is a new column `sessions.revealed_tools` (`TEXT[] NOT NULL DEFAULT '{}'`). It is not a key in `sessions.metadata`: a client can replace that column through `SessionUpdate.metadata` and the PATCH endpoint (`service/models.py:70-73`, `service/app.py:2102-2112`, `service/repositories/session_repository.py:117-138`). It is not `ExecutionContext.loaded_skills` either, which holds one turn only (`orchestrator/types.py:570-575`).
    - `SessionUpdate` has no field for the column, and the PATCH endpoint cannot set or clear it.
-   - The repository gets two methods. `add_revealed_tools(session_id, names)` adds names as a set union in one `UPDATE` statement, so two concurrent reveals both persist. `load_revealed_tools(session_id)` reads the set.
+   - The repository gets two methods. `add_revealed_tools(session_id, user_id, names)` adds names as a set union in one `UPDATE` statement, so two concurrent reveals both persist. `load_revealed_tools(session_id, user_id)` reads the set. Both filter on `session_id` and `user_id`, as the other user-facing session queries do (`service/repositories/session_repository.py:83-138`).
+   - **A failed write keeps the reveal for the turn only.** If the `UPDATE` matches no row or raises, the tool stays revealed in the current `ExecutionContext`, a log event names the failure, and the next turn reads the record as it is.
+   - **Retention.** Deleting a session deletes the record with the row. Pruning a session (`session_repository.py:210-239`) clears `revealed_tools` together with the messages, because the skill context that revealed the tools is gone.
    - **The seam:** `step_init` loads the set through the repository into a new `ExecutionContext.revealed_tools` field. The service does not pass session state to the orchestrator today (`service/app.py:506-519`, `orchestrator/orchestrator.py:118-133`), so the load happens in the executor, as other repository reads do (`orchestrator/executor.py:485-601`).
    - **A load error fails closed.** The set is empty for that turn, and a log event names the error. A skill loaded in that turn still reveals its tools for that turn.
    - **A turn reads the record once,** at `step_init`. A reveal in another turn of the same session that runs at the same time becomes visible at this session's next turn.
    - So the reveal survives a new user turn, a mid-turn compaction, a pause and resume, and a gateway restart.
    - A name in the record that is no longer a skill-provided tool, for example after a rename, is ignored when the record is read, with a log event.
-   - The column is a schema change: `docker/postgres/init.sql` and a file in `docker/postgres/migrations/`, run as the `agent` superuser through `AGENT_DATABASE_ADMIN_URL`. Its deploy class is a Postgres migration.
+   - The column is a schema change: `docker/postgres/init.sql`, the next contiguous file number in `docker/postgres/migrations/` (0033 today), and `SessionModel.revealed_tools` (`service/models.py:204-236`), with the parity and idempotency tests that the other migrations have. It runs as the `agent` superuser through `AGENT_DATABASE_ADMIN_URL`. Its deploy class is a Postgres migration.
    - Workers do not read the record. The `general` worker holds both tools in its closed tool list (`orchestrator/worker_types.py:317-332`), as it holds `query_telemetry` today.
 5. **The order of the checks for a call to a skill-provided tool:**
    1. the tool exists in the registry, and its arguments parse;
@@ -690,7 +692,7 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
 8. **Which form of the reveal.** Tools render first in the prompt. So adding a tool to the `tools` array discards the cached prompt. Measured on 2026-09-10: when the tools changed, 1,832 tokens were prefilled again in 4.59 s instead of 0.64 s. T-B chooses between two forms, for each provider dialect, as ADR-0149 D6 does for `tool_choice`:
    - **The cache-safe form (preferred):** the `tools` array does not change. The schema of a revealed tool reaches the model in the conversation:
      - in the reveal turn, in the successful `read_skill` result. That turn's `<turn_context>` block is already built, because the block is built once per user turn (`orchestrator/types.py:578-583`, `orchestrator/executor.py:6996-7036`);
-     - in each later turn of the session, once, in that turn's `<turn_context>` block, which comes after the cached prefix (`orchestrator/executor.py:6968-6977`).
+     - in each later turn of the session, once, in that turn's `<turn_context>` block, which comes after the cached prefix (`orchestrator/executor.py:6968-7036`).
 
      The session history holds the raw user text, not the block (`service/app.py:421-428`). So the schemas of earlier turns do not pile up in the history. The cost is the schema tokens of the revealed tools in each later turn. This is the pattern of S12. It is not known whether llama.cpp turns a call to a tool that is not in the request's `tools` array into a tool call, or accepts the next request, whose transcript holds a call and a result for that tool. T-B measures both.
    - **The simple form:** the tool is added to the `tools` array at the reveal and stays for the session. The cost is one full re-prefill for each reveal, once per session.
@@ -762,12 +764,15 @@ AC-F results are fresh A/B results. They are not compared with the FRE-1590 numb
   - A PATCH of the session cannot set or clear `revealed_tools`, and a PATCH of `metadata` during a reveal leaves the record as it is.
   - Two reveals of different tools in two concurrent turns of one session both persist.
   - A failed load of the record gives an empty set and a log event, and the turn runs.
+  - A load or an add with the wrong `user_id` reads or changes nothing. An add that matches no row or raises keeps the reveal for the current turn and logs the failure.
+  - Pruning a session clears `revealed_tools`.
 - **AC-R4 — the cache-safe form puts the schema where A5.8 says.** Structural tests, required only if T-B chooses the cache-safe form. *Fails if* any case differs. (T-C1)
   - The successful `read_skill` result of a providing skill holds the schemas of its tools.
   - The reveal turn's existing `<turn_context>` block holds no schema.
   - Each later turn's block holds the schema of each revealed tool once.
   - The `tools` array is the same before and after the reveal.
   - A mid-turn compression keeps the `read_skill` result that holds the schema (D2.4).
+  - A service test runs three turns of one session and reads `sessions.messages`. Each persisted user message equals the text that was sent, and holds neither `<turn_context>` nor a schema. After a new gateway process loads the session, the outgoing request holds exactly one copy of each revealed schema.
 - **AC-R3 — the provider rules hold.** The validator fails on each seeded case. *Fails if* any seeded case passes. (T-C1 for the mechanism, T-C2 for the real skills)
   - a `provides-tools` value that names an unknown tool, or a tool that is not skill-provided;
   - a skill-provided tool that no skill provides;
@@ -786,7 +791,7 @@ AC-F results are fresh A/B results. They are not compared with the FRE-1590 numb
   5. the provider accepts that request: it answers with HTTP 200, the response parses, and it holds non-empty text or a well-formed tool call. No judge is needed.
 
   *Fails if* fewer than 10 of 12 draws hold on the production primary. That is the floor of the skills that continue in FRE-1590 Part 1. The cloud primary is measured and reported, with no bound, because the production primary is local (`config/model_roles.yaml:55`). (T-B for the choice, T-D1 on the final build)
-- **AC-F3 — the cache cost is bounded on the production primary.** In llama.cpp timings, `cache_n` is the prompt tokens reused from the cache and `prompt_n` is the prompt tokens evaluated again, so a call's whole prompt is `cache_n + prompt_n` (`scripts/eval/fre1537/replay.py:192-236`). The **shortfall** of a call is `(cache_n + prompt_n of the previous call) - cache_n of this call`. A control session runs the same transcript with no reveal, and its shortfall at the same step is the boundary cost of the chat template. *Fails if* the chosen form exceeds its bound, or a call has no timings. (T-B, T-D1)
+- **AC-F3 — the cache cost is bounded on the production primary.** In llama.cpp timings, `cache_n` is the prompt tokens reused from the cache and `prompt_n` is the prompt tokens evaluated again, so a call's whole prompt is `cache_n + prompt_n` (`scripts/eval/fre1537/replay.py:192-236`). The **shortfall** of a call is `(cache_n + prompt_n of the previous call) - cache_n of this call`. A control session sends a request sequence that is byte for byte the same as the treatment's, except for the reveal under test: the synthetic `read_skill` result is the same, and only the reveal (the schema or the `tools` change) is left out. Each arm starts with a unique nonce, so neither arm reuses the other's cache. Its shortfall at the same step is the boundary cost of the chat template. A call whose `cache_n` is larger than `cache_n + prompt_n` of the previous call breaks the lineage, as the replay already checks (`replay.py:211-236`), and voids the pair. *Fails if* the chosen form exceeds its bound, or a call has no timings. (T-B, T-D1)
   - In the cache-safe form, the shortfall of the call after the reveal is no larger than the control's shortfall at the same step.
   - In the simple form, a session has at most one call for each revealed tool whose shortfall is larger than the control's at the same step.
   - For the cloud primary, T-B reports `cache_read_tokens` (`llm_client/telemetry.py:127`) for each form, with no bound.

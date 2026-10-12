@@ -96,6 +96,7 @@ def _seed(root: Path, rel: str, text: str) -> list[str]:
 
 
 def test_no_live_file_names_the_old_skills_folder() -> None:
+    """No tracked or new file outside the history directories names the old folder."""
     files = _repo_files()
     assert any(rel.startswith("skills/") for rel in files), "the skills/ folder holds no file"
     assert find_old_path_references(_REPO, files) == []
@@ -119,6 +120,7 @@ def test_no_live_file_names_the_old_skills_folder() -> None:
     ],
 )
 def test_a_seeded_file_in_each_scanned_place_fails_the_check(tmp_path: Path, rel: str) -> None:
+    """A file in each place that AC-2 lists makes the check fail."""
     seeded = _seed(tmp_path, rel, "see docs/skills/a/SKILL.md\n")
     assert find_old_path_references(tmp_path, seeded) == [rel]
 
@@ -134,11 +136,13 @@ def test_a_seeded_file_in_each_scanned_place_fails_the_check(tmp_path: Path, rel
     ],
 )
 def test_the_literal_and_the_join_form_are_both_found(tmp_path: Path, text: str) -> None:
+    """The check finds the literal path and the join form, on one line and over several."""
     seeded = _seed(tmp_path, "scripts/x.py", text)
     assert find_old_path_references(tmp_path, seeded) == ["scripts/x.py"]
 
 
 def test_the_new_path_is_not_a_hit(tmp_path: Path) -> None:
+    """The new path and ``docs/external-skills`` are not hits."""
     text = 'P = ROOT / "skills"\nQ = "skills/a/SKILL.md"\nR = "docs/external-skills/b"\n'
     seeded = _seed(tmp_path, "scripts/x.py", text)
     assert find_old_path_references(tmp_path, seeded) == []
@@ -154,11 +158,13 @@ def test_the_new_path_is_not_a_hit(tmp_path: Path) -> None:
     ],
 )
 def test_history_and_places_outside_the_scope_are_not_checked(tmp_path: Path, rel: str) -> None:
+    """The three history directories and ``telemetry/`` keep the old path."""
     seeded = _seed(tmp_path, rel, "see docs/skills/a/SKILL.md\n")
     assert find_old_path_references(tmp_path, seeded) == []
 
 
 def test_an_exception_covers_its_exact_file_name_only(tmp_path: Path) -> None:
+    """A file next to an exception, with another name, still fails the check."""
     text = "see docs/skills/a/SKILL.md\n"
     named = _seed(tmp_path, "docs/plans/completed/2026-05-22-completed-archive.md", text)
     sibling = _seed(tmp_path, "docs/plans/completed/2026-05-23-other.md", text)
@@ -168,6 +174,7 @@ def test_an_exception_covers_its_exact_file_name_only(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("rel", sorted(_EXCEPTIONS))
 def test_each_exception_exists_and_still_needs_its_exception(rel: str) -> None:
+    """An exception for a file that is gone, or that is clean, must be removed."""
     path = _REPO / rel
     assert path.is_file(), f"{rel} is gone: remove its exception"
     assert _OLD_PATH.search(path.read_text(encoding="utf-8")), (

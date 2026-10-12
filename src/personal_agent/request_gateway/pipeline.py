@@ -111,11 +111,18 @@ async def run_gateway_pipeline(
     )
 
     # Stage 5: Decomposition Assessment
+    # ADR-0154 D2: the gate is the turn's primary deployment, read through the selection
+    # the caller set before this pipeline ran (the one /chat reports as primary_selection).
+    from personal_agent.config.model_loader import (  # noqa: PLC0415
+        primary_declares_planner_mode,
+    )
+
     decomposition = assess_decomposition(
         intent=intent,
         governance=governance,
         delegation_enabled=settings.delegation_enabled,
         expansion_enabled=settings.expansion_enabled,
+        planner_mode_declared=primary_declares_planner_mode(trace_id=trace_id),
     )
 
     logger.info(
@@ -124,6 +131,7 @@ async def run_gateway_pipeline(
         complexity=intent.complexity.value,
         strategy=decomposition.strategy.value,
         reason=decomposition.reason,
+        planner_gate_reason=decomposition.planner_gate_reason,
         trace_id=trace_id,
     )
 

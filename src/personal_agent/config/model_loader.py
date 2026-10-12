@@ -352,6 +352,44 @@ def resolve_inherited_deployment(config: ModelConfig) -> str:
     return resolve_selected_deployment("primary", get_current_selection("primary"), config)
 
 
+#: The catalog mode that the planner call requests (ADR-0154 D4) and that opens D2's gate.
+PLANNER_MODE = "planner"
+
+
+def primary_declares_planner_mode(
+    config: ModelConfig | None = None, *, trace_id: str | None = None
+) -> bool:
+    """Return whether this turn's primary deployment declares a ``planner`` mode (ADR-0154 D2).
+
+    The gate of the routing change. It resolves the primary as the planner and primary
+    clients do: the turn's selection through the guardrail, else the binding default
+    (:func:`resolve_inherited_deployment`). It then applies the mode test of
+    :func:`with_requested_mode`, so the gate and the mode the planner call runs cannot
+    disagree. Fails closed: any error gives ``False``, so a deployment never reaches D2
+    with an unverified thinking control.
+
+    Args:
+        config: The catalog to resolve against. ``None`` loads the live one.
+        trace_id: The turn's trace id, for the failure log.
+
+    Returns:
+        ``True`` when the resolved primary deployment declares a ``planner`` mode.
+    """
+    try:
+        resolved_config = config if config is not None else load_model_config()
+        key = resolve_inherited_deployment(resolved_config)
+        definition = resolved_config.models.get(key)
+    except Exception as exc:
+        log.warning(
+            "planner_gate_resolve_failed",
+            trace_id=trace_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return False
+    return definition is not None and PLANNER_MODE in definition.modes
+
+
 def with_requested_mode(
     definition: ModelDefinition, mode: str, *, role: str, deployment_key: str
 ) -> ModelDefinition:

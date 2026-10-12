@@ -1,7 +1,11 @@
 """Stage 5: Decomposition Assessment.
 
 Deterministic decision matrix replacing the Slice 1 always-SINGLE stub.
-Maps (task_type, complexity, expansion_budget) → DecompositionStrategy.
+Maps (task_type, complexity, expansion_budget, planner gate) → DecompositionStrategy.
+
+ADR-0154 D2: when the session's primary deployment declares a ``planner`` mode, the four
+register types route ``HYBRID`` with reason ``planner_asked``, and the planner decides
+whether to expand. Without that mode they keep the matrix below.
 
 No LLM call — pure function driven by intent classification output
 and governance context from prior pipeline stages.
@@ -17,10 +21,16 @@ from personal_agent.request_gateway.types import (
     DecompositionStrategy,
     GovernanceContext,
     IntentResult,
+    PlannerGateReason,
     TaskType,
 )
 
 logger = structlog.get_logger(__name__)
+
+# ADR-0154 D2: the task types the planner decides for, behind the planner-mode gate.
+REGISTER_TASK_TYPES = frozenset(
+    {TaskType.CONVERSATIONAL, TaskType.TOOL_USE, TaskType.ANALYSIS, TaskType.PLANNING}
+)
 
 
 def assess_decomposition(
@@ -28,6 +38,7 @@ def assess_decomposition(
     governance: GovernanceContext,
     delegation_enabled: bool = False,
     expansion_enabled: bool = True,
+    planner_mode_declared: bool = False,
 ) -> DecompositionResult:
     """Assess how to handle this request: single, hybrid, decompose, or delegate.
 
@@ -53,16 +64,30 @@ def assess_decomposition(
             ``expansion_disabled``, checked after the resource-pressure
             forcings so ``expansion_denied`` and ``zero_budget`` keep their
             own reasons.
+        planner_mode_declared: Whether the session's primary deployment declares a
+            ``planner`` mode (ADR-0154 D2, from
+            ``config.model_loader.primary_declares_planner_mode``). It opens the
+            ``planner_asked`` route for the four register types. ``False`` (the default)
+            keeps today's routing and records ``planner_mode_absent`` on those types.
 
     Returns:
         DecompositionResult with strategy and human-readable reason.
     """
+    # ADR-0154 D6: recorded on every turn of the four register types whose primary declares
+    # no planner mode, forced or not, so a reader can tell the gate from the forcings.
+    planner_gate_reason: PlannerGateReason | None = (
+        "planner_mode_absent"
+        if not planner_mode_declared and intent.task_type in REGISTER_TASK_TYPES
+        else None
+    )
+
     # Resource pressure: force SINGLE
     if not governance.expansion_permitted:
         logger.debug("decomposition_forced_single", reason="expansion_denied")
         return DecompositionResult(
             strategy=DecompositionStrategy.SINGLE,
             reason="expansion_denied",
+            planner_gate_reason=planner_gate_reason,
         )
 
     if governance.expansion_budget <= 0:
@@ -70,6 +95,7 @@ def assess_decomposition(
         return DecompositionResult(
             strategy=DecompositionStrategy.SINGLE,
             reason="zero_budget",
+            planner_gate_reason=planner_gate_reason,
         )
 
     if not expansion_enabled:
@@ -77,25 +103,28 @@ def assess_decomposition(
         return DecompositionResult(
             strategy=DecompositionStrategy.SINGLE,
             reason="expansion_disabled",
+            planner_gate_reason=planner_gate_reason,
         )
 
     strategy, reason = _apply_matrix(
         intent.task_type,
         intent.complexity,
         delegation_enabled,
+        planner_mode_declared,
     )
-
     logger.info(
         "decomposition_assessed",
         task_type=intent.task_type.value,
         complexity=intent.complexity.value,
         strategy=strategy.value,
         reason=reason,
+        planner_gate_reason=planner_gate_reason,
     )
 
     return DecompositionResult(
         strategy=strategy,
         reason=reason,
+        planner_gate_reason=planner_gate_reason,
     )
 
 
@@ -103,6 +132,7 @@ def _apply_matrix(
     task_type: TaskType,
     complexity: Complexity,
     delegation_enabled: bool,
+    planner_mode_declared: bool,
 ) -> tuple[DecompositionStrategy, str]:
     """Apply the decomposition decision matrix.
 
@@ -110,10 +140,16 @@ def _apply_matrix(
         task_type: Classified task type.
         complexity: Estimated complexity.
         delegation_enabled: Whether a delegation adapter is wired (FRE-1376).
+        planner_mode_declared: Whether the session's primary deployment declares a
+            ``planner`` mode (ADR-0154 D2).
 
     Returns:
         Tuple of (strategy, reason).
     """
+    if planner_mode_declared and task_type in REGISTER_TASK_TYPES:
+        # ADR-0154 D2: the planner decides, and it may decline (planner_may_decline).
+        return DecompositionStrategy.HYBRID, "planner_asked"
+
     match task_type:
         case TaskType.CONVERSATIONAL:
             return DecompositionStrategy.SINGLE, "conversational_always_single"

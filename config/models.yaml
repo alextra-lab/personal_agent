@@ -266,7 +266,9 @@ models:
       # thinking off, NOT `worker`'s (which also changes the sampling). Admitted on this
       # deployment only because the committed probe (scripts/eval/fre1537) passed on it in
       # this mode: the scorer output and fingerprint are on FRE-1541 (ADR-0154 D7). A change
-      # to any value here is a routing change and needs a new passing run.
+      # to any value here is a routing change and needs a new passing run. The current planner
+      # prompt (sha256 ffe08113…) passed on FRE-1581 (18 tools) and, on production's 24 tools,
+      # with FRE-1590's long-history and paired arms and the FRE-1515 decide rerun (44/48).
       planner:
         enable_thinking: false
         temperature: 1.0
@@ -405,21 +407,6 @@ models:
         presence_penalty: 0.0
         repeat_penalty: 1.0
       worker:
-        enable_thinking: false
-        temperature: 1.0
-        top_p: 0.95
-        top_k: 64
-        min_p: 0.0
-        presence_penalty: 0.0
-        repeat_penalty: 1.0
-      # FRE-1517 stage 2b, STUDY-ONLY — NOT an ADR-0154 D7 qualification. Gemma scored 10 of 11
-      # on D7 (decline-correct 27/30). Owner, 2026-10-09: "apples to apples - test the gemma with
-      # a thinking off setting", so a Gemma session plans with thinking off as qwen3.8-flash-next
-      # does. This is the `default` mode's sampling with thinking off (ADR-0154 D4), the exact
-      # configuration the D7 run measured. No role binds this deployment, and D2 routing is not
-      # live (FRE-1515), so production routing does not change. Remove this mode if Gemma is not
-      # chosen; keep it only after a passing D7 run or an owner-approved ADR-0154 amendment.
-      planner:
         enable_thinking: false
         temperature: 1.0
         top_p: 0.95

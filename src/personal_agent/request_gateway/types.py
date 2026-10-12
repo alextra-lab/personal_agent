@@ -7,11 +7,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from personal_agent.captains_log.turn_evidence import CandidatePopulation, RecallCandidateRecord
 from personal_agent.governance.models import Mode
 from personal_agent.request_gateway.memory_status import MemoryStatusReport
+
+# ADR-0154 D2/D6: the same values as ``observability.route_trace.types.PlannerGateReason``.
+# Declared here too, because importing that package from the gateway creates an import cycle.
+PlannerGateReason = Literal["planner_mode_absent"]
 
 
 class TaskType(Enum):
@@ -98,11 +102,15 @@ class DecompositionResult:
         strategy: How the request should be handled.
         reason: Human-readable explanation for observability.
         constraints: Additional constraints (e.g., max sub-agents).
+        planner_gate_reason: ``planner_mode_absent`` on a turn of the four register types
+            whose session primary deployment declares no ``planner`` mode, forced to
+            ``SINGLE`` or not (ADR-0154 D2, D6). ``None`` otherwise.
     """
 
     strategy: DecompositionStrategy
     reason: str
     constraints: dict[str, Any] | None = None
+    planner_gate_reason: PlannerGateReason | None = None
 
 
 @dataclass(frozen=True)

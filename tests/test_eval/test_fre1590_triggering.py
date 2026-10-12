@@ -68,11 +68,11 @@ def fingerprint(**over: object) -> dict:
 # --------------------------------------------------------------------------- names
 
 
-def test_safe_names_are_unique_and_safe_for_all_63_items() -> None:
+def test_safe_names_are_unique_and_safe_for_every_item() -> None:
     items = load_items()
-    assert len(items) == 63
+    assert len(items) >= 50
     names = [t.safe_name(i.id) for i in items]
-    assert len(set(names)) == 63
+    assert len(set(names)) == len(items)
     assert all(re.fullmatch(r"[A-Za-z0-9._-]+", n) for n in names)
     assert t.safe_name("query-tempo#3") == "query-tempo__3"
 

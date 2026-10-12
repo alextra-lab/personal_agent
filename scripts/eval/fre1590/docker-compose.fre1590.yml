@@ -71,7 +71,6 @@ services:
       AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
       AGENT_APPROVAL_UI_ENABLED: "false"
     volumes:
-      - {type: bind, source: /dev/null, target: /app/docs/skills/artifact-design/SKILL.md, read_only: true}
       - {type: bind, source: /dev/null, target: /app/docs/skills/infrastructure-health/SKILL.md, read_only: true}
       - {type: bind, source: /dev/null, target: /app/docs/skills/mermaid-diagrams/SKILL.md, read_only: true}
       - {type: bind, source: /dev/null, target: /app/docs/skills/neo4j-direct/SKILL.md, read_only: true}

@@ -13,13 +13,11 @@
 #   (REASONING_DISCIPLINE_PROMPT);
 # - query-elasticsearch#0, #1, #2, query-tempo#0, system-metrics#1, neo4j-direct#3: a reviewer
 #   judged them answerable without the skill;
-# - the rows in `excluded` below, each with its reason. Part 1 still covers every scenario.
+# - the rows in `excluded` below, each with its reason. Part 1 still covers every scenario;
+# - artifact-design: it is no longer a skill (owner, PR #1263). Artifact building is a dedicated,
+#   isolated process. Its two Part 2 rows of 2026-10-11 were invalid for production.
 
 scenarios:
-  - id: artifact-design#1
-    reason: "Only the skill gives the pinned three.js shelf URL and its global THREE boot form instead of an ES module import."
-  - id: artifact-design#3
-    reason: "Only the skill says that paged.js is experimental and gated, so native @page rules must lead."
   - id: infrastructure-health#0
     reason: "Only the skill names the probe script that opens a real Postgres connection, and says that a curl to port 5432 means nothing."
   - id: mermaid-diagrams#0
@@ -42,10 +40,6 @@ scenarios:
     reason: "Only the skill says to read input_tokens down the primary calls and to name the tool result before the jump as the cause."
 
 excluded:
-  - id: artifact-design#0
-    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill gives the exact pinned /lib/ shelf URLs of Chart.js and KaTeX and the rule that no other CDN loads."
-  - id: artifact-design#2
-    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill gives the highlight.js shelf recipe and the rule to use the shelf fonts only through @font-face."
   - id: infrastructure-health#1
     reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill names the probe script with the argument `all`, which prints one line for each of the four services."
   - id: infrastructure-health#2

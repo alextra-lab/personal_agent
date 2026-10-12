@@ -13,6 +13,8 @@ from the findings. Owner decisions, all recorded on FRE-1590 before the run even
    (PR #1263). Its results here are invalid for production.
 6. Gemma runs as UD-Q8_K_XL with MTP draft depth 2, slm_server's configuration.
 7. Part 2 on Gemma needs a new owner OK, based on Gemma's Part 1 result.
+8. After Part 1 (~07:20Z on 2026-10-12): Part 2 runs on Gemma, and the D7 Flash-Next probe runs again on
+   the 24-tool capture. The other answers are under **Proposals**.
 
 This document records what was measured. Recommendations appear only in **Proposals**. The owner decides.
 
@@ -25,9 +27,10 @@ This document records what was measured. Recommendations appear only in **Propos
 | Part 1: the right skill on the first call (39 scenarios × 3 draws) | 94/117 (80%) | 90/117 (77%) |
 | Part 1: a wrong skill loaded | 1 | 0 |
 | Part 1: a skill loaded on a no-skill prompt (20 × 3) | 0/60 | 0/60 |
-| Part 2: does a skill help? (10 scenarios, two blind judges, points of 20) | with skills 13–14, without 11 | not run (owner OK needed) |
-| D7 planner probe (ADR-0154) | PASS 13/13 (FRE-1581, 18-tool capture) | FAIL 11/13 (24-tool capture) |
-| Cloud cost | $1.29 (Part 2, Captain's Log only) | $0 |
+| Part 2: does a skill help? (10 scenarios, two blind judges, points of 20) | with skills 13–14, without 11 (18 tools) | with skills 12 / 12, without 7 / 10 (24 tools) |
+| D7 planner probe (ADR-0154), 24-tool capture | FAIL 12/13: expand-correct 42/48 (bound 43) | FAIL 11/13: decline-correct 24/30 |
+| D7 planner probe, 18-tool capture (FRE-1581) | PASS 13/13 | — |
+| Cloud cost | $1.29 (Part 2, Captain's Log only) | $1.02 (Part 2: Captain's Log $0.96, one builder call $0.06) |
 
 ---
 
@@ -41,6 +44,8 @@ This document records what was measured. Recommendations appear only in **Propos
 | Part 1 Flash-Next, rerun | stub gateway → llama.cpp | 10-12 05:06–05:29 | 24 tools, 10 skills, `main` `4bc88d2a` |
 | Part 1 Gemma | llama.cpp, Gemma window | 10-12 05:37–05:51 | 24 tools, 10 skills |
 | D7 Gemma | llama.cpp, Gemma window | 10-12 05:52–06:48 | 24 tools, planner prompt `ffe08113…` |
+| D7 Flash-Next, 24-tool rerun | llama.cpp | 10-12 07:16–08:43 | 24 tools, planner prompt `ffe08113…` |
+| Part 2 Gemma | eval control and treatment gateways, second Gemma window | 10-12 08:44–09:09 | 24 tools, 10 skills, `4bc88d2a` |
 
 - **Part 1** saves each item's first primary request through the fre1537 stub gateway, once per model key.
   So each request carries that deployment's sampling. It then replays only that first call to llama.cpp,
@@ -154,6 +159,69 @@ The other checks pass. Both FAILs come from the same two decline fixtures, 0/3 e
 
 The report is on FRE-1515.
 
+### F5 — Part 2, Gemma: with skills 12 points of 20, without 7–10
+
+**Query:** `help run --model gemma-4-26b-a4b`, then `help report`. Run dir
+`telemetry/evaluation/fre1590-skill-test/p2-gemma-20261012-0844`. 10 scenarios × 2 arms, `RESULT:
+PAIRED`, 0 error rows. Gemma UD-Q8_K_XL with MTP depth 2. The same two-judge blind method as F3.
+
+| Scenario | Without skills (judge 1 / 2) | With skills (judge 1 / 2) | Time without / with |
+|---|---|---|---|
+| infrastructure-health#0 | FAIL / PARTIAL | PARTIAL / PARTIAL | 23 / 26 s |
+| mermaid-diagrams#0 | PARTIAL / PASS | PARTIAL / PARTIAL | 59 / 17 s |
+| mermaid-diagrams#2 | PARTIAL / PASS | PARTIAL / PASS (no skill loaded) | 14 / 22 s |
+| neo4j-direct#1 | FAIL / FAIL | FAIL / FAIL | 75 / 73 s |
+| query-elasticsearch#3 | FAIL / FAIL | FAIL / FAIL (no skill loaded) | 56 / 56 s |
+| self-telemetry#0 | PARTIAL / PARTIAL | PASS / PARTIAL | 17 / 25 s |
+| self-telemetry#1 | PARTIAL / PARTIAL | **PASS / PASS** | 82 / 29 s |
+| system-diagnostics#2 | PASS / PASS | PASS / PASS | 21 / 15 s |
+| system-metrics#3 | PARTIAL / PARTIAL | **PASS / PASS** | 52 / 29 s |
+| turn-forensics#1 | FAIL / FAIL | **PARTIAL / PARTIAL** | 88 / 101 s |
+| **Points of 20** | **7 / 10** | **12 / 12** | median 54 / 27 s |
+
+- The judges agreed on 15 of 20 verdicts. Judge 2 counted a step that the reply does not show as met,
+  and judge 1 counted it as missed. Both put the skill arm ahead.
+- The gain from skills is +2 to +5 points on Gemma, and +2 to +3 on Flash-Next (F3). Gemma without skills
+  scores lower: on system-metrics#3 it inferred that the GPU is busy from an SLM probe.
+- With skills, Gemma's median turn is 27 s, against 54 s without.
+- turn-forensics#1: the skill arm is ahead on Gemma, the opposite of Flash-Next.
+- F3 ran with 18 tools and F5 with 24, so the two models also differ in tool list.
+
+### F6 — D7 Flash-Next on the 24-tool capture: FAIL, 12 of 13 thresholds
+
+**Query:** `replay --mode planner --arms decide,paired --quant UD-IQ4_XS`, then `longhist --mode
+planner`, then `score --tag planner`. Run dir
+`telemetry/evaluation/fre1537-planner-probe/fre1590-flash-next-24tools-20261012-0713`.
+
+| Check | Bound | 24 tools (this run) | 18 tools (FRE-1581) |
+|---|---|---|---|
+| Decline-correct | ≥ 28/30 | 29/30 | 29/30 |
+| **Expand-correct** | ≥ 43/48 | **42/48 FAIL** | 46/48 |
+| Declined call time (p50) | ≤ 2 s | 0.69 s | 0.67 s |
+| Planner call 60k, extended / cold | ≤ 10 s / ≤ 60 s | 6.5 s / 44.2 s | 6.7 s / 45.2 s |
+| Paired added delay < 8k | ≤ 3 s, ≥ 28/30 | 0.79 s, 30/30 | 0.87 s, 30/30 |
+| Paired added delay ≥ 8k | ≤ 10 s, ≥ 8/9 | 6.38 s, 9/9 | 6.54 s, 9/9 |
+
+The other checks pass.
+- The planner prompt (`ffe08113…`), the llama.cpp build and the sampling are the same as in the FRE-1581
+  PASS. The only change is the six R2 tools in the captured primary.
+- The six expand misses are all vague requests: `c2_noverb` 2/3, `c4_deliverable` 2/3, `c4_process`
+  1/3, `c5_verb` 1/3. One decline draw expanded (`tool_logs` 1/3).
+- Hypothesis, not tested: with an artifact tool and note tools in view, the planner more often judges
+  that the primary can deliver a vague deliverable alone.
+- 42/48 is one draw under the bound, and FRE-1581's 46/48 lies inside its 95% interval (75–94%). Whether
+  the drop is stable is open: **a rerun of the decide arm waits for the owner.**
+- **Shared llama.cpp time:** a live production artifact turn (master, owner OK) ran on the same engine
+  from 07:27:08 to about 07:42Z.
+  - The decide arm had ended at 07:25:23Z, so it is clean.
+  - The 12 paired pairs whose span overlapped 07:27:00–07:42:00Z are kept in
+    `rows/planner/paired.quarantine.jsonl` and were run again at 08:29–08:42Z:
+    - draw 0: laptop_decline, lisbon_decline, susan_1–4, tariffs_decline, tool_logs;
+    - draw 1: boiler_decline, greeting, laptop_decline, lisbon_decline.
+  - The short paired median went from 1.04 s, with the 12 included, to 0.79 s.
+  - The longhist arms (08:03–08:28Z) ran after the shared period.
+  - The disturbed pairs did not cause the FAIL, which comes from the clean decide arm.
+
 ---
 
 ## Findings per skill, with cause and proposed change (AC-4)
@@ -184,6 +252,11 @@ The report is on FRE-1515.
   - The R2 client is created only on a tool call. Tool-result compression, which would write to R2, is
     off in production.
   - The FRE-1581 D7 Flash-Next PASS used the 18-tool capture. Master takes a rerun to the owner.
+- **The disabled R2 settings stop the write, not the Sonnet builder.** In F5, on
+  `mermaid-diagrams#0` without skills, Gemma called `artifact_draft`. The `artifact_builder` (Claude
+  Sonnet) ran and cost $0.06, then the write to `r2-disabled.invalid` failed, and Gemma answered
+  inline. On `neo4j-direct#1` without skills, `artifact_list` and `notes_search` failed. In production,
+  these calls succeed. So a turn that calls an R2 tool on eval does not take the production path.
 - **The two Part 1 Flash-Next runs differ in two things:** the descriptions (PR #1262) and the tool list.
   So a change between them cannot be credited to one of them.
 - **Part 2 understates the skill arm for skills with scripts.** On an eval deployment, bash runs as
@@ -213,22 +286,29 @@ The report is on FRE-1515.
 
 ## Proposals
 
-- **Decide how the telemetry skills and `query_telemetry` divide the work** (owner). The data shows the
-  cost of leaving it open: query-elasticsearch loads on 1–2 of 12. Recommendation (from FRE-1581): the
-  tool alone is right for a count, a field lookup or a latency over a window. The skill descriptions
-  say "Not for a task that query_telemetry answers alone". The scenarios test what only the skill knows.
-- **Fix the four skill texts named above:**
-  - turn-forensics: `context_tokens`, and a shorter method.
-  - self-telemetry: the formula.
-  - neo4j-direct: name the facts that only Cypher reads.
+The owner answered the first proposals on 2026-10-12, at about 07:20Z (recorded on FRE-1590). Each item
+shows its state.
+
+- **The telemetry skills and `query_telemetry`** (decided). The owner follows master's recommendation, and
+  goes further: the skill names (query-elasticsearch, query-tempo) name products, not objectives. That
+  becomes its own ticket, filed by master. The data shows the cost of the overlap today:
+  query-elasticsearch loads on 1–2 of 12.
+- **The four skill-text fixes and sequential-thinking out of the catalog** (decided: a separate study).
+  The owner wants a deeper study instead: a lighter system prompt against injected skills, and the
+  effect on the prompt cache. Master files it. The fixes named in this note are input for that study,
+  and none is applied here:
+  - turn-forensics: `context_tokens`, and a shorter method;
+  - self-telemetry: the formula;
+  - neo4j-direct: name the facts that only Cypher reads;
   - system-diagnostics and system-metrics: the "Not for…" lines.
-  Then run Part 1 again on both models (the `skill-creator` iterate loop, about 20 min per model, $0).
-- **sequential-thinking:** take it out of the catalog, because its rules are always in the prompt.
-- **Measure skills with scripts where bash can run them.** This is a security design question for the
-  owner: give the eval bash child the script's own credential, or run that part with isolation off.
-- **Part 2 on Gemma:** Gemma routes as well as Flash-Next on the skills that no tool overlaps. So a
-  Part 2 run on Gemma measures the same 10 scenarios (about 1 h of Gemma window, about $1.30). The owner
-  decides.
+- **Part 2 on Gemma** (decided, done): F5.
+- **D7 Flash-Next on the 24-tool capture** (decided, done): F6, FAIL 12/13. **Open with the owner:** a
+  rerun of the decide arm, to show whether expand-correct 42/48 is stable.
+- **Measure skills with scripts where bash can run them** (open). This is a security design question for
+  the owner: give the eval bash child the script's own credential, or run that part with isolation off.
+- **An eval stub for R2 writes** (open). The disabled R2 settings register the six tools, but a call to
+  `artifact_draft` still runs the Sonnet builder before the write fails. A turn that reaches an R2 tool
+  on eval therefore costs money and does not take the production path.
 
 ---
 

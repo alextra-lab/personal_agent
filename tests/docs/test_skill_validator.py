@@ -202,5 +202,7 @@ def test_the_gateway_image_copies_every_skill_folder() -> None:
     ]
     # No pattern may exclude a file under skills/ (a scripts/ folder or a script type).
     for pattern in ignored:
-        assert not pattern.lstrip("/").startswith("docs"), pattern
+        bare = pattern.lstrip("/").rstrip("/")
+        assert bare != "skills" and not bare.startswith("skills/"), pattern
+        assert pattern not in ("**/skills", "**/skills/**"), pattern
         assert pattern not in ("scripts", "**/scripts", "*.py", "*.sh", "**/*.py", "**/*.sh")

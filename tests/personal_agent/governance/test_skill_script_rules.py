@@ -179,10 +179,21 @@ def test_ac2_the_loader_refuses_any_other_python3_prefix_rule(rule: str) -> None
 
 
 @pytest.mark.parametrize("script", sorted(REVIEWED))
-def test_fre1593_a_rule_that_names_the_old_docs_folder_is_refused(script: str) -> None:
-    """The skills left ``docs/`` (ADR-0156 A1): a rule that keeps the old path must not load."""
+def test_fre1593_a_rule_that_names_the_old_docs_folder_is_refused(
+    script: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The skills left ``docs/`` (ADR-0156 A1): a rule that keeps the old path must not load.
+
+    The file exists at the old place here, so the refusal comes from the path pattern and not
+    from a missing file.
+    """
+    monkeypatch.chdir(_REPO)
     _load(f"bash(python3 {script} *)")  # the control: the new path loads
-    with pytest.raises(PermissionRuleError):
+    old_file = tmp_path / "docs" / script
+    old_file.parent.mkdir(parents=True)
+    old_file.write_text("print('x')\n")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(PermissionRuleError, match="is not skills/<skill>/scripts/<file>.py"):
         _load(f"bash(python3 docs/{script} *)")
 
 

@@ -1,11 +1,17 @@
 """FRE-1593 (ADR-0156 A1): no live file names the old skills folder.
 
 The runtime skills moved from ``docs/skills/`` to ``skills/``. A test or script that still reads
-the old folder finds nothing and passes without checking anything, so this check fails on any
-live file that names the old path. It finds the literal and the join form ``"docs" / "skills"``,
-which is how most code builds the path.
+the old folder finds nothing and passes without checking anything, so this check fails on a
+scanned file that names the old path.
 
-Three directories hold history and are not checked. Every other exception is one exact file name.
+It finds the literal ``docs/skills`` and the join forms that name both parts as strings:
+``"docs" / "skills"``, ``Path("docs") / "skills"`` and ``join("docs", "skills")``. It cannot find
+a path that a variable builds, such as ``DOCS.glob("skills/*")``. A test that scans the skills
+folder must assert that its file set is not empty, so that form fails there.
+
+The check scans ``src/``, ``config/``, ``scripts/``, ``tests/``, ``skills/``, ``docs/``,
+``.env.example`` and every ``Dockerfile*`` and ``docker-compose*`` file. Three ``docs/``
+directories hold history and are skipped. Every other exception is one exact file name.
 """
 
 from __future__ import annotations
@@ -19,8 +25,9 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
 
-#: The literal path, and the join form ``"docs" / "skills"`` on one line or across lines.
-_OLD_PATH = re.compile(r"docs/skills|[\"']docs[\"']\s*/\s*[\"']skills[\"']")
+#: The literal path, and the join forms that name ``"docs"`` and ``"skills"`` as two strings:
+#: ``/`` or ``,`` between them, an optional ``)`` after ``"docs"``, on one line or across lines.
+_OLD_PATH = re.compile(r"docs/skills|[\"']docs[\"']\s*\)?\s*[,/]\s*[\"']skills[\"']")
 
 #: Records of what was true at the time (ADR-0156 A1.4). They keep the old path.
 _HISTORY_DIRS = (
@@ -96,10 +103,15 @@ def _seed(root: Path, rel: str, text: str) -> list[str]:
 
 
 def test_no_live_file_names_the_old_skills_folder() -> None:
-    """No tracked or new file outside the history directories names the old folder."""
+    """No scanned file, tracked or new, names the old folder."""
     files = _repo_files()
     assert any(rel.startswith("skills/") for rel in files), "the skills/ folder holds no file"
     assert find_old_path_references(_REPO, files) == []
+
+
+def test_the_old_folder_holds_no_tracked_file() -> None:
+    """ADR-0156 A1.1: ``docs/skills/`` no longer holds a skill. A file there would never load."""
+    assert [rel for rel in _repo_files() if rel.startswith("docs/skills/")] == []
 
 
 @pytest.mark.parametrize(
@@ -133,6 +145,10 @@ def test_a_seeded_file_in_each_scanned_place_fails_the_check(tmp_path: Path, rel
         "P = ROOT / 'docs' / 'skills'\n",
         'P = (\n    ROOT\n    / "docs"\n    / "skills"\n)\n',
         'P = Path(__file__).resolve().parents[3] / "docs" / "skills"\n',
+        'P = Path("docs") / "skills"\n',
+        'P = Path("docs", "skills")\n',
+        'P = os.path.join("docs", "skills")\n',
+        'P = ROOT.joinpath("docs", "skills")\n',
     ],
 )
 def test_the_literal_and_the_join_form_are_both_found(tmp_path: Path, text: str) -> None:

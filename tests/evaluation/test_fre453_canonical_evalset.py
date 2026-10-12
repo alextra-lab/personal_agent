@@ -181,6 +181,7 @@ class TestUnionCoverage:
     def test_all_repo_skills_claimed_or_allowlisted(self, evalset: EvalSet) -> None:
         """Every skills skill is claimed by a case or allowlisted."""
         repo_skills = {p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md")}
+        assert repo_skills, f"no skill under {SKILLS_DIR}"
         uncovered = (
             repo_skills - self._claimed_skills(evalset) - set(evalset.coverage.allowlist_skills)
         )

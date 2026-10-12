@@ -98,6 +98,7 @@ def _skill_texts() -> list[tuple[str, str]]:
         for path in sorted((_SKILLS / name).rglob("*")):
             if path.is_file() and path.suffix in {".md", ".py", ".yaml"}:
                 found.append((f"{name}/{path.relative_to(_SKILLS / name)}", path.read_text()))
+    assert found, f"no skill file under {_SKILLS}"  # an empty set would skip every test
     return found
 
 

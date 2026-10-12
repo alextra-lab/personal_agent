@@ -172,7 +172,8 @@ def test_primary_and_prime_bodies(tmp_path: Path) -> None:
 
 def _with_memory_tail(inputs: llama.Inputs, label: str, *, multi_turn: bool) -> None:
     """Give a fixture the FRE-1360 primary tail: the turn's user message, then the
-    harness memory exchange (assistant tool call, memory_recall tool result)."""
+    harness memory exchange (assistant tool call, memory_recall tool result).
+    """
     history = (
         [{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "answer"}]
         if multi_turn
@@ -309,7 +310,8 @@ def test_long_history_arm_sends_the_digest_as_replay_does(
     tmp_path: Path, digest: str | None
 ) -> None:
     """FRE-1360: with --digest-file, both planner calls carry the production memory_recall
-    exchange after the unchanged user message; without it, the request is unchanged."""
+    exchange after the unchanged user message; without it, the request is unchanged.
+    """
     from personal_agent.orchestrator.expansion_controller import planner_digest_exchange
 
     paths, inputs = make_inputs(tmp_path)
@@ -631,6 +633,9 @@ def test_the_long_history_step_runs_the_mode_that_prepare_resolved(
         "run_longhist",
         lambda client, url, model, p, i, mode, digest=None: seen.append(mode),
     )
+    # The default arms are cold and paired: without this patch the paired arm ran for real
+    # against the default URL, the production llama.cpp (FRE-1594 dry draw 2).
+    monkeypatch.setattr(longhist, "run_longhist_paired", lambda *a, **k: None)
     longhist.main(["--run-dir", str(tmp_path), "--mode", "planner"])
     assert seen == [sentinel]
 

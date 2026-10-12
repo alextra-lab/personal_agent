@@ -133,6 +133,46 @@ def pytest_collection_modifyitems(
             item.add_marker(skip_mark)
 
 
+# The eval scripts default to the production llama.cpp forward on this host
+# (`scripts/eval/fre1537/llama.py` DEFAULT_URL), which AGENT_SLM_BASE_URL above does not
+# cover. A test that misses one monkeypatch then reaches production: on 2026-10-11 and
+# 2026-10-12 one did, and each burst of its malformed requests made the slm_server
+# watchdog restart the engine (FRE-1594 dry draw 2).
+PRODUCTION_INFERENCE_PORTS = frozenset({8600})
+
+
+def _refuse_production_inference(request: httpx.Request) -> None:
+    if request.url.port in PRODUCTION_INFERENCE_PORTS:
+        pytest.fail(
+            f"a unit test sent a real request to {request.url}, the production inference "
+            "port. Use httpx.MockTransport or monkeypatch the call."
+        )
+
+
+@pytest.fixture(autouse=True)
+def _no_production_inference(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail a unit test that opens a real connection to the production inference port."""
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker(
+        "requires_llm_server"
+    ):
+        return
+    sync_send = httpx.HTTPTransport.handle_request
+    async_send = httpx.AsyncHTTPTransport.handle_async_request
+
+    def guarded_sync(self: httpx.HTTPTransport, req: httpx.Request) -> httpx.Response:
+        _refuse_production_inference(req)
+        return sync_send(self, req)
+
+    async def guarded_async(self: httpx.AsyncHTTPTransport, req: httpx.Request) -> httpx.Response:
+        _refuse_production_inference(req)
+        return await async_send(self, req)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", guarded_sync)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", guarded_async)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _substrate_test_env_guard() -> None:
     """Log which substrate URIs the test session will use.

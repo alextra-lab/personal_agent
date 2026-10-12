@@ -1,6 +1,6 @@
 # ADR-0156: Skills and Tools Follow the Industry Standard — Agent Skills Folders Chosen by the Model, One Tool Contract, and One Permission Model That Asks the User
 
-**Status:** Accepted — the owner decided every item on 2026-10-10. Amended 2026-10-10 (FRE-1583), 2026-10-11 (FRE-1585) and 2026-10-12 (FRE-1591); see Status Updates.
+**Status:** Accepted — the owner decided every item on 2026-10-10. Amended 2026-10-10 (FRE-1583), 2026-10-11 (FRE-1585) and 2026-10-12 (FRE-1591, FRE-1594); see Status Updates.
 **Date:** 2026-10-10
 **Deciders:** Owner (the directive, and an answer to each brief item, 2026-10-10), `master` (the commission, the production checks, the relay), `adr` seat at Opus 5.5 (author)
 **Tags:** skills, tools, permissions, approvals, workers, governance, evaluation
@@ -791,7 +791,7 @@ AC-F results are fresh A/B results. They are not compared with the FRE-1590 numb
   5. the provider accepts that request: it answers with HTTP 200, the response parses, and it holds non-empty text or a well-formed tool call. No judge is needed.
 
   *Fails if* fewer than 10 of 12 draws hold on the production primary. That is the floor of the skills that continue in FRE-1590 Part 1. The cloud primary is measured and reported, with no bound, because the production primary is local (`config/model_roles.yaml:55`). (T-B for the choice, T-D1 on the final build)
-- **AC-F3 — the cache cost is bounded on the production primary.** In llama.cpp timings, `cache_n` is the prompt tokens reused from the cache and `prompt_n` is the prompt tokens evaluated again, so a call's whole prompt is `cache_n + prompt_n` (`scripts/eval/fre1537/replay.py:192-236`). The **shortfall** of a call is `(cache_n + prompt_n of the previous call) - cache_n of this call`. A control session sends a request sequence that is byte for byte the same as the treatment's, except for the reveal under test: the synthetic `read_skill` result is the same, and only the reveal (the schema or the `tools` change) is left out. Each arm starts with a unique nonce, so neither arm reuses the other's cache. Its shortfall at the same step is the boundary cost of the chat template. A call whose `cache_n` is larger than `cache_n + prompt_n` of the previous call breaks the lineage, as the replay already checks (`replay.py:211-236`), and voids the pair. *Fails if* the chosen form exceeds its bound, or a call has no timings. (T-B, T-D1)
+- **AC-F3 — the cache cost is bounded on the production primary.** In llama.cpp timings, `cache_n` is the prompt tokens reused from the cache and `prompt_n` is the prompt tokens evaluated again, so a call's whole prompt is `cache_n + prompt_n` (`scripts/eval/fre1537/replay.py:192-236`). The **shortfall** of a call is `(cache_n + prompt_n of the previous call) - cache_n of this call`. A control session sends a request sequence that is byte for byte the same as the treatment's, except for the reveal under test: the synthetic `read_skill` result is the same, and only the reveal (the schema or the `tools` change) is left out. Each arm starts with a unique nonce, so neither arm reuses the other's cache. Its shortfall at the same step is the boundary cost of the chat template. A call whose `cache_n` is larger than `cache_n + prompt_n` of the previous call breaks the lineage, as the replay already checks (`replay.py:211-236`), and voids the pair. **Amended 2026-10-12 (FRE-1594):** on a hybrid primary, the shortfall baseline is the previous call's whole context, `cache_n + prompt_n + predicted_n`. A pair in which neither arm reused a token is not scored. See the amendment in Status Updates. *Fails if* the chosen form exceeds its bound, or a call has no timings. (T-B, T-D1)
   - In the cache-safe form, the shortfall of the call after the reveal is no larger than the control's shortfall at the same step.
   - In the simple form, a session has at most one call for each revealed tool whose shortfall is larger than the control's at the same step.
   - For the cloud primary, T-B reports `cache_read_tokens` (`llm_client/telemetry.py:127`) for each form, with no bound.
@@ -821,3 +821,22 @@ If T-B chooses W3, T-C1 and T-C2 are replaced by a W3 ticket with the four Codex
 #### Codex review rounds
 
 Logged in the PR description.
+
+### 2026-10-12 - Amendment to AC-F3: the shortfall baseline on a hybrid primary (FRE-1594)
+**Changed By:** Owner (decision), `build2` seat (finding), `master` (recorded)
+**Reason:** the production primary, Flash-Next, is a hybrid model (Gated DeltaNet). The llama.cpp server README and `tools/server/server-context.cpp` show that such a model cannot cut its recurrent state back to a shorter common prefix. The server does one of three things:
+- It continues from the live end state, which holds the generated tokens of the previous call.
+- It restores a context checkpoint, made at the last user message or near the prompt end.
+- It processes the whole prompt again.
+
+On the first path, `cache_n` includes the generated tokens, so it is larger than `cache_n + prompt_n` of the previous call. The AC-F3 lineage rule then voids the normal case.
+
+**Owner decision (2026-10-12, in the FRE-1594 build seat):** change the baseline.
+
+**The rule, replacing the AC-F3 shortfall and lineage sentences:**
+- The shortfall of a call is `(cache_n + prompt_n + predicted_n of the previous call) - cache_n of this call`.
+- A pair is void if a call's `cache_n` is larger than that whole previous context, or if the provider rejected one of its calls.
+- A pair in which neither arm reused a token is not scored. A form whose only pairs at its scored steps are of this kind is `uninformative`, not a pass.
+- The bounds of the cache-safe and simple forms do not change.
+
+Implemented in `scripts/eval/fre1594/score.py` (PR #1270).

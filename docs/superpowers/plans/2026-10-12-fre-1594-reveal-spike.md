@@ -209,6 +209,21 @@ Its row is kept and marked `warmup`.
   cache is a prefix cache with explicit breakpoints, the case where the reveal form matters (S12).
 - **Base capture:** the capture of 2026-10-12 09:34 (24 tools, git HEAD of FRE-1515) or a fresh capture at run time.
 
+## Dry draw of 2026-10-12 (15:08:27Z to 15:13:19Z)
+
+One prompt (`log-search#0`) and one draw per form, with llama-server `--verbose`. The run stopped before the full
+population, because the dry draw showed two harness defects.
+
+- **Defect 1, fixed:** the base body replaced only the two catalog lines. The `read_skill` enum and examples, two
+  catalog cross-references and two `query_telemetry` mentions kept the old names. The cache-safe control called
+  `read_skill("query-elasticsearch")`. `base_body` now renames every old skill name, applies `system_edits`
+  (`scenarios.yaml`), and refuses a body that still names an old skill or `query_telemetry`.
+- **Defect 2, waits for the owner:** the control resends the treatment's requests, so its call k holds the
+  treatment's assistant message, not its own generation. The treatment can continue from its live end state, the
+  control cannot. The whole-context baseline charges the control for that (cache-safe k = 2: treatment 1, control
+  108). The proposed rule is `max(0, cache_n + prompt_n of the previous call - cache_n)`.
+- **Recorded:** the rows now keep the MTP counts `draft_n` and `draft_n_accepted`. They are not scored.
+
 ## Risks
 
 - **Hybrid model cache.** The local primary reuses its cache only from the live end state or a checkpoint (see

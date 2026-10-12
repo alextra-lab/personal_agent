@@ -6,6 +6,16 @@
 # `body` is the body of the synthetic `read_skill` result. `{reveal_note}` is filled for each form:
 # the treatment and the control of one form get the same text (AC-F3: only the reveal is left out).
 
+# `system_edits` removes the two other mentions of `query_telemetry` from the captured system prompt
+# (FRE-1594 dry draw, 2026-10-12): the tool is not in the spike's tool list. Each `old` must be found
+# exactly once. The old skill names elsewhere in the body (the read_skill enum and examples, the
+# cross-references of other catalog lines) are renamed to the `skills` names by base_body.
+system_edits:
+  - old: "- read_only: query_telemetry, read, read_skill"
+    new: "- read_only: read, read_skill"
+  - old: "Starts with the query_telemetry tool for event data and uses curl for the budget snapshot and the Captain's Log, which the tool does not read."
+    new: "Uses curl for event data, the budget snapshot and the Captain's Log."
+
 reveal_notes:
   cache_safe: "This skill provides the tool `{tool}`. Its definition is in `provided_tools` in this result. Call it as a normal tool call."
   simple: "This skill provides the tool `{tool}`. It is now in your tool list."

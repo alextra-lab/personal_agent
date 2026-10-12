@@ -35,7 +35,16 @@ from personal_agent.llm_client.adapters import (
 from personal_agent.llm_client.history_sanitiser import sanitise_messages
 from personal_agent.llm_client.types import LLMClientError, LLMInvalidResponse, ModelRole, ToolCall
 
-TIMING_KEYS = ("cache_n", "prompt_n", "predicted_n", "prompt_ms", "predicted_ms")
+# draft_n and draft_n_accepted: the MTP draft counts of llama.cpp. Recorded only, not scored.
+TIMING_KEYS = (
+    "cache_n",
+    "prompt_n",
+    "predicted_n",
+    "prompt_ms",
+    "predicted_ms",
+    "draft_n",
+    "draft_n_accepted",
+)
 CACHE_KEYS = ("cache_read_input_tokens", "cache_creation_input_tokens")
 _ERROR_CHARS = 300
 _CHARS_PER_TOKEN = 3  # a low estimate, so the reserved input cost is high

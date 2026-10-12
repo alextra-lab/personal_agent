@@ -5,7 +5,7 @@ Pure functions. Nothing here sends a request or runs a tool.
 - :func:`experimental_tools` builds ``search_logs`` and ``measure_model_latency`` (A5.1) from the
   parameters of ``query_telemetry``, in the wire format that the gateway sends.
 - :func:`base_body` turns a captured primary request into the spike's first request: no
-  ``query_telemetry``, the two A4 catalog lines, and the prompt's text.
+  ``query_telemetry`` anywhere, the two A4 skill names everywhere, and the prompt's text.
 - :func:`skill_result` builds the synthetic ``read_skill`` result of a form, with or without the reveal.
 - :func:`render_request` builds the request of one call of one arm from the shared transcript. The
   treatment and the control of a form differ only in the reveal and the nonce (AC-F3).
@@ -89,11 +89,13 @@ class Scenarios:
         skills: The skills, by name.
         prompts: The prompts, in file order.
         reveal_notes: The note of each form. ``{tool}`` marks the tool name.
+        system_edits: ``(old, new)`` text edits of the captured system prompt, each found once.
     """
 
     skills: Mapping[str, Skill]
     prompts: Sequence[Prompt]
     reveal_notes: Mapping[str, str]
+    system_edits: Sequence[tuple[str, str]] = ()
 
 
 def load_scenarios(path: Path = SCENARIOS) -> Scenarios:
@@ -117,7 +119,8 @@ def load_scenarios(path: Path = SCENARIOS) -> Scenarios:
     notes = dict(raw["reveal_notes"])
     if set(notes) != set(FORMS):
         raise ValueError(f"reveal_notes must name exactly the forms {FORMS}")
-    return Scenarios(skills=skills, prompts=prompts, reveal_notes=notes)
+    edits = tuple((str(e["old"]), str(e["new"])) for e in raw.get("system_edits") or [])
+    return Scenarios(skills=skills, prompts=prompts, reveal_notes=notes, system_edits=edits)
 
 
 # --------------------------------------------------------------------------- the two tools
@@ -241,13 +244,16 @@ def base_body(captured: Mapping[str, object], scenarios: Scenarios, prompt: Prom
         prompt: The prompt.
 
     Returns:
-        A new body: ``query_telemetry`` removed from ``tools``, each replaced catalog line swapped
-        for its skill's line, and the text after ``</turn_context>`` of the user message replaced
-        with the prompt's text. Every other byte is the captured one.
+        A new body: ``query_telemetry`` removed from ``tools``; each replaced catalog line swapped
+        for its skill's line; the ``system_edits`` applied; every other mention of a replaced
+        skill name, in the system prompt and in the tools (the ``read_skill`` enum and examples),
+        renamed to the skill's name; and the text after ``</turn_context>`` of the user message
+        replaced with the prompt's text. Every other byte is the captured one.
 
     Raises:
-        ValueError: The capture has no ``query_telemetry``, a catalog line is not found exactly
-            once, or the user message has no ``<turn_context>`` block.
+        ValueError: The capture has no ``query_telemetry``; a catalog line or a system edit is not
+            found exactly once; the user message has no ``<turn_context>`` block; or a replaced
+            skill name or ``query_telemetry`` is still in the body.
     """
     body = copy.deepcopy(dict(captured))
     tools = cast(list[JsonDict], body["tools"])
@@ -267,7 +273,15 @@ def base_body(captured: Mapping[str, object], scenarios: Scenarios, prompt: Prom
             raise ValueError(f"the catalog line of {skill.replaces!r} is not found exactly once")
         line = f"- {skill.name}: {skill.catalog}"
         text = pattern.sub(line.replace("\\", "\\\\"), text)
+    for old, new in scenarios.system_edits:
+        if text.count(old) != 1:
+            raise ValueError(f"the system edit {old[:60]!r} is not found exactly once")
+        text = text.replace(old, new)
+    renames = {skill.replaces: skill.name for skill in scenarios.skills.values()}
+    for old, new in renames.items():
+        text = text.replace(old, new)
     system["content"] = text
+    body["tools"] = [_renamed(tool, renames) for tool in kept]
 
     users = [m for m in messages if m.get("role") == "user"]
     if len(users) != 1:
@@ -277,7 +291,25 @@ def base_body(captured: Mapping[str, object], scenarios: Scenarios, prompt: Prom
         raise ValueError("the user message has no <turn_context> block")
     head = content[: content.index(TURN_CONTEXT_END) + len(TURN_CONTEXT_END)]
     users[0]["content"] = head + prompt.text
+
+    wire = json.dumps(body, ensure_ascii=False)
+    left = [name for name in (*renames, REMOVED_TOOL) if name in wire]
+    if left:
+        raise ValueError(f"the base body still names {left}")
     return body
+
+
+def _renamed(node: object, renames: Mapping[str, str]) -> object:
+    """Return a copy of a JSON value with each old name renamed in every string."""
+    if isinstance(node, str):
+        for old, new in renames.items():
+            node = node.replace(old, new)
+        return node
+    if isinstance(node, list):
+        return [_renamed(item, renames) for item in node]
+    if isinstance(node, dict):
+        return {key: _renamed(value, renames) for key, value in node.items()}
+    return node
 
 
 def with_nonce(body: Mapping[str, object], nonce: str) -> JsonDict:

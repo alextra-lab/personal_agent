@@ -16,12 +16,19 @@ from personal_agent.telemetry.trace import SystemTraceContext
 from personal_agent.tools.telemetry_query import TelemetryQueryError
 
 _SYSTEM = (
-    "You are the agent.\n\n## Skills\n\nPick one.\n\n"
+    "You are the agent.\n\n## Tools\n\n- read_only: query_telemetry, read, read_skill\n\n"
+    "## Skills\n\nPick one.\n\n"
+    "- infrastructure-health: Probes services. Not for Tempo - Tempo status and version belong to "
+    "the query-tempo skill.\n"
     "- mermaid-diagrams: Draws diagrams.\n"
     "- query-elasticsearch: Reads agent logs with query_telemetry.\n"
     "- query-tempo: Reads Tempo traces.\n"
+    "- self-telemetry: Reads the agent's own spend. Starts with the query_telemetry tool for event "
+    "data and uses curl for the budget snapshot and the Captain's Log, which the tool does not "
+    "read. Use when the task is about cost.\n"
     "- system-metrics: Takes a snapshot.\n"
 )
+_READ_SKILL_ENUM = ["mermaid-diagrams", "query-elasticsearch", "query-tempo", "system-metrics"]
 _USER = "<turn_context>\nCurrent date: 2026-10-12\n</turn_context>\n\nCheck the logs."
 
 
@@ -64,8 +71,20 @@ def _captured() -> dict[str, object]:
                 "content": "Memory: none.",
             },
         ],
-        "tools": [_tool("web_search"), _tool("query_telemetry"), _tool("read_skill")],
+        "tools": [_tool("web_search"), _tool("query_telemetry"), _read_skill_tool()],
     }
+
+
+def _read_skill_tool() -> dict[str, object]:
+    tool = _tool("read_skill")
+    tool["function"]["description"] = (  # type: ignore[index]
+        'Load a skill. Examples: read_skill(name="query-elasticsearch"), '
+        'read_skill(name="query-tempo", path="references/<file>.md").'
+    )
+    tool["function"]["parameters"]["properties"] = {  # type: ignore[index]
+        "name": {"type": "string", "enum": list(_READ_SKILL_ENUM)}
+    }
+    return tool
 
 
 @pytest.fixture
@@ -122,6 +141,37 @@ def test_base_body_changes_only_the_tool_the_catalog_and_the_prompt(
         k: v for k, v in captured.items() if k not in ("messages", "tools")
     }
     assert captured == _captured()
+
+
+def test_base_body_leaves_no_old_skill_name_and_no_removed_tool(
+    scenarios: reveal.Scenarios,
+) -> None:
+    body = reveal.base_body(_captured(), scenarios, scenarios.prompts[0])
+    wire = json.dumps(body)
+    for gone in ("query-elasticsearch", "query-tempo", "query_telemetry"):
+        assert gone not in wire
+    read_skill = body["tools"][1]["function"]  # type: ignore[index]
+    assert read_skill["parameters"]["properties"]["name"]["enum"] == [
+        "mermaid-diagrams",
+        "log-search",
+        "model-latency",
+        "system-metrics",
+    ]
+    assert 'read_skill(name="log-search")' in read_skill["description"]
+    assert 'read_skill(name="model-latency", path=' in read_skill["description"]
+    system = body["messages"][0]["content"]  # type: ignore[index]
+    assert "- read_only: read, read_skill\n" in system
+    assert "belong to the model-latency skill.\n" in system
+    assert "Uses curl for event data, the budget snapshot and the Captain's Log." in system
+
+
+def test_base_body_refuses_a_capture_that_still_names_a_removed_name(
+    scenarios: reveal.Scenarios,
+) -> None:
+    leaky = _captured()
+    leaky["messages"][3]["content"] = "Memory: the query_telemetry tool was used."  # type: ignore[index]
+    with pytest.raises(ValueError, match="query_telemetry"):
+        reveal.base_body(leaky, scenarios, scenarios.prompts[0])
 
 
 def test_base_body_refuses_a_capture_without_the_tool_or_a_catalog_line(
@@ -326,6 +376,8 @@ _TIMINGS = {
     "predicted_n": 7,
     "prompt_ms": 50.0,
     "predicted_ms": 300.0,
+    "draft_n": 26,
+    "draft_n_accepted": 23,
 }
 
 
@@ -372,6 +424,7 @@ def test_llama_transport_reads_structured_calls_reasoning_and_timings() -> None:
     assert out.reasoning == "think"
     assert out.finish_reason == "tool_calls"
     assert out.timings["cache_n"] == 100 and out.timings["prompt_n"] == 20
+    assert out.timings["draft_n"] == 26 and out.timings["draft_n_accepted"] == 23  # MTP, recorded
     assert out.system_fingerprint == "b123"
     assert sent[0]["model"] == "flash" and sent[0]["stream"] is True
     assert out.request_sha256 == transport.sha256(reveal.request_bytes(sent[0]))

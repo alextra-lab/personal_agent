@@ -20,7 +20,7 @@ A draw is a **treatment** session, then its **control** session.
 
 | Call | Treatment | AC-1 step |
 |---|---|---|
-| 1 | The base request: the captured primary request, without `query_telemetry`, with the `log-search` and `model-latency` catalog lines (`scenarios.yaml`) and the prompt. | 1: a `read_skill` call names the prompt's skill |
+| 1 | The base request: the captured primary request, without `query_telemetry` (the tool and every mention of it), with the `log-search` and `model-latency` catalog lines (`scenarios.yaml`), the old skill names renamed everywhere (the `read_skill` enum and examples, the cross-references), and the prompt. The build refuses a body that still names an old skill or `query_telemetry`. | 1: a `read_skill` call names the prompt's skill |
 | 2 | The transcript plus the synthetic `read_skill` result, in the form's reveal. | 2: the revealed tool is called with valid arguments. 3: the shim runs it |
 | 3 | The transcript plus the tool result. | 4: the request carries the result. 5: the reply is HTTP 200, parses, and holds text or a well-formed tool call |
 

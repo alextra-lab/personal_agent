@@ -27,16 +27,19 @@ Two checks fail the run instead of printing a wrong table:
 
 Run from the repo root:
 
-    uv run python -m scripts.eval.fre1592.inventory --capture <body.json> --expect-prompt-tokens 12377
+    uv run python -m scripts.eval.fre1592.inventory --capture <body.json> --store <counts.json>
+        --expect-prompt-tokens 12377 [--dry-run]   (one line)
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import re
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -140,14 +143,22 @@ def _system(parts: Mapping[str, str], drop: str | None = None) -> str:
 
 
 class Counter:
-    """Counts a request's prompt tokens with the server's template and tokenizer."""
+    """Counts a request's prompt tokens with the server's template and tokenizer.
 
-    def __init__(self, url: str, model: str) -> None:
-        """Open a client for the llama.cpp chat-completions URL ``url`` and model ``model``."""
+    Each count is saved in ``store`` under a hash of its request, so a stopped run resumes
+    without sending a request again. Each call prints one progress line.
+    """
+
+    def __init__(self, url: str, model: str, store: Path, *, dry_run: bool = False) -> None:
+        """Open a client for the chat-completions URL ``url`` and load the saved counts."""
         self._client = httpx.Client(timeout=300.0)
         self._url = url
         self._model = model
-        self._empty: int | None = None
+        self._store = store
+        self._saved: dict[str, int] = json.loads(store.read_text()) if store.exists() else {}
+        self._dry_run = dry_run
+        self.calls = 0
+        self._t0 = time.monotonic()
 
     def request(self, messages: Sequence[Message], tools: Sequence[object]) -> int:
         """Return ``usage.prompt_tokens`` of the request, generating one token."""
@@ -160,28 +171,47 @@ class Counter:
         }
         if tools:
             payload["tools"] = list(tools)
+        key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        if key in self._saved:
+            return self._saved[key]
+        self.calls += 1
+        size = len(json.dumps(payload))
+        if self._dry_run:
+            print(f"call {self.calls}: {size:,} chars", flush=True)
+            return 0
+        t = time.monotonic()
         r = self._client.post(self._url, json=payload)
         r.raise_for_status()
-        return int(r.json()["usage"]["prompt_tokens"])
+        n = int(r.json()["usage"]["prompt_tokens"])
+        self._saved[key] = n
+        self._store.write_text(json.dumps(self._saved))
+        print(
+            f"call {self.calls}: {n:,} tokens, {time.monotonic() - t:.1f} s "
+            f"(elapsed {time.monotonic() - self._t0:.0f} s)",
+            flush=True,
+        )
+        return n
 
     def text(self, content: str) -> int:
         """Return the tokens of a plain text: a user message minus an empty user message."""
-        if self._empty is None:
-            self._empty = self.request([{"role": "user", "content": ""}], [])
-        return self.request([{"role": "user", "content": content}], []) - self._empty
+        empty = self.request([{"role": "user", "content": ""}], [])
+        return self.request([{"role": "user", "content": content}], []) - empty
 
 
-def _with_system(messages: Sequence[Message], system: str) -> list[Message]:
-    return [{**messages[0], "content": system}, *messages[1:]]
+def _tool_name(tool: Mapping[str, object]) -> str:
+    fn = tool.get("function")
+    return str(fn.get("name")) if isinstance(fn, Mapping) else "?"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Print the inventory as Markdown tables."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--capture", type=Path, required=True)
+    parser.add_argument("--store", type=Path, required=True, help="JSON file of saved counts")
     parser.add_argument("--url", default="http://127.0.0.1:8600/v1/chat/completions")
     parser.add_argument("--llama-model", default="unsloth/qwen3.8-flash-next")
     parser.add_argument("--expect-prompt-tokens", type=int, default=None)
+    parser.add_argument("--dry-run", action="store_true", help="list the calls, send nothing")
     args = parser.parse_args(argv)
 
     body = json.loads(args.capture.read_text())
@@ -190,48 +220,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     tools: list[dict[str, object]] = body["tools"]
     _check_deployment_context()
     parts = _components(str(messages[0]["content"]))
-    count = Counter(args.url, args.llama_model)
+    count = Counter(args.url, args.llama_model, args.store, dry_run=args.dry_run)
 
+    # The instrument check, then the whole production request: the only two large requests.
     as_captured = count.request(messages, tools)
-    if args.expect_prompt_tokens is not None and as_captured != args.expect_prompt_tokens:
+    if (
+        not args.dry_run
+        and args.expect_prompt_tokens is not None
+        and as_captured != args.expect_prompt_tokens
+    ):
         print(f"instrument check FAILED: {as_captured} != {args.expect_prompt_tokens}")
         return 1
+    prod_system: Message = {"role": "system", "content": _system(parts)}
+    full = count.request([prod_system, *messages[1:]], tools)
 
-    prod = _with_system(messages, _system(parts))
-    full = count.request(prod, tools)
-    no_tools = count.request(prod, [])
-    rows: list[tuple[str, int]] = [("tool definitions (all)", full - no_tools)]
+    # Small requests from here on. The tools render as one block, so their total is
+    # (system + tools) - (system); each tool alone is (stub + tool) - (stub).
+    system_only = count.request([prod_system], [])
+    tools_total = count.request([prod_system], tools) - system_only
+    rows: list[tuple[str, int]] = [("tool definitions (all)", tools_total)]
     for name in parts:
-        rows.append(
-            (name, full - count.request(_with_system(messages, _system(parts, name)), tools))
-        )
-    system_only = count.request([prod[0]], [])
-    rows.append(("conversation after the system message", no_tools - system_only))
+        without = count.request([{"role": "system", "content": _system(parts, name)}], [])
+        rows.append((name, system_only - without))
+    stub: Message = {"role": "system", "content": "."}
+    stub_n = count.request([stub], [])
+    per_tool = [(_tool_name(t), count.request([stub], [t]) - stub_n) for t in tools]
+    catalog = [
+        (m.group(1), line)
+        for line in parts["skill_catalog"].split("\n")
+        if (m := re.match(r"- ([a-z0-9-]+): ", line))
+    ]
+    per_skill = [
+        (name, count.text(line), count.text((SKILLS_DIR / name / "SKILL.md").read_text()))
+        for name, line in catalog
+    ]
+    if args.dry_run:
+        print(f"{count.calls} calls to send ({len(count._saved)} already saved)")
+        return 0
+    rows.append(("conversation after the system message", full - system_only - tools_total))
 
-    print(
-        f"Capture: {args.capture.name}. Counted with {args.url}, max_tokens 1, usage.prompt_tokens."
-    )
-    print(f"As captured: {as_captured} tokens. Production head added: {full} tokens.\n")
+    print(f"Capture: {args.capture.name}. Counted with {args.url}, max_tokens 1, prompt_tokens.")
+    print(f"As captured: {as_captured:,} tokens. With the production head: {full:,} tokens.\n")
     print("| Component | Tokens | Share |\n|---|---:|---:|")
     for name, n in rows:
         print(f"| {name} | {n:,} | {n / full:.1%} |")
     print(f"| **whole request** | **{full:,}** | 100% |\n")
-
-    print("| Tool | Tokens |\n|---|---:|")
-    per_tool = []
-    for i, tool in enumerate(tools):
-        fn = tool["function"]
-        name = fn["name"] if isinstance(fn, dict) else str(fn)
-        per_tool.append((name, full - count.request(prod, tools[:i] + tools[i + 1 :])))
+    alone = sum(n for _, n in per_tool)
+    print(f"Tools one at a time sum to {alone:,}; together {tools_total:,}.")
+    print("| Tool | Tokens alone |\n|---|---:|")
     for name, n in sorted(per_tool, key=lambda r: -r[1]):
         print(f"| {name} | {n:,} |")
-
     print("\n| Skill | Catalog line tokens | SKILL.md body tokens |\n|---|---:|---:|")
-    for line in parts["skill_catalog"].split("\n"):
-        m = re.match(r"- ([a-z0-9-]+): ", line)
-        if m:
-            skill_md = SKILLS_DIR / m.group(1) / "SKILL.md"
-            print(f"| {m.group(1)} | {count.text(line)} | {count.text(skill_md.read_text()):,} |")
+    for name, line_n, body_n in per_skill:
+        print(f"| {name} | {line_n} | {body_n:,} |")
     return 0
 
 

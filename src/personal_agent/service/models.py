@@ -19,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase
 
@@ -234,6 +234,9 @@ class SessionModel(Base):
     # transport client dispatches only a contiguous run per session, so the
     # numbers cannot come from a sequence shared across sessions.
     last_event_seq = Column(Integer, nullable=False, default=0, server_default="0")
+    # ADR-0156 A5.4 (FRE-1595) — skill-provided tools revealed in this session. Written only
+    # by SessionRepository.add_revealed_tools; SessionUpdate has no field for it.
+    revealed_tools = Column(ARRAY(Text), nullable=False, default=list, server_default="{}")
 
 
 class MetricModel(Base):

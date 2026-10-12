@@ -1,6 +1,7 @@
 """Session storage repository using Postgres."""
 
 import json
+from collections.abc import Collection
 from datetime import datetime, timezone
 from typing import Any, cast
 from uuid import UUID
@@ -212,7 +213,8 @@ class SessionRepository:
 
         Clears ``messages`` to ``[]`` and stamps ``purged_at`` for every
         not-yet-purged session whose ``last_active_at`` is older than
-        ``retention_days``. A hard ``DELETE`` is not used: ``artifacts`` and
+        ``retention_days``. ``revealed_tools`` is cleared too: the skill context
+        that revealed the tools is gone (ADR-0156 A5.4). A hard ``DELETE`` is not used: ``artifacts`` and
         ``session_events`` both FK to ``sessions(session_id)`` with no
         cascade. Resuming a pruned session (``append_message`` / ``update``)
         clears ``purged_at`` again.
@@ -228,7 +230,7 @@ class SessionRepository:
             await self.db.execute(
                 text(
                     "UPDATE sessions "
-                    "SET messages = '[]'::jsonb, purged_at = NOW() "
+                    "SET messages = '[]'::jsonb, revealed_tools = '{}', purged_at = NOW() "
                     "WHERE purged_at IS NULL "
                     "AND last_active_at < NOW() - make_interval(days => :days)"
                 ),
@@ -253,6 +255,61 @@ class SessionRepository:
             stmt = stmt.where(SessionModel.user_id == user_id)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    # Revealed skill-provided tools (ADR-0156 A5.4, FRE-1595). Only the server
+    # writes the record: SessionUpdate has no field for it, so the PATCH
+    # endpoint cannot set or clear it. Both methods filter on session_id AND
+    # user_id, as the other user-facing session queries do.
+    # ------------------------------------------------------------------
+
+    async def add_revealed_tools(
+        self, session_id: UUID, user_id: UUID, names: Collection[str]
+    ) -> int:
+        """Add tool names to a session's revealed set, as a set union in one ``UPDATE``.
+
+        Under READ COMMITTED a concurrent ``UPDATE`` of the same row waits for the
+        row lock and re-evaluates the union on the new row, so two concurrent
+        reveals both persist.
+
+        Args:
+            session_id: UUID of the session.
+            user_id: UUID of the session's owner.
+            names: The tool names to add.
+
+        Returns:
+            Number of rows updated: 0 when no session of that owner exists.
+        """
+        stmt = text(
+            "UPDATE sessions SET revealed_tools = ARRAY("
+            "SELECT DISTINCT n FROM unnest(revealed_tools || CAST(:names AS TEXT[])) AS n "
+            "ORDER BY n) "
+            "WHERE session_id = :sid AND user_id = :uid"
+        )
+        result = cast(
+            CursorResult[Any],
+            await self.db.execute(
+                stmt, {"names": sorted(set(names)), "sid": session_id, "uid": user_id}
+            ),
+        )
+        await self.db.commit()
+        return int(result.rowcount)
+
+    async def load_revealed_tools(self, session_id: UUID, user_id: UUID) -> frozenset[str]:
+        """Read a session's revealed tool names.
+
+        Args:
+            session_id: UUID of the session.
+            user_id: UUID of the session's owner.
+
+        Returns:
+            The revealed names; empty when no session of that owner exists.
+        """
+        stmt = select(SessionModel.revealed_tools).where(
+            SessionModel.session_id == session_id, SessionModel.user_id == user_id
+        )
+        names = (await self.db.execute(stmt)).scalar_one_or_none()
+        return frozenset(names or ())
 
     # ------------------------------------------------------------------
     # Pending-state persistence — cloud-attachment confirmation (FRE-749 /

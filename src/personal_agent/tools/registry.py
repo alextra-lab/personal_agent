@@ -5,6 +5,7 @@ and their executor functions, allowing tools to be registered, discovered,
 and filtered by operational mode.
 """
 
+from collections.abc import Collection
 from typing import Any, Callable
 
 from personal_agent.governance.models import Mode
@@ -61,7 +62,11 @@ class ToolRegistry:
         return self._tools.get(name)
 
     def list_tools(
-        self, mode: Mode | None = None, *, include_worker_only: bool = False
+        self,
+        mode: Mode | None = None,
+        *,
+        include_worker_only: bool = False,
+        revealed: Collection[str] | None = (),
     ) -> list[ToolDefinition]:
         """List tools available in the given mode.
 
@@ -70,6 +75,9 @@ class ToolRegistry:
             include_worker_only: Whether to include tools only a sub-agent worker is offered
                 (FRE-1564). Default False, so every existing caller (the primary's tool list
                 and its tool-awareness prompt) is unchanged.
+            revealed: The skill-provided tools to include (ADR-0156 A5.3): the primary passes
+                the names its session revealed. ``None`` includes every skill-provided tool
+                (a worker loop, which then keeps only its closed tool list). Default: none.
 
         Returns:
             List of tool definitions available in the mode.
@@ -77,7 +85,8 @@ class ToolRegistry:
         tools = [
             tool_def
             for tool_def, _ in self._tools.values()
-            if include_worker_only or not tool_def.worker_only
+            if (include_worker_only or not tool_def.worker_only)
+            and (not tool_def.skill_provided or revealed is None or tool_def.name in revealed)
         ]
         if mode is None:
             return tools
@@ -109,6 +118,7 @@ class ToolRegistry:
         mode: Mode | None = None,
         *,
         include_worker_only: bool = False,
+        revealed: Collection[str] | None = (),
     ) -> list[dict[str, Any]]:
         """Get tool definitions in OpenAI function calling format.
 
@@ -116,11 +126,14 @@ class ToolRegistry:
             mode: Operational mode to filter by. If None, returns all tools.
             include_worker_only: Whether to include tools only a sub-agent worker is offered
                 (FRE-1564). Only the worker tool loop passes True.
+            revealed: The skill-provided tools to include, as for :meth:`list_tools`.
 
         Returns:
             List of tool definitions in OpenAI format (for function calling).
         """
-        tools = self.list_tools(mode=mode, include_worker_only=include_worker_only)
+        tools = self.list_tools(
+            mode=mode, include_worker_only=include_worker_only, revealed=revealed
+        )
         result = []
         for tool_def in tools:
             # Build properties dict, using full JSON schema for complex types

@@ -21,7 +21,8 @@ production prompt: a rule that the model follows without being told cannot show 
 (the FRE-1592 preflight found that for the grounding and parallel-calls rules).
 
 * ``a`` — :data:`RULE_A`: the final answer ends with a ``Sources:`` line of citation markers. The
-  turn holds two search results. A further tool call gets "No further results" for up to
+  turn holds two search results. A further ``fetch_url`` call gets production's HTTP 404 error,
+  and any other further call gets "No further results", for up to
   :data:`EXTRA_ROUNDS` more rounds, so the final answer is scored;
 * ``b`` — :data:`RULE_B`: the first response calls ``search_memory`` and ``web_search`` together.
 
@@ -56,6 +57,8 @@ from scripts.eval.fre1592.inventory import _check_deployment_context, _component
 from personal_agent.orchestrator.prompts import render_current_datetime_block
 from personal_agent.orchestrator.skills import get_all_skills
 from personal_agent.orchestrator.untrusted_channel import MEMORY_RECALL_TOOL, harness_tool_exchange
+from personal_agent.tools.contract import render_content
+from personal_agent.tools.types import ToolErrorDetail
 
 ITEMS = Path(__file__).with_name("items.yaml")
 # A fixed instant, so the date block is the same bytes in every request.
@@ -63,7 +66,7 @@ INSTANT = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 M3_ARMS = ("system", "heavy", "skill", "fence", "absent")
 M2_ARMS = ("base", "head", "fence", "skill", "head_turn2")
 PROBE_MAX_TOKENS = 16
-EXTRA_ROUNDS = 2
+EXTRA_ROUNDS = 3
 RULE_A = (
     "## Answer format\n"
     "When your answer uses a search result, end it with one final line that starts with "
@@ -446,6 +449,34 @@ def score(rule: str, item: Mapping[str, object], result: Mapping[str, object]) -
     }
 
 
+def further_result(function: Mapping[str, object]) -> str:
+    """Return the result of a further tool call in M3 rule a, in production's shape.
+
+    The invented URLs cannot be fetched, so ``fetch_url`` fails as production fails on an
+    HTTP 404: the ADR-0156 D6 error that ``FetchError`` renders. Any other tool finds nothing
+    new.
+
+    Args:
+        function: The ``function`` field of the tool call: ``name`` and ``arguments``.
+
+    Returns:
+        The tool result content.
+    """
+    if function.get("name") != "fetch_url":
+        return "No further results for this query."
+    try:
+        url = json.loads(str(function.get("arguments") or "{}")).get("url", "")
+    except json.JSONDecodeError:
+        url = ""
+    detail = ToolErrorDetail(
+        code="http_error",
+        message=f"HTTP 404 fetching {url}",
+        retryable=False,
+        next_action="Use web_search to find another page with the same facts.",
+    )
+    return render_content(output=None, error_detail=detail)
+
+
 def answer(client: httpx.Client, url: str, req: Body, nonce: str) -> tuple[dict[str, object], int]:
     """Call until the model answers: each further tool call gets "No further results".
 
@@ -468,7 +499,7 @@ def answer(client: httpx.Client, url: str, req: Body, nonce: str) -> tuple[dict[
                 "tool_call_id": c["id"],
                 "role": "tool",
                 "name": c["function"]["name"],
-                "content": "No further results for this query.",
+                "content": further_result(c["function"]),
             }
             for c in calls  # type: ignore[union-attr]
         ]

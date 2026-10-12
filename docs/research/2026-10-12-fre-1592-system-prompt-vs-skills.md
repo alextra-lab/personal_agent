@@ -17,10 +17,10 @@ This document records what was measured and the arithmetic built on it. Recommen
    wins only below a break-even size `s* = q × L / (c × (m − q))`.
 2. **With today's inputs the answer is clear.**
    - The always-on rules (reasoning, grounding, tool rules, identity) stay in the head.
-   - The skill bodies stay as skills: in the head they cost 12–77× more.
+   - The skill bodies stay as skills: in the head they cost 12–83× more.
    - Harness injection has nothing to gain: at `q` = 0.028 it can save at most about 0.05 s per turn.
 3. **The system-prompt question is the smallest cache cost in the system.** Moving the reasoning rule
-   changes about 0.02–0.10 s per turn. Two larger costs were found on the way:
+   changes about 0.01–0.09 s per turn. Two larger costs were found on the way:
    - **Head misses after deploys:** `m` = 0.33 in the last 14 days, 23 of 27 after a prefix change.
    - **Follow-up turns prefill the history again:** 2,824 tokens (5.9 s) at the median on turns 2–10,
      and 17,043 tokens (35.8 s) on turn 11 and later, where the history window moves.
@@ -53,15 +53,15 @@ The head wins over a skill when `s × c × (m − q) < q × L`. If `q ≥ m`, th
 | `L` | Cost of the extra `read_skill` call | Flash-Next ~1.7 s; Gemma ~1.1 s | ~52 output tokens (median of the `read_skill` first calls) × decode time + the fixed term |
 | `m` | Share of turns that start with a cold head | 0.33 (27 of 83); 0.05 without prefix changes | Production ES, `model_call_completed`, role `primary`, Flash-Next, 14 days to 2026-10-12. Head miss = fewer than 2,000 cached tokens on the turn's first call. |
 | `q` | Share of turns that load a skill | 0.028 for all skills together (5 loads in 176 turns) | Production ES, `tool_call_started` with `tool_name` `read_skill`, since `read_skill` was first registered (2026-10-01 09:27Z) |
-| `s` | Content size | Rules 150–640 tokens; bodies 900–3,600 tokens | chars ÷ 4 until M1 replaces them with tokenizer counts |
+| `s` | Content size | Rules 130–552 tokens; catalog lines 54–138; bodies 850–3,728 tokens | M1, measured with the served tokenizer and chat template |
 
 ### Results with these inputs (Flash-Next)
 
 | Case | In the head | As a skill | Result |
 |---|---|---|---|
-| All 10 skill bodies (~17,800 tokens) | 12.3 s per turn (`m` = 0.33); 1.9 s (`m` = 0.05) | 0.16 s per turn | Skills are 12–77× cheaper |
-| The reasoning rule (~150 tokens), needed on about half the turns | 0.10 s / 0.02 s, present on 100% of the turns | 0.12–0.34 s, present on 11–33% of the turns that need it | The head wins on cost and on coverage |
-| One catalog line (~120 tokens) | 0.08 s / 0.01 s per turn | — | The price of offering a skill. A skill that is never loaded pays it for nothing. |
+| All 10 skill bodies (18,077 tokens) | 12.5 s per turn (`m` = 0.33); 1.9 s (`m` = 0.05) | 0.15 s per turn | Skills are 12–83× cheaper |
+| The reasoning rule (130 tokens), needed on about half the turns | 0.09 s / 0.01 s, present on 100% of the turns | 0.11–0.31 s, present on 11–33% of the turns that need it | The head wins on cost and on coverage |
+| One catalog line (54–138 tokens, mean 101) | 0.07 s / 0.01 s per turn | — | The price of offering a skill. A skill that is never loaded pays it for nothing. |
 
 The first draft of this table used `m` = 0.57. That figure counted history misses as head misses. The
 check is in **The cache instrument** below.
@@ -128,7 +128,7 @@ Nobody has measured whether its depth adds quality: FRE-1590 Part 2 did not test
 
 ---
 
-## M1 — the inventory (pending)
+## M1 — the inventory (AC-1)
 
 **Method.** `scripts/eval/fre1592/inventory.py` takes a FRE-1590 capture of the production primary
 request (`main 4bc88d2a`, 24 tools). The prompt inputs of that capture are unchanged on `main` today:
@@ -148,7 +148,41 @@ Each component's count is an ablation (the full request minus the request withou
 instrument check: the captured body must count to the `prompt_tokens` that llama.cpp reported for the
 same body in the FRE-1590 replay (12,377).
 
-**Result:** pending.
+**Result** (2026-10-12 18:40:42–18:43:22Z, 57 calls, run `telemetry/evaluation/fre1592/slot2-20261012-1840`, git-ignored). The instrument check passed: the captured body counts 12,377 tokens, the figure of the FRE-1590 replay. With the production head, the request is 12,617 tokens.
+
+| Component | Tokens | Share | Applies on |
+|---|---:|---:|---|
+| Tool definitions (24 tools) | 9,979 | 79.1% | every turn |
+| Skill catalog (10 lines and a header) | 1,078 | 8.5% | every turn (the offer); the body only on a load |
+| Tool-use rules (`TOOL_USE_NATIVE_PROMPT`) | 552 | 4.4% | every turn |
+| Grounding contract | 313 | 2.5% | every turn |
+| Tool awareness | 178 | 1.4% | capability questions only |
+| Deployment context | 153 | 1.2% | infrastructure tasks only |
+| Reasoning rule (`REASONING_DISCIPLINE_PROMPT`) | 130 | 1.0% | every non-simple turn |
+| Operator stanza | 87 | 0.7% | every turn |
+| Conversation (user message, memory exchange) | 132 | 1.0% | — |
+
+The rows sum to 12,602; the other 15 tokens are the joins between sections.
+
+**Tools.** Counted one at a time, the 24 tools sum to 14,510 tokens against 9,979 together: each single-tool request carries about 197 tokens of the shared tool-block header. Net of that header, the largest are `query_telemetry` (~1,440), `web_search` (~920), `bash` (~540), `search_memory` (~510), `artifact_draft` (~490) and `artifact_write` (~490). The smallest is `list_linear_projects` (~130).
+
+**Skills.**
+
+| Skill | Catalog line | Body (what `read_skill` returns) |
+|---|---:|---:|
+| mermaid-diagrams | 101 | 3,728 |
+| self-telemetry | 101 | 3,014 |
+| query-elasticsearch | 107 | 2,164 |
+| turn-forensics | 117 | 2,066 |
+| neo4j-direct | 54 | 1,762 |
+| query-tempo | 137 | 1,746 |
+| system-metrics | 104 | 965 |
+| sequential-thinking | 71 | 927 |
+| system-diagnostics | 138 | 855 |
+| infrastructure-health | 80 | 850 |
+| **Total** | **1,010** | **18,077** |
+
+**What this shows.** The rules that the system prompt holds are 995 tokens (7.9%). Moving all of them out would save less than one tenth of the head. The tools are four fifths of it.
 
 ## M2 — the cache cost of each option (pending, preflight first)
 

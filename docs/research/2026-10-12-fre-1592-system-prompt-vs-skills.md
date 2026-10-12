@@ -11,23 +11,32 @@ This document records what was measured and the arithmetic built on it. Recommen
 
 ## Summary
 
-1. **The placement of a rule is a latency question with one formula.** Content of `s` tokens costs
-   `s × c × m` per turn in the head, and `q × (L + s × c)` per turn as a skill. The inputs are measured
-   (table below). The head wins when the content applies on at least `m` of the turns. Otherwise it
-   wins only below a break-even size `s* = q × L / (c × (m − q))`.
-2. **With today's inputs the answer is clear.**
-   - The always-on rules (reasoning, grounding, tool rules, identity) stay in the head.
-   - The skill bodies stay as skills: in the head they cost 12–83× more.
-   - Harness injection has nothing to gain: at `q` = 0.028 it can save at most about 0.05 s per turn.
-3. **The system-prompt question is the smallest cache cost in the system.** Moving the reasoning rule
-   changes about 0.01–0.09 s per turn. Two larger costs were found on the way:
-   - **Head misses after deploys:** `m` = 0.33 in the last 14 days, 23 of 27 after a prefix change.
-   - **Follow-up turns prefill the history again:** 2,824 tokens (5.9 s) at the median on turns 2–10,
-     and 17,043 tokens (35.8 s) on turn 11 and later, where the history window moves.
-4. **sequential-thinking duplicates its rule.** Production loaded it 0 times in 176 turns.
+The owner asked three things: do we lighten the system prompt, do we inject skills, and how does each
+choice affect the prompt cache. The answers below are measured on the production Flash-Next server.
 
-M1 (the measured inventory), M2 (the cache cost of each option on the eval stack) and M3 (rule
-following by channel) are **pending**. They run after the owner's OK on the preflight numbers.
+1. **Lightening the system prompt by moving rules gains little.** The rules are 995 of 12,617 tokens
+   (7.9%). The tool definitions are 9,979 (79%). (M1)
+2. **A larger head does weaken a rule.** With the 18,077 tokens of skill bodies added to the head, a
+   test rule held on 4 of 24 items against 12 of 24 (p = 0.03). A second test rule held on 15 of 24
+   against 20 of 24: the model kept searching instead of answering on 8 of 24 items. (M3)
+3. **Placing a rule near the question does not help on Flash-Next.** In the per-turn block, the test
+   rules held on 18 and 9 of 24, against 20 and 12 of 24 in the system prompt (p = 0.72 and 0.56).
+   That position also costs a prefill on every turn. (M3, M2)
+4. **Injecting skill bodies has nothing to gain.** A skill is loaded on 2.8% of turns. On those turns
+   `read_skill` costs 2.2 s more than injection would. That is 0.06 s per turn on average, and it
+   needs no classifier. (M2, production telemetry)
+5. **The cache rewards one position only.** Content in the head is free after its first cold
+   prefill. Content after the head costs its prefill on each turn that carries it. A change in the
+   head costs everything after the change. (M2)
+6. **The larger cache costs are elsewhere.**
+   - **F1:** a cold head on 33% of turns, 23 of 27 after a deploy changed the head.
+   - **F2:** follow-up turns prefill the history again. That is 2,824 tokens (7.3 s at 2.6 ms per
+     token) at the median on turns 2–10, and 17,043 tokens (44 s) from turn 11 on. FRE-1600 and
+     FRE-1134 hold the fixes.
+7. **sequential-thinking repeats its rule.** It loaded 0 times in 176 production turns, and its
+   catalog line costs on every turn.
+
+---
 
 ---
 
@@ -48,26 +57,26 @@ The head wins over a skill when `s × c × (m − q) < q × L`. If `q ≥ m`, th
 
 | Symbol | Meaning | Value | Source |
 |---|---|---|---|
-| `c` | Prefill time per uncached prompt token | Flash-Next 2.10 ms; Gemma 0.79 ms | Least-squares fit of `wall_s` on uncached prompt tokens and output tokens, 177 FRE-1590 Part 1 calls per model, R² = 0.98 for each. Flash-Next agrees with the independent "~30 s for 13k tokens" of a cold prefill. |
+| `c` | Prefill time per uncached prompt token | Flash-Next 2.6 ms at a 12.6k context (M2); 2.10 ms from a fit dominated by small prompts. Gemma 0.79 ms (fit only). | M2 `fence` arm: (10,628 − 814) ms / 3,729 tokens. Fit: `wall_s` on uncached prompt and output tokens, 177 FRE-1590 Part 1 calls per model, R² = 0.98. |
 | — | Decode time per output token | Flash-Next 29.8 ms; Gemma 20.8 ms | The same fit |
-| `L` | Cost of the extra `read_skill` call | Flash-Next ~1.7 s; Gemma ~1.1 s | ~52 output tokens (median of the `read_skill` first calls) × decode time + the fixed term |
+| `L` | Cost of the extra `read_skill` call | Flash-Next 2.2 s (M2); Gemma ~1.1 s (estimate) | M2 `skill` arm: the model's own `read_skill` call, 56–64 output tokens, 3 draws. Gemma: decode time × 52 tokens. |
 | `m` | Share of turns that start with a cold head | 0.33 (27 of 83); 0.05 without prefix changes | Production ES, `model_call_completed`, role `primary`, Flash-Next, 14 days to 2026-10-12. Head miss = fewer than 2,000 cached tokens on the turn's first call. |
 | `q` | Share of turns that load a skill | 0.028 for all skills together (5 loads in 176 turns) | Production ES, `tool_call_started` with `tool_name` `read_skill`, since `read_skill` was first registered (2026-10-01 09:27Z) |
 | `s` | Content size | Rules 130–552 tokens; catalog lines 54–138; bodies 850–3,728 tokens | M1, measured with the served tokenizer and chat template |
 
-### Results with these inputs (Flash-Next)
+### Results with these inputs (Flash-Next, `c` = 2.6 ms, `L` = 2.2 s)
 
-| Case | In the head | As a skill | Result |
+| Case | In the head | Elsewhere | Result |
 |---|---|---|---|
-| All 10 skill bodies (18,077 tokens) | 12.5 s per turn (`m` = 0.33); 1.9 s (`m` = 0.05) | 0.15 s per turn | Skills are 12–83× cheaper |
-| The reasoning rule (130 tokens), needed on about half the turns | 0.09 s / 0.01 s, present on 100% of the turns | 0.11–0.31 s, present on 11–33% of the turns that need it | The head wins on cost and on coverage |
-| One catalog line (54–138 tokens, mean 101) | 0.07 s / 0.01 s per turn | — | The price of offering a skill. A skill that is never loaded pays it for nothing. |
+| All 10 skill bodies (18,077 tokens) | 15.5 s per turn (`m` = 0.33); 2.4 s (`m` = 0.05) | As skills: 0.19 s per turn | Skills are 12–80× cheaper |
+| The reasoning rule (130 tokens), needed on about half the turns | 0.11 s / 0.02 s per turn | In the per-turn block: 0.17 s per turn (0.34 s on each turn that carries it) | The head is cheaper, and M3 shows no gain in the block |
+| One catalog line (54–138 tokens, mean 101) | 0.09 s / 0.01 s per turn | — | The price of offering a skill. A skill that is never loaded pays it for nothing. |
 
 The first draft of this table used `m` = 0.57. That figure counted history misses as head misses. The
 check is in **The cache instrument** below.
 
-Break-even sizes at `m` = 0.33: `q` = 0.5 → the head always wins; `q` = 0.1 → about 350 tokens;
-`q` = 0.02 → 52 tokens.
+Break-even sizes for a body at `m` = 0.33: `q` = 0.5 → the head always wins; `q` = 0.1 → about 370
+tokens; `q` = 0.02 → about 55 tokens. No skill body is that small (the smallest is 850 tokens).
 
 ---
 
@@ -91,10 +100,10 @@ Break-even sizes at `m` = 0.33: `q` = 0.5 → the head always wins; `q` = 0.1 �
 
 ### F2 — Follow-up turns prefill the history again
 
-| Turn position in the session | n | Uncached tokens on the turn's first call (p50 / p90) | Prefill time (p50) |
+| Turn position in the session | n | Uncached tokens on the turn's first call (p50 / p90) | Prefill time (p50) at 2.6 ms per token |
 |---|---:|---:|---:|
-| Turns 2–10 | 26 | 2,824 / 3,771 | 5.9 s |
-| Turn 11 and later | 13 | 17,043 / 18,160 | 35.8 s |
+| Turns 2–10 | 26 | 2,824 / 3,771 | 7.3 s |
+| Turn 11 and later | 13 | 17,043 / 18,160 | 44.3 s |
 
 Same session, same prefix hash, head cached. 12 of the 13 later turns reused only the head. 2 of 25
 sessions reached turn 11.
@@ -184,10 +193,10 @@ The rows sum to 12,602; the other 15 tokens are the joins between sections.
 
 **What this shows.** The rules that the system prompt holds are 995 tokens (7.9%). Moving all of them out would save less than one tenth of the head. The tools are four fifths of it.
 
-## M2 — the cache cost of each option (pending, preflight first)
+## M2 — the cache cost of each option (AC-2)
 
-**Method.** `scripts/eval/fre1592/channels.py cache`. One skill body (mermaid-diagrams, which loads
-on 12 of 12 draws on both models) is delivered five ways. Each arm has its own nonce. Turn 1 is cold,
+**Method.** `scripts/eval/fre1592/channels.py cache`. One skill body (mermaid-diagrams, 3,728 tokens as `read_skill`
+returns it; it loads on 12 of 12 draws on both models) is delivered five ways. Each arm has its own nonce. Turn 1 is cold,
 and turn 2 is measured with llama.cpp `timings`:
 
 | Arm | Delivery |
@@ -200,7 +209,30 @@ and turn 2 is measured with llama.cpp `timings`:
 
 The turn-1 history is kept byte for byte as it was sent, so M2 measures the delivery and not F2.
 
-## M3 — rule following by channel (pending, preflight first)
+**Result** (Flash-Next, 3 draws, 2026-10-12 20:05:16–20:16:24Z, run
+`telemetry/evaluation/fre1592/full-20261012-2005`, git-ignored, 0 gateway retries). Medians of 3; the
+draws agree within ±1 token and ±12% time.
+
+| Arm | Turn 1 (cold): tokens / prefill s | Turn 2: cached / prefilled tokens | Turn 2 prefill s | Extra on the turn that needs the body |
+|---|---|---|---:|---:|
+| `base` (no body) | 12,599 / 33.1 | 12,595 / 141 | 0.8 | — |
+| (a) `head` | 16,327 / 43.2 | 16,323 / 141 | 0.8 | 0 s per turn; +10.1 s once per cold head |
+| (b) `skill` | 12,599 / 33.1 | 12,732 / 4,188 | 11.6 | +13.0 s: the `read_skill` call 2.2 s (56–64 output tokens) + 4,188 prefilled tokens |
+| (c) `fence` | 12,600 / 33.4 | 12,596 / 3,870 | 10.6 | +9.8 s, again on each turn that injects it |
+| `head_turn2` (control) | 12,601 / 33.5 | 10,553 / 5,914 | 16.3 | +15.5 s: the cache breaks at the insertion point |
+
+**Measured inputs that replace the estimates.**
+- `L` (the `read_skill` round trip) = 2.2 s, against 1.7 s estimated.
+- The prefill cost per token at a 12.6k context is about 2.6 ms ((10,628 − 814) ms / 3,729 tokens in
+  the `fence` arm), against 2.10 ms from the FRE-1590 fit, which was dominated by small prompts. The
+  larger value makes every cold-prefill figure in this note about 25% larger. No ranking changes.
+- The `skill` arm prefills 318 tokens more than the `fence` arm for the same body: the JSON wrapper of
+  the `read_skill` result.
+- The negative control confirms the mechanism: a change in the head costs everything after the change.
+  Here that is 2,043 tokens of the system prompt after the insertion point, plus the body. In a long
+  session it also includes the whole history.
+
+## M3 — rule following by channel (ticket question 5)
 
 **Method.** `scripts/eval/fre1592/channels.py follow`. One rule is placed in each channel, and a
 script scores the reply. Each arm has its own nonce, and its items share the cached head.
@@ -245,6 +277,39 @@ the row records `gateway_retries`. An item fails on a gateway error only if the 
    start. The harness changes since then: the production 404 error for `fetch_url`, 3 further
    rounds and the gateway retry.
 
+**Result** (Flash-Next, 2026-10-12 20:16:24–20:53:57Z, same run directory as M2, 240 of 240 rows,
+0 gateway retries). Pass of 24 (8 items × 3 draws):
+
+| Arm | Rule A (`Sources:` line) | Rule B (`search_memory` with `web_search`) |
+|---|---:|---:|
+| `system` | 20 (22 answered) | 12 |
+| `heavy` | 15 (16 answered) | 4 |
+| `skill` | 23 (23 answered) | 20 |
+| `fence` | 18 (22 answered) | 9 |
+| `absent` (control) | 0 (22 answered) | 0 |
+
+Fisher's exact test, two-sided:
+
+| Comparison | Rule A | Rule B |
+|---|---|---|
+| `system` against `fence` | 20 vs 18, p = 0.72 | 12 vs 9, p = 0.56 |
+| `system` against `heavy` | 20 vs 15, p = 0.19 | 12 vs 4, p = 0.03 |
+| `system` against `skill` (context only) | 20 vs 23, p = 0.35 | 12 vs 20, p = 0.03 |
+
+**What this shows.**
+- **Both rules can be measured.** The control passed 0 of 48, and every other arm passed some items.
+- **Near the question is not better than the system prompt** for either rule on Flash-Next.
+- **A larger head weakens a rule.** For rule B, the pass rate fell from 12 to 4 of 24. For rule A,
+  the rule still held on 15 of the 16 answered items. But the model kept calling `web_search`, after
+  three replies of "No further results", on 8 of 24 items, against 2 of 24 in `system`.
+- **The `skill` arm passed most often.** In the owner's model, a rule is not a skill, so this is
+  context only. It is also confounded: the rule arrives as a separate instruction just before the
+  task, which no production position offers.
+
+**Limits.** One model (Flash-Next). Two test rules, not production rules: both production candidates
+were followed unasked (preflight 1). The 24 samples are 8 items × 3 draws, and the draws of one item
+are correlated, so the p-values are optimistic.
+
 ---
 
 ## Validity notes
@@ -252,13 +317,16 @@ the row records `gateway_retries`. An item fails on a gateway error only if the 
 - **`m` was measured in a period with many deploys** (ADR-0156 migration). Without deploys it is about
   0.05. The arithmetic gives both values.
 - **`q` comes from 176 turns, and some were test turns.** The owner is the only user.
-- **`c` comes from replayed first calls,** most of them with a small uncached part. The fit is tight
-  (R² = 0.98), and it agrees with an independent cold-prefill figure.
+- **`c` depends on the context length.** The FRE-1590 fit (2.10 ms) comes mostly from small prompts.
+  M2 measures 2.6 ms at a 12.6k context. This note uses 2.6 ms for the formula.
 - **The FRE-1590 capture gateway had no memory graph,** so its memory result reads "records could not
   be reached". M1 counts the head, which this does not change. M2 and M3 use a fixed short memory
   result.
 - **M3 adds the rule as a skill that the catalog does not list.** The `read_skill` exchange is
   synthetic. This tests how the model follows a rule in a tool result, not whether it chooses to load it.
+- **M2 and M3 ran on the production llama.cpp server,** directly on `:8600`, not through an eval
+  gateway. The eval stack uses the same server, so the cache figures are the production figures. Gemma
+  was not run, by the owner's choice: a Gemma result does not apply to the production primary.
 - **M3's rules are not production rules.** Both production candidates were followed unasked
   (preflight 1), so they cannot show a channel effect. Rules A and B are plausible operating rules
   that the model does not follow unasked. A result about them is a result about rule delivery, not
@@ -268,22 +336,45 @@ the row records `gateway_retries`. An item fails on a gateway error only if the 
 
 ## Decision brief
 
-*Completed after M1–M3. The recommendations below follow from the measured inputs. M1–M3 can change
-the numbers, and M3 is the only result that can change a recommendation.*
+**The owner's questions, answered against the owner's model.** The owner's model (asked as a question,
+not decided): the system prompt holds an agent's base behaviour, other core work gets another agent,
+and skills add capabilities on demand. The measurements fit that model. They do not ask for a change
+to it.
 
-1. **Keep the always-on rules in the system prompt** (reasoning, grounding, tool rules, identity).
-2. **Remove sequential-thinking from the catalog,** or measure its depth first. Its rule is in the head.
-3. **Keep every other skill body as a skill.**
-4. **No harness injection.**
-5. **Bind the formula in an amendment to ADR-0156 D2,** with its inputs re-measured from telemetry.
-6. **The larger levers are F1 and F2.** A fix for F2 (store the wire form, and move the window in steps,
-   not one pair per turn) saves 5.9 s on a median turn 2–10 and 35.8 s on turn 11 and later.
+| Question | Answer | Evidence |
+|---|---|---|
+| Do we lighten the system prompt? | Not by moving rules: they are 7.9% of the head. The weight is the tool definitions (79%), and their split is already under way (FRE-1591, FRE-1595). | M1 |
+| Does a heavier head cost anything? | Yes, latency and rule strength. | M2: +10.1 s per cold head for 3,728 tokens. M3: a test rule fell from 12 to 4 of 24. |
+| Do we inject skills? | No. The most it can save is 0.06 s per turn, and it needs a classifier. | M2, `q` = 0.028 |
+| Is a rule better near the question? | No, not on Flash-Next. It costs a prefill on every turn. | M3 `fence` against `system`; M2 `fence` |
+| How does each option affect the cache? | The head is free after its first prefill. Content after the head costs on each turn that carries it. A change in the head costs everything after it. | M2 |
+
+**Recommendations.** The owner decides. Nothing ships before that (AC-3).
+
+1. **No change to where a production rule sits.** No production behaviour fails today with telemetry
+   evidence, so there is nothing to fix. Record the M3 result as a property of Flash-Next, for the next
+   rule that is added: put it in the system prompt, not in the per-turn block.
+2. **Keep every skill body as a skill. Do not inject skills.**
+3. **sequential-thinking:** remove the "Rules" section, which repeats `REASONING_DISCIPLINE_PROMPT`.
+   Keep the procedure part (estimate the steps, mark revisions, name branches, check the answer) as
+   the skill, and rewrite its description for that procedure. If it still loads 0 times in the 30 days
+   after the change, remove it from the catalog. Its line costs 71 tokens on every turn.
+4. **The larger cache levers are already filed.** FRE-1600 (the stored history is not the request that
+   was sent) and FRE-1134 (the window moves one pair per turn) hold the F2 costs: 7.3 s on a median
+   turn 2–10 and 44 s from turn 11. F1 (cold heads) comes mostly from the migration's deploy rate, and
+   needs no ticket.
+5. **If the owner adopts the model, record it** in an amendment to ADR-0156 D2, with the cost formula
+   and its telemetry inputs (`c`, `L`, `m`, `q`). Future placement questions then need a measurement,
+   not an opinion.
+
+**Not recommended here (context only).** The owner parked two ideas that master raised: grouping
+rarely used tools behind skills, and a per-rule removal check (FRE-1592 comments of 2026-10-12).
 
 ---
 
 ## References
 
-- FRE-1592; FRE-1590 and `docs/research/2026-10-12-fre-1590-skill-test-qwen-gemma.md` (F1, F2, per-skill
+- FRE-1592 (comments of 2026-10-12: the owner's model, the parked ideas, the run approvals); FRE-1600; FRE-1595; FRE-1590 and `docs/research/2026-10-12-fre-1590-skill-test-qwen-gemma.md` (F1, F2, per-skill
   table, validity notes); FRE-1549; FRE-1577; FRE-1591; FRE-1134 (the conversation window decision).
 - ADR-0081 D1/D2 (the cached head and the append-only layout), ADR-0140 T2 (untrusted input only in a tool
   result), ADR-0156 D2 and amendment A5.8 (the cache-safe reveal), ADR-0154 D7 (the replay probe pattern).

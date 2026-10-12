@@ -82,7 +82,7 @@ allow:
 # curl has no allow rule. A curl call runs without asking only when curl_request.py reduces it
 # to one request that a curl_read entry lists (FRE-1583). A bash(curl … *) allow rule is refused.
 # python3 asks, except a reviewed skill script (FRE-1585): the loader accepts
-# bash(python3 docs/skills/<skill>/scripts/<file>.py *) only for one regular file there.
+# bash(python3 skills/<skill>/scripts/<file>.py *) only for one regular file there.
 # In /app (the image), the matcher also accepts that path with a /app/ prefix (FRE-1589).
 curl_read:
   - hosts: ["tempo:3200"]

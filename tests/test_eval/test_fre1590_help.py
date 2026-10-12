@@ -323,9 +323,7 @@ def test_the_override_masks_every_skill_and_keeps_the_scripts() -> None:
     services = yaml.safe_load(OVERRIDE.read_text())["services"]
     control = services["seshat-gateway-control"]
     targets = {v["target"] for v in control["volumes"]}
-    skills = {
-        f"/app/docs/skills/{p.parent.name}/SKILL.md" for p in part2.SKILLS_DIR.glob("*/SKILL.md")
-    }
+    skills = {f"/app/skills/{p.parent.name}/SKILL.md" for p in part2.SKILLS_DIR.glob("*/SKILL.md")}
     assert skills and targets == skills
     assert all(v["source"] == "/dev/null" and v["read_only"] for v in control["volumes"])
     assert "tmpfs" not in control

@@ -336,7 +336,7 @@ tools:
       - "/proc/**"
       # FRE-1585: an allow rule runs these scripts without a card, so the scripts and the
       # interpreter's import path change only through a reviewed PR and a rebuild.
-      - "/app/docs/skills/**"
+      - "/app/skills/**"
       - "/app/.venv/**"
     loop_max_per_signature: 1
     loop_max_consecutive: 2

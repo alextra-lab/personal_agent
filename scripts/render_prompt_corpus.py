@@ -22,7 +22,7 @@ from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = REPO_ROOT / "src" / "personal_agent"
-SKILLS_DIR = REPO_ROOT / "docs" / "skills"
+SKILLS_DIR = REPO_ROOT / "skills"
 OUTPUT_PATH = REPO_ROOT / "docs" / "reference" / "PROMPT_CORPUS.md"
 
 # ---------------------------------------------------------------------------
@@ -261,7 +261,7 @@ ORCHESTRATOR_COMPONENTS = [
         "executor.py",
         "1860–1993",
         "The skill catalog: one line per skill (name and description) from "
-        "docs/skills/<name>/SKILL.md. Populated by orchestrator/skills.py (ADR-0156 D2).",
+        "skills/<name>/SKILL.md. Populated by orchestrator/skills.py (ADR-0156 D2).",
     ),
     (
         "memory_section",
@@ -590,7 +590,7 @@ def _render_corpus() -> str:
     # Skill document sections
     # -----------------------------------------------------------------------
     sections.append(
-        "## Skill Documents (`docs/skills/<name>/SKILL.md`)\n\n"
+        "## Skill Documents (`skills/<name>/SKILL.md`)\n\n"
         "The `skill_index` component holds the catalog only. A body reaches the model as "
         "the result of a `read_skill` call (ADR-0156 D2).  \n\n" + "\n---\n\n".join(skill_sections)
     )

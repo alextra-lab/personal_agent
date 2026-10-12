@@ -25,6 +25,12 @@ def _write(root: Path, folder: str, frontmatter: str, body: str = "Body text.") 
 class TestDiscovery:
     """The repository's own skills load."""
 
+    def test_the_skills_live_in_the_top_level_skills_folder(self) -> None:
+        """FRE-1593 (ADR-0156 A1): ``<repo>/skills/``, which the image copies to ``/app/skills``."""
+        repo = Path(__file__).resolve().parents[3]
+        assert skills_module.SKILLS_DIR == repo / "skills"
+        assert skills_module.SKILLS_DIR.is_dir()
+
     def test_the_ten_agent_skills_load(self) -> None:
         assert len(get_all_skills()) == 10
 

@@ -22,11 +22,11 @@ The script opens a real Postgres connection and runs `SELECT 1`, reads the Elast
 health, reads the Neo4j HTTP page, and sends a Redis `PING`. It prints one line for each service.
 
 ```bash
-python3 docs/skills/infrastructure-health/scripts/probe_services.py all
+python3 skills/infrastructure-health/scripts/probe_services.py all
 ```
 
 ```bash
-python3 docs/skills/infrastructure-health/scripts/probe_services.py postgres
+python3 skills/infrastructure-health/scripts/probe_services.py postgres
 ```
 
 The argument is `postgres`, `elasticsearch`, `neo4j`, `redis` or `all`. Each line reads

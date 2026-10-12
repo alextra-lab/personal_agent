@@ -1,6 +1,6 @@
 """FRE-1581 / ADR-0156 D10 G2: does the model load the right skill, and no skill when none is needed?
 
-Runs every scenario of ``docs/skills/*/evals.yaml`` and the 20 prompts of ``no_skill_prompts.yaml`` as
+Runs every scenario of ``skills/*/evals.yaml`` and the 20 prompts of ``no_skill_prompts.yaml`` as
 one fresh session each, one draw, on the eval treatment gateway (:9003) through ``IsolatedArmRunner``
 (FRE-375, FRE-1372). The primary model is the gateway's default binding. Each turn is scored from the
 ``read_skill_invoked`` events of its trace in ``elasticsearch-eval``:
@@ -38,7 +38,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
-SKILLS_DIR = REPO_ROOT / "docs" / "skills"
+SKILLS_DIR = REPO_ROOT / "skills"
 NO_SKILL_PROMPTS = HERE / "no_skill_prompts.yaml"
 OUT_DIR = REPO_ROOT / "telemetry" / "evaluation" / "fre1581-g2"
 EVAL_ES = "http://localhost:9202"

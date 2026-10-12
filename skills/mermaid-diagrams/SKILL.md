@@ -198,7 +198,7 @@ The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed, and the 
 2. Run the script on that file:
 
 ```bash
-python3 docs/skills/mermaid-diagrams/scripts/validate_mermaid.py /tmp/m.mmd
+python3 skills/mermaid-diagrams/scripts/validate_mermaid.py /tmp/m.mmd
 ```
 
 The first line of the output is the verdict:

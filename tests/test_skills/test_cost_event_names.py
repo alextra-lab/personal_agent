@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _DOCS = Path(__file__).parent.parent.parent / "docs"
+_SKILLS = _DOCS.parent / "skills"
 
 _STALE_EVENT_NAME = "litellm_request_complete"
 
@@ -33,8 +34,9 @@ def _body_without_frontmatter(text: str) -> str:
 def test_skill_docs_do_not_name_litellm_request_complete_as_cost_source() -> None:
     """No skill doc body may name the removed `litellm_request_complete` event."""
     offenders: list[str] = []
-    skill_docs = [*_DOCS.glob("skills/*/SKILL.md"), *_DOCS.glob("external-skills/*/SKILL.md")]
-    assert skill_docs
+    runtime_skills = sorted(_SKILLS.glob("*/SKILL.md"))
+    assert runtime_skills, f"no runtime skill under {_SKILLS}"
+    skill_docs = [*runtime_skills, *_DOCS.glob("external-skills/*/SKILL.md")]
     for doc_path in sorted(skill_docs):
         body = _body_without_frontmatter(doc_path.read_text())
         if _STALE_EVENT_NAME in body:

@@ -1,7 +1,7 @@
 """FRE-1585 (ADR-0156 D8.2 amendment): reviewed skill scripts run without a card.
 
 An allow rule ``bash(python3 <path> *)`` loads only when ``<path>`` names one file under
-``docs/skills/<skill>/scripts/``, exactly. Every other ``python3`` command still asks.
+``skills/<skill>/scripts/``, exactly. Every other ``python3`` command still asks.
 
 AC-1: the documented example commands of each reviewed script evaluate to allow (the recipes are
 read from the skill bodies in ``test_skill_commands_permissions.py``; here the commands are the
@@ -27,11 +27,11 @@ from personal_agent.governance.permissions import (
 _REPO = Path(__file__).resolve().parents[3]
 RULES = load_permission_rules()
 
-_PROBE = "docs/skills/infrastructure-health/scripts/probe_services.py"
-_CYPHER = "docs/skills/neo4j-direct/scripts/cypher.py"
-_CLASSIFIER = "docs/skills/query-elasticsearch/scripts/es_index_granularity.py"
-_TIMELINE = "docs/skills/turn-forensics/scripts/call_timeline.py"
-_VALIDATE = "docs/skills/mermaid-diagrams/scripts/validate_mermaid.py"
+_PROBE = "skills/infrastructure-health/scripts/probe_services.py"
+_CYPHER = "skills/neo4j-direct/scripts/cypher.py"
+_CLASSIFIER = "skills/query-elasticsearch/scripts/es_index_granularity.py"
+_TIMELINE = "skills/turn-forensics/scripts/call_timeline.py"
+_VALIDATE = "skills/mermaid-diagrams/scripts/validate_mermaid.py"
 
 #: The scripts that a reviewed PR gave an allow rule. A new rule changes this set, and the
 #: AC-3 argument test in tests/docs/test_skill_scripts.py must cover the new script.
@@ -100,14 +100,14 @@ def test_ac1_each_script_has_a_rule_in_the_real_file() -> None:
     [
         "python3 -c 'print(1)'",
         "python3 /tmp/x.py",
-        "python3 docs/skills/x/scripts/../../../evil.py",
-        "python3 docs/skills/neo4j-direct/scripts/../../infrastructure-health/scripts/"
+        "python3 skills/x/scripts/../../../evil.py",
+        "python3 skills/neo4j-direct/scripts/../../infrastructure-health/scripts/"
         "probe_services.py all",
-        "python3 docs/skills/*/scripts/cypher.py x",
-        "python3 docs/skills/neo4j-direct/scripts/cyph?r.py x",
-        "python3 docs/skills/neo4j-direct/scripts/[c]ypher.py x",
-        "python3 docs/skills/neo4j-direct/cypher.py x",
-        "python3 docs/skills/neo4j-direct/scripts/other.py",
+        "python3 skills/*/scripts/cypher.py x",
+        "python3 skills/neo4j-direct/scripts/cyph?r.py x",
+        "python3 skills/neo4j-direct/scripts/[c]ypher.py x",
+        "python3 skills/neo4j-direct/cypher.py x",
+        "python3 skills/neo4j-direct/scripts/other.py",
         f"python3 ./{_PROBE} all",
         # f"python3 /app/{_PROBE} all" asked here until FRE-1589: it names the same file when
         # bash starts in /app, so it is allowed there (the FRE-1589 tests below).
@@ -155,17 +155,17 @@ def test_ac2_a_separator_does_not_widen_what_the_next_command_may_do() -> None:
     "rule",
     [
         "bash(python3 /tmp/x.py *)",
-        "bash(python3 docs/skills/x/y.py *)",
-        "bash(python3 docs/skills/neo4j-direct/cypher.py *)",
-        "bash(python3 docs/skills/x/scripts/../../../evil.py *)",
-        "bash(python3 docs/skills/neo4j-direct/scripts/../scripts/cypher.py *)",
-        "bash(python3 docs/skills/*/scripts/cypher.py *)",
-        "bash(python3 docs/skills/neo4j-direct/scripts/*.py *)",
-        "bash(python3 docs/skills/neo4j-direct/scripts/cyph?r.py *)",
+        "bash(python3 skills/x/y.py *)",
+        "bash(python3 skills/neo4j-direct/cypher.py *)",
+        "bash(python3 skills/x/scripts/../../../evil.py *)",
+        "bash(python3 skills/neo4j-direct/scripts/../scripts/cypher.py *)",
+        "bash(python3 skills/*/scripts/cypher.py *)",
+        "bash(python3 skills/neo4j-direct/scripts/*.py *)",
+        "bash(python3 skills/neo4j-direct/scripts/cyph?r.py *)",
         f"bash(python3 ./{_CYPHER} *)",
         f"bash(python3 /app/{_CYPHER} *)",
-        "bash(python3 docs/skills/neo4j-direct/scripts/missing.py *)",
-        "bash(python3 docs/skills/neo4j-direct/scripts/__pycache__ *)",
+        "bash(python3 skills/neo4j-direct/scripts/missing.py *)",
+        "bash(python3 skills/neo4j-direct/scripts/__pycache__ *)",
         f"bash(python3 {_PROBE} all *)",
         f"bash(python3 -I {_PROBE} *)",
         "bash(python3 *)",
@@ -178,19 +178,27 @@ def test_ac2_the_loader_refuses_any_other_python3_prefix_rule(rule: str) -> None
         _load(rule)
 
 
+@pytest.mark.parametrize("script", sorted(REVIEWED))
+def test_fre1593_a_rule_that_names_the_old_docs_folder_is_refused(script: str) -> None:
+    """The skills left ``docs/`` (ADR-0156 A1): a rule that keeps the old path must not load."""
+    _load(f"bash(python3 {script} *)")  # the control: the new path loads
+    with pytest.raises(PermissionRuleError):
+        _load(f"bash(python3 docs/{script} *)")
+
+
 def test_ac2_the_loader_refuses_a_symlinked_script(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    scripts = tmp_path / "docs" / "skills" / "evil" / "scripts"
+    scripts = tmp_path / "skills" / "evil" / "scripts"
     scripts.mkdir(parents=True)
     target = tmp_path / "payload.py"
     target.write_text("print('x')\n")
     (scripts / "link.py").symlink_to(target)
     (scripts / "real.py").write_text("print('x')\n")
     monkeypatch.chdir(tmp_path)
-    _load("bash(python3 docs/skills/evil/scripts/real.py *)")  # the control: a real file loads
+    _load("bash(python3 skills/evil/scripts/real.py *)")  # the control: a real file loads
     with pytest.raises(PermissionRuleError):
-        _load("bash(python3 docs/skills/evil/scripts/link.py *)")
+        _load("bash(python3 skills/evil/scripts/link.py *)")
 
 
 def test_ac2_the_loader_refuses_a_script_under_a_symlinked_directory(
@@ -199,12 +207,12 @@ def test_ac2_the_loader_refuses_a_script_under_a_symlinked_directory(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (elsewhere / "a.py").write_text("print('x')\n")
-    skill = tmp_path / "docs" / "skills" / "evil"
+    skill = tmp_path / "skills" / "evil"
     skill.mkdir(parents=True)
     (skill / "scripts").symlink_to(elsewhere, target_is_directory=True)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(PermissionRuleError):
-        _load("bash(python3 docs/skills/evil/scripts/a.py *)")
+        _load("bash(python3 skills/evil/scripts/a.py *)")
 
 
 def test_ac2_the_path_is_read_from_the_working_directory_of_bash(
@@ -225,7 +233,7 @@ def test_ac2_an_exact_python3_rule_stays_as_d82_had_it() -> None:
 
 # --- FRE-1589: the absolute /app/ form of a reviewed script ---------------------------------
 #
-# read_skill gives base_dir as /app/docs/skills/<skill>, so the model may run the script by its
+# read_skill gives base_dir as /app/skills/<skill>, so the model may run the script by its
 # absolute path. In the image, bash starts in /app, so that path names the reviewed file.
 
 
@@ -270,7 +278,7 @@ def test_fre1589_ac1_each_reviewed_script_has_an_absolute_form() -> None:
     "command",
     [
         f'python3 "/app/{_PROBE}" all',
-        "python3 /app/'docs'/skills/infrastructure-health/scripts/probe_services.py all",
+        "python3 /app/'skills'/infrastructure-health/scripts/probe_services.py all",
     ],
 )
 def test_fre1589_the_comparison_is_on_the_word_after_quote_removal(command: str) -> None:
@@ -289,13 +297,13 @@ def test_fre1589_the_comparison_is_on_the_word_after_quote_removal(command: str)
         f"python3 /app/{_PROBE}x all",
         f"python3 app/{_PROBE} all",
         f"python3 /app/./app/{_PROBE} all",
-        "python3 /app/docs/skills/x/scripts/../../y/scripts/z.py",
-        "python3 /app/docs/skills/neo4j-direct/scripts/../../infrastructure-health/scripts/"
+        "python3 /app/skills/x/scripts/../../y/scripts/z.py",
+        "python3 /app/skills/neo4j-direct/scripts/../../infrastructure-health/scripts/"
         "probe_services.py all",
         f"python3 /opt/seshat/{_PROBE} all",
         f"python3 /opt/seshat/.claude/worktrees/build2/{_PROBE} all",
-        "python3 /app/docs/skills/neo4j-direct/scripts/other.py",
-        "python3 /app/docs/skills/*/scripts/cypher.py x",
+        "python3 /app/skills/neo4j-direct/scripts/other.py",
+        "python3 /app/skills/*/scripts/cypher.py x",
         f"python3 /app/{_PROBE} all; rm x",
         f"python3 /app/{_PROBE} $(id)",
         f"python3 /app/{_PROBE} all > /tmp/out",
@@ -305,7 +313,7 @@ def test_fre1589_the_comparison_is_on_the_word_after_quote_removal(command: str)
         f"/usr/bin/python3 /app/{_PROBE} all",
         f"timeout 5 python3 /app/{_PROBE} all",
         # Codex plan review: a backslash-newline, ANSI-C quoting and lookalike slashes.
-        "python3 /app/docs/skills/infra\\\nstructure-health/scripts/probe_services.py all",
+        "python3 /app/skills/infra\\\nstructure-health/scripts/probe_services.py all",
         f"python3 $'/app/{_PROBE}' all",
         f"python3 /app∕{_PROBE} all",
         f"python3 /app／{_PROBE} all",
@@ -318,7 +326,7 @@ def test_fre1589_ac2_no_other_absolute_form_is_allowed(command: str) -> None:
 def test_fre1589_ac2_the_absolute_form_asks_when_bash_does_not_start_in_app(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Outside the image (a make dev run), /app/docs/… is not the file the rule names."""
+    """Outside the image (a make dev run), /app/skills/… is not the file the rule names."""
     monkeypatch.setattr(permissions, "_bash_workdir", lambda: _REPO)
     assert _bash(f"python3 /app/{_PROBE} all") == "ask"
     assert _bash(f"python3 {_PROBE} all") == "allow"  # the control: the relative form
@@ -345,8 +353,9 @@ def test_fre1589_ac2_an_absolute_form_needs_a_skill_script_rule() -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "/app/docs/skills/infrastructure-health/scripts/probe_services.py",
-        "/app/docs/skills/infrastructure-health/scripts/json.py",
+        "/app/skills/infrastructure-health/scripts/probe_services.py",
+        "/app/skills/infrastructure-health/scripts/json.py",
+        "/app/skills/infrastructure-health/SKILL.md",
         "/app/.venv/lib/python3.12/site-packages/evil.pth",
     ],
 )

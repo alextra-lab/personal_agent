@@ -58,7 +58,7 @@ def test_ac2_no_prefix_rule_for_a_program_running_word() -> None:
     assert not {words[0] for words in prefix_rules} & {"env", "awk", "sed"}
     for words in prefix_rules:
         if words[0] == "python3":
-            assert len(words) == 2 and words[1].startswith("docs/skills/"), words
+            assert len(words) == 2 and words[1].startswith("skills/"), words
 
 
 # --- AC-6: run_python with network asks in every mode ---------------------------------------
@@ -83,7 +83,7 @@ def test_ac7_a_grep_for_a_former_bad_pattern_is_allowed() -> None:
 
 
 def test_ac7_no_skill_holds_known_bad_patterns() -> None:
-    skills = Path(__file__).resolve().parents[3] / "docs" / "skills"
+    skills = Path(__file__).resolve().parents[3] / "skills"
     holders = [str(p) for p in skills.glob("*/SKILL.md") if "known_bad_patterns:" in p.read_text()]
     assert holders == []
 

@@ -62,7 +62,7 @@ if TYPE_CHECKING:
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
-SKILLS_DIR = REPO_ROOT / "docs" / "skills"
+SKILLS_DIR = REPO_ROOT / "skills"
 SCENARIOS_FILE = HERE / "part2_scenarios.yaml"
 
 #: The models of FRE-1590, as catalog keys (config/models.yaml).

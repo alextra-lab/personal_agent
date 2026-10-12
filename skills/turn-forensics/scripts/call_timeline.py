@@ -4,7 +4,7 @@
 This replaces a ``sed | grep | python3 -c "..."`` chain. Pipe ``docker logs`` into it:
 
     docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
-      | python3 docs/skills/turn-forensics/scripts/call_timeline.py <trace_id>
+      | python3 skills/turn-forensics/scripts/call_timeline.py <trace_id>
 
 Output, one line for each event, in log order:
 

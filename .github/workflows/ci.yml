@@ -51,6 +51,7 @@ jobs:
               - 'scripts/**'
               - 'docker/**'
               - 'config/**'
+              - 'skills/**'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/ci.yml'

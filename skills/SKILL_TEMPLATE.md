@@ -1,10 +1,10 @@
 # Skill template (Agent Skills format, ADR-0156 D1, D5)
 
-A skill is a folder: `docs/skills/<name>/`. Copy the two files below into it. The CI validator
+A skill is a folder: `skills/<name>/`. Copy the two files below into it. The CI validator
 (`tests/docs/test_skill_validator.py`) checks every rule on this page.
 
 ```
-docs/skills/<name>/
+skills/<name>/
 ├── SKILL.md          # required: frontmatter + instructions
 ├── evals.yaml        # required for an agent skill: at least 3 scenarios
 ├── scripts/          # optional: tested scripts, each with --help and plain error text

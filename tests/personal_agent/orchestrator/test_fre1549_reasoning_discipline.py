@@ -1,6 +1,6 @@
 """FRE-1549: the primary prompt carries the sequential-thinking discipline.
 
-The skill in ``docs/skills/sequential-thinking/SKILL.md`` reached the model only on a keyword
+The skill in ``skills/sequential-thinking/SKILL.md`` reached the model only on a keyword
 match, so the rule moved into the stable part of the primary system prompt. Covers the
 ticket's three criteria that a unit test can decide:
 

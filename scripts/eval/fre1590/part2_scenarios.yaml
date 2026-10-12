@@ -5,7 +5,7 @@
 # telemetry_query.py, _render_description) and the primary system prompt
 # (src/personal_agent/orchestrator/prompts.py) do not give. About 10 to 12 in total. `id` is
 # `<skill>#<n>`, where n is the 0-based position in the `scenarios` list of
-# docs/skills/<skill>/evals.yaml. The prompt and the `expect` line are read from that file at run
+# skills/<skill>/evals.yaml. The prompt and the `expect` line are read from that file at run
 # time, so they are not copied here.
 #
 # Left out, and why:

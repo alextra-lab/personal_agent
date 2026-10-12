@@ -1,6 +1,6 @@
 """FRE-1590 Part 1: does the primary model's first call load the right skill?
 
-The items are the 43 ``docs/skills/*/evals.yaml`` scenarios and the 20 no-skill prompts of FRE-1581
+The items are the 43 ``skills/*/evals.yaml`` scenarios and the 20 no-skill prompts of FRE-1581
 (``g2_skill_choice.load_items``). Three steps, per catalog key (the sampling differs per deployment):
 
     capture  one fresh-session turn per item through the fre1537 probe gateway, whose model is a

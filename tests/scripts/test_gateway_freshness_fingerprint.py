@@ -19,9 +19,8 @@ def _make_tree(root: Path) -> None:
     (root / "src" / "a.py").write_text("print('a')\n")
     (root / "config").mkdir()
     (root / "config" / "c.yaml").write_text("k: v\n")
-    (root / "docs").mkdir()
-    (root / "docs" / "skills").mkdir()
-    (root / "docs" / "skills" / "s.md").write_text("# skill\n")
+    (root / "skills").mkdir()
+    (root / "skills" / "s.md").write_text("# skill\n")
     (root / "docker").mkdir()
     (root / "docker" / "mcp").mkdir()
     (root / "docker" / "mcp" / "run.sh").write_text("#!/bin/sh\n")
@@ -55,6 +54,16 @@ class TestComputeBuildFingerprint:
         after = compute_build_fingerprint(tmp_path)
         assert before != after
 
+    def test_changes_when_a_skill_file_is_edited(self, tmp_path: Path) -> None:
+        """FRE-1593: ``skills/`` is a build input, so a skill edit makes the image stale."""
+        _make_tree(tmp_path)
+        before = compute_build_fingerprint(tmp_path)
+
+        (tmp_path / "skills" / "s.md").write_text("# skill, edited\n")
+
+        after = compute_build_fingerprint(tmp_path)
+        assert before != after
+
     def test_changes_when_dockerfile_itself_is_edited(self, tmp_path: Path) -> None:
         _make_tree(tmp_path)
         before = compute_build_fingerprint(tmp_path)
@@ -76,7 +85,7 @@ class TestComputeBuildFingerprint:
         assert before == after
 
     def test_missing_build_input_paths_do_not_crash(self, tmp_path: Path) -> None:
-        # A minimal tree missing config/docs/skills/docker/mcp entirely should still hash.
+        # A minimal tree missing config/skills/docker/mcp entirely should still hash.
         (tmp_path / "src").mkdir()
         (tmp_path / "src" / "a.py").write_text("print('a')\n")
         (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")

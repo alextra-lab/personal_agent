@@ -36,7 +36,6 @@ from personal_agent.tools.primitives.bash import _DEFAULT_TIMEOUT as _BASH_DEFAU
 
 _SCRIPT = (
     Path(__file__).resolve().parents[2]
-    / "docs"
     / "skills"
     / "mermaid-diagrams"
     / "scripts"

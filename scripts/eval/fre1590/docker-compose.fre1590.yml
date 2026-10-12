@@ -15,12 +15,12 @@
 #   the treatment gateway. docker-compose.eval.yml gives control no primitives (no bash). Most
 #   skills require bash, so without these two lines the control arm would fail for want of the
 #   tool, not of the skill (the FRE-1350 defect).
-# - The skill catalog is empty: each docs/skills/<name>/SKILL.md is masked with /dev/null. The
+# - The skill catalog is empty: each skills/<name>/SKILL.md is masked with /dev/null. The
 #   loader reads an empty file, finds no frontmatter and skips the skill
 #   (src/personal_agent/orchestrator/skills.py, _load_all_skills), so the catalog is empty and
 #   read_skill has no names. The folders and their scripts stay.
-#   NOT a tmpfs on /app/docs/skills: config/governance/permissions.yaml allows five
-#   `bash(python3 docs/skills/<skill>/scripts/<file>.py *)` rules, and the loader refuses such a
+#   NOT a tmpfs on /app/skills: config/governance/permissions.yaml allows five
+#   `bash(python3 skills/<skill>/scripts/<file>.py *)` rules, and the loader refuses such a
 #   rule when the file is missing (governance/permissions.py, _skill_script_refusal). The refusal
 #   fails the whole rules load, and a failed load denies every tool call (decide_permission).
 #   With a tmpfs, every tool call on the control arm would be denied.
@@ -71,16 +71,16 @@ services:
       AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
       AGENT_APPROVAL_UI_ENABLED: "false"
     volumes:
-      - {type: bind, source: /dev/null, target: /app/docs/skills/infrastructure-health/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/mermaid-diagrams/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/neo4j-direct/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/query-elasticsearch/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/query-tempo/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/self-telemetry/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/sequential-thinking/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/system-diagnostics/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/system-metrics/SKILL.md, read_only: true}
-      - {type: bind, source: /dev/null, target: /app/docs/skills/turn-forensics/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/infrastructure-health/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/mermaid-diagrams/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/neo4j-direct/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/query-elasticsearch/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/query-tempo/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/self-telemetry/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/sequential-thinking/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/system-diagnostics/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/system-metrics/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/skills/turn-forensics/SKILL.md, read_only: true}
 
   seshat-gateway-treatment:
     environment:

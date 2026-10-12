@@ -184,7 +184,7 @@ relying on a shape:
 ```bash
 curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^<family-prefix>-' \
-  | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py <family-prefix>
+  | python3 skills/query-elasticsearch/scripts/es_index_granularity.py <family-prefix>
 ```
 
 The script moved into the skill folder in FRE-1578, so that it ships in the gateway image. See

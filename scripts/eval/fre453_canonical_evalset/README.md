@@ -56,7 +56,7 @@ first run is the behavioural baseline — we run it to *learn*, not to pass.
 ## Union coverage enforcement (self-describing)
 
 `tests/evaluation/test_fre453_canonical_evalset.py` diffs the dataset's claimed
-skills/tools against `docs/skills/<name>/SKILL.md` and `config/governance/tools.yaml` at test time:
+skills/tools against `skills/<name>/SKILL.md` and `config/governance/tools.yaml` at test time:
 
 - every skill must be claimed by some case, or appear in the dataset's explicit
   `coverage.allowlist_skills`;

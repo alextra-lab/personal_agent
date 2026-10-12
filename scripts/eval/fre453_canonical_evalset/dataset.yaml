@@ -3,7 +3,7 @@
 # Tier `canonical` (7): the ADR-0084 §Open-decisions-3 pedagogical turn types — the M2
 # gate set. Tier `coverage` (11): realistic multi-tool queries, pedagogically framed,
 # whose UNION of expected skills/tools spans the toolbox (enforced by
-# tests/evaluation/test_fre453_canonical_evalset.py against docs/skills/<name>/ and
+# tests/evaluation/test_fre453_canonical_evalset.py against skills/<name>/ and
 # config/governance/tools.yaml).
 #
 # EVERY `expected:` block is a HYPOTHESIS (RESULT_TYPE_TAXONOMY_SPEC §5 "[proposed — M2

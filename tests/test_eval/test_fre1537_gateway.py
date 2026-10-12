@@ -144,6 +144,7 @@ def test_a_missing_credential_stops_the_launcher_and_names_it(name: str) -> None
         "bolt://neo4j:7687",
         "http://elasticsearch:9200",
         "http://caddy:8600",
+        "https://example.r2.cloudflarestorage.com",
     ],
 )
 def test_a_production_host_in_the_environment_is_refused(url: str) -> None:
@@ -151,6 +152,15 @@ def test_a_production_host_in_the_environment_is_refused(url: str) -> None:
     env["AGENT_SOMETHING_URL"] = url
     with pytest.raises(SystemExit, match="production"):
         gateway.assert_eval_only(env)
+
+
+def test_the_r2_tools_register_with_disabled_settings() -> None:
+    """FRE-1590: present R2 settings that point only at a host under ``.invalid``."""
+    env, _ = gateway.gateway_env(HOST_ENV)
+    for key in ("AGENT_R2_ENDPOINT_URL", "AGENT_R2_ACCESS_KEY_ID", "AGENT_R2_SECRET_ACCESS_KEY"):
+        assert env[key]
+    assert env["AGENT_R2_ENDPOINT_URL"] == "http://r2-disabled.invalid"
+    gateway.assert_eval_only(env)
 
 
 def test_secrets_travel_by_name_and_never_appear_in_argv() -> None:

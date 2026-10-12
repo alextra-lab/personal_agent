@@ -68,6 +68,17 @@ PASSTHROUGH_KEYS = (
     "AGENT_CONVERSATION_MAX_HISTORY_MESSAGES",
     "AGENT_LOCATION_ENABLED",
 )
+# FRE-1590: production registers six R2 tools (artifact_draft, artifact_write, artifact_list,
+# artifact_read, notes_write, notes_search) when the R2 settings are present
+# (src/personal_agent/tools/__init__.py). These values are present but point nowhere, so the
+# captured primary request lists the production tools, and any call fails at an invalid host
+# instead of reaching production R2. The R2 client is created only on a tool call.
+EVAL_R2_DISABLED: dict[str, str] = {
+    "AGENT_R2_ENDPOINT_URL": "http://r2-disabled.invalid",
+    "AGENT_R2_ACCESS_KEY_ID": "eval-disabled",
+    "AGENT_R2_SECRET_ACCESS_KEY": "eval-disabled",
+    "AGENT_R2_BUCKET_NAME": "eval-disabled",
+}
 _URL_HOST = re.compile(r"://(?:[^/@\s]*@)?([A-Za-z0-9._-]+)")
 
 
@@ -152,6 +163,7 @@ def gateway_env(host_env: Mapping[str, str]) -> tuple[dict[str, str], frozenset[
         "AGENT_PRIMITIVE_TOOLS_ENABLED": "true",
         "AGENT_DELEGATION_ENABLED": "false",
         "AGENT_EXPANSION_ENABLED": "false",
+        **EVAL_R2_DISABLED,
     }
     env.update({k: host_env[k] for k in PASSTHROUGH_KEYS if host_env.get(k)})
     return env, SECRET_KEYS & env.keys()
@@ -164,11 +176,12 @@ def assert_eval_only(env: Mapping[str, str]) -> None:
         env: The gateway environment.
 
     Raises:
-        SystemExit: If any URL in it points at a host that is neither an ``-eval`` store nor the stub.
+        SystemExit: If any URL in it points at a host that is not an ``-eval`` store, the stub, or a
+            ``.invalid`` host (RFC 6761: it never resolves, so it can reach nothing).
     """
     for key, value in env.items():
         for host in _URL_HOST.findall(value):
-            if not (host.endswith("-eval") or host == STUB_NAME):
+            if not (host.endswith("-eval") or host == STUB_NAME or host.endswith(".invalid")):
                 raise SystemExit(f"{key} names production host {host!r}")
 
 

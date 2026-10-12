@@ -47,6 +47,13 @@ x-fre1590-env: &fre1590-env
   # Owner decision (FRE-1590, ~20:00Z): production runs "observe", which records and blocks
   # nothing, so a reply does not change. "off" removes the Sonnet span-extraction cost per turn.
   AGENT_GROUNDING_VERIFICATION_MODE: "off"
+  # FRE-1590: present but disabled R2 settings, so the six R2 tools register as in production
+  # (src/personal_agent/tools/__init__.py) and any call fails at an invalid host. The R2 client
+  # is created only on a tool call. Same values as scripts/eval/fre1537/gateway.py.
+  AGENT_R2_ENDPOINT_URL: http://r2-disabled.invalid
+  AGENT_R2_ACCESS_KEY_ID: eval-disabled
+  AGENT_R2_SECRET_ACCESS_KEY: eval-disabled
+  AGENT_R2_BUCKET_NAME: eval-disabled
   # Owner decision (FRE-1590): production reads these from .env, and docker-compose.eval.yml
   # does not pass them. They can change a turn (expansion, for example), so both arms get the
   # production values, read from the --env-file at `up` time. AGENT_AGENT_ID stays unset, so the

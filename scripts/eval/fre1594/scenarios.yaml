@@ -1,0 +1,82 @@
+# FRE-1594 / ADR-0156 A5 (T-B): the two synthetic skills and the four prompts of the reveal spike.
+#
+# `replaces` names the catalog line of the captured system prompt that the skill's `catalog` line
+# replaces (A4: `log-search` was `query-elasticsearch`, `model-latency` was `query-tempo` Step 1).
+# `tool` is the experimental tool that the skill reveals (A5.1).
+# `body` is the body of the synthetic `read_skill` result. `{reveal_note}` is filled for each form:
+# the treatment and the control of one form get the same text (AC-F3: only the reveal is left out).
+
+# `system_edits` removes the two other mentions of `query_telemetry` from the captured system prompt
+# (FRE-1594 dry draw, 2026-10-12): the tool is not in the spike's tool list. Each `old` must be found
+# exactly once. The old skill names elsewhere in the body (the read_skill enum and examples, the
+# cross-references of other catalog lines) are renamed to the `skills` names by base_body.
+system_edits:
+  - old: "- read_only: query_telemetry, read, read_skill"
+    new: "- read_only: read, read_skill"
+  - old: "Starts with the query_telemetry tool for event data and uses curl for the budget snapshot and the Captain's Log, which the tool does not read."
+    new: "Uses curl for event data, the budget snapshot and the Captain's Log."
+
+reveal_notes:
+  cache_safe: "This skill provides the tool `{tool}`. Its definition is in `provided_tools` in this result. Call it as a normal tool call."
+  simple: "This skill provides the tool `{tool}`. It is now in your tool list."
+
+skills:
+  log-search:
+    replaces: query-elasticsearch
+    tool: search_logs
+    catalog: >-
+      Counts, breaks down or finds log events over a time window, and says which indices and
+      fields exist. Use when the task is a count, a breakdown or a search of log events, or a
+      lookup of an index or a field. Not for the latency of model calls over a time window. The
+      model-latency skill gives that.
+    body: |
+      # log-search
+
+      Count, break down or find log events over a time window.
+
+      {reveal_note}
+
+      1. Pick the index family. Agent events are in `agent-logs`. Whole turns are in `agent-topology`.
+      2. Use `action="count"` for a number, and `action="search"` with `aggs` for a breakdown.
+      3. Filter with `query`, for example `{"term": {"level": "ERROR"}}`. Set `since`, for example `"1h"`.
+      4. Use only the fields that the tool definition lists. A refusal names the allowed fields.
+      5. Report the numbers and the window. Say so if the count is zero.
+
+      Example: search_logs(action="search", index="agent-logs", query={"term": {"level": "ERROR"}},
+      since="1h", size=0, aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}})
+  model-latency:
+    replaces: query-tempo
+    tool: measure_model_latency
+    catalog: >-
+      Measures how slow the model calls are over a time window, by role or by model, and the
+      prefill and decode time of the local model server. Use when the task asks for latency
+      numbers, such as p50, p90 or max, over a window. Not for counts or searches of log events.
+      The log-search skill gives that.
+    body: |
+      # model-latency
+
+      Measure how slow the model calls are over a time window.
+
+      {reveal_note}
+
+      1. Set `since`, for example `"24h"`. It is required, and at most 7 days.
+      2. Group with `group_by`, for example `["role"]` or `["model"]`. Filter with `role` or `model`.
+      3. Use `span="slm_chat"` for the prefill and decode time of the local model server.
+      4. Report p50, p90 and max for each group, and the window. If `complete` is false, say that the
+         numbers cover a sample.
+
+      Example: measure_model_latency(since="24h", group_by=["model"])
+
+prompts:
+  - id: log-search#0
+    skill: log-search
+    text: "Check the logs for errors in the last hour."
+  - id: log-search#1
+    skill: log-search
+    text: "How many tool calls failed in the last 24 hours? Break them down by tool name."
+  - id: model-latency#0
+    skill: model-latency
+    text: "What were the p50 and p90 latencies of the primary model's calls over the last 24 hours?"
+  - id: model-latency#1
+    skill: model-latency
+    text: "Which model had the slowest calls over the last 6 hours?"

@@ -126,7 +126,8 @@ def cache_verdict(rows: Sequence[Row], form: Form) -> dict[str, object]:
         )
         if any(n > 1 for n in costly.values()):
             reasons.append("more_than_one_costly_call_in_a_session")
-    no_reuse = sum(1 for p in pairs if p.get("no_reuse"))
+    steps = (MEASURED[0],) if form == "cache_safe" else MEASURED  # the steps the form scores
+    no_reuse = sum(1 for p in pairs if p.get("no_reuse") and p["k"] in steps)
     if reasons:
         verdict = "fail"
     elif not scored:

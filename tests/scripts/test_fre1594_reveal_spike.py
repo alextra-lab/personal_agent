@@ -778,3 +778,11 @@ def test_a_local_run_needs_the_llama_server_arguments(tmp_path: object) -> None:
     argv += ["--provider", "local", "--form", "simple", "--llama-model", "m", "--quant", "q"]
     with pytest.raises(SystemExit, match="--server-args"):
         spike.main(argv)
+
+
+def test_cache_safe_ignores_no_reuse_at_a_step_it_does_not_score() -> None:
+    # Call 2 is void (lineage), call 3 reused nothing: cache-safe scores call 2 only, so undecided.
+    control = [_call(0, 1000), _call(1005, 40), _call(0, 1100)]
+    treated = [_call(0, 1000), _call(990, 50), _call(0, 1100)]
+    assert score.cache_verdict([_row(treated, control)], "cache_safe")["verdict"] == "undecided"
+    assert score.cache_verdict([_row(treated, control)], "simple")["verdict"] == "uninformative"

@@ -54,7 +54,7 @@ from scripts.eval.fre1590.triggering import replay_request
 from scripts.eval.fre1592.inventory import _check_deployment_context, _components, _system
 
 from personal_agent.orchestrator.prompts import render_current_datetime_block
-from personal_agent.orchestrator.skills import SKILLS_DIR
+from personal_agent.orchestrator.skills import get_all_skills
 from personal_agent.orchestrator.untrusted_channel import MEMORY_RECALL_TOOL, harness_tool_exchange
 
 ITEMS = Path(__file__).with_name("items.yaml")
@@ -85,13 +85,25 @@ Body = dict[str, object]
 
 
 def fence(user_text: str, extra: str = "") -> str:
-    """Return a user message as production inlines it: the turn_context block, then the text."""
+    """Return a user message as production inlines it: the turn_context block, then the text.
+
+    Args:
+        user_text: The user's own words.
+        extra: Content placed in the block before the date; empty for none.
+
+    Returns:
+        The message text.
+    """
     block = "\n\n".join(p for p in (extra, render_current_datetime_block(INSTANT)) if p)
     return f"<turn_context>\n{block}\n</turn_context>\n\n{user_text}"
 
 
 def memory_exchange() -> list[Message]:
-    """Return the memory_recall exchange that every production turn carries."""
+    """Return the memory_recall exchange that every production turn carries.
+
+    Returns:
+        The assistant call and its tool result.
+    """
     call, result = harness_tool_exchange(
         call_id="call_mem_fre1592", tool_name=MEMORY_RECALL_TOOL, content="Memory: no records."
     )
@@ -99,7 +111,15 @@ def memory_exchange() -> list[Message]:
 
 
 def skill_exchange(name: str, body: str) -> list[Message]:
-    """Return a read_skill call and the result that read_skill_executor returns for it."""
+    """Return a read_skill call and the result that read_skill_executor returns for it.
+
+    Args:
+        name: The skill name.
+        body: The text that the result carries as ``body``.
+
+    Returns:
+        The assistant call and its tool result.
+    """
     call_id = "call_skill_fre1592"
     result = {"skill_name": name, "base_dir": f"skills/{name}", "body": body, "files": []}
     return [
@@ -124,7 +144,15 @@ def skill_exchange(name: str, body: str) -> list[Message]:
 
 
 def search_exchange(query: str, sources: Sequence[Mapping[str, str]]) -> list[Message]:
-    """Return one web_search call per source, each result carrying its citation marker."""
+    """Return one web_search call per source, each result carrying its citation marker.
+
+    Args:
+        query: The search query of every call.
+        sources: Items with ``marker``, ``title``, ``url`` and ``text``.
+
+    Returns:
+        A call and its result for each source, in order.
+    """
     out: list[Message] = []
     for i, src in enumerate(sources, start=1):
         call_id = f"call_ws_{i}"
@@ -169,11 +197,18 @@ class Head:
         _check_deployment_context()
         self.parts = _components(captured_system)
         self.production = _system(self.parts)
-        bodies = sorted(SKILLS_DIR.glob("*/SKILL.md"))
-        self.all_bodies = "\n\n".join(p.read_text() for p in bodies)
+        skills = get_all_skills()
+        self.all_bodies = "\n\n".join(skills[name].body for name in sorted(skills))
 
     def with_rule(self, rule: str) -> str:
-        """Return the production system prompt with one rule after the reasoning rule."""
+        """Return the production system prompt with one rule after the reasoning rule.
+
+        Args:
+            rule: ``"a"`` or ``"b"``.
+
+        Returns:
+            The system prompt.
+        """
         reasoning = self.parts["reasoning_discipline"].rstrip("\n")
         return _system({**self.parts, "reasoning_discipline": f"{reasoning}\n\n{RULES[rule]}\n"})
 
@@ -182,7 +217,19 @@ class Head:
 
 
 def call(client: httpx.Client, url: str, request: Mapping[str, object]) -> dict[str, object]:
-    """Send one non-streamed request; return the message, the timings and the wall time."""
+    """Send one non-streamed request; return the message, the timings and the wall time.
+
+    Args:
+        client: HTTP client.
+        url: The chat-completions URL.
+        request: The request body.
+
+    Returns:
+        The row fields, plus ``message`` (the assistant message, for a further round).
+
+    Raises:
+        httpx.HTTPError: On a transport error or a non-2xx reply.
+    """
     t0 = time.monotonic()
     response = client.post(url, json=request)
     response.raise_for_status()
@@ -213,7 +260,18 @@ def request(
     rest: Sequence[Message],
     **over: object,
 ) -> Body:
-    """Build a llama.cpp request from the captured body with new messages."""
+    """Build a llama.cpp request from the captured body with new messages.
+
+    Args:
+        base: The captured primary request body (sampling and tools).
+        llama_model: The llama.cpp model name.
+        system: The system prompt.
+        rest: The messages after the system message.
+        **over: Request keys to override, such as ``max_tokens``.
+
+    Returns:
+        The request body, not streamed.
+    """
     body = replay_request(
         {**base, "messages": [{"role": "system", "content": system}, *rest]}, llama_model
     )
@@ -222,7 +280,12 @@ def request(
 
 
 def append_row(path: Path, row: Mapping[str, object]) -> None:
-    """Append one JSON row."""
+    """Append one JSON row.
+
+    Args:
+        path: The JSONL file; its directory is created when missing.
+        row: The row.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as fh:
         fh.write(json.dumps(row) + "\n")
@@ -231,7 +294,15 @@ def append_row(path: Path, row: Mapping[str, object]) -> None:
 def done(
     path: Path, key: Callable[[Mapping[str, object]], tuple[object, ...]]
 ) -> set[tuple[object, ...]]:
-    """Return the keys of the rows already written."""
+    """Return the keys of the rows already written.
+
+    Args:
+        path: The JSONL file.
+        key: Maps a row to its key.
+
+    Returns:
+        The keys; empty when the file does not exist.
+    """
     if not path.exists():
         return set()
     return {key(json.loads(line)) for line in path.read_text().splitlines() if line.strip()}
@@ -241,9 +312,15 @@ def done(
 
 
 def run_cache(args: argparse.Namespace, base: Mapping[str, object], head: Head) -> None:
-    """Run M2: five deliveries of one skill body, turn 1 cold and turn 2 measured."""
+    """Run M2: five deliveries of one skill body, turn 1 cold and turn 2 measured.
+
+    Args:
+        args: The parsed command line.
+        base: The captured primary request body.
+        head: The production system prompt.
+    """
     spec = yaml.safe_load(ITEMS.read_text())["m2"]
-    body = (SKILLS_DIR / spec["skill"] / "SKILL.md").read_text()
+    body = get_all_skills()[spec["skill"]].body  # what read_skill returns: no frontmatter
     out = args.run_dir / "rows" / args.model_key / "m2.jsonl"
     seen = done(out, lambda r: (r["arm"], r["draw"], r["step"]))
     client = httpx.Client(timeout=900.0)
@@ -286,12 +363,16 @@ def run_cache(args: argparse.Namespace, base: Mapping[str, object], head: Head) 
                 )
                 turn2_rest = [*turn2_rest, *skill_exchange(spec["skill"], body)]
             steps.append(("turn2", request(base, args.llama_model, sys2, turn2_rest, **probe)))
+            rows: list[dict[str, object]] = []
             for step, req in steps:
                 result = call(client, args.url, with_nonce(req, nonce))
                 result.pop("content")
                 result.pop("message")
-                append_row(out, {"arm": arm, "draw": draw, "step": step, "nonce": nonce, **result})
+                rows.append({"arm": arm, "draw": draw, "step": step, "nonce": nonce, **result})
                 print(f"m2 {arm} d{draw} {step}: {result['timings']}", flush=True)
+            # Written only when the arm is complete, so a resumed run never repeats a step.
+            for row in rows:
+                append_row(out, row)
 
 
 # --------------------------------------------------------------------------- M3
@@ -305,7 +386,19 @@ def m3_request(
     rule: str,
     item: Mapping[str, object],
 ) -> Body:
-    """Build the request of one M3 item in one arm."""
+    """Build the request of one M3 item in one arm.
+
+    Args:
+        base: The captured primary request body.
+        llama_model: The llama.cpp model name.
+        head: The production system prompt.
+        arm: One of :data:`M3_ARMS`.
+        rule: ``"a"`` or ``"b"``.
+        item: The item from ``items.yaml``.
+
+    Returns:
+        The request body.
+    """
     question = str(item["question"] if rule == "a" else item["prompt"])
     text = RULES[rule]
     system = {
@@ -322,14 +415,24 @@ def m3_request(
 
 
 def score(rule: str, item: Mapping[str, object], result: Mapping[str, object]) -> dict[str, object]:
-    """Score one reply against its rule."""
+    """Score one reply against its rule.
+
+    Args:
+        rule: ``"a"`` or ``"b"``.
+        item: The item from ``items.yaml``.
+        result: The row fields of the scored call.
+
+    Returns:
+        ``pass`` and ``any`` (the rule partly met), plus ``answered`` for rule a (a reply that
+        stopped normally; a truncated or tool-calling reply fails) or ``calls`` for rule b.
+    """
     if rule == "a":
         markers = [s["marker"] for s in item["sources"]]  # type: ignore[union-attr]
         lines = [ln.strip().strip("*_ ").lower() for ln in str(result["content"]).splitlines()]
         lines = [ln for ln in lines if ln]
         last = lines[-1] if lines else ""
         listed = last.startswith("sources") and any(m.lower() in last for m in markers)
-        answered = result["finish_reason"] != "tool_calls"
+        answered = result["finish_reason"] == "stop"
         return {
             "answered": answered,
             "pass": answered and listed,
@@ -344,7 +447,17 @@ def score(rule: str, item: Mapping[str, object], result: Mapping[str, object]) -
 
 
 def answer(client: httpx.Client, url: str, req: Body, nonce: str) -> tuple[dict[str, object], int]:
-    """Call until the model answers: each further tool call gets "No further results"."""
+    """Call until the model answers: each further tool call gets "No further results".
+
+    Args:
+        client: HTTP client.
+        url: The chat-completions URL.
+        req: The request body, without the nonce.
+        nonce: The arm's nonce.
+
+    Returns:
+        The last call's row fields and the number of further rounds.
+    """
     result = call(client, url, with_nonce(req, nonce))
     rounds = 0
     while result["finish_reason"] == "tool_calls" and rounds < EXTRA_ROUNDS:
@@ -366,7 +479,13 @@ def answer(client: httpx.Client, url: str, req: Body, nonce: str) -> tuple[dict[
 
 
 def run_follow(args: argparse.Namespace, base: Mapping[str, object], head: Head) -> None:
-    """Run M3: each rule in each arm, every item, ``--draws`` times, arm by arm."""
+    """Run M3: each rule in each arm, every item, ``--draws`` times, arm by arm.
+
+    Args:
+        args: The parsed command line.
+        base: The captured primary request body.
+        head: The production system prompt.
+    """
     items = yaml.safe_load(ITEMS.read_text())
     out = args.run_dir / "rows" / args.model_key / "m3.jsonl"
     seen = done(out, lambda r: (r["rule"], r["arm"], r["item"], r["draw"]))
@@ -407,12 +526,20 @@ def run_follow(args: argparse.Namespace, base: Mapping[str, object], head: Head)
 
 
 def _t(row: Mapping[str, object], key: str) -> float:
+    """Return one llama.cpp timing of a row, 0 when it is missing."""
     timings = row.get("timings") or {}
     return float(timings.get(key, 0) or 0)  # type: ignore[union-attr]
 
 
 def report(run_dir: Path) -> str:
-    """Render the M2 and M3 tables of every model in a run directory."""
+    """Render the M2 and M3 tables of every model in a run directory.
+
+    Args:
+        run_dir: The run directory.
+
+    Returns:
+        Markdown tables: the median of each M2 step, and the M3 counts per rule and arm.
+    """
     lines: list[str] = []
     for model_dir in sorted((run_dir / "rows").iterdir()):
         m2 = model_dir / "m2.jsonl"
@@ -444,8 +571,8 @@ def report(run_dir: Path) -> str:
             rows = [json.loads(x) for x in m3.read_text().splitlines() if x.strip()]
             lines += [
                 f"\n### M3 — {model_dir.name}\n",
-                "| Rule | Arm | n | pass | partial or better | median wall s |",
-                "|---|---|---:|---:|---:|---:|",
+                "| Rule | Arm | n | answered | pass | partial or better | median wall s |",
+                "|---|---|---:|---:|---:|---:|---:|",
             ]
             for rule in ("a", "b"):
                 for arm in M3_ARMS:
@@ -453,14 +580,23 @@ def report(run_dir: Path) -> str:
                     if rs:
                         walls = sorted(float(r["wall_s"]) for r in rs)
                         lines.append(
-                            f"| {rule} | {arm} | {len(rs)} | {sum(r['pass'] for r in rs)} "
+                            f"| {rule} | {arm} | {len(rs)} "
+                            f"| {sum(r.get('answered', True) for r in rs)} "
+                            f"| {sum(r['pass'] for r in rs)} "
                             f"| {sum(r['any'] for r in rs)} | {walls[len(walls) // 2]:.1f} |"
                         )
     return "\n".join(lines)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run one subcommand."""
+    """Run one subcommand.
+
+    Args:
+        argv: The command line; ``sys.argv`` when None.
+
+    Returns:
+        The exit code.
+    """
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("cache", "follow"):

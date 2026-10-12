@@ -37,6 +37,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -51,7 +52,7 @@ from personal_agent.orchestrator.prompts import (
     TOOL_USE_NATIVE_PROMPT,
     get_owner_identity,
 )
-from personal_agent.orchestrator.skills import SKILLS_DIR, assemble_skill_catalog
+from personal_agent.orchestrator.skills import assemble_skill_catalog, get_all_skills
 
 _EXECUTOR = Path(__file__).resolve().parents[3] / "src/personal_agent/orchestrator/executor.py"
 
@@ -161,7 +162,18 @@ class Counter:
         self._t0 = time.monotonic()
 
     def request(self, messages: Sequence[Message], tools: Sequence[object]) -> int:
-        """Return ``usage.prompt_tokens`` of the request, generating one token."""
+        """Return ``usage.prompt_tokens`` of the request, generating one token.
+
+        Args:
+            messages: The chat messages.
+            tools: The tool definitions; empty for none.
+
+        Returns:
+            The prompt tokens, from the store when the same request was counted before.
+
+        Raises:
+            httpx.HTTPError: On a transport error or a non-2xx reply.
+        """
         payload: Body = {
             "model": self._model,
             "messages": list(messages),
@@ -184,7 +196,10 @@ class Counter:
         r.raise_for_status()
         n = int(r.json()["usage"]["prompt_tokens"])
         self._saved[key] = n
-        self._store.write_text(json.dumps(self._saved))
+        self._store.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._store.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self._saved))
+        os.replace(tmp, self._store)
         print(
             f"call {self.calls}: {n:,} tokens, {time.monotonic() - t:.1f} s "
             f"(elapsed {time.monotonic() - self._t0:.0f} s)",
@@ -193,18 +208,33 @@ class Counter:
         return n
 
     def text(self, content: str) -> int:
-        """Return the tokens of a plain text: a user message minus an empty user message."""
+        """Return the tokens of a plain text: a user message minus an empty user message.
+
+        Args:
+            content: The text.
+
+        Returns:
+            Its token count, chat-template wrapper excluded.
+        """
         empty = self.request([{"role": "user", "content": ""}], [])
         return self.request([{"role": "user", "content": content}], []) - empty
 
 
 def _tool_name(tool: Mapping[str, object]) -> str:
+    """Return the function name of a tool definition."""
     fn = tool.get("function")
     return str(fn.get("name")) if isinstance(fn, Mapping) else "?"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Print the inventory as Markdown tables."""
+    """Print the inventory as Markdown tables.
+
+    Args:
+        argv: The command line; ``sys.argv`` when None.
+
+    Returns:
+        The exit code: 1 when the instrument check fails.
+    """
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--capture", type=Path, required=True)
     parser.add_argument("--store", type=Path, required=True, help="JSON file of saved counts")
@@ -234,29 +264,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     prod_system: Message = {"role": "system", "content": _system(parts)}
     full = count.request([prod_system, *messages[1:]], tools)
 
-    # Small requests from here on. The tools render as one block, so their total is
-    # (system + tools) - (system); each tool alone is (stub + tool) - (stub).
-    system_only = count.request([prod_system], [])
-    tools_total = count.request([prod_system], tools) - system_only
+    # Small requests from here on. Each holds one fixed user message, because a chat
+    # template can refuse a request without one; it cancels in every difference. The tools
+    # render as one block, so their total is (system + tools) - (system); each tool alone is
+    # (stub + tool) - (stub).
+    user: Message = {"role": "user", "content": "."}
+    system_only = count.request([prod_system, user], [])
+    tools_total = count.request([prod_system, user], tools) - system_only
     rows: list[tuple[str, int]] = [("tool definitions (all)", tools_total)]
     for name in parts:
-        without = count.request([{"role": "system", "content": _system(parts, name)}], [])
+        without = count.request([{"role": "system", "content": _system(parts, name)}, user], [])
         rows.append((name, system_only - without))
     stub: Message = {"role": "system", "content": "."}
-    stub_n = count.request([stub], [])
-    per_tool = [(_tool_name(t), count.request([stub], [t]) - stub_n) for t in tools]
+    stub_n = count.request([stub, user], [])
+    per_tool = [(_tool_name(t), count.request([stub, user], [t]) - stub_n) for t in tools]
+    skills = get_all_skills()
     catalog = [
         (m.group(1), line)
         for line in parts["skill_catalog"].split("\n")
         if (m := re.match(r"- ([a-z0-9-]+): ", line))
     ]
-    per_skill = [
-        (name, count.text(line), count.text((SKILLS_DIR / name / "SKILL.md").read_text()))
-        for name, line in catalog
-    ]
+    per_skill = [(name, count.text(line), count.text(skills[name].body)) for name, line in catalog]
     if args.dry_run:
         print(f"{count.calls} calls to send ({len(count._saved)} already saved)")
         return 0
+    # system_only holds the "." user message; the difference below charges it to the system.
     rows.append(("conversation after the system message", full - system_only - tools_total))
 
     print(f"Capture: {args.capture.name}. Counted with {args.url}, max_tokens 1, prompt_tokens.")

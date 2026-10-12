@@ -55,7 +55,11 @@ def route(message: str) -> tuple[str, str, str, str]:
         (task_type, complexity, strategy, reason) as the live stage 4 and 5 compute them.
     """
     intent = classify_intent(message)
-    strategy, reason = _apply_matrix(intent.task_type, intent.complexity, False)
+    # planner_mode_declared=False: the matrix without the ADR-0154 D2 gate (FRE-1515), the one
+    # the committed scripts declare their expect_route against.
+    strategy, reason = _apply_matrix(
+        intent.task_type, intent.complexity, False, planner_mode_declared=False
+    )
     return intent.task_type.value, intent.complexity.value, strategy.value.upper(), reason
 
 

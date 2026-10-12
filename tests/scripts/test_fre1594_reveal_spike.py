@@ -555,8 +555,9 @@ def test_a_call_in_the_same_reply_as_its_read_skill_is_refused(scenarios: reveal
 # --------------------------------------------------------------------------- scoring
 
 
-def _call(cache_n: int, prompt_n: int, **usage: int) -> dict[str, object]:
-    return {"timings": {"cache_n": cache_n, "prompt_n": prompt_n}, "usage": usage}
+def _call(cache_n: int, prompt_n: int, predicted_n: int = 0, **usage: int) -> dict[str, object]:
+    timings = {"cache_n": cache_n, "prompt_n": prompt_n, "predicted_n": predicted_n}
+    return {"timings": timings, "usage": usage}
 
 
 def _row(
@@ -575,8 +576,29 @@ def _row(
 _SAME = [_call(0, 1000), _call(990, 40), _call(1020, 30)]
 
 
-def test_shortfall_is_the_previous_prompt_minus_this_cache() -> None:
-    assert score.shortfall(_call(990, 50)["timings"], _call(1030, 30)["timings"]) == 10  # type: ignore[arg-type]
+def test_shortfall_is_the_previous_context_minus_this_cache() -> None:
+    previous = _call(990, 50, predicted_n=20)["timings"]
+    assert score.shortfall(previous, _call(1050, 30)["timings"]) == 10  # type: ignore[arg-type]
+
+
+def test_reuse_of_generated_tokens_is_scored_not_voided() -> None:
+    # A hybrid model continues from the live end state: cache_n passes the previous prompt.
+    control = [_call(0, 1000, 20), _call(1015, 40, 20), _call(1070, 30, 20)]
+    treated = [_call(0, 1000, 20), _call(1010, 45, 20), _call(1070, 30, 20)]
+    result = score.cache_verdict([_row(treated, control)], "cache_safe")
+    first = result["pairs"][0]
+    assert "void" not in first and first["treatment"] == 10 and first["control"] == 5
+    assert first["generated_reuse"] == {"treatment": 10, "control": 15}
+    assert result["verdict"] == "fail"
+
+
+def test_no_reuse_in_both_arms_is_uninformative_not_a_pass() -> None:
+    # Both arms re-process the whole prompt: the treatment equals the control, which proves nothing.
+    nothing = [_call(0, 1000, 20), _call(0, 1060, 20), _call(0, 1110, 20)]
+    for form in reveal.FORMS:
+        result = score.cache_verdict([_row(nothing, nothing)], form)
+        assert result["verdict"] == "uninformative"
+        assert all(p["no_reuse"] for p in result["pairs"])
 
 
 def test_cache_safe_passes_when_the_reveal_costs_no_more_than_the_control() -> None:
@@ -640,16 +662,24 @@ def test_a_changed_configuration_is_refused(tmp_path: object) -> None:
         spike.ensure_fingerprint(path, {"quant": "UD-IQ4_XS", "draws": 1})
 
 
-def test_props_record_the_template_hash_and_any_chunk_reuse_setting() -> None:
+def test_props_record_the_template_hash_and_the_cache_settings() -> None:
     props = {
         "chat_template": "{{ messages }}",
         "build_info": "b6000",
-        "default_generation_settings": {"params": {"n_cache_reuse": 256}},
+        "default_generation_settings": {"params": {"n_cache_reuse": 256, "temperature": 0.6}},
+        "n_ctx_checkpoints": 32,
+        "cache_ram_mib": 8192,
+        "kv_unified": True,
     }
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=props)))
     out = spike.read_props(client, "http://llama:8600/v1/chat/completions")
     assert out["build_info"] == "b6000"
-    assert out["cache_reuse"] == {"default_generation_settings.params.n_cache_reuse": 256}
+    assert out["cache_settings"] == {
+        "default_generation_settings.params.n_cache_reuse": 256,
+        "n_ctx_checkpoints": 32,
+        "cache_ram_mib": 8192,
+        "kv_unified": True,
+    }
     assert out["chat_template_sha256"] == transport.sha256(b"{{ messages }}")
 
 
@@ -741,3 +771,10 @@ def test_w3_needs_the_full_population(tmp_path: object) -> None:
         path = spike.rows_path(tmp_path, "local", form)  # type: ignore[arg-type]
         spike.append_jsonl(path, {**_row(_SAME, _SAME, passed=False), "draw": 0})
     assert spike.build_report(tmp_path)["w3"] is False  # type: ignore[arg-type]
+
+
+def test_a_local_run_needs_the_llama_server_arguments(tmp_path: object) -> None:
+    argv = ["run", "--run-dir", str(tmp_path), "--base", str(tmp_path / "none.json")]  # type: ignore[operator]
+    argv += ["--provider", "local", "--form", "simple", "--llama-model", "m", "--quant", "q"]
+    with pytest.raises(SystemExit, match="--server-args"):
+        spike.main(argv)

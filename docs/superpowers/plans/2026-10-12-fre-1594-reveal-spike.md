@@ -81,22 +81,41 @@ Every row records the SHA-256 of the exact request body.
 
 ### AC-2 measure (local only)
 
-`shortfall(call k) = (cache_n + prompt_n of call k-1) - cache_n of call k`, for k = 2, 3, in each session.
+`shortfall(call k) = (cache_n + prompt_n + predicted_n of call k-1) - cache_n of call k`, for k = 2, 3, in each
+session. It is the part of the previous call's whole context that call k did not reuse.
 
 - **No timings fails the form** (ADR AC-F3: "*Fails if* … a call has no timings"). The ticket text says "voids";
   the ADR is the stricter rule and wins. The note reports both readings.
 - **Lineage:** a pair (treatment call k, control call k) is void if either call's `cache_n` is larger than
-  `cache_n + prompt_n` of its previous call. Each row records that excess and `predicted_n`.
-- **No vacuous verdict:** a form with zero non-void pairs at a measured step gets `undecided`, never `pass`.
-- cache-safe passes if, in every non-void pair at k = 2, treatment shortfall ≤ control shortfall.
+  `cache_n + prompt_n + predicted_n` of its previous call. Each pair records that excess, and
+  `generated_reuse` (the reused tokens past the previous prompt) for each arm.
+- **No reuse is not a result:** a pair in which neither call reused a token is `no_reuse` and is not scored.
+  The treatment then equals the control, which proves nothing about the reveal.
+- **No vacuous verdict:** a form with no scored pair gets `uninformative` (a `no_reuse` pair exists) or
+  `undecided`, never `pass`.
+- cache-safe passes if, in every scored pair at k = 2, treatment shortfall ≤ control shortfall.
 - simple passes if each session has at most one k with treatment shortfall > control shortfall.
 
-**Why the control's own generation does not bias the shortfall** (Codex finding 2). After call k-1, the slot
-holds that call's prompt and then its generated tokens. Reuse of generated tokens therefore shows as `cache_n`
-above the previous prompt, which the lineage rule catches. The exception is llama.cpp chunk reuse
-(`--cache-reuse` > 0), which can reuse tokens after a mismatch. The fingerprint records `GET /props`. If chunk
-reuse is on, or the dry draw shows any lineage excess, the run stops before the full population and the seat
-reports to the owner.
+**Change to the ADR lineage rule (owner, 2026-10-12).** The ADR voids a pair when `cache_n` is above the
+previous call's prompt. The llama.cpp server README and `tools/server/server-context.cpp` show why that rule
+fails on the local primary:
+
+- Flash-Next is a hybrid model (Gated DeltaNet, `qwen4exp`). llama.cpp cannot cut a recurrent state back to a
+  shorter common prefix.
+- The server continues from the live end state of the slot, which holds the generated tokens. If the new
+  prompt does not extend that state, it restores a context checkpoint. Checkpoints are made at the last user
+  message and a few tokens before the prompt end (`--ctx-checkpoints` 32, `--checkpoint-min-step` 8192). If no
+  checkpoint fits, it re-processes the whole prompt.
+- Reuse of generated tokens is therefore the normal path, and the ADR rule voids it. The baseline above
+  includes `predicted_n`. Treatment and control use the same rule, so the comparison stays fair.
+
+Other cache settings: chunk reuse (`--cache-reuse`, default 0) can reuse tokens after a mismatch. The host-RAM
+prompt cache (`--cache-ram`, default 8192 MiB, with `--cache-idle-slots`) can restore a saved prompt, so
+`cache_n` does not always come from the previous call. The nonce opens the system message, so the arms share
+no useful prefix. The fingerprint pins every cache key of `GET /props` and the llama-server launch arguments
+(`--server-args`). The dry draw runs with llama-server `-v`, because the checkpoint decisions log at trace
+level. If chunk reuse is on, or the dry draw shows a lineage excess, an `uninformative` form or a forced
+re-processing on a control call, the run stops before the full population and the seat reports to the owner.
 
 ### AC-3 measure (cloud)
 
@@ -116,7 +135,7 @@ Controls run on the cloud too, so the cache figures have a reference. No bound.
 
 Base body SHA-256, system prompt SHA-256, tools SHA-256 and names, the SHA-256 of each prompt text and skill
 body, the llama.cpp model name and quant (arguments), the llama.cpp build (`system_fingerprint` of the replies),
-the chat-template SHA-256 (`GET /props`), the sampling keys of the base body, the cloud deployment key, model id
+the chat-template SHA-256 and the cache keys (`GET /props`), the llama-server launch arguments, the sampling keys of the base body, the cloud deployment key, model id
 and mode, draws, the warm-up procedure, and the git HEAD. A rerun with a different fingerprint is refused.
 
 **Warm-up:** one request before the first draw: the base body of prompt 1 with nonce `warmup`, `max_tokens` 1.
@@ -170,7 +189,8 @@ Its row is kept and marked `warmup`.
 7. Gates: `make test`, `make mypy`, `make ruff-check`, `make ruff-format`, `pre-commit run --all-files`.
 8. Self-review (code-reviewer agent), commit, push, PR. Post the preflight numbers on the ticket for master and the
    owner. **Stop.** The run waits for the window, the credentials and the owner's OK.
-9. After the OK: dry draw (1 prompt × 1 draw, each form, local). If any pair is void, stop and report before the
+9. After the OK: dry draw (1 prompt × 1 draw, each form, local, llama-server `-v`). If any pair is void, a form is
+   `uninformative`, or the server log shows a forced re-processing on a control call, stop and report before the
    full run. Then the full run, score, and the research note on the same PR.
 
 ## Acceptance criteria → evidence
@@ -191,9 +211,10 @@ Its row is kept and marked `warmup`.
 
 ## Risks
 
-- **Lineage rule and generated tokens.** Production sends `reasoning_content` back. If the template renders it,
-  the next call can reuse generated tokens, and `cache_n` can exceed the previous prompt. The ADR rule then voids
-  the pair although the lineage holds. The dry draw shows this before the full run.
+- **Hybrid model cache.** The local primary reuses its cache only from the live end state or a checkpoint (see
+  "Change to the ADR lineage rule"). If the template does not re-render the generated tokens exactly, both arms
+  fall back to a checkpoint or to a full re-processing. A form where neither arm reuses a token is
+  `uninformative`, not a pass. The dry draw shows this before the full run.
 - **Routing confound.** Step 1 needs the model to choose the skill. The four prompts are plain requests for the two
   objectives, and `query_telemetry` is absent, so `bash` with `curl` is the only other path. A draw that takes it
   fails step 1, as it would in production.

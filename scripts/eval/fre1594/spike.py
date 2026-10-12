@@ -78,14 +78,19 @@ def _git_head() -> str:
     return out.stdout.strip() or "unknown"
 
 
-def _find_cache_reuse(node: object, path: str = "") -> dict[str, object]:
+# The /props keys that change what the cache reuses: chunk reuse, context checkpoints (the local
+# primary is a hybrid model), the host-RAM prompt cache, the slots and the KV buffer layout.
+CACHE_SETTING_PARTS = ("cache_reuse", "checkpoint", "cache_ram", "cache_idle", "kv_unified", "swa")
+
+
+def _find_cache_settings(node: object, path: str = "") -> dict[str, object]:
     found: dict[str, object] = {}
     if isinstance(node, Mapping):
         for key, value in node.items():
             here = f"{path}.{key}" if path else str(key)
-            if "cache_reuse" in str(key):
+            if any(part in str(key) for part in CACHE_SETTING_PARTS):
                 found[here] = value
-            found.update(_find_cache_reuse(value, here))
+            found.update(_find_cache_settings(value, here))
     return found
 
 
@@ -102,7 +107,7 @@ def read_props(client: httpx.Client, url: str, props_file: Path | None = None) -
 
     Returns:
         ``source``, ``chat_template_sha256``, ``build_info``, ``model_path``, ``total_slots`` and
-        every ``*cache_reuse*`` key, or ``error``.
+        ``cache_settings`` (every key that names a :data:`CACHE_SETTING_PARTS` part), or ``error``.
     """
     props_url = url.split("/v1/")[0] + "/props"
     try:
@@ -123,7 +128,7 @@ def read_props(client: httpx.Client, url: str, props_file: Path | None = None) -
         "build_info": props.get("build_info"),
         "model_path": props.get("model_path"),
         "total_slots": props.get("total_slots"),
-        "cache_reuse": _find_cache_reuse(props),
+        "cache_settings": _find_cache_settings(props),
     }
 
 
@@ -282,6 +287,11 @@ def _done(path: Path) -> set[tuple[str, int]]:
 
 def run(args: argparse.Namespace) -> int:
     """Run one provider and one form over the population, resuming."""
+    if args.provider == "local" and not (args.llama_model and args.quant and args.server_args):
+        # /props may not show the checkpoint and host-RAM cache settings: the launch line pins them.
+        raise SystemExit(
+            "--llama-model, --quant and --server-args are required for the local provider"
+        )
     scenarios = reveal.load_scenarios()
     base = load_base(args.base)
     tools = reveal.experimental_tools()
@@ -303,13 +313,11 @@ def run(args: argparse.Namespace) -> int:
     try:
         sender: transport.Transport
         if args.provider == "local":
-            if not args.llama_model or not args.quant:
-                raise SystemExit("--llama-model and --quant are required for the local provider")
             props = read_props(client, args.url, args.props_file)
             if "error" in props:
                 raise SystemExit(
                     f"no llama.cpp /props ({props['error']}): pass --props-file, so the run pins "
-                    "the chat template and shows any chunk reuse"
+                    "the chat template and the cache settings"
                 )
             pins: dict[str, object] = {
                 "provider": "local",
@@ -317,6 +325,7 @@ def run(args: argparse.Namespace) -> int:
                 "quant": args.quant,
                 "llama_url": args.url,
                 "llama_props": props,
+                "llama_server_args": args.server_args,
             }
             sender = transport.LlamaTransport(client, args.url, args.llama_model)
         else:
@@ -438,6 +447,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             p.add_argument("--form", choices=reveal.FORMS, required=True)
             p.add_argument("--llama-model", help="the llama.cpp model name (local)")
             p.add_argument("--quant", help="the quant of the loaded model (local)")
+            p.add_argument(
+                "--server-args",
+                help="the llama-server launch arguments, verbatim (local): pins the checkpoint, "
+                "host-RAM cache and slot settings that /props may not show",
+            )
             p.add_argument("--limit", type=int, default=0, help="first N prompts only (dry draw)")
     args = parser.parse_args(argv)
     handlers = {"preflight": preflight, "run": run, "score": score_cmd}

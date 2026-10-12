@@ -41,8 +41,12 @@ not revealed yet, as A5.5 says. It reads the eval Elasticsearch only and refuses
   `AGENT_TEMPO_URL` set to an address of the Tempo container that this host can reach.
 - **local:** llama.cpp serves the production primary on `--url` (default `http://127.0.0.1:8600`). The
   slm_server router on `:8600` refuses `/props` (403, 2026-10-12). Save `/props` of the llama-server behind it
-  on the Mac and pass it with `--props-file`, so the fingerprint pins the chat-template hash and shows any chunk
-  reuse setting.
+  on the Mac and pass it with `--props-file`, so the fingerprint pins the chat-template hash and the cache
+  settings that `/props` shows.
+- **local:** pass the llama-server launch arguments verbatim with `--server-args="<arguments>"` (use the `=`
+  form, because the value starts with `-`). `/props` may not show the context checkpoint
+  (`--ctx-checkpoints`, `--checkpoint-min-step`), host-RAM cache (`--cache-ram`, `--cache-idle-slots`) and slot
+  settings. The launch line pins them.
 - **cloud:** the deployment's API key, and `AGENT_DATABASE_URL` set to the eval Postgres (port 5434). The cost
   gate refuses any other database.
 
@@ -58,15 +62,23 @@ BASE=<path to a captured request .json>
 | # | Command | Calls a model |
 |---|---------|---------------|
 | 1 | `uv run python -m scripts.eval.fre1594.spike preflight --run-dir $RUN --base $BASE` | no |
-| 2 | `uv run python -m scripts.eval.fre1594.spike run --run-dir $RUN-dry --base $BASE --provider local --form <form> --llama-model <name> --quant <quant> --limit 1 --draws 1`, once per form | yes, at most 7 local calls per form |
-| 3 | `uv run python -m scripts.eval.fre1594.spike run --run-dir $RUN --base $BASE --provider local --form <form> --llama-model <name> --quant <quant>`, once per form | yes, at most 73 local calls per form |
+| 2 | `uv run python -m scripts.eval.fre1594.spike run --run-dir $RUN-dry --base $BASE --provider local --form <form> --llama-model <name> --quant <quant> --server-args="<arguments>" --limit 1 --draws 1`, once per form, with llama-server started with `-v` | yes, at most 7 local calls per form |
+| 3 | `uv run python -m scripts.eval.fre1594.spike run --run-dir $RUN --base $BASE --provider local --form <form> --llama-model <name> --quant <quant> --server-args="<arguments>"`, once per form | yes, at most 73 local calls per form |
 | 4 | `uv run python -m scripts.eval.fre1594.spike run --run-dir $RUN --base $BASE --provider cloud --form <form>`, once per form | yes, at most 72 paid calls per form, under `--max-usd` (default 10) |
 | 5 | `uv run python -m scripts.eval.fre1594.spike score --run-dir $RUN` | no |
 
 **Steps 2 to 4 start only after the owner's OK on the preflight numbers.** Step 2 is the dry draw. It uses its
-own run directory, because the fingerprint pins the draw count. Read its rows before step 3. Stop and report if
-any pair has a lineage excess (`score` reports `pairs_void`), or if `/props` shows chunk reuse
-(`cache_reuse` > 0).
+own run directory, because the fingerprint pins the draw count and the server arguments. Start llama-server
+with `-v` for the dry draw only: llama.cpp logs its checkpoint decisions at trace level. Read the rows, the
+`score` output and the server log before step 3. Stop and report if:
+
+- any pair has a lineage excess (`score` reports `pairs_void`);
+- a form is `uninformative` (neither arm reused a token, `pairs_no_reuse`);
+- `cache_settings` shows chunk reuse (`n_cache_reuse` > 0);
+- the server log shows `forcing full prompt re-processing` on a control call.
+
+The server log lines to read are `created context checkpoint`, `restored context checkpoint` and
+`forcing full prompt re-processing`.
 
 A rerun of `run` resumes: it skips each (prompt, draw) that has a row. A run whose configuration differs from
 the recorded `fingerprint-<provider>.json` is refused.
@@ -84,9 +96,16 @@ the recorded `fingerprint-<provider>.json` is refused.
 ## Scoring
 
 - **AC-1:** the draws that hold all five steps. W3 applies if both local forms hold fewer than 10 of 12.
-- **AC-2 (local):** the shortfall of a call is `(cache_n + prompt_n of the previous call) - cache_n of this
-  call`. A call without timings fails the form (ADR AC-F3). A pair is void if a call's `cache_n` is larger than
-  its previous call's prompt. cache-safe passes if the treatment's shortfall at call 2 is never above the
-  control's. simple passes if no session has more than one call with a shortfall above the control's. A form
-  with no non-void pair is `undecided`.
+- **AC-2 (local):** the shortfall of a call is `(cache_n + prompt_n + predicted_n of the previous call) -
+  cache_n of this call`. This is the part of the previous call's whole context that this call did not reuse.
+  A call without timings fails the form (ADR AC-F3). A pair is void if a call's `cache_n` is larger than its
+  previous call's whole context. A pair in which neither arm reused a token is `no_reuse` and is not scored.
+  cache-safe passes if the treatment's shortfall at call 2 is never above the control's. simple passes if no
+  session has more than one call with a shortfall above the control's. A form with no scored pair is
+  `uninformative` if a pair was `no_reuse`, else `undecided`.
+- **Why the baseline holds `predicted_n`:** the local primary is a hybrid model (Gated DeltaNet). llama.cpp
+  cannot cut its recurrent state back to a shorter common prefix. It continues from the live end state, which
+  holds the generated tokens, or restores a context checkpoint, or re-processes the whole prompt. The ADR rule
+  (void when `cache_n` is above the previous prompt) voids the normal path. The owner chose this baseline on
+  2026-10-12. Each pair records `generated_reuse`, the reused tokens past the previous prompt, for each arm.
 - **AC-3 (cloud):** `cache_read_input_tokens` and `cache_creation_input_tokens` of every call, with no bound.

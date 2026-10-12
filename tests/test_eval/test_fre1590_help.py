@@ -305,6 +305,15 @@ def test_the_report_pairs_the_arms_and_flags_a_one_arm_scenario() -> None:
 def test_a_fully_paired_report_passes() -> None:
     rows = [{"id": "a#0", "arm": arm, "trace_id": arm} for arm in ("control", "treatment")]
     assert part2.build_report(rows, "m")["paired"] is True
+    assert part2.build_report(rows, "m", ["a#0"])["paired"] is True
+
+
+def test_a_scenario_with_no_row_is_unrun_and_not_paired() -> None:
+    """Seeded negative: a ``--limit 1`` run, or one that stopped early, must not report PAIRED."""
+    rows = [{"id": "a#0", "arm": arm, "trace_id": arm} for arm in ("control", "treatment")]
+    report = part2.build_report(rows, "m", ["a#0", "b#1"])
+    assert report["unrun"] == ["b#1"] and report["paired"] is False
+    assert "in the scenario list, not run: b#1" in part2.render_report(report)
 
 
 # ── the compose override ─────────────────────────────────────────────────────

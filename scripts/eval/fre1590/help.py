@@ -448,7 +448,11 @@ _SUMMARY_FIELDS = (
 )
 
 
-def build_report(rows: Sequence[Mapping[str, object]], model: str) -> dict[str, object]:
+def build_report(
+    rows: Sequence[Mapping[str, object]],
+    model: str,
+    expected_ids: Sequence[str] | None = None,
+) -> dict[str, object]:
     """Build the AC-3 skeleton: both arms of each scenario side by side.
 
     The last row without an error counts for each (id, arm).
@@ -456,11 +460,14 @@ def build_report(rows: Sequence[Mapping[str, object]], model: str) -> dict[str, 
     Args:
         rows: The rows of one model.
         model: The model key.
+        expected_ids: The scenario ids that the run must cover. An id with no row at all is
+            ``unrun``, so a run that stopped early, or a ``--limit`` run, cannot report PAIRED.
+            ``None`` checks only the rows.
 
     Returns:
         The report: ``scenarios`` (each with its arms), ``one_arm`` (ids with one arm only, so
-        AC-3 fails), ``errored`` (``id/arm`` with error rows only), ``graph_writes`` (``id/arm``
-        that left nodes in the graph) and ``paired``.
+        AC-3 fails), ``errored`` (``id/arm`` with error rows only), ``unrun`` (expected ids with no
+        row), ``graph_writes`` (``id/arm`` that left nodes in the graph) and ``paired``.
     """
     kept: dict[tuple[str, str], Mapping[str, object]] = {}
     order: list[str] = []
@@ -496,13 +503,15 @@ def build_report(rows: Sequence[Mapping[str, object]], model: str) -> dict[str, 
     graph_writes = sorted(
         f"{sid}/{arm}" for (sid, arm), r in kept.items() if _num(r.get("graph_nodes_after")) > 0
     )
+    unrun = [sid for sid in expected_ids or () if sid not in order]
     return {
         "model": model,
         "scenarios_paired": paired,
         "one_arm": one_arm,
         "errored": errored,
+        "unrun": unrun,
         "graph_writes": graph_writes,
-        "paired": bool(scenarios) and not one_arm and not errored,
+        "paired": bool(scenarios) and not one_arm and not errored and not unrun,
         "scenarios": scenarios,
     }
 
@@ -537,6 +546,7 @@ def render_report(report: Mapping[str, object]) -> str:
         f"scenarios with both arms: {report['scenarios_paired']}",
         f"one arm only (AC-3 fails): {listed('one_arm')}",
         f"error rows only, not paired: {listed('errored')}",
+        f"in the scenario list, not run: {listed('unrun')}",
         f"turns that left graph nodes: {listed('graph_writes')}",
         f"RESULT: {'PAIRED' if report['paired'] else 'NOT PAIRED'}",
     ]
@@ -570,7 +580,8 @@ async def _run(args: argparse.Namespace) -> int:
 
 def _report(args: argparse.Namespace) -> int:
     path = rows_path(Path(args.run_dir), args.model)
-    report = build_report(read_rows(path), args.model)
+    expected = [s.id for s in load_scenarios()]
+    report = build_report(read_rows(path), args.model, expected)
     (path.parent / "part2_report.json").write_text(json.dumps(report, indent=2) + "\n")
     sys.stdout.write(render_report(report))
     return 0 if report["paired"] else 1

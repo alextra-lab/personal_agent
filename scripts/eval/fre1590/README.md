@@ -22,8 +22,8 @@ RUN=telemetry/evaluation/fre1590-skill-test/$(date +%Y%m%d-%H%M)
 KEY=qwen3.8-flash-next    # or gemma-4-26b-a4b
 ```
 
-The captured bodies hold full prompts. `.gitignore` does not list `telemetry/evaluation/fre1590-skill-test/`
-yet. Do not commit a run directory.
+The captured bodies hold full prompts. `.gitignore` lists `telemetry/evaluation/fre1590-skill-test/`.
+Do not commit a run directory outside it.
 
 ### Steps (run from the repo root)
 

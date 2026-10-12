@@ -162,6 +162,8 @@
         "success":             { "type": "boolean" },
         "model_role":          { "type": "keyword" },
         "model":               { "type": "keyword" },
+        "response_model":      { "type": "keyword" },
+        "system_fingerprint":  { "type": "keyword" },
         "provider":            { "type": "keyword" },
         "endpoint":            { "type": "keyword" },
         "api_type":            { "type": "keyword" },

@@ -598,6 +598,50 @@ class TestTelemetryParity:
         # ADR-0141 D6.4 makes this the corroborating field for cache_prompt.
         assert event["cache_read_tokens"] == 900
 
+    @staticmethod
+    def _engine_stream(*, fingerprint: str | None, wire_model: str) -> bytes:
+        """A plain reply whose every chunk names an engine build and a wire model."""
+        chunks = [
+            _chunk(delta={"role": "assistant", "content": "the answer"}),
+            _chunk(delta={}, finish_reason="stop"),
+            _chunk(usage=USAGE_BLOCK),
+        ]
+        for chunk in chunks:
+            chunk["model"] = wire_model
+            if fingerprint is not None:
+                chunk["system_fingerprint"] = fingerprint
+        return _sse(*chunks)
+
+    @pytest.mark.asyncio
+    async def test_completed_event_names_the_engine_build(self) -> None:
+        """FRE-1588 AC-1 (local path): llama.cpp's build reaches the event, via real litellm."""
+        stream = self._engine_stream(fingerprint="b9999-test", wire_model="unsloth/qwen3.6-35-A3B")
+        event = (await _dispatch(stream=stream)).completed_event()
+        assert event["system_fingerprint"] == "b9999-test"
+
+    @pytest.mark.asyncio
+    async def test_completed_event_never_records_the_requested_model_as_the_reported_one(
+        self,
+    ) -> None:
+        """FRE-1588 seeded negative.
+
+        The engine answered as ``ENGINE-REPORTED-MODEL``. litellm replaces each
+        streamed chunk's ``model`` with the requested id, so the event cannot
+        know the engine's value. It must record null — not the requested id.
+        """
+        stream = self._engine_stream(fingerprint="b9999-test", wire_model="ENGINE-REPORTED-MODEL")
+        event = (await _dispatch(stream=stream)).completed_event()
+        assert event["response_model"] is None
+        assert event["model"] == "unsloth/qwen3.6-35-A3B"  # the requested name, untouched
+
+    @pytest.mark.asyncio
+    async def test_completed_event_fingerprint_is_null_when_the_stream_has_none(self) -> None:
+        """FRE-1588 AC-1: an engine that reports no build reads as null."""
+        event = (await _dispatch()).completed_event()
+        assert "system_fingerprint" in event
+        assert event["system_fingerprint"] is None
+        assert event["response_model"] is None
+
     @pytest.mark.asyncio
     async def test_started_event_is_emitted_with_the_same_span(self) -> None:
         """The canonical pair, not just the completed half (ADR-0074 §I2)."""

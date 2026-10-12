@@ -55,17 +55,17 @@ def _make_mock_response(
     return response
 
 
-async def _call_respond(captured_log_calls: list[tuple]) -> None:
+async def _call_respond(captured_log_calls: list[tuple], response: MagicMock | None = None) -> None:
     """Run LiteLLMClient.respond() with all external I/O mocked.
 
     The log.info calls are captured into captured_log_calls as (event, kwargs)
-    tuples.
+    tuples. ``response`` replaces the default mock provider response.
     """
     from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.llm_client.types import ModelRole
     from tests._helpers.trace import make_test_ctx
 
-    mock_response = _make_mock_response()
+    mock_response = response if response is not None else _make_mock_response()
 
     mock_gate = MagicMock()
     mock_gate.reserve = AsyncMock(return_value="res-001")
@@ -131,6 +131,46 @@ def _get_completed_event(calls: list[tuple]) -> dict:
         if event == "model_call_completed":
             return kwargs
     raise AssertionError(f"model_call_completed event not found in calls: {[e for e, _ in calls]}")
+
+
+@pytest.mark.asyncio
+async def test_model_call_completed_records_what_the_response_reported() -> None:
+    """FRE-1588 AC-1: the engine fields hold the response's own values."""
+    response = _make_mock_response()
+    response.system_fingerprint = "b9999"
+    response.model = "m-test"
+    calls: list[tuple] = []
+    await _call_respond(calls, response)
+    kwargs = _get_completed_event(calls)
+    assert kwargs["system_fingerprint"] == "b9999"
+    assert kwargs["response_model"] == "m-test"
+    # The event's own `model` stays the requested name (cost rows join on it).
+    assert kwargs["model"] != "m-test"
+
+
+@pytest.mark.asyncio
+async def test_model_call_completed_records_null_when_response_reports_nothing() -> None:
+    """FRE-1588 AC-1: no reported value reads as null, never as configuration."""
+    response = _make_mock_response()
+    response.system_fingerprint = None
+    response.model = None
+    calls: list[tuple] = []
+    await _call_respond(calls, response)
+    kwargs = _get_completed_event(calls)
+    assert "system_fingerprint" in kwargs
+    assert "response_model" in kwargs
+    assert kwargs["system_fingerprint"] is None
+    assert kwargs["response_model"] is None
+
+
+@pytest.mark.asyncio
+async def test_model_call_completed_never_records_a_non_string_engine_value() -> None:
+    """FRE-1588: an attribute that is not a string (a mock's auto-attribute) is not data."""
+    calls: list[tuple] = []
+    await _call_respond(calls)  # default mock leaves both attributes as auto-MagicMocks
+    kwargs = _get_completed_event(calls)
+    assert kwargs["system_fingerprint"] is None
+    assert kwargs["response_model"] is None
 
 
 @pytest.mark.asyncio

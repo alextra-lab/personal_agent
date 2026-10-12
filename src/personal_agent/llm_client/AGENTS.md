@@ -154,6 +154,23 @@ Canonical `model_call_started` / `model_call_completed` events are emitted by
 the client itself (`telemetry.py`), not by callers — see
 `emit_model_call_started` / `emit_model_call_completed`.
 
+`model_call_completed` names the engine that answered (FRE-1588). `system_fingerprint`
+is the build the response reported. `response_model` is the model name the response
+reported. The event's own `model` is the requested name, and cost rows join on it.
+Each engine field is `null` when the response reported nothing. Configuration never
+fills them.
+
+Limit: on the local (streamed) path `response_model` is always `null`. litellm
+replaces each streamed chunk's `model` with the requested model, so the engine's
+value cannot be observed. Do not "fix" this by reading the chunk `model`. That value
+is configuration.
+
+Caution for a new cloud provider: litellm pre-sets a non-streamed response `model` to
+`<provider>/<requested model>` for any OpenAI-SDK-route provider other than `openai`
+(`litellm/llms/openai/openai.py`). If the response omits `model`, `response_model`
+would then hold configuration. Check this before a new provider joins
+`_OPENAI_SDK_ROUTE_PROVIDERS`.
+
 ## Config
 
 - Local endpoint: the deployment's declared `endpoint`, or the provider's

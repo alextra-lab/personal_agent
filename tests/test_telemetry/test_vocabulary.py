@@ -252,3 +252,14 @@ def test_ac4_latency_ms_is_retired_spelling_not_governed() -> None:
     assert "latency_ms" in RETIRED_SPELLINGS
     assert RETIRED_SPELLINGS["latency_ms"] is None  # retired outright, no canonical
     assert "latency_ms" not in DECLARED_TYPES
+
+
+def test_engine_identity_fields_pass_the_vocabulary_rules() -> None:
+    """FRE-1588: ``system_fingerprint`` / ``response_model`` trip neither Rule 1 nor Rule 2.
+
+    The names sit near no governed name (``model`` is the requested name and
+    stays governed), so a ``model_call_completed`` document carrying them, set
+    or null, is not a near-miss and is accepted outside production too.
+    """
+    validate_document({"system_fingerprint": "b9999-abc", "response_model": "m-test"})
+    validate_document({"system_fingerprint": None, "response_model": None})

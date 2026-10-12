@@ -134,12 +134,21 @@ Nobody has measured whether its depth adds quality: FRE-1590 Part 2 did not test
 request (`main 4bc88d2a`, 24 tools). The prompt inputs of that capture are unchanged on `main` today:
 the script rebuilds the captured system prompt from the code constants and stops if it differs. It adds
 the two production-only sections that the capture gateway lacks: the deployment context and the
-operator stanza (placeholder name). It renders the request with llama.cpp `/apply-template` and counts
-with `/tokenize`. Each component's count is an ablation (the full request minus the request without
-it). The instrument check: the captured body must count to the `prompt_tokens` that llama.cpp
-reported for the same body (12,377).
+operator stanza (placeholder name). It sends each request to the production llama.cpp
+`/v1/chat/completions` with `max_tokens` 1 and reads `usage.prompt_tokens`. The server's `/tokenize`
+and `/apply-template` answer 403 behind the slm_server router, and master approved this method on
+2026-10-12. Two properties of the count:
 
-**Result:** pending. It needs `:8600`, which master's FRE-1594 hold blocks until about 18:10Z.
+- it includes the generation prompt that the chat template adds after the last message, as every
+  production call does;
+- a cached prefix does not change it: `prompt_tokens` counts cached and evaluated tokens alike.
+
+Each component's count is an ablation (the full request minus the request without it). A plain text
+(a catalog line, a skill body) is counted as a user message minus an empty user message. The
+instrument check: the captured body must count to the `prompt_tokens` that llama.cpp reported for the
+same body in the FRE-1590 replay (12,377).
+
+**Result:** pending.
 
 ## M2 — the cache cost of each option (pending, preflight first)
 

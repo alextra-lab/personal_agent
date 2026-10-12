@@ -1,9 +1,17 @@
 """FRE-1592 M1 — token count of each component of the production primary request.
 
-Counts with the served model's own chat template and tokenizer: llama.cpp ``/apply-template``
-renders the request (messages and tools), and ``/tokenize`` counts the rendered prompt. No
-generation. Each component's count is an ablation: the tokens of the full request minus the
-tokens of the same request without that component, so template wrappers are included.
+Counts with the served model's own chat template and tokenizer: each request goes to llama.cpp
+``/v1/chat/completions`` with ``max_tokens`` 1, and the count is ``usage.prompt_tokens``. (The
+server's ``/tokenize`` and ``/apply-template`` answer 403 behind the slm_server router; master
+approved this method on 2026-10-12.) Two properties of the count:
+
+* it includes the generation prompt that the chat template adds after the last message, as every
+  production call does;
+* a cached prefix does not change it: ``prompt_tokens`` counts cached and evaluated tokens alike.
+
+Each component's count is an ablation: the tokens of the full request minus the tokens of the same
+request without that component, so template wrappers are included. A plain text (a catalog line,
+a skill body) is counted as a user message, minus the count of an empty user message.
 
 Input is a primary request captured by ``scripts/eval/fre1537/capture.py`` (FRE-1590 captures
 are bodies of that shape). The capture gateway has no memory graph and does not run as
@@ -134,24 +142,33 @@ def _system(parts: Mapping[str, str], drop: str | None = None) -> str:
 class Counter:
     """Counts a request's prompt tokens with the server's template and tokenizer."""
 
-    def __init__(self, url: str) -> None:
-        """Open a client for the llama.cpp server at ``url``."""
-        self._client = httpx.Client(base_url=url.rstrip("/"), timeout=60.0)
-
-    def text(self, content: str) -> int:
-        """Return the token count of a plain text."""
-        r = self._client.post("/tokenize", json={"content": content})
-        r.raise_for_status()
-        return len(r.json()["tokens"])
+    def __init__(self, url: str, model: str) -> None:
+        """Open a client for the llama.cpp chat-completions URL ``url`` and model ``model``."""
+        self._client = httpx.Client(timeout=300.0)
+        self._url = url
+        self._model = model
+        self._empty: int | None = None
 
     def request(self, messages: Sequence[Message], tools: Sequence[object]) -> int:
-        """Return the token count of the prompt that the chat template renders."""
-        payload: Body = {"messages": list(messages)}
+        """Return ``usage.prompt_tokens`` of the request, generating one token."""
+        payload: Body = {
+            "model": self._model,
+            "messages": list(messages),
+            "max_tokens": 1,
+            "stream": False,
+            "cache_prompt": True,
+        }
         if tools:
             payload["tools"] = list(tools)
-        r = self._client.post("/apply-template", json=payload)
+        r = self._client.post(self._url, json=payload)
         r.raise_for_status()
-        return self.text(r.json()["prompt"])
+        return int(r.json()["usage"]["prompt_tokens"])
+
+    def text(self, content: str) -> int:
+        """Return the tokens of a plain text: a user message minus an empty user message."""
+        if self._empty is None:
+            self._empty = self.request([{"role": "user", "content": ""}], [])
+        return self.request([{"role": "user", "content": content}], []) - self._empty
 
 
 def _with_system(messages: Sequence[Message], system: str) -> list[Message]:
@@ -162,7 +179,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Print the inventory as Markdown tables."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--capture", type=Path, required=True)
-    parser.add_argument("--url", default="http://127.0.0.1:8600")
+    parser.add_argument("--url", default="http://127.0.0.1:8600/v1/chat/completions")
+    parser.add_argument("--llama-model", default="unsloth/qwen3.8-flash-next")
     parser.add_argument("--expect-prompt-tokens", type=int, default=None)
     args = parser.parse_args(argv)
 
@@ -172,7 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tools: list[dict[str, object]] = body["tools"]
     _check_deployment_context()
     parts = _components(str(messages[0]["content"]))
-    count = Counter(args.url)
+    count = Counter(args.url, args.llama_model)
 
     as_captured = count.request(messages, tools)
     if args.expect_prompt_tokens is not None and as_captured != args.expect_prompt_tokens:
@@ -190,7 +208,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     system_only = count.request([prod[0]], [])
     rows.append(("conversation after the system message", no_tools - system_only))
 
-    print(f"Capture: {args.capture.name}. Counted with {args.url} /apply-template + /tokenize.")
+    print(
+        f"Capture: {args.capture.name}. Counted with {args.url}, max_tokens 1, usage.prompt_tokens."
+    )
     print(f"As captured: {as_captured} tokens. Production head added: {full} tokens.\n")
     print("| Component | Tokens | Share |\n|---|---:|---:|")
     for name, n in rows:

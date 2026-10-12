@@ -16,12 +16,16 @@ arm reuses another's cache. Each arm sends turn 1 (cold), then turn 2 (measured)
   call (the cost of the round trip);
 * ``head_turn2`` — the body added to the system prompt on turn 2 only (negative control).
 
-**M3 (``follow``)** places one production rule in each channel and scores the reply:
+**M3 (``follow``)** places one rule in each channel and scores the reply. The rules are not in the
+production prompt: a rule that the model follows without being told cannot show a channel effect
+(the FRE-1592 preflight found that for the grounding and parallel-calls rules).
 
-* ``r1`` — the grounding contract: the reply copies the citation markers of two search results;
-* ``r2`` — the parallel-calls rule: the first response holds three independent tool calls.
+* ``a`` — :data:`RULE_A`: the final answer ends with a ``Sources:`` line of citation markers. The
+  turn holds two search results. A further tool call gets "No further results" for up to
+  :data:`EXTRA_ROUNDS` more rounds, so the final answer is scored;
+* ``b`` — :data:`RULE_B`: the first response calls ``search_memory`` and ``web_search`` together.
 
-Arms: ``system`` (production), ``heavy`` (production plus every SKILL.md body in the head),
+Arms: ``system`` (after the reasoning rule), ``heavy`` (the same, plus every SKILL.md body in the head),
 ``skill`` (a ``read_skill`` result), ``fence`` (the ``<turn_context>`` block), ``absent``.
 
 Run from the repo root (llama.cpp must serve the model of ``--model-key``):
@@ -35,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import time
 import uuid
@@ -60,6 +63,18 @@ INSTANT = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 M3_ARMS = ("system", "heavy", "skill", "fence", "absent")
 M2_ARMS = ("base", "head", "fence", "skill", "head_turn2")
 PROBE_MAX_TOKENS = 16
+EXTRA_ROUNDS = 2
+RULE_A = (
+    "## Answer format\n"
+    "When your answer uses a search result, end it with one final line that starts with "
+    "`Sources:` and lists every citation marker you used, separated by commas."
+)
+RULE_B = (
+    "## Memory first\n"
+    "Before you call web_search for a fact, call search_memory with the same query in the same "
+    "response, so that both calls run together."
+)
+RULES = {"a": RULE_A, "b": RULE_B}
 SKILL_CALL_MAX_TOKENS = 1024
 
 Message = dict[str, object]
@@ -115,9 +130,7 @@ def search_exchange(query: str, sources: Sequence[Mapping[str, str]]) -> list[Me
         call_id = f"call_ws_{i}"
         result = {
             "query": query,
-            "results": [
-                {"title": f"Result {i}", "url": f"https://example.org/{i}", "content": src["text"]}
-            ],
+            "results": [{"title": src["title"], "url": src["url"], "content": src["text"]}],
             "_citation": f"[{src['marker']}]",
         }
         out += [
@@ -156,24 +169,13 @@ class Head:
         _check_deployment_context()
         self.parts = _components(captured_system)
         self.production = _system(self.parts)
-        match = re.search(r"^- PARALLEL CALLS:.*\n", self.parts["tool_use_rules"], re.M)
-        if match is None:
-            raise SystemExit("the PARALLEL CALLS rule is not in TOOL_USE_NATIVE_PROMPT")
-        self.parallel_rule = match.group(0).rstrip("\n")
-        self.grounding_rule = self.parts["grounding_contract"].rstrip("\n")
         bodies = sorted(SKILLS_DIR.glob("*/SKILL.md"))
         self.all_bodies = "\n\n".join(p.read_text() for p in bodies)
 
-    def without(self, rule: str) -> str:
-        """Return the production system prompt without one rule."""
-        if rule == "r1":
-            return _system(self.parts, "grounding_contract")
-        tool_rules = self.parts["tool_use_rules"].replace(self.parallel_rule + "\n", "")
-        return _system({**self.parts, "tool_use_rules": tool_rules})
-
-    def rule_text(self, rule: str) -> str:
-        """Return the text of a rule."""
-        return self.grounding_rule if rule == "r1" else self.parallel_rule
+    def with_rule(self, rule: str) -> str:
+        """Return the production system prompt with one rule after the reasoning rule."""
+        reasoning = self.parts["reasoning_discipline"].rstrip("\n")
+        return _system({**self.parts, "reasoning_discipline": f"{reasoning}\n\n{RULES[rule]}\n"})
 
 
 # --------------------------------------------------------------------------- llama.cpp
@@ -196,6 +198,11 @@ def call(client: httpx.Client, url: str, request: Mapping[str, object]) -> dict[
         "reasoning_chars": len(str(message.get("reasoning_content") or "")),
         "tool_names": [c["function"]["name"] for c in calls if isinstance(c, Mapping)],
         "system_fingerprint": data.get("system_fingerprint"),
+        "message": {
+            "role": "assistant",
+            "content": message.get("content") or "",
+            "tool_calls": calls,
+        },
     }
 
 
@@ -282,6 +289,7 @@ def run_cache(args: argparse.Namespace, base: Mapping[str, object], head: Head) 
             for step, req in steps:
                 result = call(client, args.url, with_nonce(req, nonce))
                 result.pop("content")
+                result.pop("message")
                 append_row(out, {"arm": arm, "draw": draw, "step": step, "nonce": nonce, **result})
                 print(f"m2 {arm} d{draw} {step}: {result['timings']}", flush=True)
 
@@ -298,30 +306,63 @@ def m3_request(
     item: Mapping[str, object],
 ) -> Body:
     """Build the request of one M3 item in one arm."""
-    question = str(item["question"] if rule == "r1" else item["prompt"])
-    text = head.rule_text(rule)
+    question = str(item["question"] if rule == "a" else item["prompt"])
+    text = RULES[rule]
     system = {
-        "system": head.production,
-        "heavy": f"{head.production}\n\n{head.all_bodies}",
-    }.get(arm, head.without(rule))
+        "system": head.with_rule(rule),
+        "heavy": f"{head.with_rule(rule)}\n\n{head.all_bodies}",
+    }.get(arm, head.production)
     user = fence(question, text if arm == "fence" else "")
     rest: list[Message] = [{"role": "user", "content": user}, *memory_exchange()]
     if arm == "skill":
-        rest += skill_exchange("grounding" if rule == "r1" else "parallel-tool-calls", text)
-    if rule == "r1":
+        rest += skill_exchange("answer-format" if rule == "a" else "memory-first", text)
+    if rule == "a":
         rest += search_exchange(str(item["query"]), item["sources"])  # type: ignore[arg-type]
     return request(base, llama_model, system, rest)
 
 
 def score(rule: str, item: Mapping[str, object], result: Mapping[str, object]) -> dict[str, object]:
     """Score one reply against its rule."""
-    if rule == "r1":
-        content = str(result["content"])
+    if rule == "a":
         markers = [s["marker"] for s in item["sources"]]  # type: ignore[union-attr]
-        copied = [m for m in markers if m in content]
-        return {"copied": copied, "pass": len(copied) == len(markers), "any": bool(copied)}
-    n = len(result["tool_names"])  # type: ignore[arg-type]
-    return {"calls": n, "pass": n >= 3, "any": n >= 2}
+        lines = [ln.strip().strip("*_ ").lower() for ln in str(result["content"]).splitlines()]
+        lines = [ln for ln in lines if ln]
+        last = lines[-1] if lines else ""
+        listed = last.startswith("sources") and any(m.lower() in last for m in markers)
+        answered = result["finish_reason"] != "tool_calls"
+        return {
+            "answered": answered,
+            "pass": answered and listed,
+            "any": any(ln.startswith("sources") for ln in lines),
+        }
+    names = list(result["tool_names"])  # type: ignore[call-overload]
+    return {
+        "calls": names,
+        "pass": "search_memory" in names and "web_search" in names,
+        "any": "search_memory" in names,
+    }
+
+
+def answer(client: httpx.Client, url: str, req: Body, nonce: str) -> tuple[dict[str, object], int]:
+    """Call until the model answers: each further tool call gets "No further results"."""
+    result = call(client, url, with_nonce(req, nonce))
+    rounds = 0
+    while result["finish_reason"] == "tool_calls" and rounds < EXTRA_ROUNDS:
+        message = result["message"]
+        calls = message["tool_calls"]  # type: ignore[index]
+        results = [
+            {
+                "tool_call_id": c["id"],
+                "role": "tool",
+                "name": c["function"]["name"],
+                "content": "No further results for this query.",
+            }
+            for c in calls  # type: ignore[union-attr]
+        ]
+        req = {**req, "messages": [*req["messages"], message, *results]}  # type: ignore[misc]
+        result = call(client, url, with_nonce(req, nonce))
+        rounds += 1
+    return result, rounds
 
 
 def run_follow(args: argparse.Namespace, base: Mapping[str, object], head: Head) -> None:
@@ -330,7 +371,7 @@ def run_follow(args: argparse.Namespace, base: Mapping[str, object], head: Head)
     out = args.run_dir / "rows" / args.model_key / "m3.jsonl"
     seen = done(out, lambda r: (r["rule"], r["arm"], r["item"], r["draw"]))
     client = httpx.Client(timeout=900.0)
-    for rule in ("r1", "r2"):
+    for rule in ("a", "b"):
         for arm in M3_ARMS:
             nonce = f"fre1592-m3-{rule}-{arm}-{uuid.uuid4().hex[:8]}"
             for item in items[rule][: args.limit]:
@@ -338,7 +379,11 @@ def run_follow(args: argparse.Namespace, base: Mapping[str, object], head: Head)
                     if (rule, arm, item["id"], draw) in seen:
                         continue
                     req = m3_request(base, args.llama_model, head, arm, rule, item)
-                    result = call(client, args.url, with_nonce(req, nonce))
+                    if rule == "a":
+                        result, rounds = answer(client, args.url, req, nonce)
+                    else:
+                        result, rounds = call(client, args.url, with_nonce(req, nonce)), 0
+                    result.pop("message")
                     verdict = score(rule, item, result)
                     append_row(
                         out,
@@ -347,6 +392,7 @@ def run_follow(args: argparse.Namespace, base: Mapping[str, object], head: Head)
                             "arm": arm,
                             "item": item["id"],
                             "draw": draw,
+                            "extra_rounds": rounds,
                             **result,
                             **verdict,
                         },
@@ -401,7 +447,7 @@ def report(run_dir: Path) -> str:
                 "| Rule | Arm | n | pass | partial or better | median wall s |",
                 "|---|---|---:|---:|---:|---:|",
             ]
-            for rule in ("r1", "r2"):
+            for rule in ("a", "b"):
                 for arm in M3_ARMS:
                     rs = [r for r in rows if r["rule"] == rule and r["arm"] == arm]
                     if rs:

@@ -1,10 +1,11 @@
 # FRE-1592 M3 items. Every fact below is invented, so a reply can take it only from the
-# search results, never from the model's own knowledge.
+# search results, never from the model's own knowledge. The URLs are invented too, but look real:
+# in the first preflight, example.org URLs made the model search again instead of answering.
 #
-# r1 (grounding citation rule): the turn already holds one web_search call and its two
-# results, each with its citation marker. Score: the markers of `sources` that the reply copies.
-# r2 (parallel-calls rule): the first response of the turn. Score: the number of tool calls in
-# that one response. Every prompt needs three calls that do not depend on each other.
+# a (answer-format rule): the turn already holds two web_search calls and their results, each with
+# its citation marker. Score: the final answer ends with a Sources: line of those markers.
+# b (memory-first rule): plain web-fact questions. Score: the first response calls search_memory
+# and web_search together. Without the rule, the model calls only web_search.
 
 m2:
   # The skill body that M2 delivers in five ways, and the prompt of the measured turn.
@@ -13,86 +14,118 @@ m2:
   turn1_reply: "A sequence diagram shows the messages that parts of a system exchange, in time order."
   turn2: "Draw a sequence diagram of a login: the browser calls the API, the API checks the database, and the API returns a token."
 
-r1:
-  - id: r1-ferrolite
+a:
+  - id: a-ferrolite
     question: "What is the melting point of ferrolite, and who first described it?"
     query: "ferrolite melting point discovery"
     sources:
       - marker: "S1@4c1e9a7b20d3f581"
+        title: "materials-handbook.net — reference 1"
+        url: "https://www.materials-handbook.net/ref/1"
         text: "Ferrolite, a synthetic iron-boron ceramic, melts at 2,184 °C under one atmosphere."
       - marker: "S2@9b07d2e4a1c8f360"
+        title: "materials-handbook.net — reference 2"
+        url: "https://www.materials-handbook.net/ref/2"
         text: "Ferrolite was first described in 1997 by the metallurgist Hanne Volkmar at the Tallinn Institute of Materials."
-  - id: r1-kestrel-cli
+  - id: a-kestrel-cli
     question: "Which version of the Kestrel CLI added the --dry-plan flag, and what does the flag do?"
     query: "kestrel cli --dry-plan flag version"
     sources:
       - marker: "S1@e3a90b1f7c2d4658"
+        title: "kestrel-cli.dev — reference 1"
+        url: "https://www.kestrel-cli.dev/ref/1"
         text: "Kestrel CLI 4.7.0 release notes: added --dry-plan."
       - marker: "S2@1f6c8d3a0b9e2754"
+        title: "kestrel-cli.dev — reference 2"
+        url: "https://www.kestrel-cli.dev/ref/2"
         text: "The --dry-plan flag prints the resolved execution graph and exits without running any step."
-  - id: r1-lake-orvane
+  - id: a-lake-orvane
     question: "How deep is Lake Orvane, and in which country is it?"
     query: "Lake Orvane depth location"
     sources:
       - marker: "S1@7d2b4e9c1a0f3856"
+        title: "limnology-survey.eu — reference 1"
+        url: "https://www.limnology-survey.eu/ref/1"
         text: "Lake Orvane lies in the Jura foothills of eastern France."
       - marker: "S2@c8a1f0e2b7d39465"
+        title: "limnology-survey.eu — reference 2"
+        url: "https://www.limnology-survey.eu/ref/2"
         text: "A 2019 sonar survey measured Lake Orvane's maximum depth at 143 metres."
-  - id: r1-pellucid
+  - id: a-pellucid
     question: "What license does the Pellucid parser use, and what is its latest version?"
     query: "Pellucid parser license latest release"
     sources:
       - marker: "S1@2e9f7a1c4b8d0365"
+        title: "pellucid-parser.io — reference 1"
+        url: "https://www.pellucid-parser.io/ref/1"
         text: "Pellucid is distributed under the MPL-2.0 license."
       - marker: "S2@b4d0c6e1f9a27358"
+        title: "pellucid-parser.io — reference 2"
+        url: "https://www.pellucid-parser.io/ref/2"
         text: "Pellucid 3.12.1 is the latest release, published on 2026-08-30."
-  - id: r1-varn-bridge
+  - id: a-varn-bridge
     question: "When did the Varn Bridge open, and how long is its main span?"
     query: "Varn Bridge opening date main span"
     sources:
       - marker: "S1@5a3c9e0d2f1b7864"
+        title: "structurae-db.org — reference 1"
+        url: "https://www.structurae-db.org/ref/1"
         text: "The Varn Bridge opened to traffic on 14 May 2011."
       - marker: "S2@f1b8e2a7c0d43596"
+        title: "structurae-db.org — reference 2"
+        url: "https://www.structurae-db.org/ref/2"
         text: "The Varn Bridge's cable-stayed main span measures 612 metres."
-  - id: r1-quillfish
+  - id: a-quillfish
     question: "What does the quillfish eat, and how long does it live?"
     query: "quillfish diet lifespan"
     sources:
       - marker: "S1@0c7d1b9e3a2f6485"
+        title: "marine-species.info — reference 1"
+        url: "https://www.marine-species.info/ref/1"
         text: "The quillfish feeds mainly on juvenile krill and copepods."
       - marker: "S2@8e2a5f0c1d9b3746"
+        title: "marine-species.info — reference 2"
+        url: "https://www.marine-species.info/ref/2"
         text: "Tagged quillfish lived up to 11 years in the wild."
-  - id: r1-marlow-protocol
+  - id: a-marlow-protocol
     question: "What port does the Marlow protocol use by default, and which RFC defines it?"
     query: "Marlow protocol default port RFC"
     sources:
       - marker: "S1@a6f3c0b8e1d27594"
+        title: "netproto-registry.org — reference 1"
+        url: "https://www.netproto-registry.org/ref/1"
         text: "Marlow listens on TCP port 7341 by default."
       - marker: "S2@3d9e1a7f0c4b8265"
+        title: "netproto-registry.org — reference 2"
+        url: "https://www.netproto-registry.org/ref/2"
         text: "The Marlow protocol is specified in RFC 9876."
-  - id: r1-tessaly-award
+  - id: a-tessaly-award
     question: "Who won the 2025 Tessaly Award, and for which book?"
     query: "2025 Tessaly Award winner"
     sources:
       - marker: "S1@d0b2f8a3c7e15946"
+        title: "literary-prizes.news — reference 1"
+        url: "https://www.literary-prizes.news/ref/1"
         text: "The 2025 Tessaly Award went to the novelist Ilse Marchetti."
       - marker: "S2@6c1e9d4a0f2b7385"
+        title: "literary-prizes.news — reference 2"
+        url: "https://www.literary-prizes.news/ref/2"
         text: "Marchetti won the award for her novel 'The Salt Archive'."
 
-r2:
-  - id: r2-three-lookups-a
-    prompt: "Three things, please: the latest FastAPI release, what my memory holds about my running plan, and my open Linear issues about telemetry."
-  - id: r2-three-lookups-b
-    prompt: "Find the current Python release, search my notes for 'backup policy', and check my memory for anything about my dentist."
-  - id: r2-three-lookups-c
-    prompt: "Look up the latest Neo4j 5 release, list my Linear projects, and tell me where I am right now."
-  - id: r2-three-lookups-d
-    prompt: "I need the Pydantic v2 docs on validators, the weather in Lyon today, and anything I said before about my holiday plans."
-  - id: r2-three-lookups-e
-    prompt: "Check three things: what my memory says about my car, my Linear issues about the PWA, and the latest llama.cpp release."
-  - id: r2-three-lookups-f
-    prompt: "Search the web for the Elasticsearch 9 release date, search my notes for 'tax', and list my artifacts."
-  - id: r2-three-lookups-g
-    prompt: "Get me the httpx docs on timeouts, the latest Rust release, and my past conversations about the garden."
-  - id: r2-three-lookups-h
-    prompt: "What is my current location, what is the latest Debian release, and what does my memory hold about my sister?"
+b:
+  - id: b-fastapi
+    prompt: "What is the latest stable FastAPI release?"
+  - id: b-python
+    prompt: "Which Python version is the newest stable release today?"
+  - id: b-neo4j
+    prompt: "What is the current Neo4j 5 patch release?"
+  - id: b-llamacpp
+    prompt: "What changed in the most recent llama.cpp release?"
+  - id: b-debian
+    prompt: "When is the next Debian point release planned?"
+  - id: b-pydantic
+    prompt: "Is there a Pydantic 3 release yet?"
+  - id: b-elastic
+    prompt: "What is the latest Elasticsearch 9 minor version?"
+  - id: b-rust
+    prompt: "What is the newest stable Rust version?"

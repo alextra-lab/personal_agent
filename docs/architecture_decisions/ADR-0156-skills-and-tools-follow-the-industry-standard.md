@@ -1,6 +1,6 @@
 # ADR-0156: Skills and Tools Follow the Industry Standard — Agent Skills Folders Chosen by the Model, One Tool Contract, and One Permission Model That Asks the User
 
-**Status:** Accepted — the owner decided every item on 2026-10-10. Amended 2026-10-10 (FRE-1583), 2026-10-11 (FRE-1585) and 2026-10-12 (FRE-1591, FRE-1594); see Status Updates.
+**Status:** Accepted — the owner decided every item on 2026-10-10. Amended 2026-10-10 (FRE-1583), 2026-10-11 (FRE-1585) and 2026-10-12 (FRE-1591, and twice for FRE-1594); see Status Updates.
 **Date:** 2026-10-10
 **Deciders:** Owner (the directive, and an answer to each brief item, 2026-10-10), `master` (the commission, the production checks, the relay), `adr` seat at Opus 5.5 (author)
 **Tags:** skills, tools, permissions, approvals, workers, governance, evaluation
@@ -791,7 +791,7 @@ AC-F results are fresh A/B results. They are not compared with the FRE-1590 numb
   5. the provider accepts that request: it answers with HTTP 200, the response parses, and it holds non-empty text or a well-formed tool call. No judge is needed.
 
   *Fails if* fewer than 10 of 12 draws hold on the production primary. That is the floor of the skills that continue in FRE-1590 Part 1. The cloud primary is measured and reported, with no bound, because the production primary is local (`config/model_roles.yaml:55`). (T-B for the choice, T-D1 on the final build)
-- **AC-F3 — the cache cost is bounded on the production primary.** In llama.cpp timings, `cache_n` is the prompt tokens reused from the cache and `prompt_n` is the prompt tokens evaluated again, so a call's whole prompt is `cache_n + prompt_n` (`scripts/eval/fre1537/replay.py:192-236`). The **shortfall** of a call is `(cache_n + prompt_n of the previous call) - cache_n of this call`. A control session sends a request sequence that is byte for byte the same as the treatment's, except for the reveal under test: the synthetic `read_skill` result is the same, and only the reveal (the schema or the `tools` change) is left out. Each arm starts with a unique nonce, so neither arm reuses the other's cache. Its shortfall at the same step is the boundary cost of the chat template. A call whose `cache_n` is larger than `cache_n + prompt_n` of the previous call breaks the lineage, as the replay already checks (`replay.py:211-236`), and voids the pair. **Amended 2026-10-12 (FRE-1594):** on a hybrid primary, the shortfall baseline is the previous call's whole context, `cache_n + prompt_n + predicted_n`. A pair in which neither arm reused a token is not scored. See the amendment in Status Updates. *Fails if* the chosen form exceeds its bound, or a call has no timings. (T-B, T-D1)
+- **AC-F3 — the cache cost is bounded on the production primary.** In llama.cpp timings, `cache_n` is the prompt tokens reused from the cache and `prompt_n` is the prompt tokens evaluated again, so a call's whole prompt is `cache_n + prompt_n` (`scripts/eval/fre1537/replay.py:192-236`). The **shortfall** of a call is `(cache_n + prompt_n of the previous call) - cache_n of this call`. A control session sends a request sequence that is byte for byte the same as the treatment's, except for the reveal under test: the synthetic `read_skill` result is the same, and only the reveal (the schema or the `tools` change) is left out. Each arm starts with a unique nonce, so neither arm reuses the other's cache. Its shortfall at the same step is the boundary cost of the chat template. A call whose `cache_n` is larger than `cache_n + prompt_n` of the previous call breaks the lineage, as the replay already checks (`replay.py:211-236`), and voids the pair. **Amended twice on 2026-10-12 (FRE-1594):** the shortfall is `max(0, cache_n + prompt_n of the previous call - cache_n of this call)`, so reuse of generated tokens counts as 0. A pair is void only if `cache_n` is larger than the previous call's whole context, `cache_n + prompt_n + predicted_n`. A pair in which neither arm reused a token is not scored. See the two amendments in Status Updates. *Fails if* the chosen form exceeds its bound, or a call has no timings. (T-B, T-D1)
   - In the cache-safe form, the shortfall of the call after the reveal is no larger than the control's shortfall at the same step.
   - In the simple form, a session has at most one call for each revealed tool whose shortfall is larger than the control's at the same step.
   - For the cloud primary, T-B reports `cache_read_tokens` (`llm_client/telemetry.py:127`) for each form, with no bound.
@@ -838,5 +838,20 @@ On the first path, `cache_n` includes the generated tokens, so it is larger than
 - A pair is void if a call's `cache_n` is larger than that whole previous context, or if the provider rejected one of its calls.
 - A pair in which neither arm reused a token is not scored. A form whose only pairs at its scored steps are of this kind is `uninformative`, not a pass.
 - The bounds of the cache-safe and simple forms do not change.
+
+Implemented in `scripts/eval/fre1594/score.py` (PR #1270).
+
+### 2026-10-12 - Second amendment to AC-F3: the shortfall counts the previous prompt only (FRE-1594)
+**Changed By:** Owner (decision), `build2` seat (finding), `master` (recorded)
+**Reason:** the T-B dry draw (2026-10-12, 15:08:27–15:13:19Z) showed that the whole-context baseline of the first amendment is unfair to the control. The control sends the treatment's requests, so its call 2 carries the treatment's call-1 reply, not its own. The control can never continue from its live end state. It restores the checkpoint near the end of the previous prompt. The treatment continues from its own end state. The whole-context baseline therefore charged the control for generated tokens that it never had. In the dry draw, the cache-safe treatment at call 2 had a shortfall of 1 token, and the control had 108. The llama.cpp verbose log confirmed it: each control call 2 and 3 restored a checkpoint 4 tokens before the end of its previous prompt (tasks 160, 1038 and 1219). Each treatment call that followed its own reply continued from the live state.
+
+**Owner decision (2026-10-12, to master: "yes"):** count only the loss of the previous prompt.
+
+**The rule, replacing the shortfall line of the first amendment:**
+- The shortfall of a call is `max(0, cache_n + prompt_n of the previous call - cache_n of this call)`. Reuse of generated tokens counts as 0, not as void.
+- A pair is void if a call's `cache_n` is larger than the previous call's whole context, `cache_n + prompt_n + predicted_n`, or if the provider rejected one of its calls.
+- The no-reuse rule and the form bounds of the first amendment do not change.
+
+On the dry-draw timings, the cache-safe form at call 2 is 0 (treatment) against 4 (control). The simple form is 10,862 against 4 at call 2 (the `tools` change forces a full re-processing) and 0 against 4 at call 3.
 
 Implemented in `scripts/eval/fre1594/score.py` (PR #1270).

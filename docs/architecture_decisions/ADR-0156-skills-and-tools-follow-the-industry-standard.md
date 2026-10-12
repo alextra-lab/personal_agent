@@ -1,6 +1,6 @@
 # ADR-0156: Skills and Tools Follow the Industry Standard — Agent Skills Folders Chosen by the Model, One Tool Contract, and One Permission Model That Asks the User
 
-**Status:** Accepted — the owner decided every item on 2026-10-10. Implementation not started.
+**Status:** Accepted — the owner decided every item on 2026-10-10. Amended 2026-10-10 (FRE-1583), 2026-10-11 (FRE-1585) and 2026-10-12 (FRE-1591); see Status Updates.
 **Date:** 2026-10-10
 **Deciders:** Owner (the directive, and an answer to each brief item, 2026-10-10), `master` (the commission, the production checks, the relay), `adr` seat at Opus 5.5 (author)
 **Tags:** skills, tools, permissions, approvals, workers, governance, evaluation
@@ -77,7 +77,7 @@ At the PR gate, the owner answered two more points (FRE-1573, 2026-10-10 18:40 U
 
 ### D1 — Skill format and location (S1)
 
-1. Each skill is a folder: `docs/skills/<name>/SKILL.md`, with optional `scripts/`, `references/` and `assets/` (S1).
+1. Each skill is a folder: `docs/skills/<name>/SKILL.md`, with optional `scripts/`, `references/` and `assets/` (S1). **Amended 2026-10-12 (FRE-1591):** the folder moves to a top-level `skills/<name>/`, and a skill name states an objective. See the amendment in Status Updates.
 2. The frontmatter holds `name` and `description`, plus S1's optional `metadata` (a map of string to string). No other top-level field stays (D4).
 3. A CI test enforces the S1 rules on every skill:
    - `name`: 1–64 characters, lowercase letters, digits and hyphens, the same as the folder name;
@@ -147,7 +147,7 @@ The migration table gives the verdict for each file.
 ### D7 — The tool set (S4, S7)
 
 1. **An `edit` tool is added.** It replaces one exact string in one file. Zero matches or more than one match is an error that gives the count (S7: "ensure that there is exactly one match … or provide appropriate error messages"). It has the path governance of `write`. Evidence: 13 calls (G3 #6).
-2. **The primary gets `query_telemetry`.** The tool loses `worker_only=True` (`tools/telemetry_query.py:470`). Evidence: 42 primary calls of `bash` + `curl` against a stale skill (G3 #1a).
+2. **The primary gets `query_telemetry`.** The tool loses `worker_only=True` (`tools/telemetry_query.py:470`). Evidence: 42 primary calls of `bash` + `curl` against a stale skill (G3 #1a). **Amended 2026-10-12 (FRE-1591):** the tool splits into `search_logs` and `measure_model_latency`. The primary sees each one only after it loads a skill that provides it. See the amendment in Status Updates.
 3. **No new MCP server.** ADR-0028's tier order stays: native, then CLI with a skill, then MCP. We copy S8's tool shape, not its transport.
 4. **A narrow tool replaces a shell recipe** where the audit shows repeated shell work. `query_telemetry` (D7.2) is the first case. No other case is decided here.
 5. **The MCP copies of native tools are removed (owner, 2026-10-10).** `mcp_query-docs` and `mcp_resolve-library-id` copy `get_library_docs` (Context7), and `mcp_sequentialthinking` copies the `sequential-thinking` skill. S4 warns against overlapping tools.
@@ -560,3 +560,178 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
 - `probe_services.py` runs `psql` with a fixed argument list. The host, port, user and database come from the environment, not from an argument. The audit test sees the spawn but not what `psql` does inside.
 - `cypher.py` sends model-written Cypher to Neo4j in a read transaction. It can read any node of the graph. That is its purpose.
 - A command before the script in a pipeline is judged by its own rule. The scripts only filter and print their input.
+
+### 2026-10-12 - Amendment to D1, D5, D7 and D9: skills named by objective in a top-level folder, and tools that their skill reveals (FRE-1591)
+**Changed By:** Owner (decisions), `adr` seat (author), `master` (the location question and its research)
+**Reason:** the telemetry skills and the tool are named after products (Elasticsearch, Tempo) or after the word "telemetry", and the tool and the skills cover the same tasks. The owner, on FRE-1591: "They specify a product - not an objective. Only "telemetry" - this is a word game and we have muddied the water." A second owner question, relayed by master on 2026-10-12: "why are skills stored in docs/? They should have their own top level directory."
+
+#### The evidence
+
+- **The tool takes the skill's work.** FRE-1590 Part 1 (24 tools, 10 skills): `query-elasticsearch` loaded on 2 of 12 draws on Flash-Next and 1 of 12 on Gemma. On every miss, the first call was `query_telemetry`. Scenarios #0–#2 of that skill are tasks that the tool does alone, so the model's choice was right and the scorer counted it as a miss. `query-tempo` #0 (latency over a window) is the same case. Source: `docs/research/2026-10-12-fre-1590-skill-test-qwen-gemma.md`, F1 and F2.
+- **The model mixes up the tool and the skills.** The only unknown-skill request in production (`missing_skill_requested`, 2026-10-10 12:17:56Z) asked for a skill named `query-telemetry`, which is the tool's name. Captain's Log reflections invent `telemetry-analyzer` (7 times), `logs-analyzer` (3) and `telemetry-validator`.
+- **The tool description is in every request.** It has 3,472 characters, about 870 tokens at the repository's estimate of 4 characters per token. One catalog line costs 50–100 tokens (S2).
+- **Production use is small.** Since the D2 loader went live on 2026-10-10, production loaded skills 6 times (`read_skill_invoked`: `infrastructure-health` 2, `query-elasticsearch` 2, `self-telemetry` 2). It called `query_telemetry` 116 times in 6 traces (`tool_call_started`, 2026-10-10 to 2026-10-12).
+- **The workers hold the tool, not `bash`.** The `general` worker holds `query_telemetry` (FRE-1564, owner, "1 a"), and neither worker type holds `bash` (`orchestrator/worker_types.py:317-332`). Workers see no skill that needs `bash` (D9.1).
+
+#### Added standards
+
+- **S9 — Anthropic, "Skills explained":** https://claude.com/resources/articles/skills-explained (accessed 2026-10-12). "MCP connects Claude to data; Skills teach Claude what to do with that data."
+- **S10 — Claude Code subagents:** https://code.claude.com/docs/en/sub-agents (accessed 2026-10-12).
+- **S11 — the `anthropics/skills` repository:** https://github.com/anthropics/skills (listed with the GitHub API on 2026-10-12). It holds its skills in a top-level `skills/` folder.
+- **S12 — Anthropic tool search tool:** https://platform.claude.com/docs/agents-and-tools/tool-use/tool-search-tool and https://www.anthropic.com/engineering/advanced-tool-use (accessed 2026-10-12). A tool marked `defer_loading: true` is left out of the rendered tools, and its definition is expanded inline in the conversation when it is found, so the cached prefix is kept. This is an Anthropic API feature. A provider that takes tools only as the list at the start of the prompt has no such form (pydantic-ai issue 3590).
+
+#### Owner decisions (2026-10-12, this seat)
+
+1. The runtime skills move to a top-level `skills/` folder, in a ticket of its own that goes first: "Follow your recommendations", and "yes" to 3 and 4.
+2. A top-level `agents/` folder is reserved for worker definitions. Nothing moves now.
+3. Each name states an objective. `neo4j-direct` is renamed too: "rename approved".
+4. The telemetry tools stay native. The primary sees a tool only after it loads a skill that provides the tool (W4 below). The `general` worker keeps the tools. A measurement ticket goes first, and W3 is the written fallback: "yes".
+
+#### A1 — Where skills live (amends D1.1)
+
+1. The agent's runtime skills are folders under a top-level `skills/<name>/`. `docs/skills/` no longer holds a skill.
+2. **Why.**
+   - The standard does not fix a location. S2: "the Agent Skills specification does not mandate where skill directories live (it only defines what goes inside them)". For an agent in a container, S2 says: "Built-in skills can be packaged as static assets within the agent's deployment artifact". That is our case: `Dockerfile.gateway:71` copies the skills into the image.
+   - A skill is runtime input that holds reviewed code. The permission rules name its script paths (`governance/permissions.py:100`), and `write` and `edit` refuse its folder (`config/governance/tools.yaml:339`). A folder named `docs/` hides that a change in it is a code change.
+   - S11 keeps its skills in a top-level `skills/` folder.
+   - No coding agent scans a top-level `skills/` folder. Claude Code reads `.claude/skills/` and the `skills/` folder of an installed plugin. This repository is not a plugin.
+3. **The security paths move in one change.** These change together, with their tests, in one PR:
+   - `SKILLS_DIR` (`orchestrator/skills.py:30`);
+   - the skill-script path pattern (`governance/permissions.py:100`) and the `/app/<path>` form of FRE-1589;
+   - every skill-script rule (`config/governance/permissions.yaml`);
+   - the forbidden path (`config/governance/tools.yaml:339`), which becomes `/app/skills/**`;
+   - `Dockerfile.gateway:71`;
+   - the `base_dir` that `read_skill` returns.
+4. Research notes, plans and earlier ADRs keep the old path, because they record what was true at the time.
+5. `docs/external-skills/` stays. Seshat does not load those skills. They are documentation for other agents.
+
+#### A2 — Where worker definitions will live (reservation, amends D9)
+
+1. A worker type, when it gets a file, gets a top-level `agents/<name>.md` file in the S10 format:
+   - the frontmatter holds `name`, `description`, `tools`, `model` and `skills`;
+   - the body is the worker's prompt block.
+2. The governance keeps its authority. When the gateway loads an agent file, it refuses any tool that `sub_agent_tools` (`config/governance/tools.yaml`) does not grant to that type.
+3. **Nothing moves now.** The worker types stay in `orchestrator/worker_types.py` until a new worker type is created.
+4. `.claude/agents/` stays for the dev-seat subagents (`linear-gate`, `spec-compliance-reviewer`).
+
+#### A3 — Names state an objective (amends D5)
+
+1. A skill name or a tool name states what the user wants to find out or do.
+   - It may name the thing that the user works with, as S3's own examples do (`processing-pdfs`). So `mermaid-diagrams` stays.
+   - It never names the backend that stores the data: `elasticsearch`, `es`, `tempo`, `neo4j`, `postgres`, `redis`. It never uses the word `telemetry`.
+   - Skills use the noun-phrase form, which S3 accepts. The catalog already uses it (`system-metrics`).
+2. Each description has a "Not for…" line that names the neighbouring skill or tool by its exact name.
+3. The D1 validator enforces both rules, with a seeded failing case for each.
+
+#### A4 — The skills of the telemetry area, and `graph-inspection` (amends D5)
+
+| New skill | Objective | Was | Tool that it reveals (A5) |
+|---|---|---|---|
+| `log-search` | Count, break down or find log events over a window. Which indices and fields exist, and searches past the tool's limits (more than 50 hits, more than 30 days, ES\|QL) | `query-elasticsearch` | `search_logs` |
+| `model-latency` | How slow the model calls are over a window, by role or model, and the prefill and decode time of the local server | `query-tempo` Step 1 | `measure_model_latency` |
+| `turn-explanation` | What one turn did, and why it was slow or large: the call timeline, the spans of one trace, the browser events, the inference-server log | `turn-forensics`, `query-tempo` Steps 2–3 | `search_logs` |
+| `spend-and-tokens` | Spend, token totals, prompt-cache hit rate and budget use | `self-telemetry` Patterns 1–3, 5 | `search_logs` |
+| `interaction-outcomes` | How recent interactions ended, and the Captain's Log reflections and insights | `self-telemetry` Pattern 4 | — |
+| `service-health` | Whether a service or a pipeline is healthy: Postgres, Elasticsearch, Neo4j, Redis, Tempo status, and the monitor indices | `infrastructure-health`, `query-tempo` status | `search_logs` |
+| `graph-inspection` | The structure and exact facts of the knowledge graph: counts, labels, schema, creation and last-seen times | `neo4j-direct` | — |
+
+1. The names `query-elasticsearch`, `query-tempo`, `self-telemetry`, `turn-forensics`, `infrastructure-health` and `neo4j-direct` leave the catalog.
+2. **Two "Not for…" lines, as examples:**
+   - `turn-explanation`: "Not for latency over a time window. The `model-latency` skill gives that."
+   - `graph-inspection`: "Not for what the system knows about a topic. `search_memory` gives that."
+3. **Each skill's scenarios test what only the skill knows** (S3: "Build evaluations first"). The scenarios of `query-elasticsearch` #0–#2 test tasks that the tool does alone, so they are rewritten.
+4. **The FRE-1590 text defects are fixed in the same rewrite:**
+   - `turn-explanation` says that `turn_status.context_tokens` is not a queryable field, and starts with the `input_tokens` ladder.
+   - `spend-and-tokens` gives the cache hit rate for each provider: `cached / input` where the input includes the cached tokens (llama.cpp), and `cached / (input + cached)` where it does not.
+   - `graph-inspection` names the facts that only Cypher reads.
+   - `service-health` scenario #2 needs the probe script.
+
+#### A5 — A tool that its skill reveals (W4; amends D7.2 and D7.4)
+
+1. **`query_telemetry` splits by objective** into `search_logs` (the `search` and `count` actions) and `measure_model_latency` (the `latency` action). The code already holds two separate argument sets under one `action` switch (`_ES_ONLY_ARGS` and `_TEMPO_ONLY_ARGS`, `tools/telemetry_query.py:296-297`). The allowlists, the bounds and the D6 error codes do not change.
+2. **The primary sees a skill-provided tool only after it loads a skill that provides it.**
+   - A skill names the tools that it provides in `metadata.provides-tools`, a comma-separated list (S1 allows `metadata` as a map of strings).
+   - Before the load, the tool is absent from the primary's tool definitions. A call to it is refused with a D6 error that names the skill to load.
+   - After the load, the tool stays available for the rest of the session.
+   - The mode policy and the D8 rules apply to the tool as before.
+3. **The workers do not change.** The `general` worker holds both tools in its closed tool list, as it holds `query_telemetry` today (FRE-1564).
+4. **Why W4.**
+   - One implementation, one D6 contract and one security boundary. The primary keeps typed arguments.
+   - The primary has one way in for each objective, so the overlap that gave 2 of 12 cannot happen.
+   - The tool description leaves every request that does not need it.
+   - D7.2's evidence holds: no hand-written curl recipe comes back.
+5. **Which form of the reveal.** Tools render first in the prompt. So adding a tool to the `tools` array discards the cached prompt. Measured on 2026-09-10: when the tools changed, 1,832 tokens were prefilled again in 4.59 s instead of 0.64 s. The ticket that measures this (T-B below) chooses between two forms:
+   - **The cache-safe form (preferred):** the `read_skill` result carries the tool's schema, and the `tools` array does not change. This is the pattern of S12. It is not known whether llama.cpp turns a call to a tool that is not in the request's `tools` array into a tool call. T-B measures it.
+   - **The simple form:** the tool is added to the `tools` array at the load, and it stays for the session. The cost is one full re-prefill for each tool, once per session.
+6. **The fallback is W3.** If T-B shows that the model does not call the revealed tool (AC-F2), W3 applies:
+   - the primary uses skill scripts;
+   - the `general` worker keeps the typed tools;
+   - the Codex conditions below become W3's acceptance criteria.
+
+#### Alternatives considered for this amendment
+
+- **Keep `query_telemetry` visible, and give no skill to a task that the tool does alone.** This was the first brief on FRE-1591. Rejected: the primary keeps two ways in for one objective, and every request keeps paying for the tool description.
+- **W1 — remove the tool, and workers lose telemetry.** Rejected: it reverses the FRE-1564 owner grant.
+- **W2 — give the `general` worker `bash`, limited to the reviewed scripts.** Rejected, from the Codex review of 2026-10-12:
+  - Permission rules do not depend on the principal. `worker` is shown on the card but is not used to select a rule (`tools/executor.py:395`).
+  - So a grant of `bash` gives the worker every global allow: `cat`, `grep`, `docker logs` and raw `_search`, `_count` and ES|QL reads (`config/governance/permissions.yaml:95-172`). Those reads bypass the tool's field allowlist and its exclusion of conversation text.
+  - A skill-script rule is exact only in its first two words. The trailing `*` allows any literal arguments (`governance/permissions.py:456-482`).
+- **W3 — the primary runs the telemetry code as skill scripts, and the worker keeps the tool.** This was the seat's recommendation before the Codex review. Rejected as the first choice, kept as the fallback (A5.6). Its conditions, from Codex:
+  - a shared core that holds the allowlists, the validators, the request builders, the result shaping, the bounds and the error codes, not only the validators;
+  - scripts that take structured values and no path, URL, subprocess or raw request body;
+  - tests that prove the tool and the script give the same results;
+  - a test in the built image that runs each script as `nobody`.
+
+  Also, `telemetry_query.py` loads the settings when it is imported (`tools/telemetry_query.py:43`), so a script must not import it directly.
+- **Other locations for the skills (A1).** Rejected:
+  - Keep `docs/skills/`: the name hides code that the permission model governs. D1 kept this path without a reason, and the reason was history (ADR-0028 phase 4).
+  - `config/skills/`: `config/` holds the settings of each deployment. Skills are reviewed and released with the code.
+  - `.agents/skills/`: Codex, Cursor, Copilot and Goose scan it. So they load the runtime skills into coding sessions on this repository.
+  - `.claude/skills/`: it holds the dev-seat skills. A shared folder makes every seat load the runtime catalog.
+  - `src/personal_agent/skills/`: the model reads skills and does not import them. Under `src/`, the adr and explore seats can no longer edit skills.
+
+#### Verification / Acceptance Criteria of this amendment
+
+Each criterion names its check. Master checks AC-L1 to AC-N2 from the PRs. AC-F1 to AC-F4 need eval runs, and each run starts only after the owner's OK on its preflight numbers.
+
+- **AC-L1 — the skills load from `skills/`.** In the built gateway image, the catalog lists every skill from `/app/skills/`, and `docs/skills/` holds no `SKILL.md`. *Fails if* the catalog differs from the catalog before the move (apart from A4 renames), or a skill loads from `docs/`. Check: the D1 validator, and the catalog of a request captured from the built image.
+- **AC-L2 — the security paths moved with the skills.** Tests show three refusals. *Fails if* any one of them is accepted:
+  - a skill-script rule that names `docs/skills/<s>/scripts/<f>.py` is refused when the rules load;
+  - a `write` and an `edit` to `/app/skills/<s>/SKILL.md` are refused;
+  - `python3 /app/skills/<s>/scripts/<f>.py` matches its rule only when the bash tool starts in `/app`.
+- **AC-N1 — no backend name.** The D1 validator fails on a seeded skill named `query-elasticsearch` and on a seeded tool named `query_telemetry`, and it passes on the real catalog and tool list. *Fails if* either seeded name passes, or a real name holds a backend word or `telemetry`.
+- **AC-N2 — "Not for…" names a real neighbour.** The validator fails on a seeded description whose "Not for…" line names a skill that does not exist. *Fails if* the seeded case passes, or a description in the area has no "Not for…" line.
+- **AC-R1 — the primary does not see a skill-provided tool before the load.** A captured first primary request (FRE-1537 stub capture) holds neither `search_logs` nor `measure_model_latency`. A captured `general` worker request holds both. *Fails if* either capture differs.
+- **AC-R2 — a call before the load is refused, and a call after the load runs.** An executor test: a call to `search_logs` with no loaded skill returns the D6 error that names `log-search`. The same call after `read_skill(name="log-search")` in the same session returns a result. *Fails if* the first call runs or the second call is refused.
+- **AC-R3 — every provided tool has a provider.** The validator fails on a seeded `provides-tools` value that names an unknown tool, and on a seeded skill-provided tool that no skill provides. *Fails if* either seeded case passes.
+- **AC-F1 — the prompt is smaller.** The first primary request, tokenized by the llama.cpp server of the production primary, is at least 600 tokens smaller than the capture before T-C1. *Fails if* the drop is below 600 tokens.
+- **AC-F2 — the model calls the revealed tool.** Flash-Next, in a two-step replay: after `read_skill` of `log-search` or `model-latency`, the next call is the revealed tool with valid arguments on at least 10 of 12 draws. *Fails if* it is lower. This criterion decides W4 or the W3 fallback in T-B, and it is checked again on the final build in T-D.
+- **AC-F3 — the cache cost is bounded.**
+  - In the cache-safe form, the call after a reveal reads at least 90% of its prompt from the cache (llama.cpp `timings.cache_n` against `prompt_n`).
+  - In the simple form, a session has at most one call with a cache miss for each revealed tool.
+
+  *Fails if* the chosen form exceeds its bound.
+- **AC-F4 — the skills are chosen and they help.** The FRE-1590 Part 1 re-run on Flash-Next, with the rewritten scenarios:
+  - each of the seven skills in A4 is the first call on at least 10 of 12 draws;
+  - no skill of the area loads where another skill of the area was expected;
+  - 0 of 60 skill loads on the no-skill prompts.
+
+  The Part 2 re-run: with skills, each area scenario scores at least what it scores without skills. Today `turn-forensics` #1 scores FAIL with the skill and PARTIAL without it. *Fails if* any of these bounds is missed.
+
+#### Tickets
+
+| Ticket | Delivers | Blocked by |
+|---|---|---|
+| T-A | A1: the move to `skills/`, with the security paths and their tests (AC-L1, AC-L2) | — |
+| T-B | The reveal measurement: a two-step replay against llama.cpp and one cloud primary. It records the cache figures of each form and the model's second call. It chooses the form, or W3 (AC-F2, AC-F3 on the measurement) | — |
+| T-C1 | A5: the tool split, the reveal mechanism in the chosen form, and `provides-tools` on the current skills (AC-R1, AC-R2, AC-R3, AC-F1) | T-A, T-B |
+| T-C2 | A3 and A4: the renames and splits, the validator rules, the rewritten `evals.yaml` files, the fixes of A4.4 (AC-N1, AC-N2) | T-C1 |
+| T-D | The FRE-1590 re-run on Flash-Next: Part 1 with the second step, then Part 2 (AC-F2 on the final build, AC-F4) | T-C2 |
+
+A2 needs no ticket now. Its load check is written by the ticket that creates the first `agents/` file.
+
+If T-B chooses W3, T-C1 is replaced by a W3 ticket with the four Codex conditions as its criteria. That ticket is filed then, not now.
+
+#### Codex review rounds
+
+Logged in the PR description.

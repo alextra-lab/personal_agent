@@ -661,10 +661,16 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
 
    Grounding keeps both tools non-citable, as it keeps `query_telemetry` (`tests/personal_agent/grounding/test_source_registry.py:275`). A test asserts this for each new tool.
 3. **A skill names the tools that it reveals** in `metadata.provides-tools`, a comma-separated list. S1 allows `metadata` as a map of strings. A skill-provided tool is marked as such in its `ToolDefinition`.
-4. **The reveal lasts for the session, and the session records it.**
-   - The record is a validated set of tool names in `sessions.metadata` (`docker/postgres/init.sql:14`), the persisted JSONB column. It is not `ExecutionContext.loaded_skills`, which holds one turn only (`orchestrator/types.py:570-575`).
-   - Each new `ExecutionContext` reads the record, so the reveal survives a new user turn, a mid-turn compaction, a pause and resume, and a gateway restart.
-   - A name in the record that is no longer a skill-provided tool, for example after a rename, is dropped when the record is read, with a log event.
+4. **The reveal lasts for the session, and only the server writes its record.**
+   - The record is a new column `sessions.revealed_tools` (`TEXT[] NOT NULL DEFAULT '{}'`). It is not a key in `sessions.metadata`: a client can replace that column through `SessionUpdate.metadata` and the PATCH endpoint (`service/models.py:70-73`, `service/app.py:2102-2112`, `service/repositories/session_repository.py:117-138`). It is not `ExecutionContext.loaded_skills` either, which holds one turn only (`orchestrator/types.py:570-575`).
+   - `SessionUpdate` has no field for the column, and the PATCH endpoint cannot set or clear it.
+   - The repository gets two methods. `add_revealed_tools(session_id, names)` adds names as a set union in one `UPDATE` statement, so two concurrent reveals both persist. `load_revealed_tools(session_id)` reads the set.
+   - **The seam:** `step_init` loads the set through the repository into a new `ExecutionContext.revealed_tools` field. The service does not pass session state to the orchestrator today (`service/app.py:506-519`, `orchestrator/orchestrator.py:118-133`), so the load happens in the executor, as other repository reads do (`orchestrator/executor.py:485-601`).
+   - **A load error fails closed.** The set is empty for that turn, and a log event names the error. A skill loaded in that turn still reveals its tools for that turn.
+   - **A turn reads the record once,** at `step_init`. A reveal in another turn of the same session that runs at the same time becomes visible at this session's next turn.
+   - So the reveal survives a new user turn, a mid-turn compaction, a pause and resume, and a gateway restart.
+   - A name in the record that is no longer a skill-provided tool, for example after a rename, is ignored when the record is read, with a log event.
+   - The column is a schema change: `docker/postgres/init.sql` and a file in `docker/postgres/migrations/`, run as the `agent` superuser through `AGENT_DATABASE_ADMIN_URL`. Its deploy class is a Postgres migration.
    - Workers do not read the record. The `general` worker holds both tools in its closed tool list (`orchestrator/worker_types.py:317-332`), as it holds `query_telemetry` today.
 5. **The order of the checks for a call to a skill-provided tool:**
    1. the tool exists in the registry, and its arguments parse;
@@ -682,7 +688,11 @@ These are the ADR's own criteria. They are adjudicated on FRE-1573 after T1–T9
    - The tool definitions leave every request that does not need them.
    - D7.2's evidence holds: no hand-written curl recipe comes back.
 8. **Which form of the reveal.** Tools render first in the prompt. So adding a tool to the `tools` array discards the cached prompt. Measured on 2026-09-10: when the tools changed, 1,832 tokens were prefilled again in 4.59 s instead of 0.64 s. T-B chooses between two forms, for each provider dialect, as ADR-0149 D6 does for `tool_choice`:
-   - **The cache-safe form (preferred):** the `tools` array does not change. The schema of a revealed tool reaches the model in the conversation: in the `read_skill` result of the reveal turn, and in the `<turn_context>` block of each later turn (`orchestrator/executor.py:1450`), which comes after the cached prefix. This is the pattern of S12. It is not known whether llama.cpp turns a call to a tool that is not in the request's `tools` array into a tool call, or accepts the next request, whose transcript holds a call and a result for that tool. T-B measures both.
+   - **The cache-safe form (preferred):** the `tools` array does not change. The schema of a revealed tool reaches the model in the conversation:
+     - in the reveal turn, in the successful `read_skill` result. That turn's `<turn_context>` block is already built, because the block is built once per user turn (`orchestrator/types.py:578-583`, `orchestrator/executor.py:6996-7036`);
+     - in each later turn of the session, once, in that turn's `<turn_context>` block, which comes after the cached prefix (`orchestrator/executor.py:6968-6977`).
+
+     The session history holds the raw user text, not the block (`service/app.py:421-428`). So the schemas of earlier turns do not pile up in the history. The cost is the schema tokens of the revealed tools in each later turn. This is the pattern of S12. It is not known whether llama.cpp turns a call to a tool that is not in the request's `tools` array into a tool call, or accepts the next request, whose transcript holds a call and a result for that tool. T-B measures both.
    - **The simple form:** the tool is added to the `tools` array at the reveal and stays for the session. The cost is one full re-prefill for each reveal, once per session.
 9. **The fallback is W3.** If T-B shows that the full tool loop fails in both forms on the production primary (AC-F2), W3 applies:
    - the primary uses skill scripts;
@@ -739,7 +749,7 @@ AC-F results are fresh A/B results. They are not compared with the FRE-1590 numb
   - A `write` and an `edit` to `/app/skills/<s>/SKILL.md` are refused.
   - `python3 /app/skills/<s>/scripts/<f>.py` matches its rule only when the bash tool starts in `/app`.
   - A change to a file under `skills/` changes the gateway freshness fingerprint (`scripts/eval/gateway_freshness.py:32-38`).
-  - A CI check fails if `docs/skills` appears in `src/`, `config/`, `scripts/`, `tests/`, a `Dockerfile*`, a `docker-compose*` file or a live README, outside a listed set of historical files and seeded refusal fixtures. A seeded file outside the list makes the check fail.
+  - A CI check fails if `docs/skills` appears in `src/`, `config/`, `scripts/`, `tests/`, `skills/`, `.env.example`, a `Dockerfile*`, a `docker-compose*` file, or any file under `docs/` other than `docs/architecture_decisions/`, `docs/research/` and `docs/superpowers/plans/`. Each exception outside those three folders is listed by exact file name, for example a seeded refusal fixture. A seeded file outside the list makes the check fail. Today this scope finds, among others, `.env.example:855`, `docs/guides/TELEMETRY_ELASTICSEARCH_INTEGRATION.md:187`, `docs/specs/PROMPT_MANAGEMENT_SPEC.md:43` and `docs/reference/TOOL_INTEGRATION_GUIDE.md:240-251`.
 - **AC-N1 — no backend word in a name.** The validator splits each skill name and each tool name on `-` and `_`. It fails if a part equals `elasticsearch`, `es`, `tempo`, `neo4j`, `postgres`, `redis` or `telemetry`. *Fails if* the seeded names `query-elasticsearch` and `query_telemetry` pass, or a real name fails. This proves the lexical rule only. The owner approved the names themselves on FRE-1591. (T-C2)
 - **AC-N2 — each "Not for…" line names something real.** For every skill, and every skill-provided tool description, the validator checks that a "Not for…" line exists and that each skill or tool it names exists. *Fails if* a seeded line that names a missing skill passes. This is structural. AC-F4 measures the routing. (T-C2)
 - **AC-R1 — the primary sees a skill-provided tool only after the reveal.** A captured first primary request holds neither `search_logs` nor `measure_model_latency`. A captured `general` worker request holds both. The FRE-1537 capture helper selects only primary requests today (`scripts/eval/fre1537/capture.py:81`), so T-C2 adds the worker capture. *Fails if* either capture differs. (T-C2)
@@ -749,26 +759,40 @@ AC-F results are fresh A/B results. They are not compared with the FRE-1590 numb
   - A call in the next round after the reveal runs.
   - In a second user turn of the same session, the tool is available without a new `read_skill`. The same holds in a new gateway process that reads the session from Postgres.
   - After a change to a mode that does not allow the tool, the tool is absent and a call to it is refused, although the session record still names it.
+  - A PATCH of the session cannot set or clear `revealed_tools`, and a PATCH of `metadata` during a reveal leaves the record as it is.
+  - Two reveals of different tools in two concurrent turns of one session both persist.
+  - A failed load of the record gives an empty set and a log event, and the turn runs.
+- **AC-R4 — the cache-safe form puts the schema where A5.8 says.** Structural tests, required only if T-B chooses the cache-safe form. *Fails if* any case differs. (T-C1)
+  - The successful `read_skill` result of a providing skill holds the schemas of its tools.
+  - The reveal turn's existing `<turn_context>` block holds no schema.
+  - Each later turn's block holds the schema of each revealed tool once.
+  - The `tools` array is the same before and after the reveal.
+  - A mid-turn compression keeps the `read_skill` result that holds the schema (D2.4).
 - **AC-R3 — the provider rules hold.** The validator fails on each seeded case. *Fails if* any seeded case passes. (T-C1 for the mechanism, T-C2 for the real skills)
   - a `provides-tools` value that names an unknown tool, or a tool that is not skill-provided;
   - a skill-provided tool that no skill provides;
   - a skill that a principal cannot see (filtered by `requires-tools`, D9.1) does not reveal its tools to that principal.
-- **AC-F1 — the prompt is smaller by about the tool definitions.** The same captured first primary request is replayed against the production primary at the commit before T-C2 and at the commit after it. The drop in `prompt_n` (llama.cpp generation usage) is at least 80% of the `prompt_n` difference between that request with the `query_telemetry` definition and the same request without it. The 20% margin covers the catalog lines that A4 adds (about 100 tokens against about 870, S2). *Fails if* the drop is below 80%. (T-D1)
+- **AC-F1 — the prompt is smaller by about the tool definition.** Three request bodies, each hashed:
+  - `B`: the first primary request captured at the commit before T-C2;
+  - `B-minus`: `B` with only the one `query_telemetry` definition removed, byte for byte the same otherwise;
+  - `A`: the first primary request captured at the commit after T-C2, for the same scenario and settings.
+
+  Each body is sent to the production primary with an empty cache. Its token count is `cache_n + prompt_n` from the llama.cpp timings, and `cache_n` must be 0. The test requires `tokens(B) > tokens(B-minus)`, and then `tokens(B) - tokens(A) >= 0.8 × (tokens(B) - tokens(B-minus))`. The 20% margin covers the catalog lines that A4 adds (about 100 tokens against about 870, S2). *Fails if* a body, the model or the chat template differs in any way other than these, or the drop is below 80%. (T-D1)
 - **AC-F2 — the full tool loop works after a reveal.** The population is 4 prompts (2 for `log-search`, 2 for `model-latency`) × 3 draws = 12, for each form and each provider. A draw counts only if all five steps hold:
   1. the model loads the skill;
   2. it emits the revealed call with valid arguments;
   3. the call is authorized and runs;
   4. its result goes back to the model;
-  5. the provider accepts that request and the model gives a valid next response.
+  5. the provider accepts that request: it answers with HTTP 200, the response parses, and it holds non-empty text or a well-formed tool call. No judge is needed.
 
   *Fails if* fewer than 10 of 12 draws hold on the production primary. That is the floor of the skills that continue in FRE-1590 Part 1. The cloud primary is measured and reported, with no bound, because the production primary is local (`config/model_roles.yaml:55`). (T-B for the choice, T-D1 on the final build)
-- **AC-F3 — the cache cost is bounded on the production primary.** *Fails if* the chosen form exceeds its bound. (T-B, T-D1)
-  - In the cache-safe form, the call after the reveal reuses the whole prompt of the call before it: its `cache_n` is at least the `prompt_n` of that earlier call.
-  - In the simple form, a session has at most one call for each revealed tool whose `cache_n` is below the `prompt_n` of the previous call, apart from the first call of the session.
+- **AC-F3 — the cache cost is bounded on the production primary.** In llama.cpp timings, `cache_n` is the prompt tokens reused from the cache and `prompt_n` is the prompt tokens evaluated again, so a call's whole prompt is `cache_n + prompt_n` (`scripts/eval/fre1537/replay.py:192-236`). The **shortfall** of a call is `(cache_n + prompt_n of the previous call) - cache_n of this call`. A control session runs the same transcript with no reveal, and its shortfall at the same step is the boundary cost of the chat template. *Fails if* the chosen form exceeds its bound, or a call has no timings. (T-B, T-D1)
+  - In the cache-safe form, the shortfall of the call after the reveal is no larger than the control's shortfall at the same step.
+  - In the simple form, a session has at most one call for each revealed tool whose shortfall is larger than the control's at the same step.
   - For the cloud primary, T-B reports `cache_read_tokens` (`llm_client/telemetry.py:127`) for each form, with no bound.
 - **AC-F4 — the skills are chosen, and they help.** *Fails if* any bound is missed.
   - **Routing (T-D1, Part 1 with the second step).** Each of the seven skills in A4 is the first call on at least 10 of 12 draws (4 scenarios × 3 draws). No skill of the area loads where another skill of the area was expected. 0 of 60 skill loads on the no-skill prompts.
-  - **Benefit (T-D2, Part 2).** A fresh A/B on the pinned scenarios. The control arm is today's design: the tools are visible and no skill is loaded. Two judges, blind to the arm, score each reply against the scenario's `expect` text, as FRE-1590 F3 did. With skills, each area scenario scores at least what it scores in the control arm. Today `turn-forensics` #1 scores FAIL with the skill and PARTIAL without it.
+  - **Benefit (T-D2, Part 2).** A fresh A/B on the pinned scenarios. The control arm is today's design: the tools are visible and no skill is loaded. Two judges, blind to the arm, label each reply PASS, PARTIAL or FAIL against the scenario's `expect` text, as FRE-1590 F3 did. PASS is 2 points, PARTIAL 1 and FAIL 0. An arm's score on a scenario is the sum of both judges' points. When the two judges give one reply PASS and FAIL, a third judge, also blind, labels it and replaces the lower label. With skills, each area scenario scores at least what it scores in the control arm. Today `turn-forensics` #1 scores FAIL with the skill and PARTIAL without it.
 
 #### Tickets
 
@@ -776,7 +800,7 @@ AC-F results are fresh A/B results. They are not compared with the FRE-1590 numb
 |---|---|---|
 | T-A | A1: the move to `skills/`, every path in A1.3, the live documents, and the CI check for the old path (AC-L1, AC-L2) | — |
 | T-B | The reveal spike, self-contained. It uses a synthetic `read_skill` result, the two experimental tool definitions and an authorization shim. It does not depend on T-C1 or T-C2. It runs the full five-step loop on the production primary and on one cloud primary, for both forms. Its report names the form for each dialect, or W3, and it is the specification input of T-C1 (AC-F2, AC-F3 on the spike) | — |
-| T-C1 | A5.3–A5.6: the reveal mechanism and its session record, in the form that T-B chose, tested with a test tool. No production tool is skill-provided yet (AC-R2, AC-R3 for the mechanism) | T-B |
+| T-C1 | A5.3–A5.6 and A5.8: the reveal mechanism, the `revealed_tools` column and its migration, and the form that T-B chose, tested with a test tool. No production tool is skill-provided yet (AC-R2, AC-R3 for the mechanism, AC-R4) | T-A, T-B |
 | T-C2 | A3, A4, A5.1, A5.2 and A5.10: the tool split, the governance rows, the renames and splits of the skills, `provides-tools` on the new skills, the validator rules, the rewritten `evals.yaml` files, and the A4.4 fixes. The two tools become skill-provided in this ticket, together with the skills that provide them, so the primary never loses telemetry between tickets (AC-N1, AC-N2, AC-R1, AC-R3 for the real skills) | T-A, T-C1 |
 | T-D1 | The routing run: Part 1 with the second step (AC-F1, AC-F2 on the final build, AC-F3, AC-F4 routing) | T-C2 |
 | T-D2 | The benefit run: Part 2 with two blind judges (AC-F4 benefit) | T-D1 |

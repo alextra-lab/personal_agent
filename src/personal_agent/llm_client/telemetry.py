@@ -108,6 +108,8 @@ def emit_model_call_completed(
     prompt_identity: PromptIdentity,
     total_tokens: int | None = None,
     cache_read_tokens: int | None = None,
+    system_fingerprint: str | None = None,
+    response_model: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> None:
     """Emit the canonical ``model_call_completed`` event (ADR-0074 §I2).
@@ -133,6 +135,12 @@ def emit_model_call_completed(
         total_tokens: Provider-reported total (may differ from input+output
             when cache or reasoning tokens are counted separately).
         cache_read_tokens: Provider-specific cache-read token count.
+        system_fingerprint: The engine build the response itself reported
+            (llama.cpp puts its build here), or ``None`` when it reported
+            none. Never filled from configuration (FRE-1588).
+        response_model: The model name the response itself reported, or
+            ``None``. Distinct from ``model``, which is the requested name
+            that cost rows join on. Never filled from configuration (FRE-1588).
         extra: Provider-specific fields to merge into the emit
             (e.g. ``{"api_type": ..., "fallback_used": ..., "cost_usd": ...}``).
 
@@ -152,6 +160,8 @@ def emit_model_call_completed(
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "cache_read_tokens": cache_read_tokens,
+        "system_fingerprint": system_fingerprint,
+        "response_model": response_model,
         "prompt_callsite": prompt_identity.callsite,
         "prompt_component_ids": list(prompt_identity.component_ids),
         "prompt_static_prefix_hash": prompt_identity.static_prefix_hash,

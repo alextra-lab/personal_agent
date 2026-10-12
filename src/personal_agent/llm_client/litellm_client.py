@@ -457,6 +457,23 @@ def _update_generation_progress(progress: GenerationProgress, chunk: dict[str, A
         progress.content += content_piece
 
 
+def _reported_str(value: object) -> str | None:
+    """Return a response's self-reported identity value, or ``None`` (FRE-1588).
+
+    The engine fields on ``model_call_completed`` hold what the response said
+    answered the call, never what configuration asked for. Anything that is
+    not a non-empty string — an absent attribute, ``None``, a mock's
+    auto-attribute — is not a report and reads as ``None``.
+
+    Args:
+        value: A response attribute such as ``system_fingerprint`` or ``model``.
+
+    Returns:
+        The value when it is a non-empty ``str``, otherwise ``None``.
+    """
+    return value if isinstance(value, str) and value else None
+
+
 async def _safe_aclose_stream(stream: Any) -> None:
     """Best-effort close of a litellm local streaming response (FRE-1379).
 
@@ -1631,6 +1648,10 @@ class LiteLLMClient:
             prompt_identity=_identity,
             total_tokens=_total_tokens,
             cache_read_tokens=_cache_read,
+            # FRE-1588: litellm sets a non-streamed ModelResponse's model and
+            # system_fingerprint from the provider's own response body.
+            system_fingerprint=_reported_str(getattr(response, "system_fingerprint", None)),
+            response_model=_reported_str(getattr(response, "model", None)),
             extra=_extra,
         )
 
@@ -2012,6 +2033,18 @@ class LiteLLMClient:
                     prompt_identity=identity,
                     total_tokens=usage.get("total_tokens") or (input_tokens + output_tokens),
                     cache_read_tokens=cached_tokens if cached_tokens > 0 else None,
+                    # FRE-1588: the build llama.cpp reported on its chunks,
+                    # carried by the aggregator into `raw`.
+                    system_fingerprint=_reported_str(
+                        (llm_response.get("raw") or {}).get("system_fingerprint")
+                    ),
+                    # Always None on this path, deliberately. litellm replaces
+                    # each streamed chunk's `model` with the requested model
+                    # (streaming_handler.py: `model_response.model = self.model`),
+                    # so the engine's own value is unobservable here. Recording
+                    # the echo would write configuration into a field that
+                    # claims to be the response's. Measured on litellm 1.98.0.
+                    response_model=None,
                     extra={
                         "tool_calls": len(llm_response["tool_calls"]),
                         "reasoning_content_chars": len(_reasoning_trace),

@@ -267,3 +267,35 @@ def test_aggregator_default_usage_when_missing() -> None:
     ]
     result = _aggregate_streaming_chunks(chunks)
     assert result["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def test_system_fingerprint_is_carried_from_the_last_non_empty_chunk() -> None:
+    """FRE-1588: llama.cpp reports its build in ``system_fingerprint`` on every chunk.
+
+    The last non-empty value wins, a usage-only final chunk counts, and the value
+    must still be on ``raw`` after the adapter — the path the emit reads.
+    """
+    chunks = [
+        {**_make_chunk({"role": "assistant", "content": "hi"}), "system_fingerprint": "b9999-old"},
+        {**_make_chunk({}, finish_reason="stop"), "system_fingerprint": "b9999"},
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            "system_fingerprint": "b9999",
+        },
+    ]
+    aggregated = _aggregate_streaming_chunks(chunks)
+    assert aggregated["system_fingerprint"] == "b9999"
+    assert adapt_chat_completions_response(aggregated)["raw"]["system_fingerprint"] == "b9999"
+
+
+def test_system_fingerprint_absent_when_no_chunk_reports_one() -> None:
+    """FRE-1588: the key is left out, not filled, so an unreported build reads as null."""
+    chunks = [
+        _make_chunk({"role": "assistant", "content": "x"}),
+        {**_make_chunk({}, finish_reason="stop"), "system_fingerprint": None},
+        {**_make_chunk({}), "system_fingerprint": ""},
+    ]
+    assert "system_fingerprint" not in _aggregate_streaming_chunks(chunks)

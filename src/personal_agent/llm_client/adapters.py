@@ -51,11 +51,17 @@ def _aggregate_streaming_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     tool_call_acc: dict[int, dict[str, Any]] = {}
     usage: dict[str, Any] = {}
     last_chunk_id: str | None = None
+    # FRE-1588: llama.cpp reports its build here on every chunk. Carried so the
+    # model_call_completed emit can name the engine that answered.
+    system_fingerprint: str | None = None
 
     for chunk in chunks:
         if chunk.get("error") is not None:
             raise LLMInvalidResponse(f"Streaming chunk reported error: {chunk['error']}")
         last_chunk_id = chunk.get("id") or last_chunk_id
+        chunk_fingerprint = chunk.get("system_fingerprint")
+        if isinstance(chunk_fingerprint, str) and chunk_fingerprint:
+            system_fingerprint = chunk_fingerprint
         # Some servers emit a usage-only final chunk with no choices.
         chunk_usage = chunk.get("usage")
         if chunk_usage:
@@ -121,7 +127,7 @@ def _aggregate_streaming_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     if tool_calls:
         message["tool_calls"] = tool_calls
 
-    return {
+    aggregated: dict[str, Any] = {
         "id": last_chunk_id,
         "object": "chat.completion",
         "choices": [
@@ -138,6 +144,11 @@ def _aggregate_streaming_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
             "total_tokens": 0,
         },
     }
+    # Left out, not nulled, when no chunk reported one: the non-streaming shape
+    # omits it too, and existing exact-shape consumers stay unchanged.
+    if system_fingerprint is not None:
+        aggregated["system_fingerprint"] = system_fingerprint
+    return aggregated
 
 
 _THINK_TAG_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)

@@ -212,6 +212,18 @@ def test_logs_denial_reason_stays_keyword() -> None:
     assert not re.compile(free_text["match"]).match("denial_reason")
 
 
+def test_logs_pins_engine_identity_fields_as_keyword() -> None:
+    """FRE-1588: the engine a call was served by is aggregable, never analysed text.
+
+    ``system_fingerprint`` (llama.cpp build) and ``response_model`` are compared
+    by exact value across turns, so both are explicit ``keyword``. Additive: no
+    existing field changes type.
+    """
+    props = _props(_load("index-template.json"))
+    for field in ("system_fingerprint", "response_model"):
+        assert props.get(field) == {"type": "keyword"}, f"{field} must be an explicit keyword"
+
+
 # --------------------------------------------------------------------------- #
 # agent-logs field-growth bound (FRE-544 / ADR-0090 Guarded-dynamic + cap).
 # --------------------------------------------------------------------------- #

@@ -629,20 +629,23 @@ def _row(
 _SAME = [_call(0, 1000), _call(990, 40), _call(1020, 30)]
 
 
-def test_shortfall_is_the_previous_context_minus_this_cache() -> None:
+def test_shortfall_is_the_lost_part_of_the_previous_prompt() -> None:
     previous = _call(990, 50, predicted_n=20)["timings"]
-    assert score.shortfall(previous, _call(1050, 30)["timings"]) == 10  # type: ignore[arg-type]
+    assert score.shortfall(previous, _call(1030, 30)["timings"]) == 10  # type: ignore[arg-type]
+    # Reuse of generated tokens past the previous prompt is not a negative shortfall.
+    assert score.shortfall(previous, _call(1050, 30)["timings"]) == 0  # type: ignore[arg-type]
 
 
-def test_reuse_of_generated_tokens_is_scored_not_voided() -> None:
-    # A hybrid model continues from the live end state: cache_n passes the previous prompt.
-    control = [_call(0, 1000, 20), _call(1015, 40, 20), _call(1070, 30, 20)]
-    treated = [_call(0, 1000, 20), _call(1010, 45, 20), _call(1070, 30, 20)]
+def test_a_control_that_restores_a_checkpoint_is_not_charged_for_the_treatment_generation() -> None:
+    # The FRE-1594 dry draw: the treatment continues from its own generation, the control carries
+    # the treatment's assistant message and restores the checkpoint 4 tokens before its prompt end.
+    treated = [_call(0, 10865, 59), _call(10923, 1134, 101)]
+    control = [_call(0, 10862, 104), _call(10858, 361, 1303)]
     result = score.cache_verdict([_row(treated, control)], "cache_safe")
     first = result["pairs"][0]
-    assert "void" not in first and first["treatment"] == 10 and first["control"] == 5
-    assert first["generated_reuse"] == {"treatment": 10, "control": 15}
-    assert result["verdict"] == "fail"
+    assert "void" not in first and first["treatment"] == 0 and first["control"] == 4
+    assert first["generated_reuse"] == {"treatment": 58, "control": 0}
+    assert result["verdict"] == "pass"
 
 
 def test_no_reuse_in_both_arms_is_uninformative_not_a_pass() -> None:

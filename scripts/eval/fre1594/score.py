@@ -3,19 +3,24 @@
 - **AC-1** (:func:`loop_count`): the draws that hold all five steps, and the first failing step of
   each other draw.
 - **AC-2** (:func:`cache_verdict`, local only): the shortfall of a call is
-  ``(cache_n + prompt_n + predicted_n of the previous call) - cache_n of this call``: the tokens
-  of the previous call's whole context that this call did not reuse. A treatment call k and the
-  control call k form a pair, for k = 2 and 3 (1-based). A successful call without timings fails
-  the form (ADR AC-F3). A pair is void if either call reused more than its previous call's whole
-  context (the lineage rule), or if a call in it was rejected by the provider (an AC-1 failure).
-  A pair in which neither call reused a token is ``no_reuse`` and is not scored. A form with no
-  scored pair is ``uninformative`` if a pair was ``no_reuse``, else ``undecided``, never ``pass``.
+  ``max(0, cache_n + prompt_n of the previous call - cache_n of this call)``: the tokens of the
+  previous call's prompt that this call did not reuse. A treatment call k and the control call k
+  form a pair, for k = 2 and 3 (1-based). A successful call without timings fails the form (ADR
+  AC-F3). A pair is void if either call reused more than its previous call's whole context
+  (``cache_n + prompt_n + predicted_n``: the lineage rule), or if a call in it was rejected by the
+  provider (an AC-1 failure). A pair in which neither call reused a token is ``no_reuse`` and is
+  not scored. A form with no scored pair is ``uninformative`` if a pair at a scored step was
+  ``no_reuse``, else ``undecided``, never ``pass``.
 
-The baseline includes ``predicted_n`` because the local primary is a hybrid model (Gated
-DeltaNet). llama.cpp cannot cut its recurrent state back to a shorter common prefix: it continues
-from the live end state, which holds the generated tokens, or restores a context checkpoint, or
-re-processes the whole prompt. The ADR lineage rule (``cache_n`` above the previous prompt is
-void) would void the normal path, so the owner chose this baseline on 2026-10-12.
+The local primary is a hybrid model (Gated DeltaNet). llama.cpp cannot cut its recurrent state
+back to a shorter common prefix: it continues from the live end state, which holds the generated
+tokens, or restores a context checkpoint, or re-processes the whole prompt. The control resends the
+treatment's requests, so its call k holds the treatment's assistant message, not its own
+generation: it can never continue from its live end state. Reuse of generated tokens is therefore
+an advantage of the treatment alone, and the shortfall counts only the previous prompt (the FRE-1594
+dry draw of 2026-10-12: whole-context shortfall treatment 1, control 108). Each pair records
+``generated_reuse`` for each arm.
+
 - **AC-3** (:func:`cloud_cache`): the cache fields of every cloud call, with no bound.
 """
 
@@ -44,19 +49,19 @@ def _timings(call: object) -> tuple[float, float, float] | None:
 
 
 def shortfall(previous: Mapping[str, object], current: Mapping[str, object]) -> float:
-    """Return the tokens of the previous call's whole context that this call did not reuse.
+    """Return the tokens of the previous call's prompt that this call did not reuse.
 
     Args:
         previous: The previous call's ``timings``.
         current: This call's ``timings``.
 
     Returns:
-        ``(cache_n + prompt_n + predicted_n of previous) - cache_n of current``.
+        ``max(0, cache_n + prompt_n of previous - cache_n of current)``.
     """
     before = _timings({"timings": previous})
     after = _timings({"timings": current})
     assert before is not None and after is not None
-    return sum(before) - after[0]
+    return max(0.0, before[0] + before[1] - after[0])
 
 
 def _calls(row: Row, arm: str) -> Sequence[object]:
@@ -88,7 +93,7 @@ def _pair(row: Row, k: int) -> dict[str, object] | None:
             pair["void"] = "lineage"
             pair["excess"] = excess
             pair["arm"] = arm
-        values[arm] = sum(before) - after[0]
+        values[arm] = max(0.0, before[0] + before[1] - after[0])
         generated[arm] = max(0.0, after[0] - (before[0] + before[1]))
         reused.append(after[0])
     pair["treatment"], pair["control"] = values["treatment"], values["control"]

@@ -96,17 +96,20 @@ the recorded `fingerprint-<provider>.json` is refused.
 ## Scoring
 
 - **AC-1:** the draws that hold all five steps. W3 applies if both local forms hold fewer than 10 of 12.
-- **AC-2 (local):** the shortfall of a call is `(cache_n + prompt_n + predicted_n of the previous call) -
-  cache_n of this call`. This is the part of the previous call's whole context that this call did not reuse.
-  A call without timings fails the form (ADR AC-F3). A pair is void (`lineage`) if a call's `cache_n` is larger
-  than its previous call's whole context. A pair is also void (`provider_error`) if the provider rejected one
-  of its calls, which is an AC-1 failure. A pair in which neither arm reused a token is `no_reuse` and is not
-  scored. cache-safe passes if the treatment's shortfall at call 2 is never above the control's. simple passes
-  if no session has more than one call with a shortfall above the control's. A form with no scored pair is
-  `uninformative` if a pair at a step that the form scores was `no_reuse`, else `undecided`.
-- **Why the baseline holds `predicted_n`:** the local primary is a hybrid model (Gated DeltaNet). llama.cpp
-  cannot cut its recurrent state back to a shorter common prefix. It continues from the live end state, which
-  holds the generated tokens, or restores a context checkpoint, or re-processes the whole prompt. The ADR rule
-  (void when `cache_n` is above the previous prompt) voids the normal path. The owner chose this baseline on
-  2026-10-12. Each pair records `generated_reuse`, the reused tokens past the previous prompt, for each arm.
+- **AC-2 (local):** the shortfall of a call is `max(0, cache_n + prompt_n of the previous call - cache_n of
+  this call)`. This is the part of the previous call's prompt that this call did not reuse. Reuse of generated
+  tokens counts as 0. A call without timings fails the form (ADR AC-F3). A pair is void (`lineage`) if a call's
+  `cache_n` is larger than its previous call's whole context (`cache_n + prompt_n + predicted_n`). A pair is
+  also void (`provider_error`) if the provider rejected one of its calls, which is an AC-1 failure. A pair in
+  which neither arm reused a token is `no_reuse` and is not scored. cache-safe passes if the treatment's
+  shortfall at call 2 is never above the control's. simple passes if no session has more than one call with a
+  shortfall above the control's. A form with no scored pair is `uninformative` if a pair at a step that the
+  form scores was `no_reuse`, else `undecided`.
+- **Why generated tokens count as 0:** the local primary is a hybrid model (Gated DeltaNet). llama.cpp cannot
+  cut its recurrent state back to a shorter common prefix. It continues from the live end state, which holds
+  the generated tokens, or restores a context checkpoint, or re-processes the whole prompt. The control resends
+  the treatment's requests, so it carries the treatment's assistant message and can never continue from its
+  own live state. Reuse of generated tokens is an advantage of the treatment alone. The owner chose this rule
+  on 2026-10-12, after the dry draw. Each pair records `generated_reuse`, the reused tokens past the previous
+  prompt, for each arm.
 - **AC-3 (cloud):** `cache_read_input_tokens` and `cache_creation_input_tokens` of every call, with no bound.

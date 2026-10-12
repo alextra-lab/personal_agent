@@ -7,7 +7,7 @@
   ``timings`` of the last chunk are kept for AC-2.
 - :class:`CloudTransport` sends through the production client, ``LiteLLMClient.respond``, with the
   cost gate on the eval Postgres (``fre1537.cloud.CloudSession``). It enforces its own cap: the
-  spent cost of the run's rows plus a reservation for the full request and its output budget.
+  cost in the run's ledger plus a reservation for the full request and its output budget.
 """
 
 from __future__ import annotations
@@ -16,12 +16,14 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 import httpx
 from scripts.eval.fre1537 import cloud as cloud_mod
+from scripts.eval.fre1537.common import append_jsonl, read_jsonl, utc_now
 from scripts.eval.fre1594.reveal import request_bytes
 
 from personal_agent.cost_gate import BudgetDenied
@@ -148,6 +150,20 @@ def parse_stream(lines: Iterable[str]) -> tuple[list[dict[str, object]], dict[st
     return chunks, timings
 
 
+def wire_messages(messages: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    """Return a history as the production client sends it: sanitised, tool-call indices filled.
+
+    Args:
+        messages: The request messages.
+
+    Returns:
+        The messages after ``sanitise_messages`` and ``normalise_tool_call_indices``, the two passes
+        that ``LiteLLMClient`` runs before every call (``litellm_client.py:1805``).
+    """
+    clean, _ = sanitise_messages([dict(m) for m in messages], trace_id=None, emit_telemetry=False)
+    return normalise_tool_call_indices(clean)
+
+
 class LlamaTransport:
     """Sends to llama.cpp, streamed, and reads the reply as the production client does."""
 
@@ -174,10 +190,9 @@ class LlamaTransport:
         """
         messages = body["messages"]
         assert isinstance(messages, list)
-        clean, _ = sanitise_messages(list(messages), trace_id=None, emit_telemetry=False)
         return {
             **body,
-            "messages": normalise_tool_call_indices(clean),
+            "messages": wire_messages(messages),
             "model": self._model,
             "stream": True,
             "stream_options": {"include_usage": True},
@@ -204,7 +219,7 @@ class LlamaTransport:
                         sha, response.status_code, response.text, time.monotonic() - started
                     )
                 chunks, timings = parse_stream(response.iter_lines())
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
             return _failed(sha, None, f"{type(exc).__name__}: {exc}", time.monotonic() - started)
         secs = time.monotonic() - started
         try:
@@ -259,7 +274,7 @@ class CloudTransport(cloud_mod.CloudSession):
         self,
         target: cloud_mod.CloudTarget,
         *,
-        spent: Callable[[], float],
+        ledger: Path,
         max_usd: float,
         gate: object | None = None,
     ) -> None:
@@ -267,19 +282,28 @@ class CloudTransport(cloud_mod.CloudSession):
 
         Args:
             target: The managed deployment, in its default mode.
-            spent: Returns the cost of every call that the run directory records.
+            ledger: The run's cost ledger. Every call's cost is appended as soon as the call
+                returns, so a draw that stops part way still counts.
             max_usd: The cap in USD.
             gate: A cost gate that the caller registered. Default: a real gate on the eval
                 Postgres (checked by ``CloudSession``).
         """
         super().__init__(target, gate=gate)
-        self._spent = spent
+        self._ledger = ledger
         self._max_usd = max_usd
-        self._pending = 0.0
 
-    def commit(self) -> None:
-        """Forget the pending cost: the caller wrote the draw's row, so ``spent`` counts it."""
-        self._pending = 0.0
+    def spent(self) -> float:
+        """Return the cost of every call that the ledger records."""
+        total = 0.0
+        for row in read_jsonl(self._ledger):
+            cost = row.get("cost_usd")
+            total += float(cost) if isinstance(cost, int | float) else 0.0
+        return total
+
+    def _book(self, sha: str, cost: float, ok: bool) -> None:
+        append_jsonl(
+            self._ledger, {"at": utc_now(), "request_sha256": sha, "ok": ok, "cost_usd": cost}
+        )
 
     def reserve(self, body: Mapping[str, object]) -> float:
         """Refuse a call that could reach the cap. Return its worst-case cost.
@@ -296,7 +320,7 @@ class CloudTransport(cloud_mod.CloudSession):
         """
         budget = self._client.max_tokens or self.target.definition.max_tokens or _NO_BUDGET
         reservation = reserve_usd(body, self.target, budget)
-        spent = self._spent() + self._pending
+        spent = self.spent()
         if spent + reservation >= self._max_usd:
             raise SystemExit(
                 f"cost cap of {self._max_usd:g} USD reached: {spent:.4f} USD spent, this call "
@@ -335,7 +359,7 @@ class CloudTransport(cloud_mod.CloudSession):
         except BudgetDenied as exc:
             raise SystemExit(f"the cost gate denied the call: {exc}") from exc
         except (LLMClientError, TimeoutError) as exc:
-            self._pending += reservation
+            self._book(sha, round(reservation, 8), ok=False)
             failed = _failed(sha, None, f"{type(exc).__name__}: {exc}", time.monotonic() - started)
             return Reply(**{**asdict(failed), "cost_usd": round(reservation, 8)})
         usage = dict(response.get("usage") or {})
@@ -344,7 +368,7 @@ class CloudTransport(cloud_mod.CloudSession):
             + int(usage.get("completion_tokens") or 0) * self.target.output_cost
         )
         cost = round(max(float(response.get("cost_usd") or 0.0), floor), 8)
-        self._pending += cost
+        self._book(sha, cost, ok=True)
         return Reply(
             ok=True,
             status=None,

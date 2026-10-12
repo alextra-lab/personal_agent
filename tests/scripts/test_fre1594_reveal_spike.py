@@ -678,3 +678,66 @@ def test_report_names_w3_only_when_both_local_forms_miss_the_floor(tmp_path: obj
             spike.rows_path(run_dir, "local", "simple"), {**_row(_SAME, _SAME), "draw": 12 + i}
         )  # type: ignore[arg-type]
     assert spike.build_report(run_dir)["w3"] is False  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- review fixes
+
+
+def test_step_4_reads_the_history_after_the_production_sanitiser() -> None:
+    call = {
+        "id": "call_t1_0_c0",
+        "type": "function",
+        "function": {"name": "search_logs", "arguments": "{}"},
+    }
+    result = {"tool_call_id": "call_t1_0_c0", "role": "tool", "name": "search_logs", "content": "R"}
+    kept = {
+        "messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            result,
+        ]
+    }
+    assert session._carried(kept, "call_t1_0_c0", "R") is True
+    # The assistant call is missing, so the sanitiser drops the orphaned result.
+    orphan = {"messages": [{"role": "user", "content": "q"}, result]}
+    assert session._carried(orphan, "call_t1_0_c0", "R") is False
+
+
+def test_a_corrupt_stream_line_is_a_failed_reply_not_a_crash() -> None:
+    llama, _ = _llama("data: {not json\n\n")
+    out = llama.send(_captured())
+    assert not out.ok and "JSONDecodeError" in (out.error or "")
+
+
+def _cloud(tmp_path: object, max_usd: float) -> transport.CloudTransport:
+    cloud = transport.CloudTransport.__new__(transport.CloudTransport)
+    cloud._ledger = tmp_path / "ledger.jsonl"  # type: ignore[operator]
+    cloud._max_usd = max_usd
+    cloud.target = type("T", (), {"input_cost": 3e-06, "output_cost": 1.5e-05})()  # type: ignore[assignment]
+    cloud._client = type("C", (), {"max_tokens": 1000})()  # type: ignore[assignment]
+    return cloud
+
+
+def test_the_cloud_cap_counts_every_booked_call_at_once(tmp_path: object) -> None:
+    cloud = _cloud(tmp_path, max_usd=1.0)
+    body = {"messages": [{"role": "user", "content": "q"}], "tools": []}
+    cloud.reserve(body)
+    cloud._book("a", 0.6, ok=True)
+    cloud._book("b", 0.39, ok=False)  # a failed call is booked at its reservation
+    assert cloud.spent() == pytest.approx(0.99)
+    with pytest.raises(SystemExit, match="cost cap"):
+        cloud.reserve(body)
+
+
+def test_a_rejected_call_voids_its_pair_instead_of_failing_the_form() -> None:
+    treated = [_call(0, 1000), _call(990, 50), {"ok": False, "timings": {}, "usage": {}}]
+    result = score.cache_verdict([_row(treated, _SAME)], "cache_safe")
+    assert result["verdict"] == "pass"
+    assert result["pairs"][1]["void"] == "provider_error"
+
+
+def test_w3_needs_the_full_population(tmp_path: object) -> None:
+    for form in reveal.FORMS:
+        path = spike.rows_path(tmp_path, "local", form)  # type: ignore[arg-type]
+        spike.append_jsonl(path, {**_row(_SAME, _SAME, passed=False), "draw": 0})
+    assert spike.build_report(tmp_path)["w3"] is False  # type: ignore[arg-type]

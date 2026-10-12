@@ -4,9 +4,9 @@
   each other draw.
 - **AC-2** (:func:`cache_verdict`, local only): the shortfall of a call is
   ``(cache_n + prompt_n of the previous call) - cache_n of this call``. A treatment call k and the
-  control call k form a pair, for k = 2 and 3 (1-based). A call without timings fails the form
-  (ADR AC-F3). A pair is void if either call reused more than its previous call's prompt (the ADR
-  lineage rule). A form with no non-void pair at a measured step is ``undecided``, never ``pass``.
+  control call k form a pair, for k = 2 and 3 (1-based). A successful call without timings fails
+  the form (ADR AC-F3). A pair is void if either call reused more than its previous call's prompt
+  (the ADR lineage rule), or if a call in it was rejected by the provider (an AC-1 failure). A form with no non-void pair at a measured step is ``undecided``, never ``pass``.
 - **AC-3** (:func:`cloud_cache`): the cache fields of every cloud call, with no bound.
 """
 
@@ -61,6 +61,11 @@ def _pair(row: Row, k: int) -> dict[str, object] | None:
     pair: dict[str, object] = {"prompt_id": row.get("prompt_id"), "draw": row.get("draw"), "k": k}
     values: dict[str, float] = {}
     for arm, calls in (("treatment", treatment), ("control", control)):
+        if any(isinstance(c, Mapping) and c.get("ok") is False for c in calls[k - 2 : k]):
+            # A rejected call evaluated no prompt: an AC-1 failure, not missing timings.
+            pair["void"] = "provider_error"
+            pair["arm"] = arm
+            return pair
         before, after = _timings(calls[k - 2]), _timings(calls[k - 1])
         if before is None or after is None:
             pair["missing"] = arm

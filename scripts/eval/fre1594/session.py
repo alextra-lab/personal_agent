@@ -33,7 +33,7 @@ from scripts.eval.fre1594.reveal import (
     with_nonce,
 )
 from scripts.eval.fre1594.shim import ToolRun, not_run
-from scripts.eval.fre1594.transport import Reply, Transport
+from scripts.eval.fre1594.transport import Reply, Transport, wire_messages
 
 from personal_agent.llm_client.types import ToolCall
 
@@ -143,6 +143,24 @@ def _skill_load(calls: Sequence[ToolCall], skill: str) -> int | None:
     return None
 
 
+def _carried(body: Mapping[str, object], call_id: str, content: str) -> bool:
+    """Step 4: the sent history holds the call and its result, after the production sanitiser."""
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    sent = wire_messages(messages)
+    called = any(
+        call.get("id") == call_id
+        for m in sent
+        if m.get("role") == "assistant"
+        for call in (m.get("tool_calls") or [])  # type: ignore[attr-defined]
+    )
+    answered = any(
+        m.get("role") == "tool" and m.get("tool_call_id") == call_id and m.get("content") == content
+        for m in sent
+    )
+    return called and answered
+
+
 def _well_formed(call: ToolCall) -> bool:
     return bool(call["name"]) and isinstance(_arguments(call), dict)
 
@@ -225,14 +243,8 @@ def run_draw(
 
             # Call 3, steps 4 and 5: the result goes back, and the provider accepts it.
             if steps[2]:
-                carried = {
-                    "tool_call_id": ids[target],
-                    "role": "tool",
-                    "name": tool,
-                    "content": run.content,
-                }
                 body = transcript.render(transcript.state(), reveal=True, nonce=treatment_nonce)
-                steps[3] = carried in body["messages"]  # type: ignore[operator]
+                steps[3] = _carried(body, ids[target], run.content)
                 third = send()
                 steps[4] = (
                     steps[3]

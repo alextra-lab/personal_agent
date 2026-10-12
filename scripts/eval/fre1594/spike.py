@@ -38,6 +38,7 @@ DEFAULT_DRAWS = 3
 DEFAULT_MAX_USD = 10.0
 PROVIDERS = ("local", "cloud")
 LOOP_FLOOR = 10  # AC-F2: at least 10 of 12 draws on the production primary
+POPULATION = 12  # 4 prompts x 3 draws
 WARMUP = (
     "one request before the first draw of a run invocation: the base request of the first prompt, "
     "its own nonce, max_tokens 1; its row is kept in warmup.jsonl"
@@ -279,16 +280,6 @@ def _done(path: Path) -> set[tuple[str, int]]:
     return {(str(r["prompt_id"]), int(str(r["draw"]))) for r in read_jsonl(path)}
 
 
-def _spent(run_dir: Path) -> float:
-    total = 0.0
-    for path in sorted((run_dir / "rows" / "cloud").glob("*.jsonl")):
-        for row in read_jsonl(path):
-            for arm in ("treatment", "control"):
-                for call in row.get(arm) or []:  # type: ignore[attr-defined]
-                    total += float(call.get("cost_usd") or 0)
-    return total
-
-
 def run(args: argparse.Namespace) -> int:
     """Run one provider and one form over the population, resuming."""
     scenarios = reveal.load_scenarios()
@@ -314,12 +305,18 @@ def run(args: argparse.Namespace) -> int:
         if args.provider == "local":
             if not args.llama_model or not args.quant:
                 raise SystemExit("--llama-model and --quant are required for the local provider")
+            props = read_props(client, args.url, args.props_file)
+            if "error" in props:
+                raise SystemExit(
+                    f"no llama.cpp /props ({props['error']}): pass --props-file, so the run pins "
+                    "the chat template and shows any chunk reuse"
+                )
             pins: dict[str, object] = {
                 "provider": "local",
                 "llama_model": args.llama_model,
                 "quant": args.quant,
                 "llama_url": args.url,
-                "llama_props": read_props(client, args.url, args.props_file),
+                "llama_props": props,
             }
             sender = transport.LlamaTransport(client, args.url, args.llama_model)
         else:
@@ -330,10 +327,12 @@ def run(args: argparse.Namespace) -> int:
                 "model_id": target.model_id,
                 "endpoint": target.endpoint,
                 "mode": target.declared,
-                "max_usd": args.max_usd,
             }
+            # The cap is a safety bound, not a pinned input: an owner OK can raise it on resume.
             cloud = transport.CloudTransport(
-                target, spent=lambda: _spent(args.run_dir), max_usd=args.max_usd
+                target,
+                ledger=args.run_dir / "rows" / "cloud" / "ledger.jsonl",
+                max_usd=args.max_usd,
             )
             sender = cloud
         fingerprint = build_fingerprint(args.base, base, scenarios, args.draws, pins)
@@ -360,8 +359,6 @@ def run(args: argparse.Namespace) -> int:
                 nonces = (secrets.token_hex(8), secrets.token_hex(8))
                 row = session.run_draw(sender, draw, run_tool, nonces=nonces)
                 append_jsonl(path, {"at": utc_now(), "provider": args.provider, **row})
-                if cloud is not None:
-                    cloud.commit()
                 print(prompt.id, number, "steps", row["steps"], flush=True)
     finally:
         client.close()
@@ -382,7 +379,8 @@ def build_report(run_dir: Path) -> dict[str, object]:
 
     Returns:
         Per provider and form: the AC-1 count, and the AC-2 verdict (local) or the AC-3 cache
-        table (cloud). ``w3`` is true when both local forms hold fewer than 10 draws of 12.
+        table (cloud). ``w3`` is true when both local forms ran all 12 draws and each holds fewer
+        than 10.
     """
     report: dict[str, object] = {}
     local_held: list[int] = []
@@ -394,7 +392,9 @@ def build_report(run_dir: Path) -> dict[str, object]:
             entry: dict[str, object] = {"loop": score.loop_count(rows)}
             if provider == "local":
                 entry["cache"] = score.cache_verdict(rows, form)
-                local_held.append(int(score.loop_count(rows)["held"]))  # type: ignore[call-overload]
+                counted = score.loop_count(rows)
+                if counted["draws"] == POPULATION:
+                    local_held.append(int(counted["held"]))  # type: ignore[call-overload]
             else:
                 entry["cache"] = score.cloud_cache(rows)
             report[f"{provider}/{form}"] = entry

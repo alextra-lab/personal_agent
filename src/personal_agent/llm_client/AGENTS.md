@@ -165,6 +165,12 @@ replaces each streamed chunk's `model` with the requested model, so the engine's
 value cannot be observed. Do not "fix" this by reading the chunk `model`. That value
 is configuration.
 
+Caution for a new cloud provider: litellm pre-sets a non-streamed response `model` to
+`<provider>/<requested model>` for any OpenAI-SDK-route provider other than `openai`
+(`litellm/llms/openai/openai.py`). If the response omits `model`, `response_model`
+would then hold configuration. Check this before a new provider joins
+`_OPENAI_SDK_ROUTE_PROVIDERS`.
+
 ## Config
 
 - Local endpoint: the deployment's declared `endpoint`, or the provider's

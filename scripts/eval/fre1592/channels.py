@@ -67,6 +67,8 @@ M3_ARMS = ("system", "heavy", "skill", "fence", "absent")
 M2_ARMS = ("base", "head", "fence", "skill", "head_turn2")
 PROBE_MAX_TOKENS = 16
 EXTRA_ROUNDS = 3
+# 502/503/504 come from the Cloudflare tunnel in front of :8600, not from llama.cpp.
+RETRY_STATUSES = frozenset({502, 503, 504})
 RULE_A = (
     "## Answer format\n"
     "When your answer uses a search result, end it with one final line that starts with "
@@ -228,19 +230,27 @@ def call(client: httpx.Client, url: str, request: Mapping[str, object]) -> dict[
         request: The request body.
 
     Returns:
-        The row fields, plus ``message`` (the assistant message, for a further round).
+        The row fields, with ``gateway_retries`` (0 or 1), plus ``message`` (the assistant
+        message, for a further round).
 
     Raises:
-        httpx.HTTPError: On a transport error or a non-2xx reply.
+        httpx.HTTPError: On a transport error, or a non-2xx reply that is not a gateway error,
+            or a gateway error on the retry too.
     """
     t0 = time.monotonic()
     response = client.post(url, json=request)
+    retries = 0
+    if response.status_code in RETRY_STATUSES:
+        # A gateway error at the tunnel, not the model: one retry (master, 2026-10-12).
+        retries = 1
+        response = client.post(url, json=request)
     response.raise_for_status()
     data = response.json()
     message = data["choices"][0]["message"]
     calls = message.get("tool_calls") or []
     return {
         "wall_s": round(time.monotonic() - t0, 2),
+        "gateway_retries": retries,
         "timings": data.get("timings"),
         "usage": data.get("usage"),
         "finish_reason": data["choices"][0].get("finish_reason"),

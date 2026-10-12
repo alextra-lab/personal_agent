@@ -193,6 +193,10 @@ class Counter:
             return 0
         t = time.monotonic()
         r = self._client.post(self._url, json=payload)
+        if r.status_code in (502, 503, 504):
+            # A gateway error at the tunnel, not the model: one retry (master, 2026-10-12).
+            print(f"call {self.calls}: HTTP {r.status_code}, retrying once", flush=True)
+            r = self._client.post(self._url, json=payload)
         r.raise_for_status()
         n = int(r.json()["usage"]["prompt_tokens"])
         self._saved[key] = n

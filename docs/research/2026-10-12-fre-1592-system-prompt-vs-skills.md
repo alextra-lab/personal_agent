@@ -202,24 +202,48 @@ The turn-1 history is kept byte for byte as it was sent, so M2 measures the deli
 
 ## M3 — rule following by channel (pending, preflight first)
 
-**Method.** `scripts/eval/fre1592/channels.py follow`. Two production rules, each with a score that a
-script computes:
-
-- **R1, the grounding contract:** the turn holds two `web_search` results with citation markers. Pass
-  = the reply copies both markers. The facts are invented, so the reply can take them only from the
-  results.
-- **R2, the parallel-calls rule:** the prompt needs three independent tool calls. Pass = the first
-  response holds three or more calls.
+**Method.** `scripts/eval/fre1592/channels.py follow`. One rule is placed in each channel, and a
+script scores the reply. Each arm has its own nonce, and its items share the cached head.
 
 | Arm | Where the rule is |
 |---|---|
-| `system` | The system prompt, as in production |
-| `heavy` | The system prompt, with all 10 skill bodies added to the head (~17,800 more tokens). This tests whether a larger head weakens the rule. |
+| `system` | The system prompt, after the reasoning rule, as a production rule sits |
+| `heavy` | The same, with all 10 skill bodies (18,077 tokens) added to the head. This tests whether a larger head weakens a rule. |
 | `skill` | A `read_skill` result, after the user message |
 | `fence` | The `<turn_context>` block of the user message |
 | `absent` | Nowhere. This is the control: a rule that the control also passes cannot show a channel effect. |
 
-8 items per rule × 3 draws × 5 arms = 120 calls per rule per model.
+**The rules.** A rule can show a channel effect only if the model does not follow it unasked.
+
+- **Rule A (answer format):** "When your answer uses a search result, end it with one final line
+  that starts with `Sources:` and lists every citation marker you used." The turn holds two search
+  results with citation markers. The facts and URLs are invented, so the reply can take the facts
+  only from the results. Pass = the final answer stops normally, and its last line starts with
+  `Sources:` and holds a marker. A further tool call gets a reply in production's shape, for up to
+  3 rounds: `fetch_url` gets the ADR-0156 D6 error for HTTP 404, and any other tool gets "No further
+  results".
+- **Rule B (tool behaviour):** "Before you call web_search for a fact, call search_memory with the
+  same query in the same response." The prompts are plain web facts. Pass = the first response
+  calls both `search_memory` and `web_search`.
+
+8 items per rule × 3 draws × 5 arms = 120 calls per rule.
+
+**Gateway errors.** `:8600` sits behind a Cloudflare tunnel. A 502, 503 or 504 is retried once, and
+the row records `gateway_retries`. An item fails on a gateway error only if the retry fails too.
+
+**Preflight history (both on Flash-Next, 1 item per arm).**
+
+1. 17:09–17:22Z, with the production grounding rule and the parallel-calls rule. Neither rule could
+   discriminate. The parallel-calls rule passed in all 5 arms, including `absent`: Flash-Next
+   batches independent calls unasked. With the grounding rule, `absent` copied both markers too.
+   The arms with the rule searched again instead of answering: the `example.org` URLs looked like
+   placeholders.
+2. 18:43–18:48Z, rules A and B. `system` did not answer: it called `fetch_url` on the invented
+   URLs three times, and the stub's "No further results" did not stop it. `heavy`, `skill` and
+   `fence` answered and passed. `absent` got a 502 from the Cloudflare tunnel (master traced it:
+   the model finished the request with status 200), and the run stopped there. Rule B did not
+   start. The harness changes since then: the production 404 error for `fetch_url`, 3 further
+   rounds and the gateway retry.
 
 ---
 
@@ -235,6 +259,10 @@ script computes:
   result.
 - **M3 adds the rule as a skill that the catalog does not list.** The `read_skill` exchange is
   synthetic. This tests how the model follows a rule in a tool result, not whether it chooses to load it.
+- **M3's rules are not production rules.** Both production candidates were followed unasked
+  (preflight 1), so they cannot show a channel effect. Rules A and B are plausible operating rules
+  that the model does not follow unasked. A result about them is a result about rule delivery, not
+  about the grounding or parallel-calls rules.
 
 ---
 

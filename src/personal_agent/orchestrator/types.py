@@ -216,6 +216,8 @@ class PlannerRunRecord:
         prompt_tokens: The engine's prompt-token count.
         completion_tokens: The engine's completion-token count.
         input_chars: Characters of each planner input; set on every attempt.
+        is_fallback: Whether the failed run went on to the fallback planner, whose plan
+            then dispatched workers. Only possible off ``planner_asked`` (ADR-0154 D2).
     """
 
     decision: PlannerDecision
@@ -227,6 +229,7 @@ class PlannerRunRecord:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     input_chars: PlannerInputChars | None = None
+    is_fallback: bool = False
 
 
 @dataclass(frozen=True)
@@ -604,8 +607,8 @@ class ExecutionContext:
     # ``expansion_budget`` is the budget the app computed for this turn. It is carried
     # here because ``gateway_output`` is ``None`` when the gateway pipeline failed, and
     # D6 records the budget on every turn. ``planner_run`` is ``None`` until a planner
-    # run finishes (use ``record_planner_outcome``). ``planner_gate_reason`` is written
-    # by the routing change (FRE-1515). ``conversation_history_chars`` is stamped once,
+    # run finishes (use ``record_planner_outcome``). ``planner_gate_reason`` is copied
+    # from the gateway's decomposition (FRE-1515). ``conversation_history_chars`` is stamped once,
     # on the four register types, before any expansion decision. ``synthesis_appended``
     # is set when a synthesis message is added to ``messages``.
     expansion_budget: int | None = None
@@ -700,14 +703,15 @@ def record_planner_outcome(ctx: ExecutionContext, run: PlannerRunRecord) -> None
 
     A planner that declined or failed returned the turn to the tool loop, so the
     expansion strategy the gateway set is not what the turn did (ADR-0154 D6,
-    ADR-0152 D4).
+    ADR-0152 D4). A failed run that went on to the fallback planner did expand, so
+    its label stands.
 
     Args:
         ctx: The turn's execution context.
         run: The finished planner run.
     """
     ctx.planner_run = run
-    if run.decision in ("declined", "failed"):
+    if run.decision in ("declined", "failed") and not run.is_fallback:
         ctx.expansion_strategy = None
 
 

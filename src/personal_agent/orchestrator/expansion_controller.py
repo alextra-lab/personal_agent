@@ -2,17 +2,21 @@
 
 When the gateway sets strategy ∈ {HYBRID, DECOMPOSE}, this controller takes
 over from the executor (FRE-1381: the only path — the autonomous alternative,
-where the LLM decided whether to expand, was deleted). The LLM generates
-plan content only; it does not decide whether to expand.
+where the primary decided whether to expand mid-loop, was deleted). On a
+``planner_asked`` turn (ADR-0154 D2) the planner may decline; otherwise it
+generates plan content only.
 
 State machine:
   Gateway output → LLM planner → Plan validation → Executor dispatch
   → Partial aggregation → Synthesis → Final response
 
-Fallback: If the LLM planner fails (invalid output, timeout, empty plan),
-a deterministic fallback planner generates the plan.
+Decline and failure on a ``planner_asked`` turn: no worker, no synthesis
+context, and no fallback plan. The turn returns to the tool loop.
 
-See: ADR-0036 (expansion-controller)
+Fallback: on any other turn, if the LLM planner fails (invalid output,
+timeout, empty plan), a deterministic fallback planner generates the plan.
+
+See: ADR-0036 (expansion-controller), ADR-0154 (D2, D3)
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -57,6 +61,7 @@ from personal_agent.orchestrator.fallback_planner import generate_fallback_plan
 from personal_agent.orchestrator.sub_agent import run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 from personal_agent.orchestrator.tool_dispatch import get_shared_tool_execution_layer
+from personal_agent.orchestrator.types import PlannerInputChars, PlannerRunRecord
 from personal_agent.orchestrator.untrusted_channel import (
     MEMORY_RECALL_TOOL,
     harness_call_id,
@@ -70,6 +75,7 @@ from personal_agent.orchestrator.worker_types import (
     render_worker_report_body,
     worker_types_declaring,
 )
+from personal_agent.request_gateway.decomposition import REGISTER_TASK_TYPES
 from personal_agent.request_gateway.types import TaskType
 
 logger = structlog.get_logger(__name__)
@@ -105,6 +111,21 @@ _PLANNER_BRIEFING_RULES: tuple[str, ...] = (
 # system prompt names the same title, so the planner knows which block to judge.
 _DIGEST_TITLE = "What memory already holds, most relevant first"
 
+# ADR-0154 D2 (carrying ADR-0152 D1): on a `planner_asked` turn the planner may decline. The
+# rule is the FRE-1498 text, unchanged, and it goes first in the Rules list, with a schema line
+# that admits SINGLE. The D7 probe (scripts/eval/fre1537/render.py) renders the same prompt and
+# qualifies its hash, and a test asserts the two are byte-identical.
+_PLANNER_SCHEMA_STRATEGY = '"strategy": "HYBRID|DECOMPOSE"'
+_PLANNER_SCHEMA_STRATEGY_WITH_DECLINE = '"strategy": "SINGLE|HYBRID|DECOMPOSE"'
+_PLANNER_RULES_HEADING = "Rules:\n"
+_PLANNER_DECLINE_RULE = (
+    "- First decide whether this query needs independent sub-tasks at all. If one assistant working "
+    "alone, with the same tools, would answer it well in one pass — a greeting, a short factual "
+    "question, a single lookup, a follow-up — output "
+    '{"strategy": "SINGLE", "tasks": []} and nothing else. Choose HYBRID or DECOMPOSE only when '
+    "splitting the work into independent sub-tasks would produce a better answer than one pass\n"
+)
+
 
 def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
     """The sub-agent tool names currently grantable in the active mode (FRE-1389).
@@ -134,7 +155,9 @@ def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
     return list(governance_config.granted_sub_agent_tool_names())
 
 
-def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
+def _build_planner_system_prompt(
+    available_sub_agent_tools: list[str], *, admit_single: bool = False
+) -> str:
     """Build the planner system prompt with the live sub-agent tool surface.
 
     Dynamic rather than hardcoded (FRE-1389 AC-1): the eligible set is read
@@ -147,6 +170,9 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         available_sub_agent_tools: Tool names currently grantable to a
             sub-agent in the active mode (from
             :func:`_current_sub_agent_tool_surface`).
+        admit_single: Whether the planner may decline (``planner_may_decline``, ADR-0154
+            D2). Adds the decline rule first in the Rules list and ``SINGLE`` to the
+            schema line. ``False`` returns the prompt without them.
 
     Returns:
         The complete planner system prompt. It carries ``_PLANNER_BRIEFING_RULES``
@@ -182,7 +208,7 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "You are a task decomposition planner. Given a user query and a strategy, "
         "produce a JSON plan that breaks the query into independent sub-tasks.\n\n"
         "Output ONLY valid JSON matching this schema:\n"
-        '{"strategy": "HYBRID|DECOMPOSE", "tasks": [{"name": "string", '
+        f'{{{_PLANNER_SCHEMA_STRATEGY}, "tasks": [{{"name": "string", '
         f'"goal": "string", "constraints": ["string"], "type": "{type_names}", '
         f'"thoroughness": "{level_names}", "read_paths": ["string"]}}], '
         '"memory_relevance": "used|none_relevant"}\n\n'
@@ -214,7 +240,12 @@ def _build_planner_system_prompt(available_sub_agent_tools: list[str]) -> str:
         "- Do NOT answer the question — only produce the plan"
     )
     briefing_rules = "\n".join(f"- {rule}" for rule in _PLANNER_BRIEFING_RULES)
-    return f"{prompt}\n{briefing_rules}"
+    prompt = f"{prompt}\n{briefing_rules}"
+    if admit_single:
+        prompt = prompt.replace(
+            _PLANNER_SCHEMA_STRATEGY, _PLANNER_SCHEMA_STRATEGY_WITH_DECLINE, 1
+        ).replace(_PLANNER_RULES_HEADING, _PLANNER_RULES_HEADING + _PLANNER_DECLINE_RULE, 1)
+    return prompt
 
 
 # FRE-1548: the providers whose planner request carries the plan schema. litellm sends a
@@ -233,7 +264,7 @@ def planner_plan_schema(*, admit_single: bool = False) -> dict[str, Any]:
 
     Args:
         admit_single: Whether ``SINGLE`` is a valid strategy (the decline of ADR-0154 D2).
-            The production prompt does not offer it yet. The probe prompt does.
+            True on a ``planner_asked`` turn, with the decline rule in the prompt.
 
     Returns:
         A new schema dict on every call.
@@ -758,12 +789,6 @@ def planner_outcome_fields(
     }
 
 
-# ADR-0154 D6: the task types whose turns record ``conversation_history_chars``.
-_REGISTER_TASK_TYPES = frozenset(
-    {TaskType.CONVERSATIONAL, TaskType.TOOL_USE, TaskType.ANALYSIS, TaskType.PLANNING}
-)
-
-
 def conversation_history_chars(
     task_type: TaskType, messages: list[dict[str, Any]] | None, max_chars: int
 ) -> int | None:
@@ -780,7 +805,8 @@ def conversation_history_chars(
     Returns:
         The render length, or ``None`` outside the four register types.
     """
-    if task_type not in _REGISTER_TASK_TYPES:
+    # ADR-0154 D6: the same four types that D2's gate covers.
+    if task_type not in REGISTER_TASK_TYPES:
         return None
     query = get_text_content(messages[-1].get("content", "")) if messages else ""
     return len(planner_history_text(messages, query, max_chars))
@@ -845,6 +871,8 @@ class ExpansionResult:
             immediately before each call. Not ``len(sub_agent_results)``, which
             drops a worker that raised, and not ``len(dispatch_intervals)``, which
             also records a failed span entry and is assigned only after the loop.
+        planner_run: What the planner run decided and cost (ADR-0154 D6). Set by the
+            planner phase on every run; ``None`` only before it ends.
     """
 
     plan: ExpansionPlan | None = None
@@ -859,6 +887,7 @@ class ExpansionResult:
     skipped_tasks: list[str] = field(default_factory=list)
     skip_reason: SkipReason | None = None
     dispatched_count: int = 0
+    planner_run: PlannerRunRecord | None = None
 
     @property
     def cost_usd(self) -> float:
@@ -970,6 +999,8 @@ class ExpansionController:
         turn_started_at: datetime | None = None,
         expansion_budget: int | None = None,
         memory_digest: PlannerMemoryDigest | None = None,
+        planner_may_decline: bool = False,
+        on_planner_run: Callable[[PlannerRunRecord], None] | None = None,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -1028,9 +1059,18 @@ class ExpansionController:
             memory_digest: The planner's memory digest (ADR-0154 D5), built by the caller
                 from the memory context already in hand. It reaches the planner call only:
                 no worker receives it (ADR-0147 D2). ``None`` gives the planner no digest.
+            planner_may_decline: True exactly on a ``planner_asked`` turn (ADR-0154 D2). The
+                planner then sees the decline rule and a schema that admits ``SINGLE``. A
+                decline or a planner failure returns an empty result: no worker, no synthesis
+                context, and no fallback plan. ``False`` keeps the fallback planner.
+            on_planner_run: Called once with the run's record as soon as the planner phase
+                ends, before any dispatch, so the caller keeps the record even if a later
+                phase raises (ADR-0154 D6). ``None`` drops the record.
 
         Returns:
-            ExpansionResult with plan, sub-agent results, and synthesis context.
+            ExpansionResult with plan, sub-agent results, and synthesis context. On a
+            decline or a ``planner_may_decline`` failure, ``plan`` is ``None`` and nothing
+            was dispatched.
         """
         result = ExpansionResult()
         settings = get_settings()
@@ -1055,8 +1095,28 @@ class ExpansionController:
             history_max_chars=settings.planner_history_max_chars,
             input_max_chars=settings.planner_input_max_chars,
             memory_digest=memory_digest,
+            may_decline=planner_may_decline,
         )
         result.plan = plan
+        run = result.planner_run
+        if on_planner_run is not None and run is not None:
+            on_planner_run(run)
+
+        if planner_may_decline and plan is None:
+            # ADR-0154 D2: the turn returns to the tool loop. A decline is a plan, not a
+            # fault, so it reports nothing. A failure is reported once, as a warning: the
+            # turn still answers, through the primary.
+            if run is not None and run.decision == "failed" and session_id is not None:
+                await report_degradation(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    where="expansion:planner",
+                    reason=f"Planner failed ({run.failure_reason})",
+                    severity="warning",
+                    expected="a plan or a decline",
+                    actual="no plan — the turn returned to the tool loop",
+                )
+            return result
 
         if not plan or not plan.tasks:
             result.degraded = True
@@ -1164,7 +1224,8 @@ class ExpansionController:
         history_max_chars: int = 60000,
         input_max_chars: int | None = None,
         memory_digest: PlannerMemoryDigest | None = None,
-    ) -> ExpansionPlan:
+        may_decline: bool = False,
+    ) -> ExpansionPlan | None:
         """Phase 1: Get a plan from the LLM or fallback planner.
 
         Args:
@@ -1204,10 +1265,15 @@ class ExpansionController:
             memory_digest: The memory digest (ADR-0154 D5). Its text reaches the planner
                 as a ``memory_recall`` tool result after the user message (FRE-1360).
                 ``None`` gives no digest.
+            may_decline: ``planner_may_decline`` (ADR-0154 D2). The prompt carries the
+                decline rule, the schema admits ``SINGLE``, and the answer is validated by
+                :func:`_classify_planner_answer`. A decline or a failure returns ``None``,
+                and the fallback planner does not run.
 
         Returns:
-            An ExpansionPlan — either LLM-generated or fallback. Exactly one
-            ``planner_outcome`` event records the run (ADR-0154 D5).
+            An ExpansionPlan — either LLM-generated or fallback — or ``None`` on a decline
+            or a ``may_decline`` failure. Exactly one ``planner_outcome`` event records the
+            run (ADR-0154 D5), and ``result.planner_run`` holds its record (D6).
         """
         start_ms = time.monotonic() * 1000
 
@@ -1223,6 +1289,7 @@ class ExpansionController:
         # ADR-0154 D5: the facts of this run for its one terminal `planner_outcome` event,
         # which is emitted outside the try, so a failure in an emitter cannot add a second.
         llm_plan: ExpansionPlan | None = None
+        decline: PlannerDecline | None = None
         failure_reason: PlannerFailureReason | None = None
         reasoning_chars: int | None = None
         prompt_tokens: int | None = None
@@ -1233,7 +1300,9 @@ class ExpansionController:
         digest_text = memory_digest.text if memory_digest is not None else ""
         try:
             tool_surface = _current_sub_agent_tool_surface(trace_id)
-            planner_system_prompt = _build_planner_system_prompt(tool_surface)
+            planner_system_prompt = _build_planner_system_prompt(
+                tool_surface, admit_single=may_decline
+            )
             input_chars["system"] = len(planner_system_prompt)
             system_prompt_sha256 = hashlib.sha256(planner_system_prompt.encode()).hexdigest()
             # ADR-0154 D1: the query is never cut, and the history receives what the bound
@@ -1283,7 +1352,9 @@ class ExpansionController:
                     # FRE-1548: a provider that does not enforce JSON on its own gets the
                     # plan schema. Every other provider keeps the bare request it was
                     # qualified on.
-                    response_format=planner_response_format(_planner_provider(llm_client)),
+                    response_format=planner_response_format(
+                        _planner_provider(llm_client), admit_single=may_decline
+                    ),
                     trace_ctx=TraceContext(
                         trace_id=trace_id,
                         user_id=user_id,
@@ -1303,11 +1374,43 @@ class ExpansionController:
             result.planner_cost_usd = float(raw_response.get("cost_usd") or 0.0)
             reasoning = _planner_reasoning(raw_response)
             reasoning_chars = reasoning.chars
-            plan = _validate_plan_json(
-                raw_response["content"], strategy, max_tasks=expansion_budget
+            answer: ExpansionPlan | PlannerDecline | None = (
+                _classify_planner_answer(raw_response["content"], max_tasks=expansion_budget)
+                if may_decline
+                else _validate_plan_json(
+                    raw_response["content"], strategy, max_tasks=expansion_budget
+                )
             )
+            plan = answer if isinstance(answer, ExpansionPlan) else None
 
-            if plan is not None:
+            if isinstance(answer, PlannerDecline):
+                result.phase_results.append(
+                    PhaseResult(
+                        phase=ExpansionPhase.PLANNING,
+                        duration_ms=duration_ms,
+                        success=True,
+                    )
+                )
+                logger.info(
+                    "planner_completed",
+                    plan_task_count=0,
+                    task_types=[],
+                    task_thoroughness=[],
+                    parse_success=True,
+                    fallback_used=False,
+                    planner_decision="declined",
+                    history_chars=input_chars["history"],
+                    task_constraints_count=[],
+                    planner_mode=_planner_mode_name(llm_client),
+                    planner_reasoning_chars=reasoning_chars,
+                    planner_thinking_blocks=reasoning.thinking_blocks,
+                    planner_reasoning_tokens=reasoning.tokens,
+                    planner_input_chars=input_chars,
+                    planner_input_total_chars=planner_input.total_chars,
+                    trace_id=trace_id,
+                )
+                decline = answer
+            elif plan is not None:
                 result.phase_results.append(
                     PhaseResult(
                         phase=ExpansionPhase.PLANNING,
@@ -1366,8 +1469,9 @@ class ExpansionController:
             )
 
         except PlannerInputTooLargeError as exc:
-            # ADR-0154 D1: the model was not called. Until the routing change (FRE-1515)
-            # this follows today's failure path, the fallback planner.
+            # ADR-0154 D1: the model was not called. It is a planner failure: on a
+            # `planner_asked` turn the turn returns to the tool loop (D2), otherwise the
+            # fallback planner runs.
             failure_reason = "input_too_large"
             input_chars.update(message=exc.message_chars, digest=exc.digest_chars)
             logger.warning(
@@ -1392,24 +1496,41 @@ class ExpansionController:
         if call_duration_ms is None and call_started is not None:
             # A timeout or an exception during the call: the call still ran this long.
             call_duration_ms = (time.monotonic() - call_started) * 1000
-        if llm_plan is not None:
-            llm_plan = replace(
-                llm_plan,
-                memory_relevance=resolve_memory_relevance(
-                    memory_digest.item_count if memory_digest is not None else 0,
-                    "expanded",
-                    False,
-                    llm_plan.memory_relevance,
-                ),
+
+        def _run_record(
+            decision: PlannerDecision,
+            reason: PlannerFailureReason | None,
+            is_fallback: bool,
+        ) -> PlannerRunRecord:
+            return PlannerRunRecord(
+                decision=decision,
+                failure_reason=reason,
+                deployment=deployment,
+                mode=mode,
+                reasoning_chars=reasoning_chars,
+                duration_ms=call_duration_ms,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                input_chars=PlannerInputChars(**input_chars),
+                is_fallback=is_fallback,
             )
+
+        def _outcome(
+            decision: PlannerDecision,
+            reason: PlannerFailureReason | None,
+            is_fallback: bool,
+            stated: MemoryRelevance,
+            task_count: int,
+        ) -> None:
+            result.planner_run = _run_record(decision, reason, is_fallback)
             logger.info(
                 "planner_outcome",
                 **planner_outcome_fields(
-                    decision="expanded",
-                    failure_reason=None,
-                    is_fallback=False,
-                    stated_relevance=llm_plan.memory_relevance,
-                    plan_task_count=len(llm_plan.tasks),
+                    decision=decision,
+                    failure_reason=reason,
+                    is_fallback=is_fallback,
+                    stated_relevance=stated,
+                    plan_task_count=task_count,
                     digest=memory_digest,
                     deployment=deployment,
                     mode=mode,
@@ -1422,6 +1543,38 @@ class ExpansionController:
                 ),
                 trace_id=trace_id,
             )
+
+        if decline is not None:
+            # ADR-0154 D2: a valid decline is a plan, so it carries the planner's judgment
+            # of the digest (D5's matrix), and the turn returns to the tool loop.
+            _outcome("declined", None, False, decline.memory_relevance, 0)
+            return None
+
+        if may_decline and llm_plan is None:
+            # ADR-0154 D2: a failure on a `planner_asked` turn does not run the fallback
+            # planner. The turn returns to the tool loop.
+            result.phase_results.append(
+                PhaseResult(
+                    phase=ExpansionPhase.PLANNING,
+                    duration_ms=time.monotonic() * 1000 - start_ms,
+                    success=False,
+                    error=f"planner failed: {failure_reason or 'exception'}",
+                )
+            )
+            _outcome("failed", failure_reason or "exception", False, "not_applicable", 0)
+            return None
+
+        if llm_plan is not None:
+            llm_plan = replace(
+                llm_plan,
+                memory_relevance=resolve_memory_relevance(
+                    memory_digest.item_count if memory_digest is not None else 0,
+                    "expanded",
+                    False,
+                    llm_plan.memory_relevance,
+                ),
+            )
+            _outcome("expanded", None, False, llm_plan.memory_relevance, len(llm_plan.tasks))
             return llm_plan
 
         # --- Fallback planner ---
@@ -1449,25 +1602,12 @@ class ExpansionController:
         )
         # ADR-0154 D5: a run that fails and then uses the fallback plan is one run, and
         # its one event records the fallback.
-        logger.info(
-            "planner_outcome",
-            **planner_outcome_fields(
-                decision="failed",
-                failure_reason=failure_reason or "exception",
-                is_fallback=True,
-                stated_relevance=fallback_plan.memory_relevance,
-                plan_task_count=len(fallback_plan.tasks),
-                digest=memory_digest,
-                deployment=deployment,
-                mode=mode,
-                reasoning_chars=reasoning_chars,
-                duration_ms=call_duration_ms,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                input_chars=input_chars,
-                system_prompt_sha256=system_prompt_sha256,
-            ),
-            trace_id=trace_id,
+        _outcome(
+            "failed",
+            failure_reason or "exception",
+            True,
+            fallback_plan.memory_relevance,
+            len(fallback_plan.tasks),
         )
 
         return fallback_plan
@@ -2176,18 +2316,77 @@ def _validate_plan_json(
     if not tasks:
         return None
 
-    # ADR-0147 D3: the planner writes `used` or `none_relevant`. A missing or invalid
-    # value is `unstated`; `_run_planner` then applies the ADR-0154 D5 matrix.
-    stated = data.get("memory_relevance")
-    memory_relevance: MemoryRelevance = "unstated"
-    if stated == "used":
-        memory_relevance = "used"
-    elif stated == "none_relevant":
-        memory_relevance = "none_relevant"
-
     return ExpansionPlan(
         strategy=data.get("strategy", strategy),
         tasks=tasks,
         is_fallback=False,
-        memory_relevance=memory_relevance,
+        memory_relevance=_stated_memory_relevance(data),
     )
+
+
+def _stated_memory_relevance(data: Mapping[str, Any]) -> MemoryRelevance:
+    """Read the planner's judgment of the digest from its answer (ADR-0147 D3).
+
+    Args:
+        data: The parsed planner answer.
+
+    Returns:
+        ``used`` or ``none_relevant`` as written. A missing or invalid value is
+        ``unstated``; ``_run_planner`` then applies the ADR-0154 D5 matrix.
+    """
+    stated = data.get("memory_relevance")
+    if stated == "used":
+        return "used"
+    if stated == "none_relevant":
+        return "none_relevant"
+    return "unstated"
+
+
+@dataclass(frozen=True)
+class PlannerDecline:
+    """A valid decline: the planner chose ``SINGLE`` with no tasks (ADR-0154 D2).
+
+    Attributes:
+        memory_relevance: The planner's judgment of the digest. A decline is a plan, so it
+            carries one (ADR-0154 D5).
+    """
+
+    memory_relevance: MemoryRelevance
+
+
+def _classify_planner_answer(
+    raw: str, max_tasks: int | None = None
+) -> ExpansionPlan | PlannerDecline | None:
+    """Validate a planner answer on a ``planner_asked`` turn (ADR-0154 D2, D3).
+
+    The rule of D2, the same one the D7 probe scores:
+
+    - ``SINGLE`` with no tasks (``tasks`` missing or empty) is a decline.
+    - ``SINGLE`` with tasks is a failure.
+    - ``HYBRID`` or ``DECOMPOSE`` with valid tasks is an expansion. The plan runs as
+      ``HYBRID`` under the ``HYBRID`` cap and ``max_tasks`` (D3), and records ``HYBRID``.
+    - Anything else is a failure.
+
+    Args:
+        raw: Raw string from the LLM planner response.
+        max_tasks: The turn's per-turn expansion budget (FRE-1382). Tightens the cap.
+
+    Returns:
+        The plan of an expansion, a :class:`PlannerDecline`, or ``None`` for a failure.
+    """
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    strategy = data.get("strategy")
+    if strategy == "SINGLE":
+        tasks = data.get("tasks")
+        if tasks is None or tasks == []:
+            return PlannerDecline(memory_relevance=_stated_memory_relevance(data))
+        return None
+    if strategy not in ("HYBRID", "DECOMPOSE"):
+        return None
+    plan = _validate_plan_json(raw, "HYBRID", max_tasks=max_tasks)
+    return None if plan is None else replace(plan, strategy="HYBRID")

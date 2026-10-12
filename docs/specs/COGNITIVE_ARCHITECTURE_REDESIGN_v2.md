@@ -430,6 +430,13 @@ For DECOMPOSE/HYBRID: the gateway does NOT plan the sub-tasks -- it just flags
 "this needs decomposition." The primary agent creates the decomposition plan.
 **Gateway decides IF to expand. Agent decides HOW.**
 
+> **Superseded for four types (ADR-0154 D2, FRE-1515, 2026-10-11).** When the session's
+> primary deployment declares a `planner` mode in `config/models.yaml`, CONVERSATIONAL,
+> TOOL_USE, ANALYSIS and PLANNING route HYBRID with reason `planner_asked` at every
+> complexity. The planner then decides whether to expand: it may decline, and a decline or a
+> planner failure returns the turn to the tool loop. Without that mode, the matrix above
+> applies, and the turn records `planner_gate_reason = planner_mode_absent`.
+
 Output: `DecompositionResult {strategy: SINGLE|HYBRID|DECOMPOSE|DELEGATE,
 reason, constraints}`.
 Telemetry: `decomposition_decision` event -> ES.

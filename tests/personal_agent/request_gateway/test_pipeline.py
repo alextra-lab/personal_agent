@@ -36,12 +36,20 @@ def _history_sized(total_tokens: int, turns: int = 6) -> list[dict[str, str]]:
     return history
 
 
+def _close_planner_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route as a primary without a ``planner`` mode would (ADR-0154 D2), for matrix tests."""
+    monkeypatch.setattr(
+        "personal_agent.config.model_loader.primary_declares_planner_mode", lambda: False
+    )
+
+
 class TestRunGatewayPipeline:
     """Tests for run_gateway_pipeline() — full gateway orchestration."""
 
     @pytest.mark.asyncio
-    async def test_simple_conversational_request(self) -> None:
+    async def test_simple_conversational_request(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Conversational message produces valid GatewayOutput."""
+        _close_planner_gate(monkeypatch)
         result = await run_gateway_pipeline(
             user_message="Hello, how are you?",
             session_id="test-session",
@@ -194,11 +202,14 @@ class TestRunGatewayPipeline:
     # --- Slice 2 integration tests ---
 
     @pytest.mark.asyncio
-    async def test_complex_analysis_produces_decompose_strategy(self) -> None:
+    async def test_complex_analysis_produces_decompose_strategy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Complex multi-part analysis request routes to DECOMPOSE strategy.
 
         Uses 3+ question marks to trigger COMPLEX complexity (question_count >= 3).
         """
+        _close_planner_gate(monkeypatch)
         message = (
             "Analyze the trade-offs between microservices and monolithic architecture. "
             "What are the scalability implications? What are the hidden maintenance costs? "
@@ -351,8 +362,11 @@ class TestRunGatewayPipeline:
         assert result.decomposition.reason == "expansion_disabled"
 
     @pytest.mark.asyncio
-    async def test_expansion_enabled_default_leaves_hybrid_routing_unchanged(self) -> None:
+    async def test_expansion_enabled_default_leaves_hybrid_routing_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """FRE-1520 AC-2: the default (expansion_enabled=True) does not change routing."""
+        _close_planner_gate(monkeypatch)
         message = (
             "Analyze the trade-offs between microservices and monolithic architecture. "
             "What are the scalability implications? What are the hidden maintenance costs?"
@@ -367,6 +381,57 @@ class TestRunGatewayPipeline:
         )
         assert result.decomposition.strategy == DecompositionStrategy.HYBRID
         assert result.decomposition.reason == "analysis_moderate_hybrid"
+
+    @pytest.mark.asyncio
+    async def test_a_primary_with_a_planner_mode_asks_the_planner(self) -> None:
+        """ADR-0154 D2: the gate reads the turn's selected primary, set before the pipeline."""
+        from personal_agent.config.model_loader import load_model_config
+
+        catalog = load_model_config()
+        key = next(k for k, d in catalog.models.items() if "planner" in d.modes)
+        token = set_current_selection({"primary": key})
+        try:
+            result = await run_gateway_pipeline(
+                user_message="Hello, how are you?",
+                session_id="s",
+                session_messages=[],
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        finally:
+            reset_current_selection(token)
+        assert result.intent.task_type == TaskType.CONVERSATIONAL
+        assert result.decomposition.strategy == DecompositionStrategy.HYBRID
+        assert result.decomposition.reason == "planner_asked"
+        assert result.decomposition.planner_gate_reason is None
+
+    @pytest.mark.asyncio
+    async def test_a_primary_without_one_keeps_the_matrix(self) -> None:
+        """ADR-0154 D2: no ``planner`` mode → today's route, and ``planner_mode_absent``."""
+        from personal_agent.config.model_loader import is_selectable_binding, load_model_config
+
+        catalog = load_model_config()
+        key = next(
+            k
+            for k, d in catalog.models.items()
+            if "planner" not in d.modes and is_selectable_binding("primary", k, catalog)
+        )
+        token = set_current_selection({"primary": key})
+        try:
+            result = await run_gateway_pipeline(
+                user_message="Hello, how are you?",
+                session_id="s",
+                session_messages=[],
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        finally:
+            reset_current_selection(token)
+        assert result.decomposition.strategy == DecompositionStrategy.SINGLE
+        assert result.decomposition.reason == "conversational_always_single"
+        assert result.decomposition.planner_gate_reason == "planner_mode_absent"
 
     @pytest.mark.asyncio
     async def test_expansion_disabled_reason_telemetry(

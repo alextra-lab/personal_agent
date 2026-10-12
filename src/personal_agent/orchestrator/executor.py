@@ -5300,6 +5300,8 @@ async def step_init(
         ctx.conversation_history_chars = conversation_history_chars(
             gw.intent.task_type, ctx.messages, settings.planner_history_max_chars
         )
+        # ADR-0154 D2/D6 (FRE-1515): the gate's reason, on every turn the gate closed.
+        ctx.planner_gate_reason = gw.decomposition.planner_gate_reason
         # FRE-945: the sibling conversation_context_loaded emit was dark for the identical
         # reason — its call site (below apply_context_window/_maybe_frozen_reset) sits below
         # this same branch's return. Placed here, at the top, for the same reason as the
@@ -5445,6 +5447,7 @@ async def step_init(
             from personal_agent.orchestrator.expansion_controller import (
                 ExpansionController,
             )
+            from personal_agent.orchestrator.types import record_planner_outcome
 
             # FRE-958: the DISPATCH client (every run_sub_agent call) must be
             # built for role=SUB_AGENT (ADR-0033 client isolation), never PRIMARY.
@@ -5514,6 +5517,12 @@ async def step_init(
                 # ADR-0154 D5: the planner's memory digest, from the memory context
                 # already in hand (no recall query). It reaches the planner call only.
                 memory_digest=_build_planner_memory_digest(ctx.memory_context or []),
+                # ADR-0154 D2: true exactly on a `planner_asked` turn. The planner may then
+                # decline, and a decline or a failure returns the turn to the tool loop.
+                planner_may_decline=gw.decomposition.reason == "planner_asked",
+                # ADR-0154 D6: the record reaches the context as soon as the planner ends,
+                # so a later phase that raises cannot lose it.
+                on_planner_run=lambda run: record_planner_outcome(ctx, run),
             )
 
             ctx.expansion_plan = expansion_result.plan

@@ -242,6 +242,21 @@ population, because the dry draw showed two harness defects.
   They can add a little decode time, which is not scored. Expect about 20 probe rounds in a 1.64 h local run.
   The probe is not paused, because that changes production. The research note records it.
 
+## Dry draw 2 of 2026-10-12 (15:50:04Z to 15:55:13Z)
+
+Clean base body (defect 1 fixed), the prompt-loss rule (defect 2), llama-server `--verbose`, `log-search#0`, one
+draw per form.
+
+- **cache-safe:** AC-1 failed at step 2. Call 1 loaded `log-search`. Call 2 called `search_memory`, not the
+  revealed `search_logs`. This is the same failure as dry draw 1, now on a clean base body. One draw does not
+  decide the form. The full run does. AC-2 at k = 2: treatment 0, control 4.
+- **simple:** all five steps held. The control did not finish: llama-server on :8502 went away at about
+  15:55:10Z. Control call 1 got HTTP 200, and its stream stopped with no `finish_reason` and no timings. Calls 2
+  and 3 got HTTP 503 from the router. Both pairs are void (`provider_error`), so the verdict is `undecided`. A new
+  simple-only dry draw waits for the cause of the outage.
+- **Defect 3, fixed:** a stream that ended without a `finish_reason` counted as a successful call, and a cut reply
+  with text could pass step 5. `LlamaTransport` now marks it as a failed call.
+
 ## Risks
 
 - **Hybrid model cache.** The local primary reuses its cache only from the live end state or a checkpoint (see

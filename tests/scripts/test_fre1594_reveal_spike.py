@@ -842,3 +842,12 @@ def test_cache_safe_ignores_no_reuse_at_a_step_it_does_not_score() -> None:
     treated = [_call(0, 1000), _call(990, 50), _call(0, 1100)]
     assert score.cache_verdict([_row(treated, control)], "cache_safe")["verdict"] == "undecided"
     assert score.cache_verdict([_row(treated, control)], "simple")["verdict"] == "uninformative"
+
+
+def test_a_stream_that_ends_without_a_finish_reason_is_a_failed_reply() -> None:
+    # Dry draw 2: the backend went away mid-stream; the cut stream had HTTP 200 and no timings.
+    reply = _sse({"choices": [{"delta": {"reasoning_content": "thinking about the"}}]})
+    llama, _ = _llama(reply)
+    out = llama.send(_captured())
+    assert not out.ok and out.status == 200
+    assert "finish_reason" in (out.error or "")

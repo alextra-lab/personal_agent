@@ -214,8 +214,8 @@ class LlamaTransport:
             body: The request body.
 
         Returns:
-            The reply. A transport error, a non-200 status or an unreadable stream gives
-            ``ok=False``.
+            The reply. A transport error, a non-200 status, an unreadable stream or a stream
+            that ends without a ``finish_reason`` gives ``ok=False``.
         """
         wire = self.wire_body(body)
         sha = sha256(request_bytes(wire))
@@ -236,6 +236,9 @@ class LlamaTransport:
             adapted = adapt_chat_completions_response(aggregated)
         except (LLMInvalidResponse, json.JSONDecodeError) as exc:
             return _failed(sha, httpx.codes.OK, f"unreadable reply: {exc}", secs)
+        if not adapted.get("finish_reason"):
+            # A stream cut by the server (FRE-1594 dry draw 2: the backend went away) is not a reply.
+            return _failed(sha, httpx.codes.OK, "stream ended without a finish_reason", secs)
         message = aggregated["choices"][0]["message"]
         fingerprint = aggregated.get("system_fingerprint")
         return Reply(

@@ -86,6 +86,10 @@ _EVAL_ISOLATION_EXEMPT_PATHS: frozenset[str] = frozenset(
     {
         "scripts/eval/eval_isolation.py",
         "scripts/eval/fre1337_intent_probe/substrate.py",
+        # FRE-1590 Part 2 runs with consolidation off, so it wipes neo4j-eval before every turn
+        # itself and skips IsolatedArmRunner's settle and 150 s idle waits. Each row records
+        # graph_nodes_after, which shows any write that reaches the graph.
+        "scripts/eval/fre1590/help.py",
     }
 )
 

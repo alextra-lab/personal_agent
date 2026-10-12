@@ -1,0 +1,82 @@
+# FRE-1590 Part 2 — the scenarios where a skill can help.
+#
+# Owner decision (via master, FRE-1590): 1 to 2 scenarios per skill, only where the skill clearly
+# holds knowledge that the query_telemetry tool description (src/personal_agent/tools/
+# telemetry_query.py, _render_description) and the primary system prompt
+# (src/personal_agent/orchestrator/prompts.py) do not give. About 10 to 12 in total. `id` is
+# `<skill>#<n>`, where n is the 0-based position in the `scenarios` list of
+# docs/skills/<skill>/evals.yaml. The prompt and the `expect` line are read from that file at run
+# time, so they are not copied here.
+#
+# Left out, and why:
+# - every sequential-thinking scenario: its rule is always in the system prompt
+#   (REASONING_DISCIPLINE_PROMPT);
+# - query-elasticsearch#0, #1, #2, query-tempo#0, system-metrics#1, neo4j-direct#3: a reviewer
+#   judged them answerable without the skill;
+# - the rows in `excluded` below, each with its reason. Part 1 still covers every scenario;
+# - artifact-design: it is no longer a skill (owner, PR #1263). Artifact building is a dedicated,
+#   isolated process. Its two Part 2 rows of 2026-10-11 were invalid for production.
+
+scenarios:
+  - id: infrastructure-health#0
+    reason: "Only the skill names the probe script that opens a real Postgres connection, and says that a curl to port 5432 means nothing."
+  - id: mermaid-diagrams#0
+    reason: "Only the skill names the validation script (mmdc) that must print VALID before a diagram is shown."
+  - id: mermaid-diagrams#2
+    reason: "Only the skill lists `end` as a reserved flowchart word and caps the repair at 3 attempts with a text-block fallback."
+  - id: neo4j-direct#1
+    reason: "Only the skill says that entities carry first_seen and that created_at is set on almost no node."
+  - id: query-elasticsearch#3
+    reason: "Only the skill names the agent-monitors-joinability family and the index classifier script, and forbids cutting a date off a name."
+  - id: self-telemetry#0
+    reason: "Only the skill names model_call_completed as the event that carries cache_read_tokens and gives the hit-rate formula cached / (input + cached)."
+  - id: self-telemetry#1
+    reason: "Only the skill says that api_cost_recorded is the total-spend ledger and that model_call_completed leaves out embedding and rerank cost."
+  - id: system-diagnostics#2
+    reason: "Only the skill says that vmstat and iostat without a count run until the 30-second tool timeout and return nothing."
+  - id: system-metrics#3
+    reason: "Only the skill states that GPU metrics are not available in this environment."
+  - id: turn-forensics#1
+    reason: "Only the skill says to read input_tokens down the primary calls and to name the tool result before the jump as the cause."
+
+excluded:
+  - id: infrastructure-health#1
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill names the probe script with the argument `all`, which prints one line for each of the four services."
+  - id: infrastructure-health#2
+    reason: "Its recipe reads production Elasticsearch or Tempo, while the baseline's query_telemetry reads the almost empty eval ES, so the arms would see different data (owner decision)."
+  - id: infrastructure-health#3
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill names the probe script for redis and the rule to stop after two failed probes."
+  - id: mermaid-diagrams#1
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill gives the stateDiagram-v2 rules of the v11 syntax and the validation script to run first."
+  - id: mermaid-diagrams#3
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill gives the erDiagram glyph rules and the validation script to run first."
+  - id: neo4j-direct#0
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill names the read-only Cypher script, the one route to the graph that bash has."
+  - id: neo4j-direct#2
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill names the Cypher script and the schema procedures (db.labels, db.relationshipTypes) that it allows."
+  - id: query-tempo#1
+    reason: "Its recipe reads production Elasticsearch or Tempo, while the baseline's query_telemetry reads the almost empty eval ES, so the arms would see different data (owner decision)."
+  - id: query-tempo#3
+    reason: "Its recipe reads production Elasticsearch or Tempo, while the baseline's query_telemetry reads the almost empty eval ES, so the arms would see different data (owner decision)."
+  - id: self-telemetry#2
+    reason: "Its recipe reads production Elasticsearch or Tempo, while the baseline's query_telemetry reads the almost empty eval ES, so the arms would see different data (owner decision)."
+  - id: self-telemetry#3
+    reason: "Its recipe reads production Elasticsearch or Tempo, while the baseline's query_telemetry reads the almost empty eval ES, so the arms would see different data (owner decision)."
+  - id: system-metrics#0
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill says that free reports the host and that the agent's memory is the RSS of its process, in KB."
+  - id: turn-forensics#0
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill gives the per-call timeline method (the trace's model and tool events, and the call_timeline.py script on the gateway log)."
+  - id: turn-forensics#2
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill says to find the session's trace first, from model_call_started events with that session_id."
+  - id: turn-forensics#3
+    reason: "Trimmed to 1 to 2 scenarios per skill (owner decision). The skill knowledge is this. Only the skill names the Postgres session_events table and its RUN_ERROR rows as what the browser received."
+  - id: query-tempo#2
+    reason: "The tool description names the slm_chat span, its prefill and decode time, and group_by model."
+  - id: system-diagnostics#0
+    reason: "ss -tunlp for a listening port is common Linux knowledge, not skill knowledge."
+  - id: system-diagnostics#1
+    reason: "ps sorted by memory with head is common Linux knowledge, not skill knowledge."
+  - id: system-diagnostics#3
+    reason: "lsof on a path is common Linux knowledge, not skill knowledge."
+  - id: system-metrics#2
+    reason: "uptime for the load average is common Linux knowledge, the same class as system-metrics#1."

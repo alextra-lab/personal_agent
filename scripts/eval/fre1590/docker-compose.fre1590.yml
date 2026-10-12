@@ -1,0 +1,87 @@
+# FRE-1590 Part 2 — the eval gateways for "does a skill help?"
+#
+# An override on top of docker-compose.cloud.yml and docker-compose.eval.yml. It makes the two
+# eval gateways differ in one thing only: the treatment gateway (:9003) has the skill catalog,
+# the control gateway (:9002) has none. scripts/eval/fre1590/help.py runs each scenario on both.
+#
+# Both gateways:
+# - AGENT_ENABLE_SECOND_BRAIN "false": consolidation off. No entity extraction cost and no
+#   graph writes, so a turn leaves neo4j-eval as it found it (help.py records the node count).
+# - AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS "5" and AGENT_TEMPO_URL: the FRE-1581 values, set here
+#   again so this file states every value the run depends on.
+#
+# Control only:
+# - AGENT_PRIMITIVE_TOOLS_ENABLED "true" and AGENT_APPROVAL_UI_ENABLED "false": the values of
+#   the treatment gateway. docker-compose.eval.yml gives control no primitives (no bash). Most
+#   skills require bash, so without these two lines the control arm would fail for want of the
+#   tool, not of the skill (the FRE-1350 defect).
+# - The skill catalog is empty: each docs/skills/<name>/SKILL.md is masked with /dev/null. The
+#   loader reads an empty file, finds no frontmatter and skips the skill
+#   (src/personal_agent/orchestrator/skills.py, _load_all_skills), so the catalog is empty and
+#   read_skill has no names. The folders and their scripts stay.
+#   NOT a tmpfs on /app/docs/skills: config/governance/permissions.yaml allows five
+#   `bash(python3 docs/skills/<skill>/scripts/<file>.py *)` rules, and the loader refuses such a
+#   rule when the file is missing (governance/permissions.py, _skill_script_refusal). The refusal
+#   fails the whole rules load, and a failed load denies every tool call (decide_permission).
+#   With a tmpfs, every tool call on the control arm would be denied.
+#   /dev/null is not a personal path and resolves the same from any directory.
+#   tests/test_eval/test_fre1590_help.py fails when a skill folder has no mask line here.
+#
+# Use (from /opt/seshat, after `make eval-infra-up`, which builds the image, starts the eval
+# substrate and puts the production index templates on eval ES). First the dry run through the
+# FRE-1542 plan guard, then the real `up` of the two gateways only:
+#
+#   F="-p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml -f scripts/eval/fre1590/docker-compose.fre1590.yml --env-file /opt/seshat/.env"
+#   plan=$(docker compose $F up -d --no-deps --dry-run seshat-gateway-control seshat-gateway-treatment 2>&1) \
+#     && printf '%s\n' "$plan" | uv run python -m scripts.eval.compose_plan_guard \
+#     && docker compose $F up -d --no-deps seshat-gateway-control seshat-gateway-treatment
+#
+# Then check the result: `uv run python -m scripts.eval.fre1590.envdiff`.
+# To return to the plain eval stack: `make eval-infra-up` (it recreates both gateways without
+# this file).
+
+x-fre1590-env: &fre1590-env
+  AGENT_ENABLE_SECOND_BRAIN: "false"
+  AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS: "5"
+  AGENT_TEMPO_URL: http://tempo:3200
+  # Owner decision (FRE-1590, ~20:00Z): production runs "observe", which records and blocks
+  # nothing, so a reply does not change. "off" removes the Sonnet span-extraction cost per turn.
+  AGENT_GROUNDING_VERIFICATION_MODE: "off"
+  # FRE-1590: present but disabled R2 settings, so the six R2 tools register as in production
+  # (src/personal_agent/tools/__init__.py) and any call fails at an invalid host. The R2 client
+  # is created only on a tool call. Same values as scripts/eval/fre1537/gateway.py.
+  AGENT_R2_ENDPOINT_URL: http://r2-disabled.invalid
+  AGENT_R2_ACCESS_KEY_ID: eval-disabled
+  AGENT_R2_SECRET_ACCESS_KEY: eval-disabled
+  AGENT_R2_BUCKET_NAME: eval-disabled
+  # Owner decision (FRE-1590): production reads these from .env, and docker-compose.eval.yml
+  # does not pass them. They can change a turn (expansion, for example), so both arms get the
+  # production values, read from the --env-file at `up` time. AGENT_AGENT_ID stays unset, so the
+  # eval telemetry stays separate from production's.
+  AGENT_EXPANSION_ENABLED: ${AGENT_EXPANSION_ENABLED}
+  AGENT_SESSION_SUMMARY_ENABLED: ${AGENT_SESSION_SUMMARY_ENABLED}
+  AGENT_SLM_HEALTH_GENERATION_CHECK_ENABLED: ${AGENT_SLM_HEALTH_GENERATION_CHECK_ENABLED}
+  AGENT_SLM_TUNNEL_BASE_URL: ${AGENT_SLM_TUNNEL_BASE_URL}
+  AGENT_USER_DISPLAY_NAMES_JSON: ${AGENT_USER_DISPLAY_NAMES_JSON}
+
+services:
+  seshat-gateway-control:
+    environment:
+      <<: *fre1590-env
+      AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
+      AGENT_APPROVAL_UI_ENABLED: "false"
+    volumes:
+      - {type: bind, source: /dev/null, target: /app/docs/skills/infrastructure-health/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/mermaid-diagrams/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/neo4j-direct/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/query-elasticsearch/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/query-tempo/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/self-telemetry/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/sequential-thinking/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/system-diagnostics/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/system-metrics/SKILL.md, read_only: true}
+      - {type: bind, source: /dev/null, target: /app/docs/skills/turn-forensics/SKILL.md, read_only: true}
+
+  seshat-gateway-treatment:
+    environment:
+      <<: *fre1590-env

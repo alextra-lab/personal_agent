@@ -236,7 +236,9 @@ class SessionModel(Base):
     last_event_seq = Column(Integer, nullable=False, default=0, server_default="0")
     # ADR-0156 A5.4 (FRE-1595) — skill-provided tools revealed in this session. Written only
     # by SessionRepository.add_revealed_tools; SessionUpdate has no field for it.
-    revealed_tools = Column(ARRAY(Text), nullable=False, default=list, server_default="{}")
+    revealed_tools: Column[list[str]] = Column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
 
 
 class MetricModel(Base):

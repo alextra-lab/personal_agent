@@ -21,10 +21,12 @@ and they echo back as ``None`` in the contract dict.
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any, Literal
 
 from personal_agent.governance.sub_agent_tools import clamp_sub_agent_tool_params
 from personal_agent.orchestrator.loop_gate import GateResult, ToolLoopPolicy, stable_hash
+from personal_agent.orchestrator.skills import providers_of
 from personal_agent.telemetry import TOOL_CALL_COMPLETED, get_logger
 from personal_agent.telemetry.events import SUB_AGENT_TOOL_PARAM_CLAMPED
 from personal_agent.telemetry.trace import TraceContext
@@ -64,6 +66,30 @@ def get_shared_tool_execution_layer() -> "ToolExecutionLayer":
             get_default_registry(), transport=AGUITransport()
         )
     return _tool_execution_layer
+
+
+def not_revealed_error(tool_name: str) -> ToolErrorDetail:
+    """Build the refusal of a skill-provided tool that the session has not revealed.
+
+    ADR-0156 A5.5 step 2: the error lists every skill that provides the tool.
+
+    Args:
+        tool_name: The skill-provided tool the primary called.
+
+    Returns:
+        The model-facing failure.
+    """
+    providers = ", ".join(providers_of(tool_name)) or "none"
+    return dispatch_error(
+        "tool_not_revealed",
+        f"{tool_name} is not available yet: a skill provides it, and none of its skills is "
+        f"loaded in this session. Skills that provide it: {providers}.",
+        retryable=True,
+        next_action=(
+            f"Call read_skill with one of these skills: {providers}. After its result arrives, "
+            f"call {tool_name} in a later response."
+        ),
+    )
 
 
 def undispatched_failure(tool_name: str, detail: ToolErrorDetail, *, trace_id: str) -> str:
@@ -109,6 +135,7 @@ async def dispatch_tool_call(
     principal: Literal["primary", "sub_agent"] = "primary",
     worker: str | None = None,
     read_grant: ReadGrant | None = None,
+    revealed_tools: Collection[str] = (),
 ) -> dict[str, Any]:
     """Execute one validated tool call and return its result payload.
 
@@ -142,6 +169,10 @@ async def dispatch_tool_call(
             worker named (ADR-0156 D8.3, D9.3).
         read_grant: The worker task's file grant (ADR-0156 D9.4), passed on to ``read``.
             A ``sub_agent`` call to ``read`` without one is refused before it runs.
+        revealed_tools: The skill-provided tools that the primary's session revealed
+            (ADR-0156 A5.5). A ``primary`` call to a skill-provided tool outside this set is
+            refused before it runs. The default reveals nothing, so a caller that omits it
+            fails closed. A worker holds its tools from its closed list and ignores it.
 
     Returns:
         A dict with keys: ``tool_call_id``, ``tool_name``, ``content``,
@@ -189,8 +220,34 @@ async def dispatch_tool_call(
                 "tool_layer_error": "no_read_grant",
             }
 
-    # Validate required parameters against the tool definition.
     tool_info = tool_layer.registry.get_tool(tool_name)
+
+    # ADR-0156 A5.5 step 2, at the dispatch boundary: the primary's tool loop refuses an
+    # unrevealed skill-provided tool before the loop gate; this refuses it for any other
+    # primary caller too.
+    if (
+        principal == "primary"
+        and tool_info is not None
+        and tool_info[0].skill_provided
+        and tool_name not in revealed_tools
+    ):
+        return {
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "content": undispatched_failure(
+                tool_name, not_revealed_error(tool_name), trace_id=trace_id
+            ),
+            "success": False,
+            "latency_ms": 0,
+            "output_hash": None,
+            "gate_result": gate_result,
+            "args_hash": args_hash,
+            "loop_policy": loop_policy,
+            "tool_layer_output": None,
+            "tool_layer_error": "tool_not_revealed",
+        }
+
+    # Validate required parameters against the tool definition.
     if tool_info:
         tool_def, _ = tool_info
         required_params = [p.name for p in tool_def.parameters if p.required]

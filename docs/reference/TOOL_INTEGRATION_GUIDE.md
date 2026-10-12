@@ -51,6 +51,13 @@ Every Tier 1 tool consists of:
 4. **Governance entry** — in `config/governance/tools.yaml`
 5. **Unit tests** — in `tests/test_tools/test_<name>.py` with mocked httpx
 
+A tool that only a skill's task needs can be **skill-provided** (ADR-0156 A5):
+`ToolDefinition(skill_provided=True)`, and one or more skills name it in
+`metadata.provides-tools`. The primary sees the tool only after `read_skill` loads one of
+those skills, and then for the rest of the session (`sessions.revealed_tools`). Before the
+reveal, a call is refused with `tool_not_revealed`, which lists the providing skills. A worker
+holds the tool from its closed tool list, as any other tool.
+
 ### File layout
 ```
 src/personal_agent/tools/

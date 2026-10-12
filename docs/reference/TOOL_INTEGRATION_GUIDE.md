@@ -237,7 +237,7 @@ message selects a skill (ADR-0156 D2).
 
 ### Skill folder
 ```
-docs/skills/<name>/
+skills/<name>/
 ├── SKILL.md          ← frontmatter (name, description, metadata) + instructions
 ├── evals.yaml        ← at least 3 scenarios
 ├── scripts/          ← optional tested scripts; they ship in the gateway image
@@ -245,10 +245,10 @@ docs/skills/<name>/
 ```
 
 ### Skill template
-See `docs/skills/SKILL_TEMPLATE.md`.
+See `skills/SKILL_TEMPLATE.md`.
 
 ### Adding a Tier 2 tool
-1. Create `docs/skills/<name>/SKILL.md` and `evals.yaml` from the template.
+1. Create `skills/<name>/SKILL.md` and `evals.yaml` from the template.
 2. Add `<name>` to the inventory in `tests/docs/test_skill_validator.py`.
 3. Run `make test-file FILE=tests/docs/test_skill_validator.py`. The validator checks the
    format, and `tests/personal_agent/governance/test_skill_commands_permissions.py` checks

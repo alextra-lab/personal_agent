@@ -2299,7 +2299,7 @@ def test_artifact_design_doc_matches_manifest() -> None:
     """FRE-529 (ADR-0089 A4): docs/reference/artifact-builder/ is the source-of-truth.
 
     The doc is the maintainable superset the generation prompt is distilled
-    from. FRE-1590 moved it out of ``docs/skills/`` (no skill catalog lists it).
+    from. FRE-1590 moved it out of ``skills/`` (no skill catalog lists it).
     Since FRE-1579 (ADR-0156 D5.3) it is ``SKILL.md`` plus ``references/``:
     the library recipes live in the reference files, so this test reads them all.
     This manifest-driven drift guard keeps doc ↔ manifest ↔ prompt in

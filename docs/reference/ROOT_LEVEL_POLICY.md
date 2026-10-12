@@ -24,6 +24,7 @@
 - `functional-spec/` — Product requirements
 - `governance/` — Governance framework (if not consolidated)
 - `models/` — Model strategy
+- `skills/` — Runtime agent skills that the gateway image copies (ADR-0156 A1)
 - `src/` — Source code
 - `telemetry/` — Runtime observability data (evaluation runs, logs, etc. — mostly gitignored; see `.gitignore` for tracked baseline results and curated summaries)
 - `tests/` — Test suite

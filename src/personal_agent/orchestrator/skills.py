@@ -1,6 +1,6 @@
 """Skill loader, catalog and validator (ADR-0156 D1, D2, D3).
 
-Each agent skill is a folder ``docs/skills/<name>/`` in the Agent Skills format (S1,
+Each agent skill is a folder ``skills/<name>/`` in the Agent Skills format (S1,
 https://agentskills.io/specification): a ``SKILL.md`` whose frontmatter holds ``name``,
 ``description`` and an optional ``metadata`` map, with optional ``scripts/``, ``references/``
 and ``assets/`` beside it.
@@ -27,7 +27,7 @@ import yaml  # type: ignore[import-untyped]
 
 log = structlog.get_logger(__name__)
 
-SKILLS_DIR = Path(__file__).resolve().parents[3] / "docs" / "skills"
+SKILLS_DIR = Path(__file__).resolve().parents[3] / "skills"
 SKILL_FILE = "SKILL.md"
 _CHARS_PER_TOKEN = 4  # the repo's token estimate
 _MAX_FILE_BYTES = 1_000_000
@@ -483,7 +483,7 @@ def validate_skill(folder: Path, kind: SkillKind) -> tuple[SkillViolation, ...]:
 
     Args:
         folder: The skill folder.
-        kind: ``"agent"`` for ``docs/skills/``, ``"external"`` for ``docs/external-skills/``.
+        kind: ``"agent"`` for ``skills/``, ``"external"`` for ``docs/external-skills/``.
 
     Returns:
         Every broken rule; empty when the skill conforms.

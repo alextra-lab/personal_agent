@@ -23,7 +23,7 @@ import pytest
 from personal_agent.governance.permissions import evaluate_permission, load_permission_rules
 from personal_agent.orchestrator.skills import get_all_skills
 
-_SKILLS = Path(__file__).resolve().parents[3] / "docs" / "skills"
+_SKILLS = Path(__file__).resolve().parents[3] / "skills"
 _ELASTICSEARCH = (_SKILLS / "query-elasticsearch" / "SKILL.md").read_text(encoding="utf-8")
 _TEMPO = (_SKILLS / "query-tempo" / "SKILL.md").read_text(encoding="utf-8")
 # FRE-1578: the Pattern 5 recipe moved from SKILL.md to references/ (progressive disclosure).

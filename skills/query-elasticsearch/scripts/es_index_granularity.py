@@ -19,7 +19,7 @@ CLI usage — classify a family's live indices without hitting document data:
 
     curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
       | grep '^agent-monitors-joinability-' \
-      | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py \
+      | python3 skills/query-elasticsearch/scripts/es_index_granularity.py \
           agent-monitors-joinability
 
 Exit codes: 0 the family has daily or monthly indices, 1 the check failed (no input, input

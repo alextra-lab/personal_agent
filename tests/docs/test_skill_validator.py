@@ -1,6 +1,6 @@
 """ADR-0156 D1.3 (FRE-1577 AC-1, AC-4): every skill folder follows the Agent Skills format (S1).
 
-The validator runs over ``docs/skills/*/SKILL.md`` (the agent's skills) and
+The validator runs over ``skills/*/SKILL.md`` (the agent's skills) and
 ``docs/external-skills/*/SKILL.md`` (skills for external agents, D5.7). It checks the inventory
 of the ADR's migration table and every S1 rule of D1.3. An agent skill also needs a success
 section, a recovery section and an ``evals.yaml`` with 3 scenarios (D5.1, D5.2).
@@ -24,7 +24,7 @@ from personal_agent.orchestrator.skills import (
 )
 
 _REPO = Path(__file__).resolve().parents[2]
-_AGENT_DIR = _REPO / "docs" / "skills"
+_AGENT_DIR = _REPO / "skills"
 _EXTERNAL_DIR = _REPO / "docs" / "external-skills"
 
 # The ADR-0156 migration table: 11 agent skills, 3 external skills. FRE-1590 moved
@@ -192,15 +192,17 @@ def test_an_agent_skill_needs_sections_and_evals(tmp_path: Path) -> None:
 
 
 def test_the_gateway_image_copies_every_skill_folder() -> None:
-    """D1.4: the image copies ``docs/skills/`` whole, so ``<name>/scripts/`` ships with it."""
+    """D1.4: the image copies ``skills/`` whole, so ``<name>/scripts/`` ships with it."""
     dockerfile = (_REPO / "Dockerfile.gateway").read_text(encoding="utf-8")
-    assert re.search(r"^COPY docs/skills/ docs/skills/$", dockerfile, re.M)
+    assert re.search(r"^COPY skills/ skills/$", dockerfile, re.M)
     ignored = [
         line.strip()
         for line in (_REPO / ".dockerignore").read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.startswith("#")
     ]
-    # No pattern may exclude a file under docs/skills/ (a scripts/ folder or a script type).
+    # No pattern may exclude a file under skills/ (a scripts/ folder or a script type).
     for pattern in ignored:
-        assert not pattern.lstrip("/").startswith("docs"), pattern
+        bare = pattern.lstrip("/").rstrip("/")
+        assert bare != "skills" and not bare.startswith("skills/"), pattern
+        assert pattern not in ("**/skills", "**/skills/**"), pattern
         assert pattern not in ("scripts", "**/scripts", "*.py", "*.sh", "**/*.py", "**/*.sh")

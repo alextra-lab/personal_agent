@@ -62,7 +62,7 @@ each model call, tool call and sub-agent end:
 
 ```bash
 docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
-  | python3 docs/skills/turn-forensics/scripts/call_timeline.py <trace_id>
+  | python3 skills/turn-forensics/scripts/call_timeline.py <trace_id>
 ```
 
 Each line reads `HH:MM:SS  +Ns  CALL in=<tokens> role=<role>`, or `TOOL <name> <path>`. The

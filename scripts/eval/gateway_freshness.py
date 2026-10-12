@@ -35,7 +35,7 @@ log = structlog.get_logger(__name__)
 BUILD_INPUT_PATHS: tuple[str, ...] = (
     "src",
     "config",
-    "docs/skills",
+    "skills",
     "docker/mcp",
     "pyproject.toml",
     "uv.lock",

@@ -22,7 +22,7 @@ import yaml
 
 from personal_agent.tools.telemetry_query import _build_request, _build_tempo_request
 
-_SKILLS = Path(__file__).resolve().parents[2] / "docs" / "skills"
+_SKILLS = Path(__file__).resolve().parents[2] / "skills"
 _CONVERTED = (
     "infrastructure-health",
     "neo4j-direct",
@@ -98,6 +98,7 @@ def _skill_texts() -> list[tuple[str, str]]:
         for path in sorted((_SKILLS / name).rglob("*")):
             if path.is_file() and path.suffix in {".md", ".py", ".yaml"}:
                 found.append((f"{name}/{path.relative_to(_SKILLS / name)}", path.read_text()))
+    assert found, f"no skill file under {_SKILLS}"  # an empty set would skip every test
     return found
 
 
@@ -158,21 +159,21 @@ def test_no_two_descriptions_share_a_use_when_clause() -> None:
 
 # --- paths that the validator does not read -------------------------------------------------
 
-_SCRIPT_PATH = re.compile(r"docs/skills/([a-z0-9-]+)/((?:scripts|references)/[\w.-]*\w)")
+_SCRIPT_PATH = re.compile(r"skills/([a-z0-9-]+)/((?:scripts|references)/[\w.-]*\w)")
 _OTHER_SKILL_PATH = re.compile(r"(?<![\w/-])([a-z0-9-]+)/(references/[\w.-]*\w)")
 
 
 def test_every_path_to_a_skill_file_exists() -> None:
     """The validator reads only ``scripts/x`` in the skill's own folder (skills.py:363).
 
-    A repository path (``docs/skills/<name>/scripts/x``) or a file of another skill
+    A repository path (``skills/<name>/scripts/x``) or a file of another skill
     (``<name>/references/x``) escapes it, so a typo would pass. This test reads them.
     """
     missing: list[str] = []
     for where, text in _skill_texts():
         if not where.endswith(".md"):
             continue
-        # A path that starts with docs/skills/ names its folder outright: a missing folder is a
+        # A path that starts with skills/ names its folder outright: a missing folder is a
         # typo. The other-skill form (<name>/references/x) can match ordinary prose, so it is
         # read only when its first part is a real skill folder.
         for skill, relative in _SCRIPT_PATH.findall(text):
@@ -185,14 +186,14 @@ def test_every_path_to_a_skill_file_exists() -> None:
 
 
 def test_the_path_check_reads_both_spellings() -> None:
-    text = "Run docs/skills/neo4j-direct/scripts/x.py or read self-telemetry/references/y.md."
+    text = "Run skills/neo4j-direct/scripts/x.py or read self-telemetry/references/y.md."
     assert _SCRIPT_PATH.findall(text) == [("neo4j-direct", "scripts/x.py")]
     assert _OTHER_SKILL_PATH.findall(text) == [("self-telemetry", "references/y.md")]
 
 
 def test_a_mistyped_skill_folder_in_a_repository_path_is_caught(tmp_path: Path) -> None:
-    """Seeded negative: a typo in the folder of a docs/skills/ path must not pass."""
-    text = "Run docs/skills/neo4j-dirct/scripts/cypher.py now."
+    """Seeded negative: a typo in the folder of a skills/ path must not pass."""
+    text = "Run skills/neo4j-dirct/scripts/cypher.py now."
     found = _SCRIPT_PATH.findall(text)
     assert found == [("neo4j-dirct", "scripts/cypher.py")]
     assert not (_SKILLS / found[0][0] / found[0][1]).is_file()

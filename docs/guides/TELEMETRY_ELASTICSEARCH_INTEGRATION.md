@@ -184,11 +184,11 @@ relying on a shape:
 ```bash
 curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^<family-prefix>-' \
-  | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py <family-prefix>
+  | python3 skills/query-elasticsearch/scripts/es_index_granularity.py <family-prefix>
 ```
 
 The script moved into the skill folder in FRE-1578, so that it ships in the gateway image. See
-the [query-elasticsearch skill](../skills/query-elasticsearch/SKILL.md#index-families)
+the [query-elasticsearch skill](../../skills/query-elasticsearch/SKILL.md#index-families)
 for the recipe (tested classifier, guard against sibling-family name collisions) and FRE-1036's own plan
 (`docs/superpowers/plans/2026-07-31-fre-1036-es-ilm-monthly-rollover.md`) for the target design and
 per-family retention windows.

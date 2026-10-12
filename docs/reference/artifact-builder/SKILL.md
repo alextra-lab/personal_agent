@@ -2,7 +2,7 @@
 
 > **What this is:** the source document for the artifact builder's generation prompt
 > (`_HTML_GENERATION_SYSTEM_PROMPT` in `src/personal_agent/tools/artifact_tools.py`). It is
-> **not** an agent skill and sits outside `docs/skills/`, so no model's skill catalog lists it.
+> **not** an agent skill and sits outside `skills/`, so no model's skill catalog lists it.
 >
 > **Who reads it:** people who maintain the builder. No model loads it at runtime. Artifact
 > building is a dedicated, isolated process: the primary model writes a plan and calls

@@ -97,7 +97,7 @@ _CURL_PATH = re.compile(r"/|(?:/(?:[A-Za-z0-9._,-]+|\*))+")
 _VALID_MODES = frozenset(mode.value for mode in Mode)
 #: The only path form that a ``bash(python3 <path> *)`` allow rule may name (FRE-1585): relative,
 #: one skill, its ``scripts/`` directory, one ``.py`` file. No dot segment, no glob, no prefix.
-_SKILL_SCRIPT = re.compile(r"docs/skills/[a-z0-9][a-z0-9-]*/scripts/[A-Za-z0-9_][A-Za-z0-9_-]*\.py")
+_SKILL_SCRIPT = re.compile(r"skills/[a-z0-9][a-z0-9-]*/scripts/[A-Za-z0-9_][A-Za-z0-9_-]*\.py")
 #: The directory where the bash tool starts in the gateway image: ``WORKDIR /app`` in
 #: ``Dockerfile.gateway``, and ``bash.py`` passes no ``cwd=``. There, ``/app/<path>`` names the
 #: file that ``<path>`` names (FRE-1589).
@@ -273,7 +273,7 @@ class PermissionRule:
 
     @property
     def _is_skill_script_rule(self) -> bool:
-        """Whether the rule is ``bash(python3 docs/skills/<skill>/scripts/<file>.py *)``."""
+        """Whether the rule is ``bash(python3 skills/<skill>/scripts/<file>.py *)``."""
         return (
             self.bash_prefix
             and self.bash_words is not None
@@ -464,10 +464,10 @@ def _skill_script_refusal(path: str) -> str | None:
         path: The script path of a ``bash(python3 <path> *)`` rule.
 
     Returns:
-        A reason, or ``None`` when the path names one file under ``docs/skills/*/scripts/``.
+        A reason, or ``None`` when the path names one file under ``skills/*/scripts/``.
     """
     if not _SKILL_SCRIPT.fullmatch(path):
-        return f"{path!r} is not docs/skills/<skill>/scripts/<file>.py"
+        return f"{path!r} is not skills/<skill>/scripts/<file>.py"
     base = _bash_workdir()
     current = base
     for part in Path(path).parts:
@@ -483,7 +483,7 @@ def _check_allow_rule(rule: PermissionRule) -> None:
     """Reject an allow rule that would let a program run another program (D8.2).
 
     One prefix form of a program-running word loads: ``bash(python3 <path> *)``, when
-    ``<path>`` names one reviewed script under ``docs/skills/*/scripts/`` (FRE-1585). The words
+    ``<path>`` names one reviewed script under ``skills/*/scripts/`` (FRE-1585). The words
     after the script are the script's own arguments.
 
     Args:
@@ -507,7 +507,7 @@ def _check_allow_rule(rule: PermissionRule) -> None:
             return
         raise PermissionRuleError(
             f"{rule.text!r}: {refusal}. A python3 prefix rule must be "
-            "'bash(python3 docs/skills/<skill>/scripts/<file>.py *)' for one reviewed script "
+            "'bash(python3 skills/<skill>/scripts/<file>.py *)' for one reviewed script "
             "(FRE-1585)"
         )
     if rule.bash_prefix and first == "curl":

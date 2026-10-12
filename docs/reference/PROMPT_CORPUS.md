@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `0ebdfc62` · Committed: 2026-10-11T21:26:30+02:00  
+> Source revision: `fbbacf57` · Committed: 2026-10-12T13:18:19+02:00  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -26,27 +26,27 @@
 | `tool_use_injected_prompt` | 🟢 STATIC | 202 | `src/personal_agent/orchestrator/prompts.py:162` |
 | `tool_awareness_prompt` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:200` |
 | `operator_stanza` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:367` |
-| `reflection_dspy_signature` | 🟢 STATIC | 818 | `src/personal_agent/captains_log/reflection_dspy.py:79` |
+| `reflection_dspy_signature` | 🟢 STATIC | 816 | `src/personal_agent/captains_log/reflection_dspy.py:79` |
 | `reflection_manual_fallback` | 🟢 STATIC | 558 | `src/personal_agent/captains_log/reflection.py:172` |
 | `html_generation_system` | 🟢 STATIC | 1,468 | `src/personal_agent/tools/artifact_tools.py:1154` |
 
 ### Skill Documents
 
-Total skill docs: 10 · Total tokens (all skills): 17,293  
+Total skill docs: 10 · Total tokens (all skills): 17,271  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
-| infrastructure-health — Is each backend service reachable? | 820 | `docs/skills/infrastructure-health/SKILL.md` |
-| SKILL: Mermaid Diagrams | 3,595 | `docs/skills/mermaid-diagrams/SKILL.md` |
-| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,709 | `docs/skills/neo4j-direct/SKILL.md` |
-| query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,063 | `docs/skills/query-elasticsearch/SKILL.md` |
-| query-tempo — Model-call latency and the spans of one trace | 1,621 | `docs/skills/query-tempo/SKILL.md` |
-| self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `docs/skills/self-telemetry/SKILL.md` |
-| sequential-thinking — Structured Reasoning Discipline | 901 | `docs/skills/sequential-thinking/SKILL.md` |
-| system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `docs/skills/system-diagnostics/SKILL.md` |
-| system-metrics — CPU, memory and disk utilisation snapshot | 917 | `docs/skills/system-metrics/SKILL.md` |
-| turn-forensics — Reconstruct one turn end to end | 1,983 | `docs/skills/turn-forensics/SKILL.md` |
+| infrastructure-health — Is each backend service reachable? | 816 | `skills/infrastructure-health/SKILL.md` |
+| SKILL: Mermaid Diagrams | 3,593 | `skills/mermaid-diagrams/SKILL.md` |
+| neo4j-direct — Run read-only Cypher on the knowledge graph | 1,697 | `skills/neo4j-direct/SKILL.md` |
+| query-elasticsearch — Read agent logs and telemetry from Elasticsearch | 2,061 | `skills/query-elasticsearch/SKILL.md` |
+| query-tempo — Model-call latency and the spans of one trace | 1,621 | `skills/query-tempo/SKILL.md` |
+| self-telemetry — The agent's own tokens, cost, budget and outcomes | 2,858 | `skills/self-telemetry/SKILL.md` |
+| sequential-thinking — Structured Reasoning Discipline | 901 | `skills/sequential-thinking/SKILL.md` |
+| system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `skills/system-diagnostics/SKILL.md` |
+| system-metrics — CPU, memory and disk utilisation snapshot | 917 | `skills/system-metrics/SKILL.md` |
+| turn-forensics — Reconstruct one turn end to end | 1,981 | `skills/turn-forensics/SKILL.md` |
 
 ---
 
@@ -75,7 +75,7 @@ VPS/cloud deployment environment variables injected into the system prompt.
 Authenticated user identity + precedence rule (see operator_stanza leaf prompt).
 
 **`skill_index`** (🟡 SEMI_STATIC)  
-The skill catalog: one line per skill (name and description) from docs/skills/<name>/SKILL.md. Populated by orchestrator/skills.py (ADR-0156 D2).
+The skill catalog: one line per skill (name and description) from skills/<name>/SKILL.md. Populated by orchestrator/skills.py (ADR-0156 D2).
 
 **`memory_section`** (🔴 DYNAMIC)  
 Recalled memory nodes for this turn. Varies per turn. ⚠ DYNAMIC — marks the end of the cacheable prefix.
@@ -607,7 +607,7 @@ _Async function. Renders the operator stanza: the authenticated user's name and 
 | | |
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
-| **Token count** | 818 (docstring + field descriptors) |
+| **Token count** | 816 (docstring + field descriptors) |
 | **Source** | `src/personal_agent/captains_log/reflection_dspy.py:79` |
 
 ```
@@ -658,7 +658,7 @@ Focus areas:
 
 [failure_path_fix_what] Surgical fix (≤ 80 chars) that would have prevented this exact failure. Example: 'Add retry-with-scope-reduction note to query_elasticsearch tool description.' Return empty string if had_errors is False or no specific fix is identifiable.
 
-[failure_path_fix_location] File path + symbol of the text to edit, if known. Example: 'src/personal_agent/tools/fetch_url.py::DESCRIPTION' or 'docs/skills/query-tempo/SKILL.md'. Empty string if had_errors is False or unknown.
+[failure_path_fix_location] File path + symbol of the text to edit, if known. Example: 'src/personal_agent/tools/fetch_url.py::DESCRIPTION' or 'skills/query-tempo/SKILL.md'. Empty string if had_errors is False or unknown.
 
 [missing_skill_names] Skills you needed but didn't have. Format: {domain}-{noun}. Nouns: fetcher, runner, sender, writer, monitor, checker, scanner, analyzer, summarizer, generator, creator, tracker, detector, validator, notifier. Same gap = same name every time. Max 3, comma-separated. Empty string if nothing was missing.
 ```
@@ -797,7 +797,7 @@ REQUIREMENTS:
 
 ---
 
-## Skill Documents (`docs/skills/<name>/SKILL.md`)
+## Skill Documents (`skills/<name>/SKILL.md`)
 
 The `skill_index` component holds the catalog only. A body reaches the model as the result of a `read_skill` call (ADR-0156 D2).  
 
@@ -806,8 +806,8 @@ The `skill_index` component holds the catalog only. A body reaches the model as 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 820 |
-| **Source** | `docs/skills/infrastructure-health/SKILL.md` |
+| **Token count** | 816 |
+| **Source** | `skills/infrastructure-health/SKILL.md` |
 
 ```markdown
 # infrastructure-health — Is each backend service reachable?
@@ -824,11 +824,11 @@ The script opens a real Postgres connection and runs `SELECT 1`, reads the Elast
 health, reads the Neo4j HTTP page, and sends a Redis `PING`. It prints one line for each service.
 
 ```bash
-python3 docs/skills/infrastructure-health/scripts/probe_services.py all
+python3 skills/infrastructure-health/scripts/probe_services.py all
 ```
 
 ```bash
-python3 docs/skills/infrastructure-health/scripts/probe_services.py postgres
+python3 skills/infrastructure-health/scripts/probe_services.py postgres
 ```
 
 The argument is `postgres`, `elasticsearch`, `neo4j`, `redis` or `all`. Each line reads
@@ -881,8 +881,8 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 3,595 |
-| **Source** | `docs/skills/mermaid-diagrams/SKILL.md` |
+| **Token count** | 3,593 |
+| **Source** | `skills/mermaid-diagrams/SKILL.md` |
 
 ```markdown
 # SKILL: Mermaid Diagrams
@@ -1074,7 +1074,7 @@ The gateway container has `mmdc` (`@mermaid-js/mermaid-cli`) installed, and the 
 2. Run the script on that file:
 
 ```bash
-python3 docs/skills/mermaid-diagrams/scripts/validate_mermaid.py /tmp/m.mmd
+python3 skills/mermaid-diagrams/scripts/validate_mermaid.py /tmp/m.mmd
 ```
 
 The first line of the output is the verdict:
@@ -1258,8 +1258,8 @@ External resources (use for syntax lookup, not as import targets):
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,709 |
-| **Source** | `docs/skills/neo4j-direct/SKILL.md` |
+| **Token count** | 1,697 |
+| **Source** | `skills/neo4j-direct/SKILL.md` |
 
 ```markdown
 # neo4j-direct — Run read-only Cypher on the knowledge graph
@@ -1278,7 +1278,7 @@ External resources (use for syntax lookup, not as import targets):
 ## Step 1 — Run one query
 
 ```bash
-python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN count(e) AS n"
+python3 skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN count(e) AS n"
 ```
 
 The reply is one JSON document: `{"rows": [...], "row_count": n, "truncated": false}`. The script
@@ -1293,23 +1293,23 @@ backtick name is not read as a clause.
 ## Step 2 — Common diagnostic queries
 
 ```bash
-python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY cnt DESC"
+python3 skills/neo4j-direct/scripts/cypher.py "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY cnt DESC"
 ```
 
 ```bash
-python3 docs/skills/neo4j-direct/scripts/cypher.py "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
+python3 skills/neo4j-direct/scripts/cypher.py "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
 ```
 
 ```bash
-python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.first_seen AS first_seen ORDER BY e.first_seen DESC LIMIT 5"
+python3 skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.first_seen AS first_seen ORDER BY e.first_seen DESC LIMIT 5"
 ```
 
 ```bash
-python3 docs/skills/neo4j-direct/scripts/cypher.py 'MATCH (e:Entity) WHERE toLower(e.name) CONTAINS $q RETURN e.name AS name, e.entity_type AS type LIMIT 10' --param q=memory
+python3 skills/neo4j-direct/scripts/cypher.py 'MATCH (e:Entity) WHERE toLower(e.name) CONTAINS $q RETURN e.name AS name, e.entity_type AS type LIMIT 10' --param q=memory
 ```
 
 ```bash
-python3 docs/skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETURN e.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 10"
+python3 skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETURN e.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 10"
 ```
 
 Labels in the graph include `Entity` and `Turn`. A relationship type of interest is `DISCUSSES`.
@@ -1373,8 +1373,8 @@ curl -fsS -X POST \
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,063 |
-| **Source** | `docs/skills/query-elasticsearch/SKILL.md` |
+| **Token count** | 2,061 |
+| **Source** | `skills/query-elasticsearch/SKILL.md` |
 
 ```markdown
 # query-elasticsearch — Read agent logs and telemetry from Elasticsearch
@@ -1475,7 +1475,7 @@ family, use the tested script:
 ```bash
 curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^agent-monitors-joinability-' \
-  | python3 docs/skills/query-elasticsearch/scripts/es_index_granularity.py agent-monitors-joinability
+  | python3 skills/query-elasticsearch/scripts/es_index_granularity.py agent-monitors-joinability
 ```
 
 The script prints the daily and monthly counts, flags `MIXED`, and lists every name that it
@@ -1521,7 +1521,7 @@ Check the result before you answer:
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
 | **Token count** | 1,621 |
-| **Source** | `docs/skills/query-tempo/SKILL.md` |
+| **Source** | `skills/query-tempo/SKILL.md` |
 
 ```markdown
 # query-tempo — Model-call latency and the spans of one trace
@@ -1655,7 +1655,7 @@ See also: the `query-elasticsearch` skill for log queries.
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
 | **Token count** | 2,858 |
-| **Source** | `docs/skills/self-telemetry/SKILL.md` |
+| **Source** | `skills/self-telemetry/SKILL.md` |
 
 ```markdown
 # self-telemetry — The agent's own tokens, cost, budget and outcomes
@@ -1877,7 +1877,7 @@ Check the result before you answer:
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
 | **Token count** | 901 |
-| **Source** | `docs/skills/sequential-thinking/SKILL.md` |
+| **Source** | `skills/sequential-thinking/SKILL.md` |
 
 ```markdown
 # sequential-thinking — Structured Reasoning Discipline
@@ -1964,7 +1964,7 @@ What to do on each failure, with a stop rule:
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
 | **Token count** | 826 |
-| **Source** | `docs/skills/system-diagnostics/SKILL.md` |
+| **Source** | `skills/system-diagnostics/SKILL.md` |
 
 ```markdown
 # system-diagnostics — ps, ss, vmstat, iostat, lsof
@@ -2067,7 +2067,7 @@ Check the result before you answer:
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
 | **Token count** | 917 |
-| **Source** | `docs/skills/system-metrics/SKILL.md` |
+| **Source** | `skills/system-metrics/SKILL.md` |
 
 ```markdown
 # system-metrics — CPU, memory and disk utilisation snapshot
@@ -2169,8 +2169,8 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 1,983 |
-| **Source** | `docs/skills/turn-forensics/SKILL.md` |
+| **Token count** | 1,981 |
+| **Source** | `skills/turn-forensics/SKILL.md` |
 
 ```markdown
 # turn-forensics — Reconstruct one turn end to end
@@ -2226,7 +2226,7 @@ each model call, tool call and sub-agent end:
 
 ```bash
 docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
-  | python3 docs/skills/turn-forensics/scripts/call_timeline.py <trace_id>
+  | python3 skills/turn-forensics/scripts/call_timeline.py <trace_id>
 ```
 
 Each line reads `HH:MM:SS  +Ns  CALL in=<tokens> role=<role>`, or `TOOL <name> <path>`. The

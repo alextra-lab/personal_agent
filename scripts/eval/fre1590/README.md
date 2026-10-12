@@ -4,7 +4,7 @@
 
 Part 1 measures one thing: does the primary model's first call load the right skill?
 
-The items are the 43 scenarios of `docs/skills/*/evals.yaml` and the 20 no-skill prompts of
+The items are the 43 scenarios of `skills/*/evals.yaml` and the 20 no-skill prompts of
 `scripts/eval/fre1581/no_skill_prompts.yaml`. `load_items()` of `scripts/eval/fre1581/g2_skill_choice.py`
 loads them. The models are the catalog keys `qwen3.8-flash-next` and `gemma-4-26b-a4b`. llama.cpp serves both
 on `http://127.0.0.1:8600`, one model at a time.
@@ -106,7 +106,7 @@ Part 2 runs each scenario in `part2_scenarios.yaml` as one full turn on two eval
 Each turn starts a new session. The model is a catalog key: `qwen3.8-flash-next` or
 `gemma-4-26b-a4b`. The scenario list is a draft. The owner and master confirm it in the preflight.
 
-The control arm masks every `SKILL.md` with `/dev/null`. An empty `/app/docs/skills` is not
+The control arm masks every `SKILL.md` with `/dev/null`. An empty `/app/skills` is not
 used, because the permission rules then fail to load and every tool call is denied. The control
 arm also gets the primitive tools, as treatment has them, so the two arms differ only in the
 catalog.

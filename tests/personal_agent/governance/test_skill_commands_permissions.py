@@ -1,6 +1,6 @@
 """ADR-0156 D8.7 (FRE-1574): every command in a skill body is allowed, or a documented ask.
 
-It runs over every agent skill, ``docs/skills/<name>/SKILL.md`` (FRE-1577), and over the
+It runs over every agent skill, ``skills/<name>/SKILL.md`` (FRE-1577), and over the
 ``references/*.md`` files that a body links (FRE-1578: a command in a reference is a command
 that the skill names). It reads each fenced ``bash``/``sh``/``shell`` block of an agent skill and splits it into recipes at
 blank lines, because the model runs one recipe at a time. Two notations are normalised first:
@@ -25,7 +25,7 @@ from tree_sitter import Language, Parser
 
 from personal_agent.governance.permissions import evaluate_permission, load_permission_rules
 
-_SKILLS = Path(__file__).resolve().parents[3] / "docs" / "skills"
+_SKILLS = Path(__file__).resolve().parents[3] / "skills"
 _FENCE = re.compile(r"```(?:bash|sh|shell)\n(.*?)```", re.S)
 _NOTATION = re.compile(r'^(\s*)bash (?:command="(.*)"\s*$)?', re.M)
 _PLACEHOLDER = re.compile(r"<[A-Za-z_][\w-]*>")

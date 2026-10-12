@@ -7,7 +7,7 @@ be asserted:
 - success exits 0, a failed check or query exits 1, bad usage exits 2;
 - every failure is one ``error:`` line on stderr. No traceback, no secret.
 
-The scripts are standalone files under ``docs/skills/<name>/scripts/``. A stub server or a fake
+The scripts are standalone files under ``skills/<name>/scripts/``. A stub server or a fake
 driver stands in for the service. No test touches a real substrate (tests/CLAUDE.md, FRE-375).
 """
 
@@ -30,7 +30,7 @@ from types import ModuleType
 
 import pytest
 
-_SKILLS = Path(__file__).resolve().parents[2] / "docs" / "skills"
+_SKILLS = Path(__file__).resolve().parents[2] / "skills"
 _CLASSIFIER = _SKILLS / "query-elasticsearch" / "scripts" / "es_index_granularity.py"
 _PROBE = _SKILLS / "infrastructure-health" / "scripts" / "probe_services.py"
 _CYPHER = _SKILLS / "neo4j-direct" / "scripts" / "cypher.py"
@@ -622,7 +622,7 @@ def test_probe_reports_a_bad_port_as_one_line_and_does_not_stop_the_run() -> Non
 _BLOCKED_FUNCTIONS = [
     'RETURN apoc.cypher.runFirstColumnSingle("CALL dbms.listConfig() YIELD name '
     'RETURN count(name)", {}) AS n',
-    "RETURN apoc.cypher.runFirstColumnMany('CALL apoc.load.json(\"http://x\") YIELD value "
+    'RETURN apoc.cypher.runFirstColumnMany(\'CALL apoc.load.json("http://x") YIELD value '
     "RETURN value', {}) AS v",
     "RETURN apoc.cypher.runFirstColumnSingle('LOAD CSV FROM \"http://x\" AS r RETURN r', {})",
     "RETURN APOC.CYPHER.RUNFIRSTCOLUMNSINGLE('RETURN 1', {})",
@@ -924,7 +924,18 @@ def test_ac3_the_classifier_and_the_timeline_read_only_stdin() -> None:
 
 
 _PSQL_ARGV = [
-    "psql", "-w", "-h", "127.0.0.1", "-p", "1", "-U", "u", "-d", "app", "-tAc", "SELECT 1",
+    "psql",
+    "-w",
+    "-h",
+    "127.0.0.1",
+    "-p",
+    "1",
+    "-U",
+    "u",
+    "-d",
+    "app",
+    "-tAc",
+    "SELECT 1",
 ]
 
 
@@ -987,7 +998,7 @@ def test_ac3_every_script_rule_names_a_script_that_this_file_tests() -> None:
     """A python3 allow rule cannot land without the argument tests above (FRE-1585)."""
     from personal_agent.governance.permissions import load_permission_rules
 
-    repo = _SKILLS.parents[1]
+    repo = _SKILLS.parent
     named = {
         rule.bash_words[1]
         for rule in load_permission_rules().allow

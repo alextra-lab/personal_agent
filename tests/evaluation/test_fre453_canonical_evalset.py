@@ -6,7 +6,7 @@ ADR-0084 §D4):
 1. **Dataset integrity** — 18 cases, two tiers, all expected values drawn from the
    frozen vocabularies (orchestration events restricted to the classifier-emittable
    subset; pedagogical outcomes ⊆ the 10-outcome list).
-2. **Union coverage** (self-describing) — every skill in ``docs/skills/`` and every
+2. **Union coverage** (self-describing) — every skill in ``skills/`` and every
    native (non-``mcp_``) tool in ``config/governance/tools.yaml`` is claimed by some
    case or explicitly allowlisted; declared MCP families are claimed.
 3. **Evaluator semantics** — MATCH/MISMATCH findings on synthetic ``RouteTraceRow``s,
@@ -42,7 +42,7 @@ from scripts.eval.fre453_canonical_evalset.harness import (  # noqa: E402
 )
 
 DATASET_PATH = REPO_ROOT / "scripts" / "eval" / "fre453_canonical_evalset" / "dataset.yaml"
-SKILLS_DIR = REPO_ROOT / "docs" / "skills"
+SKILLS_DIR = REPO_ROOT / "skills"
 TOOLS_YAML = REPO_ROOT / "config" / "governance" / "tools.yaml"
 
 
@@ -179,8 +179,9 @@ class TestUnionCoverage:
         return claimed
 
     def test_all_repo_skills_claimed_or_allowlisted(self, evalset: EvalSet) -> None:
-        """Every docs/skills skill is claimed by a case or allowlisted."""
+        """Every skills skill is claimed by a case or allowlisted."""
         repo_skills = {p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md")}
+        assert repo_skills, f"no skill under {SKILLS_DIR}"
         uncovered = (
             repo_skills - self._claimed_skills(evalset) - set(evalset.coverage.allowlist_skills)
         )
@@ -199,10 +200,10 @@ class TestUnionCoverage:
             assert family in self._claimed_tools(evalset), f"family {family!r} unclaimed"
 
     def test_claimed_skills_exist_in_repo(self, evalset: EvalSet) -> None:
-        """No typo'd skill names: every claim must be a real docs/skills folder."""
+        """No typo'd skill names: every claim must be a real skills folder."""
         repo_skills = {p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md")}
         ghost = self._claimed_skills(evalset) - repo_skills
-        assert not ghost, f"claimed skills not in docs/skills/: {sorted(ghost)}"
+        assert not ghost, f"claimed skills not in skills/: {sorted(ghost)}"
 
     def test_claimed_tools_exist_in_registry_or_families(self, evalset: EvalSet) -> None:
         """No typo'd tool claims: all exist in tools.yaml or families."""
@@ -299,7 +300,7 @@ class TestEvaluator:
         assert self._by_name(ev_used, "tools_used_nonempty").verdict == "match"  # type: ignore[attr-defined]
 
     def test_expected_skills_matching_normalizes_separators(self, evalset: EvalSet) -> None:
-        """skills_loaded may report snake_case where docs/skills uses kebab-case."""
+        """skills_loaded may report snake_case where skills uses kebab-case."""
         case = _with_expected(self._trivial(evalset), skills=("self-telemetry",))
         ev = evaluate_case(case, _make_row(skills_loaded=("self_telemetry",)))
         assert self._by_name(ev, "skill:self-telemetry").verdict == "match"  # type: ignore[attr-defined]

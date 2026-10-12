@@ -5,7 +5,7 @@
 ``config/artifact_lib_manifest.json``, and its gotchas. paged.js is the exception: its asset is
 ``eval_gated``, so its file keeps the experimental prose and must not hold its URL.
 
-FRE-1590 moved the folder out of ``docs/skills/``: it is the source of the artifact builder's
+FRE-1590 moved the folder out of ``skills/``: it is the source of the artifact builder's
 generation prompt, not an agent skill, so no skill catalog lists it.
 
 The wider drift guard (``test_artifact_design_doc_matches_manifest``) reads the whole folder.

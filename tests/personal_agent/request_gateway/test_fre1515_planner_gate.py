@@ -225,7 +225,12 @@ class TestTheGateResolvesTheTurnsPrimary:
             raise RuntimeError("catalog unreadable")
 
         monkeypatch.setattr("personal_agent.config.model_loader.load_model_config", _broken)
-        assert primary_declares_planner_mode() is False
+        import structlog.testing
+
+        with structlog.testing.capture_logs() as logs:
+            assert primary_declares_planner_mode(trace_id="t-1515") is False
+        failed = [e for e in logs if e["event"] == "planner_gate_resolve_failed"]
+        assert failed and failed[0]["trace_id"] == "t-1515"
 
 
 #: The deployments whose ``planner`` mode passed ADR-0154 D7 on the current planner prompt

@@ -356,7 +356,9 @@ def resolve_inherited_deployment(config: ModelConfig) -> str:
 PLANNER_MODE = "planner"
 
 
-def primary_declares_planner_mode(config: ModelConfig | None = None) -> bool:
+def primary_declares_planner_mode(
+    config: ModelConfig | None = None, *, trace_id: str | None = None
+) -> bool:
     """Return whether this turn's primary deployment declares a ``planner`` mode (ADR-0154 D2).
 
     The gate of the routing change. It resolves the primary as the planner and primary
@@ -368,6 +370,7 @@ def primary_declares_planner_mode(config: ModelConfig | None = None) -> bool:
 
     Args:
         config: The catalog to resolve against. ``None`` loads the live one.
+        trace_id: The turn's trace id, for the failure log.
 
     Returns:
         ``True`` when the resolved primary deployment declares a ``planner`` mode.
@@ -377,7 +380,12 @@ def primary_declares_planner_mode(config: ModelConfig | None = None) -> bool:
         key = resolve_inherited_deployment(resolved_config)
         definition = resolved_config.models.get(key)
     except Exception as exc:
-        log.warning("planner_gate_resolve_failed", error=str(exc), error_type=type(exc).__name__)
+        log.warning(
+            "planner_gate_resolve_failed",
+            trace_id=trace_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return False
     return definition is not None and PLANNER_MODE in definition.modes
 

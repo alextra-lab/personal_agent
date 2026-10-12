@@ -122,7 +122,7 @@ async def run_gateway_pipeline(
         governance=governance,
         delegation_enabled=settings.delegation_enabled,
         expansion_enabled=settings.expansion_enabled,
-        planner_mode_declared=primary_declares_planner_mode(),
+        planner_mode_declared=primary_declares_planner_mode(trace_id=trace_id),
     )
 
     logger.info(

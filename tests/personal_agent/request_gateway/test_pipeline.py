@@ -39,7 +39,7 @@ def _history_sized(total_tokens: int, turns: int = 6) -> list[dict[str, str]]:
 def _close_planner_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """Route as a primary without a ``planner`` mode would (ADR-0154 D2), for matrix tests."""
     monkeypatch.setattr(
-        "personal_agent.config.model_loader.primary_declares_planner_mode", lambda: False
+        "personal_agent.config.model_loader.primary_declares_planner_mode", lambda **_: False
     )
 
 

@@ -6,32 +6,36 @@ F1, F3 and Proposals 1–3. **Owner decision:** 2026-10-13, "Yes" on the three p
 
 ## Scope
 
+Master corrected scope item 1 and AC-1 on the ticket at about 14:45Z, after the first build. The first text gave
+every monitor index to `log-search`. That contradicts the unchanged scenario `service-health#4`. The owner of each
+index is now chosen by objective.
+
 | # | Change | Files |
 |---|--------|-------|
-| 1 | `log-search` owns the monitor indices. `service-health` loses them from its description and body, and its "Not for…" line names `log-search` | `skills/service-health/SKILL.md`, `skills/log-search/SKILL.md` |
+| 1 | `service-health` owns `agent-monitors-slm-health` only and keeps its `search_logs` read. `log-search` owns the five other families. Each "Not for…" line names the other skill for the other part | `skills/service-health/SKILL.md`, `skills/log-search/SKILL.md` |
 | 2 | The `log-search` description puts its trigger words first: log events, counts, an index listing, ES\|QL | `skills/log-search/SKILL.md` |
-| 3 | The A4 descriptions are at least 10 tokens shorter in total. Each keeps its objective and its "Not for…" clause | `skills/{log-search,service-health,model-latency,spend-and-tokens,turn-explanation}/SKILL.md` |
+| 3 | The A4 descriptions are at least 10 tokens shorter in total. Each keeps its objective and its "Not for…" clause | `skills/{log-search,service-health,model-latency}/SKILL.md` (the first build also shortened `spend-and-tokens` and `turn-explanation`) |
 | 4 | Re-run AC-1 routing and AC-3 prompt size with the FRE-1597 harness and pins, in a window from master, after the owner OKs the preflight | `scripts/eval/fre1597/*` (no change), run directory |
 
 No tool, no tool definition and no `provides-tools` line changes. `interaction-outcomes` and `graph-inspection`
 descriptions are not touched: `interaction-outcomes` passed with no slack (8 of 9).
 
-## Assumptions and risks (stated before coding)
+## Assumptions and risks
 
-1. **`service-health#4` has no slack.** "Is the local model server healthy according to its monitor?" expects
-   `service-health`. `service-health` passed 13 of 15 with a bound of 13. After item 1 its body no longer reads
-   `agent-monitors-slm-health`, so the 3 draws of `#4` may go to `log-search`. The ticket forbids changing a scenario to
-   fit the result, so the re-run decides. The preflight note tells the owner this before the window opens.
-2. **`service-health` keeps `provides-tools: search_logs`.** The ticket says no reveal changes, ADR-0156 A4 lists the
-   reveal, and `test_telemetry_tools_visibility.py::test_the_providers_are_the_skills_that_the_adr_names` pins it.
-   After item 1 the body no longer uses the tool, so the reveal is dead weight. The handoff proposes removing it with
-   an ADR-0156 amendment. This PR does not.
-3. **Sampling noise.** Temperature is 1.0 and three skills sit at the bound (13 of 15, 13 of 15, 8 of 9). A miss on
-   the re-run may come from noise. The report states the draws, not only pass or fail.
-4. **Characters stand in for tokens until the re-run.** FRE-1597 measured 1,340 characters = 298 tokens, 4.5 characters
-   per token. The bound is 10 tokens, about 45 characters. The build saves 142 characters, about 32 tokens.
-5. **YAML.** A description is an unquoted scalar, so it cannot hold `: `. The first draft of the `log-search` line did,
+1. **Three skills sit at their bound** (`log-search` 13 of 15, `service-health` 13 of 15, `interaction-outcomes`
+   8 of 9) and temperature is 1.0. A miss on the re-run may come from noise. The report states the draws.
+2. **`log-search` lists `agent-monitors-slm-health` as one of the tool's three families** (a fact about the tool and
+   a row of its family table). The row says that `service-health` reads it. Its rules, examples and interval text do
+   not name it.
+3. **Characters stand in for tokens until the re-run.** FRE-1597 measured 1,340 characters = 298 tokens, 4.5 characters
+   per token. The bound is 10 tokens, about 45 characters. The final text saves 88 characters, about 20 tokens.
+   The `log-search` "Not for…" clause names a third skill, so it grew. It is now in the compact form
+   "(the `service-health` skill)".
+4. **YAML.** A description is an unquoted scalar, so it cannot hold `: `. The first draft of the `log-search` line did,
    and 22 validator cases failed. The line uses " - " as the other lines do.
+5. **Superseded by the correction:** the first plan expected `service-health#4` to route away and proposed dropping
+   `provides-tools: search_logs`. With the split, `service-health` still reads the index with the tool, so no ADR
+   amendment is needed.
 
 ## Steps
 
@@ -39,38 +43,41 @@ Every step is one commit unless it says otherwise. Run all commands from this wo
 
 ### 1. Failing tests first
 
-Create `tests/docs/test_monitor_index_owner.py` (17 cases):
+`tests/docs/test_monitor_index_owner.py` (17 cases):
 
-- `service-health` description: the part before "Not for" holds neither "monitor" nor "pipeline". (AC-1)
+- `service-health` description, before "Not for": holds "monitor" and "local model server", no other family, no
+  "pipeline". (AC-1)
 - `service-health` "Not for…" line holds "monitor" and `` `log-search` ``. (AC-1)
-- `service-health` body holds no `agent-monitors-`, no `search_logs(` call and no heading with "monitor". (AC-1)
-- `log-search` keeps "monitor indices" in its claim and `agent-monitors-slm-health` in its body. (guard)
-- `log-search` body holds the stale-document rule that `service-health` gave up. (fold-in)
+- `service-health` body: the only `agent-monitors-*` name is `agent-monitors-slm-health`, with the `search_logs` call
+  and `probed_at`. It holds a stale rule. (AC-1)
+- `log-search` description: claims "monitor indices", and its "Not for…" line names `` `service-health` `` and "model
+  server". (AC-1)
+- Each of the five other families is in the `log-search` body and in no part of `service-health`. (AC-1, one case each)
+- No `log-search` line pairs `agent-monitors-slm-health` with a `search_logs(` call or an interval. (AC-1)
+- `log-search` stale rule: a line with "stale" and "interval", and one that gives `cache-reset-cadence` "no interval".
 - `log-search` first sentence holds "log events", "counts", "indices" and "ES|QL", one case each. (item 2)
-- The seven A4 descriptions total at most `3738 - 120` characters. 3,738 is the FRE-1597 build. 120 characters is
-  about 27 tokens at 4.5 characters per token, against the 10 tokens that AC-3 needs. (item 3)
-- Each A4 description keeps a "Not for…" clause that names a skill in backticks. (guard)
+- The seven A4 descriptions total at most `3738 - 80` characters. 80 characters is about 18 tokens at 4.5 characters
+  per token, against the 10 tokens that AC-3 needs. (item 3)
 
-Run: `uv run pytest tests/docs/test_monitor_index_owner.py -q`. Result before the edits, observed: 6 failed, 11 passed.
-The 11 that pass are guards: they hold today and must hold after. Only the 6 prove the change.
+Run: `uv run pytest tests/docs/test_monitor_index_owner.py -q`. Result before the second round of edits, observed:
+5 failed, 12 passed. The 12 that pass are guards.
 
 ### 2. Edit the skills
 
 - `skills/service-health/SKILL.md`:
-  - description: remove the two monitor clauses and "or a pipeline". Add `log-search` to the "Not for…" line for the
-    monitor indices.
-  - body: delete the Rules bullet on monitor indices, "Step 3 — The monitor indices", the Success bullet on monitor
-    answers, and the Recovery row "A monitor query returns no document". Renumber nothing else.
-  - add one line to the Rules: a monitor index or a pipeline question goes to the `log-search` skill, loaded with
-    `read_skill`.
+  - description: claims the Postgres, Elasticsearch, Neo4j, Redis and Tempo probes and the health monitor of the local
+    model server. Its "Not for…" line names `log-search` for the other monitor indices.
+  - body: Rules name the one monitor and point the others to `log-search`. "Step 3 — The monitor of the local model
+    server" holds the `search_logs` call and `probed_at`. Success holds the stale rule (5 minutes by default).
+    Recovery holds the "no document" row.
 - `skills/log-search/SKILL.md`:
-  - description: rewrite with the trigger words first (see the test).
-  - body: add the two rules that moved from `service-health`. A monitor index records what a monitor saw at its last
-    run, and a newest document older than the monitor's interval is reported as stale. Put them in Rules and Success.
+  - description: trigger words first. The "Not for…" line names `service-health` for the model-server monitor.
+  - body: Rules hold the scheduled-monitor rule and one line that gives the model-server monitor to `service-health`.
+    Success names the three scheduled monitors (1 hour, 1 hour, 1 day) and the two event-driven ones.
 - `skills/{model-latency,spend-and-tokens,turn-explanation}/SKILL.md`: drop redundant phrases in the description
   only. No trigger word and no "Not for…" clause is removed.
 
-Run: `uv run pytest tests/docs/test_monitor_index_owner.py -q`. Expected: 5 passed.
+Run: `uv run pytest tests/docs/test_monitor_index_owner.py -q`. Expected: 17 passed.
 
 ### 3. Regression gates on the real inventory
 

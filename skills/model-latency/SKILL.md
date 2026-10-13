@@ -1,6 +1,6 @@
 ---
 name: model-latency
-description: Measures how slow model calls are over a time window - p50, p90 and max by role or by model, and the prefill and decode time of the local model server. Starts with the measure_model_latency tool and uses a curl recipe for a filter or an attribute that the tool does not list. Use when the task asks for latency numbers over a window, by role or by model, or for the prefill and decode time of the local server. Not for explaining one turn or reading the spans of one trace id. The `turn-explanation` skill does those.
+description: Measures how slow model calls are over a time window - p50, p90 and max by role or by model, and the prefill and decode time of the local model server. Starts with the measure_model_latency tool and uses a curl recipe for a filter that the tool does not list. Use when the task asks for latency numbers over a window, by role or by model, or for prefill and decode time. Not for explaining one turn or reading the spans of one trace id. The `turn-explanation` skill does those.
 metadata:
   requires-tools: bash
   provides-tools: measure_model_latency

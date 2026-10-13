@@ -1,6 +1,6 @@
 ---
 name: spend-and-tokens
-description: Reads the agent's own token totals, prompt-cache hit rate for each provider, spend by provider, role and day, and budget use. Starts with the search_logs tool for event data and uses curl for the budget snapshot, which the tool does not list. Use when the task is about token totals, cache hit rate, cost, spend by provider or by day, or budget caps. Not for how long model calls took, which the `model-latency` skill gives, or for how interactions ended, which the `interaction-outcomes` skill gives.
+description: Reads the agent's own token totals, prompt-cache hit rate for each provider, spend by provider, role and day, and budget use. Starts with the search_logs tool and uses curl for the budget snapshot. Use when the task is about token totals, cache hit rate, cost, spend by provider or by day, or budget caps. Not for how long model calls took, which the `model-latency` skill gives, or for how interactions ended, which the `interaction-outcomes` skill gives.
 metadata:
   requires-tools: bash
   provides-tools: search_logs

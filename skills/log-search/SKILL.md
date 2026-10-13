@@ -1,6 +1,6 @@
 ---
 name: log-search
-description: Counts, breaks down or finds agent log events over a time window, and tells which indices and fields exist. Starts with the search_logs tool and uses curl for what the tool cannot read - more than 50 hits, a window over 30 days, an index family outside its three, a field outside its list, and ES|QL. Use when the task is a count, a breakdown, an error search or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call timing, which the `model-latency` skill gives, or for spend and token totals, which the `spend-and-tokens` skill gives.
+description: Counts, breaks down or finds agent log events over a time window, lists indices and fields, and runs ES|QL. Starts with the search_logs tool and uses curl past its limits - more than 50 hits, over 30 days, an index family outside its three. Use when the task is a count, an error search, an index listing, an ES|QL query or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call timing (`model-latency`), spend and token totals (`spend-and-tokens`) or the monitor of the local model server (`service-health`).
 metadata:
   requires-tools: bash
   provides-tools: search_logs
@@ -14,6 +14,8 @@ metadata:
 - Start with the `search_logs` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
 - Use curl only for what the tool cannot do. The table below says which.
 - Use only the index families in this file. Never write a guessed index name.
+- A scheduled monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
+- The monitor of the local model server (`agent-monitors-slm-health`) is in the `service-health` skill.
 - Model-call timing is not in Elasticsearch. Use the `model-latency` skill.
 - Spend and token totals are in the `spend-and-tokens` skill. How interactions ended is in the `interaction-outcomes` skill.
 
@@ -89,7 +91,7 @@ Use `<family>-*`. The tool takes the family name without `-*`.
 | `agent-captains-captures-*` | Captain's Log, one document for each request | `timestamp` |
 | `agent-captains-reflections-*` | DSPy self-reflection output | `timestamp` |
 | `agent-insights-*` | Cross-session insights and anomalies | `timestamp` |
-| `agent-monitors-slm-health-*` | Probes of the local model server | `probed_at` |
+| `agent-monitors-slm-health-*` | Probes of the local model server (the `service-health` skill reads them) | `probed_at` |
 | `agent-monitors-cache-reset-cadence-*`, `agent-monitors-projector-health-*` | Monitors | `@timestamp` |
 | `agent-monitors-cache-erosion-*`, `agent-monitors-delivery-ratio-*` | Monitors | `run_at` |
 | `agent-monitors-joinability-*` | Monitor | `started_at` |
@@ -127,6 +129,9 @@ Check the result before you answer:
 - A `total` of 0 for a window in which the agent ran means the window or the filter is wrong.
 - A terms aggregation with no buckets and a `total` above 0 means the field is empty for these events. Find the event that carries it (the last call in Step 1).
 - A count that you quote is the count that the reply holds, with its window. Do not round it up.
+- A monitor answer gives the time of the newest document.
+- Three monitors run on a schedule. At the default interval they write every hour (`agent-monitors-cache-erosion`, `agent-monitors-joinability`) or every day (`agent-monitors-delivery-ratio`). A newest document older than its interval is reported as stale.
+- `agent-monitors-cache-reset-cadence` and `agent-monitors-projector-health` write on events, so they have no interval. A quiet period is not stale.
 
 ## Recovery
 

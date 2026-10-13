@@ -1,6 +1,6 @@
 ---
 name: turn-explanation
-description: Explains one agent turn from its trace id or session id - the per-call timeline with the input_tokens of each call, which part of the context used the tokens, where the time went, the spans and durations of the trace, what the browser received, and the inference-server request log when present. Use when the task is to explain one turn - why it was slow, why the context grew, or what it did step by step - to replay a trace, or to list the spans of a known trace id. Not for latency over a time window. The `model-latency` skill gives that.
+description: Explains one agent turn from its trace id or session id - the per-call timeline with the input_tokens of each call, which part of the context used the tokens, where the time went, the spans of the trace, what the browser received, and the inference-server request log. Use when the task is to explain one turn - why it was slow, why the context grew, or what it did step by step - to replay a trace, or to list the spans of a known trace id. Not for latency over a time window. The `model-latency` skill gives that.
 metadata:
   requires-tools: bash
   provides-tools: search_logs

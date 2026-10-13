@@ -985,6 +985,63 @@ class TestFactoryCollapse:
         assert isinstance(client, LiteLLMClient)
 
 
+class TestRequestedKeyIsHonoured:
+    """FRE-1343 — a local key binds the client to the deployment it names.
+
+    Before ADR-0141 D1 the key-based door returned a bare ``LocalLLMClient()``
+    that took no model key, so a standalone script got whatever the catalog
+    resolved by default — the right-looking wrong answer. These tests read the
+    ``model`` field of the request that reaches the wire, not the call's
+    arguments: the ids differ between the two fixture deployments, so a client
+    bound to anything but the requested key fails the equality.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key", [BUDGET_KEY, DISABLE_KEY])
+    async def test_wire_model_is_the_requested_keys_id_with_no_selection(self, key: str) -> None:
+        from personal_agent.config.selection import get_current_selection
+
+        assert get_current_selection(ModelRole.PRIMARY.value) is None, (
+            "precondition: a standalone script has no per-turn selection"
+        )
+
+        captured = await _dispatch(model_key=key)
+
+        assert captured.body["model"] == _local_catalog().models[key].id
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("requested", "selected"), [(BUDGET_KEY, DISABLE_KEY), (DISABLE_KEY, BUDGET_KEY)]
+    )
+    async def test_a_selection_for_another_key_does_not_displace_the_request(
+        self, requested: str, selected: str
+    ) -> None:
+        from personal_agent.config.selection import (
+            reset_current_selection,
+            set_current_selection,
+        )
+
+        token = set_current_selection({ModelRole.PRIMARY.value: selected})
+        try:
+            captured = await _dispatch(model_key=requested)
+        finally:
+            reset_current_selection(token)
+
+        assert captured.body["model"] == _local_catalog().models[requested].id
+
+    def test_an_unknown_key_raises_instead_of_substituting(self) -> None:
+        from personal_agent.llm_client.factory import get_llm_client_for_key
+
+        with (
+            patch(
+                "personal_agent.llm_client.factory.load_model_config",
+                return_value=_local_catalog(),
+            ),
+            pytest.raises(ValueError, match="Unknown model key 'not_in_catalog'"),
+        ):
+            get_llm_client_for_key("not_in_catalog", budget_role="main_inference")
+
+
 # ── FRE-1379 AC-2/AC-3 — the generation budget bounds a real streaming call ─
 
 

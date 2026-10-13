@@ -176,7 +176,9 @@ services:
       # "dependency neo4j-eval failed to start" line alongside it was collateral. All four
       # eval substrate services reach healthy unattended; they just need to be allowed to.
       start_period: 120s
-    mem_limit: 768m
+    # 768m held a 512m heap plus off-heap memory until the eval indices grew: the cgroup
+    # OOM-killed the JVM on 2026-10-12 19:20Z (anon-rss 678 MB) and again on the next start.
+    mem_limit: 1g
     cpus: 0.5
     networks:
       - cloud-sim

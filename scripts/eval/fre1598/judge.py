@@ -32,6 +32,7 @@ import json
 import random
 import re
 import sys
+import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,7 @@ from typing import Literal, cast, get_args
 
 from scripts.eval.fre1590 import help as part2
 from scripts.eval.fre1598.run import MODEL_KEY, catalog_entry
+from scripts.eval.fre1598.seed import EVAL_DB_PORT
 
 Label = Literal["PASS", "PARTIAL", "FAIL"]
 LABELS: tuple[Label, ...] = get_args(Label)
@@ -196,6 +198,8 @@ def client_judge(key: str) -> JudgeFn:
     from personal_agent.telemetry.trace import SystemTraceContext  # noqa: PLC0415
 
     client = get_llm_client_for_key(key, budget_role="study")
+    # One session id per judge process, so the client writes each call's api_costs row.
+    session_id = str(uuid.uuid4())
 
     async def call(system: str, user: str) -> JudgeReply:
         resp = await client.respond(
@@ -203,7 +207,7 @@ def client_judge(key: str) -> JudgeFn:
             messages=[{"role": "user", "content": user}],
             system_prompt=system,
             max_tokens=MAX_TOKENS,
-            trace_ctx=SystemTraceContext.new("fre1598_judge"),
+            trace_ctx=SystemTraceContext.new("fre1598_judge", session_id=session_id),
         )
         usage = resp.get("usage") or {}
         return JudgeReply(
@@ -404,9 +408,38 @@ async def _label(run_dir: Path, judge: str) -> int:
             split_rids(read_labels(jdir / "labels-1.jsonl"), read_labels(jdir / "labels-2.jsonl"))
         )
         items = [i for i in items if i["rid"] in splits]
-    rows = await label_items(
-        items, judge, client_judge(JUDGES[judge]), jdir / f"labels-{judge}.jsonl"
+    if not items:
+        print(f"judge {judge}: nothing to label")
+        return 0
+    # A standalone script has no application startup, so it registers the cost gate itself;
+    # without one every paid call refuses. The gate is what makes the `study` cap bind.
+    from personal_agent.config.settings import get_settings  # noqa: PLC0415
+    from personal_agent.cost_gate import (  # noqa: PLC0415
+        CostGate,
+        load_budget_config,
+        set_default_gate,
     )
+
+    # The gate's reservations and the client's api_costs row both go to settings.database_url.
+    # FRE-375: an eval script writes no production Postgres row, so the judge process must run
+    # with AGENT_DATABASE_URL on postgres-eval. The `study` cap then binds on the eval ledger.
+    db_url = get_settings().database_url
+    if f":{EVAL_DB_PORT}/" not in db_url:
+        raise SystemExit(
+            f"AGENT_DATABASE_URL must point at postgres-eval (port {EVAL_DB_PORT}) for the judges"
+        )
+    gate = CostGate(config=load_budget_config(), db_url=db_url)
+    await gate.connect()
+    set_default_gate(gate)
+    try:
+        rows = await label_items(
+            items, judge, client_judge(JUDGES[judge]), jdir / f"labels-{judge}.jsonl"
+        )
+    finally:
+        set_default_gate(None)
+        # One-shot script, no reaper task: reap once so a crash leaves no reservation behind.
+        await gate.reap_stale()
+        await gate.disconnect()
     return 1 if any("error" in r for r in rows) else 0
 
 

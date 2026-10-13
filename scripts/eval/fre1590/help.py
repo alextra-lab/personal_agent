@@ -371,6 +371,7 @@ async def read_turn(
     if reveal:
         check_reveal(arm, tool_lists, await _events(es, trace_id, "skill_tools_revealed"), reveal)
     completed_tools = await _events(es, trace_id, "tool_call_completed")
+    planner = await _events(es, trace_id, "planner_outcome")
     invoked = await _events(es, trace_id, "read_skill_invoked")
     started = await _events(es, trace_id, "tool_call_started")
     permissions = await _events(es, trace_id, "permission_evaluated")
@@ -395,6 +396,11 @@ async def read_turn(
             for e in completed_tools
         ),
         "error_events": [str(e.get("event_type")) for e in errors],
+        "planner_decision": [str(e.get("planner_decision")) for e in planner],
+        "model_calls_by_role": {
+            role: sum(e.get("role") == role for e in completed)
+            for role in sorted({str(e.get("role")) for e in completed})
+        },
     }
     for field, event_type in _COUNTED_EVENTS.items():
         row[field] = len(await _events(es, trace_id, event_type))

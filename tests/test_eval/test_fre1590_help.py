@@ -568,6 +568,22 @@ async def test_refusals_and_error_events_are_recorded_not_fatal(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_the_row_records_the_expansion_path(tmp_path: Path) -> None:
+    """A delegated turn is a valid row, but its sub-agent saw no skill: the row must show it."""
+    events = dict(GOOD_REVEAL)
+    events["control"] = reveal_events(
+        "control",
+        planner_outcome=[{"planner_decision": "expanded"}],
+        model_call_completed=[{"role": "primary"}, {"role": "sub_agent"}, {"role": "sub_agent"}],
+    )
+    rows, _ = await run_reveal(tmp_path, events)
+    by_arm = {r["arm"]: r for r in rows}
+    assert by_arm["control"]["planner_decision"] == ["expanded"]
+    assert by_arm["control"]["model_calls_by_role"] == {"primary": 1, "sub_agent": 2}
+    assert by_arm["treatment"]["planner_decision"] == []
+
+
+@pytest.mark.asyncio
 async def test_control_reveal_without_a_seeder_is_an_error_row(tmp_path: Path) -> None:
     async with chat_client([]) as http, es_client(GOOD_REVEAL, []) as es:
         rows = await part2.run_part2(

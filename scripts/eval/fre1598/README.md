@@ -43,7 +43,12 @@ Each row also records `tool_not_revealed` refusals and the event types of the tu
 
 ## Judge
 
+FRE-375: the judge process runs with its database on postgres-eval, so the cost gate's reservations and
+the client's `api_costs` rows land in the eval ledger, not in production. `judge label` refuses to start
+otherwise.
+
 ```bash
+export AGENT_DATABASE_URL="postgresql+asyncpg://agent:<POSTGRES_PASSWORD>@localhost:5434/personal_agent"
 uv run python -m scripts.eval.fre1598.judge blind --run-dir $RUN
 uv run python -m scripts.eval.fre1598.judge label --run-dir $RUN --judge 1
 uv run python -m scripts.eval.fre1598.judge label --run-dir $RUN --judge 2
@@ -55,8 +60,9 @@ uv run python -m scripts.eval.fre1598.judge score --run-dir $RUN
   for a PASS/FAIL split). `judging/judges.json` pins them with the prompt hashes.
 - A judge call sees one reply, its prompt and its `expect` text. It does not see the arm, the tools or the
   other reply. `judging/key.json` maps each opaque id to its scenario and arm.
-- The calls go through the agent's LLM client on the `study` budget lane (daily cap $1.00, weekly $5.00).
-  A cap denial stops the labelling. Each label row records the cost that the client returns.
+- The calls go through the agent's LLM client on the `study` budget lane of the eval ledger (daily cap
+  $1.00, weekly $5.00). A cap denial stops the labelling. Each label row records the cost that the client
+  returns.
 - `score` writes `judging/report.json`. AC-1 is `incomplete` until AC-2 passes.
 
 ## Tests

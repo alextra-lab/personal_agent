@@ -4,7 +4,7 @@ description: Takes a CPU, memory, disk and load snapshot of the agent process an
   free and df. Use when the task is a utilisation number - CPU %, the memory of the agent process or the
   host in MB, disk space, or load average - or asks about a GPU. GPU metrics are not available here. Not
   for listing or ranking processes (for example the top 5 by memory), ports or open files, which the
-  system-diagnostics skill does.
+  `system-diagnostics` skill does.
 metadata:
   requires-tools: bash
 ---

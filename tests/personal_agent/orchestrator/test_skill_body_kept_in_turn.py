@@ -316,23 +316,23 @@ async def _dispatch(layer: Any, arguments: dict[str, str], loaded: set[str]) -> 
 @pytest.mark.asyncio
 async def test_a_second_body_read_returns_the_marker() -> None:
     loaded: set[str] = set()
-    layer = _layer({"skill_name": "query-tempo", "body": _BODY, "files": []})
-    first = await _dispatch(layer, {"name": "query-tempo"}, loaded)
-    second = await _dispatch(layer, {"name": "query-tempo"}, loaded)
+    layer = _layer({"skill_name": "model-latency", "body": _BODY, "files": []})
+    first = await _dispatch(layer, {"name": "model-latency"}, loaded)
+    second = await _dispatch(layer, {"name": "model-latency"}, loaded)
     assert _BODY in first["content"]
     assert "already loaded earlier in this turn" in second["content"]
     assert layer.execute_tool.await_count == 1
-    assert loaded == {"query-tempo"}
+    assert loaded == {"model-latency"}
 
 
 @pytest.mark.asyncio
 async def test_a_file_read_is_never_deduplicated_and_loads_no_name() -> None:
-    loaded: set[str] = {"query-tempo"}
-    layer = _layer({"skill_name": "query-tempo", "path": "references/a.md", "content": "FILE"})
-    result = await _dispatch(layer, {"name": "query-tempo", "path": "references/a.md"}, loaded)
+    loaded: set[str] = {"model-latency"}
+    layer = _layer({"skill_name": "model-latency", "path": "references/a.md", "content": "FILE"})
+    result = await _dispatch(layer, {"name": "model-latency", "path": "references/a.md"}, loaded)
     assert "FILE" in result["content"]
     fresh: set[str] = set()
-    await _dispatch(layer, {"name": "query-tempo", "path": "references/a.md"}, fresh)
+    await _dispatch(layer, {"name": "model-latency", "path": "references/a.md"}, fresh)
     assert fresh == set()
 
 

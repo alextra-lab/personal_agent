@@ -31,8 +31,9 @@ class TestDiscovery:
         assert skills_module.SKILLS_DIR == repo / "skills"
         assert skills_module.SKILLS_DIR.is_dir()
 
-    def test_the_ten_agent_skills_load(self) -> None:
-        assert len(get_all_skills()) == 10
+    def test_the_eleven_agent_skills_load(self) -> None:
+        # ADR-0156 A4 (FRE-1596): seven telemetry-area skills, four others.
+        assert len(get_all_skills()) == 11
 
     def test_artifact_design_is_not_a_skill(self) -> None:
         """FRE-1590: the artifact builder's prompt source is no skill; no catalog lists it."""

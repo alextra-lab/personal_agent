@@ -1,30 +1,29 @@
 ---
-name: turn-forensics
-description: Explains one agent turn from its trace id or session id across the substrates - the per-call
-  timeline, which part of the context used the tokens, where the time went, what the browser received, and
-  the inference-server request log when present. Use when the task is to explain one turn - why it was
-  slow, why the context grew, or what it did step by step - or to replay a trace. Not for latency numbers
-  over a time window or the raw span list of a trace id - the query-tempo skill does those.
+name: turn-explanation
+description: Explains one agent turn from its trace id or session id - the per-call timeline with the input_tokens of each call, which part of the context used the tokens, where the time went, the spans and durations of the trace, what the browser received, and the inference-server request log when present. Use when the task is to explain one turn - why it was slow, why the context grew, or what it did step by step - to replay a trace, or to list the spans of a known trace id. Not for latency over a time window. The `model-latency` skill gives that.
 metadata:
   requires-tools: bash
+  provides-tools: search_logs
 ---
 
-# turn-forensics — Reconstruct one turn end to end
+# turn-explanation — Explain one turn end to end
 
 ## Rules
 
 - Pull the turn from live data. Never infer the timeline or a token count from priors.
 - Input: a `trace_id` (best) or a `session_id`. If the task names only "the last turn" or "the slowest turn", find the trace first (Step 0).
-- This skill explains one turn in depth. For a count or a breakdown over many turns use `query-elasticsearch`. For latency over a window use `query-tempo`.
+- Start with the `input_tokens` ladder (Step 1). It answers "why did the context grow" and shows which call was slow.
+- This skill explains one turn in depth. For a count or a breakdown over many turns use the `log-search` skill. For latency over a window use the `model-latency` skill.
+- `turn_status.context_tokens` is not a field that `search_logs` can read. The tool refuses it. Read the context size from `input_tokens`.
 - `trace_id` and `session_id` join every substrate.
 
 ## What each substrate answers
 
 | Substrate | Answers | How to read it |
 |---|---|---|
-| Elasticsearch `agent-logs-*` | The calls, the tokens, the tool calls | `query_telemetry` (Steps 0 and 1) |
+| Elasticsearch `agent-logs-*` | The calls, the tokens, the tool calls | `search_logs` (Steps 0 and 1) |
 | Gateway log | The same events, complete, with time stamps | `call_timeline.py` (Step 1b) |
-| Tempo | The duration of each span | `query-tempo` Step 2 |
+| Tempo | The duration of each span | curl on `tempo:3200` (Step 1c) |
 | Postgres `session_events` | What the browser received (`RUN_ERROR`, `STATE_DELTA`) | `psql` (Step 2) |
 | R2 artifact store | The bytes of an artifact | Step 3 |
 | Inference-server log | The model server's view of each request | Step 4 |
@@ -33,7 +32,7 @@ metadata:
 
 ```python
 # The traces of one session, newest first (a model call starts every one)
-query_telemetry(action="search", index="agent-logs", size=20, since="24h",
+search_logs(action="search", index="agent-logs", size=20, since="24h",
                 query={"bool": {"must": [{"term": {"session_id": "<session_id>"}},
                                          {"term": {"event_type": "model_call_started"}}]}},
                 fields=["@timestamp", "trace_id", "role"])
@@ -41,10 +40,10 @@ query_telemetry(action="search", index="agent-logs", size=20, since="24h",
 
 A turn with a model call has one trace id. Take the newest `trace_id` for "the last turn".
 
-## Step 1 — The per-call timeline and the context attribution
+## Step 1 — The `input_tokens` ladder: the per-call timeline and the context attribution
 
 ```python
-query_telemetry(action="search", index="agent-logs", size=50, since="24h",
+search_logs(action="search", index="agent-logs", size=50, since="24h",
                 query={"bool": {"must": [{"term": {"trace_id": "<trace_id>"}},
                                          {"terms": {"event_type": ["model_call_completed", "tool_call_started"]}}]}},
                 fields=["@timestamp", "event_type", "role", "model", "input_tokens", "output_tokens", "tool_name"])
@@ -62,12 +61,39 @@ each model call, tool call and sub-agent end:
 
 ```bash
 docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
-  | python3 skills/turn-forensics/scripts/call_timeline.py <trace_id>
+  | python3 skills/turn-explanation/scripts/call_timeline.py <trace_id>
 ```
 
 Each line reads `HH:MM:SS  +Ns  CALL in=<tokens> role=<role>`, or `TOOL <name> <path>`. The
 `+Ns` is the gap since the previous line. The script exits 1 with one `error:` line when no event
 of the trace is in the window: widen `--since`, or use Step 1.
+
+### Step 1c — The spans of one trace (Tempo)
+
+Tempo answers on the compose network as `tempo:3200`. It is not reachable from the host shell.
+Write a trace id, a clock value and a number as a literal in the command. A shell variable or
+`$(...)` makes the command ask for approval.
+
+```bash
+# Each span with its duration in milliseconds, in time order (the id below is an example)
+curl -fsS 'http://tempo:3200/api/v2/traces/1bc849bf94ebf80162af9c97b9ee91c3' | jq '[.trace.resourceSpans[].scopeSpans[].spans[] | {name, spanId, parentSpanId, start: (.startTimeUnixNano | tonumber), durationMs: (((.endTimeUnixNano | tonumber) - (.startTimeUnixNano | tonumber)) / 1000000)}] | sort_by(.start)'
+```
+
+A span holds `name`, `spanId`, `parentSpanId` (absent for the root), `startTimeUnixNano`,
+`endTimeUnixNano`, `kind`, `attributes` and `status`. Times are in nanoseconds: divide by
+1,000,000 for milliseconds. A very large trace (more than 1000 spans) is slow: select the span
+fields with `jq` and do not print the whole trace.
+
+Recent traces. `limit` is required: a search without it fails silently.
+
+```bash
+curl -fsS 'http://tempo:3200/api/search?limit=10' | jq '.traces'
+curl -fsS 'http://tempo:3200/api/search/tags' | jq '.tagNames'
+```
+
+`q` takes TraceQL, with braces and quotes: `{ resource.service.name = "seshat-vps" }`. A bare
+`key=value` in `q` is refused with HTTP 400. `start` and `end` are Unix seconds, written as
+literals (`date +%s` gives the clock). Tempo status and version belong to the `service-health` skill.
 
 ## Step 2 — What the browser received (Postgres `session_events`)
 
@@ -115,14 +141,14 @@ compute than the token count shows. All times are UTC ISO-8601.
 - **A slow primary call with no tool before it**: a large prefill (the grown context is sent again at each step), or a degraded model server (multi-minute calls, HTTP 524). A restart of the model server fixes the second case.
 - **A gap between the sub-agent end and the final reply**: the synthesis call on the grown context. The sub-agent was not slow.
 - **A terminal tool failure**: look for `tool_terminal_short_circuit`. The turn must end in milliseconds with a `tool_failure` `RUN_ERROR` and no recovery call.
-- `input_tokens` (the model's tokenizer) and `turn_status.context_tokens` (an estimate) differ by 10 to 20 percent. The trend is the same.
+- `turn_status.context_tokens` is an estimate that the UI shows. `search_logs` does not list it, and `input_tokens` (the model's tokenizer) differs from it by 10 to 20 percent. Quote `input_tokens`.
 
 ## Success
 
 Check the result before you answer:
 
 - The answer names the trace id and lists the calls with `input_tokens` and the gap before each.
-- A "why was it slow" answer names one step (a call or a tool) and gives its seconds, from Step 1b or from Tempo.
+- A "why was it slow" answer names one step (a call or a tool) and gives its seconds, from Step 1b or Step 1c.
 - A "why did the context grow" answer names the tool result before the jump and its size.
 - The answer says which substrates were read. A substrate that was not reachable is named, not skipped.
 
@@ -136,4 +162,5 @@ Check the result before you answer:
 | Step 4 returns HTTP 401 or 403 | The access headers are missing | Say that the model server log is not reachable. Do not guess its content |
 | Step 4 cannot resolve the host | `es.example.com` is not reachable from here | Use Steps 1 to 3. They are self-contained on the gateway host |
 | A `span_id` is absent | An older turn | Match by `ts` within 5 seconds of `model_call_started` in the gateway log |
+| `could not resolve host: tempo` | The command ran on the host shell | Run it through the `bash` tool, which runs in the gateway container |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |

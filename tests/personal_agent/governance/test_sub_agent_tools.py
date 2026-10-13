@@ -216,7 +216,8 @@ class TestTheShippedDecisions:
             ("get_library_docs", True),
             ("read_skill", True),
             ("notes_search", True),
-            ("query_telemetry", True),
+            ("search_logs", True),
+            ("measure_model_latency", True),
             # FRE-1467 reversed this one: FRE-1463 refused it because it could
             # not work without an identity, and FRE-1467 threaded the identity.
             ("recall_personal_history", True),

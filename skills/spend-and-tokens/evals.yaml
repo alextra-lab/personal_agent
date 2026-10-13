@@ -1,0 +1,14 @@
+skill: spend-and-tokens
+scenarios:
+  - prompt: "What was the prompt cache hit rate of the local model calls in the last 24 hours?"
+    expected_skill: spend-and-tokens
+    expect: "Sums input_tokens and cache_read_tokens for the local provider on model_call_completed. Gives the rate as cached divided by input, because the local input already includes the cached tokens. States the formula and the window. The rate is between 0 and 1. Does not use cache_read_input_tokens on this event."
+  - prompt: "How much did we spend yesterday in total, embeddings and reranking included?"
+    expected_skill: spend-and-tokens
+    expect: "Uses api_cost_recorded, by provider or by day, and says that the total includes embedding and rerank cost. Does not use model_call_completed alone."
+  - prompt: "How close is the daily budget to its cap right now?"
+    expected_skill: spend-and-tokens
+    expect: "Reads the latest budget_counter_snapshot per role and time_window with the curl recipe, because the tool does not list those fields. Reports running_total, cap_usd and utilization_ratio from the latest snapshot, not a sum."
+  - prompt: "Which factory role costs the most in LLM calls over the last 24 hours, and is that the whole spend?"
+    expected_skill: spend-and-tokens
+    expect: "Sums cost_usd by role on model_call_completed and says that this figure is LLM-only. Gives the total from api_cost_recorded and names the difference as embedding and rerank cost."

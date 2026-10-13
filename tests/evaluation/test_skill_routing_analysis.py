@@ -109,9 +109,9 @@ class TestRouterRecallPrecision:
 
     def test_perfect_recall_precision(self) -> None:
         """Router returns exactly the expected skill → recall=1, precision=1."""
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         r = _trace_with_events(
-            [self._routing_event(["query-elasticsearch"])],
+            [self._routing_event(["log-search"])],
             ground_truth=gt,
         )
         assert r["router_recall"] == pytest.approx(1.0)
@@ -132,9 +132,9 @@ class TestRouterRecallPrecision:
 
     def test_extra_returned_skill_lowers_precision(self) -> None:
         """Router returns expected + extra skill → precision < 1."""
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         r = _trace_with_events(
-            [self._routing_event(["query-elasticsearch", "run-python"])],
+            [self._routing_event(["log-search", "run-python"])],
             ground_truth=gt,
         )
         assert r["router_recall"] == pytest.approx(1.0)
@@ -145,7 +145,7 @@ class TestRouterRecallPrecision:
 
         precision = |returned ∩ expected| / max(1, |returned|) = 0 / max(1,0) = 0/1 = 0.
         """
-        gt = {"expected_router_skills": ["neo4j-direct"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["graph-inspection"], "forbidden_router_skills": []}
         r = _trace_with_events([self._routing_event([])], ground_truth=gt)
         assert r["router_recall"] == pytest.approx(0.0)
         assert r["router_precision"] == pytest.approx(0.0)
@@ -161,7 +161,7 @@ class TestRouterRecallPrecision:
         """No expected skills + router returns a skill → precision=0.0 (false positive)."""
         gt = {"expected_router_skills": [], "forbidden_router_skills": []}
         r = _trace_with_events(
-            [self._routing_event(["query-elasticsearch"])],
+            [self._routing_event(["log-search"])],
             ground_truth=gt,
         )
         assert r["router_recall"] is None
@@ -171,10 +171,10 @@ class TestRouterRecallPrecision:
         """Router returns a forbidden skill → router_has_forbidden=True."""
         gt = {
             "expected_router_skills": [],
-            "forbidden_router_skills": ["query-elasticsearch"],
+            "forbidden_router_skills": ["log-search"],
         }
         r = _trace_with_events(
-            [self._routing_event(["query-elasticsearch"])],
+            [self._routing_event(["log-search"])],
             ground_truth=gt,
         )
         assert r["router_has_forbidden"] is True
@@ -183,7 +183,7 @@ class TestRouterRecallPrecision:
         """Router returns a safe skill → router_has_forbidden=False."""
         gt = {
             "expected_router_skills": ["run-python"],
-            "forbidden_router_skills": ["query-elasticsearch"],
+            "forbidden_router_skills": ["log-search"],
         }
         r = _trace_with_events(
             [self._routing_event(["run-python"])],
@@ -213,7 +213,7 @@ class TestSuccessClass:
         trace = {
             "tool_iteration_limit_reached": True,
             "guard_blocks": 0,
-            "routing_skills_returned": ["query-elasticsearch"],
+            "routing_skills_returned": ["log-search"],
             "read_skill_names": [],
         }
         assert _classify_success(trace, None) == "failed"
@@ -226,7 +226,7 @@ class TestSuccessClass:
             "routing_skills_returned": [],
             "read_skill_names": [],
         }
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         assert _classify_success(trace, gt) == "guard_saved"
 
     def test_router_hit_is_clean_success(self) -> None:
@@ -234,10 +234,10 @@ class TestSuccessClass:
         trace = {
             "tool_iteration_limit_reached": False,
             "guard_blocks": 0,
-            "routing_skills_returned": ["query-elasticsearch"],
+            "routing_skills_returned": ["log-search"],
             "read_skill_names": [],
         }
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         assert _classify_success(trace, gt) == "clean_success"
 
     def test_router_miss_with_read_skill_recovery_is_recovered(self) -> None:
@@ -247,9 +247,9 @@ class TestSuccessClass:
             "guard_blocks": 0,
             "routing_call_fired": True,
             "routing_skills_returned": [],
-            "read_skill_names": ["query-elasticsearch"],
+            "read_skill_names": ["log-search"],
         }
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         assert _classify_success(trace, gt) == "recovered_success"
 
     def test_router_miss_no_recovery_is_failed(self) -> None:
@@ -261,7 +261,7 @@ class TestSuccessClass:
             "routing_skills_returned": [],
             "read_skill_names": [],
         }
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         assert _classify_success(trace, gt) == "failed"
 
     def test_no_expected_skills_no_limit_is_clean(self) -> None:
@@ -298,7 +298,7 @@ class TestSuccessClass:
             "routing_skills_returned": [],
             "read_skill_names": [],
         }
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         assert _classify_success(trace, gt) == "clean_success"
 
     def test_keyword_mode_with_iteration_limit_is_failed(self) -> None:
@@ -320,7 +320,7 @@ class TestSuccessClass:
             "routing_skills_returned": [],
             "read_skill_names": [],
         }
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         assert _classify_success(trace, gt) == "guard_saved"
 
     def test_iteration_limit_beats_guard(self) -> None:
@@ -367,10 +367,10 @@ class TestReadSkill3Bucket:
 
     def test_needed_and_invoked(self) -> None:
         """Expected skill fetched via read_skill → needed_and_invoked=True."""
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         # routing call fired but returned nothing; primary read_skill'd the expected skill
         r = _trace_with_events(
-            [self._routing_fired_event([]), *self._events(["query-elasticsearch"])],
+            [self._routing_fired_event([]), *self._events(["log-search"])],
             ground_truth=gt,
         )
         assert r["read_skill_needed_and_invoked"] is True
@@ -379,7 +379,7 @@ class TestReadSkill3Bucket:
 
     def test_needed_but_not_invoked(self) -> None:
         """Expected skill never fetched, router also missed → needed_but_not_invoked=True."""
-        gt = {"expected_router_skills": ["neo4j-direct"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["graph-inspection"], "forbidden_router_skills": []}
         r = _trace_with_events([self._routing_fired_event([])], ground_truth=gt)
         assert r["read_skill_needed_and_invoked"] is False
         assert r["read_skill_needed_but_not_invoked"] is True
@@ -387,18 +387,18 @@ class TestReadSkill3Bucket:
     def test_not_needed_but_invoked(self) -> None:
         """Primary fetches unexpected skill → not_needed_but_invoked=True."""
         gt = {"expected_router_skills": ["run-python"], "forbidden_router_skills": []}
-        # router loaded run-python; primary also fetched neo4j-direct unexpectedly
+        # router loaded run-python; primary also fetched graph-inspection unexpectedly
         r = _trace_with_events(
-            self._events(["neo4j-direct"], routing_skills=["run-python"]),
+            self._events(["graph-inspection"], routing_skills=["run-python"]),
             ground_truth=gt,
         )
         assert r["read_skill_not_needed_but_invoked"] is True
 
     def test_router_loaded_expected_skill_no_read_needed(self) -> None:
         """Router pre-loaded expected skill → needed_but_not_invoked=False (router covered it)."""
-        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        gt = {"expected_router_skills": ["log-search"], "forbidden_router_skills": []}
         r = _trace_with_events(
-            self._events([], routing_skills=["query-elasticsearch"]),
+            self._events([], routing_skills=["log-search"]),
             ground_truth=gt,
         )
         # Router loaded it, so 'not invoked' flag should be False
@@ -406,7 +406,7 @@ class TestReadSkill3Bucket:
 
     def test_no_ground_truth_buckets_are_none(self) -> None:
         """Without ground truth all 3 bucket flags are None."""
-        r = _trace_with_events(self._events(["query-elasticsearch"]))
+        r = _trace_with_events(self._events(["log-search"]))
         assert r["read_skill_needed_and_invoked"] is None
         assert r["read_skill_needed_but_not_invoked"] is None
         assert r["read_skill_not_needed_but_invoked"] is None

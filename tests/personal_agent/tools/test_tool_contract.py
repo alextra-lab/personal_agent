@@ -50,7 +50,8 @@ EXPECTED_TOOLS = frozenset(
         "perplexity_query",
         "get_library_docs",
         "fetch_url",
-        "query_telemetry",
+        "search_logs",
+        "measure_model_latency",
         "create_linear_issue",
         "find_linear_issues",
         "list_linear_projects",
@@ -367,7 +368,10 @@ def probe_layer(monkeypatch: pytest.MonkeyPatch) -> ToolExecutionLayer:
 
 
 async def _dispatch(
-    layer: ToolExecutionLayer, tool_name: str, arguments: Mapping[str, object] | None = None
+    layer: ToolExecutionLayer,
+    tool_name: str,
+    arguments: Mapping[str, object] | None = None,
+    revealed_tools: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, Any], list[MutableMapping[str, Any]]]:
     trace_ctx = TraceContext.new_trace()
     with capture_log_records() as records:
@@ -380,6 +384,7 @@ async def _dispatch(
             trace_id=trace_ctx.trace_id,
             session_id=None,
             loaded_skills=set(),
+            revealed_tools=revealed_tools,
         )
     return result, records
 
@@ -476,12 +481,12 @@ async def test_an_oversized_result_is_truncated_at_dispatch(
 
 
 # ---------------------------------------------------------------------------
-# AC-2 / AC-8 named instance: a query_telemetry refusal keeps its allowed fields
+# AC-2 / AC-8 named instance: a search_logs refusal keeps its allowed fields
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_a_query_telemetry_refusal_reaches_the_model_with_the_allowed_fields(
+async def test_a_search_logs_refusal_reaches_the_model_with_the_allowed_fields(
     full_registry: ToolRegistry,
 ) -> None:
     """AC-2: the refusal lists every allowed field, unclipped, and logs ``success: false``."""
@@ -493,8 +498,9 @@ async def test_a_query_telemetry_refusal_reaches_the_model_with_the_allowed_fiel
     )
     result, records = await _dispatch(
         layer,
-        "query_telemetry",
+        "search_logs",
         {"action": "search", "index": "agent-logs", "fields": ["user_message"]},
+        revealed_tools=frozenset({"search_logs"}),  # a providing skill was loaded (A5.3)
     )
     payload = assert_conforms(result["content"])
     error = payload["error"]

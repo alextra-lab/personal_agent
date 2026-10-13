@@ -146,7 +146,7 @@ sub_agent_tools:
       to network false (above). The tool registers only when the R2 substrate is
       configured; where it does not, the worker simply is not offered it.
 
-  query_telemetry:
+  search_logs:
     granted: true
     reason: >-
       Owner decision, 2026-10-10 (FRE-1564, "1 a"). A native read-only Elasticsearch tool
@@ -156,12 +156,21 @@ sub_agent_tools:
       content field is listed. It is internal data, so it goes only to the `general` type,
       which holds no outbound tool. Residual risk: `message` and `error` are free text from
       the agent's own logging and can carry a fragment of user input.
-      Widened by the owner on 2026-10-10 (FRE-1567): the `latency` action reads model-call
+      FRE-1596 (ADR-0156 A5.2): the `search` and `count` actions of the former single tool.
+      The grant carries over unchanged, because the capability is the same.
+
+  measure_model_latency:
+    granted: true
+    reason: >-
+      Widened by the owner on 2026-10-10 (FRE-1567), under the FRE-1564 grant: model-call
       timing from Tempo's search API. The tool writes the TraceQL; the model picks a span
       kind, group keys and exact-match filters. Only listed span attributes are selected or
       read (role, model, token counts, slm prefill and decode time, duration, status), and
       the model gets per-group statistics, never spans. Attributes that carry text or a
       conversation id (statusMessage, url.full, http.target, slm.session_id) are not listed.
+      It is internal data, so it goes only to the `general` type, which holds no outbound
+      tool. FRE-1596 (ADR-0156 A5.2): the `latency` action of the former single tool. The
+      grant carries over unchanged, because the capability is the same.
 
   recall_personal_history:
     granted: true
@@ -680,7 +689,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.943694
-  # Perform an Elasticsearch ES|QL query. — DISABLED: superseded by bash + query-elasticsearch skill (FRE-265)
+  # Perform an Elasticsearch ES|QL query. — DISABLED: superseded by bash + log-search skill (FRE-265)
   mcp_esql:
     category: "mcp"
     allowed_in_modes: []
@@ -721,7 +730,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.959873
-  # Get field mappings for a specific Elasticsearch index — DISABLED: superseded by bash + query-elasticsearch skill (FRE-265)
+  # Get field mappings for a specific Elasticsearch index — DISABLED: superseded by bash + log-search skill (FRE-265)
   mcp_get_mappings:
     category: "mcp"
     allowed_in_modes: []
@@ -732,7 +741,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.965793
-  # Get shard information for all or specific indices. — DISABLED: superseded by bash + query-elasticsearch skill (FRE-265)
+  # Get shard information for all or specific indices. — DISABLED: superseded by bash + log-search skill (FRE-265)
   mcp_get_shards:
     category: "mcp"
     allowed_in_modes: []
@@ -743,7 +752,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.971814
-  # List all available Elasticsearch indices — DISABLED: superseded by bash + query-elasticsearch skill (FRE-265)
+  # List all available Elasticsearch indices — DISABLED: superseded by bash + log-search skill (FRE-265)
   mcp_list_indices:
     category: "mcp"
     allowed_in_modes: []
@@ -1283,9 +1292,19 @@ tools:
     loop_max_per_signature: 3
     loop_max_consecutive: 5
 
-  # FRE-1564: native read-only Elasticsearch query over the system's own telemetry.
+  # FRE-1564: native read-only Elasticsearch query over the system's own logs.
   # The tool validates every query against an allowlist and builds the request itself.
-  query_telemetry:
+  # FRE-1596 (ADR-0156 A5.2): split by objective. Each tool keeps the values of the
+  # former single row. Skill-provided: the primary sees it after the reveal.
+  search_logs:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
+    risk_level: "low"
+    timeout_seconds: 20
+    rate_limit_per_hour: 120
+
+  # FRE-1567, FRE-1596: model-call timing from Tempo trace spans, per group.
+  measure_model_latency:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
     risk_level: "low"

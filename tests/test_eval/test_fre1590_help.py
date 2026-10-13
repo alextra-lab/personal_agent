@@ -54,7 +54,7 @@ def turn_events(catalog_chars: int = 0, completed: int = 1) -> dict[str, list[di
     return {
         "model_call_completed": [{"model": "m", "role": "primary"}] * completed,
         "skill_index_assembled": [{"index_chars": catalog_chars}],
-        "read_skill_invoked": [{"skill_name": "query-tempo", "path": None}],
+        "read_skill_invoked": [{"skill_name": "model-latency", "path": None}],
         "tool_call_started": [{"tool_name": "read_skill"}, {"tool_name": "bash"}],
         "tool_call_failed": [{"tool_name": "bash"}],
         "permission_evaluated": [{"decision": "allow"}, {"decision": "deny"}],
@@ -109,7 +109,7 @@ def config(tmp_path: Path) -> part2.RunConfig:
     )
 
 
-def scenario(sid: str = "query-tempo#1") -> part2.Scenario:
+def scenario(sid: str = "model-latency#1") -> part2.Scenario:
     return part2.Scenario(sid, sid.partition("#")[0], "prompt", "expect", "reason")
 
 
@@ -142,14 +142,7 @@ def test_the_part2_list_resolves_and_leaves_out_the_excluded_rows() -> None:
     ids = [s.id for s in scenarios]
     assert len(ids) == len(set(ids))
     assert not [i for i in ids if i.startswith("sequential-thinking#")]
-    reviewer_excluded = {
-        "query-elasticsearch#0",
-        "query-elasticsearch#1",
-        "query-elasticsearch#2",
-        "query-tempo#0",
-        "system-metrics#1",
-        "neo4j-direct#3",
-    }
+    reviewer_excluded = {"system-metrics#1", "graph-inspection#3"}
     assert not reviewer_excluded & set(ids)
     assert all(s.prompt and s.expect and s.reason for s in scenarios)
 
@@ -161,16 +154,16 @@ def write_list(tmp_path: Path, ids: list[str]) -> Path:
 
 
 @pytest.mark.parametrize(
-    "bad", ["query-tempo#99", "no-such-skill#0", "query-tempo", "query-tempo#x"]
+    "bad", ["model-latency#99", "no-such-skill#0", "model-latency", "model-latency#x"]
 )
 def test_an_unknown_or_malformed_id_fails_loudly(tmp_path: Path, bad: str) -> None:
     with pytest.raises(ValueError):
-        part2.load_scenarios(write_list(tmp_path, ["query-tempo#1", bad]))
+        part2.load_scenarios(write_list(tmp_path, ["model-latency#1", bad]))
 
 
 def test_a_repeated_id_fails(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="twice"):
-        part2.load_scenarios(write_list(tmp_path, ["query-tempo#1", "query-tempo#1"]))
+        part2.load_scenarios(write_list(tmp_path, ["model-latency#1", "model-latency#1"]))
 
 
 def test_select_by_ids_keeps_list_order_and_refuses_unknown_ids() -> None:
@@ -205,7 +198,7 @@ async def test_a_turn_row_carries_the_reply_and_the_counts(tmp_path: Path) -> No
     assert "error" not in treatment
     assert treatment["reply"] == "reply from treatment"
     assert treatment["expect"] == "expect"
-    assert treatment["skills_loaded"] == ["query-tempo"]
+    assert treatment["skills_loaded"] == ["model-latency"]
     assert treatment["tool_calls"] == ["read_skill", "bash"]
     assert treatment["tool_failures"] == 1
     assert treatment["permission_denials"] == 1
@@ -264,16 +257,16 @@ async def test_resume_skips_done_pairs_and_reruns_error_rows(tmp_path: Path) -> 
     out = part2.rows_path(tmp_path, "qwen3.8-flash-next")
     out.parent.mkdir(parents=True)
     out.write_text(
-        json.dumps({"id": "query-tempo#1", "arm": "control"})
+        json.dumps({"id": "model-latency#1", "arm": "control"})
         + "\n"
-        + json.dumps({"id": "query-tempo#1", "arm": "treatment", "error": "boom"})
+        + json.dumps({"id": "model-latency#1", "arm": "treatment", "error": "boom"})
         + "\n"
     )
-    rows, posted = await run(tmp_path, GOOD, [scenario("query-tempo#1"), scenario("query-tempo#3")])
+    rows, posted = await run(tmp_path, GOOD, [scenario("model-latency#1"), scenario("model-latency#3")])
     assert [(r["id"], r["arm"]) for r in rows] == [
-        ("query-tempo#1", "treatment"),
-        ("query-tempo#3", "treatment"),
-        ("query-tempo#3", "control"),
+        ("model-latency#1", "treatment"),
+        ("model-latency#3", "treatment"),
+        ("model-latency#3", "control"),
     ]
     assert len(posted) == 3
 

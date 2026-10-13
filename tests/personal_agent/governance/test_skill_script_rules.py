@@ -27,10 +27,10 @@ from personal_agent.governance.permissions import (
 _REPO = Path(__file__).resolve().parents[3]
 RULES = load_permission_rules()
 
-_PROBE = "skills/infrastructure-health/scripts/probe_services.py"
-_CYPHER = "skills/neo4j-direct/scripts/cypher.py"
-_CLASSIFIER = "skills/query-elasticsearch/scripts/es_index_granularity.py"
-_TIMELINE = "skills/turn-forensics/scripts/call_timeline.py"
+_PROBE = "skills/service-health/scripts/probe_services.py"
+_CYPHER = "skills/graph-inspection/scripts/cypher.py"
+_CLASSIFIER = "skills/log-search/scripts/es_index_granularity.py"
+_TIMELINE = "skills/turn-explanation/scripts/call_timeline.py"
 _VALIDATE = "skills/mermaid-diagrams/scripts/validate_mermaid.py"
 
 #: The scripts that a reviewed PR gave an allow rule. A new rule changes this set, and the
@@ -101,13 +101,13 @@ def test_ac1_each_script_has_a_rule_in_the_real_file() -> None:
         "python3 -c 'print(1)'",
         "python3 /tmp/x.py",
         "python3 skills/x/scripts/../../../evil.py",
-        "python3 skills/neo4j-direct/scripts/../../infrastructure-health/scripts/"
+        "python3 skills/graph-inspection/scripts/../../service-health/scripts/"
         "probe_services.py all",
         "python3 skills/*/scripts/cypher.py x",
-        "python3 skills/neo4j-direct/scripts/cyph?r.py x",
-        "python3 skills/neo4j-direct/scripts/[c]ypher.py x",
-        "python3 skills/neo4j-direct/cypher.py x",
-        "python3 skills/neo4j-direct/scripts/other.py",
+        "python3 skills/graph-inspection/scripts/cyph?r.py x",
+        "python3 skills/graph-inspection/scripts/[c]ypher.py x",
+        "python3 skills/graph-inspection/cypher.py x",
+        "python3 skills/graph-inspection/scripts/other.py",
         f"python3 ./{_PROBE} all",
         # f"python3 /app/{_PROBE} all" asked here until FRE-1589: it names the same file when
         # bash starts in /app, so it is allowed there (the FRE-1589 tests below).
@@ -156,16 +156,16 @@ def test_ac2_a_separator_does_not_widen_what_the_next_command_may_do() -> None:
     [
         "bash(python3 /tmp/x.py *)",
         "bash(python3 skills/x/y.py *)",
-        "bash(python3 skills/neo4j-direct/cypher.py *)",
+        "bash(python3 skills/graph-inspection/cypher.py *)",
         "bash(python3 skills/x/scripts/../../../evil.py *)",
-        "bash(python3 skills/neo4j-direct/scripts/../scripts/cypher.py *)",
+        "bash(python3 skills/graph-inspection/scripts/../scripts/cypher.py *)",
         "bash(python3 skills/*/scripts/cypher.py *)",
-        "bash(python3 skills/neo4j-direct/scripts/*.py *)",
-        "bash(python3 skills/neo4j-direct/scripts/cyph?r.py *)",
+        "bash(python3 skills/graph-inspection/scripts/*.py *)",
+        "bash(python3 skills/graph-inspection/scripts/cyph?r.py *)",
         f"bash(python3 ./{_CYPHER} *)",
         f"bash(python3 /app/{_CYPHER} *)",
-        "bash(python3 skills/neo4j-direct/scripts/missing.py *)",
-        "bash(python3 skills/neo4j-direct/scripts/__pycache__ *)",
+        "bash(python3 skills/graph-inspection/scripts/missing.py *)",
+        "bash(python3 skills/graph-inspection/scripts/__pycache__ *)",
         f"bash(python3 {_PROBE} all *)",
         f"bash(python3 -I {_PROBE} *)",
         "bash(python3 *)",
@@ -289,7 +289,7 @@ def test_fre1589_ac1_each_reviewed_script_has_an_absolute_form() -> None:
     "command",
     [
         f'python3 "/app/{_PROBE}" all',
-        "python3 /app/'skills'/infrastructure-health/scripts/probe_services.py all",
+        "python3 /app/'skills'/service-health/scripts/probe_services.py all",
     ],
 )
 def test_fre1589_the_comparison_is_on_the_word_after_quote_removal(command: str) -> None:
@@ -309,11 +309,11 @@ def test_fre1589_the_comparison_is_on_the_word_after_quote_removal(command: str)
         f"python3 app/{_PROBE} all",
         f"python3 /app/./app/{_PROBE} all",
         "python3 /app/skills/x/scripts/../../y/scripts/z.py",
-        "python3 /app/skills/neo4j-direct/scripts/../../infrastructure-health/scripts/"
+        "python3 /app/skills/graph-inspection/scripts/../../service-health/scripts/"
         "probe_services.py all",
         f"python3 /opt/seshat/{_PROBE} all",
         f"python3 /opt/seshat/.claude/worktrees/build2/{_PROBE} all",
-        "python3 /app/skills/neo4j-direct/scripts/other.py",
+        "python3 /app/skills/graph-inspection/scripts/other.py",
         "python3 /app/skills/*/scripts/cypher.py x",
         f"python3 /app/{_PROBE} all; rm x",
         f"python3 /app/{_PROBE} $(id)",
@@ -364,9 +364,9 @@ def test_fre1589_ac2_an_absolute_form_needs_a_skill_script_rule() -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "/app/skills/infrastructure-health/scripts/probe_services.py",
-        "/app/skills/infrastructure-health/scripts/json.py",
-        "/app/skills/infrastructure-health/SKILL.md",
+        "/app/skills/service-health/scripts/probe_services.py",
+        "/app/skills/service-health/scripts/json.py",
+        "/app/skills/service-health/SKILL.md",
         "/app/.venv/lib/python3.12/site-packages/evil.pth",
     ],
 )

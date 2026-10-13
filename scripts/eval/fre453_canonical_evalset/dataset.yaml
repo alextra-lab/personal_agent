@@ -30,8 +30,9 @@ coverage:
   # no case yet. ADR-0156 (FRE-1577): 8 skills were folded into tool descriptions and the
   # seshat-* skills moved to docs/external-skills/, so cases no longer claim them.
   allowlist_skills: [artifact-design]
-  # edit (ADR-0156 D7.1, FRE-1576) has no natural pedagogical case yet. query_telemetry is
-  # offered to the primary since FRE-1576 (D7.2) and is claimed by infra_triage_pedagogy.
+  # edit (ADR-0156 D7.1, FRE-1576) has no natural pedagogical case yet. search_logs and
+  # measure_model_latency are skill-provided (FRE-1596, ADR-0156 A5): the primary sees them after
+  # it loads a providing skill. infra_triage_pedagogy claims them.
   allowlist_tools: [get_location, get_library_docs, expand_tool_result, edit]
   # MCP tools are enforced at family granularity (a real browser task exercises many
   # mcp_browser_* micro-tools in one turn; per-method cases are meaningless).
@@ -243,7 +244,7 @@ cases:
   - id: self_observability_teaching
     tier: coverage
     title: Self-observability as teaching material (harness dev)
-    note: Exercises the self-telemetry / ES / forensics cluster in a teaching frame.
+    note: Exercises the spend, log-search, latency and turn-explanation cluster in a teaching frame.
     setup_messages: []
     stimulus: >-
       Look at your own telemetry for this session so far and teach me how to read
@@ -253,7 +254,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [self-telemetry, query-elasticsearch, query-tempo, turn-forensics]
+      skills: [spend-and-tokens, log-search, model-latency, turn-explanation, interaction-outcomes]
       tools_any_of: [read_skill]
     rubric:
       - "Teaches the METHOD (which index, which fields, how to interpret) — not just the answer."
@@ -275,8 +276,8 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [infrastructure-health, system-diagnostics, system-metrics]
-      tools_any_of: [bash, query_telemetry]
+      skills: [service-health, system-diagnostics, system-metrics]
+      tools_any_of: [bash, search_logs, measure_model_latency]
     rubric:
       - "Triage ORDERING has a rationale (blast radius first, then dependencies…)."
       - "Real health output drives the lesson; the pedagogy wraps actual signals."
@@ -322,7 +323,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [query-elasticsearch]
+      skills: [log-search]
       tools_any_of: [run_python]
     rubric:
       - >-
@@ -391,7 +392,7 @@ cases:
       orchestration_event: primary_handled
       pedagogical_outcomes: []
       tools_used_nonempty: true
-      skills: [neo4j-direct]
+      skills: [graph-inspection]
       tools_any_of: [recall_personal_history]
     rubric:
       - "Answer is graph-backed (cites what the substrate holds), not session-only."

@@ -75,7 +75,8 @@ allow:
   - rule: "perplexity_query"
   - rule: "get_library_docs"
   - rule: "fetch_url"
-  - rule: "query_telemetry"
+  - rule: "search_logs"
+  - rule: "measure_model_latency"
   - rule: "find_linear_issues"
   - rule: "list_linear_projects"
   - rule: "notes_write"
@@ -141,16 +142,16 @@ allow:
   # file (FRE-1589). Every other python3 command asks. A script gets a rule only in the PR that
   # reviews it, with a test that its arguments cannot write, run another program or read outside
   # its purpose (tests/docs/test_skill_scripts.py).
-  - rule: "bash(python3 skills/infrastructure-health/scripts/probe_services.py *)"
+  - rule: "bash(python3 skills/service-health/scripts/probe_services.py *)"
     modes: [NORMAL, ALERT, DEGRADED]
     reason: "Reachability probes of postgres, elasticsearch, neo4j and redis. The argument only picks the services; psql runs with a fixed argv."
-  - rule: "bash(python3 skills/neo4j-direct/scripts/cypher.py *)"
+  - rule: "bash(python3 skills/graph-inspection/scripts/cypher.py *)"
     modes: [NORMAL, ALERT, DEGRADED]
     reason: "One Cypher query in a read session and a read transaction. The script refuses write clauses, administration commands, and procedures and function namespaces that are not on its lists."
-  - rule: "bash(python3 skills/query-elasticsearch/scripts/es_index_granularity.py *)"
+  - rule: "bash(python3 skills/log-search/scripts/es_index_granularity.py *)"
     modes: [NORMAL, ALERT, DEGRADED]
     reason: "Classifies index names read from stdin. No file, network or process access."
-  - rule: "bash(python3 skills/turn-forensics/scripts/call_timeline.py *)"
+  - rule: "bash(python3 skills/turn-explanation/scripts/call_timeline.py *)"
     modes: [NORMAL, ALERT, DEGRADED]
     reason: "Filters gateway log text read from stdin for one trace id. No file, network or process access."
   # NORMAL only, as bash(mmdc *): the script runs mmdc with a fixed argv.

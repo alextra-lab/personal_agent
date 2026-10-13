@@ -329,7 +329,8 @@ WORKER_TYPES: Mapping[WorkerType, WorkerTypeSpec] = MappingProxyType(
                 "run_python",
                 "search_memory",
                 "recall_personal_history",
-                "query_telemetry",
+                "search_logs",
+                "measure_model_latency",
                 "notes_search",
                 "read_skill",
                 # ADR-0156 D9.4: reads only the files its task names in read_paths

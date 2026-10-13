@@ -440,6 +440,8 @@ SkillRule = Literal[
     "file_refs",
     "sections",
     "evals",
+    "name_words",
+    "not_for",
 ]
 SKILL_RULES: tuple[SkillRule, ...] = get_args(SkillRule)
 
@@ -463,6 +465,70 @@ _SKILL_PATH = re.compile(r"(?<![\w./-])(?:\./)?((?:scripts|references|assets)/[\
 _SUCCESS = re.compile(r"^##\s+Success\b", re.IGNORECASE | re.MULTILINE)
 _RECOVERY = re.compile(r"^##\s+(?:Failure\s+)?Recovery\b", re.IGNORECASE | re.MULTILINE)
 _MIN_SCENARIOS = 3
+
+# ADR-0156 A3.1: a name states an objective. It never names the backend that stores the data, and
+# it never uses the word "telemetry". The validator splits a name on "-" and "_".
+BACKEND_WORDS = frozenset(
+    {"elasticsearch", "es", "tempo", "neo4j", "postgres", "redis", "telemetry"}
+)
+_NAME_SPLIT = re.compile(r"[-_]")
+# ADR-0156 A3.2: the "Not for…" line runs from the words "Not for" to the end of the description.
+# A name in it is in backticks, so an ordinary hyphenated word ("model-call") is not read as one.
+_NOT_FOR = re.compile(r"\bNot for\b")
+_BACKTICKED = re.compile(r"`([A-Za-z0-9][A-Za-z0-9_-]*)`")
+
+
+def name_violations(names: Collection[str]) -> tuple[str, ...]:
+    """Check skill or tool names against the backend-word rule (ADR-0156 A3.1, AC-N1).
+
+    Args:
+        names: Skill names and tool names.
+
+    Returns:
+        One message per name that holds a part equal to a backend word; empty when every name
+        states an objective.
+    """
+    found: list[str] = []
+    for name in sorted(names):
+        bad = [part for part in _NAME_SPLIT.split(name.lower()) if part in BACKEND_WORDS]
+        if bad:
+            found.append(f"{name}: names the backend or the word {bad[0]!r}, not an objective")
+    return tuple(found)
+
+
+def _not_for_names(owner: str, description: str) -> list[str] | None:
+    """Return the names in a description's "Not for…" line, or ``None`` if it has no such line."""
+    match = _NOT_FOR.search(description)
+    if match is None:
+        return None
+    return [n for n in _BACKTICKED.findall(description[match.start() :]) if n != owner]
+
+
+def not_for_violations(descriptions: Mapping[str, str], known: Collection[str]) -> tuple[str, ...]:
+    """Check each description's "Not for…" line (ADR-0156 A3.2, AC-N2).
+
+    Args:
+        descriptions: The description of each skill and of each skill-provided tool, by name.
+        known: Every skill name and tool name that exists.
+
+    Returns:
+        One message per broken rule; empty when each description has a "Not for…" line that
+        names at least one skill or tool in backticks, and each name it holds exists.
+    """
+    found: list[str] = []
+    for owner in sorted(descriptions):
+        names = _not_for_names(owner, descriptions[owner])
+        if names is None:
+            found.append(f"{owner}: description has no 'Not for' line")
+            continue
+        if not names:
+            found.append(f"{owner}: its 'Not for' line names no skill or tool in backticks")
+        found.extend(
+            f"{owner}: its 'Not for' line names {n!r}, which does not exist"
+            for n in names
+            if n not in known
+        )
+    return tuple(found)
 
 
 def _named_files(body: str) -> set[str]:
@@ -561,6 +627,14 @@ def validate_skill(folder: Path, kind: SkillKind) -> tuple[SkillViolation, ...]:
         return (SkillViolation("frontmatter", f"{SKILL_FILE} has no frontmatter"),)
     fm, body = split
     found = _check_frontmatter(fm, folder) + _check_body(body, folder)
+    found += [SkillViolation("name_words", m) for m in name_violations([folder.name])]
     if kind == "agent":
         found += _check_agent_parts(body, folder)
+        description = fm.get("description")
+        if isinstance(description, str) and not _not_for_names(folder.name, description):
+            found.append(
+                SkillViolation(
+                    "not_for", "description has no 'Not for' line that names a skill or tool"
+                )
+            )
     return tuple(found)

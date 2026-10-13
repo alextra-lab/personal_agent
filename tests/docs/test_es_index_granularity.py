@@ -22,7 +22,7 @@ from pathlib import Path
 _SCRIPT = (
     Path(__file__).resolve().parents[2]
     / "skills"
-    / "query-elasticsearch"
+    / "log-search"
     / "scripts"
     / "es_index_granularity.py"
 )

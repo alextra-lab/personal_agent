@@ -31,10 +31,10 @@ from types import ModuleType
 import pytest
 
 _SKILLS = Path(__file__).resolve().parents[2] / "skills"
-_CLASSIFIER = _SKILLS / "query-elasticsearch" / "scripts" / "es_index_granularity.py"
-_PROBE = _SKILLS / "infrastructure-health" / "scripts" / "probe_services.py"
-_CYPHER = _SKILLS / "neo4j-direct" / "scripts" / "cypher.py"
-_TIMELINE = _SKILLS / "turn-forensics" / "scripts" / "call_timeline.py"
+_CLASSIFIER = _SKILLS / "log-search" / "scripts" / "es_index_granularity.py"
+_PROBE = _SKILLS / "service-health" / "scripts" / "probe_services.py"
+_CYPHER = _SKILLS / "graph-inspection" / "scripts" / "cypher.py"
+_TIMELINE = _SKILLS / "turn-explanation" / "scripts" / "call_timeline.py"
 # FRE-1579 (T7). Its verdict goes to stdout (VALID, INVALID, ERROR), so its own tests are in
 # test_validate_mermaid_script.py. Here it is held to the shared --help and usage-error contract.
 _VALIDATE = _SKILLS / "mermaid-diagrams" / "scripts" / "validate_mermaid.py"
@@ -696,8 +696,8 @@ def test_cypher_passes_other_functions_and_the_name_in_a_string(query: str) -> N
 
 
 def _skill_queries() -> list[str]:
-    """Every query that a cypher.py command in the neo4j-direct skill passes."""
-    text = (_SKILLS / "neo4j-direct" / "SKILL.md").read_text()
+    """Every query that a cypher.py command in the graph-inspection skill passes."""
+    text = (_SKILLS / "graph-inspection" / "SKILL.md").read_text()
     queries = []
     for line in text.splitlines():
         if "scripts/cypher.py" in line and line.lstrip().startswith("python3 "):

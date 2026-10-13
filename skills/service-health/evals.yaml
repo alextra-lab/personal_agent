@@ -1,0 +1,17 @@
+skill: service-health
+scenarios:
+  - prompt: "Is Postgres reachable right now?"
+    expected_skill: service-health
+    expect: "Runs the probe script for postgres, which opens a real connection and runs SELECT 1. Does not probe port 5432 with curl. Reports reachable or the plain error."
+  - prompt: "Check that all the backend services are up before we start the migration."
+    expected_skill: service-health
+    expect: "Runs the probe script for all four services and reports one line for each. Says which service failed and the error text."
+  - prompt: "My client cannot connect to Redis or to Postgres. Which of the two answers a real request from the gateway right now?"
+    expected_skill: service-health
+    expect: "Runs the probe script for redis and for postgres, because only a real connection and a PING answer the question. Does not probe the ports with curl. Reports one line for each service with ok or the error text."
+  - prompt: "Is Tempo up, and which version runs?"
+    expected_skill: service-health
+    expect: "Calls GET /status on tempo:3200 with curl and reports the version."
+  - prompt: "Is the local model server healthy according to its monitor? When was the last probe?"
+    expected_skill: service-health
+    expect: "Reads the newest document of agent-monitors-slm-health, sorted on probed_at, and reports its result with its time. Says whether the document is stale."

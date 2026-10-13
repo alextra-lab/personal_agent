@@ -57,8 +57,8 @@ def build_read_skill_tool() -> ToolDefinition:
             "a path it returns that one listed file, for example a reference or a script. "
             "Do not use it to read any other file (use read), or to load a skill again in the "
             "same turn. "
-            'Examples: read_skill(name="query-elasticsearch"), '
-            'read_skill(name="query-tempo", path="references/<file>.md").'
+            'Examples: read_skill(name="log-search"), '
+            'read_skill(name="model-latency", path="references/<file>.md").'
         ),
         category="read_only",
         parameters=[

@@ -1,17 +1,15 @@
-# query-tempo — The curl recipe for model-call latency
+# model-latency — The curl recipe for model-call latency
 
-Use this recipe only when the `query_telemetry` tool cannot take the request: a span
-attribute or a TraceQL filter that the tool does not list, or when the tool is not in
-your tool list. The tool, action `latency`, gives the same summary for the role and model
-group keys and for the `model_call` and `slm_chat` spans.
+Use this recipe only when the `measure_model_latency` tool cannot take the request: a span
+attribute or a TraceQL filter that the tool does not list. The tool gives the same summary
+for the role and model group keys and for the `model_call` and `slm_chat` spans.
 
 ### Pattern 5: Model-call latency by role and model (p50, p90, max)
 
 Use this for "how slow are model calls", "p50 and p90 by role" and any latency over a window.
 Elasticsearch holds no model-call timing. Tempo does: one `model_call <model>` span
 per model call, with the role in `gen_ai.operation.name` and the model in
-`gen_ai.request.model`. The `query_telemetry` tool, action `latency`, returns the same kind of summary
-when that tool is available. This is the bash path.
+`gen_ai.request.model`. The `measure_model_latency` tool returns the same kind of summary. This is the bash path.
 
 1. Read the clock: `date +%s` is the end, `date -d '24 hours ago' +%s` is the start. Tempo
    refuses a window over 168 hours.

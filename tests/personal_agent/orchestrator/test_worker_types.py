@@ -41,7 +41,8 @@ class TestRegistryShape:
             "run_python",
             "search_memory",
             "recall_personal_history",
-            "query_telemetry",
+            "search_logs",
+            "measure_model_latency",
             "notes_search",
             "read_skill",
             "read",  # ADR-0156 D9.4 (FRE-1580): only the files its task names
@@ -162,7 +163,8 @@ class TestTypesDeclaring:
         assert worker_types_declaring("web_search") == (WorkerType.RESEARCHER,)
         assert worker_types_declaring("run_python") == (WorkerType.GENERAL,)
         assert worker_types_declaring("fetch_url") == (WorkerType.RESEARCHER,)
-        assert worker_types_declaring("query_telemetry") == (WorkerType.GENERAL,)
+        assert worker_types_declaring("search_logs") == (WorkerType.GENERAL,)
+        assert worker_types_declaring("measure_model_latency") == (WorkerType.GENERAL,)
 
     def test_an_undeclared_tool_has_none(self) -> None:
         assert worker_types_declaring("bash") == ()

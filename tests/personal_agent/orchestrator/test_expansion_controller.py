@@ -290,7 +290,8 @@ class TestPlannerPromptToolSurface:
         assert "search_memory" in surface
         # FRE-1564: the owner granted fetch_url ("2 yes"), reversing the FRE-1463 refusal.
         assert "fetch_url" in surface
-        assert "query_telemetry" in surface
+        assert "search_logs" in surface
+        assert "measure_model_latency" in surface
         # FRE-1467 granted this one: FRE-1463 refused it only because it could
         # not work without an identity, and FRE-1467 threads the identity.
         assert "recall_personal_history" in surface
@@ -1526,7 +1527,8 @@ class TestSubAgentToolGrant:
         denied = (
             "search_memory",
             "recall_personal_history",
-            "query_telemetry",
+            "search_logs",
+            "measure_model_latency",
             "notes_search",
             "read_skill",
             "read",

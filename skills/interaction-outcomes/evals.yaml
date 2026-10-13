@@ -1,0 +1,11 @@
+skill: interaction-outcomes
+scenarios:
+  - prompt: "How did my last ten interactions end? Did any fail?"
+    expected_skill: interaction-outcomes
+    expect: "Reads the Captain's Log captures with the curl recipe, newest first by timestamp, and counts the outcomes. Names the time range of the ten."
+  - prompt: "Over the last 24 hours, how many interactions ended in each outcome?"
+    expected_skill: interaction-outcomes
+    expect: "Runs a terms aggregation on outcome over the captures index with a range on timestamp, not on @timestamp. Reports the buckets and the total, and says how many captures hold no outcome."
+  - prompt: "Which problems do the Captain's Log reflections keep repeating?"
+    expected_skill: interaction-outcomes
+    expect: "Reads agent-captains-reflections with a sort on seen_count and a range of at least 2. Quotes each reflection with its seen_count and category."

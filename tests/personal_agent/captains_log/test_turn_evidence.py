@@ -427,7 +427,7 @@ class TestAssembledContextRecord:
             candidates,
             rendered=("Paris",),
             wire=_wire(extra=[prior]),
-            skill_bodies=("bash", "query-elasticsearch"),
+            skill_bodies=("bash", "log-search"),
         )
         ac = ev.assembled_context
 
@@ -447,7 +447,7 @@ class TestAssembledContextRecord:
             "assistant",
             "tool",
         ]
-        assert ac.skill_bodies == ["bash", "query-elasticsearch"]
+        assert ac.skill_bodies == ["bash", "log-search"]
         assert ac.memory_identities == ["Paris"]
         assert ac.message_count == 5
         assert ac.system_prompt_chars == 3
@@ -471,13 +471,13 @@ class TestAssembledContextRecord:
             candidates,
             rendered=("Paris", "Berlin"),
             wire=_wire(extra=[prior_a, prior_b]),
-            skill_bodies=("bash", "query-elasticsearch"),
+            skill_bodies=("bash", "log-search"),
         )
         ac = ev.assembled_context
 
         # Resolution: each pair is separated, where a category flag would collapse it.
         assert ac.memory_identities == ["Paris", "Berlin"]
-        assert ac.skill_bodies == ["bash", "query-elasticsearch"]
+        assert ac.skill_bodies == ["bash", "log-search"]
         assert [m.origin_trace_id for m in ac.conversation_slice if m.origin_trace_id] == [
             "t-a",
             "t-b",
@@ -817,16 +817,16 @@ class TestSkillBodiesAreGatedOnTheBlockLanding:
             build_recall_candidates([], {}),
             inline_outcome=InlineOutcome.NO_TARGET,
             wire=_wire(fenced=False),
-            skill_bodies=("bash", "query-elasticsearch"),
+            skill_bodies=("bash", "log-search"),
         )
         assert ev.assembled_context.skill_bodies == []
 
     def test_listed_when_the_block_landed(self) -> None:
         ev = _evidence(
             build_recall_candidates([], {}),
-            skill_bodies=("bash", "query-elasticsearch"),
+            skill_bodies=("bash", "log-search"),
         )
-        assert ev.assembled_context.skill_bodies == ["bash", "query-elasticsearch"]
+        assert ev.assembled_context.skill_bodies == ["bash", "log-search"]
 
 
 class TestPreDroppedCandidates:

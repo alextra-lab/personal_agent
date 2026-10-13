@@ -35,7 +35,7 @@ def body(system: str = "SYS", tools: tuple[str, ...] = ("read", "read_skill")) -
     }
 
 
-def record(id_: str, kind: str = "scenario", expected: str | None = "query-tempo") -> dict:
+def record(id_: str, kind: str = "scenario", expected: str | None = "model-latency") -> dict:
     return {"id": id_, "kind": kind, "expected_skill": expected, "prompt": "p", "body": body()}
 
 
@@ -74,7 +74,7 @@ def test_safe_names_are_unique_and_safe_for_every_item() -> None:
     names = [t.safe_name(i.id) for i in items]
     assert len(set(names)) == len(items)
     assert all(re.fullmatch(r"[A-Za-z0-9._-]+", n) for n in names)
-    assert t.safe_name("query-tempo#3") == "query-tempo__3"
+    assert t.safe_name("model-latency#3") == "model-latency__3"
 
 
 # --------------------------------------------------------------------------- parsing
@@ -82,20 +82,20 @@ def test_safe_names_are_unique_and_safe_for_every_item() -> None:
 
 def test_one_read_skill_call_gives_its_name() -> None:
     first = t.parse_tool_calls(
-        reply(call("read_skill", '{"name": "query-tempo"}'))["choices"][0]["message"]
+        reply(call("read_skill", '{"name": "model-latency"}'))["choices"][0]["message"]
     )
-    assert first == t.FirstCall(("read_skill",), ("query-tempo",), ())
+    assert first == t.FirstCall(("read_skill",), ("model-latency",), ())
 
 
 def test_several_calls_keep_their_order_and_every_skill_name() -> None:
     message = reply(
         call("read", '{"path": "x"}'),
-        call("read_skill", '{"name": "query-tempo", "path": "references/a.md"}'),
-        call("read_skill", {"name": "turn-forensics"}),  # some servers send a dict
+        call("read_skill", '{"name": "model-latency", "path": "references/a.md"}'),
+        call("read_skill", {"name": "turn-explanation"}),  # some servers send a dict
     )["choices"][0]["message"]
     first = t.parse_tool_calls(message)
     assert first.tool_names == ("read", "read_skill", "read_skill")
-    assert first.skills == ("query-tempo", "turn-forensics")
+    assert first.skills == ("model-latency", "turn-explanation")
     assert first.malformed == ()
 
 
@@ -103,11 +103,11 @@ def test_malformed_read_skill_arguments_are_recorded_not_raised() -> None:
     message = reply(
         call("read_skill", '{"name": "query-te'),
         call("read_skill", '{"path": "a.md"}'),
-        call("read_skill", '"query-tempo"'),
+        call("read_skill", '"model-latency"'),
     )["choices"][0]["message"]
     first = t.parse_tool_calls(message)
     assert first.skills == ()
-    assert first.malformed == ('{"name": "query-te', '{"path": "a.md"}', '"query-tempo"')
+    assert first.malformed == ('{"name": "query-te', '{"path": "a.md"}', '"model-latency"')
 
 
 def test_no_tool_calls_parse_as_empty() -> None:
@@ -117,11 +117,11 @@ def test_no_tool_calls_parse_as_empty() -> None:
 
 def test_call_llama_reads_the_reply_fields() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=reply(call("read_skill", '{"name": "query-tempo"}')))
+        return httpx.Response(200, json=reply(call("read_skill", '{"name": "model-latency"}')))
 
     with client_for(handler) as client:
         out = t.call_llama(client, URL, {"messages": []})
-    assert out["read_skill_names"] == ["query-tempo"]
+    assert out["read_skill_names"] == ["model-latency"]
     assert out["tool_names"] == ["read_skill"]
     assert out["finish_reason"] == "tool_calls"
     assert out["system_fingerprint"] == "b1-abc"
@@ -155,17 +155,17 @@ def test_the_request_keeps_every_captured_key_and_sets_model_and_stream() -> Non
 def test_classify_each_rule_with_a_seeded_negative() -> None:
     c = t.classify
     # right: the expected skill only (a repeat is a reference read) ...
-    assert c("scenario", "query-tempo", ["query-tempo", "query-tempo"], []) == "right"
+    assert c("scenario", "model-latency", ["model-latency", "model-latency"], []) == "right"
     # ... and never with another skill beside it.
-    assert c("scenario", "query-tempo", ["query-tempo", "neo4j-direct"], []) == "wrong"
+    assert c("scenario", "model-latency", ["model-latency", "graph-inspection"], []) == "wrong"
     # wrong: another skill alone; the expected skill alone is not wrong.
-    assert c("scenario", "query-tempo", ["neo4j-direct"], []) == "wrong"
-    assert c("scenario", "query-tempo", ["query-tempo"], []) != "wrong"
+    assert c("scenario", "model-latency", ["graph-inspection"], []) == "wrong"
+    assert c("scenario", "model-latency", ["model-latency"], []) != "wrong"
     # none: no read_skill call; a malformed read_skill call is not none.
-    assert c("scenario", "query-tempo", [], []) == "none"
-    assert c("scenario", "query-tempo", [], ["{bad"]) == "malformed"
+    assert c("scenario", "model-latency", [], []) == "none"
+    assert c("scenario", "model-latency", [], ["{bad"]) == "malformed"
     # no-skill: any read_skill call is a load; no call is not.
-    assert c("no_skill", None, ["query-tempo"], []) == "load"
+    assert c("no_skill", None, ["model-latency"], []) == "load"
     assert c("no_skill", None, [], ["{bad"]) == "load"
     assert c("no_skill", None, [], []) == "none"
 
@@ -181,9 +181,9 @@ def row(id_: str, draw: int, skills: list[str], **extra: object) -> dict:
 
 
 ITEMS = [
-    Item("query-tempo#0", "scenario", "p", "query-tempo"),
-    Item("query-tempo#1", "scenario", "p", "query-tempo"),
-    Item("neo4j-direct#0", "scenario", "p", "neo4j-direct"),
+    Item("model-latency#0", "scenario", "p", "model-latency"),
+    Item("model-latency#1", "scenario", "p", "model-latency"),
+    Item("graph-inspection#0", "scenario", "p", "graph-inspection"),
     Item("ns01", "no_skill", "p", None),
     Item("ns02", "no_skill", "p", None),
     Item("ns03", "no_skill", "p", None),
@@ -193,13 +193,13 @@ ITEMS = [
 
 def test_score_counts_right_wrong_none_loads_and_missing() -> None:
     rows = [
-        row("query-tempo#0", 0, ["query-tempo"]),
-        row("query-tempo#0", 1, ["neo4j-direct"]),
-        row("query-tempo#1", 0, []),
-        row("query-tempo#1", 1, ["query-tempo"]),
-        row("neo4j-direct#0", 0, [], error="boom"),
-        row("neo4j-direct#0", 1, [], error="boom again"),
-        row("ns01", 0, ["query-tempo"]),
+        row("model-latency#0", 0, ["model-latency"]),
+        row("model-latency#0", 1, ["graph-inspection"]),
+        row("model-latency#1", 0, []),
+        row("model-latency#1", 1, ["model-latency"]),
+        row("graph-inspection#0", 0, [], error="boom"),
+        row("graph-inspection#0", 1, [], error="boom again"),
+        row("ns01", 0, ["model-latency"]),
         row("ns01", 1, []),
         row("ns02", 0, [], error="timeout"),
         row("ns02", 0, []),  # a retry after an error: not missing
@@ -207,31 +207,31 @@ def test_score_counts_right_wrong_none_loads_and_missing() -> None:
     ]
     captured = [i.id for i in ITEMS if i.id != "ns04"]
     report = t.score_rows(ITEMS, rows, 2, captured)
-    tempo = report["skills"]["query-tempo"]
+    tempo = report["skills"]["model-latency"]
     assert (tempo["scenarios"], tempo["draws"]) == (2, 4)
     assert (tempo["right"], tempo["wrong"], tempo["none"], tempo["malformed"]) == (2, 1, 1, 0)
-    assert tempo["wrong_loads"] == {"neo4j-direct": 1}
-    assert report["skills"]["neo4j-direct"]["draws"] == 0
-    assert report["no_skill"]["ns01"] == {"draws": 2, "loads": 1, "skills": ["query-tempo"]}
+    assert tempo["wrong_loads"] == {"graph-inspection": 1}
+    assert report["skills"]["graph-inspection"]["draws"] == 0
+    assert report["no_skill"]["ns01"] == {"draws": 2, "loads": 1, "skills": ["model-latency"]}
     assert report["no_skill"]["ns02"]["loads"] == 0
     missing = {m["id"]: m["reason"] for m in report["missing"]}
     assert missing == {
-        "neo4j-direct#0": "every replay errored: boom again",
+        "graph-inspection#0": "every replay errored: boom again",
         "ns03": "captured, not replayed",
         "ns04": "not captured",
     }
     assert all(m["reason"] for m in report["missing"])
     assert report["incomplete"] == []
     text = t.render({"model_key": KEY, **report})
-    assert "ns04: not captured" in text and "query-tempo" in text
+    assert "ns04: not captured" in text and "model-latency" in text
 
 
 def test_score_reports_an_item_with_too_few_draws_as_incomplete() -> None:
-    rows = [row("query-tempo#0", 0, ["query-tempo"]), row("query-tempo#0", 1, [], error="x")]
-    report = t.score_rows(ITEMS[:1], rows, 3, ["query-tempo#0"])
+    rows = [row("model-latency#0", 0, ["model-latency"]), row("model-latency#0", 1, [], error="x")]
+    report = t.score_rows(ITEMS[:1], rows, 3, ["model-latency#0"])
     assert report["missing"] == []
     assert report["incomplete"] == [
-        {"id": "query-tempo#0", "draws_done": 1, "reason": "1 of 3 draws; last error: x"}
+        {"id": "model-latency#0", "draws_done": 1, "reason": "1 of 3 draws; last error: x"}
     ]
 
 
@@ -240,23 +240,23 @@ def test_score_reports_an_item_with_too_few_draws_as_incomplete() -> None:
 
 def test_replay_resumes_and_retries_only_error_rows(tmp_path: Path) -> None:
     paths = t.Part1Paths(tmp_path, KEY)
-    captured = [record("query-tempo#0"), record("ns01", "no_skill", None)]
+    captured = [record("model-latency#0"), record("ns01", "no_skill", None)]
     t.ensure_fingerprint(paths, fingerprint())
-    append_jsonl(paths.part1, row("query-tempo#0", 0, ["query-tempo"]))
+    append_jsonl(paths.part1, row("model-latency#0", 0, ["model-latency"]))
     append_jsonl(paths.part1, row("ns01", 0, [], error="timeout"))
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
-        return httpx.Response(200, json=reply(call("read_skill", '{"name": "query-tempo"}')))
+        return httpx.Response(200, json=reply(call("read_skill", '{"name": "model-latency"}')))
 
     with client_for(handler) as client:
         errors = t.run_replay(client, URL, paths, captured, "llama-name", 2)
     assert errors == 0
-    assert len(sent) == 3  # (ns01, 0) retried; (query-tempo#0, 1) and (ns01, 1) new
+    assert len(sent) == 3  # (ns01, 0) retried; (model-latency#0, 1) and (ns01, 1) new
     assert all(s["model"] == "llama-name" and s["stream"] is False for s in sent)
     good = {(r["id"], r["draw"]) for r in read_jsonl(paths.part1) if "error" not in r}
-    assert good == {("query-tempo#0", 0), ("query-tempo#0", 1), ("ns01", 0), ("ns01", 1)}
+    assert good == {("model-latency#0", 0), ("model-latency#0", 1), ("ns01", 0), ("ns01", 1)}
     assert json.loads(paths.fingerprint.read_text())["llama_build"] == "b1-abc"
 
 
@@ -264,10 +264,10 @@ def test_replay_writes_an_error_row_on_an_http_error(tmp_path: Path) -> None:
     paths = t.Part1Paths(tmp_path, KEY)
     t.ensure_fingerprint(paths, fingerprint())
     with client_for(lambda r: httpx.Response(500, text="down")) as client:
-        errors = t.run_replay(client, URL, paths, [record("query-tempo#0")], "m", 1)
+        errors = t.run_replay(client, URL, paths, [record("model-latency#0")], "m", 1)
     assert errors == 1
     (only,) = read_jsonl(paths.part1)
-    assert "error" in only and only["id"] == "query-tempo#0"
+    assert "error" in only and only["id"] == "model-latency#0"
 
 
 # --------------------------------------------------------------------------- fingerprint
@@ -335,9 +335,9 @@ def test_capture_saves_the_primary_body_and_skips_existing_files(tmp_path: Path)
     assert len(posted) == 1
     assert posted[0]["model"] == KEY and "session_id" not in posted[0]
     saved = json.loads(paths.captured_file(items[0].id).read_text())
-    assert saved["id"] == "query-tempo#0" and saved["expected_skill"] == "query-tempo"
+    assert saved["id"] == "model-latency#0" and saved["expected_skill"] == "model-latency"
     assert saved["body"]["messages"][-1]["content"] == "p"
-    assert [r.get("id") for r in t.load_captured(paths, items)] == ["query-tempo#0", None]
+    assert [r.get("id") for r in t.load_captured(paths, items)] == ["model-latency#0", None]
 
 
 def test_a_failed_capture_writes_no_file(tmp_path: Path) -> None:

@@ -5,6 +5,8 @@ import json
 import pathlib
 
 HERE = pathlib.Path(__file__).parent
+# A run before FRE-1596 logs the refusal of the one telemetry tool that FRE-1596 split.
+LEGACY_REFUSED = "query_telemetry_refused"
 SESSIONS = ["fn_s2", "gm_s2", "gm_s3", "fn_s3", "gm4_s3", "gm4_s2"]
 # stage 3 worker grants (ADR-0150): the tool name fixes the worker type
 STAGE3_WORKER = {
@@ -78,7 +80,9 @@ for key in SESSIONS:
             "write_executor_success": ["path", "bytes_written", "mode"],
             "search_memory_tool_completed": ["result_count", "query_path"],
             "personal_history_recalled": ["turn_count"],
-            "query_telemetry_refused": ["reason"],
+            LEGACY_REFUSED: ["reason"],
+            "search_logs_refused": ["reason"],
+            "measure_model_latency_refused": ["reason"],
             "notes_search_completed": ["result_count"],
             "tool_call_missing_required_params": ["missing_params"],
         }.items():

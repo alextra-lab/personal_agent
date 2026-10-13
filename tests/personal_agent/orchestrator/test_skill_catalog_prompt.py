@@ -122,7 +122,7 @@ async def test_every_keyword_leaves_the_system_prompt_unchanged() -> None:
 @pytest.mark.asyncio
 async def test_no_skill_body_is_in_the_request() -> None:
     samples = _body_samples()
-    assert len(samples) == 10
+    assert len(samples) == 11
     for message in (_PLAIN, "; ".join(_every_keyword())):
         kwargs = await _first_call(message)
         sent = kwargs["system_prompt"] + json.dumps(kwargs["messages"])
@@ -145,4 +145,4 @@ def test_the_catalog_has_one_line_per_skill_in_name_order() -> None:
     lines = [ln for ln in assemble_skill_catalog().splitlines() if ln.startswith("- ")]
     names = [ln[2:].split(":", 1)[0] for ln in lines]
     assert names == sorted(get_all_skills())
-    assert len(names) == 10
+    assert len(names) == 11

@@ -1,16 +1,15 @@
 ---
-name: neo4j-direct
-description: Runs read-only Cypher queries on the live Neo4j knowledge graph through a tested script.
-  Use when the task needs the live state of the graph - node and relationship counts, labels, recent
-  entities, or a direct Cypher query.
+name: graph-inspection
+description: Reads the structure and the exact facts of the live Neo4j knowledge graph with read-only Cypher through a tested script - node and relationship counts, labels, relationship types, the schema, and the first_seen and last_seen times of entities, which only Cypher reads. Use when the task needs the live state or the exact structure of the graph - counts, labels, recent entities, degrees or a direct Cypher query. Not for what the system knows about a topic. `search_memory` gives that.
 metadata:
   requires-tools: bash
 ---
 
-# neo4j-direct — Run read-only Cypher on the knowledge graph
+# graph-inspection — Read the structure and exact facts of the knowledge graph
 
 ## Rules
 
+- Use this skill for the facts that only Cypher reads: counts of nodes and relationships, the labels and relationship types, the schema and property keys, the `first_seen` and `last_seen` times of an `Entity`, and the degree of a node. `search_memory` reads the same graph for meaning. It does not return these facts.
 - The skill is read-only. Use `MATCH` and `RETURN`. Never write to the graph from a diagnostic query: no `CREATE`, `MERGE`, `SET`, `DELETE`, `REMOVE`, `DROP`.
 - If the user asks to change the graph, do not do it. Show the `MATCH` that finds the nodes and leave the change to the user.
 - Use the script, not a hand-written driver call. The `run_python` sandbox has no `neo4j` driver.
@@ -23,7 +22,7 @@ metadata:
 ## Step 1 — Run one query
 
 ```bash
-python3 skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN count(e) AS n"
+python3 skills/graph-inspection/scripts/cypher.py "MATCH (e:Entity) RETURN count(e) AS n"
 ```
 
 The reply is one JSON document: `{"rows": [...], "row_count": n, "truncated": false}`. The script
@@ -38,23 +37,23 @@ backtick name is not read as a clause.
 ## Step 2 — Common diagnostic queries
 
 ```bash
-python3 skills/neo4j-direct/scripts/cypher.py "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY cnt DESC"
+python3 skills/graph-inspection/scripts/cypher.py "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY cnt DESC"
 ```
 
 ```bash
-python3 skills/neo4j-direct/scripts/cypher.py "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
+python3 skills/graph-inspection/scripts/cypher.py "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
 ```
 
 ```bash
-python3 skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.first_seen AS first_seen ORDER BY e.first_seen DESC LIMIT 5"
+python3 skills/graph-inspection/scripts/cypher.py "MATCH (e:Entity) RETURN e.name AS name, e.first_seen AS first_seen ORDER BY e.first_seen DESC LIMIT 5"
 ```
 
 ```bash
-python3 skills/neo4j-direct/scripts/cypher.py 'MATCH (e:Entity) WHERE toLower(e.name) CONTAINS $q RETURN e.name AS name, e.entity_type AS type LIMIT 10' --param q=memory
+python3 skills/graph-inspection/scripts/cypher.py 'MATCH (e:Entity) WHERE toLower(e.name) CONTAINS $q RETURN e.name AS name, e.entity_type AS type LIMIT 10' --param q=memory
 ```
 
 ```bash
-python3 skills/neo4j-direct/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETURN e.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 10"
+python3 skills/graph-inspection/scripts/cypher.py "MATCH (e:Entity)-[r]-() RETURN e.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 10"
 ```
 
 Labels in the graph include `Entity` and `Turn`. A relationship type of interest is `DISCUSSES`.
@@ -92,7 +91,7 @@ Check the result before you answer:
 | `error: the procedure apoc.x.y is not allowed` | A `CALL` outside the list | Use `MATCH` and `RETURN`, or one of the listed schema procedures |
 | `error: AGENT_NEO4J_PASSWORD is not set in this environment` | The script runs where the variable is not set | Say that the graph cannot be read from here. Do not look for the password |
 | `error: authentication failed` | The user or password is wrong | Stop. Tell the user. Do not try other credentials |
-| `error: cannot connect to bolt://...` | Neo4j is down, or the name does not resolve from here | Run the `infrastructure-health` skill for `neo4j`. Do not use `localhost` inside the container |
+| `error: cannot connect to bolt://...` | Neo4j is down, or the name does not resolve from here | Run the `service-health` skill for `neo4j`. Do not use `localhost` inside the container |
 | `error: the server refused the query: ...` | A syntax error, or the server refused a write | Fix the query as the message states |
 | `error: the neo4j driver is not importable by this python3` | The command ran with another Python | Run it with `/app/.venv/bin/python` in place of `python3` |
 | The driver is not usable at all | — | The HTTP API is the last resort (below). It asks the user |

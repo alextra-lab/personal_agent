@@ -18,7 +18,8 @@ _SURFACE = (
     "get_library_docs",
     "read_skill",
     "notes_search",
-    "query_telemetry",
+    "search_logs",
+    "measure_model_latency",
 )
 
 
@@ -42,7 +43,8 @@ def test_the_request_is_the_planner_mode_with_the_new_general_description() -> N
     body = probe.build_requests(trials=1, surface=_SURFACE)[0]["body"]
     system = body["messages"][0]["content"]
     assert "the system's own logs, metrics, errors and health" in system
-    assert "query_telemetry" in system
+    assert "search_logs" in system
+    assert "measure_model_latency" in system
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
     assert body["response_format"] == {"type": "json_object"}
     assert body["temperature"] == 1.0

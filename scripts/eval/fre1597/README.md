@@ -26,6 +26,10 @@ exactly one `read_skill` of the expected skill. Production would run any other c
 
 - The eval substrates run, Elasticsearch-eval included: `make eval-infra-up` (from `/opt/seshat`).
 - `POSTGRES_PASSWORD`, `NEO4J_PASSWORD` and `AGENT_OWNER_EMAIL` are in the environment (`gateway up` only).
+- Export `AGENT_OWNER_NAME`, `AGENT_CONVERSATION_MAX_HISTORY_MESSAGES` and `AGENT_LOCATION_ENABLED` from
+  `/opt/seshat/.env` before each `gateway up`. They shape the primary's prompt, and `gateway up` passes them
+  through only when they are set. Without `AGENT_LOCATION_ENABLED`, the capture lacks `get_location`, which
+  production lists (the first FRE-1597 capture, 2026-10-13).
 - `AGENT_ELASTICSEARCH_URL=http://127.0.0.1:9202` and `AGENT_TEMPO_URL` (the preflight smoke and `loop run`).
 - llama.cpp serves the production primary on `:8600` (the model steps only). Save `/props` of the llama-server
   behind the router and pass it with `--props-file`. Pass the launch arguments with `--server-args="..."`.

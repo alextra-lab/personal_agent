@@ -63,6 +63,7 @@ T_C2_NAMES: tuple[str, ...] = (
 )
 _TIME = re.compile(r"^(Current (?:date|time): ).*$", re.M)
 _MEMORY_CALL = re.compile(r"call_mem_[0-9a-f]+")
+_TOOL_COUNT = re.compile(r"^Available tools \((\d+) total\):$")
 
 
 class SizeError(Exception):
@@ -132,6 +133,14 @@ def _named(lines: Sequence[str]) -> bool:
     return any(name in line for line in lines for name in T_C2_NAMES)
 
 
+def _tool_count_change(removed: Sequence[str], added: Sequence[str], fewer: int) -> bool:
+    """Return True for the tool-count line of the system prompt, changed by the tool difference."""
+    if len(removed) != 1 or len(added) != 1:
+        return False
+    old, new = _TOOL_COUNT.match(removed[0]), _TOOL_COUNT.match(added[0])
+    return bool(old and new) and int(old.group(1)) - int(new.group(1)) == fewer  # type: ignore[union-attr]
+
+
 def body_diff(b: Mapping[str, object], a: Mapping[str, object]) -> dict[str, object]:
     """Compare ``B`` with the aligned ``A``.
 
@@ -147,17 +156,20 @@ def body_diff(b: Mapping[str, object], a: Mapping[str, object]) -> dict[str, obj
     if _messages(a)[1:] != _messages(b)[1:]:
         unexpected.append("the non-system messages differ")
 
-    system_blocks = []
-    for removed, added in _blocks(str(_messages(b)[0]["content"]), str(_messages(a)[0]["content"])):
-        allowed = _named(removed + added)
-        system_blocks.append({"removed": removed, "added": added, "t_c2": allowed})
-        if not allowed:
-            unexpected.append(f"system prompt: -{removed} +{added}")
-
     tools_b = {tool_name(t): t for t in _tools(b)}
     tools_a = {tool_name(t): t for t in _tools(a)}
     removed_tools = sorted(set(tools_b) - set(tools_a))
     added_tools = sorted(set(tools_a) - set(tools_b))
+
+    system_blocks = []
+    for removed, added in _blocks(str(_messages(b)[0]["content"]), str(_messages(a)[0]["content"])):
+        allowed = _named(removed + added) or _tool_count_change(
+            removed, added, len(tools_b) - len(tools_a)
+        )
+        system_blocks.append({"removed": removed, "added": added, "t_c2": allowed})
+        if not allowed:
+            unexpected.append(f"system prompt: -{removed} +{added}")
+
     if removed_tools != [REMOVED_TOOL]:
         unexpected.append(f"tools removed: {removed_tools}")
     if added_tools:

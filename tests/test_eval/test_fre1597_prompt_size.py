@@ -113,6 +113,15 @@ def test_the_alignment_refuses_another_prompt_or_another_message() -> None:
         prompt_size.align(extra, _b())
 
 
+def test_the_tool_count_line_may_drop_by_the_removed_tools_only() -> None:
+    b, a = _b(), prompt_size.align(_a(), _b())
+    b["messages"][0]["content"] += "Available tools (3 total):\n"  # type: ignore[index]
+    a["messages"][0]["content"] += "Available tools (2 total):\n"  # type: ignore[index]
+    assert prompt_size.body_diff(b, a)["unexpected"] == []
+    a["messages"][0]["content"] = a["messages"][0]["content"].replace("(2 total)", "(1 total)")  # type: ignore[index]
+    assert prompt_size.body_diff(b, a)["unexpected"] != []
+
+
 def test_the_diff_allows_only_t_c2_changes() -> None:
     allowed = prompt_size.body_diff(_b(), prompt_size.align(_a(), _b()))
     assert allowed["tools_removed"] == ["query_telemetry"]

@@ -1376,8 +1376,11 @@ class TestMidStreamTransportRetry:
 
         with _count_acompletion() as calls:
             task = asyncio.create_task(_dispatch(stream=slow, max_retries=1, capture=captured))
-            while not captured.bodies:  # the request is on the wire, the stream is being read
-                await asyncio.sleep(0.01)
+            async with asyncio.timeout(5):
+                # The request is on the wire and the stream is being read. A dispatch that
+                # fails first ends the wait, and awaiting the task below reports its error.
+                while not captured.bodies and not task.done():
+                    await asyncio.sleep(0.01)
             await asyncio.sleep(0.05)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -1466,6 +1469,35 @@ class TestMidStreamTransportRetry:
         assert captured.response["content"] == "the answer"
         assert progress.content == "the answer"
         assert progress.generation_started_monotonic is not None
+
+    @pytest.mark.asyncio
+    async def test_the_generation_clock_of_the_first_attempt_does_not_outlive_it(self) -> None:
+        """AC-5 — a retry cut during prefill has no content and no generation clock.
+
+        The first attempt generates, so it sets the clock. The second attempt only
+        prefills, so it must not inherit that clock: a sub-agent divides its
+        output by the time since the clock started.
+        """
+        await _dispatch()  # warm-up, for the reason given in TestGenerationWallClockBudget
+        prefill_only = _slow_sse(
+            *(_progress_report(step * 1024, shape="no_choices") for step in range(6)),
+            delay=0.08,
+        )
+        progress = GenerationProgress()
+
+        with pytest.raises(LLMTimeout):
+            await _dispatch(
+                streams=[
+                    _broken_sse(_PARTIAL_CHUNK, error=httpx.RemoteProtocolError(_RESET_BODY)),
+                    prefill_only,
+                ],
+                timeout_s=0.3,
+                progress_sink=progress,
+                max_retries=1,
+            )
+
+        assert progress.content == ""
+        assert progress.generation_started_monotonic is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

@@ -259,6 +259,10 @@ def _dialect_params(dialect: Dialect, mode: ModeSpec) -> dict[str, Any]:
             _set_if_declared(extra_body, "repetition_penalty", mode.repeat_penalty)
             if mode.enable_thinking is False:
                 extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+            # `return_progress` (FRE-1488) is deliberately NOT here. This builder
+            # also serves the non-streaming cloud branch, and llama-server
+            # documents the field as stream-only, so sending it from here would
+            # be inert on that branch. `_respond_local` always streams and sets it.
             params["extra_body"] = extra_body
             _set_if_declared(params, "temperature", mode.temperature)
             _set_if_declared(params, "top_p", mode.top_p)
@@ -442,15 +446,26 @@ def _update_generation_progress(progress: GenerationProgress, chunk: dict[str, A
     reasoning/tool-call deltas — sufficient for "was anything generated" and
     for the word-count throughput estimate this ticket needs.
 
+    ``progress.generation_started_monotonic`` is set on the first chunk that
+    carries a choice. A ``prompt_progress`` prefill report (FRE-1488) is skipped
+    whole: it is not generation, so it neither sets the clock nor adds content.
+
     Args:
         progress: The caller-owned sink to update in place.
         chunk: One streamed chunk, already ``model_dump()``-ed.
     """
-    if progress.generation_started_monotonic is None:
-        progress.generation_started_monotonic = time.monotonic()
+    # FRE-1488: with `return_progress` on, llama-server streams prefill reports
+    # from the start of the prompt. They are not generation: they must neither
+    # start the generation clock nor reach `content`. litellm keeps the
+    # `prompt_progress` key on a report that carries a role-only delta and drops
+    # it from one with no choices, so the choice check below covers that shape.
+    if chunk.get("prompt_progress") is not None:
+        return
     choices = chunk.get("choices") or []
     if not choices:
         return
+    if progress.generation_started_monotonic is None:
+        progress.generation_started_monotonic = time.monotonic()
     delta = choices[0].get("delta") or {}
     content_piece = delta.get("content")
     if isinstance(content_piece, str):
@@ -1848,6 +1863,20 @@ class LiteLLMClient:
         declared_params.update(
             _gate_call_site_params(dialect, {"temperature": temperature}, model_id=self.model_id)
         )
+        if dialect is Dialect.LLAMACPP_QWEN:
+            # FRE-1488. Until generation starts, the only byte this call receives
+            # is llama-server's 30 s SSE ping, and a request field
+            # (`sse_ping_interval: -1`) can remove it. `return_progress` makes
+            # the server emit `prompt_progress` chunks from the start of prefill,
+            # which keeps the Cloudflare gap bound (125 s) from firing on a cold
+            # prefill. The field is stream-only on the server. That is why it is
+            # set here, where `"stream": True` is set below, and not in
+            # `_dialect_params`, which the non-streaming cloud branch also uses.
+            # It is sent only on the llama.cpp vocabulary: no other dialect
+            # declares it. MTPLX accepts and ignores the other llama.cpp-only
+            # keys in this block (config/models.yaml); this key is not verified
+            # there, and MTPLX would then keep only the ping.
+            declared_params["extra_body"]["return_progress"] = True
 
         litellm_kwargs: dict[str, Any] = {
             "model": self._litellm_model,

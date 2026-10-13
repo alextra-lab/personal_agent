@@ -20,13 +20,14 @@ import json
 import sys
 import time
 from collections.abc import AsyncIterator, Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import litellm
 import pytest
 
 from personal_agent.llm_client import litellm_client as litellm_client_module
@@ -280,6 +281,7 @@ async def _dispatch(
     *,
     model_key: str = BUDGET_KEY,
     stream: bytes | AsyncIterator[bytes] | None = None,
+    streams: list[bytes | AsyncIterator[bytes]] | None = None,
     transport_error: Exception | None = None,
     status: int | None = None,
     session_id: str | None = "11111111-1111-4111-8111-111111111111",
@@ -294,6 +296,10 @@ async def _dispatch(
         stream: SSE bytes the transport returns, or an async byte iterator
             (e.g. :func:`_slow_sse`) for a test that needs real elapsed time
             between chunks. Defaults to a plain reply.
+        streams: One body per request, in order (FRE-1602). The last entry
+            answers any request past the end of the list. An async iterator is
+            single-use, so a test that sends the same request twice needs one
+            entry per attempt. Takes precedence over ``stream``.
         transport_error: Raised by the transport instead of returning a response.
         status: HTTP status to return instead of a 200 SSE stream.
         session_id: Session id on the trace context (``None`` omits it).
@@ -321,9 +327,13 @@ async def _dispatch(
             return httpx.Response(
                 status, json={"error": {"message": f"stub {status}"}}, request=request
             )
+        if streams is not None:
+            body_for_request = streams[min(len(captured.bodies), len(streams)) - 1]
+        else:
+            body_for_request = stream if stream is not None else _plain_stream()
         return httpx.Response(
             200,
-            content=stream if stream is not None else _plain_stream(),
+            content=body_for_request,
             headers={"content-type": "text/event-stream"},
             request=request,
         )
@@ -340,10 +350,20 @@ async def _dispatch(
     captured.tracker = tracker
 
     real_info = litellm_client_module.log.info
+    real_warning = litellm_client_module.log.warning
+    real_error = litellm_client_module.log.error
 
     def _record_info(event: str, **payload: Any) -> Any:
         captured.events.append((event, payload))
         return real_info(event, **payload)
+
+    def _record_warning(event: str, **payload: Any) -> Any:
+        captured.events.append((event, payload))
+        return real_warning(event, **payload)
+
+    def _record_error(event: str, **payload: Any) -> Any:
+        captured.events.append((event, payload))
+        return real_error(event, **payload)
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -361,6 +381,8 @@ async def _dispatch(
             )
         )
         stack.enter_context(patch.object(litellm_client_module.log, "info", _record_info))
+        stack.enter_context(patch.object(litellm_client_module.log, "warning", _record_warning))
+        stack.enter_context(patch.object(litellm_client_module.log, "error", _record_error))
         stack.enter_context(
             patch("personal_agent.telemetry.spans.get_tracer", return_value=_real_tracer())
         )
@@ -1234,3 +1256,311 @@ class TestPrefillReportsAreNotGeneration:
         # Prefill is not generation. A clock set here would make a call that never
         # produced a token read as one that generated for as long as it prefilled.
         assert progress.generation_started_monotonic is None
+
+
+# ── FRE-1602 — one retry of a local call whose stream broke mid-read ──────
+#
+# litellm retries a failure raised before the response starts (`2N + 1`
+# requests, see TestRetryAndTimeoutParity) and never one raised while the
+# stream is read. A Cloudflare tunnel drop is the second kind: the origin
+# finishes the request and the gateway sees a reset body. These tests drive the
+# real dispatch and break the stream at the transport.
+
+_RESET_BODY = "peer closed connection without sending complete message body"
+_PARTIAL_CHUNK = _chunk(delta={"role": "assistant", "content": "partial "})
+
+
+async def _broken_sse(*chunks: dict[str, Any], error: Exception) -> AsyncIterator[bytes]:
+    """Yield ``chunks`` as SSE, then fail the way a dropped connection does."""
+    for chunk in chunks:
+        yield b"data: " + json.dumps(chunk).encode() + b"\n\n"
+    raise error
+
+
+def _transport_break(shape: str) -> Exception:
+    """The exception httpx raises, after its own mapping, for one reset shape."""
+    if shape == "RemoteProtocolError":
+        return httpx.RemoteProtocolError(_RESET_BODY)
+    return httpx.ReadError("connection reset by peer")
+
+
+@contextmanager
+def _count_acompletion() -> Iterator[list[dict[str, Any]]]:
+    """Record every ``litellm.acompletion`` call this layer makes.
+
+    litellm's own retries happen inside one call, so the count is the number of
+    attempts ``_respond_local`` made, whatever the transport saw.
+    """
+    real = litellm.acompletion
+    calls: list[dict[str, Any]] = []
+
+    async def _spy(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return await real(**kwargs)
+
+    with patch.object(litellm, "acompletion", _spy):
+        yield calls
+
+
+class TestMidStreamTransportRetry:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("max_retries", [None, 1])
+    @pytest.mark.parametrize("partial", [True, False])
+    @pytest.mark.parametrize("shape", ["RemoteProtocolError", "ReadError"])
+    async def test_a_mid_stream_transport_break_is_retried_once(
+        self, shape: str, partial: bool, max_retries: int | None
+    ) -> None:
+        """AC-1 — the same request goes out a second time and its result is returned."""
+        broken = _broken_sse(*([_PARTIAL_CHUNK] if partial else []), error=_transport_break(shape))
+
+        captured = await _dispatch(streams=[broken, _plain_stream()], max_retries=max_retries)
+
+        assert len(captured.bodies) == 2
+        assert captured.bodies[0] == captured.bodies[1]
+        assert captured.response is not None
+        assert captured.response["content"] == "the answer"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("case", "dispatch_kwargs", "expected"),
+        [
+            ("http_400", lambda: {"status": 400}, LLMClientError),
+            ("http_500", lambda: {"status": 500}, LLMServerError),
+            (
+                "mid_stream_read_timeout",
+                lambda: {"streams": [_broken_sse(error=httpx.ReadTimeout("stalled"))]},
+                LLMTimeout,
+            ),
+            (
+                "mid_stream_non_transport_error",
+                lambda: {"streams": [_broken_sse(_PARTIAL_CHUNK, error=ValueError("bad chunk"))]},
+                LLMClientError,
+            ),
+        ],
+    )
+    async def test_only_transport_errors_are_sent_twice(
+        self, case: str, dispatch_kwargs: Any, expected: type[Exception]
+    ) -> None:
+        """AC-2 — a failure that is not a transport break is sent once by this layer."""
+        with _count_acompletion() as calls, pytest.raises(expected):
+            await _dispatch(max_retries=1, **dispatch_kwargs())
+
+        assert len(calls) == 1, case
+
+    @pytest.mark.asyncio
+    async def test_the_callers_wall_clock_timeout_is_not_retried(self) -> None:
+        """AC-2 — the budget the caller set ends the call, not a second attempt."""
+        await _dispatch()  # warm-up, for the reason given in TestGenerationWallClockBudget
+        slow = _slow_sse(
+            _chunk(delta={"role": "assistant", "content": "one "}),
+            _chunk(delta={"content": "two "}),
+            _chunk(delta={"content": "three "}),
+            delay=0.08,
+        )
+
+        with _count_acompletion() as calls, pytest.raises(LLMTimeout):
+            await _dispatch(stream=slow, timeout_s=0.15, max_retries=1)
+
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_by_the_caller_is_not_retried(self) -> None:
+        """AC-2 — a cancelled call does not start a new attempt."""
+        await _dispatch()  # warm-up
+        slow = _slow_sse(
+            _chunk(delta={"role": "assistant", "content": "one "}),
+            _chunk(delta={"content": "two "}),
+            delay=0.3,
+        )
+        captured = Captured()
+
+        with _count_acompletion() as calls:
+            task = asyncio.create_task(_dispatch(stream=slow, max_retries=1, capture=captured))
+            async with asyncio.timeout(5):
+                # The request is on the wire and the stream is being read. A dispatch that
+                # fails first ends the wait, and awaiting the task below reports its error.
+                while not captured.bodies and not task.done():
+                    await asyncio.sleep(0.01)
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert len(calls) == 1
+        assert len(captured.bodies) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_second_break_is_the_terminal_error(self) -> None:
+        """AC-3 — one retry, then today's error. No third attempt."""
+        captured = Captured()
+        streams: list[bytes | AsyncIterator[bytes]] = [
+            _broken_sse(_PARTIAL_CHUNK, error=httpx.RemoteProtocolError(_RESET_BODY))
+            for _ in range(3)
+        ]
+
+        with pytest.raises(LLMConnectionError):
+            await _dispatch(streams=streams, max_retries=1, capture=captured)
+
+        names = [name for name, _ in captured.events]
+        assert len(captured.bodies) == 2
+        assert names.count("model_call_retried") == 1
+        assert names.count("model_call_error") == 1, "only the terminal failure is an error"
+
+    @pytest.mark.asyncio
+    async def test_budget_zero_sends_one_request_on_a_mid_stream_break(self) -> None:
+        """The ``max_retries=0`` contract of the background producers holds."""
+        captured = Captured()
+
+        with pytest.raises(LLMConnectionError):
+            await _dispatch(
+                streams=[
+                    _broken_sse(error=httpx.RemoteProtocolError(_RESET_BODY)),
+                    _plain_stream(),
+                ],
+                max_retries=0,
+                capture=captured,
+            )
+
+        assert len(captured.bodies) == 1
+        assert "model_call_retried" not in [name for name, _ in captured.events]
+
+    @pytest.mark.asyncio
+    async def test_the_retry_is_visible_in_telemetry(self) -> None:
+        """AC-4 — a retried call is told apart from a clean one."""
+        captured = await _dispatch(
+            streams=[
+                _broken_sse(_PARTIAL_CHUNK, error=httpx.ReadError("connection reset by peer")),
+                _plain_stream(),
+            ],
+            max_retries=1,
+        )
+
+        retried = captured.event("model_call_retried")
+        completed = captured.completed_event()
+        assert retried["error_shape"] == "ReadError"
+        assert retried["attempt"] == 2
+        assert str(retried["trace_id"]) == str(completed["trace_id"]) != ""
+        assert completed["attempts"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_clean_call_records_one_attempt(self) -> None:
+        captured = await _dispatch()
+
+        assert captured.completed_event()["attempts"] == 1
+        assert "model_call_retried" not in [name for name, _ in captured.events]
+
+    @pytest.mark.asyncio
+    async def test_the_partial_of_the_first_attempt_does_not_reach_the_reply_or_the_sink(
+        self,
+    ) -> None:
+        """AC-5 — the content and the progress sink hold only the second stream."""
+        progress = GenerationProgress()
+
+        captured = await _dispatch(
+            streams=[
+                _broken_sse(_PARTIAL_CHUNK, error=httpx.RemoteProtocolError(_RESET_BODY)),
+                _plain_stream("the answer"),
+            ],
+            progress_sink=progress,
+            max_retries=1,
+        )
+
+        assert captured.response is not None
+        assert captured.response["content"] == "the answer"
+        assert progress.content == "the answer"
+        assert progress.generation_started_monotonic is not None
+
+    @pytest.mark.asyncio
+    async def test_the_generation_clock_of_the_first_attempt_does_not_outlive_it(self) -> None:
+        """AC-5 — a retry cut during prefill has no content and no generation clock.
+
+        The first attempt generates, so it sets the clock. The second attempt only
+        prefills, so it must not inherit that clock: a sub-agent divides its
+        output by the time since the clock started.
+        """
+        await _dispatch()  # warm-up, for the reason given in TestGenerationWallClockBudget
+        prefill_only = _slow_sse(
+            *(_progress_report(step * 1024, shape="no_choices") for step in range(6)),
+            delay=0.08,
+        )
+        progress = GenerationProgress()
+
+        with pytest.raises(LLMTimeout):
+            await _dispatch(
+                streams=[
+                    _broken_sse(_PARTIAL_CHUNK, error=httpx.RemoteProtocolError(_RESET_BODY)),
+                    prefill_only,
+                ],
+                timeout_s=0.3,
+                progress_sink=progress,
+                max_retries=1,
+            )
+
+        assert progress.content == ""
+        assert progress.generation_started_monotonic is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            ({"status": 502}, LLMServerError),
+            ({"status": 503}, LLMServerError),
+            ({"status": 504}, LLMTimeout),
+            ({"transport_error": httpx.ConnectError("Connection refused")}, LLMConnectionError),
+        ],
+    )
+    async def test_creation_time_failures_are_not_retried_again_by_this_layer(
+        self, kwargs: dict[str, Any], expected: type[Exception]
+    ) -> None:
+        """AC-3 — litellm's budget already covers a failure before the response starts.
+
+        ``2N + 1`` is 3 for ``N = 1``. A second layer on top would make it 6.
+        """
+        captured = Captured()
+
+        with pytest.raises(expected):
+            await _dispatch(max_retries=1, capture=captured, **kwargs)
+
+        assert len(captured.bodies) == 3
+
+
+class TestStreamTransportErrorShape:
+    """The classifier names a reset or an incomplete body, and nothing else."""
+
+    @pytest.mark.parametrize(
+        ("error", "shape"),
+        [
+            (httpx.RemoteProtocolError(_RESET_BODY), "RemoteProtocolError"),
+            (httpx.ReadError("connection reset by peer"), "ReadError"),
+            (httpx.ReadTimeout("stalled"), None),
+            (httpx.LocalProtocolError("bad request"), None),
+            (
+                EgressBlockedError(httpx.Request("POST", "https://x.test/v1"), "blocklisted", None),
+                None,
+            ),
+            (ValueError("bad chunk"), None),
+        ],
+    )
+    def test_names_the_shape_of_the_error_itself(
+        self, error: BaseException, shape: str | None
+    ) -> None:
+        assert litellm_client_module._stream_transport_error_shape(error) == shape
+
+    def test_finds_a_reset_wrapped_by_a_cause(self) -> None:
+        try:
+            try:
+                raise httpx.ReadError("connection reset by peer")
+            except httpx.ReadError as inner:
+                raise RuntimeError("litellm wrapper") from inner
+        except RuntimeError as wrapped:
+            assert litellm_client_module._stream_transport_error_shape(wrapped) == "ReadError"
+
+    def test_ignores_a_reset_the_raiser_suppressed(self) -> None:
+        """``raise ... from None`` states that the earlier error is not the cause."""
+        try:
+            try:
+                raise httpx.ReadError("connection reset by peer")
+            except httpx.ReadError:
+                raise ValueError("unparseable chunk") from None
+        except ValueError as unrelated:
+            assert litellm_client_module._stream_transport_error_shape(unrelated) is None

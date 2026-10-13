@@ -62,7 +62,7 @@ from personal_agent.security import (
     get_domain_guard,
     guard_event_hooks,
 )
-from personal_agent.telemetry.events import MODEL_CALL_ERROR
+from personal_agent.telemetry.events import MODEL_CALL_ERROR, MODEL_CALL_RETRIED
 from personal_agent.telemetry.spans import model_call_span
 
 if TYPE_CHECKING:
@@ -181,6 +181,13 @@ def _build_guarded_client(
 # generation budget and must not become the connect budget too, or an
 # unreachable SLM tunnel hangs the turn for ten minutes instead of ten seconds.
 _LOCAL_NON_READ_TIMEOUT_S = 10.0
+
+# FRE-1602. Attempts at reading one local stream: the first, and one retry after a
+# transport reset. litellm retries a failure raised before the response starts
+# and never one raised while the stream is read, so this loop covers only the
+# second. Two attempts bound it. A third would hold a user turn for another
+# prefill-length wait on a connection that is failing.
+_LOCAL_STREAM_ATTEMPTS = 2
 
 
 #: Call-site keyword names this client treats as dialect-governed parameters
@@ -434,6 +441,40 @@ def _map_local_dispatch_error(exc: Exception) -> Exception:
         return LLMServerError(f"Local model server error {status}: {exc}")
 
     return LLMClientError(f"Local model call failed: {exc}")
+
+
+def _stream_transport_error_shape(exc: BaseException) -> str | None:
+    """Name the transport reset that broke a local stream, or ``None`` (FRE-1602).
+
+    A Cloudflare tunnel drop ends the response body with a connection reset or
+    an incomplete chunked body while the origin finishes the request. httpx
+    raises ``ReadError`` (a ``NetworkError``) or ``RemoteProtocolError`` for
+    these. A timeout, a local protocol error and ``EgressBlockedError`` are
+    none of them, so the caller's own budget and the egress policy are never
+    retried.
+
+    The walk follows ``__cause__``, and ``__context__`` only when the raiser did
+    not suppress it. ``raise ... from None`` states that the earlier error is
+    not the cause, and a reset hidden that way must not make an unrelated
+    failure look like a transport break.
+
+    Args:
+        exc: The exception raised while the stream was read.
+
+    Returns:
+        The httpx class name of the reset (the error shape logged on the retry),
+        or ``None`` when the failure is not a transport reset.
+    """
+    current: BaseException | None = exc
+    for _ in range(8):
+        if current is None:
+            return None
+        if isinstance(current, (httpx.NetworkError, httpx.RemoteProtocolError)):
+            return type(current).__name__
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return None
 
 
 def _update_generation_progress(progress: GenerationProgress, chunk: dict[str, Any]) -> None:
@@ -1744,6 +1785,8 @@ class LiteLLMClient:
                 streaming response trips the read timeout only on a stall, so the
                 wall-clock bound is what actually terminates it at this value.
             max_retries: Retry budget; ``None`` uses ``settings.llm_max_retries``.
+                ``0`` means exactly one request: it also turns off the one
+                retry after a transport reset while the stream is read (FRE-1602).
             prompt_identity: Identity of the prompt (ADR-0078 D1/D4).
             priority: Inference priority tier for the re-homed concurrency
                 controller (ADR-0141 D3). Controls scheduling order when
@@ -1959,7 +2002,7 @@ class LiteLLMClient:
                 )
 
                 try:
-                    stream: Any = None
+                    attempts = 0
                     # FRE-1379: bounds BOTH stream creation (acompletion()) and
                     # consumption in one wall-clock budget, from slot acquisition —
                     # the httpx read timeout below only catches a stalled connection
@@ -1968,20 +2011,71 @@ class LiteLLMClient:
                     # distinguishable from an externally triggered cancel: the former
                     # surfaces as TimeoutError on exit, the latter still propagates as
                     # CancelledError.
+                    # FRE-1602: the retry below runs inside this one budget, so a
+                    # retry never extends the bound the caller sized its outer
+                    # deadline against.
                     async with asyncio.timeout(effective_timeout_s):
-                        stream = await litellm.acompletion(**litellm_kwargs)
-                        try:
+                        while True:
+                            attempts += 1
+                            stream: Any = None
                             chunks: list[dict[str, Any]] = []
-                            async for chunk in stream:
-                                dumped = chunk.model_dump()
+                            try:
+                                stream = await litellm.acompletion(**litellm_kwargs)
+                                async for chunk in stream:
+                                    dumped = chunk.model_dump()
+                                    if progress_sink is not None:
+                                        _update_generation_progress(progress_sink, dumped)
+                                    chunks.append(dumped)
+                                break
+                            except Exception as read_exc:
+                                # FRE-1602: a transport reset while the stream is read —
+                                # a Cloudflare tunnel drop, with the origin finishing
+                                # the request. `stream is None` means the failure came
+                                # before the response, which litellm's own budget has
+                                # already retried. `effective_max_retries < 1` is a
+                                # caller's "exactly one request" (the background
+                                # producers). The request is sent unchanged, so the
+                                # server's prompt cache turns the retry into a cache
+                                # hit. CancelledError is not an Exception and the
+                                # caller's wall-clock TimeoutError is not a reset, so
+                                # neither reaches the retry.
+                                shape = (
+                                    _stream_transport_error_shape(read_exc)
+                                    if stream is not None
+                                    else None
+                                )
+                                if (
+                                    shape is None
+                                    or effective_max_retries < 1
+                                    or attempts >= _LOCAL_STREAM_ATTEMPTS
+                                ):
+                                    raise
+                                log.warning(
+                                    MODEL_CALL_RETRIED,
+                                    role=role.value,
+                                    model=self._telemetry_model,
+                                    endpoint=api_base,
+                                    provider=self.provider,
+                                    error_shape=shape,
+                                    error=str(read_exc),
+                                    attempt=attempts + 1,
+                                    max_attempts=_LOCAL_STREAM_ATTEMPTS,
+                                    trace_id=trace_id,
+                                    session_id=trace_ctx.session_id,
+                                    span_id=span_id,
+                                )
+                                # The discarded attempt's text must reach neither the
+                                # reply (`chunks` is per attempt) nor the caller's sink,
+                                # which an outer timeout would otherwise read as the
+                                # partial (ADR-0149 D3).
                                 if progress_sink is not None:
-                                    _update_generation_progress(progress_sink, dumped)
-                                chunks.append(dumped)
-                        finally:
-                            # Best-effort: an unclosed stream on a cancelled/timed-out
-                            # call would otherwise leak into the cached guarded
-                            # httpx.AsyncClient (process-lifetime connection pool).
-                            await _safe_aclose_stream(stream)
+                                    progress_sink.content = ""
+                                    progress_sink.generation_started_monotonic = None
+                            finally:
+                                # Best-effort: an unclosed stream on a cancelled/timed-out
+                                # call would otherwise leak into the cached guarded
+                                # httpx.AsyncClient (process-lifetime connection pool).
+                                await _safe_aclose_stream(stream)
                     response_data = _aggregate_streaming_chunks(chunks)
                     # Reasoning extraction (both shapes) and the unconditional text
                     # tool-call fallback both live in this adapter, which is why the
@@ -2077,6 +2171,8 @@ class LiteLLMClient:
                     extra={
                         "tool_calls": len(llm_response["tool_calls"]),
                         "reasoning_content_chars": len(_reasoning_trace),
+                        # FRE-1602: 1 for a clean call, 2 after a transport retry.
+                        "attempts": attempts,
                     },
                 )
 

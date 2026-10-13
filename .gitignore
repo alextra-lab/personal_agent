@@ -248,6 +248,9 @@ telemetry/evaluation/fre1590-skill-test/
 # FRE-1594 reveal spike run outputs (request bodies and replies hold full prompts; never committed)
 telemetry/evaluation/fre1594-reveal-spike/
 
+# FRE-1592 study run outputs (request bodies and replies hold full prompts; never committed)
+telemetry/evaluation/fre1592/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

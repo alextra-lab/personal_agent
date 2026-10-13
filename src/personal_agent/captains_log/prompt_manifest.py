@@ -157,7 +157,14 @@ async def load_mean_rating_lookup(
         # Local import to avoid circular import; TelemetryQueries is a heavy dep.
         from personal_agent.telemetry import TelemetryQueries
 
-        return await TelemetryQueries().get_mean_rating_by_callsite(days=days)
+        queries = TelemetryQueries()
+        try:
+            return await queries.get_mean_rating_by_callsite(days=days)
+        finally:
+            # This runs once per reflected turn and the client is built here, so
+            # nothing else will close it. Dropped open, its aiohttp connector is
+            # reported by the garbage collector as "Unclosed connector" (FRE-1601).
+            await queries.disconnect()
     except Exception:
         log.warning(
             "mean_rating_lookup_unavailable",

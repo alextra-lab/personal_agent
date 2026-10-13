@@ -102,9 +102,12 @@ def capture_turn(
     paths.stub_out.mkdir(parents=True, exist_ok=True)
     script = paths.stub_out / SCRIPT_FILE
     script.write_text(json.dumps(script_for(skill)))
-    _, files = capture.turn(client, chat_url, paths, prompt, "OK", None, settle, model_key)
-    left = json.loads(script.read_text())
-    script.write_text("[]")
+    try:
+        _, files = capture.turn(client, chat_url, paths, prompt, "OK", None, settle, model_key)
+        left = json.loads(script.read_text())
+    finally:
+        # A later capture in this run directory must not take a reply scripted for this turn.
+        script.write_text("[]")
     if left:
         raise ValueError(f"the stub did not use {len(left)} scripted replies")
     return TwoCalls.from_capture(primary_calls(files, prompt), skill)

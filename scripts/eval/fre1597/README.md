@@ -6,7 +6,7 @@ The run measures four things on the FRE-1596 build, on the production primary (l
 |---|---|---|---|
 | AC-1 | AC-F4 routing | `routing.py` | Does the first call load the right area skill, and no skill on a no-skill prompt? |
 | AC-2 | AC-F2 | `loop.py` | After `read_skill`, does the revealed tool complete the five-step loop? |
-| AC-3 | AC-F1 | `prompt_size.py` | Is the first request smaller by about the `query_telemetry` definition? |
+| AC-3 | AC-F1 | `prompt_size.py` | Is the first request smaller by about the definition of the old telemetry tool? |
 | AC-4 | AC-F3 | `loop.py` | Does the simple reveal cost at most one costly call per revealed tool, against a control? |
 
 The plan, with the two Codex review rounds: `docs/superpowers/plans/2026-10-13-fre-1597-routing-run.md`.

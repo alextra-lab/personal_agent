@@ -290,3 +290,22 @@ def test_a_request_error_is_not_retried(status: int) -> None:
     inner = _Replies(_failed(status, "Failed to parse tools"))
     reply = RetryOnce(inner).send({})
     assert inner.sent == 1 and not reply.ok and "retried" not in reply.extra
+
+
+def test_a_failed_capture_turn_empties_the_stub_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    from scripts.eval.fre1537 import capture
+    from scripts.eval.fre1537.common import RunPaths
+    from scripts.eval.fre1597 import common
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise httpx.ConnectError("gateway down")
+
+    monkeypatch.setattr(capture, "turn", boom)
+    with pytest.raises(httpx.ConnectError):
+        common.capture_turn(
+            httpx.Client(), "http://x/chat", tmp_path, PROMPT, model_key="k", skill="log-search"
+        )
+    assert json.loads((RunPaths(tmp_path).stub_out / common.SCRIPT_FILE).read_text()) == []

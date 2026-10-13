@@ -242,6 +242,11 @@ def run_replay(
                 if reason is None:
                     second = sender.send(entry.calls.second_request(reply))
                     row["second"] = second_record(entry.calls, second)
+                    if not second.ok:
+                        # A failed call 2 is not a text reply: the row is an error, so a rerun
+                        # sends the draw again.
+                        row["error"] = f"call 2 failed: {second.error}"
+                        errors += 1
                 else:
                     row["second"] = {"skipped": reason}
             append_jsonl(rows_path, row)

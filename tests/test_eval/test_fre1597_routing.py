@@ -218,3 +218,15 @@ def test_two_llama_builds_fail_the_run() -> None:
 def test_a_clean_run_passes() -> None:
     items = _skill_items("log-search", 4) + _no_skill_items(2)
     assert routing.score(items, _all_right(items), draws=3)["verdict"] == "pass"
+
+
+def test_a_failed_call_2_writes_an_error_row_and_a_rerun_redoes_the_draw(tmp_path: Path) -> None:
+    rows = tmp_path / "rows.jsonl"
+    load = _reply(_load("log-search"))
+    sender = _Scripted(load, _reply(ok=False))
+    assert routing.run_replay(sender, [_captured("log-search")], rows, draws=1) == 1
+    (row,) = read_jsonl(rows)
+    assert "call 2" in str(row["error"])
+    sender = _Scripted(load, _reply(("search_logs", "{}")))
+    assert routing.run_replay(sender, [_captured("log-search")], rows, draws=1) == 0
+    assert len(sender.sent) == 2

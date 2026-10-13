@@ -9,6 +9,7 @@ import copy
 
 import pytest
 from scripts.eval.fre1594 import transport
+from scripts.eval.fre1594.reveal import REMOVED_TOOL
 from scripts.eval.fre1597 import prompt_size
 
 PROMPT = "What is the capital of France?"
@@ -60,7 +61,7 @@ def _body(
 
 
 _B_SYSTEM = (
-    "You are the agent.\n- read_only: query_telemetry, read, read_skill\n"
+    f"You are the agent.\n- read_only: {REMOVED_TOOL}, read, read_skill\n"
     "- query-elasticsearch: Reads logs.\n- system-metrics: A snapshot.\n"
 )
 _A_SYSTEM = (
@@ -73,7 +74,7 @@ _A_SYSTEM = (
 def _b() -> dict[str, object]:
     tools = [
         _tool("fetch_url"),
-        _tool("query_telemetry", "x" * 3000),
+        _tool(REMOVED_TOOL, "x" * 3000),
         _tool("read_skill", "query-elasticsearch"),
     ]
     return _body(_B_SYSTEM, tools, "10:00:01", "call_mem_aaa111")
@@ -91,7 +92,7 @@ def test_b_minus_removes_the_one_tool_definition_only() -> None:
     assert {k: v for k, v in minus.items() if k != "tools"} == {
         k: v for k, v in b.items() if k != "tools"
     }
-    with pytest.raises(prompt_size.SizeError, match="query_telemetry"):
+    with pytest.raises(prompt_size.SizeError, match=REMOVED_TOOL):
         prompt_size.b_minus(minus)
 
 
@@ -124,7 +125,7 @@ def test_the_tool_count_line_may_drop_by_the_removed_tools_only() -> None:
 
 def test_the_diff_allows_only_t_c2_changes() -> None:
     allowed = prompt_size.body_diff(_b(), prompt_size.align(_a(), _b()))
-    assert allowed["tools_removed"] == ["query_telemetry"]
+    assert allowed["tools_removed"] == [REMOVED_TOOL]
     assert allowed["unexpected"] == []
 
     a = prompt_size.align(_a(), _b())

@@ -3,7 +3,7 @@
 Three first requests of one no-skill prompt, each sent to llama.cpp with an empty cache:
 
 - ``B``: captured at ``b02503fc``, the commit before T-C2 (FRE-1596);
-- ``B-minus``: ``B`` with only the ``query_telemetry`` definition removed;
+- ``B-minus``: ``B`` with only the definition of the old telemetry tool removed;
 - ``A``: captured on the final build, with its non-system messages aligned to ``B``'s.
 
     capture  --label B|A   one probe-gateway turn, text reply   -> <run>/prompt_size/<label>.json
@@ -16,7 +16,7 @@ changes the output, not the prompt.
 The test is ``tokens(B) > tokens(B-minus)`` and ``tokens(B) - tokens(A) >= 0.8 x (tokens(B) -
 tokens(B-minus))``. It also fails if ``B`` and ``A`` differ in a way that is not a T-C2 change: a
 changed block of system-prompt or tool-definition lines must name a skill or tool that T-C2 renamed,
-split or removed, the only removed tool is ``query_telemetry``, no tool is added, and every other key
+split or removed, the only removed tool is the old telemetry tool, no tool is added, and every other key
 is equal.
 
 Run from the repo root. See README.md beside this file.
@@ -38,14 +38,13 @@ from scripts.eval.fre1537 import capture
 from scripts.eval.fre1537.common import utc_now
 from scripts.eval.fre1581.g2_skill_choice import load_items
 from scripts.eval.fre1594 import spike
-from scripts.eval.fre1594.reveal import tool_name
+from scripts.eval.fre1594.reveal import REMOVED_TOOL, tool_name
 from scripts.eval.fre1594.transport import LlamaTransport, Transport
 from scripts.eval.fre1597 import common
 from scripts.eval.fre1597.calls import JsonDict
 from scripts.eval.fre1597.routing import AREA_SKILLS
 
 PROMPT_ID = "ns01"
-REMOVED_TOOL = "query_telemetry"
 SHARE = 0.8
 LABELS = ("B", "A")
 # The names that T-C2 removed, renamed or split (ADR-0156 A4, A5.1), and the names it added.
@@ -85,7 +84,7 @@ def _tools(body: Mapping[str, object]) -> list[JsonDict]:
 
 
 def b_minus(b: Mapping[str, object]) -> JsonDict:
-    """Return ``B`` with only the ``query_telemetry`` definition removed.
+    """Return ``B`` with only the definition of the old telemetry tool (``REMOVED_TOOL``) removed.
 
     Raises:
         SizeError: If ``B`` does not hold that definition exactly once.

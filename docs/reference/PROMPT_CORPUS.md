@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `a02c4aeb` · Committed: 2026-10-13T16:16:43+02:00  
+> Source revision: `a6583065` · Committed: 2026-10-13T14:33:45Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,14 +32,14 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 17,836  
+Total skill docs: 11 · Total tokens (all skills): 17,931  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
 | graph-inspection — Read the structure and exact facts of the knowledge graph | 1,756 | `skills/graph-inspection/SKILL.md` |
 | interaction-outcomes — How interactions ended, and what the reflections say | 823 | `skills/interaction-outcomes/SKILL.md` |
-| log-search — Count, break down and find agent log events | 2,150 | `skills/log-search/SKILL.md` |
+| log-search — Count, break down and find agent log events | 2,245 | `skills/log-search/SKILL.md` |
 | SKILL: Mermaid Diagrams | 3,593 | `skills/mermaid-diagrams/SKILL.md` |
 | model-latency — How slow the model calls are over a window | 825 | `skills/model-latency/SKILL.md` |
 | sequential-thinking — Structured Reasoning Discipline | 901 | `skills/sequential-thinking/SKILL.md` |
@@ -997,7 +997,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,150 |
+| **Token count** | 2,245 |
 | **Source** | `skills/log-search/SKILL.md` |
 
 ```markdown
@@ -1009,7 +1009,7 @@ Check the result before you answer:
 - Start with the `search_logs` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
 - Use curl only for what the tool cannot do. The table below says which.
 - Use only the index families in this file. Never write a guessed index name.
-- A monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
+- A scheduled monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
 - Model-call timing is not in Elasticsearch. Use the `model-latency` skill.
 - Spend and token totals are in the `spend-and-tokens` skill. How interactions ended is in the `interaction-outcomes` skill.
 
@@ -1126,7 +1126,9 @@ Check the result before you answer:
 - A `total` of 0 for a window in which the agent ran means the window or the filter is wrong.
 - A terms aggregation with no buckets and a `total` above 0 means the field is empty for these events. Find the event that carries it (the last call in Step 1).
 - A count that you quote is the count that the reply holds, with its window. Do not round it up.
-- A monitor answer gives the time of the newest document. A document older than the monitor's interval is reported as stale.
+- A monitor answer gives the time of the newest document.
+- Four monitors run on a schedule. At the default interval they write every 5 minutes (`agent-monitors-slm-health`), every hour (`agent-monitors-cache-erosion`, `agent-monitors-joinability`) or every day (`agent-monitors-delivery-ratio`). A newest document older than its interval is reported as stale.
+- `agent-monitors-cache-reset-cadence` and `agent-monitors-projector-health` write on events, so they have no interval. A quiet period is not stale.
 
 ## Recovery
 

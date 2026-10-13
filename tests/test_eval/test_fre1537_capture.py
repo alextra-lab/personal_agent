@@ -50,6 +50,66 @@ def test_stub_numbering_continues_after_a_restart(tmp_path: Path) -> None:
     assert sorted(p.name for p in (tmp_path / "calls").glob("*.json")) == ["0001.json", "0002.json"]
 
 
+_SKILL_CALL = {"tool_calls": [{"name": "read_skill", "arguments": {"name": "log-search"}}]}
+
+
+def test_stub_streams_a_scripted_tool_call_that_the_production_adapter_reads(
+    tmp_path: Path,
+) -> None:
+    """FRE-1597: the gateway must see a real tool call, so it runs read_skill and calls again."""
+    from personal_agent.llm_client.adapters import (
+        _aggregate_streaming_chunks,
+        adapt_chat_completions_response,
+    )
+
+    (tmp_path / "next_replies.json").write_text(json.dumps([_SKILL_CALL, {"content": "DONE"}]))
+    client = TestClient(stub.create_app(tmp_path))
+    first = client.post(
+        "/v1/chat/completions", json={"messages": [], "tools": TOOLS, "stream": True}
+    )
+    chunks = [
+        json.loads(x[6:])
+        for x in first.text.splitlines()
+        if x.startswith("data: ") and x != "data: [DONE]"
+    ]
+    adapted = adapt_chat_completions_response(_aggregate_streaming_chunks(chunks))
+    assert adapted["finish_reason"] == "tool_calls"
+    calls = adapted["tool_calls"]
+    assert [c["name"] for c in calls] == ["read_skill"]
+    assert json.loads(calls[0]["arguments"]) == {"name": "log-search"}
+
+    # A request without tools does not take a scripted entry.
+    other = client.post("/v1/chat/completions", json={"messages": [], "stream": False})
+    assert other.json()["choices"][0]["message"]["content"] == "OK"
+    second = client.post(
+        "/v1/chat/completions", json={"messages": [], "tools": TOOLS, "stream": False}
+    )
+    assert second.json()["choices"][0]["message"]["content"] == "DONE"
+    assert json.loads((tmp_path / "next_replies.json").read_text()) == []
+
+
+def test_stub_answers_a_scripted_tool_call_without_streaming(tmp_path: Path) -> None:
+    (tmp_path / "next_replies.json").write_text(json.dumps([_SKILL_CALL]))
+    client = TestClient(stub.create_app(tmp_path))
+    reply = client.post(
+        "/v1/chat/completions", json={"messages": [], "tools": TOOLS, "stream": False}
+    ).json()["choices"][0]
+    assert reply["finish_reason"] == "tool_calls"
+    call = reply["message"]["tool_calls"][0]
+    assert call["type"] == "function" and call["function"]["name"] == "read_skill"
+    assert json.loads(call["function"]["arguments"]) == {"name": "log-search"}
+
+
+def test_stub_falls_back_to_the_text_reply_when_the_script_is_empty(tmp_path: Path) -> None:
+    (tmp_path / "next_replies.json").write_text("[]")
+    (tmp_path / "next_reply.txt").write_text("SCRIPTED")
+    client = TestClient(stub.create_app(tmp_path))
+    reply = client.post(
+        "/v1/chat/completions", json={"messages": [], "tools": TOOLS, "stream": False}
+    )
+    assert reply.json()["choices"][0]["message"]["content"] == "SCRIPTED"
+
+
 def write_call(directory: Path, n: int, body: dict[str, object]) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{n:04d}.json"

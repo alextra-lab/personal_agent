@@ -40,6 +40,9 @@ from personal_agent.llm_client.types import ToolCall
 RunTool = Callable[[str, str, tuple[str, ...]], ToolRun]
 """Runs one call to an experimental tool: name, argument JSON, the tools revealed before the reply."""
 
+PlaceTools = Callable[[Sequence[JsonDict], tuple[str, ...]], list[JsonDict]]
+"""Returns the treatment's tools: the base tools and the revealed names (FRE-1597)."""
+
 STEPS = 5
 
 
@@ -54,6 +57,10 @@ class Draw:
         base: The base request of the prompt (:func:`reveal.base_body`).
         scenarios: The scenarios.
         tools: The experimental tool definitions.
+        skill_content: The ``read_skill`` result of both arms, in place of the synthetic one
+            (FRE-1597: the production result of the final build). Simple form only.
+        place_tools: The treatment's tools after a reveal, in place of appending the revealed
+            definitions (FRE-1597: the production order). The control keeps the base tools.
     """
 
     prompt: Prompt
@@ -62,6 +69,13 @@ class Draw:
     base: JsonDict
     scenarios: Scenarios
     tools: Mapping[str, JsonDict]
+    skill_content: str | None = None
+    place_tools: PlaceTools | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse a hook in the cache-safe form, whose reveal is in the skill result."""
+        if self.form != "simple" and (self.skill_content or self.place_tools):
+            raise ValueError("the final-build hooks apply to the simple form only")
 
     @property
     def skill(self) -> Skill:
@@ -96,14 +110,21 @@ class _Transcript:
         draw = self.draw
         messages = copy.deepcopy(list(state.messages))
         if state.slot is not None:
-            messages[state.slot]["content"] = skill_result(
+            messages[state.slot]["content"] = draw.skill_content or skill_result(
                 draw.scenarios, draw.skill, draw.form, reveal=reveal, tools=draw.tools
             )
         base_tools = draw.base["tools"]
         assert isinstance(base_tools, list)
-        tools = revealed_tools(
-            base_tools, draw.form, reveal=reveal, revealed=state.revealed, tools=draw.tools
-        )
+        if draw.place_tools is not None:
+            tools = (
+                draw.place_tools(base_tools, state.revealed)
+                if reveal and state.revealed
+                else list(base_tools)
+            )
+        else:
+            tools = revealed_tools(
+                base_tools, draw.form, reveal=reveal, revealed=state.revealed, tools=draw.tools
+            )
         return with_nonce({**draw.base, "messages": messages, "tools": tools}, nonce)
 
     def add_reply(self, reply: Reply, turn_id: int) -> list[str]:

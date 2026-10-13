@@ -100,6 +100,14 @@ class ToolDefinition(BaseModel):
             "it from every listing the primary reads; a worker's tool loop opts in."
         ),
     )
+    skill_provided: bool = Field(
+        False,
+        description=(
+            "True for a tool that a skill reveals (ADR-0156 A5.3). The primary sees it only after "
+            "read_skill loads a skill whose metadata.provides-tools names it; a worker holds it "
+            "from its closed tool list."
+        ),
+    )
 
     # Grounding metadata (ADR-0098 Amendment A2)
     referent_parameter: str | None = Field(

@@ -281,7 +281,7 @@ def _build_tool_defs(tool_names: list[str]) -> list[dict[str, Any]] | None:
         return None
     granted = set(tool_names)
     all_defs = get_shared_tool_execution_layer().registry.get_tool_definitions_for_llm(
-        mode=None, include_worker_only=True
+        mode=None, include_worker_only=True, revealed=None
     )
     defs = [d for d in all_defs if d.get("function", {}).get("name") in granted]
     return [_with_visible_skills(d, tool_names) for d in defs] or None

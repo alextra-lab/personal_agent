@@ -44,7 +44,7 @@ from personal_agent.tools.contract import (
     ToolExecutionError as ToolExecutionError,
 )
 from personal_agent.tools.registry import ToolRegistry
-from personal_agent.tools.types import ToolErrorDetail, ToolResult
+from personal_agent.tools.types import ToolDefinition, ToolErrorDetail, ToolResult
 
 if TYPE_CHECKING:
     from personal_agent.governance.worker_read_grant import ReadGrant
@@ -318,6 +318,51 @@ async def _request_approval(
         )
 
 
+def mode_refusal(
+    tool_name: str,
+    tool_def: ToolDefinition,
+    mode: Mode,
+    governance_config: GovernanceConfig,
+) -> PermissionRefused | None:
+    """Refuse a call that the current mode does not allow.
+
+    The governance policy's allowed_in_modes is authoritative when a policy is configured for
+    this tool (ADR-0063 §D1, FRE-1358) — an empty list means "allowed nowhere", not "unset".
+    tool_def.allowed_modes is the fallback for tools with no governance entry. The primary's
+    tool loop also runs this check before the loop gate for a skill-provided tool (ADR-0156
+    A5.5 step 3).
+
+    Args:
+        tool_name: Name of the tool.
+        tool_def: Tool definition.
+        mode: The current operational mode.
+        governance_config: Governance configuration.
+
+    Returns:
+        The refusal, or ``None`` when the mode allows the tool.
+    """
+    mode_str = mode.value
+    tool_policy = governance_config.tools.get(tool_name)
+    mode_next = (
+        f"Do not retry {tool_name} while the agent is in {mode_str} mode. "
+        "Use another tool, or tell the user that the mode blocks it."
+    )
+    if tool_policy is not None:
+        if mode_str not in tool_policy.allowed_in_modes:
+            return _governance_refusal(
+                "mode_refused", f"Tool not allowed in {mode_str} mode", mode_next
+            )
+    elif mode_str not in tool_def.allowed_modes:
+        return _governance_refusal(
+            "mode_refused", f"Tool not allowed in {mode_str} mode", mode_next
+        )
+
+    # Check tool policy for forbidden modes
+    if tool_policy and mode_str in tool_policy.forbidden_in_modes:
+        return _governance_refusal("mode_refused", f"Tool forbidden in {mode_str} mode", mode_next)
+    return None
+
+
 async def _check_permissions(
     tool_name: str,
     tool_def: Any,
@@ -362,29 +407,11 @@ async def _check_permissions(
         session_rules,
     )
 
-    # 1. Mode check. The governance policy's allowed_in_modes is authoritative when a
-    # policy is configured for this tool (ADR-0063 §D1, FRE-1358) — an empty list means
-    # "allowed nowhere", not "unset". tool_def.allowed_modes is the fallback for tools
-    # with no governance entry.
+    # 1. Mode check.
     mode_str = current_mode.value
-    tool_policy = governance_config.tools.get(tool_name)
-    mode_next = (
-        f"Do not retry {tool_name} while the agent is in {mode_str} mode. "
-        "Use another tool, or tell the user that the mode blocks it."
-    )
-    if tool_policy is not None:
-        if mode_str not in tool_policy.allowed_in_modes:
-            return _governance_refusal(
-                "mode_refused", f"Tool not allowed in {mode_str} mode", mode_next
-            )
-    elif mode_str not in tool_def.allowed_modes:
-        return _governance_refusal(
-            "mode_refused", f"Tool not allowed in {mode_str} mode", mode_next
-        )
-
-    # Check tool policy for forbidden modes
-    if tool_policy and mode_str in tool_policy.forbidden_in_modes:
-        return _governance_refusal("mode_refused", f"Tool forbidden in {mode_str} mode", mode_next)
+    refused_by_mode = mode_refusal(tool_name, tool_def, current_mode, governance_config)
+    if refused_by_mode is not None:
+        return refused_by_mode
 
     # 2. Argument validation, before the card: never ask the user about a call that a path
     # rule refuses anyway.

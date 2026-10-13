@@ -25,6 +25,11 @@ The frontmatter holds `name`, `description` and `metadata` only. No other field 
 - `metadata.requires-tools`: optional, a comma-separated list of the tools the skill uses. It
   filters the catalog per worker type (D9). A worker sees the skill only if it holds every
   listed tool, and every worker sees a skill that lists none. It never routes and never blocks.
+- `metadata.provides-tools`: optional, a comma-separated list of skill-provided tools (ADR-0156
+  A5). The primary sees such a tool only after `read_skill` loads a skill that provides it, and
+  then for the rest of the session. Each name must be a registered tool marked
+  `skill_provided`, and each skill-provided tool needs at least one providing skill
+  (`provider_violations` in `orchestrator/skills.py`).
 - The body: under 500 lines and under 5,000 tokens. Put more detail in `references/`.
 - Every file that the body names (`scripts/…`, `references/…`, `assets/…`, or a relative link)
   exists, one level below the skill folder.

@@ -262,16 +262,67 @@ def test_default_registry_offers_fetch_url_in_normal_mode() -> None:
     assert "url" in fetch_def["function"]["parameters"]["required"]
 
 
-def _tool(name: str, *, worker_only: bool = False) -> ToolDefinition:
+def _tool(
+    name: str,
+    *,
+    worker_only: bool = False,
+    skill_provided: bool = False,
+    modes: tuple[str, ...] = ("NORMAL",),
+) -> ToolDefinition:
     return ToolDefinition(
         name=name,
         description=f"{name} tool",
         category="read_only",
         parameters=[],
         risk_level="low",
-        allowed_modes=["NORMAL"],
+        allowed_modes=list(modes),
         worker_only=worker_only,
+        skill_provided=skill_provided,
     )
+
+
+class TestSkillProvidedTools:
+    """ADR-0156 A5.3 (FRE-1595) — a skill-provided tool is listed only after its reveal."""
+
+    @staticmethod
+    def _registry() -> ToolRegistry:
+        registry = ToolRegistry()
+        registry.register(_tool("shared_tool"), lambda: {})
+        registry.register(_tool("revealed_tool", skill_provided=True), lambda: {})
+        registry.register(
+            _tool("alert_only_tool", skill_provided=True, modes=("ALERT",)), lambda: {}
+        )
+        return registry
+
+    def test_default_is_not_skill_provided(self) -> None:
+        assert _tool("t").skill_provided is False
+
+    def test_the_listings_omit_it_before_the_reveal(self) -> None:
+        registry = self._registry()
+        assert [t.name for t in registry.list_tools()] == ["shared_tool"]
+        names = {d["function"]["name"] for d in registry.get_tool_definitions_for_llm(Mode.NORMAL)}
+        assert names == {"shared_tool"}
+
+    def test_a_revealed_tool_is_listed(self) -> None:
+        registry = self._registry()
+        names = {
+            d["function"]["name"]
+            for d in registry.get_tool_definitions_for_llm(Mode.NORMAL, revealed={"revealed_tool"})
+        }
+        assert names == {"shared_tool", "revealed_tool"}
+
+    def test_the_mode_still_filters_a_revealed_tool(self) -> None:
+        registry = self._registry()
+        listed = registry.list_tools(Mode.NORMAL, revealed={"revealed_tool", "alert_only_tool"})
+        assert {t.name for t in listed} == {"shared_tool", "revealed_tool"}
+
+    def test_none_lists_every_skill_provided_tool(self) -> None:
+        registry = self._registry()
+        assert {t.name for t in registry.list_tools(revealed=None)} == {
+            "shared_tool",
+            "revealed_tool",
+            "alert_only_tool",
+        }
 
 
 class TestWorkerOnlyTools:

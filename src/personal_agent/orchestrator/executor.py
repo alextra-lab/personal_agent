@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 from opentelemetry.context.context import Context
 from opentelemetry.trace import Span
 
+from personal_agent.brainstem import get_mode_manager
 from personal_agent.captains_log.turn_evidence import (
     CandidatePopulation,
     GroundingRecord,
@@ -91,7 +92,12 @@ from personal_agent.orchestrator.loop_gate import (
 )
 from personal_agent.orchestrator.routing import is_memory_recall_query
 from personal_agent.orchestrator.session import SessionManager
-from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call, undispatched_failure
+from personal_agent.orchestrator.skills import tools_revealed_by
+from personal_agent.orchestrator.tool_dispatch import (
+    dispatch_tool_call,
+    not_revealed_error,
+    undispatched_failure,
+)
 from personal_agent.orchestrator.types import (
     ConstraintResolutionRecord,
     ExecutionContext,
@@ -138,7 +144,9 @@ from personal_agent.telemetry.spans import close_step_span, open_step_span
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools import ToolExecutionLayer, get_default_registry
 from personal_agent.tools.contract import dispatch_error
+from personal_agent.tools.executor import mode_refusal
 from personal_agent.tools.registry import ToolRegistry
+from personal_agent.tools.types import ToolErrorDetail
 
 log = get_logger(__name__)
 
@@ -630,6 +638,209 @@ async def _clear_pending_state(
             await clear_repo_method(repo, sid)
     except Exception:
         log.exception(f"{log_prefix}_clear_failed", trace_id=trace_id, session_id=session_id)
+
+
+# ---------------------------------------------------------------------------
+# Skill-provided tools revealed in the session (ADR-0156 A5.3–A5.5, FRE-1595)
+#
+# A skill-provided tool reaches the primary only after read_skill loads a skill that
+# provides it. The reveal lasts for the session: it is added to ctx.revealed_tools at
+# once and to sessions.revealed_tools next, and step_init reads that record once per
+# turn. The service passes no session state to the orchestrator, so the executor reads
+# and writes the record itself, as the pending-state helpers above do. Neither helper
+# raises: a failed load gives an empty set, and a failed add keeps the reveal for the
+# current turn only. Both log the failure.
+# ---------------------------------------------------------------------------
+
+
+def _session_owner(ctx: ExecutionContext) -> tuple[UUID, UUID] | None:
+    """Return ``(session_id, user_id)`` of a session that has a durable record, or None."""
+    if ctx.user_id is None:
+        return None
+    try:
+        return UUID(ctx.session_id), ctx.user_id
+    except (ValueError, AttributeError):
+        return None
+
+
+def _skill_provided_names() -> frozenset[str]:
+    """Return the registered tools that are skill-provided."""
+    global _tool_registry
+    if _tool_registry is None:
+        _tool_registry = get_default_registry()
+    return frozenset(
+        t.name
+        for t in _tool_registry.list_tools(include_worker_only=True, revealed=None)
+        if t.skill_provided
+    )
+
+
+async def _load_revealed_tools(ctx: ExecutionContext) -> set[str]:
+    """Read the session's revealed tools from ``sessions.revealed_tools``.
+
+    A name that is no longer a registered skill-provided tool (for example after a rename)
+    is dropped, with a log event.
+
+    Args:
+        ctx: The turn's execution context.
+
+    Returns:
+        The revealed tool names; empty when the session has no durable record or the read
+        fails.
+    """
+    owner = _session_owner(ctx)
+    if owner is None:
+        return set()
+    session_id, user_id = owner
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            names = await SessionRepository(db).load_revealed_tools(session_id, user_id)
+    except Exception:
+        log.exception(
+            "revealed_tools_load_failed", trace_id=ctx.trace_id, session_id=ctx.session_id
+        )
+        return set()
+
+    known = set(names & _skill_provided_names())
+    stale = sorted(names - known)
+    if stale:
+        log.info(
+            "revealed_tools_stale_names_ignored",
+            names=stale,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+    return known
+
+
+async def _persist_revealed_tools(ctx: ExecutionContext, names: frozenset[str]) -> None:
+    """Add newly revealed tools to ``sessions.revealed_tools``; log a failure, never raise.
+
+    Args:
+        ctx: The turn's execution context.
+        names: The tool names to add.
+    """
+    owner = _session_owner(ctx)
+    if owner is None:
+        log.info(
+            "revealed_tools_add_skipped",
+            reason="no_durable_session",
+            names=sorted(names),
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+        return
+    session_id, user_id = owner
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            rows = await SessionRepository(db).add_revealed_tools(session_id, user_id, names)
+    except Exception:
+        log.exception(
+            "revealed_tools_add_failed",
+            names=sorted(names),
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+        return
+    if rows == 0:
+        log.warning(
+            "revealed_tools_add_no_row",
+            names=sorted(names),
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+
+
+async def _reveal_skill_tools(ctx: ExecutionContext, output: object) -> None:
+    """Reveal the tools of a skill whose body ``read_skill`` returned (ADR-0156 A5.3).
+
+    Args:
+        ctx: The turn's execution context.
+        output: The ``read_skill`` result payload.
+    """
+    if not isinstance(output, dict) or "body" not in output:
+        return
+    skill_name = str(output.get("skill_name", ""))
+    # The primary sees every skill in its catalog (assemble_skill_catalog(None)).
+    new = tools_revealed_by(skill_name) - ctx.revealed_tools
+    if not new:
+        return
+    ctx.revealed_tools |= new
+    log.info(
+        "skill_tools_revealed",
+        skill_name=skill_name,
+        tools=sorted(new),
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+    )
+    await _persist_revealed_tools(ctx, frozenset(new))
+
+
+def _primary_tool_definitions(ctx: ExecutionContext) -> list[dict[str, Any]]:
+    """Return the primary's tool definitions: the mode's tools plus the revealed ones.
+
+    Per ADR-0063 §D1 (FRE-260), governance is mode-only. A skill-provided tool is listed only
+    after this session revealed it (ADR-0156 A5.8, the simple form chosen by FRE-1594).
+
+    Args:
+        ctx: The turn's execution context.
+
+    Returns:
+        The tool definitions in OpenAI function-calling format.
+    """
+    global _tool_registry
+    if _tool_registry is None:
+        _tool_registry = get_default_registry()
+    return _tool_registry.get_tool_definitions_for_llm(mode=ctx.mode, revealed=ctx.revealed_tools)
+
+
+def _skill_provided_refusal(ctx: ExecutionContext, tool_name: str) -> ToolErrorDetail | None:
+    """Refuse a primary call to a skill-provided tool, before the loop gate (ADR-0156 A5.5).
+
+    Step 2: the session must have revealed the tool. Step 3: the live mode must allow it, on
+    every round, so a recorded reveal never overrides a later mode change.
+
+    Args:
+        ctx: The turn's execution context.
+        tool_name: The called tool.
+
+    Returns:
+        The model-facing failure, or ``None`` when the call goes on to the loop gate.
+    """
+    global _tool_registry
+    if _tool_registry is None:
+        _tool_registry = get_default_registry()
+    tool_info = _tool_registry.get_tool(tool_name)
+    if tool_info is None or not tool_info[0].skill_provided:
+        return None
+    if tool_name not in ctx.revealed_tools:
+        detail = not_revealed_error(tool_name)
+    else:
+        refused = mode_refusal(
+            tool_name,
+            tool_info[0],
+            get_mode_manager().get_current_mode(),
+            _get_cached_governance_config(),  # type: ignore[arg-type]
+        )
+        if refused is None:
+            return None
+        detail = refused.error
+    log.info(
+        "skill_provided_tool_refused",
+        tool_name=tool_name,
+        error_code=detail.code,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+    )
+    return detail
 
 
 async def _save_pending_cloud_confirmation(
@@ -5115,6 +5326,10 @@ async def step_init(
         ctx.messages = list(session.messages)
         session_message_count = len(ctx.messages)
 
+    # ADR-0156 A5.4 (FRE-1595): the skill-provided tools this session revealed, read once
+    # per turn. A reveal in a concurrent turn of the session shows at the next turn.
+    ctx.revealed_tools = await _load_revealed_tools(ctx)
+
     # FRE-749: Check for pending cloud-attachment confirmation from a previous paused turn
     # and re-inject attachments if the user's message is affirmative.
     await _maybe_reinject_pending_cloud_attachment(ctx)
@@ -6835,8 +7050,9 @@ async def step_llm_call(
 
             # Per ADR-0063 §D1 (FRE-260), governance is mode-only — the
             # TaskType→tool-filter wire is severed. Every turn sees every tool
-            # the active mode allows.
-            tool_defs = _tool_registry.get_tool_definitions_for_llm(mode=ctx.mode)
+            # the active mode allows, plus the skill-provided tools that this
+            # session revealed (ADR-0156 A5.8).
+            tool_defs = _primary_tool_definitions(ctx)
 
             if tool_strategy == ToolCallingStrategy.NATIVE:
                 # Pass tools in the API request — model uses native function calling
@@ -6874,9 +7090,7 @@ async def step_llm_call(
         if is_synthesizing:
             dialect = llm_client.dialect_for_role(model_role)
             _synthesis_tool_defs = (
-                get_default_registry().get_tool_definitions_for_llm(mode=ctx.mode)
-                if synthesis_retains_tools(dialect)
-                else None
+                _primary_tool_definitions(ctx) if synthesis_retains_tools(dialect) else None
             )
             tools, tool_choice = _forced_synthesis_tool_overrides(
                 llm_client=llm_client,
@@ -7815,6 +8029,31 @@ async def step_tool_execution(
             )
             continue
 
+        # ADR-0156 A5.5 steps 2 and 3: a skill-provided tool runs for the primary only after
+        # its reveal, and only in a mode that allows it. Both are checked before the loop
+        # gate, so a refused call creates no approval card and no loop count. Phase 3 adds a
+        # reveal only after every call of this response has passed this point, so a call
+        # beside the revealing read_skill is refused whatever the order of execution.
+        _skill_refusal = _skill_provided_refusal(ctx, tool_name)
+        if _skill_refusal is not None:
+            tool_results.append(
+                {
+                    "tool_call_id": tool_call_id,
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": undispatched_failure(
+                        tool_name, _skill_refusal, trace_id=ctx.trace_id
+                    ),
+                }
+            )
+            _record_undispatched_invocation(
+                ctx,
+                tool_name=tool_name,
+                arguments=arguments,
+                error=f"refused before the loop gate: {_skill_refusal.code}",
+            )
+            continue
+
         # Gate pre-check (sequential — FSM state mutations happen here)
         args_hash = stable_hash(arguments)
         loop_policy = _get_tool_loop_policy(tool_name)
@@ -7880,6 +8119,7 @@ async def step_tool_execution(
                             args_hash=p["args_hash"],
                             gate_result=p["gate_result"],
                             loop_policy=p["loop_policy"],
+                            revealed_tools=frozenset(ctx.revealed_tools),
                         ),
                         tool_name=p["tool_name"],
                         tool_call_id=p["tool_call_id"],
@@ -8018,6 +8258,8 @@ async def step_tool_execution(
         # ADR-0156 D2.4 (FRE-1577): a skill body or file loaded in this turn stays verbatim.
         if dr["tool_name"] == "read_skill" and dr["success"]:
             ctx.skill_call_ids.add(dr["tool_call_id"])
+            # ADR-0156 A5.3: the loaded skill reveals its tools for the session.
+            await _reveal_skill_tools(ctx, dr["tool_layer_output"])
 
         _total_serial_ms += dr["latency_ms"]
         _max_dispatch_ms = max(_max_dispatch_ms, dr["latency_ms"])

@@ -37,7 +37,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- TTL and a derived counter would reset and re-issue seqs the client has
     -- already acknowledged. Mirrors
     -- docker/postgres/migrations/0023_session_events_per_session_seq.sql.
-    last_event_seq INTEGER NOT NULL DEFAULT 0
+    last_event_seq INTEGER NOT NULL DEFAULT 0,
+    -- Skill-provided tools that read_skill revealed in this session (ADR-0156 A5.4,
+    -- FRE-1595). Only the server writes it (SessionRepository.add_revealed_tools); the
+    -- PATCH endpoint cannot set or clear it. Pruning clears it with the messages. Mirrors
+    -- docker/postgres/migrations/0033_sessions_revealed_tools.sql.
+    revealed_tools TEXT[] NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX idx_sessions_last_active ON sessions(last_active_at DESC);

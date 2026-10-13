@@ -147,6 +147,7 @@ DispatchCode = Literal[
     "denied_by_user",
     "approval_timed_out",
     "not_available_to_worker",
+    "tool_not_revealed",
     "loop_blocked",
     "timeout",
     "tool_exception",

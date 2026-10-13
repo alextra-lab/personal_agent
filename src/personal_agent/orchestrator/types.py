@@ -577,6 +577,10 @@ class ExecutionContext:
     # Tool-call ids of this turn's read_skill results. The mid-turn trims and the hard
     # compression keep these results verbatim (ADR-0156 D2.4).
     skill_call_ids: set[str] = field(default_factory=set)
+    # ADR-0156 A5.4 (FRE-1595): the skill-provided tools that this session revealed. step_init
+    # loads it from sessions.revealed_tools once per turn; a read_skill in this turn adds to it.
+    # The primary lists and runs a skill-provided tool only when it is in this set.
+    revealed_tools: set[str] = field(default_factory=set)
 
     # --- FRE-1529: one volatile fence per turn ---
     # Set True once this request's <turn_context> block is in ctx.messages. Later

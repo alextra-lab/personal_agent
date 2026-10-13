@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import re
 import stat
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
@@ -48,6 +48,8 @@ class SkillDoc:
         requires_tools: ``metadata.requires-tools``, split on commas (D4).
         body: The ``SKILL.md`` text after the frontmatter.
         folder: The skill folder.
+        provides_tools: ``metadata.provides-tools``, split on commas: the skill-provided tools
+            that loading this skill reveals (ADR-0156 A5.3).
     """
 
     name: str
@@ -55,6 +57,7 @@ class SkillDoc:
     requires_tools: tuple[str, ...]
     body: str
     folder: Path
+    provides_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,11 +109,11 @@ def _parse_frontmatter(path: Path) -> tuple[dict[str, object], str]:
     return split if split is not None else ({}, content.strip())
 
 
-def _requires_tools(fm: dict[str, object]) -> tuple[str, ...]:
+def _metadata_tools(fm: dict[str, object], key: str) -> tuple[str, ...]:
     metadata = fm.get("metadata")
     if not isinstance(metadata, dict):
         return ()
-    raw = metadata.get("requires-tools")
+    raw = metadata.get(key)
     if not isinstance(raw, str):
         return ()
     return tuple(t.strip() for t in raw.split(",") if t.strip())
@@ -168,9 +171,10 @@ def _load_all_skills(skills_dir: Path) -> _SkillCache:
         docs[name] = SkillDoc(
             name=name,
             description=" ".join(str(description).split()),
-            requires_tools=_requires_tools(fm),
+            requires_tools=_metadata_tools(fm, "requires-tools"),
             body=body,
             folder=path.parent,
+            provides_tools=_metadata_tools(fm, "provides-tools"),
         )
     return _SkillCache(docs=docs, mtimes=mtimes)
 
@@ -243,6 +247,67 @@ def skills_for_tools(held: Collection[str]) -> dict[str, SkillDoc]:
     return {
         name: doc for name, doc in _get_cache().docs.items() if set(doc.requires_tools) <= tools
     }
+
+
+def providers_of(tool_name: str) -> tuple[str, ...]:
+    """Return the skills whose ``metadata.provides-tools`` names a tool (ADR-0156 A5.5).
+
+    Args:
+        tool_name: The tool name.
+
+    Returns:
+        The provider skill names, sorted; empty when no skill provides the tool.
+    """
+    return tuple(
+        sorted(name for name, doc in _get_cache().docs.items() if tool_name in doc.provides_tools)
+    )
+
+
+def tools_revealed_by(skill_name: str, held: Collection[str] | None = None) -> frozenset[str]:
+    """Return the tools that loading a skill reveals to a principal (ADR-0156 A5.3, AC-R3).
+
+    A skill that the principal cannot see (D9.1) reveals nothing to it.
+
+    Args:
+        skill_name: The loaded skill.
+        held: The tools the principal holds, as for :func:`assemble_skill_catalog`. ``None``
+            is the primary, which sees every skill.
+
+    Returns:
+        The revealed tool names; empty for an unknown or a hidden skill.
+    """
+    visible = _get_cache().docs if held is None else skills_for_tools(held)
+    doc = visible.get(skill_name)
+    return frozenset(doc.provides_tools) if doc is not None else frozenset()
+
+
+def provider_violations(
+    skills: Mapping[str, SkillDoc], skill_provided: Mapping[str, bool]
+) -> tuple[str, ...]:
+    """Check the ``provides-tools`` rules against the registered tools (ADR-0156 AC-R3).
+
+    Args:
+        skills: The skills, keyed by name.
+        skill_provided: Every registered tool name, mapped to its ``skill_provided`` flag.
+
+    Returns:
+        One message per broken rule; empty when the rules hold. A ``provides-tools`` name must
+        be a registered tool that is skill-provided, and every skill-provided tool must have at
+        least one provider.
+    """
+    found: list[str] = []
+    provided: set[str] = set()
+    for name in sorted(skills):
+        for tool in skills[name].provides_tools:
+            if tool not in skill_provided:
+                found.append(f"{name}: provides-tools names unknown tool {tool!r}")
+            elif not skill_provided[tool]:
+                found.append(f"{name}: provides-tools names {tool!r}, which is not skill-provided")
+            else:
+                provided.add(tool)
+    for tool in sorted(t for t, flag in skill_provided.items() if flag and t not in provided):
+        found.append(f"{tool} is skill-provided, but no skill provides it")
+    return tuple(found)
 
 
 def assemble_skill_catalog(held: Collection[str] | None = None) -> str:

@@ -8,4 +8,4 @@ scenarios:
     expect: "Runs a terms aggregation on outcome over the captures index with a range on timestamp, not on @timestamp. Reports the buckets and the total, and says how many captures hold no outcome."
   - prompt: "Which problems do the Captain's Log reflections keep repeating?"
     expected_skill: interaction-outcomes
-    expect: "Reads agent-captains-reflections with a sort on seen_count and a range of at least 2. Quotes each reflection with its seen_count and category."
+    expect: "Reads agent-captains-reflections with a sort on proposed_change.seen_count and a range of at least 2. Quotes each reflection with its proposed_change.seen_count and category."

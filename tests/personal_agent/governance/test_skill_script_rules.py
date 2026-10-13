@@ -324,7 +324,7 @@ def test_fre1589_the_comparison_is_on_the_word_after_quote_removal(command: str)
         f"/usr/bin/python3 /app/{_PROBE} all",
         f"timeout 5 python3 /app/{_PROBE} all",
         # Codex plan review: a backslash-newline, ANSI-C quoting and lookalike slashes.
-        "python3 /app/skills/infra\\\nstructure-health/scripts/probe_services.py all",
+        "python3 /app/skills/service-\\\nhealth/scripts/probe_services.py all",
         f"python3 $'/app/{_PROBE}' all",
         f"python3 /app∕{_PROBE} all",
         f"python3 /app／{_PROBE} all",

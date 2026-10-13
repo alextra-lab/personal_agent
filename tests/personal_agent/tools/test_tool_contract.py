@@ -513,6 +513,38 @@ async def test_a_search_logs_refusal_reaches_the_model_with_the_allowed_fields(
     assert [(c["success"], c["error_code"]) for c in completions] == [(False, "refused")]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "arguments", "foreign"),
+    [
+        ("search_logs", {"action": "count", "index": "agent-logs", "role": "primary"}, "role"),
+        ("measure_model_latency", {"since": "24h", "index": "agent-logs"}, "index"),
+    ],
+)
+async def test_a_skill_provided_tool_refuses_an_argument_it_does_not_declare(
+    full_registry: ToolRegistry, tool: str, arguments: dict[str, object], foreign: str
+) -> None:
+    """FRE-1596: the single tool refused the other source's arguments. Two tools must too.
+
+    A silent drop would let the model read an unfiltered figure as a filtered one (``role`` is
+    an argument of ``measure_model_latency`` only).
+    """
+    governance = load_governance_config()
+    layer = ToolExecutionLayer(
+        registry=full_registry,
+        governance_config=governance,
+        mode_manager=ModeManager(governance_config=governance),
+    )
+    result, records = await _dispatch(layer, tool, arguments, revealed_tools=frozenset({tool}))
+    payload = assert_conforms(result["content"])
+    error = payload["error"]
+    assert error["code"] == "invalid_arguments"
+    assert foreign in error["message"] and "does not take" in error["message"]
+    assert [(c["success"], c["error_code"]) for c in _completions(records)] == [
+        (False, "invalid_arguments")
+    ]
+
+
 # ---------------------------------------------------------------------------
 # AC-3: the folded skills' "use this, not that" rules live in the descriptions (D5.6)
 # ---------------------------------------------------------------------------

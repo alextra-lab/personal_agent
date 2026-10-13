@@ -411,7 +411,7 @@ search_logs_tool = ToolDefinition(
             name="index",
             type="string",
             description="The index family to read. Required.",
-            required=False,
+            required=True,
             default=None,
             json_schema={
                 "type": "string",
@@ -503,7 +503,7 @@ measure_model_latency_tool = ToolDefinition(
                 "How far back to look: a number and m, h or d, e.g. '90m', '24h', '7d'. "
                 "Required, at most 7d."
             ),
-            required=False,
+            required=True,
             default=None,
             json_schema=None,
         ),
@@ -1078,13 +1078,13 @@ def _build_tempo_request(
         ToolExecutionError: Any argument is refused. Nothing has been sent at that point.
     """
     if since is None:
-        raise _refuse("latency needs 'since', e.g. '24h' (at most 7d)")
+        raise _refuse("'since' is required, e.g. '24h' (at most 7d)")
     match = _SINCE_RE.fullmatch(since) if isinstance(since, str) else None
     if match is None:
         raise _refuse("since is a number and m, h or d, e.g. '90m', '24h', '7d'")
     minutes = int(match.group(1)) * _SINCE_UNIT_MINUTES[match.group(2)]
     if not 1 <= minutes <= _TEMPO_MAX_SINCE_MINUTES:
-        raise _refuse("for latency, since must be between 1 minute and 7 days")
+        raise _refuse("since must be between 1 minute and 7 days")
 
     kind = "model_call" if span is None else span
     if not isinstance(kind, str) or kind not in TEMPO_SPANS:

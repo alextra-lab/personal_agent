@@ -42,10 +42,11 @@ curl -fsS -X POST 'http://elasticsearch:9200/agent-captains-captures-*/_search?f
 
 ## Step 3 — The patterns that reflections repeat
 
-Reflections are in `agent-captains-reflections-*`. They hold `rationale`, `seen_count`,
-`category` and `proposed_change_what`. Use the same `_search` form, with
-`"sort": [{"seen_count": "desc"}]` and `"query": {"range": {"seen_count": {"gte": 2}}}`.
-The date field of this family is `timestamp`.
+Reflections are in `agent-captains-reflections-*`. A reflection holds `title`, `rationale`
+and `proposed_change`, an object with `what`, `category` and `seen_count`. Use the same
+`_search` form, with `"sort": [{"proposed_change.seen_count": "desc"}]` and
+`"query": {"range": {"proposed_change.seen_count": {"gte": 2}}}`. A bare `seen_count` is not
+a field of this index. The date field of this family is `timestamp`.
 
 ## Success
 
@@ -53,7 +54,7 @@ Check the result before you answer:
 
 - The answer names the time range of the rows, or the window of the counts.
 - The buckets of an outcome count can sum to less than the total: a capture can hold no `outcome`. Say how many hold none.
-- A reflection is quoted with its `seen_count`. A pattern that was seen once is not called a recurring pattern.
+- A reflection is quoted with its `proposed_change.seen_count`. A pattern that was seen once is not called a recurring pattern.
 
 ## Recovery
 
@@ -63,4 +64,5 @@ Check the result before you answer:
 | `{"hits": {"total": {"value": 0}}}` and the agent ran | The window is too short, or the index pattern is wrong | Widen the window once. Check the family name against the `log-search` skill |
 | `could not resolve host: elasticsearch` | The command ran on the host shell | Run it through the `bash` tool, which runs in the gateway container |
 | HTTP 400 with `parse_exception` | The request body is not valid JSON | Check the quotes and braces of the body |
+| HTTP 400 with `No mapping found for [seen_count]` | The sort used a bare `seen_count` | Use `proposed_change.seen_count` |
 | The same failure twice | — | Stop. Tell the user what failed and what was tried |

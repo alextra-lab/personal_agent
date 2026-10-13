@@ -799,6 +799,21 @@ class ToolExecutionLayer:
                 valid_parameters=list(valid_param_names),
                 trace_id=trace_ctx.trace_id,
             )
+            if tool_def.skill_provided:
+                # ADR-0156 A5 (FRE-1596): a skill-provided tool is one of a pair that split one
+                # tool by data source, and the model learns its arguments from the reveal. A
+                # silent drop would let it read an unfiltered figure as a filtered one.
+                return _failed(
+                    tool_name,
+                    dispatch_error(
+                        "invalid_arguments",
+                        f"{tool_name} does not take {', '.join(sorted(invalid_params))}. "
+                        f"Its arguments are: {', '.join(sorted(valid_param_names))}.",
+                        retryable=True,
+                        next_action=f"Call {tool_name} again with only those arguments.",
+                    ),
+                    trace_ctx=trace_ctx,
+                )
 
         # 3b. Full schema validation (required fields, types, nested structures)
         from personal_agent.tools.schema_validator import validate_tool_arguments

@@ -45,14 +45,31 @@ ALLOWED: Mapping[str, frozenset[str]] = {
     # The FRE-1594 spike reads a stored capture of a request that held the old tool.
     "scripts/eval/fre1594/reveal.py": frozenset({f'REMOVED_TOOL = "{_OLD}"'}),
 }
-# Historical documents of the spike: they describe a run on the old tool.
-_HISTORICAL_FILES = frozenset(
-    {
-        "scripts/eval/fre1594/README.md",
-        "scripts/eval/fre1594/scenarios.yaml",
-        "scripts/eval/fre1517/spot_retest_stage4.md",
-    }
-)
+# Historical documents: they describe a run on the old tool, or hold the text of the stored
+# capture that the spike transforms. The exact lines are listed, with <OLD> for the old name, so a
+# new use of it in one of these files fails the guard too.
+_HISTORICAL_LINES: Mapping[str, tuple[str, ...]] = {
+    "scripts/eval/fre1594/README.md": (
+        "| 1 | The base request: the captured primary request, without `<OLD>` (the tool and every mention of it), with the `log-search` and `model-latency` catalog lines (`scenarios.yaml`), the old skill names renamed everywhere (the `read_skill` enum and examples, the cross-references), and the prompt. The build refuses a body that still names an old skill or `<OLD>`. | 1: a `read_skill` call names the prompt's skill |",
+        "capture must hold `<OLD>`, and its system prompt must hold the `query-elasticsearch` and",
+    ),
+    "scripts/eval/fre1594/scenarios.yaml": (
+        "# `system_edits` removes the two other mentions of `<OLD>` from the captured system prompt",
+        '- old: "- read_only: <OLD>, read, read_skill"',
+        '- old: "Starts with the <OLD> tool for event data and uses curl for the budget snapshot and the Captain\'s Log, which the tool does not read."',
+    ),
+    "scripts/eval/fre1517/spot_retest_stage4.md": (
+        "- FRE-1564: workers get read-only tools, `<OLD>` for `general`, and a researcher gets no",
+        "- PASS: delivered, and the latency figures come from our own telemetry, through `<OLD>` by a",
+    ),
+}
+ALLOWED = {
+    **ALLOWED,
+    **{
+        path: frozenset(line.replace("<OLD>", _OLD) for line in lines)
+        for path, lines in _HISTORICAL_LINES.items()
+    },
+}
 
 
 def _files(repo: Path) -> Iterator[Path]:
@@ -80,7 +97,7 @@ def offences(repo: Path, allowed: Mapping[str, frozenset[str]] = ALLOWED) -> lis
     found: list[str] = []
     for path in _files(repo):
         rel = path.relative_to(repo).as_posix()
-        if rel.startswith(_HISTORY) or rel in _HISTORICAL_FILES:
+        if rel.startswith(_HISTORY):
             continue
         if _SKIP_PARTS & set(path.parts):
             continue

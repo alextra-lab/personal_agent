@@ -121,9 +121,7 @@ def _canned(data: Mapping[str, Any]) -> _Recorder:
     return _Recorder(lambda _r: httpx.Response(200, json=data))
 
 
-async def _call(
-    executor: Callable[..., Any], rec: _Recorder, **kwargs: Any
-) -> dict[str, Any]:
+async def _call(executor: Callable[..., Any], rec: _Recorder, **kwargs: Any) -> dict[str, Any]:
     client = httpx.AsyncClient(transport=httpx.MockTransport(rec.handler))
     with patch(
         "personal_agent.tools.telemetry_query.create_guarded_http_client", return_value=client
@@ -171,9 +169,9 @@ def test_the_description_lists_exactly_each_familys_fields(family: str) -> None:
 
 
 def test_the_description_lists_exactly_the_span_attributes() -> None:
-    assert _listed(
-        measure_model_latency_tool.description, "- latency span attributes: "
-    ) == set(TEMPO_ATTRIBUTES)
+    assert _listed(measure_model_latency_tool.description, "- latency span attributes: ") == set(
+        TEMPO_ATTRIBUTES
+    )
 
 
 def test_the_description_lists_exactly_the_span_kinds_and_group_keys() -> None:
@@ -506,9 +504,7 @@ async def test_a_missing_group_value_is_reported_as_none() -> None:
 
 @pytest.mark.asyncio
 async def test_reaching_the_trace_limit_marks_the_result_incomplete() -> None:
-    out = await _run(
-        _canned(_reply([_span("a", 10)], [_span("b", 20)])), since="1h", limit=2
-    )
+    out = await _run(_canned(_reply([_span("a", 10)], [_span("b", 20)])), since="1h", limit=2)
     assert out["complete"] is False
     assert out["sample"] is True
     assert any("trace limit" in r for r in out["incomplete_reasons"])
@@ -727,6 +723,4 @@ async def test_each_fre1564_rule_still_refuses_for_its_own_reason(
     kwargs: dict[str, Any], reason: str
 ) -> None:
     """Twins of FRE-1564 refusal tests whose field (``latency_ms``) left the allowlist."""
-    await _refused_search(
-        _Recorder(), match=reason, action="search", index="agent-logs", **kwargs
-    )
+    await _refused_search(_Recorder(), match=reason, action="search", index="agent-logs", **kwargs)

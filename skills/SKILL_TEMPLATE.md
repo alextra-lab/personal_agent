@@ -1,7 +1,14 @@
 # Skill template (Agent Skills format, ADR-0156 D1, D5)
 
 A skill is a folder: `skills/<name>/`. Copy the two files below into it. The CI validator
-(`tests/docs/test_skill_validator.py`) checks every rule on this page.
+(`tests/docs/test_skill_validator.py`) checks every rule on this page, with two rules of
+ADR-0156 A3:
+
+- **A name states an objective** (`name_words`). No part of the name, split on `-` and `_`, is a
+  backend (`elasticsearch`, `es`, `tempo`, `neo4j`, `postgres`, `redis`) or the word `telemetry`.
+- **A "Not for…" line names the neighbour** (`not_for`). The description ends with a sentence
+  that starts with "Not for" and names the neighbouring skill or tool by its exact name, in
+  backticks. A name that does not exist fails the check.
 
 ```
 skills/<name>/
@@ -39,9 +46,10 @@ The frontmatter holds `name`, `description` and `metadata` only. No other field 
 ````markdown
 ---
 name: <name>
-description: <What the skill does, in the third person>. Use when <the tasks that need it>.
+description: <What the skill does, in the third person>. Use when <the tasks that need it>. Not for <the neighbouring task>. The `<neighbour>` skill gives that.
 metadata:
   requires-tools: bash
+  provides-tools: <a skill-provided tool that loading this skill reveals; leave the line out if none>
 ---
 
 # <name> — <one line>

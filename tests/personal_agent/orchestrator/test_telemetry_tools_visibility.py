@@ -31,7 +31,9 @@ from personal_agent.orchestrator.skills import (
     name_violations,
     not_for_violations,
     provider_violations,
+    assemble_skill_catalog,
     providers_of,
+    tools_revealed_by,
     skill_names,
 )
 from personal_agent.orchestrator.sub_agent import SubAgentSpec
@@ -105,10 +107,13 @@ def test_the_providers_are_the_skills_that_the_adr_names() -> None:
     )
 
 
-def test_a_skill_that_provides_a_tool_is_seen_by_the_primary() -> None:
+def test_every_provider_is_in_the_primarys_catalog_and_reveals_its_tool() -> None:
     """The primary's catalog is every skill, so each provider can reveal its tool (A5.4)."""
-    for name in (*providers_of("search_logs"), *providers_of("measure_model_latency")):
-        assert name in get_all_skills()
+    catalog = assemble_skill_catalog(None)
+    for tool in _TOOLS:
+        for name in providers_of(tool):
+            assert f"- {name}:" in catalog, name
+            assert tool in tools_revealed_by(name, held=None), name
 
 
 # ── AC-3 ──────────────────────────────────────────────────────────────────────────

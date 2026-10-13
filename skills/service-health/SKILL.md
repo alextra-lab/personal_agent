@@ -93,5 +93,5 @@ Check the result before you answer:
 ## Governance
 
 - `curl` `GET` of a listed health endpoint runs without asking in NORMAL, ALERT and DEGRADED. Any other host, path or method asks. For Neo4j only `GET http://neo4j:7474/` runs without asking.
-- `python3` (the probe script), `psql` and `redis-cli` ask the user, in every mode.
+- The probe script (`python3 skills/service-health/scripts/probe_services.py`) runs without asking in NORMAL, ALERT and DEGRADED. `psql`, `redis-cli` and any other `python3` command ask the user.
 - LOCKDOWN and RECOVERY: `bash` is disabled.

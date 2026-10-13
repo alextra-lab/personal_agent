@@ -396,7 +396,11 @@ def reveal_events(arm: str, **extra: list[dict[str, object]]) -> dict[str, list[
             tools_event("2026-10-13T10:00:05Z", BASE_TOOLS + ["search_logs"]),
         ]
         events["skill_tools_revealed"] = [
-            {"@timestamp": "2026-10-13T10:00:03Z", "skill_name": "log-search", "tools": ["search_logs"]}
+            {
+                "@timestamp": "2026-10-13T10:00:03Z",
+                "skill_name": "log-search",
+                "tools": ["search_logs"],
+            }
         ]
     events.update(extra)
     return events
@@ -473,7 +477,8 @@ async def test_control_whose_first_call_lacks_a_seeded_tool_is_an_error_row(tmp_
     """Seeded negative: the seed read back, but the model never saw the tool."""
     events = dict(GOOD_REVEAL)
     events["control"] = reveal_events(
-        "control", tools_passed_to_llm=[tools_event("2026-10-13T10:00:01Z", BASE_TOOLS + ["search_logs"])]
+        "control",
+        tools_passed_to_llm=[tools_event("2026-10-13T10:00:01Z", BASE_TOOLS + ["search_logs"])],
     )
     rows, _ = await run_reveal(tmp_path, events)
     assert "lack a seeded tool" in str({r["arm"]: r for r in rows}["control"]["error"])
@@ -483,14 +488,17 @@ async def test_control_whose_first_call_lacks_a_seeded_tool_is_an_error_row(tmp_
 async def test_treatment_whose_first_call_lists_a_tool_is_an_error_row(tmp_path: Path) -> None:
     events = dict(GOOD_REVEAL)
     events["treatment"] = reveal_events(
-        "treatment", tools_passed_to_llm=[tools_event("2026-10-13T10:00:01Z", BASE_TOOLS + ["search_logs"])]
+        "treatment",
+        tools_passed_to_llm=[tools_event("2026-10-13T10:00:01Z", BASE_TOOLS + ["search_logs"])],
     )
     rows, _ = await run_reveal(tmp_path, events)
     assert "first primary call lists" in str({r["arm"]: r for r in rows}["treatment"]["error"])
 
 
 @pytest.mark.asyncio
-async def test_treatment_call_after_a_reveal_without_the_tool_is_an_error_row(tmp_path: Path) -> None:
+async def test_treatment_call_after_a_reveal_without_the_tool_is_an_error_row(
+    tmp_path: Path,
+) -> None:
     events = dict(GOOD_REVEAL)
     events["treatment"] = reveal_events(
         "treatment",
@@ -500,7 +508,9 @@ async def test_treatment_call_after_a_reveal_without_the_tool_is_an_error_row(tm
         ],
     )
     rows, _ = await run_reveal(tmp_path, events)
-    assert "lacks revealed ['search_logs']" in str({r["arm"]: r for r in rows}["treatment"]["error"])
+    assert "lacks revealed ['search_logs']" in str(
+        {r["arm"]: r for r in rows}["treatment"]["error"]
+    )
 
 
 @pytest.mark.asyncio
@@ -508,7 +518,9 @@ async def test_a_call_outside_normal_mode_is_an_error_row(tmp_path: Path) -> Non
     events = dict(GOOD_REVEAL)
     events["control"] = reveal_events(
         "control",
-        tools_passed_to_llm=[tools_event("2026-10-13T10:00:01Z", BASE_TOOLS + list(REVEAL), "LOCKDOWN")],
+        tools_passed_to_llm=[
+            tools_event("2026-10-13T10:00:01Z", BASE_TOOLS + list(REVEAL), "LOCKDOWN")
+        ],
     )
     rows, _ = await run_reveal(tmp_path, events)
     assert "not NORMAL" in str({r["arm"]: r for r in rows}["control"]["error"])
@@ -554,7 +566,12 @@ async def test_refusals_and_error_events_are_recorded_not_fatal(tmp_path: Path) 
     events["treatment"] = reveal_events(
         "treatment",
         tool_call_completed=[
-            {"tool_name": "search_logs", "success": False, "error_code": "tool_not_revealed", "executed": False},
+            {
+                "tool_name": "search_logs",
+                "success": False,
+                "error_code": "tool_not_revealed",
+                "executed": False,
+            },
             {"tool_name": "bash", "success": False, "error_code": "tool_execution_failed"},
             {"tool_name": "read_skill", "success": True},
         ],
@@ -575,12 +592,15 @@ async def test_the_row_records_the_expansion_path(tmp_path: Path) -> None:
         "control",
         planner_outcome=[{"planner_decision": "expanded"}],
         model_call_completed=[{"role": "primary"}, {"role": "sub_agent"}, {"role": "sub_agent"}],
+        sub_agent_start=[{"task_id": "t1"}, {"task_id": "t2"}],
     )
     rows, _ = await run_reveal(tmp_path, events)
     by_arm = {r["arm"]: r for r in rows}
     assert by_arm["control"]["planner_decision"] == ["expanded"]
     assert by_arm["control"]["model_calls_by_role"] == {"primary": 1, "sub_agent": 2}
+    assert by_arm["control"]["sub_agents"] == 2
     assert by_arm["treatment"]["planner_decision"] == []
+    assert by_arm["treatment"]["sub_agents"] == 0
 
 
 @pytest.mark.asyncio

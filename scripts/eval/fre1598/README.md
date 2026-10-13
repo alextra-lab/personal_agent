@@ -41,6 +41,11 @@ A row is an error row, and is not judged, when any check fails:
 
 Each row also records `tool_not_revealed` refusals and the event types of the turn's `ERROR` events.
 
+Each row records the path of the turn: `planner_decision`, `sub_agents` (the `sub_agent_start` count),
+`model_calls_by_role` and `tool_calls`. A sub-agent sees every skill-provided tool and no catalog in
+either arm, so an expanded turn does not use the skill. `tool_calls` holds the calls of the primary and
+of the sub-agents: `tool_call_started` carries no role.
+
 ## Judge
 
 FRE-375: the judge process runs with its database on postgres-eval, so the cost gate's reservations and

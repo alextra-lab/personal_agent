@@ -79,6 +79,8 @@ _COUNTED_EVENTS = {
     "tool_failures": "tool_call_failed",
     "constraint_pauses": "constraint_pause_emitted",
     "force_synthesis": "force_synthesis_injected",
+    # FRE-1598: the expansion path. A sub-agent sees no skill catalog in either arm.
+    "sub_agents": "sub_agent_start",
 }
 
 #: The reply that ``/chat`` returns with HTTP 200 when the orchestrator raised

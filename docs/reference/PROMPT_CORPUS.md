@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `a6583065` · Committed: 2026-10-13T14:33:45Z  
+> Source revision: `6cadfe20` · Committed: 2026-10-13T14:39:53Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -32,18 +32,18 @@
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 17,931  
+Total skill docs: 11 · Total tokens (all skills): 18,106  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
 |---|---|---|
 | graph-inspection — Read the structure and exact facts of the knowledge graph | 1,756 | `skills/graph-inspection/SKILL.md` |
 | interaction-outcomes — How interactions ended, and what the reflections say | 823 | `skills/interaction-outcomes/SKILL.md` |
-| log-search — Count, break down and find agent log events | 2,245 | `skills/log-search/SKILL.md` |
+| log-search — Count, break down and find agent log events | 2,229 | `skills/log-search/SKILL.md` |
 | SKILL: Mermaid Diagrams | 3,593 | `skills/mermaid-diagrams/SKILL.md` |
 | model-latency — How slow the model calls are over a window | 825 | `skills/model-latency/SKILL.md` |
 | sequential-thinking — Structured Reasoning Discipline | 901 | `skills/sequential-thinking/SKILL.md` |
-| service-health — Is each service healthy? | 939 | `skills/service-health/SKILL.md` |
+| service-health — Is each service healthy? | 1,130 | `skills/service-health/SKILL.md` |
 | spend-and-tokens — The agent's own tokens, cost and budget | 2,559 | `skills/spend-and-tokens/SKILL.md` |
 | system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `skills/system-diagnostics/SKILL.md` |
 | system-metrics — CPU, memory and disk utilisation snapshot | 917 | `skills/system-metrics/SKILL.md` |
@@ -997,7 +997,7 @@ Check the result before you answer:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 2,245 |
+| **Token count** | 2,229 |
 | **Source** | `skills/log-search/SKILL.md` |
 
 ```markdown
@@ -1010,6 +1010,7 @@ Check the result before you answer:
 - Use curl only for what the tool cannot do. The table below says which.
 - Use only the index families in this file. Never write a guessed index name.
 - A scheduled monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
+- The monitor of the local model server (`agent-monitors-slm-health`) is in the `service-health` skill.
 - Model-call timing is not in Elasticsearch. Use the `model-latency` skill.
 - Spend and token totals are in the `spend-and-tokens` skill. How interactions ended is in the `interaction-outcomes` skill.
 
@@ -1029,9 +1030,6 @@ search_logs(action="search", index="agent-logs", size=0, since="1h",
 # The last 20 errors, with the fields that name them
 search_logs(action="search", index="agent-logs", query={"term": {"level": "ERROR"}}, size=20,
                 since="3h", fields=["@timestamp", "event_type", "message", "tool_name", "trace_id", "error"])
-
-# The newest probe of the local model server (a monitor index)
-search_logs(action="search", index="agent-monitors-slm-health", size=1, since="1h")
 
 # The events of one trace
 search_logs(action="search", index="agent-logs", query={"term": {"trace_id": "<trace_id>"}},
@@ -1088,7 +1086,7 @@ Use `<family>-*`. The tool takes the family name without `-*`.
 | `agent-captains-captures-*` | Captain's Log, one document for each request | `timestamp` |
 | `agent-captains-reflections-*` | DSPy self-reflection output | `timestamp` |
 | `agent-insights-*` | Cross-session insights and anomalies | `timestamp` |
-| `agent-monitors-slm-health-*` | Probes of the local model server | `probed_at` |
+| `agent-monitors-slm-health-*` | Probes of the local model server (the `service-health` skill reads them) | `probed_at` |
 | `agent-monitors-cache-reset-cadence-*`, `agent-monitors-projector-health-*` | Monitors | `@timestamp` |
 | `agent-monitors-cache-erosion-*`, `agent-monitors-delivery-ratio-*` | Monitors | `run_at` |
 | `agent-monitors-joinability-*` | Monitor | `started_at` |
@@ -1127,7 +1125,7 @@ Check the result before you answer:
 - A terms aggregation with no buckets and a `total` above 0 means the field is empty for these events. Find the event that carries it (the last call in Step 1).
 - A count that you quote is the count that the reply holds, with its window. Do not round it up.
 - A monitor answer gives the time of the newest document.
-- Four monitors run on a schedule. At the default interval they write every 5 minutes (`agent-monitors-slm-health`), every hour (`agent-monitors-cache-erosion`, `agent-monitors-joinability`) or every day (`agent-monitors-delivery-ratio`). A newest document older than its interval is reported as stale.
+- Three monitors run on a schedule. At the default interval they write every hour (`agent-monitors-cache-erosion`, `agent-monitors-joinability`) or every day (`agent-monitors-delivery-ratio`). A newest document older than its interval is reported as stale.
 - `agent-monitors-cache-reset-cadence` and `agent-monitors-projector-health` write on events, so they have no interval. A quiet period is not stale.
 
 ## Recovery
@@ -1687,7 +1685,7 @@ What to do on each failure, with a stop rule:
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 939 |
+| **Token count** | 1,130 |
 | **Source** | `skills/service-health/SKILL.md` |
 
 ```markdown
@@ -1698,7 +1696,8 @@ What to do on each failure, with a stop rule:
 - Probe the live endpoint before you say that a service is healthy or down.
 - Use a real connection for Postgres, not a TCP probe. Port 5432 is the wire protocol, not HTTP: `curl http://postgres:5432` always gives a meaningless reply.
 - The names `postgres`, `neo4j`, `elasticsearch`, `redis` and `tempo` are Docker DNS names. They resolve only inside the `cloud-sim` network. From the host shell use `localhost:<port>`.
-- A monitor index or a pipeline question is not in this skill. Load the `log-search` skill with `read_skill`.
+- The health monitor of the local model server records what its last probe saw. Read its newest document before you say that the model server is healthy.
+- Any other monitor index is in the `log-search` skill. Load it with `read_skill`.
 
 ## Step 1 — One service, or all four
 
@@ -1732,6 +1731,16 @@ curl -fsS http://tempo:3200/status
 `yellow`: that is up. Only `red` is unhealthy. The Tempo reply holds its version and build.
 `/ready` answers `ready` when Tempo takes requests.
 
+## Step 3 — The monitor of the local model server
+
+The monitor writes one document for each probe, in `agent-monitors-slm-health`. Read the newest
+document, and use its date field `probed_at`. A range on another field returns nothing and no error.
+
+```python
+# The newest probe of the local model server
+search_logs(action="search", index="agent-monitors-slm-health", size=1, since="1h")
+```
+
 ## Success
 
 Check the result before you answer:
@@ -1739,6 +1748,7 @@ Check the result before you answer:
 - The answer has one line for each service that was asked about, with `ok` or the error text.
 - "Down" rests on a failed connection or a bad reply, not on a missing tool or a wrong name.
 - A `yellow` Elasticsearch status is reported as `yellow` and as up.
+- A monitor answer gives the time of the newest document. A document older than the probe interval (5 minutes by default) is reported as stale.
 - The answer says whether the probe ran inside the gateway container or on the host.
 
 ## Recovery
@@ -1750,6 +1760,7 @@ Check the result before you answer:
 | `FAIL cannot connect to ...` | The service is down, or the name does not resolve from here | Check where the command runs (the Rules above). If it runs in the gateway, the service is down: say so |
 | `redis: ok ... asks for a password` | Redis needs authentication | The server is up. Say that PING was not tried with a password |
 | `elasticsearch: FAIL cluster status red` | Shards are missing | Report `red`. Use the `log-search` skill for `_cat/indices` if asked for the cause |
+| The monitor query returns no document | The window is too short, or the date field is wrong | Check that the date field is `probed_at`. Widen `since` once |
 | HTTP 404 on `/api/status` of Tempo | Wrong status path | Use `/status` or `/api/echo` |
 | The same failure twice | — | Stop. Tell the user the service, the error text and what was tried |
 

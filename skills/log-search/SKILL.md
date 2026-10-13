@@ -14,7 +14,7 @@ metadata:
 - Start with the `search_logs` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
 - Use curl only for what the tool cannot do. The table below says which.
 - Use only the index families in this file. Never write a guessed index name.
-- A monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
+- A scheduled monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
 - Model-call timing is not in Elasticsearch. Use the `model-latency` skill.
 - Spend and token totals are in the `spend-and-tokens` skill. How interactions ended is in the `interaction-outcomes` skill.
 
@@ -131,7 +131,9 @@ Check the result before you answer:
 - A `total` of 0 for a window in which the agent ran means the window or the filter is wrong.
 - A terms aggregation with no buckets and a `total` above 0 means the field is empty for these events. Find the event that carries it (the last call in Step 1).
 - A count that you quote is the count that the reply holds, with its window. Do not round it up.
-- A monitor answer gives the time of the newest document. A document older than the monitor's interval is reported as stale.
+- A monitor answer gives the time of the newest document.
+- Four monitors run on a schedule. At the default interval they write every 5 minutes (`agent-monitors-slm-health`), every hour (`agent-monitors-cache-erosion`, `agent-monitors-joinability`) or every day (`agent-monitors-delivery-ratio`). A newest document older than its interval is reported as stale.
+- `agent-monitors-cache-reset-cadence` and `agent-monitors-projector-health` write on events, so they have no interval. A quiet period is not stale.
 
 ## Recovery
 

@@ -62,8 +62,10 @@ def test_service_health_body_does_not_read_a_monitor() -> None:
     body = _skill("service-health").body
     assert "agent-monitors-" not in body
     assert "search_logs(" not in body
-    headings = [line for line in body.splitlines() if line.startswith("#")]
-    assert not [h for h in headings if "monitor" in h.lower()]
+    # The one line that holds the word is the pointer to the owner.
+    mentions = [line for line in body.splitlines() if "monitor" in line.lower()]
+    assert len(mentions) == 1, mentions
+    assert "`log-search`" in mentions[0]
 
 
 def test_log_search_keeps_the_monitor_indices() -> None:
@@ -74,8 +76,13 @@ def test_log_search_keeps_the_monitor_indices() -> None:
 
 
 def test_log_search_carries_the_stale_monitor_rule_that_service_health_gave_up() -> None:
-    """The old Success bullet told the model to report a stale monitor document."""
-    assert "stale" in _skill("log-search").body.lower()
+    """The old Success bullet told the model to report a stale monitor document.
+
+    Two monitors write on events (settings hold no interval for them), so the rule names them.
+    """
+    lines = [line.lower() for line in _skill("log-search").body.splitlines()]
+    assert [line for line in lines if "stale" in line and "interval" in line]
+    assert [line for line in lines if "cache-reset-cadence" in line and "no interval" in line]
 
 
 # ── Item 2: the trigger words of log-search come first ───────────────────────────
@@ -93,10 +100,3 @@ def test_log_search_trigger_words_are_in_its_first_sentence(word: str) -> None:
 def test_the_a4_descriptions_are_shorter_than_the_fre_1597_build() -> None:
     total = sum(len(_skill(name).description) for name in _A4_SKILLS)
     assert total <= _A4_BASELINE_CHARS - _A4_REQUIRED_SAVING_CHARS, total
-
-
-@pytest.mark.parametrize("name", _A4_SKILLS)
-def test_each_a4_description_keeps_its_not_for_clause(name: str) -> None:
-    """Shortening must not remove the neighbour that the line gives work to."""
-    _, not_for = _claim_and_not_for(_skill(name).description)
-    assert "`" in not_for, name

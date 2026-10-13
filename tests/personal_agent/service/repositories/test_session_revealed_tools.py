@@ -110,7 +110,10 @@ async def test_concurrent_adds_all_persist(owned_session) -> None:
         first = asyncio.create_task(_add(session_id, user_id, ["tool_a"]))
         second = asyncio.create_task(_add(session_id, user_id, ["tool_b"]))
         async with AsyncSessionLocal() as probe:
-            for _ in range(100):
+            for _ in range(600):
+                # pg_stat_activity is a snapshot that Postgres caches for the whole transaction.
+                # Clear it before each read, or the count stays at its first value.
+                await probe.execute(text("SELECT pg_stat_clear_snapshot()"))
                 waiting = (
                     await probe.execute(
                         text(

@@ -34,6 +34,9 @@ UNKNOWN_STATE = "unknown_state"
 MODEL_CALL_STARTED = "model_call_started"
 MODEL_CALL_COMPLETED = "model_call_completed"
 MODEL_CALL_ERROR = "model_call_error"
+# FRE-1602: a local call's stream broke on a transport reset and the same request is sent once
+# more. Not an error: the call can still complete. The terminal failure stays MODEL_CALL_ERROR.
+MODEL_CALL_RETRIED = "model_call_retried"
 HISTORY_SANITISED = "history_sanitised"
 
 # FRE-1527: a primary-turn call was rejected for exceeding the model's context

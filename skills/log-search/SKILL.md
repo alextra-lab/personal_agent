@@ -1,6 +1,6 @@
 ---
 name: log-search
-description: Counts, breaks down or finds agent log events over a time window, and tells which indices and fields exist. Starts with the search_logs tool and uses curl for what the tool cannot read - more than 50 hits, a window over 30 days, an index family outside its three, a field outside its list, and ES|QL. Use when the task is a count, a breakdown, an error search or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call timing, which the `model-latency` skill gives, or for spend and token totals, which the `spend-and-tokens` skill gives.
+description: Counts, breaks down or finds agent log events over a time window, lists indices and fields, and runs ES|QL. Starts with the search_logs tool and uses curl past its limits - more than 50 hits, a window over 30 days, an index family outside its three, a field outside its list. Use when the task is a count, a breakdown, an error search, an index listing, an ES|QL query or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call timing, which the `model-latency` skill gives, or for spend and token totals, which the `spend-and-tokens` skill gives.
 metadata:
   requires-tools: bash
   provides-tools: search_logs
@@ -14,6 +14,7 @@ metadata:
 - Start with the `search_logs` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
 - Use curl only for what the tool cannot do. The table below says which.
 - Use only the index families in this file. Never write a guessed index name.
+- A monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
 - Model-call timing is not in Elasticsearch. Use the `model-latency` skill.
 - Spend and token totals are in the `spend-and-tokens` skill. How interactions ended is in the `interaction-outcomes` skill.
 
@@ -33,6 +34,9 @@ search_logs(action="search", index="agent-logs", size=0, since="1h",
 # The last 20 errors, with the fields that name them
 search_logs(action="search", index="agent-logs", query={"term": {"level": "ERROR"}}, size=20,
                 since="3h", fields=["@timestamp", "event_type", "message", "tool_name", "trace_id", "error"])
+
+# The newest probe of the local model server (a monitor index)
+search_logs(action="search", index="agent-monitors-slm-health", size=1, since="1h")
 
 # The events of one trace
 search_logs(action="search", index="agent-logs", query={"term": {"trace_id": "<trace_id>"}},
@@ -127,6 +131,7 @@ Check the result before you answer:
 - A `total` of 0 for a window in which the agent ran means the window or the filter is wrong.
 - A terms aggregation with no buckets and a `total` above 0 means the field is empty for these events. Find the event that carries it (the last call in Step 1).
 - A count that you quote is the count that the reply holds, with its window. Do not round it up.
+- A monitor answer gives the time of the newest document. A document older than the monitor's interval is reported as stale.
 
 ## Recovery
 

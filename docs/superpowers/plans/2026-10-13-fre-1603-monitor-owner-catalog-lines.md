@@ -27,10 +27,11 @@ descriptions are not touched: `interaction-outcomes` passed with no slack (8 of 
 2. **`log-search` lists `agent-monitors-slm-health` as one of the tool's three families** (a fact about the tool and
    a row of its family table). The row says that `service-health` reads it. Its rules, examples and interval text do
    not name it.
-3. **Characters stand in for tokens until the re-run.** FRE-1597 measured 1,340 characters = 298 tokens, 4.5 characters
-   per token. The bound is 10 tokens, about 45 characters. The final text saves 88 characters, about 20 tokens.
-   The `log-search` "Not for…" clause names a third skill, so it grew. It is now in the compact form
-   "(the `service-health` skill)".
+3. **Characters do not stand in for tokens.** The first build cut 88 characters and the repo's estimator
+   (cl100k_base) showed 11 tokens, not the 20 that 4.5 characters per token predicts. AC-3 needs 10 llama.cpp tokens.
+   The preflight of 2026-10-13 15:10 showed the margin was one token. The final text is tested in estimated tokens:
+   the seven A4 lines were 861 at `a02c4aeb` and are 835 now (minus 26, 140 characters). The estimator and llama.cpp
+   agree within about 2% (FRE-1597: B-minus 10,893 est against 10,944 real).
 4. **YAML.** A description is an unquoted scalar, so it cannot hold `: `. The first draft of the `log-search` line did,
    and 22 validator cases failed. The line uses " - " as the other lines do.
 5. **Superseded by the correction:** the first plan expected `service-health#4` to route away and proposed dropping
@@ -56,8 +57,8 @@ Every step is one commit unless it says otherwise. Run all commands from this wo
 - No `log-search` line pairs `agent-monitors-slm-health` with a `search_logs(` call or an interval. (AC-1)
 - `log-search` stale rule: a line with "stale" and "interval", and one that gives `cache-reset-cadence` "no interval".
 - `log-search` first sentence holds "log events", "counts", "indices" and "ES|QL", one case each. (item 2)
-- The seven A4 descriptions total at most `3738 - 80` characters. 80 characters is about 18 tokens at 4.5 characters
-  per token, against the 10 tokens that AC-3 needs. (item 3)
+- The seven A4 catalog lines are at most 841 estimated tokens: 861 at `a02c4aeb` minus 20, against the 10 that AC-3
+  needs. (item 3)
 
 Run: `uv run pytest tests/docs/test_monitor_index_owner.py -q`. Result before the second round of edits, observed:
 5 failed, 12 passed. The 12 that pass are guards.

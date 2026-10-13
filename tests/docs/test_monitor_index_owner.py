@@ -20,6 +20,7 @@ import re
 
 import pytest
 
+from personal_agent.llm_client.token_counter import estimate_tokens
 from personal_agent.orchestrator.skills import SkillDoc, get_all_skills
 
 # The seven skills that ADR-0156 A4 adds to the catalog.
@@ -43,12 +44,14 @@ _OTHER_FAMILIES = (
 )
 _FAMILY = re.compile(r"agent-monitors-[a-z-]+[a-z]")
 
-# FRE-1597 measured the seven descriptions at 3,738 characters on the final build, and the catalog
-# block at 4.5 characters per token (1,340 characters = 298 tokens). AC-3 needs 10 tokens less
-# (about 45 characters). The budget below asks for 80 characters (about 18 tokens), so that the
-# character estimate has a margin of more than two. The llama.cpp re-run gives the real count.
-_A4_BASELINE_CHARS = 3_738
-_A4_REQUIRED_SAVING_CHARS = 80
+# The catalog lines of the seven A4 skills, in the repo's estimator (cl100k_base), were 861 tokens
+# at a02c4aeb, the FRE-1596 build that FRE-1597 measured. AC-3 needs the first call 10 llama.cpp
+# tokens smaller (A <= 11,232 against 11,242). The estimator and llama.cpp agree within about 2%
+# (FRE-1597: B-minus 10,893 est against 10,944 real). The budget asks for 20 estimated tokens, so
+# that the bound has a margin of two. A character count is not a proxy: the first build cut 88
+# characters and the estimator showed 11 tokens. The llama.cpp re-run gives the real count.
+_A4_BASELINE_EST_TOKENS = 861
+_A4_REQUIRED_SAVING_TOKENS = 20
 
 
 def _skill(name: str) -> SkillDoc:
@@ -133,9 +136,10 @@ def test_log_search_trigger_words_are_in_its_first_sentence(word: str) -> None:
     assert word in first
 
 
-# ── Item 3 (AC-3): the A4 lines are shorter ──────────────────────────────────────
+# ── Item 3 (AC-3): the A4 catalog lines are shorter ──────────────────────────────
 
 
-def test_the_a4_descriptions_are_shorter_than_the_fre_1597_build() -> None:
-    total = sum(len(_skill(name).description) for name in _A4_SKILLS)
-    assert total <= _A4_BASELINE_CHARS - _A4_REQUIRED_SAVING_CHARS, total
+def test_the_a4_catalog_lines_are_shorter_than_the_fre_1597_build() -> None:
+    lines = "".join(f"- {name}: {_skill(name).description}\n" for name in sorted(_A4_SKILLS))
+    tokens = estimate_tokens(lines)
+    assert tokens <= _A4_BASELINE_EST_TOKENS - _A4_REQUIRED_SAVING_TOKENS, tokens

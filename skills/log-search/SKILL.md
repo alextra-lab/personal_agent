@@ -1,6 +1,6 @@
 ---
 name: log-search
-description: Counts, breaks down or finds agent log events over a time window, lists indices and fields, and runs ES|QL. Starts with the search_logs tool and uses curl past its limits - more than 50 hits, a window over 30 days, an index family outside its three. Use when the task is a count, a breakdown, an error search, an index listing, an ES|QL query or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call timing (the `model-latency` skill), spend and token totals (the `spend-and-tokens` skill) or the monitor of the local model server (the `service-health` skill).
+description: Counts, breaks down or finds agent log events over a time window, lists indices and fields, and runs ES|QL. Starts with the search_logs tool and uses curl past its limits - more than 50 hits, over 30 days, an index family outside its three. Use when the task is a count, an error search, an index listing, an ES|QL query or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call timing (`model-latency`), spend and token totals (`spend-and-tokens`) or the monitor of the local model server (`service-health`).
 metadata:
   requires-tools: bash
   provides-tools: search_logs

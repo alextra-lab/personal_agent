@@ -1,0 +1,253 @@
+# FRE-1600 AC-1 — the scripted session. Seven turns of one conversation about an invented home lab.
+# Every fact is invented. Turns 1, 3 and 5 hold one web_search exchange, so each turn after a tool
+# turn (2, 4, 6) and each turn after a plain turn (3, 5, 7) is measured.
+#
+# memory: the memory_recall tool result, in the shape of executor._render_memory_section_with_ids
+#   (one identifier per line, as FRE-1296 appends it).
+# tool: one web_search call. reasoning is the scripted thinking that production stores on the
+#   assistant tool-call message (executor.step_llm_call keeps reasoning_content).
+# reply: the final answer, as the service stores it (citation markers stripped, FRE-1282).
+
+turns:
+  - user: >-
+      I want to move the Brindle home lab off the old Kestrel switch. Which 2.5 GbE switch from the
+      Vantor line fits a six-port rack shelf, and does it do VLAN tagging?
+    memory: |-
+      ## Your Memory Graph — Known Entities
+      - Brindle home lab (Project): a three-node lab in the hallway closet, built in 2025. [S1@3a91c0d2e4f65b17]
+      - Kestrel KS-8 (Device): the current unmanaged gigabit switch of the Brindle lab. [S2@7c20e9b4a1d3f586]
+      - Vantor Networks (Organization): a switch vendor the user compared in an earlier session. [S3@e5b81f0c9d2a4736]
+
+      These are entities drawn from earlier conversations, including other people; they record what was discussed, not who you are speaking with. Use them to answer questions about what the user has previously discussed.
+
+      ## Relevant Past Conversations
+      The following past conversations may be relevant to the current request:
+
+      1. The user asked how much rack space the hallway closet shelf has. The answer was 1U at 254 mm depth. [S4@0b6d4e8f2a1c9375]
+         Entities: Brindle home lab, hallway closet
+
+      You can reference these past conversations to provide more context-aware responses.
+    tool:
+      query: "Vantor 2.5GbE six port switch VLAN 802.1Q depth"
+      reasoning: >-
+        The user wants a Vantor 2.5 GbE switch that fits a 1U shelf of 254 mm depth and supports VLAN
+        tagging. Memory has the shelf size but not the Vantor models. Search the web for the current
+        Vantor six-port 2.5 GbE models and their VLAN support.
+      marker: "S5@91f2c7a0b3d84e65"
+      results:
+        - title: "Vantor VX-206 product page"
+          url: "https://www.vantor-networks.com/products/vx-206"
+          content: >-
+            The Vantor VX-206 is a six-port 2.5 GbE web-managed switch with two 10 GbE SFP+ uplinks. It
+            supports IEEE 802.1Q VLAN tagging with up to 64 VLANs, port mirroring and IGMP snooping. The
+            chassis measures 210 mm wide, 180 mm deep and 28 mm high and ships with a rack-ear kit for
+            10-inch and 19-inch racks. Fanless design, 14 W maximum power draw.
+        - title: "Vantor VX-206P datasheet"
+          url: "https://www.vantor-networks.com/datasheets/vx-206p.pdf"
+          content: >-
+            The VX-206P adds 802.3bt PoE on four ports with a 120 W budget. Same VLAN feature set as the
+            VX-206. The PoE model is 260 mm deep and has two 40 mm fans.
+        - title: "SmallRack forum: Vantor VX-206 review"
+          url: "https://forum.smallrack.example-lab.net/t/vantor-vx-206-review/4471"
+          content: >-
+            Owner review after six months: VLANs work fine with OPNsense trunks, the web UI is slow but
+            stable, firmware 2.3.1 fixed the LACP bug. Runs at 41 °C in a closed cabinet.
+    reply: >-
+      The Vantor VX-206 fits. It has six 2.5 GbE ports and two 10 GbE SFP+ uplinks, and it is 180 mm
+      deep, so it sits on your 254 mm shelf with room for cables. It supports 802.1Q VLAN tagging with
+      up to 64 VLANs, which covers a lab trunk to the firewall.
+
+
+      Avoid the VX-206P unless you need PoE: it is 260 mm deep, so it does not fit the shelf, and it has
+      fans. One owner reports that firmware 2.3.1 fixed an LACP bug, so update the firmware before you
+      build a bond.
+
+  - user: >-
+      Good. If I put the three nodes on VLAN 20 and the management interfaces on VLAN 99, what do I
+      need to change on the Proxmox side?
+    memory: |-
+      ## Your Memory Graph — Known Entities
+      - Brindle home lab (Project): a three-node lab in the hallway closet, built in 2025. [S1@5d0e2a7b9c4f1836]
+      - Proxmox cluster "brindle" (Software): three nodes named larch, alder and rowan, on Proxmox VE 8.2. [S2@a83f61c0d5e2b947]
+
+      These are entities drawn from earlier conversations, including other people; they record what was discussed, not who you are speaking with. Use them to answer questions about what the user has previously discussed.
+
+      ## What The User Thinks About Related Topics
+      - The user prefers configuration in files over clicks in a web UI. [S3@2c7b9e1f0a4d6358]
+    reply: >-
+      On each node (larch, alder and rowan), make the Linux bridge VLAN-aware and move the management
+      address to a VLAN interface:
+
+
+      1. In /etc/network/interfaces, set `bridge-vlan-aware yes` and `bridge-vids 2-4094` on vmbr0.
+
+      2. Remove the address from vmbr0 and add a `vmbr0.99` interface with the management address and
+      gateway.
+
+      3. Give each VM's network device the tag 20 in its config file (`net0: ...,tag=20`).
+
+      4. Apply with `ifreload -a` on one node at a time, from the console, so that a mistake does not cut
+      you off.
+
+
+      On the switch, set the node ports as trunks that carry VLANs 20 and 99, with no untagged VLAN.
+      Change the corosync addresses only if they move to a new subnet. If they do, edit
+      /etc/pve/corosync.conf on one node and increase config_version.
+
+  - user: >-
+      What does the Vantor firmware 2.3.1 changelog say about the LACP fix? I want to know if it affects
+      a two-port bond to the NAS.
+    memory: |-
+      ## Your Memory Graph — Known Entities
+      - Vantor Networks (Organization): a switch vendor the user compared in an earlier session. [S1@f4a2b8c61d0e9375]
+      - Tarn NAS (Device): the lab's storage box, two 2.5 GbE ports, TrueNAS SCALE 24.10. [S2@6e1d0c9b7a2f3584]
+
+      These are entities drawn from earlier conversations, including other people; they record what was discussed, not who you are speaking with. Use them to answer questions about what the user has previously discussed.
+    tool:
+      query: "Vantor VX-206 firmware 2.3.1 release notes LACP"
+      reasoning: >-
+        The user asks about the LACP fix in Vantor firmware 2.3.1 and a two-port bond to the Tarn NAS.
+        Memory has the NAS but not the changelog. Search for the release notes.
+      marker: "S3@c09e5a1f7b2d4683"
+      results:
+        - title: "VX-206 firmware 2.3.1 release notes"
+          url: "https://www.vantor-networks.com/support/vx-206/firmware/2.3.1"
+          content: >-
+            Fixed: an LACP bond of two or more ports could stop forwarding after a link flap on any member
+            port, until the bond was removed and added again (issue VX-1182). Fixed: the web UI session
+            expired after 5 minutes instead of 30. Changed: the default LACP rate is now slow (30 s); set
+            it to fast in the bond settings to match Linux bonding defaults. Known issue: a static LAG
+            with jumbo frames above 9000 bytes drops oversized frames silently.
+        - title: "Vantor community: VX-1182 bond stops after link flap"
+          url: "https://community.vantor-networks.com/t/vx-1182-bond-stops-after-link-flap/2210"
+          content: >-
+            Reported on 2.2.4 with a TrueNAS LACP bond. Pulling one cable stopped the whole bond. Vantor
+            staff confirmed the fix in 2.3.1 and advised setting the LACP rate to fast on both ends.
+    reply: >-
+      Yes, it affects you. Before 2.3.1, an LACP bond could stop forwarding entirely after one member
+      port flapped, until you removed and re-added the bond (issue VX-1182). A user hit exactly this
+      with a TrueNAS bond.
+
+
+      Two points for the Tarn NAS bond:
+
+      - Update the switch to 2.3.1 before you build the bond.
+
+      - 2.3.1 changes the default LACP rate to slow. TrueNAS uses fast, so set the bond on the switch
+      to fast as well, or the two ends disagree on timing.
+
+
+      Also note the known issue: a static LAG with jumbo frames above 9000 bytes drops large frames.
+      LACP is not affected, but keep the MTU at 9000 or lower.
+
+  - user: >-
+      Fine. Write me the TrueNAS side of the bond as the steps in the web UI, short.
+    memory: |-
+      ## Your Memory Graph — Known Entities
+      - Tarn NAS (Device): the lab's storage box, two 2.5 GbE ports, TrueNAS SCALE 24.10. [S1@8b3e0f6a2c9d1547]
+
+      These are entities drawn from earlier conversations, including other people; they record what was discussed, not who you are speaking with. Use them to answer questions about what the user has previously discussed.
+
+      ## What The User Thinks About Related Topics
+      - The user prefers configuration in files over clicks in a web UI. [S2@d71c4a9e0b5f2368]
+    reply: >-
+      In TrueNAS SCALE 24.10:
+
+
+      1. Network → Interfaces → Add. Type: Link Aggregation.
+
+      2. Name: bond0. Protocol: LACP. Transmit hash policy: LAYER3+4. LACPDU rate: FAST.
+
+      3. Members: the two 2.5 GbE ports. Remove their addresses first.
+
+      4. Set the address on bond0 (static, VLAN 20 if the NAS sits there; otherwise untagged).
+
+      5. MTU 9000 only if the switch ports and the nodes also use 9000.
+
+      6. Test Changes, check that you can still reach the UI, then Save Changes within 60 seconds.
+
+
+      On the switch, put both ports in one LACP group, rate fast.
+
+  - user: >-
+      Last thing on the switch: is there a quieter fan mod for the VX-206P if I ever need PoE?
+    memory: |-
+      ## Relevant Past Conversations
+      The following past conversations may be relevant to the current request:
+
+      1. The user said that the hallway closet must stay silent because it is next to the bedroom. [S1@4f9a0e2c7b1d6385]
+         Entities: hallway closet, Brindle home lab
+
+      You can reference these past conversations to provide more context-aware responses.
+    tool:
+      query: "Vantor VX-206P fan noise quiet fan replacement"
+      reasoning: >-
+        The user asks about a quieter fan for the VX-206P. Memory says the closet must stay silent.
+        Search for fan replacement reports.
+      marker: "S2@a6c3e1f09b7d2548"
+      results:
+        - title: "SmallRack forum: VX-206P fan swap"
+          url: "https://forum.smallrack.example-lab.net/t/vx-206p-fan-swap/5120"
+          content: >-
+            The stock fans are 40 mm, 12 V, 3-pin, about 28 dBA at full speed. Two members swapped them
+            for 40 mm low-noise fans rated at 14 dBA. The switch reads the tachometer, so a fan that
+            reports below 2,000 RPM raises a fan alarm and the switch caps PoE at 60 W. One member used
+            a low-noise adapter and got the alarm.
+        - title: "Vantor VX-206P datasheet"
+          url: "https://www.vantor-networks.com/datasheets/vx-206p.pdf"
+          content: >-
+            Fan speed is controlled by temperature. At a PoE load below 40 W the fans run at about 30% and
+            the noise level is 19 dBA. Opening the chassis voids the warranty.
+    reply: >-
+      There is a working swap, with limits. The stock fans are 40 mm, 12 V, 3-pin. Owners have fitted
+      40 mm low-noise fans rated at 14 dBA. But the switch reads the fan speed: below 2,000 RPM it raises
+      a fan alarm and caps PoE at 60 W, so a low-noise adapter that slows the stock fans triggers it.
+
+
+      Before you modify anything: at a PoE load under 40 W the stock fans run at about 30% and make
+      about 19 dBA, which may already be quiet enough for the closet. Opening the chassis voids the
+      warranty.
+
+  - user: >-
+      OK. Summarize the whole plan as a checklist I can follow on Saturday.
+    memory: |-
+      ## Your Memory Graph — Known Entities
+      - Brindle home lab (Project): a three-node lab in the hallway closet, built in 2025. [S1@1e8c5b0a9f3d7264]
+      - Tarn NAS (Device): the lab's storage box, two 2.5 GbE ports, TrueNAS SCALE 24.10. [S2@b2f7d0e4c6a19853]
+      - Proxmox cluster "brindle" (Software): three nodes named larch, alder and rowan, on Proxmox VE 8.2. [S3@9d4a1c7e0f2b5386]
+
+      These are entities drawn from earlier conversations, including other people; they record what was discussed, not who you are speaking with. Use them to answer questions about what the user has previously discussed.
+    reply: >-
+      Saturday checklist:
+
+
+      1. Update the VX-206 to firmware 2.3.1.
+
+      2. Rack the VX-206 on the closet shelf. Move the cables from the Kestrel KS-8.
+
+      3. Switch: create VLANs 20 and 99. Node ports: trunks with 20 and 99. NAS ports: one LACP group,
+      rate fast.
+
+      4. Proxmox, one node at a time from the console: vmbr0 VLAN-aware, management on vmbr0.99,
+      `ifreload -a`, check that the node rejoins the cluster.
+
+      5. Tag each VM's network device with 20.
+
+      6. TrueNAS: create bond0 (LACP, fast, LAYER3+4), set its address, Test Changes, Save.
+
+      7. Pull one NAS cable and check that the bond keeps forwarding.
+
+      8. Keep the MTU at 1500 unless every hop is set to 9000.
+
+  - user: >-
+      Thanks. One more: how long will step 4 take if each node needs a reboot?
+    memory: |-
+      ## Your Memory Graph — Known Entities
+      - Proxmox cluster "brindle" (Software): three nodes named larch, alder and rowan, on Proxmox VE 8.2. [S1@6a0f3d9c2e7b1458]
+
+      These are entities drawn from earlier conversations, including other people; they record what was discussed, not who you are speaking with. Use them to answer questions about what the user has previously discussed.
+    reply: >-
+      About 30 to 45 minutes for the three nodes. Per node: 2 minutes to edit the file, 3 to 5 minutes
+      to reboot, and about 5 minutes to check that the node is back in the cluster and that its VMs
+      reach the network. Migrate or stop the VMs of each node before you reboot it, and add that time
+      if they are large.

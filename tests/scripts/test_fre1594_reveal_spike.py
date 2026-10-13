@@ -6,6 +6,7 @@ No test calls a model or a store. The model calls and the tool runs are gated li
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 
 import httpx
@@ -606,6 +607,40 @@ def test_a_call_in_the_same_reply_as_its_read_skill_is_refused(scenarios: reveal
     assert tools.calls[0] == ("search_logs", _SEARCH[1], ())
     assert tools.calls[1] == ("search_logs", _SEARCH[1], ("search_logs",))
     assert row["passed"] is True
+
+
+def test_the_final_build_hooks_set_the_skill_result_and_the_tool_place(
+    scenarios: reveal.Scenarios,
+) -> None:
+    """FRE-1597: the real skill result in both arms, the revealed tool where production puts it."""
+    placed: list[tuple[str, ...]] = []
+
+    def place(base: object, revealed: object) -> list[dict[str, object]]:
+        assert isinstance(base, list) and isinstance(revealed, tuple)
+        placed.append(revealed)
+        return [base[0], *(reveal.experimental_tools()[n] for n in revealed), *base[1:]]
+
+    draw = dataclasses.replace(
+        _draw(scenarios, "simple"), skill_content='{"ok": true, "body": "real"}', place_tools=place
+    )
+    scripted = _Scripted(
+        _reply(calls=(_LOAD,)), _reply(calls=(_SEARCH,)), _reply("3 errors.", finish="stop")
+    )
+    row = session.run_draw(scripted, draw, _Tools(), nonces=("tn", "cn"))
+
+    assert row["passed"] is True
+    treatment, control = scripted.sent[:3], scripted.sent[3:]
+    base_tools = draw.base["tools"]
+    assert isinstance(base_tools, list)
+    for body in (treatment[1], treatment[2]):
+        names = [reveal.tool_name(t) for t in body["tools"]]  # type: ignore[union-attr]
+        assert names[1] == "search_logs" and len(names) == len(base_tools) + 1
+    for body in (treatment[0], *control):
+        assert body["tools"] == base_tools
+    for body in (treatment[1], control[1]):
+        skill = next(m for m in body["messages"] if m.get("name") == "read_skill")  # type: ignore[union-attr]
+        assert skill["content"] == '{"ok": true, "body": "real"}'
+    assert set(placed) == {("search_logs",)}
 
 
 # --------------------------------------------------------------------------- scoring

@@ -64,6 +64,11 @@ The run directory is git-ignored: the captures and rows hold full prompts.
 `loop run --provider cloud` measures the cloud primary with no bound (ADR AC-F2). It is a paid call, so it runs
 only on the owner's word.
 
+Every llama.cpp call goes through `common.RetryOnce`. A transport failure (a reset or another error without an
+HTTP status, a 502, 503 or 504, or a stream cut before its `finish_reason`) is sent once more. The first failure is
+kept in that call's `extra.retried`. An item fails only if the second attempt fails too. A request error (any
+other status, for example 400 or 500) is not retried. A retried call's timings are those of the second attempt.
+
 Each rerun of a capture, `replay` or `run` resumes. A run whose configuration differs from the recorded
 fingerprint is refused.
 

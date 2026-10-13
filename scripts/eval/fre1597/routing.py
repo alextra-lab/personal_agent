@@ -465,7 +465,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
             "git_head": spike._git_head(),
         }
         spike.ensure_fingerprint(paths.fingerprint, fingerprint)
-        sender = LlamaTransport(client, args.url, args.llama_model)
+        sender = common.RetryOnce(LlamaTransport(client, args.url, args.llama_model))
         common.warm_up(sender, captured[0].calls.first, paths.warmup)
         errors = run_replay(sender, captured, paths.rows, draws=args.draws)
     finally:

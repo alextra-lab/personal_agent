@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import secrets
@@ -21,7 +22,7 @@ from scripts.eval.fre1537 import capture
 from scripts.eval.fre1537.common import RunPaths, append_jsonl, utc_now
 from scripts.eval.fre1594 import spike
 from scripts.eval.fre1594.reveal import request_bytes, with_nonce
-from scripts.eval.fre1594.transport import Transport
+from scripts.eval.fre1594.transport import Reply, Transport
 from scripts.eval.fre1597.calls import JsonDict, TwoCalls, primary_calls
 
 DEFAULT_URL = "http://127.0.0.1:8600/v1/chat/completions"
@@ -196,6 +197,52 @@ def request_pins(bodies: Sequence[Mapping[str, object]]) -> dict[str, object]:
         "system_prompt_sha256": sorted(systems),
         "tools_sha256": sorted(tools),
     }
+
+
+TRANSIENT_STATUS = frozenset({502, 503, 504})
+CUT_STREAM = "stream ended without a finish_reason"
+
+
+def is_transient(reply: Reply) -> bool:
+    """Return True for a transport failure: no HTTP status, 502/503/504, or a cut stream."""
+    if reply.ok:
+        return False
+    if reply.status is None or reply.status in TRANSIENT_STATUS:
+        return True
+    return reply.status == httpx.codes.OK and CUT_STREAM in (reply.error or "")
+
+
+class RetryOnce:
+    """Send again once after a transport failure, and record the first failure on the reply.
+
+    A reset, a 502, 503 or 504, or a stream cut before its ``finish_reason`` is sent once more.
+    The returned reply's ``extra["retried"]`` holds the first failure's status and error, so the
+    row shows it. A request error (any other status) is returned at once.
+    """
+
+    def __init__(self, inner: Transport) -> None:
+        """Wrap a transport.
+
+        Args:
+            inner: The transport that sends.
+        """
+        self._inner = inner
+
+    def send(self, body: Mapping[str, object]) -> Reply:
+        """Send one request, and once more after a transport failure.
+
+        Args:
+            body: The request body.
+
+        Returns:
+            The reply of the last attempt.
+        """
+        reply = self._inner.send(body)
+        if not is_transient(reply):
+            return reply
+        first = {"status": reply.status, "error": reply.error}
+        again = self._inner.send(body)
+        return dataclasses.replace(again, extra={**again.extra, "retried": first})
 
 
 def warm_up(sender: Transport, body: Mapping[str, object], path: Path) -> None:

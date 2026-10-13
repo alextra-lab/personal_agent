@@ -267,7 +267,8 @@ def _cmd_measure(args: argparse.Namespace) -> int:
     client = httpx.Client(timeout=httpx.Timeout(900.0, connect=10.0))
     try:
         pins = common.local_pins(args, client)
-        counts = count_tokens(LlamaTransport(client, args.url, args.llama_model), bodies)
+        sender = common.RetryOnce(LlamaTransport(client, args.url, args.llama_model))
+        counts = count_tokens(sender, bodies)
     finally:
         client.close()
     drop = drop_verdict(counts)

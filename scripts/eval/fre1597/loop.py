@@ -188,7 +188,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         sender: transport.Transport
         if args.provider == "local":
             pins = {"provider": "local", **common.local_pins(args, client)}
-            sender = transport.LlamaTransport(client, args.url, args.llama_model)
+            sender = common.RetryOnce(transport.LlamaTransport(client, args.url, args.llama_model))
         else:
             target = cloud_mod.resolve_target(args.deployment, "default")
             pins = {

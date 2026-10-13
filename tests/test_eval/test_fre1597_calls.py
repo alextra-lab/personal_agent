@@ -220,3 +220,73 @@ def test_a_reply_with_only_the_scripted_read_skill_is_not_skipped() -> None:
     first = _first()
     two = calls.TwoCalls.from_capture([first, _second(first)], "log-search")
     assert calls.skip_reason(two, _reply(("read_skill", '{"name": "log-search"}'))) is None
+
+
+# --------------------------------------------------------------------------- retry once
+
+
+def _failed(status: int | None, error: str) -> transport.Reply:
+    return transport.Reply(
+        ok=False,
+        status=status,
+        error=error,
+        content="",
+        reasoning=None,
+        tool_calls=(),
+        structured=False,
+        finish_reason=None,
+        timings={},
+        usage={},
+        secs=36.0,
+        system_fingerprint=None,
+        cost_usd=0.0,
+        request_sha256="x",
+    )
+
+
+class _Replies:
+    def __init__(self, *replies: transport.Reply) -> None:
+        self.replies = list(replies)
+        self.sent = 0
+
+    def send(self, body: object) -> transport.Reply:
+        self.sent += 1
+        return self.replies.pop(0)
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        _failed(None, "ReadError: [Errno 104] Connection reset by peer"),
+        _failed(502, "bad gateway"),
+        _failed(503, "unavailable"),
+        _failed(504, "timeout"),
+        _failed(200, "stream ended without a finish_reason"),
+    ],
+)
+def test_a_transport_error_is_retried_once_and_recorded(first: transport.Reply) -> None:
+    from scripts.eval.fre1597.common import RetryOnce
+
+    inner = _Replies(first, _reply(("read_skill", '{"name": "log-search"}')))
+    reply = RetryOnce(inner).send({})
+    assert inner.sent == 2 and reply.ok
+    assert reply.extra["retried"] == {"status": first.status, "error": first.error}
+    assert reply.record()["extra"]["retried"]["error"] == first.error  # type: ignore[index]
+
+
+def test_a_second_failure_is_returned_with_the_first_recorded() -> None:
+    from scripts.eval.fre1597.common import RetryOnce
+
+    inner = _Replies(_failed(502, "first"), _failed(None, "second"))
+    reply = RetryOnce(inner).send({})
+    assert inner.sent == 2 and not reply.ok and reply.error == "second"
+    assert reply.extra["retried"] == {"status": 502, "error": "first"}
+
+
+@pytest.mark.parametrize("status", [400, 500])
+def test_a_request_error_is_not_retried(status: int) -> None:
+    from scripts.eval.fre1597.common import RetryOnce
+
+    inner = _Replies(_failed(status, "Failed to parse tools"))
+    reply = RetryOnce(inner).send({})
+    assert inner.sent == 1 and not reply.ok and "retried" not in reply.extra

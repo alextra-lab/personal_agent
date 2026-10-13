@@ -1,24 +1,21 @@
 ---
-name: query-elasticsearch
-description: Reads agent logs and other telemetry from Elasticsearch - counts, breakdowns, error searches,
-  the events of one trace, and which fields and indices exist. Starts with the query_telemetry tool and
-  uses curl only for the data that the tool cannot read. Use when the task is a count, a breakdown, an
-  error search or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call
-  timing, spend and token totals, or interaction outcomes, which other skills hold.
+name: log-search
+description: Counts, breaks down or finds agent log events over a time window, and tells which indices and fields exist. Starts with the search_logs tool and uses curl for what the tool cannot read - more than 50 hits, a window over 30 days, an index family outside its three, a field outside its list, and ES|QL. Use when the task is a count, a breakdown, an error search or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call timing, which the `model-latency` skill gives, or for spend and token totals, which the `spend-and-tokens` skill gives.
 metadata:
   requires-tools: bash
+  provides-tools: search_logs
 ---
 
-# query-elasticsearch — Read agent logs and telemetry from Elasticsearch
+# log-search — Count, break down and find agent log events
 
 ## Rules
 
 - Answer only from a live query. Never answer from what the logs probably hold.
-- Start with the `query_telemetry` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
+- Start with the `search_logs` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
 - Use curl only for what the tool cannot do. The table below says which.
 - Use only the index families in this file. Never write a guessed index name.
-- Model-call timing is not in Elasticsearch. Use the `query-tempo` skill.
-- Spend, token totals and interaction outcomes are in the `self-telemetry` skill.
+- Model-call timing is not in Elasticsearch. Use the `model-latency` skill.
+- Spend and token totals are in the `spend-and-tokens` skill. How interactions ended is in the `interaction-outcomes` skill.
 
 ## Step 1 — Use the tool
 
@@ -27,22 +24,22 @@ returns at most 50. `since` is at most `30d`.
 
 ```python
 # Count the errors of the last 24 hours
-query_telemetry(action="count", index="agent-logs", query={"term": {"level": "ERROR"}}, since="24h")
+search_logs(action="count", index="agent-logs", query={"term": {"level": "ERROR"}}, since="24h")
 
 # The most common event types of the last hour
-query_telemetry(action="search", index="agent-logs", size=0, since="1h",
+search_logs(action="search", index="agent-logs", size=0, since="1h",
                 aggs={"by_event": {"terms": {"field": "event_type", "size": 20}}})
 
 # The last 20 errors, with the fields that name them
-query_telemetry(action="search", index="agent-logs", query={"term": {"level": "ERROR"}}, size=20,
+search_logs(action="search", index="agent-logs", query={"term": {"level": "ERROR"}}, size=20,
                 since="3h", fields=["@timestamp", "event_type", "message", "tool_name", "trace_id", "error"])
 
 # The events of one trace
-query_telemetry(action="search", index="agent-logs", query={"term": {"trace_id": "<trace_id>"}},
+search_logs(action="search", index="agent-logs", query={"term": {"trace_id": "<trace_id>"}},
                 size=50, since="7d", fields=["@timestamp", "event_type", "role", "tool_name", "input_tokens"])
 
 # Which events carry a field (find the event before you aggregate on the field)
-query_telemetry(action="search", index="agent-logs", size=0, since="24h",
+search_logs(action="search", index="agent-logs", size=0, since="24h",
                 query={"exists": {"field": "input_tokens"}},
                 aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}})
 ```
@@ -107,7 +104,7 @@ family, use the tested script:
 ```bash
 curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
   | grep '^agent-monitors-joinability-' \
-  | python3 skills/query-elasticsearch/scripts/es_index_granularity.py agent-monitors-joinability
+  | python3 skills/log-search/scripts/es_index_granularity.py agent-monitors-joinability
 ```
 
 The script prints the daily and monthly counts, flags `MIXED`, and lists every name that it
@@ -138,7 +135,7 @@ Check the result before you answer:
 | `refused: field 'x' is not available in agent-logs. Allowed fields: ...` | The field is not in the allowlist, or the name is wrong | Pick a field from the list in the message. If none fits, check the field with `_field_caps` and use curl |
 | `refused: index must be one of ...` | The family is not one of the three | Use the curl path in Step 2 |
 | `refused: since ...` | The window is malformed or over 30 days | Write a number and `m`, `h` or `d` |
-| `store_unavailable` or `store_timeout` | Elasticsearch is down or slow | Call once more. If it fails again, stop and tell the user. The `infrastructure-health` skill checks the service |
+| `store_unavailable` or `store_timeout` | Elasticsearch is down or slow | Call once more. If it fails again, stop and tell the user. The `service-health` skill checks the service |
 | `store_rejected` (HTTP 400) | The query shape is wrong | Change the query as the message states |
 | HTTP 404 `index_not_found_exception` with curl | A guessed index name. The names `agent-events-*`, `agent-traces-*`, `agent-telemetry-*` and `logs-*` are retired or never existed | Use a family from the table. Events of every kind are in `agent-logs-*` |
 | A curl reply is `{"hits": {"total": {"value": 0}}}` and the agent ran | Wrong date field, or `since` too short | Check the date field of the family. Widen the window once |

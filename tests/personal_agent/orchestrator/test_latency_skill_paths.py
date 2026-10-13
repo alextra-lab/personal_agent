@@ -1,7 +1,7 @@
 """The latency skills send a latency question to a path that holds data (FRE-1568).
 
-AC-1: ``query-elasticsearch.md`` recommends no retired latency field.
-AC-2 (offline half): the ``query-tempo.md`` recipe passes the bash allowlist, and its ``jq``
+AC-1: ``log-search.md`` recommends no retired latency field.
+AC-2 (offline half): the ``model-latency.md`` recipe passes the bash allowlist, and its ``jq``
     step reduces a Tempo reply to exact percentiles and says when the reply is capped.
     The live half (a real Tempo query) is run by master, not here.
 
@@ -24,11 +24,14 @@ from personal_agent.governance.permissions import evaluate_permission, load_perm
 from personal_agent.orchestrator.skills import get_all_skills
 
 _SKILLS = Path(__file__).resolve().parents[3] / "skills"
-_ELASTICSEARCH = (_SKILLS / "query-elasticsearch" / "SKILL.md").read_text(encoding="utf-8")
-_TEMPO = (_SKILLS / "query-tempo" / "SKILL.md").read_text(encoding="utf-8")
+_ELASTICSEARCH = (_SKILLS / "log-search" / "SKILL.md").read_text(encoding="utf-8")
+_TEMPO = (_SKILLS / "model-latency" / "SKILL.md").read_text(encoding="utf-8")
 # FRE-1578: the Pattern 5 recipe moved from SKILL.md to references/ (progressive disclosure).
-_RECIPE = (_SKILLS / "query-tempo" / "references" / "latency-recipe.md").read_text(encoding="utf-8")
-_TEMPO_FILES = f"{_TEMPO}\n{_RECIPE}"
+_RECIPE = (_SKILLS / "model-latency" / "references" / "latency-recipe.md").read_text(encoding="utf-8")
+# FRE-1596: the spans-of-one-trace and trace-search recipes moved to turn-explanation (A4).
+_TURN = (_SKILLS / "turn-explanation" / "SKILL.md").read_text(encoding="utf-8")
+_TURN_TEMPO = _TURN[_TURN.index("### Step 1c") : _TURN.index("## Step 2")]
+_TEMPO_FILES = f"{_TEMPO}\n{_RECIPE}\n{_TURN_TEMPO}"
 _RULES = load_permission_rules()
 
 
@@ -90,12 +93,13 @@ def _description(name: str) -> str:
 
 def test_elasticsearch_skill_sends_latency_to_tempo() -> None:
     """The model chooses from the catalog descriptions (ADR-0156 D2, FRE-1577)."""
-    assert "query-tempo" in _ELASTICSEARCH
-    assert "latency" not in _description("query-elasticsearch")
+    assert "model-latency" in _ELASTICSEARCH
+    # The "Not for…" line names the neighbour in backticks (ADR-0156 A3.2). That name is not a claim.
+    assert "latency" not in re.sub(r"`[^`]+`", "", _description("log-search"))
 
 
 def test_tempo_description_names_latency() -> None:
-    assert "latency" in _description("query-tempo")
+    assert "latency" in _description("model-latency")
 
 
 # --------------------------------------------------------------------------- scope 4

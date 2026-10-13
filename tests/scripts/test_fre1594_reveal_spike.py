@@ -15,15 +15,18 @@ from scripts.eval.fre1594 import reveal, score, session, shim, spike, transport
 from personal_agent.telemetry.trace import SystemTraceContext
 from personal_agent.tools.telemetry_query import TelemetryQueryError
 
+# The tool that the stored capture holds: a harness constant, not a live tool name (FRE-1596).
+REMOVED = reveal.REMOVED_TOOL
+
 _SYSTEM = (
-    "You are the agent.\n\n## Tools\n\n- read_only: query_telemetry, read, read_skill\n\n"
+    f"You are the agent.\n\n## Tools\n\n- read_only: {REMOVED}, read, read_skill\n\n"
     "## Skills\n\nPick one.\n\n"
     "- infrastructure-health: Probes services. Not for Tempo - Tempo status and version belong to "
     "the query-tempo skill.\n"
     "- mermaid-diagrams: Draws diagrams.\n"
-    "- query-elasticsearch: Reads agent logs with query_telemetry.\n"
+    f"- query-elasticsearch: Reads agent logs with {REMOVED}.\n"
     "- query-tempo: Reads Tempo traces.\n"
-    "- self-telemetry: Reads the agent's own spend. Starts with the query_telemetry tool for event "
+    f"- self-telemetry: Reads the agent's own spend. Starts with the {REMOVED} tool for event "
     "data and uses curl for the budget snapshot and the Captain's Log, which the tool does not "
     "read. Use when the task is about cost.\n"
     "- system-metrics: Takes a snapshot.\n"
@@ -71,7 +74,7 @@ def _captured() -> dict[str, object]:
                 "content": "Memory: none.",
             },
         ],
-        "tools": [_tool("web_search"), _tool("query_telemetry"), _read_skill_tool()],
+        "tools": [_tool("web_search"), _tool(REMOVED), _read_skill_tool()],
     }
 
 
@@ -101,7 +104,7 @@ def test_scenarios_hold_four_prompts_two_per_skill(scenarios: reveal.Scenarios) 
     assert {s.tool for s in scenarios.skills.values()} == {"search_logs", "measure_model_latency"}
 
 
-def test_the_two_tools_split_the_arguments_of_query_telemetry() -> None:
+def test_the_two_tools_split_the_arguments_of_the_production_tools() -> None:
     tools = reveal.experimental_tools()
     search = tools["search_logs"]["function"]["parameters"]  # type: ignore[index]
     latency = tools["measure_model_latency"]["function"]["parameters"]  # type: ignore[index]
@@ -148,7 +151,7 @@ def test_base_body_leaves_no_old_skill_name_and_no_removed_tool(
 ) -> None:
     body = reveal.base_body(_captured(), scenarios, scenarios.prompts[0])
     wire = json.dumps(body)
-    for gone in ("query-elasticsearch", "query-tempo", "query_telemetry"):
+    for gone in ("query-elasticsearch", "query-tempo", REMOVED):
         assert gone not in wire
     read_skill = body["tools"][1]["function"]  # type: ignore[index]
     assert read_skill["parameters"]["properties"]["name"]["enum"] == [
@@ -169,8 +172,8 @@ def test_base_body_refuses_a_capture_that_still_names_a_removed_name(
     scenarios: reveal.Scenarios,
 ) -> None:
     leaky = _captured()
-    leaky["messages"][3]["content"] = "Memory: the query_telemetry tool was used."  # type: ignore[index]
-    with pytest.raises(ValueError, match="query_telemetry"):
+    leaky["messages"][3]["content"] = f"Memory: the {REMOVED} tool was used."  # type: ignore[index]
+    with pytest.raises(ValueError, match=REMOVED):
         reveal.base_body(leaky, scenarios, scenarios.prompts[0])
 
 
@@ -179,7 +182,7 @@ def test_base_body_refuses_a_capture_without_the_tool_or_a_catalog_line(
 ) -> None:
     no_tool = _captured()
     no_tool["tools"] = [_tool("web_search")]
-    with pytest.raises(ValueError, match="query_telemetry"):
+    with pytest.raises(ValueError, match=REMOVED):
         reveal.base_body(no_tool, scenarios, scenarios.prompts[0])
     no_line = copy.deepcopy(_captured())
     no_line["messages"][0]["content"] = "## Skills\n- query-tempo: x\n"  # type: ignore[index]
@@ -289,7 +292,7 @@ async def test_a_tool_that_is_not_revealed_is_refused_and_not_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_revealed_tools_map_to_query_telemetry_actions() -> None:
+async def test_the_revealed_tools_run_with_their_own_arguments() -> None:
     executor = _Executor()
     run = await _run(
         "search_logs",
@@ -305,7 +308,7 @@ async def test_the_revealed_tools_map_to_query_telemetry_actions() -> None:
     assert latency.ran
     assert executor.calls == [
         {"action": "count", "index": "agent-logs", "since": "1h"},
-        {"action": "latency", "since": "24h"},
+        {"since": "24h"},
     ]
 
 

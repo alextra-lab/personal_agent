@@ -1,0 +1,14 @@
+skill: turn-explanation
+scenarios:
+  - prompt: "Trace 883b6190 was very slow. Where did the time go?"
+    expected_skill: turn-explanation
+    expect: "Builds the per-call timeline of that one trace, finds the step that took the time, and names the call or tool with its seconds. Pulls the data and does not guess."
+  - prompt: "The context counter jumped to 47K on the last turn of session s-4411. What caused it?"
+    expected_skill: turn-explanation
+    expect: "Finds the trace of the last turn, reads input_tokens down the primary calls, finds the jump and names the tool result before it. Does not ask search_logs for turn_status.context_tokens."
+  - prompt: "Show every span of trace 1bc849bf94ebf80162af9c97b9ee91c3 with its duration, and say which one is the root."
+    expected_skill: turn-explanation
+    expect: "Reads the trace with a curl GET of /api/v2/traces/<id> on tempo:3200, with the id written as a literal. Lists the spans with durations in milliseconds and names the span that has no parent."
+  - prompt: "Did the browser really receive an error for the last turn of session s-4411?"
+    expected_skill: turn-explanation
+    expect: "Reads the session_events rows of that session (a documented ask) and reports the RUN_ERROR rows with their sequence numbers."

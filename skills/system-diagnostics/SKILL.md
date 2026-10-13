@@ -5,7 +5,7 @@ description: Lists and inspects what runs on the host or in the container with p
   ports listen, which process holds a file, and what disk and network I/O activity looks like. Use when the
   task is to find, list or rank processes, or to find listening ports, open files, or I/O and network
   activity. Not for a utilisation number - CPU %, the memory of the agent process or the host in MB, disk
-  space, load average - which the system-metrics skill gives.
+  space, load average - which the `system-metrics` skill gives.
 metadata:
   requires-tools: bash
 ---

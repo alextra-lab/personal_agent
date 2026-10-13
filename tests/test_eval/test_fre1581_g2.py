@@ -12,7 +12,7 @@ def row(id_: str, kind: str, expected: str | None, loaded: list[str], **extra: o
 
 
 def passing_rows(scenarios: int = 33) -> list[dict]:
-    rows = [row(f"s#{i}", "scenario", "query-tempo", ["query-tempo"]) for i in range(scenarios)]
+    rows = [row(f"s#{i}", "scenario", "model-latency", ["model-latency"]) for i in range(scenarios)]
     return rows + [row(f"ns{i:02d}", "no_skill", None, []) for i in range(1, 21)]
 
 
@@ -34,12 +34,12 @@ def test_at_least_10_no_skill_prompts_hold_a_former_keyword() -> None:
 
 
 def test_a_scenario_is_right_only_with_its_skill_and_no_other() -> None:
-    assert g2.is_right("scenario", "query-tempo", ["query-tempo"])
+    assert g2.is_right("scenario", "model-latency", ["model-latency"])
     assert g2.is_right(
-        "scenario", "query-tempo", ["query-tempo", "query-tempo"]
+        "scenario", "model-latency", ["model-latency", "model-latency"]
     )  # a reference read
-    assert not g2.is_right("scenario", "query-tempo", ["query-tempo", "self-telemetry"])
-    assert not g2.is_right("scenario", "query-tempo", [])
+    assert not g2.is_right("scenario", "model-latency", ["model-latency", "spend-and-tokens"])
+    assert not g2.is_right("scenario", "model-latency", [])
     assert g2.is_right("no_skill", None, [])
     assert not g2.is_right("no_skill", None, ["mermaid-diagrams"])
 
@@ -58,7 +58,7 @@ def test_the_90_percent_bound() -> None:
     for r in rows[:4]:
         r["skills_loaded"] = []
     assert g2.score(rows).passed  # 36/40 = 90%
-    rows[4]["skills_loaded"] = ["self-telemetry"]
+    rows[4]["skills_loaded"] = ["spend-and-tokens"]
     assert not g2.score(rows).passed  # 35/40
 
 
@@ -66,9 +66,9 @@ def test_three_no_skill_loads_fail() -> None:
     rows = passing_rows()
     no_skill = [r for r in rows if r["kind"] == "no_skill"]
     for r in no_skill[:2]:
-        r["skills_loaded"] = ["self-telemetry"]
+        r["skills_loaded"] = ["spend-and-tokens"]
     assert g2.score(rows).passed
-    no_skill[2]["skills_loaded"] = ["query-tempo"]
+    no_skill[2]["skills_loaded"] = ["model-latency"]
     result = g2.score(rows)
     assert not result.passed and result.no_skill_loaded == 3
 
@@ -127,12 +127,12 @@ def test_read_turn_reads_a_skill_load_on_a_production_mapped_index() -> None:
                 "role": "primary",
                 "model": "m",
             },
-            {"trace_id": "t1", "event_type": "read_skill_invoked", "skill_name": "query-tempo"},
-            {"trace_id": "t2", "event_type": "read_skill_invoked", "skill_name": "neo4j-direct"},
+            {"trace_id": "t1", "event_type": "read_skill_invoked", "skill_name": "model-latency"},
+            {"trace_id": "t2", "event_type": "read_skill_invoked", "skill_name": "graph-inspection"},
         ]
     )
     turn = g2.read_turn(es, "t1", settle_s=0)  # type: ignore[arg-type]
-    assert turn["skills_loaded"] == ["query-tempo"] and turn["primary_models"] == ["m"]
+    assert turn["skills_loaded"] == ["model-latency"] and turn["primary_models"] == ["m"]
 
 
 def test_a_turn_with_no_model_call_is_an_error_not_a_no_skill_row() -> None:

@@ -1434,10 +1434,10 @@ class AppConfig(BaseSettings):
         default="localhost:4319",
         description="OTLP gRPC endpoint of the OTel Collector, the single egress point for traces",
     )
-    # Tempo query API, read by query_telemetry's 'latency' action (FRE-1567)
+    # Tempo query API, read by the measure_model_latency tool (FRE-1567)
     tempo_url: str = Field(
         default="http://localhost:3200",
-        description="Tempo HTTP query API base URL (search only, read by query_telemetry)",
+        description="Tempo HTTP query API base URL (search only, read by measure_model_latency)",
     )
     captains_log_index_prefix: str = Field(
         default="agent-captains",

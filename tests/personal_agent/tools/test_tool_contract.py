@@ -50,7 +50,8 @@ EXPECTED_TOOLS = frozenset(
         "perplexity_query",
         "get_library_docs",
         "fetch_url",
-        "query_telemetry",
+        "search_logs",
+        "measure_model_latency",
         "create_linear_issue",
         "find_linear_issues",
         "list_linear_projects",
@@ -367,7 +368,10 @@ def probe_layer(monkeypatch: pytest.MonkeyPatch) -> ToolExecutionLayer:
 
 
 async def _dispatch(
-    layer: ToolExecutionLayer, tool_name: str, arguments: Mapping[str, object] | None = None
+    layer: ToolExecutionLayer,
+    tool_name: str,
+    arguments: Mapping[str, object] | None = None,
+    revealed_tools: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, Any], list[MutableMapping[str, Any]]]:
     trace_ctx = TraceContext.new_trace()
     with capture_log_records() as records:
@@ -380,6 +384,7 @@ async def _dispatch(
             trace_id=trace_ctx.trace_id,
             session_id=None,
             loaded_skills=set(),
+            revealed_tools=revealed_tools,
         )
     return result, records
 
@@ -476,12 +481,12 @@ async def test_an_oversized_result_is_truncated_at_dispatch(
 
 
 # ---------------------------------------------------------------------------
-# AC-2 / AC-8 named instance: a query_telemetry refusal keeps its allowed fields
+# AC-2 / AC-8 named instance: a search_logs refusal keeps its allowed fields
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_a_query_telemetry_refusal_reaches_the_model_with_the_allowed_fields(
+async def test_a_search_logs_refusal_reaches_the_model_with_the_allowed_fields(
     full_registry: ToolRegistry,
 ) -> None:
     """AC-2: the refusal lists every allowed field, unclipped, and logs ``success: false``."""
@@ -493,8 +498,9 @@ async def test_a_query_telemetry_refusal_reaches_the_model_with_the_allowed_fiel
     )
     result, records = await _dispatch(
         layer,
-        "query_telemetry",
+        "search_logs",
         {"action": "search", "index": "agent-logs", "fields": ["user_message"]},
+        revealed_tools=frozenset({"search_logs"}),  # a providing skill was loaded (A5.3)
     )
     payload = assert_conforms(result["content"])
     error = payload["error"]
@@ -505,6 +511,38 @@ async def test_a_query_telemetry_refusal_reaches_the_model_with_the_allowed_fiel
     assert "[truncated]" not in error["message"]
     completions = _completions(records)
     assert [(c["success"], c["error_code"]) for c in completions] == [(False, "refused")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "arguments", "foreign"),
+    [
+        ("search_logs", {"action": "count", "index": "agent-logs", "role": "primary"}, "role"),
+        ("measure_model_latency", {"since": "24h", "index": "agent-logs"}, "index"),
+    ],
+)
+async def test_a_skill_provided_tool_refuses_an_argument_it_does_not_declare(
+    full_registry: ToolRegistry, tool: str, arguments: dict[str, object], foreign: str
+) -> None:
+    """FRE-1596: the single tool refused the other source's arguments. Two tools must too.
+
+    A silent drop would let the model read an unfiltered figure as a filtered one (``role`` is
+    an argument of ``measure_model_latency`` only).
+    """
+    governance = load_governance_config()
+    layer = ToolExecutionLayer(
+        registry=full_registry,
+        governance_config=governance,
+        mode_manager=ModeManager(governance_config=governance),
+    )
+    result, records = await _dispatch(layer, tool, arguments, revealed_tools=frozenset({tool}))
+    payload = assert_conforms(result["content"])
+    error = payload["error"]
+    assert error["code"] == "invalid_arguments"
+    assert foreign in error["message"] and "does not take" in error["message"]
+    assert [(c["success"], c["error_code"]) for c in _completions(records)] == [
+        (False, "invalid_arguments")
+    ]
 
 
 # ---------------------------------------------------------------------------

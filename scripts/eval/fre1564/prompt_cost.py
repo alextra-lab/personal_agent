@@ -5,8 +5,10 @@ Measures, from the code in this tree, three things and prints a Markdown table:
 * per worker type: the tool declarations the type is offered on every worker call, before
   and after this change;
 * the planner system prompt (one call per fan-out), before and after;
-* the primary: ``query_telemetry`` was worker-only at FRE-1564, so the primary's declarations
-  did not change. FRE-1576 (ADR-0156 D7.2) offers it to the primary.
+* the primary: the telemetry tool was worker-only at FRE-1564, so the primary's declarations
+  did not change. FRE-1576 (ADR-0156 D7.2) offered it to the primary. FRE-1596 (ADR-0156 A5)
+  split it into ``search_logs`` and ``measure_model_latency``, which the primary sees only after a
+  skill reveals them, so the column below reads ``no``.
 
 "Before" is the state of origin/main at 85ea515a, written down below. Tokens are estimated
 with tiktoken ``cl100k_base`` (``llm_client.token_counter``), which is not the served model's
@@ -135,9 +137,10 @@ def main() -> None:
 
     primary_defs = registry.get_tool_definitions_for_llm(Mode.NORMAL)
     primary_text = json.dumps(primary_defs, separators=(",", ":"))
-    worker_only = _declarations(registry, ["query_telemetry"])
-    in_primary = "query_telemetry" in {d["function"]["name"] for d in primary_defs}
-    print("\n| Primary call (every turn) | tool declarations | `query_telemetry` offered | Added |")
+    telemetry_tools = ["search_logs", "measure_model_latency"]
+    worker_only = _declarations(registry, telemetry_tools)
+    in_primary = any(d["function"]["name"] in telemetry_tools for d in primary_defs)
+    print("\n| Primary call (every turn) | tool declarations | telemetry tools offered | Added |")
     print("|---|---:|---|---:|")
     added = count(worker_only) if in_primary else 0
     print(f"| NORMAL mode | {count(primary_text)} | {'yes' if in_primary else 'no'} | +{added} |")

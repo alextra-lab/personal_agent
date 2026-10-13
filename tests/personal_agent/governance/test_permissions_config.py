@@ -121,7 +121,8 @@ def test_every_rule_names_a_known_tool() -> None:
     """A typo in a rule would silently govern nothing."""
     known = set(load_governance_config().tools) | {
         "search_memory",
-        "query_telemetry",
+        "search_logs",
+        "measure_model_latency",
         "create_linear_issue",
         "find_linear_issues",
         "list_linear_projects",

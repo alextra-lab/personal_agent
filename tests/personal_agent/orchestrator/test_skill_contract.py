@@ -70,5 +70,5 @@ def test_requires_tools_names_real_tools(name: str, skill: object) -> None:
 def test_the_telemetry_skills_require_bash() -> None:
     """A positive control: the parser reads the field (a broken parser yields no names)."""
     skills = get_all_skills()
-    assert skills["query-elasticsearch"].requires_tools == ("bash",)
+    assert skills["log-search"].requires_tools == ("bash",)
     assert skills["sequential-thinking"].requires_tools == ()

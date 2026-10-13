@@ -272,18 +272,28 @@ def test_unknown_tool_registers_no_source() -> None:
     assert registration.admissibility is Admissibility.UNCLASSIFIED_TOOL
 
 
-def test_query_telemetry_is_not_a_citable_source() -> None:
-    """FRE-1564: telemetry is partly agent-written, so it must not become a source by accident.
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "content"),
+    [
+        ("search_logs", {"action": "count", "index": "agent-logs"}, '{"count": 12}'),
+        ("measure_model_latency", {"since": "24h"}, '{"groups": [], "complete": true}'),
+    ],
+)
+def test_a_telemetry_tool_is_not_a_citable_source(
+    tool_name: str, arguments: dict[str, object], content: str
+) -> None:
+    """FRE-1564, FRE-1596: telemetry is partly agent-written, so it is no source by accident.
 
-    The tool stays off the typed-retrieval table, which matches the `bash` + `curl` route it
-    replaces for a worker. Adding it there needs its own decision (an ADR-0138 D2 amendment).
+    Each tool of the split (ADR-0156 A5.2) stays off the typed-retrieval table, which matches the
+    `bash` + `curl` route it replaces for a worker. Adding one there needs its own decision (an
+    ADR-0138 D2 amendment).
     """
     registry = SourceRegistry(turn_id=TURN_A)
 
     registration = registry.register_tool_result(
-        tool_name="query_telemetry",
-        arguments={"action": "count", "index": "agent-logs"},
-        content='{"count": 12}',
+        tool_name=tool_name,
+        arguments=arguments,
+        content=content,
     )
 
     assert registration.source is None

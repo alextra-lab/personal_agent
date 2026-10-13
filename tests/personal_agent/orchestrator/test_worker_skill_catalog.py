@@ -33,8 +33,8 @@ _SEEDED: dict[str, str | None] = {
     "needs-nothing": None,
     "needs-bash": "bash",
     "needs-search": "web_search",
-    "needs-telemetry": "query_telemetry",
-    "needs-search-and-telemetry": "web_search, query_telemetry",
+    "needs-telemetry": "search_logs",
+    "needs-search-and-telemetry": "web_search, search_logs",
 }
 _SEEDED_VISIBLE = {
     WorkerType.RESEARCHER: {"needs-nothing", "needs-search"},

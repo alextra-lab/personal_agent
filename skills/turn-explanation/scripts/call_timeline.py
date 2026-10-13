@@ -4,7 +4,7 @@
 This replaces a ``sed | grep | python3 -c "..."`` chain. Pipe ``docker logs`` into it:
 
     docker logs cloud-sim-seshat-gateway --since=40m 2>&1 \
-      | python3 skills/turn-forensics/scripts/call_timeline.py <trace_id>
+      | python3 skills/turn-explanation/scripts/call_timeline.py <trace_id>
 
 Output, one line for each event, in log order:
 
@@ -108,7 +108,7 @@ def main(argv: list[str], stdin: Iterable[str]) -> int:
         print(
             f"error: no model call or tool call of trace {argv[0]} in the input. "
             "The window of --since can be too short, or the command before this one failed. "
-            "Elasticsearch may hold the events: use query_telemetry with a term on trace_id.",
+            "Elasticsearch may hold the events: use search_logs with a term on trace_id.",
             file=sys.stderr,
         )
         return 1

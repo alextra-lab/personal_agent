@@ -243,7 +243,8 @@ def test_governance_config_sub_agent_tools_is_a_distinct_grant_set() -> None:
         "get_library_docs",
         "read_skill",
         "notes_search",
-        "query_telemetry",
+        "search_logs",
+        "measure_model_latency",
         "read",
     }
     # write_file is a tool of the primary in NORMAL that no sub-agent holds — proves the

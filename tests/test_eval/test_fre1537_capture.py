@@ -81,6 +81,79 @@ def test_primary_body_needs_exactly_one_hit(tmp_path: Path) -> None:
         )
 
 
+def _tools(*names: str) -> list[dict[str, object]]:
+    return [{"type": "function", "function": {"name": n}} for n in names]
+
+
+def test_worker_body_picks_the_request_that_ends_on_the_task(tmp_path: Path) -> None:
+    """ADR-0156 AC-R1: the helper selects a worker's request, not only the primary's."""
+    user = "How many errors did the agent log?"
+    task = "Count the ERROR events of agent-logs in the last hour."
+    primary = write_call(
+        tmp_path,
+        1,
+        {"tools": _tools("read_skill", "bash"), "messages": [{"role": "user", "content": user}]},
+    )
+    worker = write_call(
+        tmp_path,
+        2,
+        {
+            "tools": _tools("search_logs", "measure_model_latency", "read_skill"),
+            "messages": [{"role": "user", "content": f"Task: {task}"}],
+        },
+    )
+    planner = write_call(tmp_path, 3, {"messages": [{"role": "user", "content": task}]})  # no tools
+    calls = [primary, worker, planner]
+    assert capture.tool_names(capture.worker_body(calls, task)) == {
+        "search_logs",
+        "measure_model_latency",
+        "read_skill",
+    }
+    assert capture.tool_names(capture.primary_body(calls, user)) == {"read_skill", "bash"}
+    with pytest.raises(ValueError, match="expected one worker request"):
+        capture.worker_body([primary, planner], task)
+    with pytest.raises(ValueError, match="found 2"):
+        capture.worker_body(
+            [
+                worker,
+                write_call(
+                    tmp_path,
+                    4,
+                    {"tools": _tools("x"), "messages": [{"role": "user", "content": task}]},
+                ),
+            ],
+            task,
+        )
+
+
+def test_the_telemetry_tools_are_in_the_worker_request_and_not_the_first_primary_request(
+    tmp_path: Path,
+) -> None:
+    """AC-R1 on recorded bodies: the primary's first request lacks both tools."""
+    user = "Count the errors."
+    task = "Count the ERROR events."
+    primary = write_call(
+        tmp_path,
+        1,
+        {"tools": _tools("read_skill"), "messages": [{"role": "user", "content": user}]},
+    )
+    worker = write_call(
+        tmp_path,
+        2,
+        {
+            "tools": _tools("search_logs", "measure_model_latency"),
+            "messages": [{"role": "user", "content": task}],
+        },
+    )
+    both = {"search_logs", "measure_model_latency"}
+    assert not both & capture.tool_names(capture.primary_body([primary, worker], user))
+    assert both <= capture.tool_names(capture.worker_body([primary, worker], task))
+
+
+def test_tool_names_of_a_body_with_no_tools_is_empty() -> None:
+    assert capture.tool_names({"messages": []}) == frozenset()
+
+
 def test_capture_runs_turn_one_with_the_scripted_reply_then_turn_two_in_the_same_session(
     tmp_path: Path,
 ) -> None:

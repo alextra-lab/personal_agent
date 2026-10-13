@@ -1,8 +1,13 @@
-"""Native read-only telemetry query tool — FRE-1564 (ADR-0150 D2 amendment, ADR-0028 Tier 1).
+"""Native read-only log and model-latency tools — FRE-1564, FRE-1567, FRE-1596 (ADR-0156 A5.1).
 
 A sub-agent worker of the ``general`` type holds private reads, so it must be able to read
-the system's own logs and metrics without ``bash``. This tool is the only Elasticsearch
-route a worker has. It is a security boundary, so it is built on two rules:
+the system's own logs and metrics without ``bash``. These tools are the only Elasticsearch and
+Tempo route a worker has. FRE-1596 split the one telemetry tool of FRE-1564 by objective:
+``search_logs`` (the ``search`` and ``count`` actions, Elasticsearch) and ``measure_model_latency``
+(Tempo). Both are skill-provided: the primary sees them after it loads a skill that names them
+in ``metadata.provides-tools`` (ADR-0156 A5.3). The allowlists below are shared and unchanged.
+
+They are a security boundary, so they are built on two rules:
 
 * **The model never writes the request.** It names an action, one of three index families
   and a validated query and aggregation. The tool builds the URL, the body, the time bound
@@ -19,7 +24,7 @@ returned. ``message`` and ``error`` are free text written by the agent's own log
 carry a fragment of user input inside an exception string. That is the residual risk.
 
 **Tempo (FRE-1567).** ADR-0129 moved model-call timing onto OTel spans, so Elasticsearch has
-none. The ``latency`` action reads Tempo's search API under the same two rules: the model picks
+none. ``measure_model_latency`` reads Tempo's search API under the same two rules: the model picks
 a span kind, group keys and two exact-match filters, and the tool writes the TraceQL, the
 window and the limits. The span attributes it selects and reads are listed in
 ``TEMPO_ATTRIBUTES``. Attributes that carry text or a conversation id (``statusMessage``,
@@ -60,15 +65,16 @@ TelemetryCode = Literal[
     "reply_too_large",
     "bad_reply",
 ]
-"""``query_telemetry`` failure codes (ADR-0156 D6.1)."""
+"""``search_logs`` and ``measure_model_latency`` failure codes (ADR-0156 D6.1)."""
 
 
 class TelemetryQueryError(ToolError[TelemetryCode]):
-    """A ``query_telemetry`` failure."""
+    """A ``search_logs`` or ``measure_model_latency`` failure."""
 
 
 _REFUSED_NEXT = "Nothing was sent. Correct the request as the message states and call again."
-_RETRY_NEXT = "Call query_telemetry once more; if it fails again, tell the user."
+_RETRY_SEARCH = "Call search_logs once more; if it fails again, tell the user."
+_RETRY_LATENCY = "Call measure_model_latency once more; if it fails again, tell the user."
 
 # family -> the date field the time bound applies to. Indices are addressed as ``<family>-*``.
 FAMILY_TIME_FIELD: Mapping[str, str] = MappingProxyType(
@@ -292,8 +298,6 @@ _TEMPO_QUERY_ERROR_STATUSES = frozenset({400, 422})
 # A filter value, and a group label read back from Tempo, must look like a role or model id.
 # No quote or backslash can enter the TraceQL, and no free text can come back.
 _LABEL_RE = re.compile(r"[A-Za-z0-9._/:-]{1,100}")
-_ES_ONLY_ARGS = ("index", "query", "aggs", "fields", "size")
-_TEMPO_ONLY_ARGS = ("span", "group_by", "role", "model", "limit")
 
 
 def _time_field_line() -> str:
@@ -316,11 +320,12 @@ def _time_field_line() -> str:
     return f"'since' filters on @timestamp, except {', '.join(odd)}."
 
 
-def _render_description() -> str:
-    """Build the tool description from the allowlists, so the two cannot drift (AC-1).
+def _render_search_description() -> str:
+    """Build the ``search_logs`` description from the allowlists, so the two cannot drift (AC-1).
 
     Returns:
-        The description, with one line per index family and per Tempo list.
+        The description, with one line per index family. The last line is the "Not for…" line
+        that names the neighbouring tool (ADR-0156 A3.2).
     """
     family_lines = [
         f"- {family} fields: {', '.join(sorted(fields))}."
@@ -328,57 +333,76 @@ def _render_description() -> str:
     ]
     return "\n".join(
         [
-            "Read the system's own logs, metrics, health and model-call timing. Read-only. "
+            "Read the system's own logs, metrics and health from Elasticsearch. Read-only. "
             "Never use it for the user's conversation text: that is not available.",
-            "Use it instead of bash with curl to Elasticsearch or Tempo: it knows the fields, "
+            "Use it instead of bash with curl to Elasticsearch: it knows the fields, "
             "a refusal lists the allowed fields, and the result is bounded.",
-            "Actions: 'search' and 'count' read Elasticsearch and need 'index'. 'latency' "
-            "reads model-call timing from Tempo trace spans and needs 'since'.",
+            "Actions: 'search' (hits and aggregations) and 'count' (a document count). "
+            "Both need 'index'.",
             "Elasticsearch index families and the only fields each accepts:",
             *family_lines,
             "Elasticsearch holds no model-call timing: duration_ms, latency_ms and "
             "response_time_ms are not in agent-logs (retired in August 2026, ADR-0129). "
             "agent-topology latency_total_ms is the whole-turn time from request receipt "
             "(FRE-1568). It is empty for turns between 2026-08-08 and that fix. "
-            "Use 'latency' for model-call timing. Other timing fields depend on event_type; "
-            "to find which event carries a field, use an exists query with a terms "
+            "Use measure_model_latency for model-call timing. Other timing fields depend on "
+            "event_type; to find which event carries a field, use an exists query with a terms "
             "aggregation on event_type.",
             _time_field_line(),
-            "search and count: 'since' default 24h, at most 30d. Query operators: match_all, "
+            "'since' default 24h, at most 30d. Query operators: match_all, "
             "bool, term, terms, match, match_phrase, prefix, range, exists. Aggregations: "
             "terms, date_histogram, avg, sum, min, max, value_count, cardinality, stats, "
             "percentiles.",
-            f"- latency spans: {', '.join(TEMPO_SPANS)}.",
-            f"- latency group_by: {', '.join(TEMPO_GROUP_KEYS)}.",
-            f"- latency span attributes: {', '.join(sorted(TEMPO_ATTRIBUTES))}.",
-            "latency: model_call is one span per model call; slm_chat is the local model "
-            "server's side and adds prefill and decode time. Filter with 'role' and 'model' "
-            f"(exact values). 'since' 1m to 7d. 'limit' caps traces (default "
-            f"{_TEMPO_DEFAULT_LIMIT}, at most {_TEMPO_MAX_LIMIT}). It returns, per group, "
-            "count, errors, p50_ms, p90_ms, max_ms and token sums over the spans it read. "
-            "complete=false means a cap was hit and the numbers cover a sample.",
             "A name outside these lists is refused.",
-            'Examples: query_telemetry(action="count", index="agent-logs", '
+            'Examples: search_logs(action="count", index="agent-logs", '
             'query={"term": {"level": "ERROR"}}, since="24h"), '
-            'query_telemetry(action="search", index="agent-logs", size=5, '
-            'aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}}), '
-            'query_telemetry(action="latency", since="24h", group_by=["model"]).',
+            'search_logs(action="search", index="agent-logs", size=5, '
+            'aggs={"by_event": {"terms": {"field": "event_type", "size": 10}}}).',
+            "Not for model-call timing. `measure_model_latency` gives that.",
         ]
     )
 
 
-query_telemetry_tool = ToolDefinition(
-    name="query_telemetry",
-    description=_render_description(),
+def _render_latency_description() -> str:
+    """Build the ``measure_model_latency`` description from the allowlists (AC-1).
+
+    Returns:
+        The description, with one line per Tempo list. The last line is the "Not for…" line
+        that names the neighbouring tool (ADR-0156 A3.2).
+    """
+    return "\n".join(
+        [
+            "Read the system's own model-call timing from Tempo trace spans, per group. "
+            "Read-only. The model gets per-group statistics, never spans.",
+            "Use it instead of bash with curl to Tempo: it knows the span kinds and "
+            "attributes, a refusal lists the allowed names, and the result is bounded.",
+            f"- latency spans: {', '.join(TEMPO_SPANS)}.",
+            f"- latency group_by: {', '.join(TEMPO_GROUP_KEYS)}.",
+            f"- latency span attributes: {', '.join(sorted(TEMPO_ATTRIBUTES))}.",
+            "model_call is one span per model call; slm_chat is the local model "
+            "server's side and adds prefill and decode time. Filter with 'role' and 'model' "
+            f"(exact values). 'since' is required, 1m to 7d. 'limit' caps traces (default "
+            f"{_TEMPO_DEFAULT_LIMIT}, at most {_TEMPO_MAX_LIMIT}). It returns, per group, "
+            "count, errors, p50_ms, p90_ms, max_ms and token sums over the spans it read. "
+            "complete=false means a cap was hit and the numbers cover a sample.",
+            "A name outside these lists is refused.",
+            'Example: measure_model_latency(since="24h", group_by=["model"]).',
+            "Not for counts or searches of log events. `search_logs` gives that.",
+        ]
+    )
+
+
+_ES_MODES = ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
+
+search_logs_tool = ToolDefinition(
+    name="search_logs",
+    description=_render_search_description(),
     category="read_only",
     parameters=[
         ToolParameter(
             name="action",
             type="string",
-            description=(
-                "'search' (hits and aggregations), 'count' (a document count) or 'latency' "
-                "(model-call timing from Tempo)."
-            ),
+            description="'search' (hits and aggregations) or 'count' (a document count).",
             required=True,
             default=None,
             json_schema=None,
@@ -386,13 +410,13 @@ query_telemetry_tool = ToolDefinition(
         ToolParameter(
             name="index",
             type="string",
-            description="The index family to read. Required for search and count.",
-            required=False,
+            description="The index family to read. Required.",
+            required=True,
             default=None,
             json_schema={
                 "type": "string",
                 "enum": list(FAMILY_TIME_FIELD),
-                "description": "The index family to read. Required for search and count.",
+                "description": "The index family to read. Required.",
             },
         ),
         ToolParameter(
@@ -447,42 +471,70 @@ query_telemetry_tool = ToolDefinition(
             name="since",
             type="string",
             description=(
-                f"How far back to look: a number and m, h or d, e.g. '90m', '24h', '7d'. "
-                f"search and count: default {_DEFAULT_SINCE}, at most 30d. latency: required, "
-                "at most 7d."
+                "How far back to look: a number and m, h or d, e.g. '90m', '24h', '7d'. "
+                f"Default {_DEFAULT_SINCE}, at most 30d."
             ),
             required=False,
+            default=None,
+            json_schema=None,
+        ),
+    ],
+    risk_level="low",
+    allowed_modes=list(_ES_MODES),
+    requires_approval=False,
+    requires_sandbox=False,
+    timeout_seconds=20,
+    rate_limit_per_hour=120,
+    error_codes=error_codes(TelemetryQueryError),
+    max_result_tokens=10_000,
+    truncation_next_action="Ask for fewer hits (a lower size), fewer fields, or a narrower since.",
+    skill_provided=True,
+)
+
+measure_model_latency_tool = ToolDefinition(
+    name="measure_model_latency",
+    description=_render_latency_description(),
+    category="read_only",
+    parameters=[
+        ToolParameter(
+            name="since",
+            type="string",
+            description=(
+                "How far back to look: a number and m, h or d, e.g. '90m', '24h', '7d'. "
+                "Required, at most 7d."
+            ),
+            required=True,
             default=None,
             json_schema=None,
         ),
         ToolParameter(
             name="span",
             type="string",
-            description="latency only: the span kind. Default model_call.",
+            description="The span kind. Default model_call.",
             required=False,
             default=None,
             json_schema={
                 "type": "string",
                 "enum": list(TEMPO_SPANS),
-                "description": "latency only: the span kind. Default model_call.",
+                "description": "The span kind. Default model_call.",
             },
         ),
         ToolParameter(
             name="group_by",
             type="array",
-            description="latency only: group keys. Default ['role', 'model'].",
+            description="Group keys. Default ['role', 'model'].",
             required=False,
             default=None,
             json_schema={
                 "type": "array",
                 "items": {"type": "string", "enum": list(TEMPO_GROUP_KEYS)},
-                "description": "latency only: group keys. Default ['role', 'model'].",
+                "description": "Group keys. Default ['role', 'model'].",
             },
         ),
         ToolParameter(
             name="role",
             type="string",
-            description="latency only: keep spans of this role, e.g. 'primary'.",
+            description="Keep spans of this role, e.g. 'primary'.",
             required=False,
             default=None,
             json_schema=None,
@@ -490,7 +542,7 @@ query_telemetry_tool = ToolDefinition(
         ToolParameter(
             name="model",
             type="string",
-            description="latency only: keep spans of this model id.",
+            description="Keep spans of this model id.",
             required=False,
             default=None,
             json_schema=None,
@@ -499,8 +551,7 @@ query_telemetry_tool = ToolDefinition(
             name="limit",
             type="number",
             description=(
-                f"latency only: traces to read (default {_TEMPO_DEFAULT_LIMIT}, at most "
-                f"{_TEMPO_MAX_LIMIT})."
+                f"Traces to read (default {_TEMPO_DEFAULT_LIMIT}, at most {_TEMPO_MAX_LIMIT})."
             ),
             required=False,
             default=None,
@@ -508,14 +559,15 @@ query_telemetry_tool = ToolDefinition(
         ),
     ],
     risk_level="low",
-    allowed_modes=["NORMAL", "ALERT", "DEGRADED", "RECOVERY"],
+    allowed_modes=list(_ES_MODES),
     requires_approval=False,
     requires_sandbox=False,
     timeout_seconds=20,
     rate_limit_per_hour=120,
     error_codes=error_codes(TelemetryQueryError),
     max_result_tokens=10_000,
-    truncation_next_action="Ask for fewer hits (a lower size), fewer fields, or a narrower since.",
+    truncation_next_action="Narrow the window, add a role or model filter, or lower limit.",
+    skill_provided=True,
 )
 
 
@@ -844,8 +896,13 @@ def _build_request(
     Raises:
         ToolExecutionError: Any argument is refused. Nothing has been sent at that point.
     """
+    if action == _LATENCY:
+        raise _refuse(
+            "action 'latency' is not a search_logs action. Read model-call timing with the "
+            "measure_model_latency tool"
+        )
     if action not in _ACTIONS:
-        raise _refuse(f"action must be one of {', '.join((*_ACTIONS, _LATENCY))}")
+        raise _refuse(f"action must be one of {', '.join(_ACTIONS)}")
     if not isinstance(index, str) or index not in FAMILY_TIME_FIELD:
         raise _refuse(f"index must be one of {', '.join(FAMILY_TIME_FIELD)}")
     window = _parse_since(since)
@@ -973,22 +1030,6 @@ def _is_absent(value: object) -> bool:
     return value is None or value in ("", {}, [])
 
 
-def _refuse_foreign_args(action: str, args: Mapping[str, object], names: Sequence[str]) -> None:
-    """Refuse arguments that belong to the other data source.
-
-    Args:
-        action: The action the model asked for.
-        args: Every argument the model passed, by name.
-        names: The names that ``action`` does not take.
-
-    Raises:
-        TelemetryQueryError: ``refused``. One of ``names`` was given a value.
-    """
-    given = [name for name in names if not _is_absent(args.get(name))]
-    if given:
-        raise _refuse(f"action {action!r} does not take {', '.join(given)}")
-
-
 @dataclass(frozen=True)
 class _TempoRequest:
     """A validated ``latency`` request: the query parameters and how to read the reply.
@@ -1037,13 +1078,13 @@ def _build_tempo_request(
         ToolExecutionError: Any argument is refused. Nothing has been sent at that point.
     """
     if since is None:
-        raise _refuse("latency needs 'since', e.g. '24h' (at most 7d)")
+        raise _refuse("'since' is required, e.g. '24h' (at most 7d)")
     match = _SINCE_RE.fullmatch(since) if isinstance(since, str) else None
     if match is None:
         raise _refuse("since is a number and m, h or d, e.g. '90m', '24h', '7d'")
     minutes = int(match.group(1)) * _SINCE_UNIT_MINUTES[match.group(2)]
     if not 1 <= minutes <= _TEMPO_MAX_SINCE_MINUTES:
-        raise _refuse("for latency, since must be between 1 minute and 7 days")
+        raise _refuse("since must be between 1 minute and 7 days")
 
     kind = "model_call" if span is None else span
     if not isinstance(kind, str) or kind not in TEMPO_SPANS:
@@ -1215,7 +1256,7 @@ def _summarise_tempo(data: Mapping[str, object], request: _TempoRequest) -> dict
             "bad_reply",
             "Tempo returned a reply of an unexpected shape.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_LATENCY,
         )
     reasons: dict[str, None] = {}
     if len(traces) >= request.limit:
@@ -1345,24 +1386,24 @@ async def _read_tempo(
             next_action="Tempo cannot be read from here. Tell the user.",
         ) from exc
     except httpx.ConnectError as exc:
-        log.error("query_telemetry_tempo_connect_failed", trace_id=trace_id, session_id=session_id)
+        log.error("measure_model_latency_connect_failed", trace_id=trace_id, session_id=session_id)
         raise TelemetryQueryError(
             "store_unavailable",
             "Cannot connect to Tempo. Is the tempo service running?",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_LATENCY,
         ) from exc
     except (httpx.TimeoutException, TimeoutError) as exc:
-        log.error("query_telemetry_tempo_timeout", trace_id=trace_id, session_id=session_id)
+        log.error("measure_model_latency_timeout", trace_id=trace_id, session_id=session_id)
         raise TelemetryQueryError(
             "store_timeout",
             "Tempo request timed out.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_LATENCY,
         ) from exc
     except httpx.HTTPError as exc:
         log.error(
-            "query_telemetry_tempo_failed",
+            "measure_model_latency_failed",
             trace_id=trace_id,
             session_id=session_id,
             error=type(exc).__name__,
@@ -1371,7 +1412,7 @@ async def _read_tempo(
             "store_failed",
             "Tempo request failed.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_LATENCY,
         ) from exc
 
     if response.is_error:
@@ -1382,7 +1423,7 @@ async def _read_tempo(
         else:
             reason = "no detail passed on for this status"
         log.warning(
-            "query_telemetry_tempo_rejected",
+            "measure_model_latency_rejected",
             trace_id=trace_id,
             session_id=session_id,
             status=response.status_code,
@@ -1401,52 +1442,58 @@ async def _read_tempo(
             "bad_reply",
             "Tempo returned a reply that is not JSON.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_LATENCY,
         ) from exc
     if not isinstance(data, dict):
         raise TelemetryQueryError(
             "bad_reply",
             "Tempo returned a reply that is not a JSON object.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_LATENCY,
         )
     return data
 
 
-async def _latency(args: Mapping[str, object], *, ctx: TraceContext) -> dict[str, object]:
-    """Run the ``latency`` action: one bounded Tempo search, summarised per group.
+async def measure_model_latency_executor(
+    since: object = None,
+    span: object = None,
+    group_by: object = None,
+    role: object = None,
+    model: object = None,
+    limit: object = None,
+    *,
+    ctx: TraceContext,
+) -> dict[str, object]:
+    """Run one bounded Tempo search and summarise it per group (``measure_model_latency``).
 
     Args:
-        args: Every argument the model passed, by name.
+        since: Look-back window, a number and ``m``, ``h`` or ``d``. Required, at most ``7d``.
+        span: A key of ``TEMPO_SPANS``. Default ``model_call``.
+        group_by: Keys of ``TEMPO_GROUP_KEYS``. Default role and model.
+        role: An exact role to keep.
+        model: An exact model id to keep.
+        limit: Traces to read. Default 200, at most 500.
         ctx: Trace context for logging.
 
     Returns:
-        The per-group statistics (see ``_summarise_tempo``).
+        Per-group statistics and ``complete`` (see ``_summarise_tempo``).
 
     Raises:
-        ToolExecutionError: The request is refused (nothing was sent), or Tempo fails.
+        ToolExecutionError: The request is refused (the message starts with ``refused:`` and
+            nothing was sent), or Tempo rejects the query or cannot be reached.
     """
     try:
-        _refuse_foreign_args(_LATENCY, args, _ES_ONLY_ARGS)
-        request = _build_tempo_request(
-            args.get("since"),
-            args.get("span"),
-            args.get("group_by"),
-            args.get("role"),
-            args.get("model"),
-            args.get("limit"),
-            now=time.time(),
-        )
+        request = _build_tempo_request(since, span, group_by, role, model, limit, now=time.time())
     except ToolExecutionError as exc:
         log.warning(
-            "query_telemetry_refused",
+            "measure_model_latency_refused",
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
             reason=str(exc),
         )
         raise
     log.info(
-        "query_telemetry_tempo_started",
+        "measure_model_latency_started",
         trace_id=ctx.trace_id,
         session_id=ctx.session_id,
         span=request.span,
@@ -1457,7 +1504,7 @@ async def _latency(args: Mapping[str, object], *, ctx: TraceContext) -> dict[str
     return _summarise_tempo(data, request)
 
 
-async def query_telemetry_executor(
+async def search_logs_executor(
     action: str = "",
     index: str = "",
     query: object = None,
@@ -1465,37 +1512,27 @@ async def query_telemetry_executor(
     fields: object = None,
     size: object = None,
     since: object = None,
-    span: object = None,
-    group_by: object = None,
-    role: object = None,
-    model: object = None,
-    limit: object = None,
     *,
     ctx: TraceContext,
 ) -> dict[str, Any]:
-    """Run one bounded, read-only search, count or latency summary over the own telemetry.
+    """Run one bounded, read-only search or count over the own logs (``search_logs``).
 
     Args:
-        action: ``search`` or ``count`` (Elasticsearch), or ``latency`` (Tempo).
+        action: ``search`` or ``count``.
         index: An index family: ``agent-logs``, ``agent-topology`` or
-            ``agent-monitors-slm-health``. Search and count only.
+            ``agent-monitors-slm-health``.
         query: Optional filter from the supported query operators. Default: all documents.
         aggs: Optional aggregations for ``search``.
         fields: Optional field names to return for each hit.
         size: Hits to return. Default 20, at most 50.
-        since: Look-back window, a number and ``m``, ``h`` or ``d``. Search and count:
-            default ``24h``, at most ``30d``. Latency: required, at most ``7d``.
-        span: Latency only: a key of ``TEMPO_SPANS``. Default ``model_call``.
-        group_by: Latency only: keys of ``TEMPO_GROUP_KEYS``. Default role and model.
-        role: Latency only: an exact role to keep.
-        model: Latency only: an exact model id to keep.
-        limit: Latency only: traces to read. Default 200, at most 500.
+        since: Look-back window, a number and ``m``, ``h`` or ``d``. Default ``24h``, at
+            most ``30d``.
         ctx: Trace context for logging.
 
     Returns:
         For ``count``, ``{"count": n}``. For ``search``, ``total``, ``hits`` and, when
         asked, ``aggregations``. A reply over 20,000 characters is cut and marked
-        ``truncated``. For ``latency``, per-group statistics and ``complete``.
+        ``truncated``.
 
     Raises:
         ToolExecutionError: The request is refused (the message starts with ``refused:`` and
@@ -1503,32 +1540,16 @@ async def query_telemetry_executor(
     """
     trace_id = ctx.trace_id
     session_id = ctx.session_id
-    args: dict[str, object] = {
-        "index": index,
-        "query": query,
-        "aggs": aggs,
-        "fields": fields,
-        "size": size,
-        "since": since,
-        "span": span,
-        "group_by": group_by,
-        "role": role,
-        "model": model,
-        "limit": limit,
-    }
-    if action == _LATENCY:
-        return await _latency(args, ctx=ctx)
     try:
-        _refuse_foreign_args(action, args, _TEMPO_ONLY_ARGS)
         path, body = _build_request(action, index, query, aggs, fields, size, since)
     except ToolExecutionError as exc:
         log.warning(
-            "query_telemetry_refused", trace_id=trace_id, session_id=session_id, reason=str(exc)
+            "search_logs_refused", trace_id=trace_id, session_id=session_id, reason=str(exc)
         )
         raise
 
     log.info(
-        "query_telemetry_started",
+        "search_logs_started",
         trace_id=trace_id,
         session_id=session_id,
         action=action,
@@ -1551,24 +1572,24 @@ async def query_telemetry_executor(
             next_action="Elasticsearch cannot be read from here. Tell the user.",
         ) from exc
     except httpx.ConnectError as exc:
-        log.error("query_telemetry_connect_failed", trace_id=trace_id, session_id=session_id)
+        log.error("search_logs_connect_failed", trace_id=trace_id, session_id=session_id)
         raise TelemetryQueryError(
             "store_unavailable",
             "Cannot connect to Elasticsearch. Is the elasticsearch service running?",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_SEARCH,
         ) from exc
     except httpx.TimeoutException as exc:
-        log.error("query_telemetry_timeout", trace_id=trace_id, session_id=session_id)
+        log.error("search_logs_timeout", trace_id=trace_id, session_id=session_id)
         raise TelemetryQueryError(
             "store_timeout",
             "Elasticsearch request timed out.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_SEARCH,
         ) from exc
     except httpx.HTTPError as exc:
         log.error(
-            "query_telemetry_failed",
+            "search_logs_failed",
             trace_id=trace_id,
             session_id=session_id,
             error=type(exc).__name__,
@@ -1577,13 +1598,13 @@ async def query_telemetry_executor(
             "store_failed",
             "Elasticsearch request failed.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_SEARCH,
         ) from exc
 
     if response.is_error:
         reason = _short_reason(response)
         log.warning(
-            "query_telemetry_rejected",
+            "search_logs_rejected",
             trace_id=trace_id,
             session_id=session_id,
             status=response.status_code,
@@ -1602,13 +1623,13 @@ async def query_telemetry_executor(
             "bad_reply",
             "Elasticsearch returned a reply that is not JSON.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_SEARCH,
         ) from exc
     if not isinstance(data, dict):
         raise TelemetryQueryError(
             "bad_reply",
             "Elasticsearch returned a reply that is not a JSON object.",
             retryable=True,
-            next_action=_RETRY_NEXT,
+            next_action=_RETRY_SEARCH,
         )
     return _shape_result(action, data)

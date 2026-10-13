@@ -38,7 +38,14 @@ from personal_agent.tools.registry import ToolRegistry
 OUTBOUND = OUTBOUND_TOOLS
 # `read` reads local files (ADR-0156 D9.4: only the files a task names), so it is private.
 PRIVATE = frozenset(
-    {"search_memory", "recall_personal_history", "notes_search", "query_telemetry", "read"}
+    {
+        "search_memory",
+        "recall_personal_history",
+        "notes_search",
+        "search_logs",
+        "measure_model_latency",
+        "read",
+    }
 )
 # Reads nothing private and sends nothing out. `run_python` is here only because its
 # `network` argument is pinned false for a worker (see the governance decision).
@@ -100,7 +107,7 @@ class TestTheRule:
         broken = {
             **WORKER_TYPES,
             WorkerType.RESEARCHER: replace(
-                researcher, tools=(*researcher.tools, "query_telemetry")
+                researcher, tools=(*researcher.tools, "search_logs")
             ),
         }
         assert types_holding_outbound_and_private(broken) == [WorkerType.RESEARCHER]
@@ -146,7 +153,13 @@ class TestToolsReachTheWorkers:
 
     _ADDED = {
         WorkerType.RESEARCHER: ("fetch_url", "get_library_docs", "read_skill"),
-        WorkerType.GENERAL: ("query_telemetry", "notes_search", "read_skill", "read"),
+        WorkerType.GENERAL: (
+            "search_logs",
+            "measure_model_latency",
+            "notes_search",
+            "read_skill",
+            "read",
+        ),
     }
 
     @pytest.mark.parametrize("worker_type", list(WorkerType))
@@ -198,28 +211,37 @@ class TestToolsReachTheWorkers:
         register_mvp_tools(registry)
         offered = {
             d["function"]["name"]
-            for d in registry.get_tool_definitions_for_llm(mode=None, include_worker_only=True)
+            # revealed=None: a worker holds the skill-provided tools from its closed list.
+            for d in registry.get_tool_definitions_for_llm(
+                mode=None, include_worker_only=True, revealed=None
+            )
         }
         listed = {tool for spec in WORKER_TYPES.values() for tool in spec.tools}
         conditional = {"notes_search"}
         assert (listed - conditional) <= offered, sorted((listed - conditional) - offered)
 
     @pytest.mark.parametrize("mode", [Mode.NORMAL, Mode.ALERT, Mode.DEGRADED, Mode.RECOVERY])
-    def test_the_primary_is_offered_query_telemetry(
+    def test_the_primary_is_offered_the_telemetry_tools_only_after_the_reveal(
         self, monkeypatch: pytest.MonkeyPatch, mode: Mode
     ) -> None:
-        """ADR-0156 D7.2 (FRE-1576 AC-3): the primary's tool list on a turn has query_telemetry.
+        """ADR-0156 A5.3 (FRE-1596 AC-3): the telemetry tools are skill-provided.
 
-        ``get_tool_definitions_for_llm(mode=ctx.mode)`` is the call the primary's turn makes
-        (``orchestrator/executor.py``).
+        ``get_tool_definitions_for_llm(mode=ctx.mode, revealed=...)`` is the call the primary's turn
+        makes (``orchestrator/executor.py``). Before the reveal the list holds neither tool.
         """
         from personal_agent.config import settings
 
         monkeypatch.setattr(settings, "primitive_tools_enabled", True)
         registry = ToolRegistry()
         register_mvp_tools(registry)
-        primary = {d["function"]["name"] for d in registry.get_tool_definitions_for_llm(mode)}
-        assert "query_telemetry" in primary
+        tools = ("search_logs", "measure_model_latency")
+        before = {d["function"]["name"] for d in registry.get_tool_definitions_for_llm(mode)}
+        assert not set(tools) & before
+        after = {
+            d["function"]["name"]
+            for d in registry.get_tool_definitions_for_llm(mode, revealed=set(tools))
+        }
+        assert set(tools) <= after
 
     def test_the_worker_loop_builds_the_declaration_from_the_full_registry(self) -> None:
         from unittest.mock import MagicMock, patch
@@ -234,9 +256,13 @@ class TestToolsReachTheWorkers:
             "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
             return_value=layer,
         ):
-            defs = _build_tool_defs(["query_telemetry", "web_search"])
+            defs = _build_tool_defs(["search_logs", "measure_model_latency", "web_search"])
         assert defs is not None
-        assert {d["function"]["name"] for d in defs} == {"query_telemetry", "web_search"}
+        assert {d["function"]["name"] for d in defs} == {
+            "search_logs",
+            "measure_model_latency",
+            "web_search",
+        }
 
 
 class TestPlannerPrompt:
@@ -258,7 +284,8 @@ class TestPlannerPrompt:
     def test_general_is_described_as_the_type_for_the_systems_own_telemetry(self) -> None:
         line = self._line(self._prompt(), "general")
         assert "the system's own logs, metrics, errors and health" in line
-        assert "query_telemetry" in line
+        assert "search_logs" in line
+        assert "measure_model_latency" in line
 
     def test_researcher_is_described_as_reading_a_known_page_or_library_docs(self) -> None:
         line = self._line(self._prompt(), "researcher")
@@ -269,5 +296,6 @@ class TestPlannerPrompt:
     def test_neither_line_advertises_the_other_sides_tools(self) -> None:
         prompt = self._prompt()
         researcher, general = self._line(prompt, "researcher"), self._line(prompt, "general")
-        assert "query_telemetry" not in researcher
+        assert "search_logs" not in researcher
+        assert "measure_model_latency" not in researcher
         assert "fetch_url" not in general

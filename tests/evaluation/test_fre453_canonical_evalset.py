@@ -301,15 +301,15 @@ class TestEvaluator:
 
     def test_expected_skills_matching_normalizes_separators(self, evalset: EvalSet) -> None:
         """skills_loaded may report snake_case where skills uses kebab-case."""
-        case = _with_expected(self._trivial(evalset), skills=("self-telemetry",))
-        ev = evaluate_case(case, _make_row(skills_loaded=("self_telemetry",)))
-        assert self._by_name(ev, "skill:self-telemetry").verdict == "match"  # type: ignore[attr-defined]
+        case = _with_expected(self._trivial(evalset), skills=("spend-and-tokens",))
+        ev = evaluate_case(case, _make_row(skills_loaded=("spend_and_tokens",)))
+        assert self._by_name(ev, "skill:spend-and-tokens").verdict == "match"  # type: ignore[attr-defined]
 
     def test_expected_skill_missing_is_mismatch(self, evalset: EvalSet) -> None:
         """An expected skill absent from skills_loaded is a mismatch."""
-        case = _with_expected(self._trivial(evalset), skills=("self-telemetry",))
+        case = _with_expected(self._trivial(evalset), skills=("spend-and-tokens",))
         ev = evaluate_case(case, _make_row(skills_loaded=()))
-        assert self._by_name(ev, "skill:self-telemetry").verdict == "mismatch"  # type: ignore[attr-defined]
+        assert self._by_name(ev, "skill:spend-and-tokens").verdict == "mismatch"  # type: ignore[attr-defined]
 
     def test_tools_any_of_direct_and_family(self, evalset: EvalSet) -> None:
         """tools_any_of matches direct names and family prefixes."""

@@ -1,4 +1,4 @@
-# query-elasticsearch — ES|QL, for one-off analytics only
+# log-search — ES|QL, for one-off analytics only
 
 ES|QL (`/_query`) can chain `STATS ... BY ...` in one request. It has gotchas that the
 `_search` DSL does not have. Use `_search` (the tool, or `references/curl-recipes.md`) first.

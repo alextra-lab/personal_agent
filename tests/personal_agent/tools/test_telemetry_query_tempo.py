@@ -1,7 +1,7 @@
-"""Tests for query_telemetry's Tempo read and its field list (FRE-1567).
+"""Tests for ``measure_model_latency`` (Tempo) and the field lists of both tools (FRE-1567, FRE-1596).
 
 AC-1: the tool description lists every allowed field and span attribute, and nothing else.
-AC-4: the ``latency`` action reads Tempo's search API only, with a required window, a bounded
+AC-4: ``measure_model_latency`` reads Tempo's search API only, with a required window, a bounded
 trace limit and allowlisted attributes. Every refusal also asserts that no request left the
 process (``calls == 0``). No test talks to Tempo or Elasticsearch: all use
 ``httpx.MockTransport`` (tests/CLAUDE.md, FRE-375).
@@ -32,8 +32,10 @@ from personal_agent.tools.telemetry_query import (
     TEMPO_ATTRIBUTES,
     TEMPO_GROUP_KEYS,
     TEMPO_SPANS,
-    query_telemetry_executor,
-    query_telemetry_tool,
+    measure_model_latency_executor,
+    measure_model_latency_tool,
+    search_logs_executor,
+    search_logs_tool,
 )
 
 _CTX = TraceContext.new_trace()
@@ -119,12 +121,22 @@ def _canned(data: Mapping[str, Any]) -> _Recorder:
     return _Recorder(lambda _r: httpx.Response(200, json=data))
 
 
-async def _run(rec: _Recorder, **kwargs: Any) -> dict[str, Any]:
+async def _call(executor: Callable[..., Any], rec: _Recorder, **kwargs: Any) -> dict[str, Any]:
     client = httpx.AsyncClient(transport=httpx.MockTransport(rec.handler))
     with patch(
         "personal_agent.tools.telemetry_query.create_guarded_http_client", return_value=client
     ):
-        return await query_telemetry_executor(ctx=_CTX, **kwargs)
+        return await executor(ctx=_CTX, **kwargs)  # type: ignore[no-any-return]
+
+
+async def _run(rec: _Recorder, **kwargs: Any) -> dict[str, Any]:
+    """Run ``measure_model_latency``."""
+    return await _call(measure_model_latency_executor, rec, **kwargs)
+
+
+async def _run_search(rec: _Recorder, **kwargs: Any) -> dict[str, Any]:
+    """Run ``search_logs``."""
+    return await _call(search_logs_executor, rec, **kwargs)
 
 
 async def _refused(rec: _Recorder, match: str = "refused", **kwargs: Any) -> None:
@@ -133,11 +145,15 @@ async def _refused(rec: _Recorder, match: str = "refused", **kwargs: Any) -> Non
     assert rec.calls == 0, "a refused call must send no request"
 
 
-def _listed(prefix: str) -> set[str]:
+async def _refused_search(rec: _Recorder, match: str = "refused", **kwargs: Any) -> None:
+    with pytest.raises(ToolExecutionError, match=match):
+        await _run_search(rec, **kwargs)
+    assert rec.calls == 0, "a refused call must send no request"
+
+
+def _listed(description: str, prefix: str) -> set[str]:
     """Return the comma-separated items of the description line that starts with ``prefix``."""
-    lines = [
-        line for line in query_telemetry_tool.description.splitlines() if line.startswith(prefix)
-    ]
+    lines = [line for line in description.splitlines() if line.startswith(prefix)]
     assert len(lines) == 1, f"expected one description line starting {prefix!r}"
     return {item.strip() for item in lines[0].removeprefix(prefix).rstrip(".").split(",")}
 
@@ -147,27 +163,33 @@ def _listed(prefix: str) -> set[str]:
 
 @pytest.mark.parametrize("family", list(ALLOWED_FIELDS))
 def test_the_description_lists_exactly_each_familys_fields(family: str) -> None:
-    assert _listed(f"- {family} fields: ") == set(ALLOWED_FIELDS[family])
+    assert _listed(search_logs_tool.description, f"- {family} fields: ") == set(
+        ALLOWED_FIELDS[family]
+    )
 
 
 def test_the_description_lists_exactly_the_span_attributes() -> None:
-    assert _listed("- latency span attributes: ") == set(TEMPO_ATTRIBUTES)
+    assert _listed(measure_model_latency_tool.description, "- latency span attributes: ") == set(
+        TEMPO_ATTRIBUTES
+    )
 
 
 def test_the_description_lists_exactly_the_span_kinds_and_group_keys() -> None:
-    assert _listed("- latency spans: ") == set(TEMPO_SPANS)
-    assert _listed("- latency group_by: ") == set(TEMPO_GROUP_KEYS)
+    description = measure_model_latency_tool.description
+    assert _listed(description, "- latency spans: ") == set(TEMPO_SPANS)
+    assert _listed(description, "- latency group_by: ") == set(TEMPO_GROUP_KEYS)
 
 
 def test_no_sensitive_name_is_offered_in_the_description() -> None:
-    description = query_telemetry_tool.description
-    for name in (*_SENSITIVE_ATTRIBUTES, *_CONTENT_FIELDS):
-        assert name not in description, name
+    for tool in (search_logs_tool, measure_model_latency_tool):
+        for name in (*_SENSITIVE_ATTRIBUTES, *_CONTENT_FIELDS):
+            assert name not in tool.description, (tool.name, name)
 
 
 def test_the_description_says_where_model_call_timing_lives() -> None:
-    description = query_telemetry_tool.description
-    assert "Tempo" in description
+    description = search_logs_tool.description
+    assert "measure_model_latency" in description
+    assert "Tempo" in measure_model_latency_tool.description
     assert "latency_total_ms" in description and "FRE-1568" in description
     # FRE-1568 restored the column: the text no longer says it is empty from now on.
     assert "empty since" not in description
@@ -180,7 +202,7 @@ def test_the_description_says_where_model_call_timing_lives() -> None:
 
 def test_the_description_names_each_family_whose_time_field_is_not_the_default() -> None:
     """Master's note 2: a model guessed ``@timestamp`` on slm-health, whose field is not that."""
-    description = query_telemetry_tool.description
+    description = search_logs_tool.description
     odd = {f: t for f, t in FAMILY_TIME_FIELD.items() if t != "@timestamp"}
     assert odd, "the test needs at least one family with its own time field"
     for family, time_field in odd.items():
@@ -198,7 +220,10 @@ def test_the_planner_prompt_does_not_depend_on_the_tool_description() -> None:
     """Scope item 4: the planner request is byte-identical, so ADR-0154 D7 need not re-run."""
     tools = [*WORKER_TYPES[WorkerType.GENERAL].tools, "web_search", "fetch_url"]
     before = _build_planner_system_prompt(tools)
-    with patch.object(query_telemetry_tool, "description", "changed"):
+    with (
+        patch.object(search_logs_tool, "description", "changed"),
+        patch.object(measure_model_latency_tool, "description", "changed"),
+    ):
         after = _build_planner_system_prompt(tools)
     assert before == after
     assert "span attributes" not in before
@@ -210,7 +235,7 @@ def test_the_planner_prompt_does_not_depend_on_the_tool_description() -> None:
 @pytest.mark.asyncio
 async def test_latency_sends_one_bounded_get_to_the_search_api() -> None:
     rec = _Recorder()
-    await _run(rec, action="latency", since="24h")
+    await _run(rec, since="24h")
 
     assert rec.calls == 1
     request = rec.requests[0]
@@ -233,7 +258,6 @@ async def test_filters_and_the_slm_span_kind_build_the_expected_traceql() -> Non
     rec = _Recorder()
     await _run(
         rec,
-        action="latency",
         since="7d",
         span="slm_chat",
         role="chat",
@@ -260,7 +284,7 @@ async def test_the_result_has_percentiles_counts_errors_and_tokens_per_group() -
         _span("s1", 5, role="sub_agent", model="m/b"),
         _span("s2", 15, role="sub_agent", model="m/b", status="error"),
     ]
-    out = await _run(_canned(_reply(primary, sub)), action="latency", since="24h")
+    out = await _run(_canned(_reply(primary, sub)), since="24h")
 
     assert out["source"] == "tempo"
     assert out["complete"] is True
@@ -288,7 +312,7 @@ async def test_the_result_has_percentiles_counts_errors_and_tokens_per_group() -
 @pytest.mark.asyncio
 async def test_group_by_role_alone_merges_the_models() -> None:
     spans = [_span("a", 10, model="m/a"), _span("b", 30, model="m/b")]
-    out = await _run(_canned(_reply(spans)), action="latency", since="1h", group_by=["role"])
+    out = await _run(_canned(_reply(spans)), since="1h", group_by=["role"])
     assert out["groups"] == [
         {
             "role": "primary",
@@ -309,7 +333,7 @@ async def test_slm_spans_add_prefill_and_decode_percentiles() -> None:
         _span("a", 100, role="chat", extra={"slm.prefill_ms": 40, "slm.decode_ms": 60}),
         _span("b", 200, role="chat", extra={"slm.prefill_ms": 80, "slm.decode_ms": 120}),
     ]
-    out = await _run(_canned(_reply(spans)), action="latency", since="1h", span="slm_chat")
+    out = await _run(_canned(_reply(spans)), since="1h", span="slm_chat")
     (group,) = out["groups"]
     assert group["prefill_p50_ms"] == 40.0
     assert group["prefill_p90_ms"] == 80.0
@@ -322,19 +346,19 @@ async def test_slm_spans_add_prefill_and_decode_percentiles() -> None:
 
 @pytest.mark.asyncio
 async def test_a_missing_window_is_refused() -> None:
-    await _refused(_Recorder(), action="latency")
+    await _refused(_Recorder())
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("since", ["8d", "169h", "10081m", "30d", "0m", "1y", "now-1h", ""])
 async def test_a_window_outside_one_minute_to_seven_days_is_refused(since: str) -> None:
-    await _refused(_Recorder(), action="latency", since=since)
+    await _refused(_Recorder(), since=since)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit", [501, 10_000, 0, -1, "200", 2.5, float("nan"), True])
 async def test_an_oversized_or_malformed_limit_is_refused(limit: Any) -> None:
-    await _refused(_Recorder(), action="latency", since="24h", limit=limit)
+    await _refused(_Recorder(), since="24h", limit=limit)
 
 
 @pytest.mark.asyncio
@@ -357,7 +381,7 @@ async def test_an_oversized_or_malformed_limit_is_refused(limit: Any) -> None:
     ],
 )
 async def test_a_group_key_outside_the_allowlist_is_refused(group_by: Any) -> None:
-    await _refused(_Recorder(), action="latency", since="24h", group_by=group_by)
+    await _refused(_Recorder(), since="24h", group_by=group_by)
 
 
 @pytest.mark.asyncio
@@ -365,7 +389,7 @@ async def test_a_group_key_outside_the_allowlist_is_refused(group_by: Any) -> No
     "span", ["../api/traces/x", "traces", "http", "tool_call", "/api/v2/traces", "MODEL_CALL", 3]
 )
 async def test_a_span_kind_outside_the_list_is_refused(span: Any) -> None:
-    await _refused(_Recorder(), action="latency", since="24h", span=span)
+    await _refused(_Recorder(), since="24h", span=span)
 
 
 @pytest.mark.asyncio
@@ -386,37 +410,31 @@ async def test_a_span_kind_outside_the_list_is_refused(span: Any) -> None:
 async def test_a_filter_value_that_could_change_the_traceql_is_refused(
     key: str, value: Any
 ) -> None:
-    await _refused(_Recorder(), action="latency", since="24h", **{key: value})
+    await _refused(_Recorder(), since="24h", **{key: value})
+
+
+def test_the_two_tools_take_disjoint_arguments_except_the_window() -> None:
+    """FRE-1596: the argument sets of the two data sources are two tools, not one switch."""
+    search = {p.name for p in search_logs_tool.parameters}
+    latency = {p.name for p in measure_model_latency_tool.parameters}
+    assert search & latency == {"since"}
+    assert "action" not in latency
+    assert search == {"action", "index", "query", "aggs", "fields", "size", "since"}
+    assert latency == {"since", "span", "group_by", "role", "model", "limit"}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {"index": "agent-logs"},
-        {"query": {"match_all": {}}},
-        {"aggs": {"a": {"avg": {"field": "input_tokens"}}}},
-        {"fields": ["event_type"]},
-        {"size": 5},
-    ],
-)
-async def test_latency_refuses_elasticsearch_arguments(extra: dict[str, Any]) -> None:
-    await _refused(_Recorder(), action="latency", since="24h", **extra)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "extra",
-    [{"span": "model_call"}, {"group_by": ["role"]}, {"role": "primary"}, {"limit": 10}],
-)
-async def test_search_refuses_tempo_arguments(extra: dict[str, Any]) -> None:
-    await _refused(_Recorder(), action="search", index="agent-logs", **extra)
+async def test_search_logs_refuses_the_latency_action_and_names_the_other_tool() -> None:
+    rec = _Recorder()
+    with pytest.raises(ToolExecutionError, match="measure_model_latency"):
+        await _run_search(rec, action="latency", index="agent-logs", since="24h")
+    assert rec.calls == 0
 
 
 @pytest.mark.asyncio
 async def test_search_and_count_still_need_an_index() -> None:
-    await _refused(_Recorder(), action="search")
-    await _refused(_Recorder(), action="count")
+    await _refused_search(_Recorder(), action="search")
+    await _refused_search(_Recorder(), action="count")
 
 
 @pytest.mark.asyncio
@@ -428,7 +446,7 @@ async def test_every_accepted_latency_call_reaches_only_the_search_endpoint() ->
         {"since": "2h", "group_by": ["model"], "role": "sub_agent"},
         {"since": "90m", "limit": 1, "model": "anthropic/claude-sonnet-5"},
     ):
-        await _run(rec, action="latency", **kwargs)
+        await _run(rec, **kwargs)
     assert rec.calls == 4
     assert {(r.method, r.url.path) for r in rec.requests} == {("GET", "/api/search")}
 
@@ -457,7 +475,7 @@ async def test_no_sensitive_value_in_the_reply_reaches_the_output() -> None:
     data["traces"][0]["rootServiceName"] = secret
     data["traces"][0]["statusMessage"] = secret
 
-    out = await _run(_canned(data), action="latency", since="1h")
+    out = await _run(_canned(data), since="1h")
     assert out["spans_used"] == 1
     assert secret not in json.dumps(out)
 
@@ -468,7 +486,7 @@ async def test_no_sensitive_value_in_the_reply_reaches_the_output() -> None:
     ['the user said "hello there"', "x" * 101, "multi\nline", "{ select(statusMessage) }"],
 )
 async def test_an_unexpected_group_value_is_replaced(label: str) -> None:
-    out = await _run(_canned(_reply([_span("a", 10, role=label)])), action="latency", since="1h")
+    out = await _run(_canned(_reply([_span("a", 10, role=label)])), since="1h")
     assert out["groups"][0]["role"] == "<unrecognised>"
     assert label not in json.dumps(out)
 
@@ -477,7 +495,7 @@ async def test_an_unexpected_group_value_is_replaced(label: str) -> None:
 async def test_a_missing_group_value_is_reported_as_none() -> None:
     span = _span("a", 10)
     span["attributes"] = [a for a in span["attributes"] if a["key"] != "gen_ai.operation.name"]
-    out = await _run(_canned(_reply([span])), action="latency", since="1h")
+    out = await _run(_canned(_reply([span])), since="1h")
     assert out["groups"][0]["role"] == "<none>"
 
 
@@ -486,9 +504,7 @@ async def test_a_missing_group_value_is_reported_as_none() -> None:
 
 @pytest.mark.asyncio
 async def test_reaching_the_trace_limit_marks_the_result_incomplete() -> None:
-    out = await _run(
-        _canned(_reply([_span("a", 10)], [_span("b", 20)])), action="latency", since="1h", limit=2
-    )
+    out = await _run(_canned(_reply([_span("a", 10)], [_span("b", 20)])), since="1h", limit=2)
     assert out["complete"] is False
     assert out["sample"] is True
     assert any("trace limit" in r for r in out["incomplete_reasons"])
@@ -498,7 +514,7 @@ async def test_reaching_the_trace_limit_marks_the_result_incomplete() -> None:
 async def test_a_span_set_with_more_matches_than_spans_marks_it_incomplete() -> None:
     data = _reply([_span("a", 10)])
     data["traces"][0]["spanSets"][0]["matched"] = 250
-    out = await _run(_canned(data), action="latency", since="1h")
+    out = await _run(_canned(data), since="1h")
     assert out["complete"] is False
     assert any("span set" in r for r in out["incomplete_reasons"])
 
@@ -511,13 +527,13 @@ async def test_a_missing_or_malformed_match_count_marks_it_incomplete(matched: A
         del data["traces"][0]["spanSets"][0]["matched"]
     else:
         data["traces"][0]["spanSets"][0]["matched"] = matched
-    out = await _run(_canned(data), action="latency", since="1h")
+    out = await _run(_canned(data), since="1h")
     assert out["complete"] is False
 
 
 @pytest.mark.asyncio
 async def test_unfinished_search_jobs_mark_it_incomplete() -> None:
-    out = await _run(_canned(_reply([_span("a", 10)], jobs=(3, 64))), action="latency", since="1h")
+    out = await _run(_canned(_reply([_span("a", 10)], jobs=(3, 64))), since="1h")
     assert out["complete"] is False
     assert any("blocks" in r for r in out["incomplete_reasons"])
 
@@ -526,7 +542,7 @@ async def test_unfinished_search_jobs_mark_it_incomplete() -> None:
 async def test_a_span_without_a_valid_duration_marks_it_incomplete() -> None:
     span = _span("a", 10)
     span["durationNanos"] = "not-a-number"
-    out = await _run(_canned(_reply([span, _span("b", 20)])), action="latency", since="1h")
+    out = await _run(_canned(_reply([span, _span("b", 20)])), since="1h")
     assert out["spans_used"] == 1
     assert out["complete"] is False
 
@@ -534,7 +550,7 @@ async def test_a_span_without_a_valid_duration_marks_it_incomplete() -> None:
 @pytest.mark.asyncio
 async def test_more_than_fifty_groups_are_cut_and_marked_incomplete() -> None:
     spans = [_span(f"s{i}", 10, model=f"m/{i}") for i in range(60)]
-    out = await _run(_canned(_reply(spans)), action="latency", since="1h")
+    out = await _run(_canned(_reply(spans)), since="1h")
     assert len(out["groups"]) == 50
     assert out["complete"] is False
     assert any("groups" in r for r in out["incomplete_reasons"])
@@ -546,7 +562,7 @@ async def test_the_same_span_in_two_span_sets_is_counted_once() -> None:
     span = _span("a", 10)
     data = _reply([span])
     data["traces"][0]["spanSets"].append({"spans": [span], "matched": 1})
-    out = await _run(_canned(data), action="latency", since="1h")
+    out = await _run(_canned(data), since="1h")
     assert out["spans_used"] == 1
 
 
@@ -555,14 +571,14 @@ async def test_a_reply_with_the_single_span_set_shape_is_read() -> None:
     data = _reply([_span("a", 10)])
     trace = data["traces"][0]
     trace["spanSet"] = trace.pop("spanSets")[0]
-    out = await _run(_canned(data), action="latency", since="1h")
+    out = await _run(_canned(data), since="1h")
     assert out["spans_used"] == 1
     assert out["complete"] is True
 
 
 @pytest.mark.asyncio
 async def test_an_empty_window_is_complete_with_no_groups() -> None:
-    out = await _run(_canned({"traces": [], "metrics": {}}), action="latency", since="5m")
+    out = await _run(_canned({"traces": [], "metrics": {}}), since="5m")
     assert out["groups"] == []
     assert out["spans_used"] == 0
     assert out["complete"] is True
@@ -576,7 +592,7 @@ async def test_an_oversized_reply_is_a_tool_error() -> None:
     big = b"x" * (16 * 1024 * 1024 + 1)
     rec = _Recorder(lambda _r: httpx.Response(200, content=big))
     with pytest.raises(ToolExecutionError, match="larger than 16 MB") as err:
-        await _run(rec, action="latency", since="24h")
+        await _run(rec, since="24h")
     assert err.value.code == "reply_too_large"
 
 
@@ -584,7 +600,7 @@ async def test_an_oversized_reply_is_a_tool_error() -> None:
 async def test_a_tempo_rejection_becomes_a_short_error() -> None:
     rec = _Recorder(lambda _r: httpx.Response(400, text="bad query " + "x" * 900))
     with pytest.raises(ToolExecutionError, match="rejected") as err:
-        await _run(rec, action="latency", since="24h")
+        await _run(rec, since="24h")
     assert len(str(err.value)) < 500
 
 
@@ -594,14 +610,14 @@ async def test_a_tempo_error_body_is_echoed_only_for_a_query_error(status: int) 
     """Only 400 and 422 describe the tool-built query; any other body is not ours to pass on."""
     rec = _Recorder(lambda _r: httpx.Response(status, text="SECRET proxy or server page"))
     with pytest.raises(ToolExecutionError, match=f"HTTP {status}") as err:
-        await _run(rec, action="latency", since="24h")
+        await _run(rec, since="24h")
     assert "SECRET" not in str(err.value)
 
 
 @pytest.mark.asyncio
 async def test_a_whole_number_float_limit_is_accepted() -> None:
     rec = _Recorder()
-    await _run(rec, action="latency", since="24h", limit=200.0)
+    await _run(rec, since="24h", limit=200.0)
     assert rec.params()["limit"] == "200"
 
 
@@ -611,7 +627,7 @@ async def test_a_connection_failure_becomes_a_tool_error() -> None:
         raise httpx.ConnectError("down")
 
     with pytest.raises(ToolExecutionError, match="Cannot connect to Tempo"):
-        await _run(_Recorder(boom), action="latency", since="24h")
+        await _run(_Recorder(boom), since="24h")
 
 
 @pytest.mark.asyncio
@@ -620,7 +636,7 @@ async def test_a_timeout_becomes_a_tool_error() -> None:
         raise httpx.ReadTimeout("slow")
 
     with pytest.raises(ToolExecutionError, match="timed out"):
-        await _run(_Recorder(slow), action="latency", since="24h")
+        await _run(_Recorder(slow), since="24h")
 
 
 @pytest.mark.asyncio
@@ -628,7 +644,7 @@ async def test_a_timeout_becomes_a_tool_error() -> None:
 async def test_a_reply_of_the_wrong_shape_is_a_tool_error(body: bytes) -> None:
     rec = _Recorder(lambda _r: httpx.Response(200, content=body))
     with pytest.raises(ToolExecutionError, match="Tempo"):
-        await _run(rec, action="latency", since="24h")
+        await _run(rec, since="24h")
 
 
 @pytest.mark.asyncio
@@ -639,7 +655,7 @@ async def test_an_egress_block_becomes_store_blocked() -> None:
         raise EgressBlockedError(request, "domain not allowlisted", None)
 
     with pytest.raises(ToolExecutionError, match="Tempo") as err:
-        await _run(_Recorder(blocked), action="latency", since="24h")
+        await _run(_Recorder(blocked), since="24h")
     assert err.value.code == "store_blocked"
     assert err.value.retryable is False
 
@@ -652,7 +668,7 @@ async def test_another_transport_failure_becomes_store_failed() -> None:
         raise httpx.RemoteProtocolError("peer closed connection")
 
     with pytest.raises(ToolExecutionError, match="Tempo request failed") as err:
-        await _run(_Recorder(broken), action="latency", since="24h")
+        await _run(_Recorder(broken), since="24h")
     assert err.value.code == "store_failed"
     assert err.value.retryable is True
 
@@ -663,7 +679,7 @@ async def test_another_transport_failure_becomes_store_failed() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", _RETIRED)
 async def test_a_retired_timing_field_is_refused(field: str) -> None:
-    await _refused(_Recorder(), action="search", index="agent-logs", fields=[field])
+    await _refused_search(_Recorder(), action="search", index="agent-logs", fields=[field])
 
 
 @pytest.mark.asyncio
@@ -707,4 +723,4 @@ async def test_each_fre1564_rule_still_refuses_for_its_own_reason(
     kwargs: dict[str, Any], reason: str
 ) -> None:
     """Twins of FRE-1564 refusal tests whose field (``latency_ms``) left the allowlist."""
-    await _refused(_Recorder(), match=reason, action="search", index="agent-logs", **kwargs)
+    await _refused_search(_Recorder(), match=reason, action="search", index="agent-logs", **kwargs)

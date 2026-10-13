@@ -22,8 +22,8 @@ from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.telemetry_query import (
     ALLOWED_FIELDS,
     FAMILY_TIME_FIELD,
-    query_telemetry_executor,
-    query_telemetry_tool,
+    search_logs_executor,
+    search_logs_tool,
 )
 
 _CTX = TraceContext.new_trace()
@@ -77,7 +77,7 @@ async def _run(rec: _Recorder, **kwargs: Any) -> dict[str, Any]:
     with patch(
         "personal_agent.tools.telemetry_query.create_guarded_http_client", return_value=client
     ):
-        return await query_telemetry_executor(ctx=_CTX, **kwargs)
+        return await search_logs_executor(ctx=_CTX, **kwargs)
 
 
 async def _refused(rec: _Recorder, **kwargs: Any) -> None:
@@ -90,34 +90,34 @@ async def _refused(rec: _Recorder, **kwargs: Any) -> None:
 
 
 def test_definition_is_a_low_risk_read_only_tool() -> None:
-    assert query_telemetry_tool.name == "query_telemetry"
-    assert query_telemetry_tool.category == "read_only"
-    assert query_telemetry_tool.risk_level == "low"
-    assert query_telemetry_tool.requires_approval is False
-    # The primary reads telemetry with bash and curl; this tool is for workers (FRE-1564).
-    assert query_telemetry_tool.worker_only is False  # ADR-0156 D7.2: the primary has it
-    names = {p.name for p in query_telemetry_tool.parameters}
-    # FRE-1567 added the five latency (Tempo) parameters.
-    assert names == {
-        "action",
-        "index",
-        "query",
-        "aggs",
-        "fields",
-        "size",
-        "since",
-        "span",
-        "group_by",
-        "role",
-        "model",
-        "limit",
-    }
+    assert search_logs_tool.name == "search_logs"
+    assert search_logs_tool.category == "read_only"
+    assert search_logs_tool.risk_level == "low"
+    assert search_logs_tool.requires_approval is False
+    assert search_logs_tool.worker_only is False  # ADR-0156 D7.2: the primary has it
+    # ADR-0156 A5.3 (FRE-1596): the primary sees it only after a providing skill is loaded.
+    assert search_logs_tool.skill_provided is True
+    names = {p.name for p in search_logs_tool.parameters}
+    # The Tempo arguments belong to measure_model_latency (A5.1).
+    assert names == {"action", "index", "query", "aggs", "fields", "size", "since"}
     # No parameter can carry a URL, path, header or raw request body.
     assert not names & {"url", "path", "endpoint", "body", "method", "headers"}
+    action = next(p for p in search_logs_tool.parameters if p.name == "action")
+    assert action.json_schema is None or set(action.json_schema.get("enum", [])) <= {
+        "search",
+        "count",
+    }
+
+
+def test_the_description_ends_with_a_not_for_line_that_names_the_other_tool() -> None:
+    """ADR-0156 A3.2: the neighbouring tool is named by its exact name, in backticks."""
+    last = search_logs_tool.description.splitlines()[-1]
+    assert last.startswith("Not for ")
+    assert "`measure_model_latency`" in last
 
 
 def test_the_index_parameter_enumerates_exactly_the_families() -> None:
-    index = next(p for p in query_telemetry_tool.parameters if p.name == "index")
+    index = next(p for p in search_logs_tool.parameters if p.name == "index")
     assert index.json_schema is not None
     assert set(index.json_schema["enum"]) == set(FAMILY_TIME_FIELD)
 

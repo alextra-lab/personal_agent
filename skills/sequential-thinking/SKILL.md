@@ -3,7 +3,7 @@ name: sequential-thinking
 description: 'Gives a discipline for multi-step reasoning: estimate the steps up front, mark revisions,
   name branch points, and finish only when the task is really done. Use when a problem needs several dependent
   steps, an early assumption can need revision, or two or more real alternatives are compared. Not for
-  short factual questions or single-step lookups.'
+  short factual questions or single-step lookups, which `web_search` and `search_memory` answer.'
 ---
 
 # sequential-thinking — Structured Reasoning Discipline

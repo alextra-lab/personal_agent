@@ -105,7 +105,8 @@ class ToolDefinition(BaseModel):
         description=(
             "True for a tool that a skill reveals (ADR-0156 A5.3). The primary sees it only after "
             "read_skill loads a skill whose metadata.provides-tools names it; a worker holds it "
-            "from its closed tool list."
+            "from its closed tool list. The executor refuses an argument that such a tool does "
+            "not declare, where it drops the argument for any other tool (FRE-1596)."
         ),
     )
 

@@ -1,7 +1,7 @@
-# query-elasticsearch — curl recipes for what the tool cannot do
+# log-search — curl recipes for what the tool cannot do
 
-Use these only after the `query_telemetry` tool has refused the request or cannot take it
-(see Step 2 of `SKILL.md`). Spend and Captain's Log recipes are in the `self-telemetry` skill.
+Use these only after the `search_logs` tool has refused the request or cannot take it
+(see Step 2 of `SKILL.md`). Spend recipes are in the `spend-and-tokens` skill. Captain's Log recipes are in the `interaction-outcomes` skill.
 
 Rules for every recipe here:
 

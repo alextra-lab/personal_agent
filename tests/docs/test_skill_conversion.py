@@ -6,7 +6,7 @@ conversion adds on top of them:
 - every ``evals.yaml`` names its skill and gives scenarios that each hold a prompt and the
   expected result (D5.2), and no prompt is shared by two skills;
 - no skill names a retired field or index outside a line that says "retired" (AC-3);
-- the four telemetry skills show a ``query_telemetry`` call before their first curl recipe
+- the four telemetry skills show a ``search_logs`` or ``measure_model_latency`` call before their first curl recipe
   (D5.5), and every call that they show is one the tool's own validator accepts (AC-2).
 """
 
@@ -24,16 +24,17 @@ from personal_agent.tools.telemetry_query import _build_request, _build_tempo_re
 
 _SKILLS = Path(__file__).resolve().parents[2] / "skills"
 _CONVERTED = (
-    "infrastructure-health",
-    "neo4j-direct",
-    "query-elasticsearch",
-    "query-tempo",
-    "self-telemetry",
+    "graph-inspection",
+    "interaction-outcomes",
+    "log-search",
+    "model-latency",
+    "service-health",
+    "spend-and-tokens",
     "system-diagnostics",
     "system-metrics",
-    "turn-forensics",
+    "turn-explanation",
 )
-_LEAD_WITH_THE_TOOL = ("query-elasticsearch", "query-tempo", "self-telemetry", "turn-forensics")
+_LEAD_WITH_THE_TOOL = ("log-search", "model-latency", "spend-and-tokens", "turn-explanation")
 
 # --- AC-1: evals.yaml -----------------------------------------------------------------------
 
@@ -186,9 +187,9 @@ def test_every_path_to_a_skill_file_exists() -> None:
 
 
 def test_the_path_check_reads_both_spellings() -> None:
-    text = "Run skills/neo4j-direct/scripts/x.py or read self-telemetry/references/y.md."
-    assert _SCRIPT_PATH.findall(text) == [("neo4j-direct", "scripts/x.py")]
-    assert _OTHER_SKILL_PATH.findall(text) == [("self-telemetry", "references/y.md")]
+    text = "Run skills/graph-inspection/scripts/x.py or read spend-and-tokens/references/y.md."
+    assert _SCRIPT_PATH.findall(text) == [("graph-inspection", "scripts/x.py")]
+    assert _OTHER_SKILL_PATH.findall(text) == [("spend-and-tokens", "references/y.md")]
 
 
 def test_a_mistyped_skill_folder_in_a_repository_path_is_caught(tmp_path: Path) -> None:
@@ -199,14 +200,14 @@ def test_a_mistyped_skill_folder_in_a_repository_path_is_caught(tmp_path: Path) 
     assert not (_SKILLS / found[0][0] / found[0][1]).is_file()
 
 
-# --- D5.5 and AC-2: the telemetry skills lead with query_telemetry --------------------------
+# --- D5.5 and AC-2: the telemetry skills lead with their tool -------------------------------
 
-_CALL_START = re.compile(r"query_telemetry\(")
+_CALL_START = re.compile(r"\b(?:search_logs|measure_model_latency)\(")
 _FIRST_CURL_FENCE = re.compile(r"```(?:bash|sh|shell)\n(?:(?!```).)*?\bcurl\b", re.DOTALL)
 
 
 def _calls(text: str) -> list[str]:
-    """Return each ``query_telemetry(...)`` call in ``text``, with balanced brackets."""
+    """Return each ``search_logs(...)`` or ``measure_model_latency(...)`` call in ``text``."""
     found: list[str] = []
     for start in _CALL_START.finditer(text):
         depth, quote = 0, ""
@@ -227,11 +228,11 @@ def _calls(text: str) -> list[str]:
 
 
 def _check_call(call: str) -> None:
-    """Raise if the ``query_telemetry`` tool would refuse ``call`` before it sends anything."""
+    """Raise if the tool that ``call`` names would refuse it before it sends anything."""
     node = ast.parse(call, mode="eval").body
-    assert isinstance(node, ast.Call)
+    assert isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     args = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg}
-    if args["action"] == "latency":
+    if node.func.id == "measure_model_latency":
         _build_tempo_request(
             args.get("since"),
             args.get("span"),
@@ -262,11 +263,11 @@ def test_the_skill_shows_the_tool_before_its_first_curl(name: str) -> None:
     body = (_SKILLS / name / "SKILL.md").read_text(encoding="utf-8").split("---", 2)[2]
     first_call = _CALL_START.search(body)
     first_curl = _FIRST_CURL_FENCE.search(body)
-    assert first_call is not None, f"{name} shows no query_telemetry call"
+    assert first_call is not None, f"{name} shows no telemetry tool call"
     assert first_curl is None or first_call.start() < first_curl.start()
 
 
-def test_the_skills_show_query_telemetry_calls() -> None:
+def test_the_skills_show_telemetry_tool_calls() -> None:
     assert len(_all_calls()) >= 15
 
 
@@ -280,7 +281,7 @@ def test_a_shown_call_is_one_the_tool_accepts(where: str, call: str) -> None:
 def test_the_tool_refuses_a_field_that_does_not_exist() -> None:
     """Seeded negative: the call that a primary once made through curl, where it passed."""
     call = (
-        'query_telemetry(action="search", index="agent-logs", since="1h", '
+        'search_logs(action="search", index="agent-logs", since="1h", '
         'aggs={"by": {"terms": {"field": "fake_field"}}})'
     )
     with pytest.raises(Exception, match="fake_field"):
@@ -288,5 +289,5 @@ def test_the_tool_refuses_a_field_that_does_not_exist() -> None:
 
 
 def test_the_call_extractor_reads_a_call_that_spans_lines() -> None:
-    text = 'Run:\n\nquery_telemetry(\n    action="count",\n    index="agent-logs",\n)\n'
-    assert _calls(text) == ['query_telemetry(\n    action="count",\n    index="agent-logs",\n)']
+    text = 'Run:\n\nsearch_logs(\n    action="count",\n    index="agent-logs",\n)\n'
+    assert _calls(text) == ['search_logs(\n    action="count",\n    index="agent-logs",\n)']

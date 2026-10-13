@@ -1,0 +1,14 @@
+skill: model-latency
+scenarios:
+  - prompt: "Give me the p50, p90 and max of the model calls per model for the last 30 days."
+    expected_skill: model-latency
+    expect: "Knows that Tempo holds at most 7 days. Does not report a 30-day figure. Calls measure_model_latency with since 7d, grouped by model, and says that the window is cut to 7 days."
+  - prompt: "Which model is the slowest at prompt prefill on the local server this week?"
+    expected_skill: model-latency
+    expect: "Calls measure_model_latency with span slm_chat, since 7d, grouped by model. Reports prefill p50 and p90 per model, not the whole call time."
+  - prompt: "How slow were the primary model calls today, and is that number solid?"
+    expected_skill: model-latency
+    expect: "Calls measure_model_latency with role primary and reads complete. If complete is false, says that the figure is a sample and names the reason. Does not report an empty groups list as zero latency."
+  - prompt: "Give p50 and p90 of the model calls of the last 24 hours, but only the calls whose TraceQL attribute gen_ai.response.model equals one named value."
+    expected_skill: model-latency
+    expect: "Knows that the tool filters only on role and model. Reads references/latency-recipe.md and runs the curl recipe with a literal start, end and filter. Reads complete from its output."

@@ -76,7 +76,7 @@ _ALL = list(_recipes())
 
 
 def test_the_extractor_finds_recipes() -> None:
-    # 74 before FRE-1578. The telemetry patterns became query_telemetry calls, which are not
+    # 74 before FRE-1578. The telemetry patterns became tool calls, which are not
     # commands, so the count fell. The reference files below are asserted by name.
     assert len(_ALL) >= 40
 
@@ -84,9 +84,9 @@ def test_the_extractor_finds_recipes() -> None:
 def test_the_extractor_reads_the_reference_files() -> None:
     """A command in a ``references/`` file is scanned, so a low count cannot hide a file."""
     assert {
-        "query-elasticsearch/references/curl-recipes.md",
-        "query-elasticsearch/references/esql.md",
-        "query-tempo/references/latency-recipe.md",
+        "log-search/references/curl-recipes.md",
+        "log-search/references/esql.md",
+        "model-latency/references/latency-recipe.md",
     } <= _SCANNED
 
 
@@ -104,21 +104,23 @@ def test_recipe_is_allowed_or_a_documented_ask(skill: str, recipe: str, document
 
 
 _TELEMETRY_SKILLS = {
-    "query-elasticsearch",
-    "query-tempo",
-    "self-telemetry",
-    "infrastructure-health",
+    "interaction-outcomes",
+    "log-search",
+    "model-latency",
+    "service-health",
+    "spend-and-tokens",
+    "turn-explanation",
 }
 _TELEMETRY_CURL = [
     (skill, recipe)
     for skill, recipe, documented in _ALL
-    if skill in _TELEMETRY_SKILLS and recipe.lstrip().startswith("curl ") and not documented
+    if skill in _TELEMETRY_SKILLS and re.search(r"(?m)^\s*curl ", recipe) and not documented
 ]
 
 
 def test_the_telemetry_skills_have_curl_recipes() -> None:
     assert {skill for skill, _ in _TELEMETRY_CURL} == _TELEMETRY_SKILLS
-    # 51 before FRE-1578, when the counts and breakdowns became query_telemetry calls.
+    # 51 before FRE-1578, when the counts and breakdowns became tool calls.
     assert len(_TELEMETRY_CURL) >= 14
 
 

@@ -27,20 +27,22 @@ _REPO = Path(__file__).resolve().parents[2]
 _AGENT_DIR = _REPO / "skills"
 _EXTERNAL_DIR = _REPO / "docs" / "external-skills"
 
-# The ADR-0156 migration table: 11 agent skills, 3 external skills. FRE-1590 moved
-# artifact-design to docs/reference/artifact-builder/ (the builder's prompt source, no skill).
+# The ADR-0156 migration table, as amended by A4 (FRE-1596): 11 agent skills, 3 external skills.
+# FRE-1590 moved artifact-design to docs/reference/artifact-builder/ (the builder's prompt source,
+# no skill).
 _AGENT_SKILLS = frozenset(
     {
-        "infrastructure-health",
+        "graph-inspection",
+        "interaction-outcomes",
+        "log-search",
         "mermaid-diagrams",
-        "neo4j-direct",
-        "query-elasticsearch",
-        "query-tempo",
-        "self-telemetry",
+        "model-latency",
         "sequential-thinking",
+        "service-health",
+        "spend-and-tokens",
         "system-diagnostics",
         "system-metrics",
-        "turn-forensics",
+        "turn-explanation",
     }
 )
 _EXTERNAL_SKILLS = frozenset({"seshat-knowledge", "seshat-observations", "seshat-sessions"})
@@ -176,9 +178,10 @@ def test_a_named_file_must_exist_one_level_down(tmp_path: Path) -> None:
 
 def test_an_agent_skill_needs_sections_and_evals(tmp_path: Path) -> None:
     folder = _skill(tmp_path, "name: demo-skill\ndescription: Checks logs.\n")
-    assert _rules(folder, "agent") == {"sections", "evals"}
+    assert _rules(folder, "agent") == {"sections", "evals", "not_for"}
     (folder / "SKILL.md").write_text(
-        "---\nname: demo-skill\ndescription: Checks logs.\n---\n\n"
+        "---\nname: demo-skill\ndescription: Checks logs. Not for metrics. "
+        "The `system-metrics` skill does.\n---\n\n"
         "## Success\nThe count is a number.\n\n## Recovery\nStop after 2 tries.\n",
         encoding="utf-8",
     )

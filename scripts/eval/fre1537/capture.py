@@ -78,6 +78,18 @@ def turn(
     return response.json()["session_id"], sorted(set(calls.glob("*.json")) - before)
 
 
+def _one_request(call_files: Sequence[Path], needle: str, who: str) -> dict[str, object]:
+    """Pick the one request among ``call_files`` that carries tools and ends on ``needle``."""
+    hits = []
+    for path in call_files:
+        body = json.loads(path.read_text())["body"]
+        if body.get("tools") and needle in last_user_text(body):
+            hits.append(body)
+    if len(hits) != 1:
+        raise ValueError(f"expected one {who} request for {needle!r}, found {len(hits)}")
+    return hits[0]
+
+
 def primary_body(call_files: Sequence[Path], message: str) -> dict[str, object]:
     """Pick the primary's request body among the calls of a turn.
 
@@ -91,14 +103,46 @@ def primary_body(call_files: Sequence[Path], message: str) -> dict[str, object]:
     Raises:
         ValueError: If the turn holds no such request, or more than one.
     """
-    hits = []
-    for path in call_files:
-        body = json.loads(path.read_text())["body"]
-        if body.get("tools") and message in last_user_text(body):
-            hits.append(body)
-    if len(hits) != 1:
-        raise ValueError(f"expected one primary request for {message!r}, found {len(hits)}")
-    return hits[0]
+    return _one_request(call_files, message, "primary")
+
+
+def worker_body(call_files: Sequence[Path], task: str) -> dict[str, object]:
+    """Pick one worker's request body among the calls of a turn (ADR-0156 AC-R1).
+
+    A worker's request carries its own ``tools`` array and ends on the task text that the planner
+    wrote, not on the user's message. The primary's request does not hold the task text, so the two
+    never match the same file.
+
+    Args:
+        call_files: The stub call files of the turn.
+        task: The worker's task text, or a part of it that is unique to this worker.
+
+    Returns:
+        The one request body that carries tools and ends on ``task``.
+
+    Raises:
+        ValueError: If the turn holds no such request, or more than one.
+    """
+    return _one_request(call_files, task, "worker")
+
+
+def tool_names(body: Mapping[str, object]) -> frozenset[str]:
+    """Return the names of the tools that a request body declares.
+
+    Args:
+        body: A captured request body.
+
+    Returns:
+        The tool names, empty when the body has no ``tools`` array.
+    """
+    names: set[str] = set()
+    tools = body.get("tools") or []
+    assert isinstance(tools, list)
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            names.add(function["name"])
+    return frozenset(names)
 
 
 def capture_fixture(

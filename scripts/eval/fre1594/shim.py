@@ -2,7 +2,8 @@
 
 The two experimental tools are not in the registry. The shim stands in for the A5.5 check order:
 a tool that is not revealed is refused and not run, and a revealed one runs the production
-``query_telemetry`` code with the matching action. Every result is in the D6 contract shape.
+executor of the same name. (FRE-1596 split the one telemetry tool into these two, so the spike's
+tool names are now the production names.) Every result is in the D6 contract shape.
 
 The shim reads the eval Elasticsearch only. Tempo is the one Tempo, read only, as the eval gateways
 read it (``docker-compose.eval.yml``).
@@ -21,8 +22,10 @@ from personal_agent.telemetry import TraceContext
 from personal_agent.tools.contract import dispatch_error, failure_payload, render_content
 from personal_agent.tools.telemetry_query import (
     TelemetryQueryError,
-    query_telemetry_executor,
-    query_telemetry_tool,
+    measure_model_latency_executor,
+    measure_model_latency_tool,
+    search_logs_executor,
+    search_logs_tool,
 )
 from personal_agent.tools.types import ToolErrorDetail
 
@@ -31,6 +34,12 @@ _EVAL_ES_HOSTS = ("127.0.0.1", "localhost", "elasticsearch-eval", "cloud-sim-ela
 _SEARCH_ACTIONS = ("search", "count")
 
 TelemetryExecutor = Callable[..., Awaitable[object]]
+
+_PRODUCTION: Mapping[str, TelemetryExecutor] = {
+    "search_logs": search_logs_executor,
+    "measure_model_latency": measure_model_latency_executor,
+}
+_DEFINITIONS = {"search_logs": search_logs_tool, "measure_model_latency": measure_model_latency_tool}
 
 
 @dataclass(frozen=True)
@@ -91,7 +100,7 @@ def assert_eval_elasticsearch(url: str) -> None:
 
 
 def _arguments(name: str, raw: Mapping[str, object]) -> dict[str, object] | str:
-    """Map a call's arguments to ``query_telemetry`` keyword arguments, or say why not."""
+    """Map a call's arguments to the executor's keyword arguments, or say why not."""
     allowed: Sequence[str] = SEARCH_ARGS if name == "search_logs" else LATENCY_ARGS
     foreign = sorted(set(raw) - set(allowed))
     if foreign:
@@ -99,8 +108,7 @@ def _arguments(name: str, raw: Mapping[str, object]) -> dict[str, object] | str:
     if name == "search_logs":
         if raw.get("action") not in _SEARCH_ACTIONS:
             return "search_logs needs action 'search' or 'count'."
-        return dict(raw)
-    return {"action": "latency", **raw}
+    return dict(raw)
 
 
 async def run_tool(
@@ -110,7 +118,7 @@ async def run_tool(
     revealed: Collection[str],
     providers: Mapping[str, Sequence[str]],
     ctx: TraceContext,
-    executor: TelemetryExecutor = query_telemetry_executor,
+    executor: TelemetryExecutor | None = None,
 ) -> ToolRun:
     """Authorize and run one call to an experimental tool.
 
@@ -120,7 +128,8 @@ async def run_tool(
         revealed: The tools revealed before this model response.
         providers: The skills that provide each tool.
         ctx: Trace context for the tool's logs.
-        executor: The ``query_telemetry`` executor. Tests pass a fake.
+        executor: One executor for both tools. Default: the production executor of ``name``. Tests
+            pass a fake.
 
     Returns:
         The run.
@@ -154,7 +163,8 @@ async def run_tool(
         )
         return ToolRun(_failure(detail), False, False, detail.code)
     try:
-        output = await executor(**mapped, ctx=ctx)
+        run = executor or _PRODUCTION[name]
+        output = await run(**mapped, ctx=ctx)
     except TelemetryQueryError as exc:
         refused = exc.code == "refused"
         return ToolRun(_failure(exc.detail), not refused, False, exc.code)
@@ -163,10 +173,11 @@ async def run_tool(
             "tool_exception", f"{type(exc).__name__}: {exc}", retryable=False, next_action="Stop."
         )
         return ToolRun(_failure(detail), True, False, detail.code)
+    definition = _DEFINITIONS[name]
     content = render_content(
         output=output if isinstance(output, Mapping) else str(output),
         error_detail=None,
-        max_result_tokens=query_telemetry_tool.max_result_tokens or 10_000,
-        truncation_next_action=query_telemetry_tool.truncation_next_action or "Narrow the request.",
+        max_result_tokens=definition.max_result_tokens or 10_000,
+        truncation_next_action=definition.truncation_next_action or "Narrow the request.",
     )
     return ToolRun(content, True, True, None)

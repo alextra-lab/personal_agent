@@ -4,7 +4,7 @@ description: 'Creates software diagrams in Mermaid syntax and validates them wit
   shown: flowcharts, sequence diagrams, state machines, ER diagrams, C4 architecture diagrams, class diagrams,
   Git graphs, Gantt charts, pie charts, mindmaps and timelines. Use when the user asks for a diagram,
   a flowchart, a schema, an architecture sketch or a visualization, or when a picture explains a system,
-  a data flow or a workflow better than prose.'
+  a data flow or a workflow better than prose. Not for charts of plotted numbers or tables, which `artifact_write` builds.'
 metadata:
   requires-tools: bash, write
 ---

@@ -3,9 +3,9 @@
 Pure functions. Nothing here sends a request or runs a tool.
 
 - :func:`experimental_tools` builds ``search_logs`` and ``measure_model_latency`` (A5.1) from the
-  parameters of ``query_telemetry``, in the wire format that the gateway sends.
+  parameters of the production tools, in the wire format that the gateway sends.
 - :func:`base_body` turns a captured primary request into the spike's first request: no
-  ``query_telemetry`` anywhere, the two A4 skill names everywhere, and the prompt's text.
+  ``REMOVED_TOOL`` anywhere, the two A4 skill names everywhere, and the prompt's text.
 - :func:`skill_result` builds the synthetic ``read_skill`` result of a form, with or without the reveal.
 - :func:`render_request` builds the request of one call of one arm from the shared transcript. The
   treatment and the control of a form differ only in the reveal and the nonce (AC-F3).
@@ -32,7 +32,8 @@ from personal_agent.tools.telemetry_query import (
     FAMILY_TIME_FIELD,
     TEMPO_GROUP_KEYS,
     TEMPO_SPANS,
-    query_telemetry_tool,
+    measure_model_latency_tool,
+    search_logs_tool,
 )
 from personal_agent.tools.types import ToolParameter
 
@@ -127,7 +128,8 @@ def load_scenarios(path: Path = SCENARIOS) -> Scenarios:
 
 
 def _param(name: str) -> ToolParameter:
-    return next(p for p in query_telemetry_tool.parameters if p.name == name)
+    production = (*search_logs_tool.parameters, *measure_model_latency_tool.parameters)
+    return next(p for p in production if p.name == name)
 
 
 def _property(param: ToolParameter) -> JsonDict:
@@ -195,7 +197,7 @@ def _latency_description() -> str:
 def experimental_tools() -> dict[str, JsonDict]:
     """Build the two experimental tool definitions of A5.1.
 
-    The parameters are those of ``query_telemetry``, split by its own argument sets. ``search_logs``
+    The parameters are those of the production tools. ``search_logs``
     keeps ``action``, limited to ``search`` and ``count``. ``measure_model_latency`` has no
     ``action`` and requires ``since``.
 
@@ -244,16 +246,16 @@ def base_body(captured: Mapping[str, object], scenarios: Scenarios, prompt: Prom
         prompt: The prompt.
 
     Returns:
-        A new body: ``query_telemetry`` removed from ``tools``; each replaced catalog line swapped
+        A new body: ``REMOVED_TOOL`` removed from ``tools``; each replaced catalog line swapped
         for its skill's line; the ``system_edits`` applied; every other mention of a replaced
         skill name, in the system prompt and in the tools (the ``read_skill`` enum and examples),
         renamed to the skill's name; and the text after ``</turn_context>`` of the user message
         replaced with the prompt's text. Every other byte is the captured one.
 
     Raises:
-        ValueError: The capture has no ``query_telemetry``; a catalog line or a system edit is not
+        ValueError: The capture has no ``REMOVED_TOOL``; a catalog line or a system edit is not
             found exactly once; the user message has no ``<turn_context>`` block; or a replaced
-            skill name or ``query_telemetry`` is still in the body.
+            skill name or ``REMOVED_TOOL`` is still in the body.
     """
     body = copy.deepcopy(dict(captured))
     tools = cast(list[JsonDict], body["tools"])

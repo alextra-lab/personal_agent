@@ -49,11 +49,15 @@ HAND = {  # the rows no rule matched, assigned by reading each reason
     "gm4_s2#20": "relative_path",
 }
 ES = r"elasticsearch:9200|localhost:9200|agent-logs|captains-captures|/_mapping|/_cat|esql|ES\|QL"
+# The audit reads the events of the run that it audits. A run before FRE-1596 holds the one
+# telemetry tool that FRE-1596 split into `search_logs` and `measure_model_latency`.
+LEGACY_TOOL = "query_telemetry"
+TELEMETRY_TOOLS = frozenset({LEGACY_TOOL, "search_logs", "measure_model_latency"})
 
 
 def rule(c, l):
     a, r, t, role = c["args"], l["reason"], c["tool"], c["role"]
-    if t == "query_telemetry" or (
+    if t in TELEMETRY_TOOLS or (
         role == "sub_agent"
         and t == "run_python"
         and re.search(r"latenc|telemetry|fetch_latency", a + r, re.I)

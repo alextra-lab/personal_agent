@@ -1,0 +1,17 @@
+skill: log-search
+scenarios:
+  - prompt: "How many ERROR events did agent-logs hold over the last 45 days?"
+    expected_skill: log-search
+    expect: "Knows that the search_logs tool stops at 30 days. Does not report a 30-day count as a 45-day count. Reads the count with a curl request to _count on elasticsearch:9200 with a literal range, or says that the window is cut to 30 days and names the cut."
+  - prompt: "List the oldest 100 ERROR events of agent-logs in the last 7 days, oldest first."
+    expected_skill: log-search
+    expect: "Knows that the tool returns at most 50 hits, newest first. Uses a curl _search request with an ascending sort on @timestamp and a size of 100, and says how many rows came back."
+  - prompt: "What did the agent-monitors-cache-erosion monitor report most recently?"
+    expected_skill: log-search
+    expect: "Knows that this family is outside the three families of the tool and that its date field is run_at. Uses a curl _search request with a sort on run_at, not on @timestamp."
+  - prompt: "Is the agent-monitors-joinability index family daily or monthly? I need a pattern for it."
+    expected_skill: log-search
+    expect: "Lists the family names with _cat/indices and runs the index classifier script. Reports the daily and monthly counts. Does not cut a date off a name by hand."
+  - prompt: "Use ES|QL to count the agent-logs events of the last day by level."
+    expected_skill: log-search
+    expect: "Reads the ES|QL reference of the skill and sends the query to _query with curl, with a literal time bound. Reports the counts with the window."

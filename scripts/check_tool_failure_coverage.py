@@ -9,7 +9,7 @@ A failure-building line is the first line of a statement that calls:
 
 * a :class:`~personal_agent.tools.contract.ToolError` subclass (a tool's typed failure);
 * a function whose return type is a ``ToolError`` subclass or ``ToolErrorDetail`` (for example
-  ``dispatch_error`` and ``query_telemetry``'s ``_refuse``);
+  ``dispatch_error`` and the ``_refuse`` of the log and latency tools);
 * one of the layer's refusal builders named in :data:`EXTRA_BUILDERS`.
 
 The scanned modules are the executor module of every tool registered with every registration

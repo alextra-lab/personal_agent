@@ -28,7 +28,8 @@ The control runs only when step 1 held. It sends each treatment request again, w
 the reveal. Its replies are discarded and its timings are kept. A reply that stopped on its length bound fails
 its step.
 
-The shim runs the two experimental tools with the production `query_telemetry` code. It refuses a tool that is
+The shim runs the two experimental tools with the production executor of the same name
+(FRE-1596 split the one telemetry tool into these two). It refuses a tool that is
 not revealed yet, as A5.5 says. It reads the eval Elasticsearch only and refuses any other.
 
 ## Prerequisites

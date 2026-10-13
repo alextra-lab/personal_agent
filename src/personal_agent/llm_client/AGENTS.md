@@ -148,6 +148,12 @@ for attempt in range(MAX_RETRIES):
 `max_retries` is also accepted directly by `respond()` — most producers pass
 it explicitly rather than looping themselves.
 
+On the local path, litellm retries a failure that happens before the response
+starts and never one that happens while the stream is read. A tunnel drop is the
+second kind. When `max_retries >= 1`, `_respond_local` sends the same request once
+more after a connection reset or an incomplete body during the stream (FRE-1602).
+`max_retries=0` means exactly one request.
+
 ## Telemetry
 
 Canonical `model_call_started` / `model_call_completed` events are emitted by
@@ -159,6 +165,10 @@ is the build the response reported. `response_model` is the model name the respo
 reported. The event's own `model` is the requested name, and cost rows join on it.
 Each engine field is `null` when the response reported nothing. Configuration never
 fills them.
+
+A retried local call emits `model_call_retried` (warning) with `error_shape` and
+`attempt`. `model_call_completed` carries `attempts`: 1 for a clean call, 2 after a
+retry. The first attempt does not emit `model_call_error`. Only the final failure does.
 
 Limit: on the local (streamed) path `response_model` is always `null`. litellm
 replaces each streamed chunk's `model` with the requested model, so the engine's

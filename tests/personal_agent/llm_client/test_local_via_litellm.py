@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack
@@ -30,6 +31,7 @@ import pytest
 
 from personal_agent.llm_client import litellm_client as litellm_client_module
 from personal_agent.llm_client.models import (
+    Dialect,
     ModelConfig,
     ModelDefinition,
     ModeSpec,
@@ -436,6 +438,45 @@ class TestWireShape:
         body = (await _dispatch()).body
         assert body["stream"] is True
         assert body["stream_options"] == {"include_usage": True}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model_key", [BUDGET_KEY, DISABLE_KEY])
+    async def test_return_progress_is_a_top_level_key_of_the_serialized_body(
+        self, model_key: str
+    ) -> None:
+        """FRE-1488 AC-1: the field is read off the bytes the transport received.
+
+        Asserting on ``litellm_kwargs`` would pass with the field nested under a
+        literal ``extra_body`` key, which is the ADR-0141 failure: the server
+        ignores it and the pre-token byte is still only the 30 s ping.
+        """
+        body = (await _dispatch(model_key=model_key)).body
+        assert body["return_progress"] is True
+        assert "extra_body" not in body
+
+    @pytest.mark.asyncio
+    async def test_a_local_placement_on_another_dialect_sends_no_return_progress(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-1488 AC-4: the field is the llama.cpp vocabulary, not every local call's.
+
+        ``cache_prompt`` is the ``llamacpp_qwen`` block's other transport key. Its
+        absence shows that block was not the one applied, so the missing
+        ``return_progress`` is the dialect gate working and not a field that was
+        dropped for another reason.
+        """
+        catalog = _local_catalog()
+        catalog.providers["slm_local"] = catalog.providers["slm_local"].model_copy(
+            update={"dialect": Dialect.OVH_QWEN}
+        )
+        monkeypatch.setattr(sys.modules[__name__], "_local_catalog", lambda: catalog)
+
+        body = (await _dispatch(model_key=BUDGET_KEY)).body
+
+        assert body["stream"] is True
+        assert "cache_prompt" not in body
+        assert "return_progress" not in body
+        assert "extra_body" not in body
 
 
 class TestSystemPromptAndParams:
@@ -1111,3 +1152,85 @@ class TestGenerationWallClockBudget:
         second = await _dispatch()
         assert second.response is not None
         assert second.response["content"] == "the answer"
+
+
+# ── FRE-1488 AC-3 — prefill reports are not generation ────────────────────
+
+
+def _progress_report(processed: int, *, shape: str) -> dict[str, Any]:
+    """One llama-server ``prompt_progress`` report, in either shape litellm can hand on.
+
+    ``role_delta`` carries a role-only delta, and litellm keeps the
+    ``prompt_progress`` key on it. ``no_choices`` has an empty ``choices`` list,
+    and litellm drops the key from it. The raw SSE carries the key in both.
+    """
+    report = (
+        _chunk(delta={"role": "assistant", "content": None}) if shape == "role_delta" else _chunk()
+    )
+    report["prompt_progress"] = {
+        "total": 8192,
+        "cache": 0,
+        "processed": processed,
+        "time_ms": processed,
+    }
+    return report
+
+
+_REPORT_SHAPES = ["role_delta", "no_choices"]
+
+
+class TestPrefillReportsAreNotGeneration:
+    """``return_progress`` puts reports on the stream before the first token.
+
+    The streamed partial is the report a capped sub-agent hands back
+    (ADR-0149 D3), and ``generation_started_monotonic`` is the clock its
+    throughput estimate divides by. A report that reached either would corrupt
+    both, silently.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("shape", _REPORT_SHAPES)
+    async def test_reports_before_the_answer_leave_the_partial_and_the_response_clean(
+        self, shape: str
+    ) -> None:
+        stream = _sse(
+            _progress_report(0, shape=shape),
+            _progress_report(4096, shape=shape),
+            _progress_report(8192, shape=shape),
+            _chunk(delta={"role": "assistant", "content": "the answer"}),
+            _chunk(delta={}, finish_reason="stop"),
+            _chunk(usage=USAGE_BLOCK),
+        )
+        progress = GenerationProgress()
+
+        captured = await _dispatch(stream=stream, progress_sink=progress)
+
+        assert captured.response is not None
+        assert captured.response["content"] == "the answer"
+        assert progress.content == "the answer"
+        assert "prompt_progress" not in progress.content
+        assert progress.generation_started_monotonic is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("shape", _REPORT_SHAPES)
+    async def test_a_call_cut_during_prefill_has_no_content_and_no_generation_clock(
+        self, shape: str
+    ) -> None:
+        # Warm-up, for the reason given in TestGenerationWallClockBudget.
+        await _dispatch()
+
+        reports_only = _slow_sse(
+            *(_progress_report(step * 1024, shape=shape) for step in range(4)),
+            delay=0.08,
+        )
+        progress = GenerationProgress()
+
+        with pytest.raises(LLMTimeout):
+            await _dispatch(
+                stream=reports_only, timeout_s=0.15, progress_sink=progress, max_retries=0
+            )
+
+        assert progress.content == ""
+        # Prefill is not generation. A clock set here would make a call that never
+        # produced a token read as one that generated for as long as it prefilled.
+        assert progress.generation_started_monotonic is None

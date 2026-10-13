@@ -61,6 +61,30 @@ def test_plain_text_response_aggregates() -> None:
     assert result["usage"]["total_tokens"] == 8
 
 
+def test_prompt_progress_reports_neither_raise_nor_add_content() -> None:
+    """FRE-1488: llama-server's ``prompt_progress`` reports are not generation.
+
+    With ``return_progress`` on, the stream opens with reports carrying a
+    role-only delta (``content: null``) or no choices at all. Both must pass
+    through the aggregator without an error and without a character of content.
+    """
+    progress = {"total": 8192, "cache": 0, "processed": 4096, "time_ms": 1200}
+    role_delta_report = _make_chunk({"role": "assistant", "content": None})
+    role_delta_report["prompt_progress"] = progress
+    no_choices_report: dict = {"id": "chatcmpl-1", "choices": [], "prompt_progress": progress}
+    chunks = [
+        role_delta_report,
+        no_choices_report,
+        _make_chunk({"role": "assistant", "content": "Hello"}),
+        _make_chunk({"content": " world"}),
+        _make_chunk({}, finish_reason="stop"),
+    ]
+
+    result = _aggregate_streaming_chunks(chunks)
+
+    assert result["choices"][0]["message"]["content"] == "Hello world"
+
+
 def test_aggregated_shape_round_trips_through_response_adapter() -> None:
     """The aggregator's output must be valid input to `adapt_chat_completions_response`.
 

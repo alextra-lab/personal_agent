@@ -11,7 +11,7 @@ description: 'Gives a procedure for multi-step reasoning: estimate the step coun
 
 ## The procedure
 
-These steps are working discipline for the whole turn. The system prompt sets what the answer shows.
+Apply these steps in your own working, for the whole turn. The system prompt sets what the answer shows.
 
 - **Estimate first.** Before working the problem, form a rough count of the steps it will take.
   Revise that count as you go — do not silently overrun it.
@@ -29,7 +29,7 @@ Check these points before the answer is final:
 
 - The answer holds up. It covers every part of the question, and no later step contradicts an
   earlier one without a marked revision.
-- The step count that was estimated first matches the work done, or the change was stated.
+- The step count that was estimated first matches the work done, or the change was noted.
 
 ## Recovery
 
@@ -38,6 +38,6 @@ What to do on each failure, with a stop rule:
 | Failure | Cause | Next step |
 |---|---|---|
 | A later step contradicts an earlier conclusion | An assumption was wrong | Mark it as a revision: name what is reconsidered and why. Redo each step that depended on it. |
-| The work passes the estimated step count | The task is larger than estimated | State the new count. Do not continue as if the first count held. |
+| The work passes the estimated step count | The task is larger than estimated | Note the new count. Do not continue as if the first count held. |
 | The answer does not hold up on the final check | A step was skipped, or a conclusion was assumed | Name the point that failed. Redo the work from the step that holds it. |
 | The same check fails twice | — | Stop. Tell the user what is not settled and what was tried. |

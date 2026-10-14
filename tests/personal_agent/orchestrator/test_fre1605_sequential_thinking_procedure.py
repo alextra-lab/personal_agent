@@ -42,6 +42,9 @@ _STOPWORDS = frozenset(
 # prompt sentence's pairs of neighbouring content words.
 _SHARED_WORDS = 0.6
 _SHARED_PAIRS = 2
+# The word share counts only when at least this many content words are shared. A short
+# procedure sentence that shares "step" and "work" with the prompt is not a repeated rule.
+_MIN_SHARED_WORDS = 3
 # A sentence with fewer content words is too short to compare.
 _MIN_CONTENT_WORDS = 3
 _SUFFIXES = ("ing", "ed", "es", "s", "ly")
@@ -89,9 +92,10 @@ def repeated_rules(text: str, prompt: str = REASONING_DISCIPLINE_PROMPT) -> list
             continue
         pairs = set(zip(words, words[1:], strict=False))
         for rule in rules:
-            shared_words = len(set(words) & set(rule)) / len(set(words))
+            common = len(set(words) & set(rule))
             shared_pairs = len(pairs & set(zip(rule, rule[1:], strict=False)))
-            if shared_words >= _SHARED_WORDS or shared_pairs >= _SHARED_PAIRS:
+            by_words = common >= _MIN_SHARED_WORDS and common / len(set(words)) >= _SHARED_WORDS
+            if by_words or shared_pairs >= _SHARED_PAIRS:
                 found.append(sentence)
                 break
     return found
@@ -147,8 +151,11 @@ class TestAC1NoRepeatedRule:
             "Keep the working private. A plain linear chain of reasoning stays invisible.",
         ],
     )
-    def test_a_close_paraphrase_is_caught(self, paraphrase: str) -> None:
+    def test_a_rewording_with_the_same_vocabulary_is_caught(self, paraphrase: str) -> None:
         assert repeated_rules(paraphrase)
+
+    def test_a_short_procedure_sentence_that_shares_two_words_is_not_caught(self) -> None:
+        assert repeated_rules("Name the step you are working on.") == []
 
     def test_the_comparison_leaves_the_procedure_alone(self) -> None:
         procedure = (

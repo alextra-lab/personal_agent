@@ -76,10 +76,6 @@ def _reflection_env(gate: AsyncMock, recorder: AsyncMock, *, is_cloud: bool) -> 
         patch("personal_agent.captains_log.reflection.generate_reflection_dspy", new=_fake_dspy),
         patch.object(asyncio, "to_thread", new=_fake_to_thread),
         patch(
-            "personal_agent.captains_log.reflection.load_mean_rating_lookup",
-            new=AsyncMock(return_value={}),
-        ),
-        patch(
             "personal_agent.captains_log.reflection.resolve_dspy_target",
             return_value=("claude_sonnet", model_def, is_cloud),
         ),

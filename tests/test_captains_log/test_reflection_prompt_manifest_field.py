@@ -127,10 +127,6 @@ class TestGenerateReflectionEntryBuildsManifest:
                 new=fake_dspy,
             ),
             patch.object(asyncio, "to_thread", new=fake_to_thread),
-            patch(
-                "personal_agent.captains_log.reflection.load_mean_rating_lookup",
-                new=AsyncMock(return_value={}),
-            ),
             # FRE-989: the cloud DSPy path is now cost-gated, so reflection
             # needs a registered gate. This test is about manifest wiring, not
             # billing — a stub gate keeps it on the DSPy path instead of

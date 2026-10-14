@@ -181,10 +181,6 @@ class TestMissingSkillNamesPersistedOnEntry:
                 "personal_agent.captains_log.reflection.generate_reflection_dspy", new=_fake_dspy
             ),
             patch.object(asyncio, "to_thread", new=_fake_to_thread),
-            patch(
-                "personal_agent.captains_log.reflection.load_mean_rating_lookup",
-                new=AsyncMock(return_value={}),
-            ),
             # Local (non-cloud) target — the missing-skill plumbing under test
             # is orthogonal to the FRE-989 cost-gate path already covered by
             # test_reflection_dspy_gated.py.

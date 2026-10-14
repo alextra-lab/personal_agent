@@ -30,15 +30,15 @@ def _model_call_event(
 
 
 class TestBuildPromptManifest:
-    """build_prompt_manifest assembles a 3-line manifest string."""
+    """build_prompt_manifest assembles a 2-line manifest string (FRE-1608)."""
 
-    def test_returns_three_lines(self) -> None:
+    def test_returns_two_lines(self) -> None:
         from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
 
         events = [_model_call_event()]
         result = build_prompt_manifest(events)
         lines = result.splitlines()
-        assert len(lines) == 3
+        assert len(lines) == 2
 
     def test_components_line_lists_active_components(self) -> None:
         from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
@@ -70,43 +70,14 @@ class TestBuildPromptManifest:
         second_line = result.splitlines()[1]
         assert second_line == "Static prefix hash: deadbeef12345678"
 
-    def test_no_components_shows_none(self) -> None:
+    def test_no_components_is_not_recorded(self) -> None:
         from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
 
         events = [_model_call_event(component_ids=[])]
         result = build_prompt_manifest(events)
         first_line = result.splitlines()[0]
-        assert "(none)" in first_line
-
-    def test_quality_line_with_rating_lookup(self) -> None:
-        from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
-
-        events = [_model_call_event()]
-        result = build_prompt_manifest(
-            events,
-            mean_rating_lookup={"orchestrator.primary": (2.10, 43)},
-        )
-        third_line = result.splitlines()[2]
-        assert "mean rating = 2.10" in third_line
-        assert "n=43" in third_line
-        assert "last 7 days" in third_line
-
-    def test_quality_line_no_rating_for_callsite(self) -> None:
-        from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
-
-        events = [_model_call_event()]
-        result = build_prompt_manifest(events, mean_rating_lookup={})
-        third_line = result.splitlines()[2]
-        assert "no recent ratings" in third_line
-        assert "last 7 days" in third_line
-
-    def test_quality_line_no_lookup_at_all(self) -> None:
-        from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
-
-        events = [_model_call_event()]
-        result = build_prompt_manifest(events)
-        third_line = result.splitlines()[2]
-        assert "no recent ratings" in third_line
+        assert "(none)" not in first_line
+        assert first_line == "Active prompt components: not recorded for callsite orchestrator.primary"
 
     def test_returns_unavailable_when_no_identity_event(self) -> None:
         from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
@@ -138,10 +109,9 @@ class TestBuildPromptManifest:
         ]
         result = build_prompt_manifest(events)
         lines = result.splitlines()
-        assert len(lines) == 3
+        assert len(lines) == 2
         assert "gateway_persona" in lines[0]
         assert "cccc1111eeee2222" in lines[1]
-        assert "gateway.chat" in lines[2]
 
     def test_primary_callsite_preferred_over_others(self) -> None:
         """orchestrator.primary wins even if it appears before another callsite event."""
@@ -184,17 +154,6 @@ class TestBuildPromptManifest:
         assert result != "Prompt manifest: unavailable"
         assert "tool_awareness" in result
 
-    def test_rating_precision_two_decimal_places(self) -> None:
-        from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
-
-        events = [_model_call_event()]
-        result = build_prompt_manifest(
-            events, mean_rating_lookup={"orchestrator.primary": (1.73333, 9)}
-        )
-        third_line = result.splitlines()[2]
-        assert "mean rating = 1.73" in third_line
-        assert "n=9" in third_line
-
     def test_never_raises_on_malformed_events(self) -> None:
         from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
 
@@ -207,27 +166,3 @@ class TestBuildPromptManifest:
         result = build_prompt_manifest(events)
         # Either unavailable or valid manifest; must not raise
         assert isinstance(result, str)
-
-
-class TestFormatQualityLine:
-    """_format_quality_line formats the callsite quality signal."""
-
-    def test_with_rating_shows_mean_and_count(self) -> None:
-        from personal_agent.captains_log.prompt_manifest import _format_quality_line
-
-        line = _format_quality_line("orchestrator.primary", {"orchestrator.primary": (2.10, 43)})
-        assert "orchestrator.primary" in line
-        assert "mean rating = 2.10" in line
-        assert "n=43" in line
-
-    def test_without_callsite_key_shows_no_recent(self) -> None:
-        from personal_agent.captains_log.prompt_manifest import _format_quality_line
-
-        line = _format_quality_line("orchestrator.primary", {})
-        assert "no recent ratings" in line
-
-    def test_none_lookup_shows_no_recent(self) -> None:
-        from personal_agent.captains_log.prompt_manifest import _format_quality_line
-
-        line = _format_quality_line("orchestrator.primary", None)
-        assert "no recent ratings" in line

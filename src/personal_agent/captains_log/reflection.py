@@ -31,10 +31,7 @@ from personal_agent.captains_log.models import (
     ProposedChange,
     TelemetryRef,
 )
-from personal_agent.captains_log.prompt_manifest import (
-    build_prompt_manifest,
-    load_mean_rating_lookup,
-)
+from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
 from personal_agent.captains_log.turn_evidence import mark_truncated
 from personal_agent.config import settings
 from personal_agent.llm_client import ModelRole
@@ -93,22 +90,102 @@ class FailureExcerpt:
         failed_tool_calls: Tool calls that ended in error or timeout.
         error_summary: Short human-readable summary of the failure (≤ 200 chars).
         recovery_actions: What the agent did after each failure (retry, fallback, etc.).
+        degradation_events: Failures that are not tool calls, one per event, as
+            ``"<event> (<detail>)"``: a model call error, a failed planner, a degraded turn.
     """
 
     failed_tool_calls: list[FailedToolCall] = field(default_factory=list)
     error_summary: str = ""
     recovery_actions: list[str] = field(default_factory=list)
+    degradation_events: list[str] = field(default_factory=list)
+
+
+# Events that record a turn that ran but did not finish cleanly. Each is a failure of the turn,
+# not of one tool call. Names are the production event names (FRE-1608 read them from
+# ``agent-logs-*``). Each maps to the one field that carries its detail, or ``None``.
+_DEGRADATION_EVENTS: Mapping[str, str | None] = {
+    "model_call_error": "error_type",
+    "planner_failed": "reason",
+    "fallback_planner_used": "reason",
+    "graceful_degradation_triggered": "reason",
+    "turn_degraded": "reason",
+    "turn_wall_clock_budget_exceeded_mid_call": None,
+    "turn_lifetime_cap_exceeded_mid_call": None,
+}
+_FAILED_STATUSES: frozenset[str] = frozenset({"error", "timeout", "failed"})
+
+
+def _tool_failure_events(trace_events: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Return one event per failed tool call in a trace.
+
+    A call that ran and failed logs ``tool_call_failed`` and then
+    ``tool_call_completed`` with ``success=False`` (ADR-0156 D6.3). A call refused before
+    it ran logs only the second. A trace recorded before ADR-0156 holds only the first.
+    So the failures of one tool are the larger of the two counts, and the
+    ``tool_call_failed`` event is kept first because it carries the error text.
+
+    Args:
+        trace_events: Trace events, oldest first.
+
+    Returns:
+        The failure events, with a failed call counted once.
+    """
+    failed = [e for e in trace_events if e.get("event") == "tool_call_failed"]
+    mirrored: dict[str, int] = {}
+    for e in failed:
+        name = str(e.get("tool_name", "unknown"))
+        mirrored[name] = mirrored.get(name, 0) + 1
+
+    unmirrored: list[Mapping[str, Any]] = []
+    for e in trace_events:
+        if e.get("event") != "tool_call_completed" or e.get("success") is not False:
+            continue
+        name = str(e.get("tool_name", "unknown"))
+        if mirrored.get(name, 0) > 0:
+            mirrored[name] -= 1
+        else:
+            unmirrored.append(e)
+    return [*failed, *unmirrored]
+
+
+def _degradation_notes(trace_events: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Return one note per failure of the turn that is not a tool call.
+
+    Args:
+        trace_events: Trace events, oldest first.
+
+    Returns:
+        Notes of the form ``"<event> (<detail>)"``, or the bare event name when the event
+        carries no detail.
+    """
+    notes: list[str] = []
+    for e in trace_events:
+        name = str(e.get("event", ""))
+        if name.startswith("tool_call_"):
+            continue
+        if name in _DEGRADATION_EVENTS:
+            detail_key = _DEGRADATION_EVENTS[name]
+            detail = e.get(detail_key) if detail_key else None
+        elif name == "expansion_controller_complete" and e.get("degraded") is True:
+            detail = "degraded"
+        elif e.get("status") in _FAILED_STATUSES:
+            detail = f"status={e.get('status')}"
+        else:
+            continue
+        notes.append(f"{name} ({detail})" if detail else name)
+    return notes
 
 
 def _extract_failure_excerpt(trace_events: Sequence[dict[str, Any]]) -> FailureExcerpt | None:
     """Extract a failure-path excerpt from a trace's raw events.
 
-    Walks ``trace_events`` looking for events whose ``event`` name or ``status``
-    field signals a tool failure (``"tool_call_failed"``, ``status in {"error",
-    "timeout"}``). For each failure, checks the next event to detect retries or
-    fallback strategies.
+    Covers every failure a production trace records: a failed tool call
+    (``tool_call_failed`` or ``tool_call_completed`` with ``success=False``, counted once),
+    and the failures of the turn itself (``model_call_error``, ``planner_failed``,
+    degraded turns and any event with a failed ``status``). For each failed tool call,
+    checks the next tool event to detect retries or fallback strategies.
 
-    Returns ``None`` when the trace has no error events (Phase 2 should skip).
+    Returns ``None`` when the trace has no failure (Phase 2 should skip).
 
     Args:
         trace_events: List of structlog event dicts from ``get_trace_events()``.
@@ -120,52 +197,86 @@ def _extract_failure_excerpt(trace_events: Sequence[dict[str, Any]]) -> FailureE
     recovery_actions: list[str] = []
     last_error: str = ""
 
+    failure_ids = {id(e) for e in _tool_failure_events(trace_events)}
     for i, event in enumerate(trace_events):
-        ev_name = str(event.get("event", ""))
-        status = str(event.get("status", ""))
-        is_failure = ev_name in {
-            "tool_call_failed",
-            "tool_execution_failed",
-            "tool_timeout",
-        } or status in {"error", "timeout", "failed"}
-
-        if not is_failure:
+        if id(event) not in failure_ids:
             continue
 
-        tool_name = str(event.get("tool_name", event.get("tool", "unknown")))
-        error_msg = str(event.get("error", event.get("error_message", status or "unknown error")))
+        tool_name = str(event.get("tool_name", "unknown"))
+        # ``tool_call_failed`` carries the text in ``error``. A refused call logs only
+        # ``error_code``.
+        error_msg = str(event.get("error") or event.get("error_code") or "unknown error")
         trace_id = str(event.get("trace_id", ""))
-        arguments: Mapping[str, Any] = event.get("arguments", {}) or {}
 
         failed_calls.append(
             FailedToolCall(
                 name=tool_name,
-                arguments=arguments,
+                arguments={},
                 error_message=error_msg,
                 trace_id=trace_id,
             )
         )
         last_error = error_msg
 
-        # Check for recovery in the next event
+        # Check for recovery in the next tool event
         if i + 1 < len(trace_events):
             next_ev = trace_events[i + 1]
-            next_tool = str(next_ev.get("tool_name", next_ev.get("tool", "")))
+            next_tool = (
+                str(next_ev.get("tool_name", ""))
+                if str(next_ev.get("event", "")).startswith("tool_call_")
+                else ""
+            )
             if next_tool == tool_name:
                 recovery_actions.append(f"Retried {tool_name} with same arguments")
             elif next_tool:
                 recovery_actions.append(f"Switched from {tool_name} to {next_tool}")
 
-    if not failed_calls:
+    degradation = _degradation_notes(trace_events)
+    if not failed_calls and not degradation:
         return None
 
-    error_summary = (
-        mark_truncated(last_error, 200) if last_error else f"{len(failed_calls)} tool failure(s)"
-    )
+    if last_error:
+        error_summary = mark_truncated(last_error, 200)
+    elif failed_calls:
+        error_summary = f"{len(failed_calls)} tool failure(s)"
+    else:
+        error_summary = mark_truncated(degradation[-1], 200)
     return FailureExcerpt(
         failed_tool_calls=failed_calls,
         error_summary=error_summary,
         recovery_actions=recovery_actions,
+        degradation_events=degradation,
+    )
+
+
+def _build_failure_path_input(trace_events: Sequence[dict[str, Any]]) -> tuple[bool, str]:
+    """Build the failure-path inputs of a reflection from a trace's events.
+
+    Args:
+        trace_events: Trace events, oldest first.
+
+    Returns:
+        ``(had_errors, failure_excerpt_json)``. A trace with no failure gives
+        ``(False, "")``.
+    """
+    excerpt = _extract_failure_excerpt(trace_events)
+    if excerpt is None:
+        return False, ""
+    return True, json.dumps(
+        {
+            "failed_tool_calls": [
+                {
+                    "name": fc.name,
+                    "error_message": fc.error_message,
+                    "trace_id": fc.trace_id,
+                }
+                for fc in excerpt.failed_tool_calls
+            ],
+            "degradation_events": excerpt.degradation_events,
+            "error_summary": excerpt.error_summary,
+            "recovery_actions": excerpt.recovery_actions,
+        },
+        ensure_ascii=False,
     )
 
 
@@ -202,8 +313,7 @@ Focus on:
 - Tool effectiveness (did tool calls provide value or could LLM handle directly?)
 - Mode/governance interactions
 - Opportunities for optimization (caching, parallelization, reduced tool calls)
-- Prompt composition patterns (unused components, unstable static prefix hash, low/declining
-  callsite ratings); when proposing a prompt change, name the specific component_id from the
+- Prompt composition patterns (unused components, unstable static prefix hash); when proposing a prompt change, name the specific component_id from the
   taxonomy and set scope to llm_client or orchestrator
 
 If this was a simple, successful task with no issues, keep the reflection lightweight.
@@ -343,9 +453,7 @@ async def generate_reflection_entry(
     telemetry_summary = _summarize_telemetry(trace_events, metrics_summary)
 
     # FRE-409: Build prompt-composition manifest from already-fetched trace events.
-    # The mean-rating lookup is best-effort; reflection proceeds even if ES is down.
-    mean_rating_lookup = await load_mean_rating_lookup(days=7, trace_id=trace_id)
-    prompt_manifest = build_prompt_manifest(trace_events, mean_rating_lookup=mean_rating_lookup)
+    prompt_manifest = build_prompt_manifest(trace_events)
     log.info(
         "reflection_prompt_manifest_built",
         trace_id=trace_id,
@@ -363,28 +471,11 @@ async def generate_reflection_entry(
 
     _captains_log_role = resolve_role_model_key("captains_log")
 
-    # Phase 2: failure-path excerpt (ADR-0056 §D6, default False until validated)
+    # Phase 2: failure-path excerpt (ADR-0056 §D6; on by default since FRE-1608)
     failure_excerpt_json = ""
     had_errors = False
     if settings.failure_path_reflection_enabled:
-        excerpt = _extract_failure_excerpt(trace_events)
-        if excerpt is not None:
-            had_errors = True
-            failure_excerpt_json = json.dumps(
-                {
-                    "failed_tool_calls": [
-                        {
-                            "name": fc.name,
-                            "error_message": fc.error_message,
-                            "trace_id": fc.trace_id,
-                        }
-                        for fc in excerpt.failed_tool_calls
-                    ],
-                    "error_summary": excerpt.error_summary,
-                    "recovery_actions": excerpt.recovery_actions,
-                },
-                ensure_ascii=False,
-            )
+        had_errors, failure_excerpt_json = _build_failure_path_input(trace_events)
 
     # Try DSPy approach first (if available)
     if DSPY_AVAILABLE:
@@ -494,7 +585,9 @@ async def generate_reflection_entry(
             # warning above — the warning is ephemeral and depends on
             # InsightsEngine's clustering job running before logs age out.
             entry.missing_skill_names = missing_skill_names
-            await _apply_read_before_emit(entry, sysgraph_repo, trace_id=trace_id)
+            await _apply_read_before_emit(
+                entry, sysgraph_repo, trace_id=trace_id, eval_mode=eval_mode
+            )
             return entry
         except Exception as e:
             # DSPy failed, fallback to manual
@@ -649,7 +742,7 @@ async def generate_reflection_entry(
         )
 
         entry.eval_mode = eval_mode  # FRE-523 provenance
-        await _apply_read_before_emit(entry, sysgraph_repo, trace_id=trace_id)
+        await _apply_read_before_emit(entry, sysgraph_repo, trace_id=trace_id, eval_mode=eval_mode)
         return entry
 
     except Exception as e:
@@ -717,6 +810,7 @@ async def _apply_read_before_emit(
     sysgraph_repo: SysgraphRepository | None,
     *,
     trace_id: str | None,
+    eval_mode: bool = False,
 ) -> None:
     """ADR-0105 D9/FRE-721: suppress `entry.proposed_change` for a decided/awaiting equivalent.
 
@@ -736,7 +830,14 @@ async def _apply_read_before_emit(
         sysgraph_repo: Explicit repo override, or None to use the shared
             process-level singleton (``get_default_sysgraph_repo()``).
         trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
+        eval_mode: True when the entry came from an eval run. The check is skipped: it
+            increments or inserts a production sysgraph row on most branches, and an eval
+            turn must not change production state (FRE-1608). The proposal stays on the
+            entry, and promotion skips every ``eval_mode`` entry (FRE-523).
     """
+    if eval_mode:
+        return
+
     pc = entry.proposed_change
     if pc is None or pc.category is None or pc.scope is None or not pc.fingerprint:
         return
@@ -803,46 +904,71 @@ def _summarize_telemetry(
             event_name = event.get("event", "unknown")
             event_types[event_name] = event_types.get(event_name, 0) + 1
 
-        # Extract timing info
         model_calls = [e for e in events if e.get("event") == "model_call_completed"]
-        tool_calls = [e for e in events if e.get("event") == "tool_executed"]
-        errors = [e for e in events if "error" in e.get("event", "").lower()]
+        errors = [e for e in events if "error" in str(e.get("event", "")).lower()]
 
         summary_parts = [
             f"**Event Counts**: {json.dumps(event_types, indent=2)}",
         ]
 
+        # Per-call duration is not in telemetry events: it is a Tempo span attribute
+        # (ADR-0129). Say so. Printing 0ms for a missing value reads as a fast call.
         if model_calls:
-            avg_duration = sum(e.get("duration_ms", 0) for e in model_calls) / len(model_calls)
             summary_parts.append(
-                f"**LLM Calls**: {len(model_calls)} calls, avg duration: {avg_duration:.0f}ms"
+                f"**LLM Calls**: {len(model_calls)} calls (duration: not available)"
             )
 
-        if tool_calls:
-            tool_names = [e.get("tool") for e in tool_calls]
-            tool_failures = [e for e in tool_calls if not e.get("success")]
+        # A failed call that logs both events is one call (ADR-0156 D6.3): the failure
+        # event consumes the mirrored ``tool_call_completed success=False``.
+        tool_names = [
+            str(e.get("tool_name", "unknown"))
+            for e in events
+            if e.get("event") == "tool_call_completed"
+        ]
+        mirrored: dict[str, int] = {}
+        for e in events:
+            if e.get("event") == "tool_call_completed" and e.get("success") is False:
+                name = str(e.get("tool_name", "unknown"))
+                mirrored[name] = mirrored.get(name, 0) + 1
+        for e in events:
+            if e.get("event") != "tool_call_failed":
+                continue
+            name = str(e.get("tool_name", "unknown"))
+            if mirrored.get(name, 0) > 0:
+                mirrored[name] -= 1
+            else:
+                tool_names.append(name)
 
+        if tool_names:
             summary_parts.append(
-                f"**Tools Used**: {len(tool_calls)} calls - {', '.join(set(x for x in tool_names if x is not None))}"
+                f"**Tools Used**: {len(tool_names)} calls - {', '.join(sorted(set(tool_names)))}"
+                " (duration: not available)"
             )
 
-            if tool_failures:
-                failed_tools = [e.get("tool") for e in tool_failures]
-                summary_parts.append(
-                    f"**Tool Failures**: {len(tool_failures)} failures - {', '.join([x for x in failed_tools if x is not None])}"
-                )
-
-            # Extract tool durations
-            tool_durations = [
-                (e.get("tool"), e.get("duration_ms", 0)) for e in tool_calls if e.get("duration_ms")
-            ]
-            if tool_durations:
-                avg_tool_duration = sum(d for _, d in tool_durations) / len(tool_durations)
-                summary_parts.append(f"**Tool Avg Duration**: {avg_tool_duration:.0f}ms")
+        tool_failures = _tool_failure_events(events)
+        if tool_failures:
+            failed_names = sorted({str(e.get("tool_name", "unknown")) for e in tool_failures})
+            summary_parts.append(
+                f"**Tool Failures**: {len(tool_failures)} failures - {', '.join(failed_names)}"
+            )
 
         if errors:
-            error_messages = [e.get("message", "Unknown error") for e in errors[:3]]
+            error_messages = [
+                f"{e.get('event')} ({mark_truncated(str(e.get('error_type') or e.get('error') or 'no detail'), 120)})"
+                for e in errors[:3]
+            ]
             summary_parts.append(f"**Errors**: {len(errors)} errors - {'; '.join(error_messages)}")
+
+        # Events named ``*_error`` are on the Errors line already.
+        degraded = [
+            note
+            for note in _degradation_notes(events)
+            if "error" not in note.split(" (")[0].lower()
+        ]
+        if degraded:
+            summary_parts.append(
+                f"**Degraded**: {len(degraded)} events - {'; '.join(degraded[:5])}"
+            )
 
     # Add request-scoped metrics summary (ADR-0012)
     if metrics_summary:

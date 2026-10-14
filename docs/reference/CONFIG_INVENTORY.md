@@ -147,7 +147,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 97 | `expansion_enabled` | `AGENT_EXPANSION_ENABLED` | `bool` | `True` |  | ✅ |
 | 98 | `experimental_openai_base_llm_http_handler` | `AGENT_EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER` · `EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER` | `bool` | `False` |  | — |
 | 99 | `extra_permission_rules_path` | `AGENT_EXTRA_PERMISSION_RULES_PATH` | `pathlib.Path \| None` | `None` |  | ✅ |
-| 100 | `failure_path_reflection_enabled` | `AGENT_FAILURE_PATH_REFLECTION_ENABLED` | `bool` | `False` |  | ✅ |
+| 100 | `failure_path_reflection_enabled` | `AGENT_FAILURE_PATH_REFLECTION_ENABLED` | `bool` | `True` |  | ✅ |
 | 101 | `feedback_defer_revisit_days` | `AGENT_FEEDBACK_DEFER_REVISIT_DAYS` | `int` | `90` |  | ✅ |
 | 102 | `feedback_max_reevaluations` | `AGENT_FEEDBACK_MAX_REEVALUATIONS` | `int` | `2` |  | ✅ |
 | 103 | `feedback_polling_enabled` | `AGENT_FEEDBACK_POLLING_ENABLED` | `bool` | `True` |  | ✅ |

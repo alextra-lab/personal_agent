@@ -115,8 +115,7 @@ try:
         prompt_manifest: str = dspy.InputField(
             desc=(
                 "Snapshot of THIS turn's prompt composition: the ordered active component "
-                "IDs, the cacheable static prefix hash, and a recent quality signal for "
-                "the callsite (mean 0-3 rating over the trailing 7 days). "
+                "IDs and the cacheable static prefix hash. "
                 "Use it to notice composition problems and, when warranted, propose a "
                 "prompt-composition change that names the specific component_id. "
                 "Patterns to watch for: "
@@ -124,8 +123,6 @@ try:
                 "e.g. skill_index present but no skill content matched — propose trimming it. "
                 "(2) A static prefix hash that changed recently — indicates cacheable prefix "
                 "instability that erodes KV-cache reuse — propose stabilising it. "
-                "(3) A declining or low mean rating for this callsite — suggest revisiting "
-                "the prompt components driving those turns. "
                 "When proposing a prompt change, name the component_id in "
                 "proposed_change_what and set proposed_change_scope to "
                 "'llm_client' or 'orchestrator'. "

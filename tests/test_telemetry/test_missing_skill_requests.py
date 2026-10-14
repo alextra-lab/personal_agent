@@ -42,6 +42,23 @@ class TestExtractHosts:
     def test_empty_command_gives_empty_set(self) -> None:
         assert extract_hosts("") == frozenset()
 
+    def test_userinfo_token_is_never_read_as_the_host(self) -> None:
+        cmd = "curl -s https://ghp_AbC123xyz@api.github.com/repos/o/r"
+        assert extract_hosts(cmd) == frozenset({"api.github.com"})
+
+    def test_userinfo_with_numeric_password_is_not_a_port(self) -> None:
+        assert extract_hosts("curl http://user:12345@db.example/x") == frozenset({"db.example"})
+
+    def test_at_sign_in_the_query_string_is_not_userinfo(self) -> None:
+        cmd = "curl 'https://a.example:8080?contact=x@y.example'"
+        assert extract_hosts(cmd) == frozenset({"a.example:8080"})
+
+    def test_host_is_lowercased_and_scheme_case_is_ignored(self) -> None:
+        assert extract_hosts("curl HTTP://Tempo:3200/x") == frozenset({"tempo:3200"})
+
+    def test_ellipsis_in_prose_is_not_a_host(self) -> None:
+        assert extract_hosts("echo see http://... for details") == frozenset()
+
 
 class TestDominantHost:
     """``dominant_host`` picks the host with the most commands in the trace."""
@@ -95,17 +112,6 @@ def _bash(trace: str, command: str, session: str | None = "s-1") -> dict:
     }
 
 
-def _tool(trace: str, session: str | None) -> dict:
-    return {
-        "_source": {
-            "event_type": "tool_call_started",
-            "trace_id": trace,
-            "session_id": session,
-            "tool_name": "bash",
-        }
-    }
-
-
 def _resp(hits: list[dict], total: int | None = None) -> dict:
     return {"hits": {"total": {"value": total if total is not None else len(hits)}, "hits": hits}}
 
@@ -136,11 +142,11 @@ class TestGetMissingSkillRequests:
         got = await queries.get_missing_skill_requests(days=7)
         assert got == [MissingSkillRequest("observability-fetcher", "s-1", "t-1", "tempo:3200")]
 
-    async def test_null_session_is_taken_from_a_tool_event_of_the_trace(self) -> None:
+    async def test_null_session_is_taken_from_a_bash_event_of_the_trace(self) -> None:
         queries, _ = _queries(
             [
                 _resp([_event("query-telemetry", None, "t-1")]),
-                _resp([_tool("t-1", "s-9"), _bash("t-1", "curl http://elasticsearch:9200/_cat")]),
+                _resp([_bash("t-1", "curl http://elasticsearch:9200/_cat", session="s-9")]),
             ]
         )
         got = await queries.get_missing_skill_requests(days=7)
@@ -168,12 +174,23 @@ class TestGetMissingSkillRequests:
         ]
         assert terms == [["t-1"]]
 
-    async def test_trace_without_bash_has_no_host(self) -> None:
+    async def test_trace_without_a_url_has_no_host(self) -> None:
         queries, _ = _queries(
-            [_resp([_event("weather-fetcher", "s-1", "t-1")]), _resp([_tool("t-1", "s-1")])]
+            [
+                _resp([_event("weather-fetcher", "s-1", "t-1")]),
+                _resp([_bash("t-1", "jq keys /tmp/x.json")]),
+            ]
         )
         got = await queries.get_missing_skill_requests(days=7)
         assert got[0].host is None
+
+    async def test_only_bash_events_are_fetched(self) -> None:
+        """tool_call_started is the highest-volume event and would crowd out bash_started."""
+        queries, search = _queries([_resp([_event("a-skill", "s-1", "t-1")]), _resp([])])
+        await queries.get_missing_skill_requests(days=7)
+        filters = search.await_args_list[1].kwargs["query"]["bool"]["filter"]
+        event_types = [f["terms"]["event_type"] for f in filters if "event_type" in f.get("terms", {})]
+        assert event_types == [["bash_started"]]
 
     async def test_trace_ids_are_queried_in_chunks_of_twenty(self) -> None:
         events = [_event(f"skill-{i}", f"s-{i}", f"t-{i}") for i in range(45)]

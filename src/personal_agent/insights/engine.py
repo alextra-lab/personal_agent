@@ -61,9 +61,25 @@ def _missing_skill_confidence(count: int) -> float:
     return min(0.95, 0.60 + 0.05 * min(7, count - MIN_MISSING_SKILL_REQUESTS))
 
 
-def _cluster_requests_by_host(
-    requests: Sequence[MissingSkillRequest],
-) -> list[tuple[str, int, int, tuple[str, ...]]]:
+@dataclass(frozen=True)
+class _HostCluster:
+    """Missing-skill requests whose turns reached one host (FRE-1322).
+
+    Attributes:
+        host: The ``host[:port]`` that the turns reached with bash.
+        request_count: Distinct turns (trace ids). One reflection can name three
+            skills, so counting events would let one turn clear the bar alone.
+        distinct_sessions: Distinct sessions of those requests.
+        name_events: Per requested name, the number of events inside the cluster.
+    """
+
+    host: str
+    request_count: int
+    distinct_sessions: int
+    name_events: dict[str, int]
+
+
+def _cluster_requests_by_host(requests: Sequence[MissingSkillRequest]) -> list[_HostCluster]:
     """Group missing-skill requests by the host their turn reached (FRE-1322).
 
     A request without a host is left out.  A request without a session adds to
@@ -73,22 +89,36 @@ def _cluster_requests_by_host(
         requests: Requests joined to their turn by ``get_missing_skill_requests``.
 
     Returns:
-        ``(host, request_count, distinct_sessions, sorted_distinct_names)`` per
-        host, sorted by host for a stable order.
+        One cluster per host, sorted by host for a stable order.
     """
     by_host: dict[str, list[MissingSkillRequest]] = {}
     for request in requests:
         if request.host:
             by_host.setdefault(request.host, []).append(request)
-    return [
-        (
-            host,
-            len(group),
-            len({r.session_id for r in group if r.session_id}),
-            tuple(sorted({r.requested_name for r in group})),
+    clusters: list[_HostCluster] = []
+    for host, group in sorted(by_host.items()):
+        name_events: dict[str, int] = {}
+        for request in group:
+            name_events[request.requested_name] = name_events.get(request.requested_name, 0) + 1
+        turns = {r.trace_id or f"{r.requested_name}:{r.session_id}" for r in group}
+        clusters.append(
+            _HostCluster(
+                host=host,
+                request_count=len(turns),
+                distinct_sessions=len({r.session_id for r in group if r.session_id}),
+                name_events=name_events,
+            )
         )
-        for host, group in sorted(by_host.items())
-    ]
+    return clusters
+
+
+def _name_list(names: Sequence[str]) -> str:
+    """Join names for an insight: each cut to 64 characters, at most 10 shown."""
+    shown = [name[:64] for name in names[:10]]
+    text = ", ".join(shown)
+    if len(names) > 10:
+        text += f" (+{len(names) - 10} more)"
+    return text
 
 
 @dataclass(frozen=True)
@@ -382,35 +412,48 @@ class InsightsEngine:
             log.warning("missing_skill_pattern_analysis_failed", exc_info=True)
 
         cluster_insights: list[Insight] = []
-        covered_names: set[str] = set()
+        cluster_events: dict[str, int] = {}
         try:
             requests = await self._queries.get_missing_skill_requests(days=days, until=until)
         except Exception:
             log.warning("missing_skill_context_analysis_failed", exc_info=True)
         else:
-            for host, count, sessions, names in _cluster_requests_by_host(requests):
-                if count < MIN_MISSING_SKILL_REQUESTS or sessions < MIN_MISSING_SKILL_SESSIONS:
+            for cluster in _cluster_requests_by_host(requests):
+                names = sorted(cluster.name_events)
+                # One name over one host adds nothing: the name path already holds it,
+                # and a second insight would carry a second fingerprint for one gap.
+                if len(names) < 2:
                     continue
-                covered_names.update(names)
+                if (
+                    cluster.request_count < MIN_MISSING_SKILL_REQUESTS
+                    or cluster.distinct_sessions < MIN_MISSING_SKILL_SESSIONS
+                ):
+                    continue
+                for name, events in cluster.name_events.items():
+                    cluster_events[name] = cluster_events.get(name, 0) + events
+                name_text = _name_list(names)
                 cluster_insights.append(
                     Insight(
                         insight_type="missing_skill",
-                        pattern_kind="missing_skill_requested",
-                        title=f"Create skill for `{host}`",
+                        # The host is in pattern_kind because the title fingerprint
+                        # collapses digit runs: tempo:3200 and tempo:3000 must differ.
+                        pattern_kind=f"missing_skill_host:{cluster.host}",
+                        title=f"Create skill for `{cluster.host}`",
                         summary=(
-                            f"The agent asked for skills that do not exist {count} times across "
-                            f"{sessions} distinct sessions over the last {days} days, under "
-                            f"{len(names)} different names ({', '.join(names)}).  Each turn "
-                            f"reached `{host}` by hand with bash.  The model is naming a "
+                            f"The agent asked for skills that do not exist in "
+                            f"{cluster.request_count} turns across {cluster.distinct_sessions} "
+                            f"distinct sessions over the last {days} days, under "
+                            f"{len(names)} different names ({name_text}).  Each turn reached "
+                            f"`{cluster.host}` by hand with bash.  The model is naming a "
                             f"capability gap for that service."
                         ),
-                        confidence=_missing_skill_confidence(count),
+                        confidence=_missing_skill_confidence(cluster.request_count),
                         evidence={
-                            "service_host": host,
-                            "request_count": count,
-                            "distinct_sessions": sessions,
+                            "service_host": cluster.host,
+                            "request_count": cluster.request_count,
+                            "distinct_sessions": cluster.distinct_sessions,
                             "window_days": days,
-                            "requested_names": ", ".join(names),
+                            "requested_names": name_text,
                         },
                         actionable=True,
                     )
@@ -421,7 +464,8 @@ class InsightsEngine:
                 continue
             if sessions < MIN_MISSING_SKILL_SESSIONS:
                 continue
-            if name in covered_names:
+            # A name is replaced only when the clusters hold every one of its requests.
+            if name in cluster_events and cluster_events[name] >= count:
                 continue
             confidence = _missing_skill_confidence(count)
             insights.append(

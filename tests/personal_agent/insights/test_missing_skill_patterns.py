@@ -169,11 +169,13 @@ class TestMissingSkillFingerprint:
         assert len(fingerprints) == 2
 
 
-def _req(name: str, session: str | None, host: str | None) -> MissingSkillRequest:
+def _req(
+    name: str, session: str | None, host: str | None, trace: str | None = None
+) -> MissingSkillRequest:
     return MissingSkillRequest(
         requested_name=name,
         session_id=session,
-        trace_id=f"trace-{name}-{session}",
+        trace_id=trace or f"trace-{name}-{session}",
         host=host,
     )
 
@@ -215,7 +217,7 @@ class TestHostClusterProducesInsight:
         assert len(insights) == 1
         ins = insights[0]
         assert ins.insight_type == "missing_skill"
-        assert ins.pattern_kind == "missing_skill_requested"
+        assert ins.pattern_kind == "missing_skill_host:tempo:3200"
         assert ins.actionable is True
         assert ins.title == "Create skill for `tempo:3200`"
         assert ins.evidence["service_host"] == "tempo:3200"
@@ -225,23 +227,78 @@ class TestHostClusterProducesInsight:
         assert ins.evidence["requested_names"] == "grafana-fetcher, observability-fetcher, session-analyzer"
         assert 0.60 <= ins.confidence <= 0.95
 
-    async def test_cluster_replaces_the_name_insight_it_covers(self) -> None:
-        """A name that fires alone is dropped when its host cluster fires."""
+    async def test_cluster_replaces_a_name_insight_that_it_fully_covers(self) -> None:
+        """All 3 requests of telemetry-analyzer sit in the cluster → one finding, not two."""
         engine = _engine(
             buckets=[("telemetry-analyzer", 3, 3), ("unrelated-skill", 4, 2)],
             requests=[
                 _req("telemetry-analyzer", "s-1", "elasticsearch:9200"),
                 _req("telemetry-analyzer", "s-2", "elasticsearch:9200"),
+                _req("telemetry-analyzer", "s-3", "elasticsearch:9200"),
                 _req("logs-analyzer", "s-3", "elasticsearch:9200"),
             ],
         )
         insights = await engine.detect_missing_skill_patterns(days=7)
-        titles = sorted(i.title for i in insights)
-        assert len(insights) == 2
-        assert titles[0] == "Create skill for `elasticsearch:9200`"
-        assert insights[0].evidence.get("requested_name") != "telemetry-analyzer"
-        assert any(i.evidence.get("requested_name") == "unrelated-skill" for i in insights)
-        assert not any(i.evidence.get("requested_name") == "telemetry-analyzer" for i in insights)
+        assert sorted(i.title for i in insights if "service_host" in i.evidence) == [
+            "Create skill for `elasticsearch:9200`"
+        ]
+        by_name = [i.evidence.get("requested_name") for i in insights]
+        assert "telemetry-analyzer" not in by_name
+        assert "unrelated-skill" in by_name
+
+    async def test_name_insight_survives_when_the_cluster_holds_only_a_few_of_its_requests(
+        self,
+    ) -> None:
+        """40 requests in 20 sessions must not vanish because 1 of them reached a host."""
+        engine = _engine(
+            buckets=[("web-search", 40, 20)],
+            requests=[
+                _req("web-search", "s-1", "tempo:3200"),
+                _req("other-a", "s-2", "tempo:3200"),
+                _req("other-b", "s-3", "tempo:3200"),
+            ],
+        )
+        insights = await engine.detect_missing_skill_patterns(days=7)
+        names = [i.evidence.get("requested_name") for i in insights]
+        assert "web-search" in names
+        assert any(i.evidence.get("service_host") == "tempo:3200" for i in insights)
+
+    async def test_single_name_cluster_leaves_the_name_insight_alone(self) -> None:
+        """One name over one host adds nothing: the title and fingerprint must not change."""
+        engine = _engine(
+            buckets=[("foo", 3, 2)],
+            requests=[
+                _req("foo", "s-1", "tempo:3200"),
+                _req("foo", "s-2", "tempo:3200"),
+                _req("foo", "s-2", "tempo:3200", trace="trace-foo-second"),
+            ],
+        )
+        insights = await engine.detect_missing_skill_patterns(days=7)
+        assert [i.title for i in insights] == ["Create skill: `foo` — requested 3x across 2 sessions"]
+
+    async def test_several_names_from_one_turn_count_as_one_request(self) -> None:
+        """One reflection can name 3 skills. 3 names from 2 turns in 2 sessions is not a bar of 3."""
+        engine = _engine(
+            buckets=[("a-skill", 1, 1), ("b-skill", 1, 1), ("c-skill", 1, 1)],
+            requests=[
+                _req("a-skill", "s-1", "tempo:3200", trace="turn-1"),
+                _req("b-skill", "s-1", "tempo:3200", trace="turn-1"),
+                _req("c-skill", "s-2", "tempo:3200", trace="turn-2"),
+            ],
+        )
+        assert await engine.detect_missing_skill_patterns(days=7) == []
+
+    async def test_long_name_lists_are_capped_and_truncated(self) -> None:
+        names = [f"skill-{i:02d}-" + "x" * 80 for i in range(12)]
+        engine = _engine(
+            buckets=[],
+            requests=[_req(n, f"s-{i % 3}", "tempo:3200") for i, n in enumerate(names)],
+        )
+        (ins,) = await engine.detect_missing_skill_patterns(days=7)
+        listed = str(ins.evidence["requested_names"])
+        assert listed.endswith("(+2 more)")
+        assert max(len(part) for part in listed.split(", ")) <= 64 + len(" (+2 more)")
+        assert "x" * 65 not in ins.summary
 
     async def test_context_query_failure_keeps_the_name_insights(self) -> None:
         """A failing context query must not remove the exact-name findings."""
@@ -355,3 +412,21 @@ class TestHostClusterFingerprint:
         )
         assert first and second
         assert first[0].proposed_change.fingerprint == second[0].proposed_change.fingerprint  # type: ignore[union-attr]
+
+    async def test_hosts_that_differ_only_in_digits_get_distinct_fingerprints(self) -> None:
+        """The title fingerprint collapses digit runs, so the host must live in pattern_kind."""
+        reqs = [
+            _req(f"{h}-{n}", f"s-{n % 2}", host)
+            for h, host in (("a", "localhost:9000"), ("b", "localhost:9200"))
+            for n in range(3)
+        ]
+        engine = _engine(buckets=[], requests=reqs)
+        insights = await engine.detect_missing_skill_patterns(days=7)
+        proposals = await engine.create_captain_log_proposals(insights)
+        fingerprints = {
+            p.proposed_change.fingerprint  # type: ignore[union-attr]
+            for p in proposals
+            if p.proposed_change is not None
+        }
+        assert len(insights) == 2
+        assert len(fingerprints) == 2

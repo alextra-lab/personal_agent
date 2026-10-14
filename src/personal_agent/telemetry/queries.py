@@ -92,10 +92,17 @@ class MissingSkillRequest:
     host: str | None
 
 
-_URL_HOST_RE = re.compile(r"https?://([A-Za-z0-9._-]+)(?::(\d+))?")
+# The optional userinfo group keeps ``https://<token>@host`` from reading the token
+# as the host (a credential must never reach an insight title). ``?`` and ``#`` end
+# the authority, so an ``@`` in a query string is not userinfo.
+_URL_HOST_RE = re.compile(
+    r"https?://(?:[^/@\s'\"?#]*@)?([A-Za-z0-9._-]+)(?::(\d+))?", re.IGNORECASE
+)
 
 # FRE-1322: bounds for the missing-skill context join. A 7-day window holds
 # fewer than 200 requests, so the cap is a guard and a truncation is logged.
+# Only bash_started is fetched: it carries session_id, and tool_call_started is
+# the highest-volume event per trace and would crowd it out of the cap.
 _MISSING_SKILL_REQUEST_CAP = 2000
 _MISSING_SKILL_TRACE_CHUNK = 20
 _MISSING_SKILL_TOOL_EVENT_CAP = 5000
@@ -110,9 +117,13 @@ def extract_hosts(command: str) -> frozenset[str]:
     Returns:
         The distinct ``host`` or ``host:port`` values; empty when no URL is present.
     """
-    return frozenset(
-        f"{host}:{port}" if port else host for host, port in _URL_HOST_RE.findall(command or "")
-    )
+    hosts: set[str] = set()
+    for host, port in _URL_HOST_RE.findall(command or ""):
+        host = host.lower()
+        if not any(ch.isalnum() for ch in host):
+            continue  # "http://..." in prose is not a host
+        hosts.add(f"{host}:{port}" if port else host)
+    return frozenset(hosts)
 
 
 def dominant_host(commands: Sequence[str]) -> str | None:
@@ -638,7 +649,7 @@ class TelemetryQueries:
 
         Names are model guesses, so two requests for one gap often differ. The
         host that the turn reached with bash is the stable signal: it is read
-        from the ``bash_started`` events of the same ``trace_id``. Tool events
+        from the ``bash_started`` events of the same ``trace_id``. Those events
         also supply the session when the request event has none.
 
         Args:
@@ -697,12 +708,12 @@ class TelemetryQueries:
                     "bool": {
                         "filter": [
                             {"terms": {"trace_id": chunk}},
-                            {"terms": {"event_type": ["bash_started", "tool_call_started"]}},
+                            {"terms": {"event_type": ["bash_started"]}},
                         ]
                     }
                 },
                 size=_MISSING_SKILL_TOOL_EVENT_CAP,
-                source_includes=["trace_id", "event_type", "command", "session_id"],
+                source_includes=["trace_id", "command", "session_id"],
                 track_total_hits=True,
             )
             tool_hits = tool_response["hits"]["hits"]
@@ -718,7 +729,7 @@ class TelemetryQueries:
                     continue
                 if source.get("session_id"):
                     sessions.setdefault(trace, source["session_id"])
-                if source.get("event_type") == "bash_started" and source.get("command"):
+                if source.get("command"):
                     commands.setdefault(trace, []).append(str(source["command"]))
 
         return [

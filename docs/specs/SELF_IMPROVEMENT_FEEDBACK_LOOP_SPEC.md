@@ -38,6 +38,23 @@ Wire the existing Captain's Log promotion pipeline to Linear (replacing dry-run 
 4. No mechanism for the agent to re-analyze or refine a proposal based on feedback
 5. No feedback metrics in the insights engine
 
+### Reflection inputs (Stream 1, FRE-1608)
+
+The reflection model must receive only inputs that production telemetry carries. On 2026-10-14 a
+30-day read of production `agent-logs-*` showed seven false inputs. FRE-1608 corrected them.
+
+| Input | Source | Rule |
+|-------|--------|------|
+| LLM calls | `model_call_completed` | Count only. Duration is a Tempo span attribute (ADR-0129), so the summary states "duration: not available". It never prints `0ms`. |
+| Tool calls | `tool_call_completed.tool_name` | The old `tool_executed` event does not exist. |
+| Tool failures | `tool_call_failed` and `tool_call_completed success=false` | A failed call counts once. A call refused before it ran logs only the second event (ADR-0156 D6.3). |
+| Errors | events with "error" in the name | The text comes from `error` and `error_type`. |
+| Degraded turn | `planner_failed`, `fallback_planner_used`, `graceful_degradation_triggered`, `turn_degraded`, the two `*_exceeded_mid_call` events, `expansion_controller_complete degraded=true`, `status=failed` | Listed beside the tool failures, never as a tool call. |
+| Failure path | `failure_path_reflection_enabled` (default `true`) | `had_errors` is true when the trace holds any failure above. The flag stays as a kill switch. The structured excerpt goes to the DSPy path only. The manual fallback prompt gets the same facts through the `Tool Failures`, `Errors` and `Degraded` lines of the telemetry summary. |
+| Prompt components | `prompt_component_ids` on `model_call_completed` | Only the `orchestrator.primary` callsite records named components. An empty list renders "not recorded for callsite X", not "(none)". |
+| User rating | none | The per-callsite mean is not an input. 2,276 of 2,317 ratings are 2, so the mean carries no signal. A turn's own rating does not exist when reflection runs. |
+| Eval turns | `eval_mode` | Reflection runs, and the cadence gate is bypassed on purpose (FRE-523). Two writes are closed. The read-before-emit check is skipped, because it increments or inserts a production sysgraph row. A Captain's Log entry merges only into a file of the same `eval_mode`, so an eval sighting cannot raise a production `seen_count`. |
+
 ---
 
 ## 3. Linear Budget Constraints

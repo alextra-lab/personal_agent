@@ -251,10 +251,6 @@ class TestNoSamplerReachesSonnet:
                 "personal_agent.captains_log.reflection._fetch_trace_events",
                 AsyncMock(return_value=[]),
             ),
-            patch(
-                "personal_agent.captains_log.reflection.load_mean_rating_lookup",
-                AsyncMock(return_value={}),
-            ),
             patch("personal_agent.config.resolve_role_model_key", return_value="claude_sonnet"),
             _apply(_dispatch_stack(captured)),
         ):

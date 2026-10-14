@@ -447,11 +447,11 @@ class AppConfig(BaseSettings):
         description="Hard cap on ErrorPatternDetectedEvent emissions per scan run.",
     )
     failure_path_reflection_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable ADR-0056 Phase 2 GEPA-inspired failure-path reflection. "
         "Extends GenerateReflection with failure_excerpt inputs and "
-        "failure_path_fix_what/location outputs. Flip True after 1 week of Phase 1 "
-        "observation validates signal quality.",
+        "failure_path_fix_what/location outputs. On by default since FRE-1608: with it "
+        "off, every reflection read had_errors=False. Set False only as a kill switch.",
     )
     metrics_sampled_stream_maxlen: int = Field(
         default=720,

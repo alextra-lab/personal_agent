@@ -326,7 +326,7 @@ class CaptainLogManager:
 
         # --- ADR-0030 / ADR-0040: fingerprint-based dedup ---
         if fingerprint:
-            existing_path = self._find_entry_by_fingerprint(fingerprint)
+            existing_path = self._find_entry_by_fingerprint(fingerprint, eval_mode=entry.eval_mode)
             if existing_path is not None:
                 return self._merge_into_existing(existing_path, entry, es_handler)
 
@@ -370,14 +370,23 @@ class CaptainLogManager:
     # ADR-0030 dedup helpers
     # ------------------------------------------------------------------
 
-    def _find_entry_by_fingerprint(self, fingerprint: str) -> pathlib.Path | None:
+    def _find_entry_by_fingerprint(
+        self, fingerprint: str, *, eval_mode: bool = False
+    ) -> pathlib.Path | None:
         """Scan on-disk entries for a proposal with matching fingerprint (any status).
 
         ADR-0040: matches any status so promoted (APPROVED) entries still absorb
         duplicate reflections without creating a new promotable CL file.
 
+        FRE-1608: only an entry of the same provenance matches. An eval sighting that
+        merged into a production file raised its ``seen_count`` toward promotion, and a
+        production sighting that merged into an eval file vanished, because promotion
+        skips every ``eval_mode`` file.
+
         Args:
             fingerprint: The fingerprint to match.
+            eval_mode: Provenance of the incoming entry. Only files of the same
+                provenance match.
 
         Returns:
             Path to the matching file, or None.
@@ -386,6 +395,9 @@ class CaptainLogManager:
             try:
                 data = _json.loads(json_file.read_text(encoding="utf-8"))
             except Exception:
+                continue
+
+            if bool(data.get("eval_mode")) != eval_mode:
                 continue
 
             pc = data.get("proposed_change")

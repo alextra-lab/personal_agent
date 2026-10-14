@@ -28,10 +28,6 @@ async def test_manual_fallback_routes_via_factory_with_captains_log_role() -> No
             AsyncMock(return_value=[]),
         ),
         patch(
-            "personal_agent.captains_log.reflection.load_mean_rating_lookup",
-            AsyncMock(return_value={}),
-        ),
-        patch(
             "personal_agent.config.resolve_role_model_key",
             return_value="claude_sonnet",
         ) as mock_resolve,

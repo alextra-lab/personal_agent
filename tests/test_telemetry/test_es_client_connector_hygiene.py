@@ -126,15 +126,3 @@ def test_detector_is_quiet_for_a_disconnected_client() -> None:
     leaks, requests = _leaks_from(body)
     assert requests >= 1, "the code under test never reached the fake server"
     assert leaks == []
-
-
-def test_load_mean_rating_lookup_releases_its_connector() -> None:
-    """FRE-1601 AC-1/AC-2: the per-turn reflection lookup leaves no connector behind."""
-    from personal_agent.captains_log.prompt_manifest import load_mean_rating_lookup
-
-    async def body() -> None:
-        await load_mean_rating_lookup(days=7, trace_id="fre-1601")
-
-    leaks, requests = _leaks_from(body)
-    assert requests >= 1, "the code under test never reached the fake server"
-    assert leaks == []

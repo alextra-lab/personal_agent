@@ -1,0 +1,272 @@
+{
+ "events": {
+  "expansion_controller_complete": {
+   "fields": {
+    "@timestamp": 117,
+    "component": 117,
+    "degraded": 117,
+    "event_type": 117,
+    "function": 47,
+    "level": 117,
+    "line_number": 47,
+    "logger": 117,
+    "message": 117,
+    "mode": 117,
+    "module": 47,
+    "plan_is_fallback": 117,
+    "session_id": 117,
+    "span_id": 117,
+    "sub_agent_count": 117,
+    "successful": 117,
+    "trace_id": 117,
+    "user_id": 117
+   },
+   "sampled": 117,
+   "total_in_window": 117
+  },
+  "fallback_planner_used": {
+   "fields": {
+    "@timestamp": 9,
+    "component": 9,
+    "event_type": 9,
+    "level": 9,
+    "logger": 9,
+    "message": 9,
+    "reason": 9,
+    "session_id": 9,
+    "span_id": 9,
+    "task_count": 9,
+    "trace_id": 9,
+    "user_id": 9
+   },
+   "sampled": 9,
+   "total_in_window": 9
+  },
+  "graceful_degradation_triggered": {
+   "fields": {
+    "@timestamp": 7,
+    "component": 7,
+    "event_type": 7,
+    "function": 2,
+    "level": 7,
+    "line_number": 2,
+    "logger": 7,
+    "message": 7,
+    "module": 2,
+    "phase": 7,
+    "reason": 7,
+    "session_id": 7,
+    "span_id": 7,
+    "trace_id": 7,
+    "user_id": 7
+   },
+   "sampled": 7,
+   "total_in_window": 7
+  },
+  "model_call_completed": {
+   "fields": {
+    "@timestamp": 300,
+    "anthropic_thinking_present": 111,
+    "api_type": 46,
+    "budget_role": 181,
+    "cache_creation_input_tokens": 181,
+    "cache_read_tokens": 300,
+    "capture_trace_id": 16,
+    "component": 300,
+    "cost_usd": 181,
+    "endpoint": 300,
+    "event_type": 300,
+    "fallback_used": 46,
+    "input_tokens": 300,
+    "kind": 21,
+    "level": 300,
+    "logger": 300,
+    "message": 300,
+    "model": 300,
+    "output_tokens": 300,
+    "parent_span_id": 300,
+    "prompt_callsite": 300,
+    "prompt_component_ids": 300,
+    "prompt_dynamic_hash": 300,
+    "prompt_static_prefix_hash": 300,
+    "provider": 300,
+    "reasoning_content_chars": 73,
+    "reasoning_tokens": 114,
+    "role": 300,
+    "session_id": 300,
+    "span_id": 300,
+    "tool_calls": 254,
+    "total_tokens": 300,
+    "trace_id": 300,
+    "user_id": 295
+   },
+   "sampled": 300,
+   "total_in_window": 3613
+  },
+  "model_call_error": {
+   "fields": {
+    "@timestamp": 70,
+    "component": 70,
+    "endpoint": 48,
+    "error": 70,
+    "error_type": 70,
+    "event_type": 70,
+    "function": 6,
+    "level": 70,
+    "line_number": 6,
+    "logger": 70,
+    "message": 70,
+    "model": 48,
+    "module": 6,
+    "provider": 43,
+    "role": 48,
+    "session_id": 70,
+    "span_id": 70,
+    "trace_id": 70,
+    "user_id": 70
+   },
+   "sampled": 70,
+   "total_in_window": 70
+  },
+  "planner_failed": {
+   "fields": {
+    "@timestamp": 9,
+    "component": 9,
+    "error": 2,
+    "event_type": 9,
+    "finish_reason": 4,
+    "level": 9,
+    "logger": 9,
+    "message": 9,
+    "reason": 9,
+    "session_id": 9,
+    "span_id": 9,
+    "trace_id": 9,
+    "user_id": 9
+   },
+   "sampled": 9,
+   "total_in_window": 9
+  },
+  "subagent_completed": {
+   "fields": {
+    "@timestamp": 300,
+    "component": 300,
+    "event_type": 300,
+    "function": 90,
+    "level": 300,
+    "line_number": 90,
+    "logger": 300,
+    "message": 300,
+    "module": 90,
+    "session_id": 300,
+    "span_id": 300,
+    "status": 300,
+    "task_name": 300,
+    "trace_id": 300,
+    "user_id": 300
+   },
+   "sampled": 300,
+   "total_in_window": 307
+  },
+  "tool_call_completed": {
+   "fields": {
+    "@timestamp": 300,
+    "component": 300,
+    "event_type": 300,
+    "level": 300,
+    "logger": 300,
+    "message": 300,
+    "session_id": 300,
+    "span_id": 300,
+    "success": 300,
+    "tool_name": 300,
+    "trace_id": 300,
+    "user_id": 300
+   },
+   "sampled": 300,
+   "total_in_window": 2830
+  },
+  "tool_call_failed": {
+   "fields": {
+    "@timestamp": 103,
+    "component": 103,
+    "error": 103,
+    "error_code": 1,
+    "event_type": 103,
+    "exception": 102,
+    "function": 72,
+    "level": 103,
+    "line_number": 72,
+    "logger": 103,
+    "message": 103,
+    "module": 72,
+    "session_id": 103,
+    "span_id": 103,
+    "tool_name": 103,
+    "trace_id": 103,
+    "user_id": 103
+   },
+   "sampled": 103,
+   "total_in_window": 103
+  },
+  "turn_degraded": {
+   "fields": {
+    "@timestamp": 7,
+    "component": 7,
+    "event_type": 7,
+    "function": 2,
+    "level": 7,
+    "line_number": 2,
+    "logger": 7,
+    "message": 7,
+    "module": 2,
+    "reason": 7,
+    "session_id": 7,
+    "severity": 7,
+    "span_id": 7,
+    "trace_id": 7,
+    "user_id": 7,
+    "where": 7
+   },
+   "sampled": 7,
+   "total_in_window": 7
+  },
+  "turn_lifetime_cap_exceeded_mid_call": {
+   "fields": {
+    "@timestamp": 1,
+    "budget_seconds": 1,
+    "component": 1,
+    "event_type": 1,
+    "level": 1,
+    "logger": 1,
+    "message": 1,
+    "session_id": 1,
+    "span_id": 1,
+    "trace_id": 1,
+    "user_id": 1
+   },
+   "sampled": 1,
+   "total_in_window": 1
+  },
+  "turn_wall_clock_budget_exceeded_mid_call": {
+   "fields": {
+    "@timestamp": 8,
+    "budget_seconds": 8,
+    "component": 8,
+    "event_type": 8,
+    "level": 8,
+    "logger": 8,
+    "message": 8,
+    "session_id": 8,
+    "span_id": 8,
+    "trace_id": 8,
+    "user_id": 8
+   },
+   "sampled": 8,
+   "total_in_window": 8
+  }
+ },
+ "generated": "2026-10-14",
+ "note": "ES stores the structlog event name as event_type; the reflection path translates it to event.",
+ "source": "agent-logs-* production Elasticsearch, read-only, event_type term + 45d window"
+}

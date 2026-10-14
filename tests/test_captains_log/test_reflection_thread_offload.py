@@ -167,7 +167,6 @@ class TestReflectionTraceEventsThreadOffload:
             patch.object(reflection, "get_trace_events", _blocking_get_trace_events),
             patch.object(reflection, "DSPY_AVAILABLE", True),
             patch.object(reflection, "generate_reflection_dspy", _fast_dspy),
-            patch.object(reflection, "load_mean_rating_lookup", AsyncMock(return_value={})),
         ):
             await asyncio.gather(
                 heartbeat(),

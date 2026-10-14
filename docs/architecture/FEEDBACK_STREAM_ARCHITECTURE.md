@@ -56,6 +56,7 @@ All nine feedback streams, their current state, and their target state after ADR
 - **ADR:** ADR-0030, ADR-0058
 - **Project:** Self-Improvement Pipeline
 - **Gap:** Closed by ADR-0058 (implemented FRE-248 2026-04-25)
+- **Inputs (FRE-1608, 2026-10-14):** the reflection model reads only fields that production carries. Call counts come from `model_call_completed` and `tool_call_completed.tool_name`. Durations are not in events (Tempo spans, ADR-0129), so the summary says "not available". Failures cover `tool_call_failed`, `tool_call_completed success=false`, `model_call_error`, `planner_failed` and degraded turns. The failure path is on by default. The per-callsite mean rating is not an input. An eval turn reflects but never touches sysgraph. Detail: `docs/specs/SELF_IMPROVEMENT_FEEDBACK_LOOP_SPEC.md` ("Reflection inputs").
 
 ### Stream 2: Linear Human Feedback
 - **Source:** Human applies label to Linear issue

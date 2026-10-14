@@ -65,6 +65,12 @@ Subcommands. Each one is safe to re-run.
 | `reset <dir>` | Refuses unless `<dir>/VERIFIED` exists and the checksums still match. One transaction: delete `correlates_with`/`influence` rows that reference proposals, then `outcome`, `ticket`, `proposal`, `signal` (cascades remove `promoted_to`, `produced`, `derives_from`). Then delete live `CL-*.json` and the archive files. | production |
 | `verify` | Counts must be 0: live CL files, archive files, `proposal`, `ticket`, `promoted_to`; promotion scan eligible = 0. Exit 1 otherwise. | none |
 
+Codex plan review (accepted): ordering alone cannot make two stores atomic. `backup`,
+`verify-backup` and `reset` therefore refuse while the gateway runs, and `reset` refuses if any
+count differs from the frozen `counts.txt` manifest. `verify` checks every table the reset
+empties. The file work runs in a throwaway container of the gateway image (`--volumes-from`,
+`AGENT_LOG_DIR` redirected), because the gateway is stopped.
+
 Order inside `reset`: sysgraph first, files second. If a sighting lands between the two steps, it
 can only merge into an old file that the file step then deletes. The reverse order lets an old
 sysgraph row stamp its count onto a new file.

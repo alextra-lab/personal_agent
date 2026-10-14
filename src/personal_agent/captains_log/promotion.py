@@ -730,9 +730,21 @@ class PromotionPipeline:
                 trace_id=_trace_id_from_entry(entry),
             )
             if archived is not None:
-                live_files = [
-                    restore_archived(archived, self.log_dir, trace_id=_trace_id_from_entry(entry))
-                ]
+                try:
+                    live_files = [
+                        restore_archived(
+                            archived, self.log_dir, trace_id=_trace_id_from_entry(entry)
+                        )
+                    ]
+                except (OSError, EOFError) as exc:
+                    # Reported below as not marked; the caller does not count it promoted.
+                    log.warning(
+                        "promotion_archive_restore_failed",
+                        entry_id=entry.entry_id,
+                        archive_file=str(archived),
+                        error=str(exc),
+                        trace_id=_trace_id_from_entry(entry),
+                    )
         for json_file in live_files:
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))

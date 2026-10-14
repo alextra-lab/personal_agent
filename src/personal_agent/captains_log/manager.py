@@ -427,7 +427,18 @@ class CaptainLogManager:
             trace_id=trace_id,
         )
         if archived is not None:
-            return restore_archived(archived, self.log_dir, trace_id=trace_id)
+            try:
+                return restore_archived(archived, self.log_dir, trace_id=trace_id)
+            except (OSError, EOFError) as exc:
+                # Fail open: a failed restore must not drop the sighting. The new entry
+                # it creates is the pre-FRE-1609 behaviour, and Guard 3 still links it.
+                log.warning(
+                    "captains_log_archive_restore_failed",
+                    archive_file=str(archived),
+                    fingerprint=fingerprint,
+                    error=str(exc),
+                    trace_id=trace_id,
+                )
         return None
 
     def _merge_into_existing(

@@ -13,6 +13,7 @@ caller merges into or marks the original entry, as if it had never aged out.
 
 from __future__ import annotations
 
+import glob
 import gzip
 import json
 import os
@@ -64,7 +65,7 @@ def find_archived(
     if not archive_dir.is_dir():
         return None
     candidates = sorted(
-        archive_dir.glob(f"*/{name_prefix}*.json{_GZ_SUFFIX}"),
+        archive_dir.glob(f"*/{glob.escape(name_prefix)}*.json{_GZ_SUFFIX}"),
         key=lambda p: p.name,
         reverse=True,
     )
@@ -109,14 +110,23 @@ def restore_archived(
 
     Raises:
         OSError: If the archive cannot be read or the live file cannot be written.
+        EOFError: If the archive is truncated.
     """
     live_path = log_dir / gz_path.name.removesuffix(_GZ_SUFFIX)
-    with gzip.open(gz_path, "rb") as fh:
-        payload = fh.read()
+    try:
+        with gzip.open(gz_path, "rb") as fh:
+            payload = fh.read()
+    except FileNotFoundError:
+        # A concurrent restore of the same entry finished first and removed the .gz.
+        if live_path.exists():
+            return live_path
+        raise
     fd, tmp_name = tempfile.mkstemp(dir=log_dir, prefix=".restore-", suffix=".json")
     try:
         with os.fdopen(fd, "wb") as out:
             out.write(payload)
+        # mkstemp creates 0600; a live entry written by write_text is 0644.
+        os.chmod(tmp_name, 0o644)
         os.link(tmp_name, live_path)
     except FileExistsError:
         pass

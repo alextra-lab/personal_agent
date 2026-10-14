@@ -22,7 +22,11 @@ from unittest.mock import patch
 
 import pytest
 
-from personal_agent.captains_log.archive import reflection_archive_dir, restore_archived
+from personal_agent.captains_log.archive import (
+    find_archived,
+    reflection_archive_dir,
+    restore_archived,
+)
 from personal_agent.captains_log.dedup import compute_proposal_fingerprint
 from personal_agent.captains_log.manager import CaptainLogManager
 from personal_agent.captains_log.models import (
@@ -192,3 +196,47 @@ def test_restore_never_overwrites_a_live_file(tmp_path: pathlib.Path) -> None:
     assert json.loads(live.read_text()) == {"merged": True}
     assert not gz_path.exists()
     assert [p.name for p in log_dir.iterdir()] == [live.name]
+
+
+def test_restore_after_a_concurrent_restore_removed_the_archive(tmp_path: pathlib.Path) -> None:
+    """The second of two racing restores finds the .gz gone and the entry already live."""
+    log_dir = tmp_path / "captains_log"
+    log_dir.mkdir()
+    gz_path = reflection_archive_dir(log_dir) / "2026-09" / "CL-20260901-000000-orig.json.gz"
+    live = log_dir / "CL-20260901-000000-orig.json"
+    live.write_text('{"merged": true}')
+
+    assert restore_archived(gz_path, log_dir) == live
+    assert json.loads(live.read_text()) == {"merged": True}
+
+
+def test_a_corrupt_archive_file_is_skipped_not_fatal(tmp_path: pathlib.Path) -> None:
+    """One unreadable .gz must not hide the valid entries behind it."""
+    log_dir = tmp_path / "captains_log"
+    log_dir.mkdir()
+    month = reflection_archive_dir(log_dir) / "2026-09"
+    month.mkdir(parents=True)
+    (month / "CL-20260902-000000-corrupt.json.gz").write_bytes(b"not gzip")
+    good = month / "CL-20260901-000000-good.json.gz"
+    with gzip.open(good, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps({"entry_id": "CL-20260901-000000-good"}))
+
+    found = find_archived(log_dir, lambda data: data.get("entry_id") == "CL-20260901-000000-good")
+
+    assert found == good
+
+
+def test_name_prefix_limits_the_files_read(tmp_path: pathlib.Path) -> None:
+    """``_mark_promoted`` reads only its own entry's archive file."""
+    log_dir = tmp_path / "captains_log"
+    log_dir.mkdir()
+    month = reflection_archive_dir(log_dir) / "2026-09"
+    month.mkdir(parents=True)
+    for name in ("CL-20260901-000000-a", "CL-20260901-000000-b"):
+        with gzip.open(month / f"{name}-title.json.gz", "wt", encoding="utf-8") as fh:
+            fh.write(json.dumps({"entry_id": name}))
+
+    found = find_archived(log_dir, lambda data: True, name_prefix="CL-20260901-000000-a-")
+
+    assert found is not None
+    assert found.name == "CL-20260901-000000-a-title.json.gz"

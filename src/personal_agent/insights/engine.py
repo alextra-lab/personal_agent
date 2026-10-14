@@ -9,6 +9,7 @@ reflection source (``captains_log/reflection.py``). Not a separate product.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from statistics import mean, median, pstdev
@@ -38,6 +39,7 @@ from personal_agent.sysgraph import SysgraphRepository
 from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, check_before_emit
 from personal_agent.sysgraph.repository import ProposalRecord
 from personal_agent.telemetry import TaskPatternReport, TelemetryQueries, get_logger
+from personal_agent.telemetry.queries import MissingSkillRequest
 
 log = get_logger(__name__)
 
@@ -52,6 +54,41 @@ MIN_MISSING_SKILL_SESSIONS = 2
 # FRE-409: minimum occurrences before a prompt-component-change cluster is
 # promoted into a prompt_composition Insight (mirrors missing-skill / delegation).
 MIN_PROMPT_COMPOSITION_PROPOSALS = 2
+
+
+def _missing_skill_confidence(count: int) -> float:
+    """Confidence of a missing-skill insight: 0.60 at the bar, 0.95 at most."""
+    return min(0.95, 0.60 + 0.05 * min(7, count - MIN_MISSING_SKILL_REQUESTS))
+
+
+def _cluster_requests_by_host(
+    requests: Sequence[MissingSkillRequest],
+) -> list[tuple[str, int, int, tuple[str, ...]]]:
+    """Group missing-skill requests by the host their turn reached (FRE-1322).
+
+    A request without a host is left out.  A request without a session adds to
+    the request count but not to the session count.
+
+    Args:
+        requests: Requests joined to their turn by ``get_missing_skill_requests``.
+
+    Returns:
+        ``(host, request_count, distinct_sessions, sorted_distinct_names)`` per
+        host, sorted by host for a stable order.
+    """
+    by_host: dict[str, list[MissingSkillRequest]] = {}
+    for request in requests:
+        if request.host:
+            by_host.setdefault(request.host, []).append(request)
+    return [
+        (
+            host,
+            len(group),
+            len({r.session_id for r in group if r.session_id}),
+            tuple(sorted({r.requested_name for r in group})),
+        )
+        for host, group in sorted(by_host.items())
+    ]
 
 
 @dataclass(frozen=True)
@@ -309,13 +346,20 @@ class InsightsEngine:
         )
         return insights
 
-    async def detect_missing_skill_patterns(self, days: int = 7) -> list[Insight]:
-        """Detect recurring `read_skill` calls for skills that don't exist (FRE-328).
+    async def detect_missing_skill_patterns(
+        self, days: int = 7, until: datetime | None = None
+    ) -> list[Insight]:
+        """Detect recurring requests for skills that don't exist (FRE-328, FRE-1322).
 
-        Queries ``missing_skill_requested`` events in agent-logs-*, grouped by
-        ``requested_name``.  Emits one insight per skill name with at least
-        ``MIN_MISSING_SKILL_REQUESTS`` requests across
-        ``MIN_MISSING_SKILL_SESSIONS`` distinct sessions.
+        Two groupings run over ``missing_skill_requested`` events in agent-logs-*.
+        Both use the same bar: at least ``MIN_MISSING_SKILL_REQUESTS`` requests
+        across ``MIN_MISSING_SKILL_SESSIONS`` distinct sessions.
+
+        - By ``requested_name``: one insight per exact skill name.
+        - By host (FRE-1322): names are model guesses, so one gap is often asked
+          for under several names.  Requests whose turn reached the same host
+          with bash form one cluster, and one insight names the host.  A name
+          insight that a cluster covers is dropped, so one gap files once.
 
         The insight flows through ``create_captain_log_proposals`` → CaptainLog
         → existing promotion pipeline → Linear ``Needs Approval`` ticket
@@ -324,24 +368,62 @@ class InsightsEngine:
 
         Args:
             days: Lookback window in days.
+            until: End of the window; defaults to now.  Used to replay a past window.
 
         Returns:
-            List of missing-skill insights; empty if no skill clears the threshold
+            List of missing-skill insights; empty if nothing clears the bar
             or ES is unavailable.
         """
         insights: list[Insight] = []
+        buckets: list[tuple[str, int, int]] = []
         try:
-            buckets = await self._queries.get_missing_skill_buckets(days=days)
+            buckets = await self._queries.get_missing_skill_buckets(days=days, until=until)
         except Exception:
             log.warning("missing_skill_pattern_analysis_failed", exc_info=True)
-            return insights
+
+        cluster_insights: list[Insight] = []
+        covered_names: set[str] = set()
+        try:
+            requests = await self._queries.get_missing_skill_requests(days=days, until=until)
+        except Exception:
+            log.warning("missing_skill_context_analysis_failed", exc_info=True)
+        else:
+            for host, count, sessions, names in _cluster_requests_by_host(requests):
+                if count < MIN_MISSING_SKILL_REQUESTS or sessions < MIN_MISSING_SKILL_SESSIONS:
+                    continue
+                covered_names.update(names)
+                cluster_insights.append(
+                    Insight(
+                        insight_type="missing_skill",
+                        pattern_kind="missing_skill_requested",
+                        title=f"Create skill for `{host}`",
+                        summary=(
+                            f"The agent asked for skills that do not exist {count} times across "
+                            f"{sessions} distinct sessions over the last {days} days, under "
+                            f"{len(names)} different names ({', '.join(names)}).  Each turn "
+                            f"reached `{host}` by hand with bash.  The model is naming a "
+                            f"capability gap for that service."
+                        ),
+                        confidence=_missing_skill_confidence(count),
+                        evidence={
+                            "service_host": host,
+                            "request_count": count,
+                            "distinct_sessions": sessions,
+                            "window_days": days,
+                            "requested_names": ", ".join(names),
+                        },
+                        actionable=True,
+                    )
+                )
 
         for name, count, sessions in buckets:
             if count < MIN_MISSING_SKILL_REQUESTS:
                 continue
             if sessions < MIN_MISSING_SKILL_SESSIONS:
                 continue
-            confidence = min(0.95, 0.60 + 0.05 * min(7, count - MIN_MISSING_SKILL_REQUESTS))
+            if name in covered_names:
+                continue
+            confidence = _missing_skill_confidence(count)
             insights.append(
                 Insight(
                     insight_type="missing_skill",
@@ -363,10 +445,12 @@ class InsightsEngine:
                 )
             )
 
+        insights.extend(cluster_insights)
         log.info(
             "missing_skill_pattern_analysis_complete",
             buckets=len(buckets),
             insights=len(insights),
+            host_clusters=len(cluster_insights),
             days=days,
         )
         return insights

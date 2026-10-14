@@ -83,6 +83,120 @@
           "bucketAggs": []
         }
       ]
+    },
+    {
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-agent-insights"
+      },
+      "description": "One row per skill gap the agent asked for. Requests is how often it asked. Sessions is in how many distinct sessions. A row names the gap by skill name, or by the service host when the agent asked under several names. A gap with 3 or more requests in 2 or more sessions is ready for a skill ticket. Source: Insights Engine records, one per consolidation scan.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "showHeader": true
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "alias": "",
+          "bucketAggs": [],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-agent-insights"
+          },
+          "editorType": "builder",
+          "metrics": [
+            {
+              "id": "1",
+              "settings": {
+                "size": "500"
+              },
+              "type": "raw_data"
+            }
+          ],
+          "preserveQuery": false,
+          "query": "insight_type:missing_skill",
+          "queryType": "lucene",
+          "refId": "A"
+        }
+      ],
+      "timeFrom": "7d",
+      "title": "Missing-skill gaps seen in the last 7 days",
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "evidence.distinct_sessions": {
+                "aggregations": [
+                  "first"
+                ],
+                "operation": "aggregate"
+              },
+              "evidence.request_count": {
+                "aggregations": [
+                  "first"
+                ],
+                "operation": "aggregate"
+              },
+              "fingerprint": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "timestamp": {
+                "aggregations": [
+                  "first"
+                ],
+                "operation": "aggregate"
+              },
+              "title": {
+                "aggregations": [
+                  "first"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        }
+      ],
+      "type": "table"
     }
   ],
   "time": {

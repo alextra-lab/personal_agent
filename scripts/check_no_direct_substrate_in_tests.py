@@ -90,6 +90,8 @@ _EVAL_ISOLATION_EXEMPT_PATHS: frozenset[str] = frozenset(
         # itself and skips IsolatedArmRunner's settle and 150 s idle waits. Each row records
         # graph_nodes_after, which shows any write that reaches the graph.
         "scripts/eval/fre1590/help.py",
+        # FRE-1598 reads the arms' /health only; its turns run through fre1590/help.py above.
+        "scripts/eval/fre1598/run.py",
     }
 )
 

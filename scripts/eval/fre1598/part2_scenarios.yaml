@@ -1,0 +1,51 @@
+# FRE-1598 (ADR-0156 A5, T-D2) — the benefit run: the Part 2 scenarios of the seven area skills.
+#
+# Same format as scripts/eval/fre1590/part2_scenarios.yaml. `id` is `<skill>#<n>`, n the 0-based
+# position in skills/<skill>/evals.yaml. The prompt and `expect` are read from that file at run time,
+# and the run records the SHA-256 of each.
+#
+# Rule (owner, FRE-1590): 1 to 2 scenarios per skill, only where the skill holds knowledge that the
+# primary system prompt and the descriptions of search_logs and measure_model_latency
+# (src/personal_agent/tools/telemetry_query.py) do not give. The owner confirms this list in the
+# preflight. In the control arm, both tools are visible from call 1, so their descriptions are the
+# baseline.
+
+scenarios:
+  - id: graph-inspection#1
+    reason: "Only the skill says that entities carry first_seen and that created_at is set on almost no node, and names the Cypher script."
+  - id: interaction-outcomes#1
+    reason: "Only the skill says that the captures index ranges on timestamp, not @timestamp, and that outcome is the field to aggregate."
+  - id: interaction-outcomes#2
+    reason: "Only the skill names agent-captains-reflections and proposed_change.seen_count."
+  - id: log-search#2
+    reason: "Only the skill says that the cache-erosion family is outside the tool's three families and that its date field is run_at."
+  - id: log-search#3
+    reason: "Only the skill names the joinability family and the index classifier script, and forbids cutting a date off a name."
+  - id: model-latency#3
+    reason: "The tool filters on role and model only. Only the skill gives the TraceQL curl recipe (references/latency-recipe.md)."
+  - id: service-health#0
+    reason: "Only the skill names the probe script that opens a real Postgres connection, and says that a curl to port 5432 means nothing."
+  - id: spend-and-tokens#0
+    reason: "Only the skill gives the local hit-rate formula (cached / input, where the input includes the cache)."
+  - id: spend-and-tokens#1
+    reason: "Only the skill says that api_cost_recorded is the total-spend ledger and that model_call_completed leaves out embedding and rerank cost."
+  - id: turn-explanation#1
+    reason: "Only the skill says to read input_tokens down the primary calls, and that turn_status.context_tokens is not queryable. ADR-0156 AC-F4 names this case."
+  - id: turn-explanation#2
+    reason: "The tool returns statistics, never spans. Only the skill gives the Tempo curl GET of one trace by id."
+
+excluded:
+  - id: log-search#0
+    reason: "The search_logs description states the 30-day cap."
+  - id: log-search#1
+    reason: "Trimmed to 2 per skill (owner rule)."
+  - id: log-search#4
+    reason: "Trimmed to 2 per skill (owner rule)."
+  - id: model-latency#0
+    reason: "The measure_model_latency description states the 7-day window."
+  - id: model-latency#1
+    reason: "The measure_model_latency description names slm_chat and prefill."
+  - id: model-latency#2
+    reason: "The measure_model_latency description explains complete=false."
+  - id: service-health#4
+    reason: "The search_logs description names agent-monitors-slm-health and probed_at."

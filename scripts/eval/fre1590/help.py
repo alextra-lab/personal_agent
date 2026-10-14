@@ -31,13 +31,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast, get_args
+from typing import TYPE_CHECKING, Literal, Protocol, cast, get_args
 
 import httpx
 import yaml  # type: ignore[import-untyped]
@@ -78,9 +79,32 @@ _COUNTED_EVENTS = {
     "tool_failures": "tool_call_failed",
     "constraint_pauses": "constraint_pause_emitted",
     "force_synthesis": "force_synthesis_injected",
+    # FRE-1598: the expansion path. A sub-agent sees no skill catalog in either arm.
+    "sub_agents": "sub_agent_start",
 }
 
+#: The reply that ``/chat`` returns with HTTP 200 when the orchestrator raised
+#: (``service/app.py``, ``orchestrator_call_failed``). A row with it is an error row.
+GENERIC_FAILURE_REPLY = "An error occurred processing your request"
+
 Row = dict[str, object]
+
+
+class RevealSeeder(Protocol):
+    """Writes and reads ``sessions.revealed_tools`` of an eval session (FRE-1598)."""
+
+    async def seed(self, session_id: str, names: Sequence[str]) -> list[str]:
+        """Add ``names`` to the session's revealed tools; return the stored names, sorted."""
+        ...
+
+    async def read(self, session_id: str) -> list[str]:
+        """Return the session's revealed tools, sorted."""
+        ...
+
+
+def sha256_text(text: str) -> str:
+    """Return the hex SHA-256 of a text's UTF-8 bytes."""
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -230,24 +254,92 @@ def _num(value: object) -> float:
     return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0.0
 
 
-async def _events(es: httpx.AsyncClient, trace_id: str, event_type: str) -> list[dict[str, object]]:
-    body = turn_events_query(trace_id, event_type)
+async def _search(
+    es: httpx.AsyncClient, body: Mapping[str, object], what: str
+) -> list[dict[str, object]]:
     resp = await es.post(f"{EVAL_ES_URL}/{EVAL_ES_INDEX}/_search", json=body, timeout=30.0)
     resp.raise_for_status()
     hits = resp.json()["hits"]["hits"]
     size = body.get("size")
     if isinstance(size, int) and len(hits) >= size:
-        raise ValueError(f"{event_type} for trace {trace_id} filled its page of {size}")
+        raise ValueError(f"{what} filled its page of {size}")
     return [h["_source"] for h in hits]
 
 
-async def read_turn(es: httpx.AsyncClient, trace_id: str, arm: Arm) -> Row:
+async def _events(es: httpx.AsyncClient, trace_id: str, event_type: str) -> list[dict[str, object]]:
+    body = turn_events_query(trace_id, event_type)
+    return await _search(es, body, f"{event_type} for trace {trace_id}")
+
+
+async def _error_events(es: httpx.AsyncClient, trace_id: str) -> list[dict[str, object]]:
+    body = turn_events_query(trace_id, "")
+    query = cast(dict[str, dict[str, list[dict[str, object]]]], body["query"])
+    query["bool"]["filter"] = [{"term": {"trace_id": trace_id}}, {"term": {"level": "ERROR"}}]
+    return await _search(es, body, f"ERROR events for trace {trace_id}")
+
+
+def check_reveal(
+    arm: Arm,
+    tool_lists: Sequence[Mapping[str, object]],
+    reveals: Sequence[Mapping[str, object]],
+    names: Sequence[str],
+) -> None:
+    """Prove from the primary calls' tool lists that the arm saw the tools it must see (FRE-1598).
+
+    Control: every primary call lists every name (the session was seeded before the turn).
+    Treatment: the first primary call lists none of them, and each primary call after a
+    ``skill_tools_revealed`` event lists the tools revealed so far. Every call runs in NORMAL
+    mode, because a mode filter can hide a revealed tool (``tools/registry.py``).
+
+    Args:
+        arm: The arm that served the turn.
+        tool_lists: The turn's ``tools_passed_to_llm`` events of the primary, in time order.
+        reveals: The turn's ``skill_tools_revealed`` events, in time order.
+        names: The tools under test.
+
+    Raises:
+        ValueError: A check fails, or the turn has no primary tool list.
+    """
+    if not tool_lists:
+        raise ValueError("no tools_passed_to_llm event of the primary")
+    wanted = set(names)
+    modes = sorted({str(e.get("mode")) for e in tool_lists} - {"NORMAL"})
+    if modes:
+        raise ValueError(f"a primary call ran in mode {modes}, not NORMAL")
+    lists = [
+        (str(e.get("@timestamp")), set(cast(list[str], e.get("tool_names") or [])))
+        for e in tool_lists
+    ]
+    if arm == "control":
+        short = [i for i, (_, listed) in enumerate(lists) if not wanted <= listed]
+        if short:
+            raise ValueError(
+                f"control primary calls {short} lack a seeded tool of {sorted(wanted)}"
+            )
+        return
+    if wanted & lists[0][1]:
+        raise ValueError(f"treatment's first primary call lists {sorted(wanted & lists[0][1])}")
+    for at, listed in lists[1:]:
+        revealed = {
+            str(t)
+            for e in reveals
+            if str(e.get("@timestamp")) < at
+            for t in cast(list[object], e.get("tools") or [])
+        }
+        if not revealed <= listed:
+            raise ValueError(f"a primary call at {at} lacks revealed {sorted(revealed - listed)}")
+
+
+async def read_turn(
+    es: httpx.AsyncClient, trace_id: str, arm: Arm, reveal: Sequence[str] = ()
+) -> Row:
     """Read one turn's skill loads, tool calls, failures, pauses, model calls and cost.
 
     Args:
         es: A client for ``elasticsearch-eval``.
         trace_id: The turn's trace id.
         arm: The arm that served the turn.
+        reveal: The tools seeded on control (FRE-1598). When given, :func:`check_reveal` runs.
 
     Returns:
         The row fields read from ``agent-logs-*``.
@@ -255,7 +347,8 @@ async def read_turn(es: httpx.AsyncClient, trace_id: str, arm: Arm) -> Row:
     Raises:
         ValueError: The turn has no ``model_call_completed`` event (the query or the mapping is
             wrong, and empty lists would read as "nothing happened"), no ``skill_index_assembled``
-            event, or a catalog that does not fit its arm (control must have none, treatment one).
+            event, a catalog that does not fit its arm (control must have none, treatment one),
+            an ``orchestrator_call_failed`` event, or a failed :func:`check_reveal`.
     """
     completed = await _events(es, trace_id, "model_call_completed")
     if not completed:
@@ -269,6 +362,18 @@ async def read_turn(es: httpx.AsyncClient, trace_id: str, arm: Arm) -> Row:
         raise ValueError(f"control turn {trace_id} saw a skill catalog of {max(catalog):.0f} chars")
     if arm == "treatment" and not all(catalog):
         raise ValueError(f"treatment turn {trace_id} saw no skill catalog")
+    errors = await _error_events(es, trace_id)
+    if any(e.get("event_type") == "orchestrator_call_failed" for e in errors):
+        raise ValueError(f"turn {trace_id} logged orchestrator_call_failed")
+    tool_lists = [
+        e
+        for e in await _events(es, trace_id, "tools_passed_to_llm")
+        if e.get("model_role") == "primary"
+    ]
+    if reveal:
+        check_reveal(arm, tool_lists, await _events(es, trace_id, "skill_tools_revealed"), reveal)
+    completed_tools = await _events(es, trace_id, "tool_call_completed")
+    planner = await _events(es, trace_id, "planner_outcome")
     invoked = await _events(es, trace_id, "read_skill_invoked")
     started = await _events(es, trace_id, "tool_call_started")
     permissions = await _events(es, trace_id, "permission_evaluated")
@@ -285,6 +390,19 @@ async def read_turn(es: httpx.AsyncClient, trace_id: str, arm: Arm) -> Row:
         "cost_usd": round(sum(_num(e.get("cost_usd")) for e in costs), 6),
         "cost_events": len(costs),
         "skill_catalog_chars": max(catalog),
+        "primary_tool_counts": [
+            len(cast(list[str], e.get("tool_names") or [])) for e in tool_lists
+        ],
+        "tool_not_revealed": sum(
+            e.get("success") is False and e.get("error_code") == "tool_not_revealed"
+            for e in completed_tools
+        ),
+        "error_events": [str(e.get("event_type")) for e in errors],
+        "planner_decision": [str(e.get("planner_decision")) for e in planner],
+        "model_calls_by_role": {
+            role: sum(e.get("role") == role for e in completed)
+            for role in sorted({str(e.get("role")) for e in completed})
+        },
     }
     for field, event_type in _COUNTED_EVENTS.items():
         row[field] = len(await _events(es, trace_id, event_type))
@@ -316,6 +434,9 @@ class RunConfig:
         arms: The arms to run.
         settle_s: Seconds to wait after a turn before its events are read.
         gap_s: Seconds to wait once no local model call is in flight.
+        control_reveal: The skill-provided tools that control sees from call 1 (FRE-1598).
+            When set, each turn first creates its session with ``POST /sessions``; on control
+            a ``RevealSeeder`` writes these names into the session before ``/chat``.
     """
 
     run_dir: Path
@@ -323,6 +444,54 @@ class RunConfig:
     arms: tuple[Arm, ...]
     settle_s: float = 20.0
     gap_s: float = 10.0
+    control_reveal: tuple[str, ...] = ()
+
+
+async def prepare_session(
+    base_url: str,
+    arm: Arm,
+    cfg: RunConfig,
+    http: httpx.AsyncClient,
+    seeder: RevealSeeder | None,
+    row: Row,
+) -> str:
+    """Create the turn's session, seed control's revealed tools, and prove both arms' state.
+
+    Both arms create the session the same way (``POST /sessions`` with the body that ``/chat``
+    itself uses), so the arms differ only in the seed.
+
+    Args:
+        base_url: The arm's gateway.
+        arm: The arm.
+        cfg: The run configuration (``control_reveal`` set).
+        http: A client for the eval gateway.
+        seeder: Writes and reads ``sessions.revealed_tools``.
+        row: The row; gets ``revealed_before``.
+
+    Returns:
+        The new session id.
+
+    Raises:
+        ValueError: No seeder, or the read-back is not the seeded names (control) or empty
+            (treatment).
+    """
+    if seeder is None:
+        raise ValueError("control_reveal is set but no RevealSeeder was given")
+    resp = await http.post(f"{base_url}/sessions", json={}, timeout=30.0)
+    resp.raise_for_status()
+    session_id = str(resp.json()["session_id"])
+    if arm == "control":
+        stored = await seeder.seed(session_id, cfg.control_reveal)
+        expected = sorted(cfg.control_reveal)
+    else:
+        stored = await seeder.read(session_id)
+        expected = []
+    row["revealed_before"] = stored
+    if stored != expected:
+        raise ValueError(
+            f"{arm} session {session_id} holds revealed tools {stored}, not {expected}"
+        )
+    return session_id
 
 
 async def run_one(
@@ -334,6 +503,7 @@ async def run_one(
     http: httpx.AsyncClient,
     es: httpx.AsyncClient,
     driver: AsyncDriver,
+    seeder: RevealSeeder | None = None,
 ) -> Row:
     """Wipe the eval graph, wait for the model, run one turn in a new session, read its events.
 
@@ -345,6 +515,7 @@ async def run_one(
         http: A client for the eval gateway.
         es: A client for ``elasticsearch-eval``.
         driver: A driver for ``neo4j-eval``.
+        seeder: Required when ``cfg.control_reveal`` is set.
 
     Returns:
         The row. A transport, HTTP, missing-key or value failure is an ``error`` row.
@@ -359,6 +530,8 @@ async def run_one(
         "model": cfg.model,
         "prompt": scenario.prompt,
         "expect": scenario.expect,
+        "prompt_sha256": sha256_text(scenario.prompt),
+        "expect_sha256": sha256_text(scenario.expect),
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     t0: float | None = None
@@ -366,6 +539,8 @@ async def run_one(
         await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
         await wait_for_local_model_calls(es, gap_s=cfg.gap_s)
         params = {"message": scenario.prompt, "channel": "EVAL", "model": cfg.model}
+        if cfg.control_reveal:
+            params["session_id"] = await prepare_session(base_url, arm, cfg, http, seeder, row)
         timeout = settings.orchestrator_turn_lifetime_seconds + _CLIENT_TIMEOUT_BUFFER_S
         t0 = time.monotonic()
         resp = await http.post(f"{base_url}/chat", params=params, timeout=timeout)
@@ -379,8 +554,10 @@ async def run_one(
             reply=str(data["response"]),
             primary_selection=data.get("primary_selection"),
         )
+        if GENERIC_FAILURE_REPLY in str(row["reply"]):
+            raise ValueError(f"the reply is the generic failure reply: {row['reply']!r}"[:200])
         await asyncio.sleep(cfg.settle_s)
-        row.update(await read_turn(es, trace_id, arm))
+        row.update(await read_turn(es, trace_id, arm, cfg.control_reveal))
         row["graph_nodes_after"] = await count_graph_nodes(driver)
     except (httpx.HTTPError, KeyError, ValueError) as exc:
         row["error"] = repr(exc)[:300]
@@ -396,6 +573,7 @@ async def run_part2(
     http: httpx.AsyncClient,
     es: httpx.AsyncClient,
     driver: AsyncDriver,
+    seeder: RevealSeeder | None = None,
 ) -> list[Row]:
     """Run each (scenario, arm) that has no row without an error; append each row as it lands.
 
@@ -405,6 +583,7 @@ async def run_part2(
         http: A client for the eval gateways.
         es: A client for ``elasticsearch-eval``.
         driver: A driver for ``neo4j-eval``.
+        seeder: Required when ``cfg.control_reveal`` is set.
 
     Returns:
         The rows written by this call.
@@ -417,7 +596,9 @@ async def run_part2(
         for position, arm in enumerate(arm_order(cfg.arms, index)):
             if (scenario.id, arm) in done:
                 continue
-            row = await run_one(scenario, arm, position, cfg, http=http, es=es, driver=driver)
+            row = await run_one(
+                scenario, arm, position, cfg, http=http, es=es, driver=driver, seeder=seeder
+            )
             with out.open("a") as fh:
                 fh.write(json.dumps(row) + "\n")
             written.append(row)

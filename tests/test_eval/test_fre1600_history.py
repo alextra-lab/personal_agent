@@ -114,7 +114,13 @@ def test_report_derives_boundary_from_control(tmp_path: Path) -> None:
     rows = []
     for arm, prompt_n in {"today": 3000, "control": 900, "no_tools": 500, "preserve": 320}.items():
         rows.append(
-            {"arm": arm, "draw": 0, "turn": 2, "call": 1, "timings": {"prompt_n": prompt_n}}
+            {
+                "arm": arm,
+                "draw": 0,
+                "turn": 2,
+                "call": 1,
+                "timings": {"prompt_n": prompt_n, "cache_n": 12000 - prompt_n},
+            }
         )
     (tmp_path / "rows.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
     args = argparse.Namespace(run_dir=tmp_path)
@@ -123,3 +129,4 @@ def test_report_derives_boundary_from_control(tmp_path: Path) -> None:
     assert entry["new_tokens"] == 300
     assert entry["boundary"] == 600
     assert entry["bound"] == 900
+    assert entry["preserve_cache_n"] == [11680]

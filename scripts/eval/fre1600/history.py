@@ -397,6 +397,9 @@ def report(args: argparse.Namespace) -> dict[str, object]:
         for arm in ARMS:
             vals = [first[(arm, d, turn)]["prompt_n"] for d in draws if (arm, d, turn) in first]
             entry[f"{arm}_prompt_n"] = vals
+            entry[f"{arm}_cache_n"] = [
+                first[(arm, d, turn)]["cache_n"] for d in draws if (arm, d, turn) in first
+            ]
         control = entry["control_prompt_n"]
         if isinstance(control, list) and control:
             boundary = int(statistics.median(control)) - new

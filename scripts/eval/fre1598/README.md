@@ -68,7 +68,9 @@ uv run python -m scripts.eval.fre1598.judge score --run-dir $RUN
 - The calls go through the agent's LLM client on the `study` budget lane of the eval ledger (daily cap
   $1.00, weekly $5.00). A cap denial stops the labelling. Each label row records the cost that the client
   returns.
-- `score` writes `judging/report.json`. AC-1 is `incomplete` until AC-2 passes.
+- `score` writes `judging/report.json`. AC-1 is `incomplete` until AC-2 passes. A scenario of
+  `part2_scenarios.yaml` with no judged reply (both arms were error rows, or it never ran) is listed as
+  `unjudged` and fails AC-2.
 
 ## Tests
 

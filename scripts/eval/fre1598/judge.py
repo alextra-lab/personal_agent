@@ -37,9 +37,10 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast, get_args
+from urllib.parse import parse_qs, urlsplit
 
 from scripts.eval.fre1590 import help as part2
-from scripts.eval.fre1598.run import MODEL_KEY, catalog_entry
+from scripts.eval.fre1598.run import MODEL_KEY, SCENARIOS_FILE, catalog_entry
 from scripts.eval.fre1598.seed import EVAL_DB_PORT
 
 Label = Literal["PASS", "PARTIAL", "FAIL"]
@@ -268,6 +269,31 @@ async def label_items(
     return written
 
 
+def is_eval_db_url(url: str) -> bool:
+    """Tell whether a database URL can only reach postgres-eval.
+
+    Args:
+        url: The ``AGENT_DATABASE_URL`` value.
+
+    Returns:
+        True for one local host on port ``EVAL_DB_PORT`` with no ``host`` or ``port`` query key.
+        A multi-host URL is refused: asyncpg would connect to the first host that answers.
+    """
+    parts = urlsplit(url)
+    if "," in parts.netloc.rpartition("@")[2]:
+        return False
+    query = {k.lower() for k in parse_qs(parts.query)}
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    return (
+        parts.hostname in {"localhost", "127.0.0.1"}
+        and port == EVAL_DB_PORT
+        and not query & {"host", "port"}
+    )
+
+
 def split_rids(
     labels_1: Mapping[str, Mapping[str, object]], labels_2: Mapping[str, Mapping[str, object]]
 ) -> list[str]:
@@ -282,12 +308,15 @@ def split_rids(
 def score(
     key: Mapping[str, Mapping[str, str]],
     labels: Mapping[str, Mapping[str, Mapping[str, object]]],
+    expected_ids: Sequence[str] = (),
 ) -> dict[str, object]:
     """Score both arms of each scenario and decide AC-1 and AC-2.
 
     Args:
         key: ``rid`` → ``id``, ``arm``, ``trace_id``.
         labels: Judge number (``"1"``, ``"2"``, ``"3"``) → ``rid`` → label row.
+        expected_ids: The scenario list. A listed id with no reply in ``key`` (both arms were
+            error rows, or it never ran) goes to ``unjudged`` and fails AC-2.
 
     Returns:
         ``replies`` (each judge's label, the third label, the final pair and the points),
@@ -327,7 +356,8 @@ def score(
     for entry in key.values():
         arms_by_id.setdefault(entry["id"], set()).add(entry["arm"])
     one_arm = sorted(sid for sid, arms in arms_by_id.items() if arms != set(part2.ARMS))
-    ac2 = not (missing or missing_third or unexpected_third or one_arm)
+    unjudged = sorted(set(expected_ids) - set(arms_by_id))
+    ac2 = not (missing or missing_third or unexpected_third or one_arm or unjudged)
     scenarios = [
         {
             "id": sid,
@@ -347,6 +377,7 @@ def score(
         "missing_third": missing_third,
         "unexpected_third": unexpected_third,
         "one_arm": one_arm,
+        "unjudged": unjudged,
         "ac2": "PASS" if ac2 else "FAIL",
         "ac1": ("FAIL" if lower else "PASS") if ac2 else "incomplete",
         "lower_with_skills": lower,
@@ -374,6 +405,7 @@ def render(report: Mapping[str, object], cost: float) -> str:
         "missing_third",
         "unexpected_third",
         "one_arm",
+        "unjudged",
         "lower_with_skills",
     ):
         lines.append(f"{field}: {report[field] or 'none'}")
@@ -424,7 +456,7 @@ async def _label(run_dir: Path, judge: str) -> int:
     # FRE-375: an eval script writes no production Postgres row, so the judge process must run
     # with AGENT_DATABASE_URL on postgres-eval. The `study` cap then binds on the eval ledger.
     db_url = get_settings().database_url
-    if f":{EVAL_DB_PORT}/" not in db_url:
+    if not is_eval_db_url(db_url):
         raise SystemExit(
             f"AGENT_DATABASE_URL must point at postgres-eval (port {EVAL_DB_PORT}) for the judges"
         )
@@ -458,7 +490,7 @@ def _score(run_dir: Path) -> int:
     jdir = judging_dir(run_dir)
     key = json.loads((jdir / "key.json").read_text())
     labels = {j: read_labels(jdir / f"labels-{j}.jsonl") for j in JUDGES}
-    report = score(key, labels)
+    report = score(key, labels, [s.id for s in part2.load_scenarios(SCENARIOS_FILE)])
     cost = sum(
         float(cast(float, r.get("cost_usd") or 0.0))
         for j in JUDGES

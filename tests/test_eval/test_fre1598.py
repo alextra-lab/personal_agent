@@ -336,6 +336,34 @@ def test_a_scenario_with_one_arm_fails_ac2() -> None:
     assert report["one_arm"] == ["b#1"] and report["ac2"] == "FAIL"
 
 
+def test_a_listed_scenario_with_no_judged_reply_fails_ac2() -> None:
+    """Seeded negative: both arms of c#2 were error rows, so the key has no entry for it."""
+    same = {"r01": "PASS", "r02": "PASS", "r03": "PASS", "r04": "PASS"}
+    report = judge.score(KEY, labels(j1=same, j2=same), expected_ids=["a#0", "b#1", "c#2"])
+    assert report["unjudged"] == ["c#2"]
+    assert report["ac2"] == "FAIL" and report["ac1"] == "incomplete"
+    full = judge.score(KEY, labels(j1=same, j2=same), expected_ids=["a#0", "b#1"])
+    assert full["unjudged"] == [] and full["ac2"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    ("url", "ok"),
+    [
+        ("postgresql+asyncpg://agent:p%2Fw@localhost:5434/personal_agent", True),
+        ("postgresql+asyncpg://agent:pw@127.0.0.1:5434/personal_agent", True),
+        # Seeded negatives: production, the test stack, and three forms that hold ":5434/".
+        ("postgresql+asyncpg://agent:pw@localhost:5432/personal_agent", False),
+        ("postgresql+asyncpg://agent:pw@localhost:5433/personal_agent", False),
+        ("postgresql://agent:pw@localhost:5432,localhost:5434/personal_agent", False),
+        ("postgresql+asyncpg://agent:pw@db.example.org:5434/personal_agent", False),
+        ("postgresql+asyncpg://agent:pw@localhost:5432/personal_agent?x=:5434/", False),
+        ("postgresql+asyncpg://agent:pw@localhost:5434/personal_agent?host=prod", False),
+    ],
+)
+def test_the_judge_accepts_only_the_eval_database(url: str, ok: bool) -> None:
+    assert judge.is_eval_db_url(url) is ok
+
+
 def test_the_judges_resolve_from_the_catalog() -> None:
     pins = judge.judge_pins()
     judges = pins["judges"]

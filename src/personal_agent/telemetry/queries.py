@@ -5,6 +5,8 @@ the threshold optimizer (FRE-11).
 """
 
 import hashlib
+import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -70,6 +72,85 @@ class TaskPatternReport:
     hourly_distribution: dict[int, int]
     avg_cpu_percent: float
     avg_memory_percent: float
+
+
+@dataclass(frozen=True)
+class MissingSkillRequest:
+    """One ``missing_skill_requested`` event joined to the turn that produced it (FRE-1322).
+
+    Attributes:
+        requested_name: Skill name the model asked for.
+        session_id: Session of the request; taken from a tool event of the same
+            trace when the event itself carries none.
+        trace_id: Trace of the turn, or ``None`` when the event carries none.
+        host: Host that the turn reached most often with bash, or ``None``.
+    """
+
+    requested_name: str
+    session_id: str | None
+    trace_id: str | None
+    host: str | None
+
+
+# The optional userinfo group keeps ``https://<token>@host`` from reading the token
+# as the host (a credential must never reach an insight title). ``?`` and ``#`` end
+# the authority, so an ``@`` in a query string is not userinfo.
+_URL_HOST_RE = re.compile(
+    r"https?://(?:[^/@\s'\"?#]*@)?([A-Za-z0-9._-]+)(?::(\d+))?", re.IGNORECASE
+)
+
+# FRE-1322: bounds for the missing-skill context join. A 7-day window holds
+# fewer than 200 requests, so the cap is a guard and a truncation is logged.
+# Only bash_started is fetched: it carries session_id, and tool_call_started is
+# the highest-volume event per trace and would crowd it out of the cap.
+_MISSING_SKILL_REQUEST_CAP = 2000
+_MISSING_SKILL_TRACE_CHUNK = 20
+_MISSING_SKILL_TOOL_EVENT_CAP = 5000
+
+
+def extract_hosts(command: str) -> frozenset[str]:
+    """Read the ``host[:port]`` of every ``http(s)`` URL in a shell command.
+
+    Args:
+        command: Shell command text, for example from a ``bash_started`` event.
+
+    Returns:
+        The distinct ``host`` or ``host:port`` values; empty when no URL is present.
+    """
+    hosts: set[str] = set()
+    for host, port in _URL_HOST_RE.findall(command or ""):
+        host = host.lower()
+        if not any(ch.isalnum() for ch in host):
+            continue  # "http://..." in prose is not a host
+        hosts.add(f"{host}:{port}" if port else host)
+    return frozenset(hosts)
+
+
+def dominant_host(commands: Sequence[str]) -> str | None:
+    """Pick the host that the most commands reach.
+
+    A host counts once per command. Ties break alphabetically so the result is
+    deterministic.
+
+    Args:
+        commands: Shell commands of one trace.
+
+    Returns:
+        The dominant ``host[:port]``, or ``None`` when no command reaches a host.
+    """
+    counts: Counter[str] = Counter()
+    for command in commands:
+        counts.update(extract_hosts(command))
+    if not counts:
+        return None
+    return min(counts, key=lambda host: (-counts[host], host))
+
+
+def _window_bounds(days: int, until: datetime | None) -> tuple[datetime, datetime]:
+    """Return ``(start, end)`` of a trailing window; ``until`` never exceeds now."""
+    now = datetime.now(timezone.utc)
+    end = min(until, now) if until is not None else now
+    return end - timedelta(days=days), end
 
 
 class TelemetryQueries:
@@ -496,7 +577,9 @@ class TelemetryQueries:
             "rounds_needed_values": rounds_values,
         }
 
-    async def get_missing_skill_buckets(self, days: int) -> list[tuple[str, int, int]]:
+    async def get_missing_skill_buckets(
+        self, days: int, until: datetime | None = None
+    ) -> list[tuple[str, int, int]]:
         """Aggregate ``missing_skill_requested`` events over trailing ``days`` (FRE-328).
 
         Queries agent-logs-* for events where ``event_type == "missing_skill_requested"``
@@ -510,14 +593,14 @@ class TelemetryQueries:
 
         Args:
             days: Rolling look-back window size in days.
+            until: End of the window; defaults to now and never exceeds it.
 
         Returns:
             List of ``(requested_name, request_count, distinct_sessions)`` tuples,
             sorted descending by request count, capped at 50 buckets.
         """
         client = await self._get_client()
-        now = datetime.now(timezone.utc)
-        start = now - timedelta(days=days)
+        start, now = _window_bounds(days, until)
 
         response = await client.search(
             index=f"{self._logs_index_prefix}-*",
@@ -558,6 +641,106 @@ class TelemetryQueries:
             sessions = int((bucket.get("distinct_sessions") or {}).get("value", 0) or 0)
             results.append((name, count, sessions))
         return results
+
+    async def get_missing_skill_requests(
+        self, days: int, until: datetime | None = None
+    ) -> list[MissingSkillRequest]:
+        """Join each ``missing_skill_requested`` event to the turn that produced it (FRE-1322).
+
+        Names are model guesses, so two requests for one gap often differ. The
+        host that the turn reached with bash is the stable signal: it is read
+        from the ``bash_started`` events of the same ``trace_id``. Those events
+        also supply the session when the request event has none.
+
+        Args:
+            days: Look-back window size in days.
+            until: End of the window; defaults to now and never exceeds it.
+
+        Returns:
+            One entry per request, newest first. ``host`` is ``None`` when the
+            request has no trace or its turn ran no bash command with a URL.
+        """
+        client = await self._get_client()
+        start, end = _window_bounds(days, until)
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": start.isoformat(),
+                                    "lte": end.isoformat(),
+                                }
+                            }
+                        },
+                        {"term": {"event_type": "missing_skill_requested"}},
+                    ]
+                }
+            },
+            size=_MISSING_SKILL_REQUEST_CAP,
+            sort=[{"@timestamp": "desc"}],
+            source_includes=["requested_name", "session_id", "trace_id"],
+            track_total_hits=True,
+        )
+        hits = response["hits"]["hits"]
+        total = int(response["hits"]["total"]["value"])
+        if total > len(hits):
+            log.warning("missing_skill_requests_truncated", total=total, cap=len(hits))
+
+        raw: list[tuple[str, str | None, str | None]] = []
+        for hit in hits:
+            source = hit.get("_source") or {}
+            name = str(source.get("requested_name") or "").strip()
+            if not name:
+                continue
+            raw.append((name, source.get("session_id") or None, source.get("trace_id") or None))
+
+        trace_ids = sorted({trace for _, _, trace in raw if trace})
+        commands: dict[str, list[str]] = {}
+        sessions: dict[str, str] = {}
+        for i in range(0, len(trace_ids), _MISSING_SKILL_TRACE_CHUNK):
+            chunk = trace_ids[i : i + _MISSING_SKILL_TRACE_CHUNK]
+            tool_response = await client.search(
+                index=f"{self._logs_index_prefix}-*",
+                query={
+                    "bool": {
+                        "filter": [
+                            {"terms": {"trace_id": chunk}},
+                            {"terms": {"event_type": ["bash_started"]}},
+                        ]
+                    }
+                },
+                size=_MISSING_SKILL_TOOL_EVENT_CAP,
+                source_includes=["trace_id", "command", "session_id"],
+                track_total_hits=True,
+            )
+            tool_hits = tool_response["hits"]["hits"]
+            tool_total = int(tool_response["hits"]["total"]["value"])
+            if tool_total > len(tool_hits):
+                log.warning(
+                    "missing_skill_tool_events_truncated", total=tool_total, cap=len(tool_hits)
+                )
+            for tool_hit in tool_hits:
+                source = tool_hit.get("_source") or {}
+                trace = source.get("trace_id")
+                if not trace:
+                    continue
+                if source.get("session_id"):
+                    sessions.setdefault(trace, source["session_id"])
+                if source.get("command"):
+                    commands.setdefault(trace, []).append(str(source["command"]))
+
+        return [
+            MissingSkillRequest(
+                requested_name=name,
+                session_id=session or (sessions.get(trace) if trace else None),
+                trace_id=trace,
+                host=dominant_host(commands.get(trace, [])) if trace else None,
+            )
+            for name, session, trace in raw
+        ]
 
     async def get_error_events(
         self,

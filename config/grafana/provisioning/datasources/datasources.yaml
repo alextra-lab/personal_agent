@@ -48,6 +48,17 @@ datasources:
       timeField: "timestamp"
       logMessageField: "title"
 
+  # Insights Engine records (FRE-1322): the surface where a missing-skill finding is read.
+  - name: Elasticsearch - agent-insights
+    type: elasticsearch
+    uid: es-agent-insights
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-insights-*"
+      timeField: "timestamp"
+      logMessageField: "title"
+
   # Used by the monitors_joinability_slm dashboard rebuild (AC-6, F13).
   - name: Elasticsearch - monitors-joinability
     type: elasticsearch

@@ -8,9 +8,11 @@ import json as _json
 import pathlib
 import re
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from personal_agent.captains_log.archive import find_archived, restore_archived
 from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
@@ -64,6 +66,12 @@ def _get_captains_log_dir() -> pathlib.Path:
     log_dir = project_root / "telemetry" / "captains_log"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
+
+
+def _has_fingerprint(data: Mapping[str, object], fingerprint: str) -> bool:
+    """Return whether a stored entry's proposal carries ``fingerprint``."""
+    pc = data.get("proposed_change")
+    return isinstance(pc, dict) and pc.get("fingerprint") == fingerprint
 
 
 def _generate_entry_id(date: datetime | None = None, trace_id: str | None = None) -> str:
@@ -326,7 +334,9 @@ class CaptainLogManager:
 
         # --- ADR-0030 / ADR-0040: fingerprint-based dedup ---
         if fingerprint:
-            existing_path = self._find_entry_by_fingerprint(fingerprint, eval_mode=entry.eval_mode)
+            existing_path = self._find_entry_by_fingerprint(
+                fingerprint, eval_mode=entry.eval_mode, trace_id=_trace_id_from_entry(entry)
+            )
             if existing_path is not None:
                 return self._merge_into_existing(existing_path, entry, es_handler)
 
@@ -371,7 +381,7 @@ class CaptainLogManager:
     # ------------------------------------------------------------------
 
     def _find_entry_by_fingerprint(
-        self, fingerprint: str, *, eval_mode: bool = False
+        self, fingerprint: str, *, eval_mode: bool = False, trace_id: str | None = None
     ) -> pathlib.Path | None:
         """Scan on-disk entries for a proposal with matching fingerprint (any status).
 
@@ -383,13 +393,19 @@ class CaptainLogManager:
         production sighting that merged into an eval file vanished, because promotion
         skips every ``eval_mode`` file.
 
+        FRE-1609: on a live miss, the archive is searched too. The lifecycle job moves
+        an entry older than 14 days to the archive, and a re-sighting of it created a
+        fresh promotable entry. A matching archived entry is restored to the live
+        directory, so the caller merges into it.
+
         Args:
             fingerprint: The fingerprint to match.
             eval_mode: Provenance of the incoming entry. Only files of the same
                 provenance match.
+            trace_id: Trace of the incoming entry, for the restore log.
 
         Returns:
-            Path to the matching file, or None.
+            Path to the matching live file, or None.
         """
         for json_file in sorted(self.log_dir.glob("CL-*.json"), reverse=True):
             try:
@@ -400,10 +416,29 @@ class CaptainLogManager:
             if bool(data.get("eval_mode")) != eval_mode:
                 continue
 
-            pc = data.get("proposed_change")
-            if pc and pc.get("fingerprint") == fingerprint:
+            if _has_fingerprint(data, fingerprint):
                 return json_file
 
+        archived = find_archived(
+            self.log_dir,
+            lambda data: (
+                bool(data.get("eval_mode")) == eval_mode and _has_fingerprint(data, fingerprint)
+            ),
+            trace_id=trace_id,
+        )
+        if archived is not None:
+            try:
+                return restore_archived(archived, self.log_dir, trace_id=trace_id)
+            except (OSError, EOFError) as exc:
+                # Fail open: a failed restore must not drop the sighting. The new entry
+                # it creates is the pre-FRE-1609 behaviour, and Guard 3 still links it.
+                log.warning(
+                    "captains_log_archive_restore_failed",
+                    archive_file=str(archived),
+                    fingerprint=fingerprint,
+                    error=str(exc),
+                    trace_id=trace_id,
+                )
         return None
 
     def _merge_into_existing(

@@ -9,7 +9,8 @@ import pytest
 import pytest_asyncio
 
 from personal_agent.sysgraph import SysgraphRepository
-from personal_agent.sysgraph.repository import ProposalRecord
+from personal_agent.sysgraph import repository as repository_module
+from personal_agent.sysgraph.repository import _REINFORCE_PROPOSAL_QUERY, ProposalRecord
 
 
 @pytest_asyncio.fixture
@@ -25,10 +26,10 @@ async def _cleanup_rbe_rows(sysgraph_pool: asyncpg.Pool) -> AsyncIterator[None]:
             )
             await conn.execute(
                 "DELETE FROM sysgraph.promoted_to WHERE ticket_id IN "
-                "(SELECT id FROM sysgraph.ticket WHERE linear_issue_id = 'FRE-TEST-RBE-DECIDED')"
+                "(SELECT id FROM sysgraph.ticket WHERE linear_issue_id LIKE 'FRE-TEST-RBE-%')"
             )
             await conn.execute(
-                "DELETE FROM sysgraph.ticket WHERE linear_issue_id = 'FRE-TEST-RBE-DECIDED'"
+                "DELETE FROM sysgraph.ticket WHERE linear_issue_id LIKE 'FRE-TEST-RBE-%'"
             )
             await conn.execute(
                 "DELETE FROM sysgraph.proposal WHERE fingerprint LIKE 'fp-rbe-test-%'"
@@ -273,3 +274,202 @@ async def test_read_before_emit_generation_upsert_increments_not_overwrites(
             "SELECT seen_count FROM sysgraph.proposal WHERE id = $1", existing_id
         )
     assert seen_count == 6
+
+
+async def _seed_promoted_proposal(
+    pool: asyncpg.Pool, *, category: str, fingerprint: str, seen_count: int
+) -> object:
+    """Seed a proposal -> ticket chain with NO outcome: promoted, but the kind is not decided."""
+    async with pool.acquire() as conn:
+        proposal_id = await conn.fetchval(
+            "INSERT INTO sysgraph.proposal (source, category, fingerprint, what, seen_count, scope) "
+            "VALUES ('reflection', $1, $2, 'seed', $3, 'tools') RETURNING id",
+            category,
+            fingerprint,
+            seen_count,
+        )
+        ticket_id = await conn.fetchval(
+            "INSERT INTO sysgraph.ticket (linear_issue_id, title) "
+            "VALUES ('FRE-TEST-RBE-PROMOTED', 'seed ticket') RETURNING id"
+        )
+        await conn.execute(
+            "INSERT INTO sysgraph.promoted_to (proposal_id, ticket_id) VALUES ($1, $2)",
+            proposal_id,
+            ticket_id,
+        )
+    return proposal_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_read_before_emit_does_not_reinforce_a_promoted_row(
+    sysgraph_repo: SysgraphRepository,
+    sysgraph_pool: asyncpg.Pool,
+    _cleanup_rbe_rows: None,
+) -> None:
+    """FRE-1609 AC-4: a promoted row plus a new matching proposal keeps its seen_count.
+
+    FRE-1378's row rose from 143 at promotion to 197, because the group lookup did not
+    exclude promoted rows. The new sighting starts a fresh row from zero instead.
+    """
+    promoted_id = await _seed_promoted_proposal(
+        sysgraph_pool,
+        category="rbe-promoted-cat",
+        fingerprint="fp-rbe-test-promoted",
+        seen_count=143,
+    )
+
+    result = await sysgraph_repo.read_before_emit(
+        "reflection",
+        "rbe-promoted-cat",
+        "tools",
+        ProposalRecord(
+            source="reflection",
+            category="rbe-promoted-cat",
+            fingerprint="fp-rbe-test-after-promotion",
+            what="the same idea, seen again after promotion",
+            why=None,
+            how=None,
+            seen_count=1,
+            scope="tools",
+        ),
+    )
+
+    assert result.decision == "generate_new"
+    assert result.proposal_id != promoted_id
+    async with sysgraph_pool.acquire() as conn:
+        promoted_seen = await conn.fetchval(
+            "SELECT seen_count FROM sysgraph.proposal WHERE id = $1", promoted_id
+        )
+        fresh_seen = await conn.fetchval(
+            "SELECT seen_count FROM sysgraph.proposal "
+            "WHERE fingerprint = 'fp-rbe-test-after-promotion'"
+        )
+    assert promoted_seen == 143
+    assert fresh_seen == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_read_before_emit_fingerprint_conflict_does_not_reinforce_a_promoted_row(
+    sysgraph_repo: SysgraphRepository,
+    sysgraph_pool: asyncpg.Pool,
+    _cleanup_rbe_rows: None,
+) -> None:
+    """FRE-1609 AC-4: the ON CONFLICT (fingerprint) path also leaves a promoted row alone.
+
+    A sighting whose fingerprint equals the promoted row's fingerprint skips the group
+    lookup (the promoted row is excluded) and reaches the generation upsert. Without a
+    guard on the conflict update, that upsert is a second way to raise the count.
+    """
+    promoted_id = await _seed_promoted_proposal(
+        sysgraph_pool,
+        category="rbe-promoted-conflict-cat",
+        fingerprint="fp-rbe-test-promoted-conflict",
+        seen_count=143,
+    )
+
+    result = await sysgraph_repo.read_before_emit(
+        "reflection",
+        "rbe-promoted-conflict-cat",
+        "tools",
+        ProposalRecord(
+            source="reflection",
+            category="rbe-promoted-conflict-cat",
+            fingerprint="fp-rbe-test-promoted-conflict",
+            what="seed",
+            why=None,
+            how=None,
+            seen_count=1,
+            scope="tools",
+        ),
+    )
+
+    assert result.decision == "generate_new"
+    assert result.proposal_id is None
+    async with sysgraph_pool.acquire() as conn:
+        promoted_seen = await conn.fetchval(
+            "SELECT seen_count FROM sysgraph.proposal WHERE id = $1", promoted_id
+        )
+    assert promoted_seen == 143
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reinforce_update_skips_a_row_promoted_after_the_lookup(
+    sysgraph_pool: asyncpg.Pool,
+    _cleanup_rbe_rows: None,
+) -> None:
+    """FRE-1609: promotion links a row without the read-before-emit lock.
+
+    If the row becomes promoted between the group lookup and the UPDATE, the UPDATE
+    must change nothing and return no row, so the caller starts a new row instead.
+    """
+    promoted_id = await _seed_promoted_proposal(
+        sysgraph_pool,
+        category="rbe-promoted-race-cat",
+        fingerprint="fp-rbe-test-promoted-race",
+        seen_count=143,
+    )
+
+    async with sysgraph_pool.acquire() as conn:
+        returned = await conn.fetchval(_REINFORCE_PROPOSAL_QUERY, promoted_id)
+        seen = await conn.fetchval(
+            "SELECT seen_count FROM sysgraph.proposal WHERE id = $1", promoted_id
+        )
+
+    assert returned is None
+    assert seen == 143
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_read_before_emit_falls_through_when_the_row_is_promoted_mid_check(
+    sysgraph_repo: SysgraphRepository,
+    sysgraph_pool: asyncpg.Pool,
+    _cleanup_rbe_rows: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1609: the lookup saw the row unpromoted, the UPDATE sees it promoted.
+
+    The race is simulated by giving the lookup the pre-FRE-1609 query, which still
+    returns the promoted row. The UPDATE refuses it, and the sighting must start a new
+    row instead of returning ``reinforced`` with no count.
+    """
+    promoted_id = await _seed_promoted_proposal(
+        sysgraph_pool,
+        category="rbe-promoted-midcheck-cat",
+        fingerprint="fp-rbe-test-promoted-midcheck",
+        seen_count=143,
+    )
+    monkeypatch.setattr(
+        repository_module,
+        "_FIND_AWAITING_PROPOSAL_QUERY",
+        "SELECT id, fingerprint, seen_count, created_at FROM sysgraph.proposal "
+        "WHERE source = $1 AND category = $2 AND scope IS NOT DISTINCT FROM $3 "
+        "ORDER BY created_at DESC LIMIT 1;",
+    )
+
+    result = await sysgraph_repo.read_before_emit(
+        "reflection",
+        "rbe-promoted-midcheck-cat",
+        "tools",
+        ProposalRecord(
+            source="reflection",
+            category="rbe-promoted-midcheck-cat",
+            fingerprint="fp-rbe-test-after-midcheck",
+            what="the same idea, seen while it was being promoted",
+            why=None,
+            how=None,
+            seen_count=1,
+            scope="tools",
+        ),
+    )
+
+    assert result.decision == "generate_new"
+    assert result.proposal_id not in (None, promoted_id)
+    async with sysgraph_pool.acquire() as conn:
+        promoted_seen = await conn.fetchval(
+            "SELECT seen_count FROM sysgraph.proposal WHERE id = $1", promoted_id
+        )
+    assert promoted_seen == 143

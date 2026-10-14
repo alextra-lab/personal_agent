@@ -56,6 +56,7 @@ done
 captains_log/
 ├── __init__.py           # Exports: CaptainLogManager
 ├── manager.py            # Log entry management, file I/O
+├── archive.py            # Find/restore archived entries for dedup + promotion (FRE-1609)
 ├── models.py             # Pydantic models (CaptainLogEntry, ProposedChange)
 ├── reflection.py         # Main reflection generation (DSPy + manual fallback)
 ├── reflection_dspy.py    # DSPy ChainOfThought implementation (ADR-0010)

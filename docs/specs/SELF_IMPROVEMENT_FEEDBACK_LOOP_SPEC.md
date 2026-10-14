@@ -90,6 +90,15 @@ archived issues as disposable — they contain the human signal that makes this 
 
 ### History preservation strategy
 
+> **One-time reset, 2026-10-14 (FRE-1609).** Owner decision: *"Captains log - so much has changed
+> it evolved. I vote we clear the file history and let the process start from zero."* The
+> reflections that produced the old proposals read fields that no longer existed (FRE-1608), so
+> their corroboration was false. This one reset overrides the preservation rule below. It
+> deletes the live `CL-*.json` files, the reflections archive and the sysgraph proposal state
+> (proposals, tickets, `promoted_to`, outcomes, signals), after a verified backup. It keeps the
+> ES indices (ILM ages them out), the Linear tickets (the canceled ones stay as Guard 3
+> tombstones) and the Guard 2 suppression file. The rule below applies again from that date.
+
 Before archiving any issue, the agent captures its full feedback metadata to a local file:
 
 **Location**: `telemetry/feedback_history/<issue_identifier>.json` (gitignored)
@@ -434,7 +443,7 @@ No immediate action. The issue stays in its current state. The poller records th
 
 ### 6.4 Proposal re-emergence prevention
 
-**Problem**: The existing write-time fingerprint dedup (`manager._find_entry_by_fingerprint()`) only matches `AWAITING_APPROVAL` entries. Once an entry is promoted (status → `APPROVED`) or rejected and archived, a future reflection with the same fingerprint creates a new CL entry, accumulates `seen_count`, and gets promoted again — producing a duplicate Linear issue.
+**Problem**: The original write-time fingerprint dedup (`manager._find_entry_by_fingerprint()`) only matched `AWAITING_APPROVAL` entries. Once an entry was promoted (status → `APPROVED`) or rejected and archived, a future reflection with the same fingerprint created a new CL entry, accumulated `seen_count`, and got promoted again — producing a duplicate Linear issue.
 
 ```
 Reflection: "add retry logic" (fingerprint: abc123)
@@ -442,36 +451,48 @@ Reflection: "add retry logic" (fingerprint: abc123)
   → Rejected in Linear → archived
 
 Two weeks later: reflection "add retry logic" again
-  → _find_entry_by_fingerprint() finds nothing (old entry is APPROVED)
+  → _find_entry_by_fingerprint() finds nothing (old entry is APPROVED, or archived)
   → New CL entry created → accumulates → promoted again
   → DUPLICATE Linear issue
 ```
 
-**Solution**: Three complementary guards, each catching what the previous one misses.
+**Solution**: Three complementary guards, each catching what the previous one misses, plus one
+rule in sysgraph (Guard 1b).
 
-#### Guard 1: Expand CL write-time dedup (cheapest, catches most)
+#### Guard 1: CL write-time dedup over every status, live and archived
 
-Modify `_find_entry_by_fingerprint()` in `manager.py` to match **any** status, not just `AWAITING_APPROVAL`:
+`_find_entry_by_fingerprint()` in `manager.py` matches an entry of **any** status that has the
+same fingerprint and the same `eval_mode` (FRE-1608: an eval sighting never merges into a
+production entry, and the reverse). It reads the live directory first. On a miss it reads the
+reflections archive (FRE-1609).
 
-```python
-def _find_entry_by_fingerprint(self, fingerprint: str) -> pathlib.Path | None:
-    for json_file in sorted(self.log_dir.glob("CL-*.json"), reverse=True):
-        try:
-            data = _json.loads(json_file.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+The lifecycle job (`telemetry/lifecycle_manager.py`) gzips a CL file that is older than 14 days
+into `<telemetry>/archive/captains_log_reflections/YYYY-MM/`. Before FRE-1609, a re-sighting of an
+archived entry created a fresh promotable entry: `CL-20261003-084335` carried FRE-1378's
+fingerprint. Now a matching archived entry is restored to the live directory
+(`captains_log/archive.py`, no-clobber), and the sighting merges into it. The archive is a storage
+tier, not a decision: the restored entry keeps its `entry_id`, status and `linear_issue_id`.
 
-        # ADR-0040: match ANY status, not just AWAITING_APPROVAL.
-        # If the entry is APPROVED/promoted, we still want to merge
-        # (increment seen_count) rather than create a new promotable entry.
-        pc = data.get("proposed_change")
-        if pc and pc.get("fingerprint") == fingerprint:
-            return json_file
+`_merge_into_existing()` increments `seen_count` and never resets the status. An `APPROVED`
+(promoted) entry stays promoted. The agent keeps noticing the pattern without triggering
+re-promotion. `PromotionPipeline._mark_promoted()` also restores the entry from the archive if
+the lifecycle job moved it between the scan and the write.
 
-    return None
-```
+The promotion scan itself reads only the live directory. An awaiting entry that ages out
+without a new sighting stays in the archive until a new sighting restores it.
 
-And update `_merge_into_existing()`: if the matched entry is `APPROVED` (already promoted), merge the observation (increment `seen_count`) but **do not** reset status back to `AWAITING_APPROVAL`. The entry stays promoted. This preserves the data (the agent keeps noticing this pattern) without triggering re-promotion.
+#### Guard 1b: no sysgraph reinforcement after promotion (FRE-1609)
+
+`SysgraphRepository.read_before_emit()` groups proposals by `(source, category, scope)`. The
+group lookup, the reinforcement `UPDATE` and the `ON CONFLICT (fingerprint)` branch of the
+generation upsert all exclude a proposal that has a `promoted_to` edge. Before FRE-1609, a
+promoted row stayed the newest match of its group and kept gaining corroboration: FRE-1378's row
+rose from 143 at promotion to 197. That count was stamped onto every later sighting.
+
+After a promotion, a new sighting of the same group starts a new row at `seen_count` 1. A
+sighting whose fingerprint equals the promoted row's fingerprint writes nothing
+(`proposal_id` is `None`), and Guard 1 absorbs it into the promoted CL entry. Gating of decided
+kinds is FRE-1610.
 
 #### Guard 2: Suppression file for rejected proposals
 
@@ -507,30 +528,28 @@ Suppression duration is configurable (`feedback_suppression_days`, default 30). 
 
 #### Guard 3: Promotion-time Linear search (last resort)
 
-Before creating a Linear issue, the promotion pipeline queries Linear to check for an existing issue with the same fingerprint embedded in the description:
+Before creating a Linear issue, the promotion pipeline queries Linear for an existing issue whose
+description contains the fingerprint (`PromotionPipeline._existing_linear_issue_for_fingerprint()`):
 
 ```python
-async def _check_linear_duplicate(self, fingerprint: str) -> str | None:
-    """Search Linear for an existing issue containing this fingerprint.
-
-    Returns:
-        Issue identifier if found, None otherwise.
-    """
-    results = await self._linear_client.list_issues(
-        team="FrenchForest",
-        label="Improvement",
-        query=fingerprint,
-    )
-    return results[0]["id"] if results else None
+issues = await self._linear_client.list_issues(
+    team=settings.linear_team_name,
+    descriptionQuery=fingerprint,  # FRE-1354: `query=` filtered titles and matched nothing
+    includeArchived=False,
+    limit=50,
+)
 ```
 
-The promotion pipeline includes the fingerprint in the Linear issue description (it's already in the CL entry data). If a match is found, the pipeline links the CL entry to the existing issue instead of creating a new one.
+The promotion pipeline includes the fingerprint in the Linear issue description. If a match is
+found, the pipeline links the CL entry to the existing issue instead of creating a new one. A
+canceled issue is still returned, so it stays a permanent tombstone for its fingerprint.
 
 #### Summary of guards
 
 | Guard | Where | Catches | Cost |
 |-------|-------|---------|------|
-| Expanded fingerprint match | `manager.save_entry()` | Re-emergence after promotion | Disk scan (existing, cheap) |
+| Fingerprint match, any status, live and archived | `manager.save_entry()` | Re-emergence after promotion or archival | Disk scan; archive read only on a live miss |
+| No reinforcement after promotion | `SysgraphRepository.read_before_emit()` | Corroboration that keeps growing on a filed idea | Same query, one extra `NOT EXISTS` |
 | Suppression file | `manager.save_entry()` | Re-emergence after rejection | JSON file read (very cheap) |
 | Linear search | `promotion.run()` | Anything that slipped through guards 1-2 | 1 API call per promotion (negligible at daily rate) |
 

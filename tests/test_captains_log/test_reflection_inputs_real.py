@@ -322,6 +322,29 @@ class TestFailureEventShapes:
         assert payload["failed_tool_calls"] == []
         assert expected in payload["degradation_events"][0]
 
+    def test_a_failed_calls_own_mirror_is_not_a_retry(self) -> None:
+        """The mirrored ``tool_call_completed`` is the same failure, not a second call."""
+        payload = self._excerpt(
+            {"event": "tool_call_failed", "tool_name": "fetch_url", "error": "timeout"},
+            {"event": "tool_call_completed", "tool_name": "fetch_url", "success": False},
+        )
+
+        assert payload["recovery_actions"] == []
+
+    def test_a_real_retry_and_a_real_switch_are_reported(self) -> None:
+        retry = self._excerpt(
+            {"event": "tool_call_failed", "tool_name": "fetch_url", "error": "timeout"},
+            {"event": "tool_call_completed", "tool_name": "fetch_url", "success": False},
+            {"event": "tool_call_completed", "tool_name": "fetch_url", "success": True},
+        )
+        switch = self._excerpt(
+            {"event": "tool_call_failed", "tool_name": "fetch_url", "error": "timeout"},
+            {"event": "tool_call_completed", "tool_name": "web_search", "success": True},
+        )
+
+        assert retry["recovery_actions"] == ["Retried fetch_url with same arguments"]
+        assert switch["recovery_actions"] == ["Switched from fetch_url to web_search"]
+
     def test_an_undegraded_expansion_is_not_a_failure(self) -> None:
         had_errors, payload = _build_failure_path_input(
             [{"event": "expansion_controller_complete", "degraded": False}]

@@ -168,7 +168,7 @@ def _degradation_notes(trace_events: Sequence[Mapping[str, Any]]) -> list[str]:
             detail = e.get(detail_key) if detail_key else None
         elif name == "expansion_controller_complete" and e.get("degraded") is True:
             detail = "degraded"
-        elif e.get("status") in _FAILED_STATUSES:
+        elif str(e.get("status", "")) in _FAILED_STATUSES:
             detail = f"status={e.get('status')}"
         else:
             continue
@@ -218,9 +218,20 @@ def _extract_failure_excerpt(trace_events: Sequence[dict[str, Any]]) -> FailureE
         )
         last_error = error_msg
 
-        # Check for recovery in the next tool event
-        if i + 1 < len(trace_events):
-            next_ev = trace_events[i + 1]
+        # Check for recovery in the next tool event. The call's own mirror
+        # (``tool_call_completed success=False`` right after ``tool_call_failed``) is
+        # the same failure, not a retry.
+        nxt = i + 1
+        if (
+            event.get("event") == "tool_call_failed"
+            and nxt < len(trace_events)
+            and trace_events[nxt].get("event") == "tool_call_completed"
+            and trace_events[nxt].get("success") is False
+            and trace_events[nxt].get("tool_name") == event.get("tool_name")
+        ):
+            nxt += 1
+        if nxt < len(trace_events):
+            next_ev = trace_events[nxt]
             next_tool = (
                 str(next_ev.get("tool_name", ""))
                 if str(next_ev.get("event", "")).startswith("tool_call_")

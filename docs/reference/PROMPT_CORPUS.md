@@ -1,6 +1,6 @@
 # Prompt Corpus — Seshat Personal Agent
 
-> Source revision: `6cadfe20` · Committed: 2026-10-13T14:39:53Z  
+> Source revision: `411a8a43` · Committed: 2026-10-14T04:55:44Z  
 > ADR: ADR-0078 · Spec: `docs/specs/PROMPT_MANAGEMENT_SPEC.md`  
 >
 > **Cache tier key**  
@@ -21,18 +21,18 @@
 | `entity_extraction_template` | 🟡 SEMI_STATIC | 4,011 | `src/personal_agent/second_brain/entity_extraction.py:69` |
 | `context_compressor_system` | 🟢 STATIC | 1,076 | `src/personal_agent/orchestrator/context_compressor.py:118` |
 | `router_system_prompt` | 🟢 STATIC | 124 | `src/personal_agent/orchestrator/prompts.py:24` |
-| `tool_rules` | 🟢 STATIC | 476 | `src/personal_agent/orchestrator/prompts.py:137` |
-| `tool_use_native_prompt` | 🟢 STATIC | 71 | `src/personal_agent/orchestrator/prompts.py:152` |
-| `tool_use_injected_prompt` | 🟢 STATIC | 202 | `src/personal_agent/orchestrator/prompts.py:162` |
-| `tool_awareness_prompt` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:200` |
-| `operator_stanza` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:367` |
+| `tool_rules` | 🟢 STATIC | 476 | `src/personal_agent/orchestrator/prompts.py:138` |
+| `tool_use_native_prompt` | 🟢 STATIC | 71 | `src/personal_agent/orchestrator/prompts.py:153` |
+| `tool_use_injected_prompt` | 🟢 STATIC | 202 | `src/personal_agent/orchestrator/prompts.py:163` |
+| `tool_awareness_prompt` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:201` |
+| `operator_stanza` | 🟡 SEMI_STATIC | runtime | `src/personal_agent/orchestrator/prompts.py:368` |
 | `reflection_dspy_signature` | 🟢 STATIC | 816 | `src/personal_agent/captains_log/reflection_dspy.py:79` |
 | `reflection_manual_fallback` | 🟢 STATIC | 558 | `src/personal_agent/captains_log/reflection.py:172` |
 | `html_generation_system` | 🟢 STATIC | 1,468 | `src/personal_agent/tools/artifact_tools.py:1154` |
 
 ### Skill Documents
 
-Total skill docs: 11 · Total tokens (all skills): 18,106  
+Total skill docs: 11 · Total tokens (all skills): 17,637  
 *(No body is injected: the model loads one with `read_skill`; ADR-0156 D2)*
 
 | skill | tokens | source |
@@ -42,7 +42,7 @@ Total skill docs: 11 · Total tokens (all skills): 18,106
 | log-search — Count, break down and find agent log events | 2,229 | `skills/log-search/SKILL.md` |
 | SKILL: Mermaid Diagrams | 3,593 | `skills/mermaid-diagrams/SKILL.md` |
 | model-latency — How slow the model calls are over a window | 825 | `skills/model-latency/SKILL.md` |
-| sequential-thinking — Structured Reasoning Discipline | 901 | `skills/sequential-thinking/SKILL.md` |
+| sequential-thinking — Multi-Step Reasoning Procedure | 432 | `skills/sequential-thinking/SKILL.md` |
 | service-health — Is each service healthy? | 1,130 | `skills/service-health/SKILL.md` |
 | spend-and-tokens — The agent's own tokens, cost and budget | 2,559 | `skills/spend-and-tokens/SKILL.md` |
 | system-diagnostics — ps, ss, vmstat, iostat, lsof | 826 | `skills/system-diagnostics/SKILL.md` |
@@ -507,7 +507,7 @@ Rules:
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
 | **Token count** | 476 |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:137` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:138` |
 
 ```
 Rules:
@@ -532,7 +532,7 @@ Rules:
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
 | **Token count** | 71 |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:152` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:153` |
 
 ```
 [f-string template]
@@ -554,7 +554,7 @@ If you need to call a tool, use native function calling (the tool_calls mechanis
 |---|---|
 | **Cache tier** | 🟢 STATIC — never varies at runtime |
 | **Token count** | 202 |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:162` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:163` |
 
 ```
 [f-string template]
@@ -585,7 +585,7 @@ User: "Give me a comprehensive comparison of React vs Svelte with citations"
 |---|---|
 | **Cache tier** | 🟡 SEMI_STATIC — varies at session boundary |
 | **Token count** | runtime (see description) |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:200` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:201` |
 
 _Dynamically generated listing of available tools grouped by category. Cached for 60 s. Includes tool counts per category and key capability declarations (web search, file access, etc.). Content varies with the active tool registry — changes when tools are added or governance config is reloaded. Cannot be extracted statically; see function source._
 
@@ -597,7 +597,7 @@ _Dynamically generated listing of available tools grouped by category. Cached fo
 |---|---|
 | **Cache tier** | 🟡 SEMI_STATIC — varies at session boundary |
 | **Token count** | runtime (see description) |
-| **Source** | `src/personal_agent/orchestrator/prompts.py:367` |
+| **Source** | `src/personal_agent/orchestrator/prompts.py:368` |
 
 _Async function. Renders the operator stanza: the authenticated user's name and the FRE-1150 identity-precedence rule. No Neo4j content — the :Person profile fields (location, pronouns, role, languages) ride the memory_recall tool result instead (FRE-1566, ADR-0140 T2). Content varies per connected user. Cannot be extracted statically._
 
@@ -1593,28 +1593,20 @@ Check the result before you answer:
 
 ---
 
-### sequential-thinking — Structured Reasoning Discipline
+### sequential-thinking — Multi-Step Reasoning Procedure
 
 | | |
 |---|---|
 | **Cache tier** | 🔴 DYNAMIC — a read_skill result, only when the model loads it |
-| **Token count** | 901 |
+| **Token count** | 432 |
 | **Source** | `skills/sequential-thinking/SKILL.md` |
 
 ```markdown
-# sequential-thinking — Structured Reasoning Discipline
+# sequential-thinking — Multi-Step Reasoning Procedure
 
-## Rules
+## The procedure
 
-Keep the discipline below internally on every turn this skill engages.
-When the problem has a genuine false start, show the step you tried and
-abandoned, alongside the correct path. Never invent a wrong step you did
-not actually take. An unremarkable linear chain of reasoning with no false
-start must stay invisible to the reader.
-
-## The discipline
-
-When this skill engages, hold yourself to the following, internally, for the whole turn:
+Apply these steps in your own working, for the whole turn. The system prompt sets what the answer shows.
 
 - **Estimate first.** Before working the problem, form a rough count of the steps it will take.
   Revise that count as you go — do not silently overrun it.
@@ -1626,44 +1618,13 @@ When this skill engages, hold yourself to the following, internally, for the who
 - **Gate completion on done-ness.** Only treat the problem as finished when the answer actually
   holds up — not when you have produced a plausible-looking response.
 
-## When to surface structure in the answer
-
-Surface structure only when the problem has a real false start. An ordinary linear chain of
-reasoning that needed no revision or branch stays clean: no step numbers, no scaffold.
-
-- If the obvious first line of attack on this problem fails, show that **tried and abandoned**
-  step in the answer, alongside the correct path, and name what was wrong with it — for example:
-  "First attempt: X — that fails because Y, so this answer instead does Z."
-- Show it only when a false start actually exists. An unremarkable linear chain of reasoning
-  with no false start available must stay clean.
-- Do not renumber the whole answer into an essay around it — one short line at the point in the
-  answer where the false start belongs.
-
-**Never invent a false start you did not actually take.** A plausible-looking wrong step
-manufactured for presentation, rather than reasoning you actually did, is confabulation. If the
-problem has no real false start, show none; a fabricated one is worse than showing nothing.
-
-A false start stays rare — most problems this skill engages on have no wrong turn at all — so
-ordinary answers do not turn into numbered essays.
-
-## When NOT to engage
-
-- A short factual question with one obvious answer.
-- A single-step lookup or command.
-- Any turn where no assumption is at risk of being wrong and no real alternative is being
-  weighed. Engaging here just manufactures a numbered essay out of a simple answer, which is a
-  net loss over saying nothing.
-
 ## Success
 
 Check these points before the answer is final:
 
 - The answer holds up. It covers every part of the question, and no later step contradicts an
   earlier one without a marked revision.
-- The step count that was estimated first matches the work done, or the change was stated.
-- A false start is shown only if it was actually taken. It takes one short line, with what was
-  wrong with it.
-- An ordinary linear chain has no numbered scaffold in the answer.
+- The step count that was estimated first matches the work done, or the change was noted.
 
 ## Recovery
 
@@ -1672,9 +1633,8 @@ What to do on each failure, with a stop rule:
 | Failure | Cause | Next step |
 |---|---|---|
 | A later step contradicts an earlier conclusion | An assumption was wrong | Mark it as a revision: name what is reconsidered and why. Redo each step that depended on it. |
-| The work passes the estimated step count | The task is larger than estimated | State the new count. Do not continue as if the first count held. |
+| The work passes the estimated step count | The task is larger than estimated | Note the new count. Do not continue as if the first count held. |
 | The answer does not hold up on the final check | A step was skipped, or a conclusion was assumed | Name the point that failed. Redo the work from the step that holds it. |
-| It is not clear that a false start was real | The wrong step was not actually taken | Show none. A made-up false start is worse than showing nothing. |
 | The same check fails twice | — | Stop. Tell the user what is not settled and what was tried. |
 ```
 

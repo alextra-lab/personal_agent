@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
+from personal_agent.captains_log.archive import find_archived, restore_archived
 from personal_agent.captains_log.linear_client import (
     LinearClient,
     extract_issue_identifier_from_description,
@@ -718,7 +719,21 @@ class PromotionPipeline:
             ``True`` when at least one file was marked APPROVED, ``False`` otherwise.
         """
         marked = False
-        for json_file in self.log_dir.glob(f"{entry.entry_id}-*.json"):
+        live_files = list(self.log_dir.glob(f"{entry.entry_id}-*.json"))
+        if not live_files:
+            # FRE-1609: the lifecycle job can archive the entry between the scan and
+            # this write. Restore it, or it stays unmarked and is never linked.
+            archived = find_archived(
+                self.log_dir,
+                lambda data: data.get("entry_id") == entry.entry_id,
+                name_prefix=f"{entry.entry_id}-",
+                trace_id=_trace_id_from_entry(entry),
+            )
+            if archived is not None:
+                live_files = [
+                    restore_archived(archived, self.log_dir, trace_id=_trace_id_from_entry(entry))
+                ]
+        for json_file in live_files:
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
                 data["status"] = CaptainLogStatus.APPROVED.value

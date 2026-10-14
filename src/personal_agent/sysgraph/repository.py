@@ -216,10 +216,19 @@ ON CONFLICT (source, category) DO UPDATE
 
 _ADVISORY_LOCK_QUERY = "SELECT pg_advisory_xact_lock(hashtext($1));"
 
-_FIND_AWAITING_PROPOSAL_QUERY = """
+# FRE-1609: "awaiting" means not yet promoted. Without the NOT EXISTS, a promoted
+# row stayed the newest match of its group and kept gaining corroboration after its
+# ticket was filed (FRE-1378's row: 143 at promotion, 197 later), and that count was
+# stamped onto every later sighting. A sighting after promotion starts a new row.
+_NOT_PROMOTED = """
+NOT EXISTS (SELECT 1 FROM sysgraph.promoted_to pt WHERE pt.proposal_id = sysgraph.proposal.id)
+"""
+
+_FIND_AWAITING_PROPOSAL_QUERY = f"""
 SELECT id, fingerprint, seen_count, created_at
 FROM sysgraph.proposal
 WHERE source = $1 AND category = $2 AND scope IS NOT DISTINCT FROM $3
+  AND {_NOT_PROMOTED}
 ORDER BY created_at DESC
 LIMIT 1;
 """
@@ -227,17 +236,24 @@ LIMIT 1;
 # RETURNING the post-increment count rather than computing `existing + 1` in Python:
 # the UPDATE is the authority, and under the advisory lock its result is the value
 # the caller must report (FRE-1354).
-_REINFORCE_PROPOSAL_QUERY = """
+# FRE-1609: promotion writes `promoted_to` without this path's advisory lock, so the
+# row can become promoted between the lookup and this UPDATE. Re-check here; no row
+# returned means "promoted meanwhile" and the caller falls through to a new row.
+_REINFORCE_PROPOSAL_QUERY = f"""
 UPDATE sysgraph.proposal SET seen_count = seen_count + 1, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND {_NOT_PROMOTED}
 RETURNING seen_count;
 """
 
-_GENERATION_TIME_UPSERT_PROPOSAL = """
+# FRE-1609: the conflict branch is the second way to raise a promoted row's count — a
+# sighting whose fingerprint equals the promoted row's skips the group lookup above and
+# lands here. When the WHERE is false, the statement changes nothing and returns no row.
+_GENERATION_TIME_UPSERT_PROPOSAL = f"""
 INSERT INTO sysgraph.proposal (source, category, fingerprint, what, why, how, seen_count, scope)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (fingerprint) DO UPDATE
     SET seen_count = sysgraph.proposal.seen_count + 1, updated_at = NOW()
+    WHERE {_NOT_PROMOTED}
 RETURNING id;
 """
 
@@ -657,11 +673,13 @@ class SysgraphRepository:
         Returns:
             ``decided_skip`` when this ``(source, category)`` kind already has
             a terminal, non-``deferred`` outcome (ADR-0105 D7) — no write.
-            ``reinforced`` when an awaiting (not-yet-decided) equivalent
+            ``reinforced`` when an awaiting (not yet promoted) equivalent
             already exists — its ``seen_count`` is incremented in place,
             ``proposal_id`` is the existing row's id. ``generate_new`` when
-            nothing equivalent exists — a new row is inserted, ``proposal_id``
-            is the new row's id.
+            nothing awaiting is equivalent — a new row is inserted, ``proposal_id``
+            is the new row's id. ``proposal_id`` is ``None`` when the fingerprint
+            belongs to a promoted row (FRE-1609): nothing is written, and the
+            Captain's Log write-time dedup absorbs the sighting into the promoted entry.
         """
         assert self.pool is not None, "call connect() first"
         lock_key = f"{source}:{category}:{scope or ''}"
@@ -672,8 +690,12 @@ class SysgraphRepository:
                 return ReadBeforeEmitResult(decision="decided_skip", proposal_id=None)
 
             existing = await conn.fetchrow(_FIND_AWAITING_PROPOSAL_QUERY, source, category, scope)
-            if existing is not None:
-                reinforced_count = await conn.fetchval(_REINFORCE_PROPOSAL_QUERY, existing["id"])
+            reinforced_count = (
+                await conn.fetchval(_REINFORCE_PROPOSAL_QUERY, existing["id"])
+                if existing is not None
+                else None
+            )
+            if existing is not None and reinforced_count is not None:
                 return ReadBeforeEmitResult(
                     decision="reinforced",
                     proposal_id=existing["id"],

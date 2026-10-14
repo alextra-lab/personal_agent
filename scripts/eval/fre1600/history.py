@@ -48,6 +48,7 @@ import sys
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -336,6 +337,8 @@ def run(args: argparse.Namespace) -> None:
                     total_tokens += est
                     print(f"{arm} d{draw} t{turn_no}c{call_no}: {len(messages)} msgs, ~{est:,} tok")
                     continue
+                # The start time, to match a suspect turn against the gateway health probes.
+                at = datetime.now(UTC).isoformat(timespec="seconds")
                 result = call(client, args.url, body)
                 result.pop("content")
                 result.pop("message")
@@ -346,10 +349,11 @@ def run(args: argparse.Namespace) -> None:
                         "turn": turn_no,
                         "call": call_no,
                         "nonce": nonce,
+                        "at": at,
                         **result,
                     }
                 )
-                print(f"{arm} d{draw} t{turn_no}c{call_no}: {result['timings']}", flush=True)
+                print(f"{at} {arm} d{draw} t{turn_no}c{call_no}: {result['timings']}", flush=True)
             # Written only when the arm's session is complete, so a resumed run repeats no call.
             for row in rows:
                 append_row(out, row)

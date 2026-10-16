@@ -194,3 +194,23 @@ def test_report_shows_the_headroom_and_each_premise() -> None:
     assert "why: Retries doubled latency." in report
     assert "seen_count: 5" in report
     assert "existing_issue" not in report
+
+
+@pytest.mark.asyncio
+async def test_dry_run_creates_no_directory(tmp_path: pathlib.Path) -> None:
+    """Reading the suppression file must not create ``telemetry/feedback_history``."""
+    log_dir = tmp_path / "captains_log"
+    log_dir.mkdir()
+    _write(log_dir, 1)
+    root = tmp_path / "root"
+    root.mkdir()
+    pipeline = _pipeline(log_dir, _client(0), AsyncMock())
+
+    with (
+        patch("personal_agent.captains_log.suppression._project_root", return_value=root),
+        patch.object(promotion_module.settings, "seshat_open_ticket_cap", 10),
+    ):
+        await pipeline.run()
+
+    assert len(pipeline.planned) == 1
+    assert not (root / "telemetry").exists()

@@ -258,6 +258,7 @@ async def test_create_issue_success() -> None:
         _states_response(),
         _labels_response(),
         _label_create_response(),
+        _issue_search_response([]),  # dedup
         _issue_search_response([]),  # the ticket-cap count (FRE-1611)
         _issue_create_response(),
     ]

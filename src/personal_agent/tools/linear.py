@@ -447,7 +447,8 @@ async def _refuse_at_ticket_cap() -> None:
     failed call raises ``LinearError``, so an unreadable count cannot open the cap.
 
     Raises:
-        CreateLinearIssueError: ``ticket_cap_reached`` when the cap is full.
+        CreateLinearIssueError: ``ticket_cap_reached`` when the cap is full, or
+            ``bad_reply`` when the reply holds no issue list.
         LinearError: When the GraphQL call fails.
     """
     cap = settings.seshat_open_ticket_cap
@@ -459,7 +460,17 @@ async def _refuse_at_ticket_cap() -> None:
         }""",
         {"filter": open_pipeline_issues_filter(_TEAM_NAME), "first": cap},
     )
-    open_count = len((data.get("issues") or {}).get("nodes") or [])
+    issues_data = data.get("issues")
+    nodes = issues_data.get("nodes") if isinstance(issues_data, dict) else None
+    if not isinstance(nodes, list):
+        # A reply with no issue list is not a count of zero. The cap fails closed.
+        raise CreateLinearIssueError(
+            "bad_reply",
+            "Linear returned no issue list, so the open ticket count is unreadable.",
+            retryable=True,
+            next_action="Do not file it now. Describe the issue in your answer and try later.",
+        )
+    open_count = len(nodes)
     if open_count >= cap:
         raise CreateLinearIssueError(
             "ticket_cap_reached",

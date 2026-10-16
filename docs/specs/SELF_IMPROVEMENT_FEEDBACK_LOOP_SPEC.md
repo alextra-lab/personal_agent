@@ -711,7 +711,7 @@ seshat_open_ticket_cap: int = Field(
     default=10,
     ge=1,
     le=100,
-    description="Max open tickets Seshat itself may have outstanding (FRE-1354)",
+    description="Max open tickets the promotion pipeline may have outstanding; counts the pipeline-filed label only (FRE-1354, FRE-1611)",
 )
 promotion_min_seen_count: int = Field(
     default=3,

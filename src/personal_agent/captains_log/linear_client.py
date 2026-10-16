@@ -630,8 +630,11 @@ class LinearClient:
                 """,
                 variables,
             )
-            issues_data = data.get("issues") or {}
-            nodes = issues_data.get("nodes") or []
+            issues_data = data.get("issues")
+            nodes = issues_data.get("nodes") if isinstance(issues_data, dict) else None
+            if not isinstance(issues_data, dict) or not isinstance(nodes, list):
+                # A reply with no issue list is not a count of zero. The cap fails closed.
+                raise RuntimeError("Linear returned no issue list; the open count is unreadable.")
             page_info = issues_data.get("pageInfo") or {}
             total += len(nodes)
 

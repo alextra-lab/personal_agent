@@ -18,15 +18,19 @@ def _project_root() -> pathlib.Path:
 
 
 def feedback_history_dir() -> pathlib.Path:
-    """Directory for feedback history JSON (gitignored)."""
+    """Directory for feedback history JSON (gitignored). Creates it when absent."""
     d = _project_root() / "telemetry" / "feedback_history"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def suppression_file_path() -> pathlib.Path:
-    """Path to suppressed_fingerprints.json."""
-    return feedback_history_dir() / "suppressed_fingerprints.json"
+    """Path to suppressed_fingerprints.json.
+
+    This does not create the directory: a read must not write (FRE-1611 dry run).
+    The write path creates the directory in ``_atomic_write_json``.
+    """
+    return _project_root() / "telemetry" / "feedback_history" / "suppressed_fingerprints.json"
 
 
 def _load_suppressions(trace_id: str | None = None) -> dict[str, Any]:

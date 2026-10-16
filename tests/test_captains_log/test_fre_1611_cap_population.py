@@ -174,3 +174,43 @@ def test_count_method_is_named_for_its_population() -> None:
     """The count method name must not claim the old, wider population."""
     assert hasattr(LinearClient, "count_open_pipeline_issues")
     assert not hasattr(LinearClient, "count_open_agent_issues")
+
+
+class TestUnreadableCountFailsClosed:
+    """A reply that holds no issue list is not a count of zero (codex review, FRE-1611)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "reply", [{}, {"issues": None}, {"issues": {}}, {"issues": {"nodes": None}}]
+    )
+    async def test_malformed_reply_raises_instead_of_counting_zero(
+        self, reply: dict[str, Any]
+    ) -> None:
+        """HTTP 200 without errors and without an issue list must not read as 0 open."""
+        client = LinearClient()
+
+        async def _call(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+            return reply
+
+        with (
+            patch.object(client, "_call", side_effect=_call),
+            pytest.raises(RuntimeError, match="no issue list"),
+        ):
+            await client.count_open_pipeline_issues("FrenchForest")
+
+    @pytest.mark.asyncio
+    async def test_promotion_refuses_when_the_reply_is_malformed(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The pipeline gate returns None (no creation) when the count cannot be read."""
+        client = LinearClient()
+
+        async def _call(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+            return {}
+
+        with (
+            patch.object(client, "_call", side_effect=_call),
+            patch.object(promotion_module.settings, "seshat_open_ticket_cap", 10),
+        ):
+            pipeline = PromotionPipeline(log_dir=tmp_path, linear_client=client)
+            assert await pipeline._ticket_cap_headroom() is None

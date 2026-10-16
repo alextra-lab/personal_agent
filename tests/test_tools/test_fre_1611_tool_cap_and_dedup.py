@@ -162,3 +162,26 @@ class TestCap:
         fake = _FakeLinear(issues)
         result = await _file(fake, "A new finding")
         assert result["identifier"] == "FRE-9999"
+
+
+class TestUnreadableCountFailsClosed:
+    """A reply that holds no issue list is not a count of zero (codex review, FRE-1611)."""
+
+    @pytest.mark.asyncio
+    async def test_tool_refuses_when_the_count_reply_is_malformed(self) -> None:
+        """The cap query answers with no ``issues`` object. The tool files nothing."""
+
+        class _Blind(_FakeLinear):
+            async def gql(
+                self, query: str, variables: dict[str, Any] | None = None
+            ) -> dict[str, Any]:
+                variables = variables or {}
+                if "issueCreate" not in query and "labels" in variables.get("filter", {}):
+                    return {}
+                return await super().gql(query, variables)
+
+        fake = _Blind([])
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await _file(fake, "A new finding")
+        assert exc_info.value.code == "bad_reply"
+        assert fake.created == []

@@ -1,65 +1,81 @@
-# Last session — master, 2026-10-05 to 2026-10-11 08:00 UTC
+# Last session — master, 2026-10-13 to 2026-10-16 08:30 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The owner stopped all model testing on 2026-10-10 and ordered the move of skills and tools to the
-industry standard (FRE-1573, ADR-0156, project "Skills and Tools Standard"). Seven of its tickets
-are Done; the rest run on the build streams (read `next_resolver`). Model testing reopens only when
-FRE-1581's gate passes (G1–G4, plus the ADR-0154 D7 planner probe that the owner moved into it).
-Explore is on a read-only study: can Neo4j's agent skills improve recall or KG search
-(https://neo4j.com/labs/genai-ecosystem/agent-skills/neo4j-skills/). The owner is waiting for
-nothing from master except the pending decisions below.
+The owner ordered a full fix of the self-analysis pipeline in four parts: FRE-1608 (analysis), FRE-1609
+(history), FRE-1610 (backlog) and FRE-1611 (creation). Parts 1–3 are merged and deployed. Part 4,
+PR #1294, was bounced to build2 on 2026-10-16 for two reasons: the codex review did not run, and the
+dry-run runbook ran on the host instead of in the gateway. When #1294 returns, follow the order below.
+The owner approved the llama.cpp pin move, and production runs b11689 (0f4376268) since 08:16Z.
+The pin commit is d4a4fb3 in the slm_server repo. Rollback: point `SLM_LLAMA_SERVER_BIN` back to llama.cpp-master.
 
 ## What was decided and why
-- **Testing stopped because the studies measured our broken tools, not the models.** The PR #1242
-  audit found 36–45% of Flash-Next's tool calls fixable. Owner: "Tools are not working - we fix
-  them, then we come back to testing models." Do not propose model studies, D7 runs or live probes
-  until FRE-1581 passes. Owner-approved exceptions shipped: FRE-1568, 1570, 1572, 1583.
-- **The production planner prompt is currently unqualified.** FRE-1580 changed it; the owner chose
-  "Re-pin now, probe in T9" in build2's seat. FRE-1581 must run D7 on the current prompt.
-- **Owner decisions that changed the permission model (all in ADR-0156 or its tickets):**
-  `python3`/`awk`/`sed`/`env` ask (reverses the earlier "python3 stays allowed"); an "ask" with no
-  approval UI is refused (ADR-0063 Amendment B); `curl` runs unasked only for read requests to
-  internal telemetry (FRE-1583); reviewed skill scripts get exact allow rules (FRE-1585).
-- **MCP is off by owner decision (O1):** the three MCP copies of native tools were removed, so no MCP
-  server remains; `AGENT_MCP_GATEWAY_ENABLED=false` in production `.env` is deliberate.
-- **Primary model:** master recommends keeping Flash-Next (Gemma failed D7 three times: decline
-  24/30, misses `susan_3` and `tool_logs`; blind quality −7.5 to −8 on s2/s3). The owner has NOT
-  ruled. If Flash-Next is kept, remove the study-only Gemma `planner` mode from `config/models.yaml`.
-- **FRE-1517 stage-4 rulings:** s2 t13 = PASS (owner). Telemetry turns in stages 3–4 are confounded
-  by the tools, not model evidence (owner: "the skills/tools are wrong - for any model").
-- **Search:** FRE-1584 removes `google cse` (271 of 290 degraded searches were its quota) and keeps
-  `braveapi` + `exa`. Assessed and rejected for now: SerpApi (scraping by proxy), Tavily (overlaps
-  Exa; our fetch failures are guessed-URL 404s, 16 of 24). Kagi is first choice only if FRE-1584's
-  7-day read shows degraded > 5%; check its API availability first.
-- **Span extraction cap 4,096 → 16,384 (owner yes).** Its lane caps are USD 5/day, 7/week; the last
-  week spent 5.42, projected ~6.6. Owner informed; no cap changed.
-- **Master errors this session, now memories:** a listed field is not a populated one (FRE-1567 AC
-  was wrong); a 60-row truncated query read as complete; removing a stream label without clearing
-  `dispatch_state.json` wedged two streams; seats sat on "Switch model?" for 15 min to 3 h unseen.
+- **Owner: clear the Captain's Log history and start from zero.** The bad analysis already filed 6
+  tickets (FRE-1373, 1378, 1404, 1412, 1418, 1429, all canceled). Master ran the FRE-1609 reset on
+  2026-10-14 at 16:32Z. Verified backup: `~/seshat-backups/fre1609-20261014T163213Z`. **Delete it
+  when FRE-1611 closes.** The six fingerprints are suppressed in the gateway volume (FRE-1610 replay).
+- **Ticket filing is held.** `.env` has `AGENT_SESHAT_OPEN_TICKET_CAP=4`, with a comment, since
+  2026-10-14. The order for FRE-1611:
+  1. Merge #1294.
+  2. Set `AGENT_PROMOTION_PIPELINE_ENABLED=false` in `.env`. The cap starts counting
+     `pipeline-filed` only, so its count drops to 0, and the next consolidation can file up to 4
+     tickets unseen.
+  3. Deploy.
+  4. Run the dry run **inside the gateway**: `docker cp` the script, then run it with
+     `/app/.venv/bin/python`.
+  5. Post the list on FRE-1611.
+  6. The owner reads the list. Only then set the cap to 10, set the pipeline flag to true, and restart.
+
+  Streams 2 and 4 (feedback polling, insights) stay off. They are the owner's decision.
+- **Escalated diffs were waived** for #1290, #1291, #1292 under the 2026-08-31 directive ("Waive
+  unless seriously necessary"). Each one was test-isolated or refused to run without a verified backup.
+- **Secrets rotated, all owner-approved, all in `pass`:**
+  - sysgraph_role password (2026-10-14). A helper printed the `.env` URL.
+  - `AGENT_SESHAT_CHANNEL_SECRET` (2026-10-14). A prefix grep printed it.
+  - `GATEWAY_TOKEN_PWA` (2026-10-16). Master's `curl localhost:3000` printed the PWA page, which embeds it.
+
+  Check: the new token gives 200 and the old one 401 on
+  `/api/v1/observations/route-traces/session/<nil-uuid>`. Open PWA tabs need a reload.
+- **FRE-1600:** no storage change. Stored history costs about 256 tokens per follow-up turn.
+  `preserve_thinking` saves at most about 0.6 s per turn but costs about 4,500 tokens per stored turn.
+- **FRE-1606:** the owner said "Go" in the adrs seat to all three recommendations.
+- **Owner: "The elastic dashboards should become grafana dashboards."** The five panels moved to
+  FRE-1612, filed by build2 and in Needs Approval for the owner.
+- **The owner's model-testing hold (FRE-1573) still stands.** The llama.cpp pin move is an engine
+  fix, not a model test.
 
 ## Worktrees — anything special
-- `fre-1565-worker-side-effecting-tools` @ `7d261e99`: FRE-1565 parked (held, no stream label).
-  It must rebase on main; its per-call worker asks (D9.3) already shipped in FRE-1574.
-- `fre-1571-d7-tool-logs-fixture-truth`: empty branch. The Option A/B analysis is on FRE-1571.
+- `build2` holds `fre-1611-creation-cap-flags-docs-dashboards`, which is bounced PR #1294.
+- `agent-ad5db2001c2a5c5f9` holds `fre-1590-artifact-design-out-of-catalog`, which is not this
+  session's work. Check it before removing it.
 
 ## Answers for the fresh start
-- **Held tickets (stream labels removed on purpose):** FRE-1565, 1495, 1510, 1571, 1517. Re-label
-  only after FRE-1581 passes, except FRE-1565, which waits for an owner word.
-- **After every dispatch launch, look at the seat pane.** The "Switch model?" prompt holds the seat;
-  answer by the ticket's Tier label. This session ran a background watcher; it does not survive /clear.
-- **Production `.env` edits this session (all deliberate):** MCP gateway off (line 222); dead keys
-  commented 2026-10-11 (`AGENT_SKILL_ROUTING_MODE`, `AGENT_PREFER_PRIMITIVES`,
-  `AGENT_SECOND_BRAIN_CHECK_INTERVAL_SECONDS`, `AGENT_REFLECTION_RECALL_ENABLED`,
-  `AGENT_PLANNER_BRIEF_MODE`); backup `.env.bak-master-config-drift-20261011`. Consolidation
-  (`AGENT_ENABLE_SECOND_BRAIN`) is back to true.
-- **Owner decisions pending:** the primary model; whether to file the three keys read outside the
-  config manager (`AGENT_SESHAT_CHANNEL_SECRET`, `AGENT_SLM_TUNNEL_BASE_URL`, `AGENT_HOST`) for
-  the config-manager capstone; FRE-1571 Option A or B (when testing reopens).
-- **Live checks that need an owner PWA turn:** FRE-1580 AC-5 (test file
-  `/app/agent_workspace/fre1580-review.txt` is in place); FRE-1568 AC-4 (latency p50/p90 by role);
-  FRE-1585 AC-4 after it deploys. Test identity convention for master-fired turns:
-  a synthetic `fre<ticket>-live@` address on the owner's domain, `channel=EVAL`, consolidation paused first.
-- **Timed reads:** FRE-1570 AC-4 on or after 2026-10-17 20:09 UTC; FRE-1584 AC-2 seven days after
-  its deploy; FRE-1360 and FRE-1566 prompt-cache comparisons.
-- **First turn after a prompt-changing deploy takes ~30 s** (cold prefill, 13k tokens on
-  Flash-Next). Expected during this migration; G4 bounds prompt size.
+- **The master channel (port 8789) held the OLD secret until this restart.** That is why the watcher's
+  triggers for #1290, #1289 and #1291 never arrived. After the restart, check that the new secret is
+  loaded:
+  1. Read `ss -ltnpH` for the pid on 127.0.0.1:8789.
+  2. Read `SESHAT_CHANNEL_SECRET` from `/proc/<pid>/environ`.
+  3. Compare it in Python with the `.env` value, and print only a boolean.
+
+  Ports 8790, 8791 and 8792 were True on 2026-10-14.
+- **A seat can sit on a Claude Code dialog for hours** (2026-10-16: `/auto-mode-setup`, 7 h on
+  build2). The dispatcher still saw the seat as busy after Esc. `cc-sessions restart cc-2build`
+  cleared the stale status, and the next tick launched the ticket.
+- **Timed reads that master owes** (each ticket's comment has the query):
+  - FRE-1602 (overdue since 2026-10-14 13:38Z).
+  - FRE-1570 AC-4, on or after 2026-10-17 20:09Z.
+  - FRE-1584 AC-2, on or after 2026-10-18.
+  - FRE-1601, on or after 2026-10-20.
+  - FRE-1600 AC-4 re-baseline, on or after 2026-10-21, from ES only.
+  - FRE-1605 AC-4, on or after 2026-11-13.
+  - FRE-1608 live check: the first non-eval reflection after 2026-10-14 08:53Z must show no "0ms" or
+    "2.00/3", and a failed turn must give `had_errors=true`.
+  - FRE-1322: an integer `host_clusters` field on `missing_skill_pattern_analysis_complete`.
+
+  `Awaiting Deploy` holds more tickets from earlier sessions. Triage them from their comments.
+- **Owner-pending:**
+  - Approve FRE-1612 (dashboards).
+  - Approve FRE-1607 (the planner and sub-agents never see the skill catalog on an expanded turn).
+  - Turn on Streams 2 and 4, or keep them off.
+  - Restart cloudflared on the Mac. It was planned for Friday 2026-10-16. Only the owner can do it.
+- **Stale `/master <n>` text** can collect in master's input box (1217–1219 on 2026-10-16). Check
+  `gh pr view` before you gate.

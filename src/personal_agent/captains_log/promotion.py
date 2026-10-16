@@ -877,7 +877,9 @@ class PromotionPipeline:
             )
             return None
 
-    def _mark_promoted(self, entry: CaptainLogEntry, linear_issue_id: str) -> bool:
+    def _mark_promoted(
+        self, entry: CaptainLogEntry, linear_issue_id: str, filed_at: str | None = None
+    ) -> bool:
         """Update the on-disk JSON file to APPROVED with the Linear issue ID.
 
         The return value is load-bearing (FRE-1354). This status write is what stops
@@ -889,6 +891,8 @@ class PromotionPipeline:
         Args:
             entry: The entry that was promoted.
             linear_issue_id: The Linear issue identifier.
+            filed_at: ISO UTC time of a fresh filing, written beside the ticket id so that a
+                later merge re-index keeps it (FRE-1612). ``None`` for a link.
 
         Returns:
             ``True`` when at least one file was marked APPROVED, ``False`` otherwise.
@@ -925,6 +929,8 @@ class PromotionPipeline:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
                 data["status"] = CaptainLogStatus.APPROVED.value
                 data["linear_issue_id"] = linear_issue_id
+                if filed_at is not None:
+                    data["filed_at"] = filed_at
                 json_file.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
                 marked = True
                 log.info(
@@ -974,14 +980,17 @@ class PromotionPipeline:
             linked: True for a link to an existing ticket. The pipeline did not file that
                 ticket, so the reflection document gets no ``filed_at`` (FRE-1612).
         """
-        if not self._mark_promoted(entry, linear_issue_id):
+        # A fresh filing starts the feedback-latency clock. A link does not: the pipeline did
+        # not file that ticket (FRE-1612).
+        filed_at = None if linked else datetime.now(timezone.utc).isoformat()
+        if not self._mark_promoted(entry, linear_issue_id, filed_at):
             # Not counted as promoted: the entry is still AWAITING_APPROVAL and will
             # be rescanned. Self-healing, because the fingerprint lookup now works —
             # the next run links to this same issue rather than filing a duplicate.
             return
         promoted.append({"entry_id": entry.entry_id, "linear_issue_id": linear_issue_id})
         await self._record_sysgraph_linkage(entry, linear_issue_id)
-        await self._stamp_reflection_linkage(entry.entry_id, linear_issue_id, filed=not linked)
+        await self._stamp_reflection_linkage(entry.entry_id, linear_issue_id, filed_at=filed_at)
         pc = entry.proposed_change
         if pc is not None and pc.source == ProposalSource.STATISTICAL_DETECTOR and pc.fingerprint:
             await self._stamp_insight_linkage(pc.fingerprint, linear_issue_id)
@@ -1099,7 +1108,7 @@ class PromotionPipeline:
             )
 
     async def _stamp_reflection_linkage(
-        self, entry_id: str, linear_issue_id: str, *, filed: bool = True
+        self, entry_id: str, linear_issue_id: str, *, filed_at: str | None = None
     ) -> None:
         """Stamp linear_issue_id onto the agent-captains-reflections-* doc (ADR-0105 D6), best-effort.
 
@@ -1115,10 +1124,9 @@ class PromotionPipeline:
         Args:
             entry_id: The promoted entry's id (also its ES document id).
             linear_issue_id: The Linear issue identifier just linked.
-            filed: True when the pipeline filed the ticket just now. The document then
-                gets ``filed_at`` (FRE-1612), the start of the feedback-latency clock.
-                A link to an existing ticket gets none, because the filing time is not
-                the linking time.
+            filed_at: ISO UTC time of a fresh filing (FRE-1612), the start of the
+                feedback-latency clock. ``None`` for a link to an existing ticket, because
+                the filing time is not the linking time.
         """
         from personal_agent.captains_log.manager import CaptainLogManager
 
@@ -1127,9 +1135,9 @@ class PromotionPipeline:
             return
         script = "ctx._source.linear_issue_id = params.linear_issue_id"
         params: dict[str, str] = {"linear_issue_id": linear_issue_id}
-        if filed:
+        if filed_at is not None:
             script += "; ctx._source.filed_at = params.filed_at"
-            params["filed_at"] = datetime.now(timezone.utc).isoformat()
+            params["filed_at"] = filed_at
         try:
             updated = await handler.es_logger.update_by_query(
                 "agent-captains-reflections-*",

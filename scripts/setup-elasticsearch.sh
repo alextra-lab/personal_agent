@@ -214,6 +214,52 @@ print('OK')
   echo "  ✓ _field_caps verified on $live_index"
 }
 
+apply_month_index_mapping() {
+  # Args: <index-prefix> <template-file>
+  #
+  # Monthly families have no write alias, so apply_live_index_mapping skips them.
+  # A dynamic:false family then stores a new field on the existing month index but
+  # cannot search or aggregate it, and an event written before the PUT stays
+  # unsearchable. Run this before the code that writes the field is deployed.
+  # Additive only: ES rejects a type conflict, which counts as a failure (FRE-1612).
+  local prefix="$1"
+  local template_file="$2"
+  local index="${prefix}-$(date -u +%Y-%m)"
+  local http_status resp mapping_body
+
+  http_status=$(curl -sS -o /dev/null -w '%{http_code}' -I "$ES_URL/$index" 2>&1) || http_status="000"
+  if [[ "$http_status" == "404" ]]; then
+    echo "  → [$index] not created yet — the template applies when it is"
+    return 0
+  fi
+  if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "  ✗ apply_month_index_mapping [$index]: HEAD HTTP $http_status"
+    failures=$((failures + 1))
+    return 1
+  fi
+
+  mapping_body=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    tpl = json.load(f)
+print(json.dumps({'properties': tpl['template']['mappings']['properties']}))
+" "$template_file")
+
+  if ! resp=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' -X PUT "$ES_URL/$index/_mapping" \
+      -H 'Content-Type: application/json' -d "$mapping_body" 2>&1); then
+    echo "  ✗ apply_month_index_mapping [$index]: PUT /_mapping curl failed: $resp"
+    failures=$((failures + 1))
+    return 1
+  fi
+  http_status="${resp##*HTTP_STATUS:}"
+  if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "  ✗ apply_month_index_mapping [$index]: PUT /_mapping HTTP $http_status — ${resp%$'\n'HTTP_STATUS:*}"
+    failures=$((failures + 1))
+    return 1
+  fi
+  echo "  ✓ Mapping patched on $index"
+}
+
 put_and_apply_template() {
   # Args: same as put_resource — <label> <url-path> <template-file>
   #
@@ -299,6 +345,10 @@ put_resource "ILM policy: agent-captains-funnel-events-policy" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-funnel-events-ilm-policy.json"
 put_and_apply_template "Index template: agent-captains-funnel-events-template" \
   "/_index_template/agent-captains-funnel-events-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/captains-funnel-events-index-template.json"
+# FRE-1612: the template is dynamic:false, so the new promotion_run fields need an explicit
+#           mapping on the month index that already exists.
+apply_month_index_mapping "agent-captains-funnel-events" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-funnel-events-index-template.json"
 
 # 3b. Insights engine template (FRE-534/A2 — family previously untemplated).

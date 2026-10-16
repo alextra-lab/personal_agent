@@ -765,6 +765,7 @@ How to read the funnel panel:
 - *Filed* counts only tickets that the pipeline created. A link to an existing ticket adds to `linked` and sets no `filed_at`.
 - *Outcome seen* needs `AGENT_FEEDBACK_POLLING_ENABLED=true`. While it is false, the outcome and latency panels are empty. Each panel description says so.
 - The `promotion_run`, `had_errors`, `telemetry_available`, `filed_at`, `ticket_outcome_at` and `hours_to_outcome` fields exist only for documents that the deployed code wrote. The panels are empty for earlier days.
+- `filed_at` is stored on the entry, so a merge keeps it. `ticket_outcome`, `ticket_outcome_at` and `hours_to_outcome` exist only on the Elasticsearch document. A merge that re-indexes the document after an outcome erases them. The outcome is never stamped twice, so that ticket drops out of the outcome panels.
 - A repeated proposal merges into its first reflection document (`CaptainLogManager._merge_into_existing`). It adds no document, so the health shares count documents, not turns.
 
 The `promotion_run` event is one document per non-dry run in `agent-captains-funnel-events-*`: `eligible`, `filed`, `linked`, `cap`, and `open_pipeline_count` when the run read it. A run that finds no candidate does not read the count.

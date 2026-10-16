@@ -71,8 +71,14 @@ async def test_live_script_on_the_test_stack() -> None:
             document={"linear_issue_id": "FRE-1", "filed_at": "2026-10-16T10:00:00.123456+00:00"},
         )
         await client.index(index=index, id="old", document={"linear_issue_id": "FRE-2"})
+        # A document re-indexed from the entry carries filed_at in Pydantic's "Z" form.
+        await client.index(
+            index=index,
+            id="zulu",
+            document={"linear_issue_id": "FRE-3", "filed_at": "2026-10-16T10:00:00Z"},
+        )
         await client.indices.refresh(index=index)
-        for issue in ("FRE-1", "FRE-2"):
+        for issue in ("FRE-1", "FRE-2", "FRE-3"):
             await client.update_by_query(
                 index=index,
                 query={"term": {"linear_issue_id": issue}},
@@ -92,6 +98,8 @@ async def test_live_script_on_the_test_stack() -> None:
         old = (await client.get(index=index, id="old"))["_source"]
         assert filed["hours_to_outcome"] == pytest.approx(3.5, abs=0.001)
         assert filed["ticket_outcome"] == "shipped"
+        zulu = (await client.get(index=index, id="zulu"))["_source"]
+        assert zulu["hours_to_outcome"] == pytest.approx(3.5, abs=0.001)
         assert "hours_to_outcome" not in old
         assert old["ticket_outcome_at"].startswith("2026-10-16T13:30:00")
     finally:

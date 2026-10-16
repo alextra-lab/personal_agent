@@ -501,6 +501,22 @@ def test_setup_script_registration_parity() -> None:
         assert (ES_DIR / name).exists(), f"{name} is PUT by script but missing on disk"
 
 
+def test_setup_script_patches_the_funnel_events_month_index() -> None:
+    """FRE-1612: a dynamic:false monthly index needs an explicit mapping PUT.
+
+    The funnel-events template is dynamic:false and the family has no write alias, so
+    `apply_live_index_mapping` skips it. Without `apply_month_index_mapping`, a
+    `promotion_run` field is stored on the existing month index but cannot be searched.
+    """
+    script = SETUP_SCRIPT.read_text()
+    assert "apply_month_index_mapping() {" in script
+    assert re.search(
+        r'apply_month_index_mapping "agent-captains-funnel-events" \\\n\s+'
+        r'"\$PROJECT_ROOT/docker/elasticsearch/captains-funnel-events-index-template\.json"',
+        script,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # ILM + retention for the daily/monthly diagnostic families (FRE-543).
 # --------------------------------------------------------------------------- #

@@ -55,7 +55,7 @@
         "type": "mixed",
         "uid": "-- Mixed --"
       },
-      "description": "How far proposals travel. Reflections and Proposals count documents in the range (eval turns excluded). Eligible (entry-runs) sums, over every promotion run, the proposals that passed the filters. A proposal that waits for a free slot counts again on each run, so this bar is attempts, not distinct proposals. Throttled runs counts the runs that the open-ticket cap stopped. Filed sums the tickets the pipeline created. Outcome seen counts reflections whose ticket reached Done or Canceled, dated by the time the outcome was first seen. The Eligible, Throttled and Filed bars read the promotion_run events, which start with the FRE-1612 deploy and only exist while AGENT_PROMOTION_PIPELINE_ENABLED is true. The Outcome bar stays at 0 while AGENT_FEEDBACK_POLLING_ENABLED is false.",
+      "description": "How far proposals travel. Reflections and Proposals count documents in the range (eval turns excluded). Eligible entry-runs sums, over every promotion run, the proposals that passed the filters. A proposal that waits for a free slot counts again on each run, so this bar is attempts, not distinct proposals. Throttled runs counts the throttled_budget events: a run that the open-ticket cap stopped, or a run that could not read the ticket count. Filed sums the tickets the pipeline created. Outcome seen counts reflection documents whose ticket reached Done or Canceled, dated by the time the outcome was first seen. The Eligible and Filed bars read the promotion_run events, which start with the FRE-1612 deploy and only exist while AGENT_PROMOTION_PIPELINE_ENABLED is true. The Outcome bar stays at 0 while AGENT_FEEDBACK_POLLING_ENABLED is false.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -312,7 +312,7 @@
         "type": "elasticsearch",
         "uid": "es-captains-reflections-outcomes"
       },
-      "description": "Tickets the pipeline filed that reached a final state, per day, split by proposal category and outcome. shipped means Done. owner-rejected means Canceled with the Rejected label. canceled-as-noise means Canceled or Duplicate without it. The day is the time the sweep first saw the outcome, not the day of the proposal. The panel is empty while AGENT_FEEDBACK_POLLING_ENABLED is false, because nothing reads ticket outcomes then. Eval turns are excluded.",
+      "description": "Reflection documents whose ticket reached a final state, per day, split by proposal category and outcome. A ticket that the pipeline linked to an existing ticket counts too. shipped means Done. owner-rejected means Canceled with the Rejected label. canceled-as-noise means Canceled or Duplicate without it. The day is the time the sweep first saw the outcome, not the day of the proposal. The panel is empty while AGENT_FEEDBACK_POLLING_ENABLED is false, because nothing reads ticket outcomes then. Eval turns are excluded.",
       "fieldConfig": {
         "defaults": {
           "color": {

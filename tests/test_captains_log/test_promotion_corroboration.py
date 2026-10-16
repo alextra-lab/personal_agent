@@ -357,8 +357,9 @@ class TestAC3RefusalIsVisible:
     ) -> None:
         """AC-3: the structlog event is named `throttled_budget`.
 
-        `self_improvement_funnel.json` panel 2 queries es-agent-logs for
-        `event_type: "throttled_budget"`, and `event_type` is derived from the
+        The funnel dashboard once queried es-agent-logs for
+        `event_type: "throttled_budget"` (FRE-1612 moved it to the funnel-events
+        index). `event_type` in agent-logs is derived from the
         structlog **event name** (es_handler `_build_item`). Passing `event_type=`
         as a payload field instead would overwrite the semantic event name — the
         FRE-1066 defect that `test_es_handler.py` guards against.

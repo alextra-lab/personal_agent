@@ -1,88 +1,868 @@
 {
-  "uid": "fre1072-self-improvement-funnel",
-  "title": "Self-Improvement Funnel",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Self-improvement funnel (ADR-0105 D6, FRE-1612): stage counts, proposal quality, feedback latency, the open-ticket cap and the health of reflection inputs.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
   "tags": [
     "fre-1072",
     "rebuilt-from-kibana"
   ],
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
   "timezone": "browser",
-  "schemaVersion": 39,
+  "title": "Self-Improvement Funnel",
+  "uid": "fre1072-self-improvement-funnel",
   "version": 1,
   "panels": [
     {
-      "id": 1,
-      "type": "stat",
-      "title": "Self-Improvement Funnel: total reflection count (stage breakdown not reproduced)",
-      "description": "[FRE-1072 rebuild note: approximated as count() \u2014 filters(None). Plots the total reflection-document count, not the Produced/Promoted/Shipped/Canceled stage breakdown the original filters() aggregation computed; that breakdown was not reproduced.]",
+      "datasource": {
+        "type": "mixed",
+        "uid": "-- Mixed --"
+      },
+      "description": "How far proposals travel. Reflections and Proposals count documents in the range (eval turns excluded). Eligible (entry-runs) sums, over every promotion run, the proposals that passed the filters. A proposal that waits for a free slot counts again on each run, so this bar is attempts, not distinct proposals. Throttled runs counts the runs that the open-ticket cap stopped. Filed sums the tickets the pipeline created. Outcome seen counts reflections whose ticket reached Done or Canceled, dated by the time the outcome was first seen. The Eligible, Throttled and Filed bars read the promotion_run events, which start with the FRE-1612 deploy and only exist while AGENT_PROMOTION_PIPELINE_ENABLED is true. The Outcome bar stays at 0 while AGENT_FEEDBACK_POLLING_ENABLED is false.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 10
+        "x": 0,
+        "y": 0
       },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-captains-reflections"
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
+      "pluginVersion": "13.1.3",
       "targets": [
         {
-          "refId": "A",
+          "alias": "Reflections",
+          "bucketAggs": [
+            {
+              "field": "timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "auto"
+              },
+              "type": "date_histogram"
+            }
+          ],
           "datasource": {
             "type": "elasticsearch",
             "uid": "es-captains-reflections"
           },
-          "query": "",
+          "editorType": "builder",
+          "limit": 20,
           "metrics": [
             {
-              "type": "count",
-              "id": "1"
+              "id": "1",
+              "type": "count"
             }
           ],
+          "metricsQueryType": "range",
+          "preserveQuery": false,
+          "query": "eval_mode:false",
+          "queryType": "traceql",
+          "refId": "A",
+          "serviceMapUseNativeHistograms": false,
+          "tableType": "traces",
+          "timeField": "timestamp"
+        },
+        {
+          "alias": "Proposals",
           "bucketAggs": [
             {
-              "type": "date_histogram",
-              "id": "99",
               "field": "timestamp",
+              "id": "2",
               "settings": {
-                "interval": "1h"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "type": "table",
-      "title": "Self-Improvement Funnel: Promotion throttle events",
-      "description": "Raw document table. Columns in source: event_type, current_count, threshold. The Kibana original sourced this from agent-captains-funnel-events-*, which carries no live documents in Elasticsearch; re-sourced to es-agent-logs, filtered to event_type:\"throttled_budget\" (src/personal_agent/captains_log/promotion.py::_emit_throttle_event) so this table actually shows throttle events rather than every agent-logs document.",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 18
-      },
-      "datasource": {
-        "type": "elasticsearch",
-        "uid": "es-agent-logs"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "elasticsearch",
-            "uid": "es-agent-logs"
-          },
-          "query": "event_type: \"throttled_budget\"",
-          "metrics": [
-            {
-              "type": "raw_document",
-              "id": "1"
+                "interval": "auto"
+              },
+              "type": "date_histogram"
             }
           ],
-          "bucketAggs": []
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-reflections"
+          },
+          "editorType": "builder",
+          "limit": 20,
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "metricsQueryType": "range",
+          "preserveQuery": false,
+          "query": "eval_mode:false AND _exists_:proposed_change.category",
+          "queryType": "traceql",
+          "refId": "B",
+          "serviceMapUseNativeHistograms": false,
+          "tableType": "traces",
+          "timeField": "timestamp"
+        },
+        {
+          "alias": "Eligible entry-runs",
+          "bucketAggs": [
+            {
+              "field": "@timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "auto"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-funnel-events"
+          },
+          "editorType": "builder",
+          "limit": 20,
+          "metrics": [
+            {
+              "field": "eligible",
+              "id": "1",
+              "type": "sum"
+            }
+          ],
+          "metricsQueryType": "range",
+          "preserveQuery": false,
+          "query": "event_type:promotion_run",
+          "queryType": "traceql",
+          "refId": "C",
+          "serviceMapUseNativeHistograms": false,
+          "tableType": "traces",
+          "timeField": "@timestamp"
+        },
+        {
+          "alias": "Throttled runs",
+          "bucketAggs": [
+            {
+              "field": "@timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "auto"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-funnel-events"
+          },
+          "editorType": "builder",
+          "limit": 20,
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "metricsQueryType": "range",
+          "preserveQuery": false,
+          "query": "event_type:throttled_budget",
+          "queryType": "traceql",
+          "refId": "D",
+          "serviceMapUseNativeHistograms": false,
+          "tableType": "traces",
+          "timeField": "@timestamp"
+        },
+        {
+          "alias": "Filed tickets",
+          "bucketAggs": [
+            {
+              "field": "@timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "auto"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-funnel-events"
+          },
+          "editorType": "builder",
+          "limit": 20,
+          "metrics": [
+            {
+              "field": "filed",
+              "id": "1",
+              "type": "sum"
+            }
+          ],
+          "metricsQueryType": "range",
+          "preserveQuery": false,
+          "query": "event_type:promotion_run",
+          "queryType": "traceql",
+          "refId": "E",
+          "serviceMapUseNativeHistograms": false,
+          "tableType": "traces",
+          "timeField": "@timestamp"
+        },
+        {
+          "alias": "Outcome seen",
+          "bucketAggs": [
+            {
+              "field": "ticket_outcome_at",
+              "id": "2",
+              "settings": {
+                "interval": "auto"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-reflections-outcomes"
+          },
+          "editorType": "builder",
+          "limit": 20,
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "metricsQueryType": "range",
+          "preserveQuery": false,
+          "query": "eval_mode:false AND _exists_:ticket_outcome",
+          "queryType": "traceql",
+          "refId": "F",
+          "serviceMapUseNativeHistograms": false,
+          "tableType": "traces",
+          "timeField": "ticket_outcome_at"
         }
-      ]
+      ],
+      "title": "Funnel by stage",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-captains-reflections-outcomes"
+      },
+      "description": "Tickets the pipeline filed that reached a final state, per day, split by proposal category and outcome. shipped means Done. owner-rejected means Canceled with the Rejected label. canceled-as-noise means Canceled or Duplicate without it. The day is the time the sweep first saw the outcome, not the day of the proposal. The panel is empty while AGENT_FEEDBACK_POLLING_ENABLED is false, because nothing reads ticket outcomes then. Eval turns are excluded.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 12,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "alias": "",
+          "bucketAggs": [
+            {
+              "field": "proposed_change.category",
+              "id": "3",
+              "settings": {
+                "min_doc_count": "1",
+                "order": "desc",
+                "orderBy": "_term",
+                "size": "10"
+              },
+              "type": "terms"
+            },
+            {
+              "field": "ticket_outcome",
+              "id": "4",
+              "settings": {
+                "min_doc_count": "1",
+                "order": "desc",
+                "orderBy": "_term",
+                "size": "10"
+              },
+              "type": "terms"
+            },
+            {
+              "field": "ticket_outcome_at",
+              "id": "2",
+              "settings": {
+                "interval": "1d"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-reflections-outcomes"
+          },
+          "editorType": "builder",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "preserveQuery": false,
+          "query": "eval_mode:false AND _exists_:ticket_outcome",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "ticket_outcome_at"
+        }
+      ],
+      "title": "Proposal quality: outcomes by category",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-captains-reflections-outcomes"
+      },
+      "description": "Hours from the time the pipeline filed a ticket (filed_at) to the first outcome the sweep saw, per day of the outcome. The lines show the average and the longest. A ticket that the pipeline linked to an existing ticket has no filed_at, so it is not in this panel. Documents that were filed before FRE-1612 have no filed_at either. The panel is empty while AGENT_FEEDBACK_POLLING_ENABLED is false, because nothing reads ticket outcomes then. Eval turns are excluded.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "h"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 13,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "alias": "",
+          "bucketAggs": [
+            {
+              "field": "ticket_outcome_at",
+              "id": "2",
+              "settings": {
+                "interval": "1d"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-reflections-outcomes"
+          },
+          "editorType": "builder",
+          "metrics": [
+            {
+              "field": "hours_to_outcome",
+              "id": "1",
+              "type": "avg"
+            },
+            {
+              "field": "hours_to_outcome",
+              "id": "3",
+              "type": "max"
+            }
+          ],
+          "preserveQuery": false,
+          "query": "eval_mode:false AND _exists_:hours_to_outcome",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "ticket_outcome_at"
+        }
+      ],
+      "title": "Feedback latency: filing to first outcome",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-captains-funnel-events"
+      },
+      "description": "The highest count of open pipeline-filed tickets that a promotion run read each day, against the cap in force on that run. The red line marks the default cap of 10. Promotion stops at the cap, and a throttled_budget event follows. Tickets that the in-turn agent tool filed do not count. A run that finds no candidates does not read the count, so a quiet day can have no point. There are no points while AGENT_PROMOTION_PIPELINE_ENABLED is false.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 14,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "alias": "",
+          "bucketAggs": [
+            {
+              "field": "@timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "1d"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-funnel-events"
+          },
+          "editorType": "builder",
+          "metrics": [
+            {
+              "field": "open_pipeline_count",
+              "id": "1",
+              "type": "max"
+            },
+            {
+              "field": "cap",
+              "id": "3",
+              "type": "max"
+            }
+          ],
+          "preserveQuery": false,
+          "query": "event_type:promotion_run",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "@timestamp"
+        }
+      ],
+      "title": "Open pipeline tickets against the cap",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "elasticsearch",
+        "uid": "es-captains-reflections"
+      },
+      "description": "Per day, the share of new reflection documents that had a failure on the reflected turn (had_errors true), and the share that had no trace events to summarize (telemetry_available false). A high share of failures is normal on a bad day. A high share of missing trace events means the reflection ran on thin input, as in FRE-1608. Only documents written after the FRE-1612 deploy carry these fields, so older days are empty. A repeated proposal merges into its first document and adds no document here, so the shares count documents, not turns. Eval turns are excluded.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 15,
+      "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "enableFacetedFilter": false,
+          "overflow": "ellipsis",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.1.3",
+      "targets": [
+        {
+          "alias": "Reflections with errors",
+          "bucketAggs": [
+            {
+              "field": "timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "1d"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-reflections"
+          },
+          "editorType": "builder",
+          "metrics": [
+            {
+              "id": "1",
+              "settings": {
+                "script": "doc['had_errors'].value ? 1 : 0"
+              },
+              "type": "avg"
+            }
+          ],
+          "preserveQuery": false,
+          "query": "eval_mode:false AND _exists_:had_errors",
+          "queryType": "lucene",
+          "refId": "A",
+          "timeField": "timestamp"
+        },
+        {
+          "alias": "Reflections without trace events",
+          "bucketAggs": [
+            {
+              "field": "timestamp",
+              "id": "2",
+              "settings": {
+                "interval": "1d"
+              },
+              "type": "date_histogram"
+            }
+          ],
+          "datasource": {
+            "type": "elasticsearch",
+            "uid": "es-captains-reflections"
+          },
+          "editorType": "builder",
+          "metrics": [
+            {
+              "id": "1",
+              "settings": {
+                "script": "doc['telemetry_available'].value ? 0 : 1"
+              },
+              "type": "avg"
+            }
+          ],
+          "preserveQuery": false,
+          "query": "eval_mode:false AND _exists_:telemetry_available",
+          "queryType": "lucene",
+          "refId": "B",
+          "timeField": "timestamp"
+        }
+      ],
+      "title": "Reflection inputs health",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -170,7 +950,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 24
       },
       "id": 3,
       "options": {
@@ -277,9 +1057,5 @@
       ],
       "type": "table"
     }
-  ],
-  "time": {
-    "from": "now-24h",
-    "to": "now"
-  }
+  ]
 }

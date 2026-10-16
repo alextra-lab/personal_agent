@@ -746,20 +746,28 @@ promotion_initial_cap: int = Field(
 
 ### Dashboards (Grafana)
 
-Kibana is retired (ADR-0129 D6, FRE-1214). Grafana is the only dashboard UI. The dashboard is `config/grafana/dashboards/self_improvement_funnel.json` (uid `fre1072-self-improvement-funnel`).
+Kibana is retired (ADR-0129 D6, FRE-1214). Grafana is the only dashboard UI. The dashboard is `config/grafana/dashboards/self_improvement_funnel.json` (uid `fre1072-self-improvement-funnel`). It opens on the last 30 days.
 
-It holds two panels today:
+It holds six panels. FRE-1612 built the first five in the Grafana UI with the `create-visualization` skill:
 
-- **Reflection count**: all reflections in the time range (`es-captains-reflections`)
-- **Promotion throttle events**: the `throttled_budget` refusals (`es-agent-logs`)
+| Panel | Reads | Datasource |
+|-------|-------|------------|
+| **Funnel by stage**: reflections, proposals, eligible, throttled, filed, outcome | Reflection documents, `promotion_run` and `throttled_budget` events, outcome stamps | `es-captains-reflections`, `es-captains-funnel-events`, `es-captains-reflections-outcomes` |
+| **Proposal quality: outcomes by category**: per day, by category and outcome (`shipped`, `owner-rejected`, `canceled-as-noise`) | `ticket_outcome`, dated by `ticket_outcome_at` | `es-captains-reflections-outcomes` |
+| **Feedback latency: filing to first outcome**: average and longest `hours_to_outcome` per day | `filed_at` to `ticket_outcome_at` | `es-captains-reflections-outcomes` |
+| **Open pipeline tickets against the cap**: `open_pipeline_count` and `cap` per day | `promotion_run` events | `es-captains-funnel-events` |
+| **Reflection inputs health**: the share of reflections with `had_errors=true`, and the share with `telemetry_available=false` | Reflection documents | `es-captains-reflections` |
+| **Missing-skill gaps seen in the last 7 days** (FRE-1322) | Insights Engine records | `es-agent-insights` |
 
-FRE-1612 adds these panels, built in the Grafana UI. They need telemetry that the pipeline does not write yet (a per-run funnel event, reflection health fields, filing and outcome times):
+How to read the funnel panel:
 
-- **Funnel by stage**: reflections, proposals, eligible, throttled, filed, outcome
-- **Proposal quality**: outcomes by category over time (approved, rejected, canceled)
-- **Feedback latency**: time from filing to the first outcome
-- **Open tickets against the cap**: open `pipeline-filed` count and the cap value
-- **Reflection inputs health**: the share of reflections with `had_errors=true`, and the share with no telemetry summary
+- *Eligible* sums, over every run, the entries that passed the filters. An entry that waits for a free slot counts again on each run. The bar counts attempts, not distinct proposals.
+- *Filed* counts only tickets that the pipeline created. A link to an existing ticket adds to `linked` and sets no `filed_at`.
+- *Outcome seen* needs `AGENT_FEEDBACK_POLLING_ENABLED=true`. While it is false, the outcome and latency panels are empty. Each panel description says so.
+- The `promotion_run`, `had_errors`, `telemetry_available`, `filed_at`, `ticket_outcome_at` and `hours_to_outcome` fields exist only for documents that the deployed code wrote. The panels are empty for earlier days.
+- A repeated proposal merges into its first reflection document (`CaptainLogManager._merge_into_existing`). It adds no document, so the health shares count documents, not turns.
+
+The `promotion_run` event is one document per non-dry run in `agent-captains-funnel-events-*`: `eligible`, `filed`, `linked`, `cap`, and `open_pipeline_count` when the run read it. A run that finds no candidate does not read the count.
 
 ---
 
@@ -825,7 +833,7 @@ All steps (6–12) are implemented:
 
 - `build_feedback_insights_handler()` in `pipeline_handlers.py` is a stub (logs signal only)
 - `InsightsEngine.analyze_feedback_patterns()` exists (`insights/engine.py`) and reads `telemetry/feedback_history/*.json`. No job calls it, so it produces no insight yet
-- The Grafana panels above (FRE-1612) replace the Kibana dashboards, which were never built
+- The Grafana dashboard above (FRE-1612) replaces the Kibana dashboards, which were never built
 
 ### Phase 4: Evaluate — **NOT STARTED**
 

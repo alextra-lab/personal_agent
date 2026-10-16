@@ -557,8 +557,8 @@ class PromotionPipeline:
         if count >= cap:
             # Event NAME, not a payload field: `event_type` in agent-logs is derived
             # from the structlog event name, and a payload key of that name would
-            # overwrite it (the FRE-1066 defect). The committed funnel dashboard
-            # panel queries es-agent-logs for event_type:"throttled_budget".
+            # overwrite it (the FRE-1066 defect). The funnel dashboard reads the
+            # same refusal from agent-captains-funnel-events-* (FRE-1612).
             log.warning(
                 "throttled_budget",
                 reason="seshat_open_ticket_cap_reached",

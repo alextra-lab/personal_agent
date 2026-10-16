@@ -48,6 +48,32 @@ datasources:
       timeField: "timestamp"
       logMessageField: "title"
 
+  # FRE-1612: the same reflection documents on the time the ticket outcome was first
+  # seen. Outcome panels need it: an outcome that lands today on an old proposal sits
+  # outside today's range on the `timestamp` axis above. Documents without an outcome
+  # have no ticket_outcome_at, so a time-range query excludes them.
+  - name: Elasticsearch - captains-reflections-outcomes
+    type: elasticsearch
+    uid: es-captains-reflections-outcomes
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-captains-reflections-*"
+      timeField: "ticket_outcome_at"
+      logMessageField: "title"
+
+  # FRE-1612: one document per promotion run (`promotion_run`) and per refusal
+  # (`throttled_budget`, `misconfigured_project`).
+  - name: Elasticsearch - captains-funnel-events
+    type: elasticsearch
+    uid: es-captains-funnel-events
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: "agent-captains-funnel-events-*"
+      timeField: "@timestamp"
+      logMessageField: "event_type"
+
   # Insights Engine records (FRE-1322): the surface where a missing-skill finding is read.
   - name: Elasticsearch - agent-insights
     type: elasticsearch

@@ -487,6 +487,10 @@ async def generate_reflection_entry(
     had_errors = False
     if settings.failure_path_reflection_enabled:
         had_errors, failure_excerpt_json = _build_failure_path_input(trace_events)
+    # FRE-1612: what the entry records. Unknown (None) when the failure path is off,
+    # because ``had_errors`` is then False for every turn, failed or not.
+    recorded_had_errors = had_errors if settings.failure_path_reflection_enabled else None
+    telemetry_available = bool(trace_events)
 
     # Try DSPy approach first (if available)
     if DSPY_AVAILABLE:
@@ -592,6 +596,8 @@ async def generate_reflection_entry(
                     session_id=session_id,
                 )
             entry.eval_mode = eval_mode  # FRE-523 provenance
+            entry.had_errors = recorded_had_errors
+            entry.telemetry_available = telemetry_available
             # FRE-1340: persist the signal on the entry itself, not just the log
             # warning above — the warning is ephemeral and depends on
             # InsightsEngine's clustering job running before logs age out.
@@ -753,6 +759,8 @@ async def generate_reflection_entry(
         )
 
         entry.eval_mode = eval_mode  # FRE-523 provenance
+        entry.had_errors = recorded_had_errors
+        entry.telemetry_available = telemetry_available
         await _apply_read_before_emit(entry, sysgraph_repo, trace_id=trace_id, eval_mode=eval_mode)
         return entry
 
@@ -772,6 +780,8 @@ async def generate_reflection_entry(
             effective_final_state,
             reply_length,
             eval_mode=eval_mode,
+            had_errors=recorded_had_errors,
+            telemetry_available=telemetry_available,
         )
 
 
@@ -1056,6 +1066,8 @@ def _create_basic_reflection_entry(
     final_state: str,
     reply_length: int,
     eval_mode: bool = False,
+    had_errors: bool | None = None,
+    telemetry_available: bool | None = None,
 ) -> CaptainLogEntry:
     """Create a basic reflection entry without LLM analysis (fallback).
 
@@ -1066,6 +1078,8 @@ def _create_basic_reflection_entry(
         final_state: Final task state.
         reply_length: Length of the agent's reply.
         eval_mode: True when the task originated from an eval run (FRE-523).
+        had_errors: Whether the turn had a failure; ``None`` when unknown (FRE-1612).
+        telemetry_available: Whether the turn had telemetry events (FRE-1612).
 
     Returns:
         Basic CaptainLogEntry.
@@ -1088,4 +1102,6 @@ def _create_basic_reflection_entry(
         status=CaptainLogStatus.AWAITING_APPROVAL,
         telemetry_refs=[TelemetryRef(trace_id=trace_id, metric_name=None, value=None)],
         eval_mode=eval_mode,
+        had_errors=had_errors,
+        telemetry_available=telemetry_available,
     )

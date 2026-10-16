@@ -299,6 +299,25 @@ class CaptainLogEntry(BaseModel):
         ),
     )
 
+    # FRE-1612: the time the pipeline filed this entry's ticket, the start of the feedback-latency
+    # clock. It lives on the entry, not only in ES: a repeated proposal merges into the stored
+    # entry and re-indexes the whole document, so an ES-only field would be erased.
+    filed_at: datetime | None = Field(
+        default=None,
+        description="When the promotion pipeline filed this entry's ticket (FRE-1612).",
+    )
+    # FRE-1612: reflection input health, read by the self-improvement funnel dashboard.
+    # ``None`` means unknown: an entry written before FRE-1612, or a reflection run with
+    # the failure path switched off.
+    had_errors: bool | None = Field(
+        default=None,
+        description="True when the reflected turn had at least one failure (FRE-1612).",
+    )
+    telemetry_available: bool | None = Field(
+        default=None,
+        description="True when the reflected turn had telemetry events to summarize (FRE-1612).",
+    )
+
     @field_validator("timestamp", mode="before")
     @classmethod
     def parse_timestamp(cls, v: Any) -> datetime:

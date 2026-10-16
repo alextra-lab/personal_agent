@@ -40,22 +40,31 @@ def _dashboard_files() -> list[Path]:
 
 
 def test_no_panel_target_overrides_the_datasource_timefield() -> None:
-    """The datasource's own provisioned timeField must govern — a target-level override is
-    exactly the bug: it silently zeroes every result against a family whose real time field
-    differs from whatever was hardcoded.
+    """A target's `timeField` must equal its datasource's provisioned timeField.
+
+    A disagreeing override is exactly the bug: it silently zeroes every result against a
+    family whose real time field differs from whatever was hardcoded. Grafana 13.1 writes
+    the datasource's own value onto every target it exports (FRE-1612), so the key alone is
+    not the defect. The value is.
     """
+    time_fields = _datasource_time_fields()
     offenders = []
     for path in _dashboard_files():
         dashboard = json.loads(path.read_text())
         for panel in dashboard.get("panels", []):
             for target in panel.get("targets", []):
+                ds = target.get("datasource", {})
                 if (
-                    target.get("datasource", {}).get("type") == "elasticsearch"
+                    ds.get("type") == "elasticsearch"
                     and "timeField" in target
+                    and target["timeField"] != time_fields.get(ds.get("uid"))
                 ):
-                    offenders.append(f"{path.name}::{panel['title']}")
+                    offenders.append(
+                        f"{path.name}::{panel['title']} sets timeField {target['timeField']!r}, "
+                        f"but {ds.get('uid')} is configured with {time_fields.get(ds.get('uid'))!r}"
+                    )
     assert not offenders, (
-        f"panel target(s) carry an explicit timeField, overriding the datasource default: {offenders}"
+        f"panel target(s) carry a timeField that overrides the datasource default: {offenders}"
     )
 
 

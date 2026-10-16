@@ -640,12 +640,16 @@ class TestPromotionPipelineRun:
             )
             await pipeline.run()
 
-        es_handler.es_logger.index_document.assert_awaited_once()
-        args, kwargs = es_handler.es_logger.index_document.call_args
-        index_name = args[0] if args else kwargs["index_name"]
-        assert index_name.startswith("agent-captains-funnel-events-")
-        doc = args[1] if len(args) > 1 else kwargs["document"]
-        assert doc["event_type"] == "throttled_budget"
+        # FRE-1612: every run also writes a ``promotion_run`` event. Look at the refusal.
+        refusals = [
+            c.args
+            for c in es_handler.es_logger.index_document.await_args_list
+            if c.args[1]["event_type"] == "throttled_budget"
+        ]
+        assert len(refusals) == 1
+        args = refusals[0]
+        assert args[0].startswith("agent-captains-funnel-events-")
+        doc = args[1]
         assert doc["current_count"] == 10
         assert doc["threshold"] == 10
         assert "@timestamp" in doc
@@ -678,7 +682,11 @@ class TestPromotionPipelineRun:
             )
             await pipeline.run()
 
-        es_handler.es_logger.index_document.assert_not_awaited()
+        # FRE-1612: the run's own ``promotion_run`` event is the only document.
+        event_types = [
+            c.args[1]["event_type"] for c in es_handler.es_logger.index_document.await_args_list
+        ]
+        assert event_types == ["promotion_run"]
 
     @pytest.mark.asyncio
     async def test_linear_duplicate_links_existing_issue(self, tmp_path: pathlib.Path) -> None:
@@ -995,7 +1003,8 @@ class TestAdr0105BidirectionalLinkage:
         assert len(reflection_calls) == 1
         args = reflection_calls[0].args
         assert args[1] == {"term": {"entry_id": "CL-refl-001"}}
-        assert args[3] == {"linear_issue_id": "FRE-NEW"}
+        assert args[3]["linear_issue_id"] == "FRE-NEW"
+        assert "filed_at" in args[3]  # FRE-1612: a fresh create starts the latency clock
         # No insights-index stamp for a reflection-sourced entry.
         assert not [c for c in calls if c.args[0] == "agent-insights-*"]
 

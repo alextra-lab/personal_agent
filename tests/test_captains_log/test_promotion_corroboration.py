@@ -357,8 +357,9 @@ class TestAC3RefusalIsVisible:
     ) -> None:
         """AC-3: the structlog event is named `throttled_budget`.
 
-        `self_improvement_funnel.json` panel 2 queries es-agent-logs for
-        `event_type: "throttled_budget"`, and `event_type` is derived from the
+        The funnel dashboard once queried es-agent-logs for
+        `event_type: "throttled_budget"` (FRE-1612 moved it to the funnel-events
+        index). `event_type` in agent-logs is derived from the
         structlog **event name** (es_handler `_build_item`). Passing `event_type=`
         as a payload field instead would overwrite the semantic event name — the
         FRE-1066 defect that `test_es_handler.py` guards against.
@@ -418,10 +419,13 @@ class TestAC3RefusalIsVisible:
         )
         await pipeline.run()
 
-        es.es_logger.index_document.assert_awaited_once()
-        args = es.es_logger.index_document.await_args.args
+        # FRE-1612: every run also writes a ``promotion_run`` event. Look at the refusal.
+        (args,) = [
+            c.args
+            for c in es.es_logger.index_document.await_args_list
+            if c.args[1]["event_type"] == "throttled_budget"
+        ]
         assert args[0].startswith("agent-captains-funnel-events-")
-        assert args[1]["event_type"] == "throttled_budget"
         assert args[1]["current_count"] == 10
         assert args[1]["threshold"] == 10
 
@@ -470,8 +474,8 @@ class TestAC4ProjectValidated:
         assert await pipeline.run() == []
         create.assert_not_called()
 
-        args = es.es_logger.index_document.await_args.args
-        assert args[1]["event_type"] == "misconfigured_project"
+        event_types = [c.args[1]["event_type"] for c in es.es_logger.index_document.await_args_list]
+        assert "misconfigured_project" in event_types
 
 
 # --------------------------------------------------------------------------- #

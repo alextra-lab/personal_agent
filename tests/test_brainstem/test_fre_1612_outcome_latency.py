@@ -53,18 +53,19 @@ async def test_live_script_on_the_test_stack() -> None:
     client = AsyncElasticsearch(url)
     index = f"fre1612-scratch-{uuid.uuid4().hex[:8]}"
     try:
-        try:
-            await client.indices.create(
-                index=index,
-                mappings={
-                    "properties": {
-                        "linear_issue_id": {"type": "keyword"},
-                        "filed_at": {"type": "date"},
-                    }
-                },
-            )
-        except Exception:
+        # CI has no test stack. ping() returns False on a refused connection, so skip
+        # before any other call, including the cleanup in `finally`.
+        if not await client.ping():
             pytest.skip("test Elasticsearch is not reachable")
+        await client.indices.create(
+            index=index,
+            mappings={
+                "properties": {
+                    "linear_issue_id": {"type": "keyword"},
+                    "filed_at": {"type": "date"},
+                }
+            },
+        )
         await client.index(
             index=index,
             id="filed",
@@ -103,5 +104,8 @@ async def test_live_script_on_the_test_stack() -> None:
         assert "hours_to_outcome" not in old
         assert old["ticket_outcome_at"].startswith("2026-10-16T13:30:00")
     finally:
-        await client.indices.delete(index=index, ignore_unavailable=True)
+        try:
+            await client.indices.delete(index=index, ignore_unavailable=True)
+        except Exception:  # noqa: BLE001 - cleanup only; the stack may be absent
+            pass
         await client.close()

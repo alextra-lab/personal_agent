@@ -113,7 +113,8 @@ create_linear_issue_tool = ToolDefinition(
         "exists, do not file a duplicate (a title match is refused). Do not use it in eval "
         "sessions or for other projects' files. "
         "Agent filing is rate-limited per project per day and is refused when the cap of open "
-        "self-filed tickets is full; dry_run=true previews the payload without creating anything. "
+        "tickets that the promotion pipeline filed is full (your own tickets do not count); "
+        "dry_run=true previews the payload without creating anything. "
         'Example: create_linear_issue(title="Recall drops tags on notes_search", '
         'description="## Evidence\\n...\\n## Proposed action\\n...", priority=3).'
     ),

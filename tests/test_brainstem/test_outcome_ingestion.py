@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import pathlib
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from personal_agent.brainstem.jobs.outcome_ingestion import (
     _classify_outcome,
+    fingerprint_to_suppress,
     run_outcome_ingestion,
 )
+from personal_agent.captains_log.suppression import is_fingerprint_suppressed
 from personal_agent.sysgraph.repository import SignalValue
 
 
@@ -239,3 +242,99 @@ class TestRunOutcomeIngestion:
         await run_outcome_ingestion(client, trace_id="test-trace")
 
         repo.compute_and_apply_signal.assert_not_awaited()
+
+
+_FP = "abc123def4567890"
+
+
+def _issue_with_fp(state_name: str, labels: list[str] | None = None) -> dict:
+    issue = _issue(state_name, labels)
+    issue["description"] = (
+        f"## Proposed Change\n\n**Fingerprint**: `{_FP}`\n<!-- fingerprint: {_FP} -->"
+    )
+    return issue
+
+
+class TestFingerprintToSuppress:
+    """FRE-1610 R1: a Canceled ticket suppresses its own fingerprint, labelled or not."""
+
+    def test_canceled_without_label_returns_fingerprint(self) -> None:
+        assert fingerprint_to_suppress(_issue_with_fp("Canceled")) == _FP
+
+    def test_canceled_with_rejected_label_returns_fingerprint(self) -> None:
+        assert fingerprint_to_suppress(_issue_with_fp("Canceled", ["Rejected"])) == _FP
+
+    @pytest.mark.parametrize("state_name", ["Duplicate", "Done", "In Progress", "Approved"])
+    def test_other_states_do_not_suppress(self, state_name: str) -> None:
+        assert fingerprint_to_suppress(_issue_with_fp(state_name)) is None
+
+    def test_canceled_without_fingerprint_returns_none(self) -> None:
+        assert fingerprint_to_suppress(_issue("Canceled")) is None
+
+
+@pytest.mark.asyncio
+class TestIngestionSuppressesCancels:
+    def _repo(self, monkeypatch: pytest.MonkeyPatch, *, record_ok: bool = True) -> MagicMock:
+        repo = MagicMock()
+        repo.connect = AsyncMock()
+        repo.disconnect = AsyncMock()
+        repo.tickets_awaiting_outcome = AsyncMock(return_value=["FRE-900"])
+        repo.ticket_source_kind = AsyncMock(return_value=("reflection", "reliability"))
+        repo.get_signal = AsyncMock(return_value=SignalValue(value=0.0, n=0, suppressed=False))
+        repo.record_outcome = AsyncMock(return_value=record_ok)
+        repo.compute_and_apply_signal = AsyncMock(
+            return_value=SignalValue(value=-0.25, n=1, suppressed=False)
+        )
+        monkeypatch.setattr(
+            "personal_agent.sysgraph.SysgraphRepository", MagicMock(return_value=repo)
+        )
+        return repo
+
+    async def test_unlabelled_cancel_suppresses_fingerprint(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        """AC-1: a ticket canceled with no label, then the same fingerprint, stays suppressed."""
+        monkeypatch.setattr(
+            "personal_agent.captains_log.suppression.feedback_history_dir", lambda: tmp_path
+        )
+        self._repo(monkeypatch)
+        client = MagicMock()
+        client.get_issue = AsyncMock(return_value=_issue_with_fp("Canceled"))
+        assert not is_fingerprint_suppressed(_FP)
+
+        await run_outcome_ingestion(client, trace_id="test-trace")
+
+        assert is_fingerprint_suppressed(_FP)
+
+    async def test_shipped_ticket_does_not_suppress(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+    ) -> None:
+        monkeypatch.setattr(
+            "personal_agent.captains_log.suppression.feedback_history_dir", lambda: tmp_path
+        )
+        self._repo(monkeypatch)
+        client = MagicMock()
+        client.get_issue = AsyncMock(return_value=_issue_with_fp("Done"))
+
+        await run_outcome_ingestion(client, trace_id="test-trace")
+
+        assert not is_fingerprint_suppressed(_FP)
+
+    async def test_suppression_write_failure_leaves_outcome_unrecorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The write comes first, so a failure leaves the ticket in the queue for a retry."""
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(
+            "personal_agent.brainstem.jobs.outcome_ingestion.record_rejection_suppression", _boom
+        )
+        repo = self._repo(monkeypatch)
+        client = MagicMock()
+        client.get_issue = AsyncMock(return_value=_issue_with_fp("Canceled"))
+
+        await run_outcome_ingestion(client, trace_id="test-trace")
+
+        repo.record_outcome.assert_not_awaited()

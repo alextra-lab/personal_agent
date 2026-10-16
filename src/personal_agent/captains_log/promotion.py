@@ -31,6 +31,7 @@ from personal_agent.captains_log.models import (
     ChangeCategory,
     ProposalSource,
 )
+from personal_agent.captains_log.suppression import is_fingerprint_suppressed
 from personal_agent.config import settings
 from personal_agent.linear_labels import AGENT_AUTHORED_LABEL
 from personal_agent.sysgraph import SysgraphRepository
@@ -301,6 +302,18 @@ class PromotionPipeline:
             if data.get("linear_issue_id"):
                 continue
 
+            # FRE-1610 R1: a canceled or rejected ticket suppressed this fingerprint. The
+            # write-time check in the manager only stops new entries; an entry already
+            # awaiting on disk must be stopped here.
+            fingerprint = pc.get("fingerprint")
+            if fingerprint and is_fingerprint_suppressed(str(fingerprint)):
+                log.info(
+                    "promotion_skipped_suppressed_fingerprint",
+                    entry_id=data.get("entry_id"),
+                    fingerprint=fingerprint,
+                )
+                continue
+
             try:
                 entry = CaptainLogEntry.model_validate(data)
                 promotable.append(entry)
@@ -327,6 +340,11 @@ class PromotionPipeline:
         entries = self.scan_promotable_entries()
         if not entries:
             log.info("promotion_pipeline_no_entries")
+            return []
+
+        entries = await self._drop_decided_kinds(entries)
+        if not entries:
+            log.info("promotion_pipeline_all_decided")
             return []
 
         entries = await self._apply_signal_ranking(entries)
@@ -545,6 +563,61 @@ class PromotionPipeline:
                     error=str(exc),
                     trace_id=entry_trace.get(entry_id),
                 )
+
+    async def _drop_decided_kinds(self, entries: list[CaptainLogEntry]) -> list[CaptainLogEntry]:
+        """Drop entries whose ``(source, category, scope)`` kind is decided (FRE-1610 R3).
+
+        An entry can wait on disk while its kind receives a terminal outcome. The
+        generation-time skip (ADR-0105 D9) never sees such an entry again, so the scan
+        must check. "Decided" is the bounded rule of
+        :meth:`~personal_agent.sysgraph.repository.SysgraphRepository.is_kind_decided`:
+        same scope, inside ``decided_skip_days``. Fails open (ADR-0105 D9): without a
+        repository, or when a read raises, the entry stays.
+
+        Args:
+            entries: Promotable entries in scan order.
+
+        Returns:
+            The entries whose kind is not decided, in the same order.
+        """
+        if self._sysgraph_repo is None:
+            return entries
+
+        kept: list[CaptainLogEntry] = []
+        for entry in entries:
+            pc = entry.proposed_change
+            if pc is None or pc.source is ProposalSource.LEGACY_UNATTRIBUTABLE:
+                kept.append(entry)
+                continue
+            # Same canonical values `_record_sysgraph_linkage` stores, so a category-less
+            # entry is checked against the row its own promotion would write.
+            category = pc.category.value if pc.category else "unknown"
+            scope = pc.scope.value if pc.scope else None
+            try:
+                decided = await self._sysgraph_repo.is_kind_decided(
+                    pc.source.value, category, scope
+                )
+            except Exception as exc:
+                log.warning(
+                    "promotion_decided_read_failed",
+                    entry_id=entry.entry_id,
+                    error=str(exc),
+                    trace_id=_trace_id_from_entry(entry),
+                )
+                kept.append(entry)
+                continue
+            if decided:
+                log.info(
+                    "promotion_skipped_decided_kind",
+                    entry_id=entry.entry_id,
+                    source=pc.source.value,
+                    category=category,
+                    scope=scope,
+                    trace_id=_trace_id_from_entry(entry),
+                )
+                continue
+            kept.append(entry)
+        return kept
 
     async def _apply_signal_ranking(self, entries: list[CaptainLogEntry]) -> list[CaptainLogEntry]:
         """Rank by realized value and drop suppressed (source, category) pairs.
@@ -841,6 +914,7 @@ class PromotionPipeline:
                 why=pc.why,
                 how=pc.how,
                 seen_count=pc.seen_count,
+                scope=pc.scope.value if pc.scope else None,
             )
             await self._sysgraph_repo.record_promotion(
                 proposal, linear_issue_id=linear_issue_id, ticket_title=entry.title

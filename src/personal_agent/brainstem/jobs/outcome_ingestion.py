@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from personal_agent.captains_log.linear_client import LinearClient
+from personal_agent.captains_log.linear_client import (
+    LinearClient,
+    extract_issue_identifier_from_description,
+)
+from personal_agent.captains_log.suppression import record_rejection_suppression
 from personal_agent.config.settings import get_settings
 from personal_agent.telemetry import get_logger
 
@@ -44,6 +48,26 @@ def _classify_outcome(issue: dict[str, Any]) -> _OutcomeResult | None:
         labels = LinearClient.labels_from_issue(issue)
         return "owner-rejected" if "Rejected" in labels else "canceled-as-noise"
     return None
+
+
+def fingerprint_to_suppress(issue: dict[str, Any]) -> str | None:
+    """Return the fingerprint that a ticket's outcome suppresses, or ``None`` (FRE-1610 R1).
+
+    A ticket in state ``Canceled`` suppresses its own fingerprint, with or without the
+    ``Rejected`` label. The owner and master cancel tickets directly, so the label cannot
+    be the trigger. State ``Duplicate`` does not suppress: the idea lives on in the
+    canonical ticket. Pure function, no I/O.
+
+    Args:
+        issue: A ``LinearClient.get_issue()``-shaped dict.
+
+    Returns:
+        The lower-case fingerprint parsed from the description, or ``None`` when the
+        ticket is not ``Canceled`` or carries no fingerprint.
+    """
+    if (issue.get("state") or {}).get("name") != "Canceled":
+        return None
+    return extract_issue_identifier_from_description(str(issue.get("description") or ""))
 
 
 async def _stamp_ticket_outcome(
@@ -121,6 +145,14 @@ async def run_outcome_ingestion(
                 result = _classify_outcome(issue)
                 if result is None:
                     continue
+
+                # FRE-1610 R1: write the suppression BEFORE the outcome. If this raises,
+                # the outcome stays unrecorded and the ticket is retried on the next sweep.
+                fingerprint = fingerprint_to_suppress(issue)
+                if fingerprint:
+                    record_rejection_suppression(
+                        fingerprint, issue_identifier=linear_issue_id, trace_id=trace_id
+                    )
 
                 kind = await repo.ticket_source_kind(linear_issue_id)
                 before = await repo.get_signal(*kind) if kind else None

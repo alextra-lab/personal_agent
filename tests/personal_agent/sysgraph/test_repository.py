@@ -506,3 +506,43 @@ async def test_vacuum_analyze_table_uses_a_maintenance_sized_timeout(
 
     assert captured["timeout"] is not None
     assert float(captured["timeout"]) > 10.0  # strictly greater than the pool's default
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_record_promotion_stores_scope_and_keeps_an_existing_one(
+    sysgraph_repo: SysgraphRepository,
+    sysgraph_pool: asyncpg.Pool,
+) -> None:
+    """FRE-1610: a row created at promotion carries its scope; a later call never replaces it."""
+    fp = "fp-promo-scope-test"
+    try:
+        for scope in ("orchestrator", "brainstem"):
+            await sysgraph_repo.record_promotion(
+                ProposalRecord(
+                    source="reflection",
+                    category="promo-scope",
+                    fingerprint=fp,
+                    what="w",
+                    why=None,
+                    how=None,
+                    seen_count=1,
+                    scope=scope,
+                ),
+                linear_issue_id="FRE-TEST-PROMO-SCOPE",
+            )
+        async with sysgraph_pool.acquire() as conn:
+            stored = await conn.fetchval(
+                "SELECT scope FROM sysgraph.proposal WHERE fingerprint = $1", fp
+            )
+        assert stored == "orchestrator"
+    finally:
+        async with sysgraph_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM sysgraph.promoted_to WHERE ticket_id IN "
+                "(SELECT id FROM sysgraph.ticket WHERE linear_issue_id = 'FRE-TEST-PROMO-SCOPE')"
+            )
+            await conn.execute(
+                "DELETE FROM sysgraph.ticket WHERE linear_issue_id = 'FRE-TEST-PROMO-SCOPE'"
+            )
+            await conn.execute("DELETE FROM sysgraph.proposal WHERE fingerprint = $1", fp)

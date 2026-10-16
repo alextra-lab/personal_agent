@@ -5,8 +5,14 @@ uses the production decisions: the decided-kind skip, the signal ranking, the fi
 lookup in Linear and the ticket cap. It reads Linear, the sysgraph and the Captain's Log
 files. It creates no ticket, links nothing, changes no entry and writes no event.
 
-Run on the host, from the repository root, with the production ``.env``:
-    uv run python -m scripts.fre1611_promotion_dry_run
+Run it inside the gateway container, not on the host. The gateway keeps the Captain's Log
+entries in the volume ``seshat_captains_log_cloud`` and the suppression file in
+``seshat_feedback_history_cloud``. A host run reads ``/opt/seshat/telemetry`` and lists the
+wrong entries. The script imports only ``personal_agent`` and the standard library, so it runs
+as a copied file:
+    docker cp scripts/fre1611_promotion_dry_run.py cloud-sim-seshat-gateway:/tmp/
+    docker exec cloud-sim-seshat-gateway /app/.venv/bin/python /tmp/fre1611_promotion_dry_run.py
+    docker exec cloud-sim-seshat-gateway rm /tmp/fre1611_promotion_dry_run.py
 
 Post the output on the ticket. Each row carries its premise (why, seen count, first seen).
 """

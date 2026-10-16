@@ -1967,7 +1967,10 @@ class AppConfig(BaseSettings):
     # Insights Engine (Phase 2.3, FRE-24)
     insights_enabled: bool = Field(
         default=True,
-        description="Enable proactive insights analysis and proposal generation",
+        description=(
+            "Enable the insights analysis that runs on each consolidation.completed event. "
+            "False stops the analysis before it reads telemetry (FRE-1611)."
+        ),
     )
     # NOTE: the clock-based scheduling knobs (insights_daily_run_hour_utc,
     # insights_weekly_day, insights_weekly_run_hour_utc) were removed in FRE-896 —
@@ -2006,7 +2009,11 @@ class AppConfig(BaseSettings):
     # Captain's Log promotion + Linear feedback loop (ADR-0040)
     promotion_pipeline_enabled: bool = Field(
         default=True,
-        description="Enable weekly Captain's Log → Linear promotion pipeline",
+        description=(
+            "Enable the Captain's Log → Linear promotion pipeline, which runs on each "
+            "consolidation.completed event. False stops it before it scans or files "
+            "anything (FRE-1611)."
+        ),
     )
     feedback_polling_enabled: bool = Field(
         default=True,
@@ -2038,12 +2045,13 @@ class AppConfig(BaseSettings):
         ge=1,
         le=100,
         description=(
-            "Max open Linear tickets Seshat itself may have outstanding (FRE-1354). "
-            "Replaces issue_budget_threshold, which counted ALL non-terminal team "
-            "issues (259 against a 200 bar) and so throttled Seshat on volume it did "
-            "not produce. Counts only issues carrying AGENT_AUTHORED_LABEL — both "
-            "creation paths apply it. Promotion refuses at or above this count, and "
-            "fails closed when the count cannot be read."
+            "Max open Linear tickets the promotion pipeline may have outstanding "
+            "(FRE-1354, FRE-1611). Replaces issue_budget_threshold, which counted ALL "
+            "non-terminal team issues (259 against a 200 bar) and so throttled Seshat on "
+            "volume it did not produce. Counts only issues carrying PIPELINE_FILED_LABEL, "
+            "which only the pipeline applies, so tickets from the in-turn tool do not "
+            "count. Promotion and the in-turn tool refuse at or above this count, and "
+            "fail closed when the count cannot be read."
         ),
     )
     promotion_min_seen_count: int = Field(

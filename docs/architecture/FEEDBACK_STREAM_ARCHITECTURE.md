@@ -72,7 +72,7 @@ All nine feedback streams, their current state, and their target state after ADR
 ### Stream 3: Promotion Pipeline
 - **Source:** `consolidation.completed` event
 - **Collection:** Scans `telemetry/captains_log/` for promotable entries
-- **Processing:** `seen_count ≥ 3`, `age ≥ 7 days`, budget check → Linear issue creation
+- **Processing:** `seen_count ≥ 3`, `age ≥ 7 days`, open-ticket cap check (`AGENT_SESHAT_OPEN_TICKET_CAP`) → Linear issue creation
 - **Signal:** `PromotionIssueCreatedEvent`; Linear issue in target project
 - **Action:** Human review in Linear
 - **Human loop:** Yes — required
@@ -237,9 +237,9 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 | Stream | Detects | Bus? | Complete loop? | ADR | Project |
 |--------|---------|------|----------------|-----|---------|
 | 1. Self-reflection | Per-task | ✅ | ✅ | ADR-0030, ADR-0058 (Accepted, Implemented 2026-04-25) | Self-Improvement Pipeline |
-| 2. Linear feedback | Human label | ✅ | ✅ | ADR-0040 | Self-Improvement Pipeline |
-| 3. Promotion pipeline | Threshold | ✅ | ✅ | ADR-0030/0040 | Self-Improvement Pipeline |
-| 4. Insights engine | Patterns | ✅ | ✅ | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
+| 2. Linear feedback | Human label | ✅ | ⚠️ Closes only when `AGENT_FEEDBACK_POLLING_ENABLED=true`; the `feedback.received` insights consumer only logs | ADR-0040 | Self-Improvement Pipeline |
+| 3. Promotion pipeline | Threshold | ✅ | ✅ Stops when `AGENT_PROMOTION_PIPELINE_ENABLED=false` or the open-ticket cap is full | ADR-0030/0040 | Self-Improvement Pipeline |
+| 4. Insights engine | Patterns | ✅ | ⚠️ Runs only when `AGENT_INSIGHTS_ENABLED=true`; `analyze_feedback_patterns` has no caller | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
 | 5. Mode manager | System metrics | ❌ → ✅ | ❌ → ✅ | ADR-0055 (Drafted, In Review) | System Health & Homeostasis |
 | 6. Memory freshness | Access patterns | ✅ | ⚠️ → ✅ | ADR-0042 + ADR-0060 (Accepted, FRE-250) | Knowledge Graph Quality |
 | 7. Compaction quality | Context loss | ✅ | ✅ | ADR-0047 D3 + ADR-0059 (Accepted, Implemented 2026-04-27) | Context Quality Monitoring |

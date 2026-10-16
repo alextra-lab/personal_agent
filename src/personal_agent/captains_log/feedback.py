@@ -481,7 +481,7 @@ class FeedbackPoller:
         # Warns at 80% of the cap; the old `threshold - 20` goes negative at a cap
         # of 10 and would have warned on every single poll.
         try:
-            n = await self._client.count_open_agent_issues(settings.linear_team_name)
+            n = await self._client.count_open_pipeline_issues(settings.linear_team_name)
             cap = settings.seshat_open_ticket_cap
             if n >= math.ceil(cap * 0.8):
                 log.warning(

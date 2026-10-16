@@ -435,6 +435,43 @@ class TestConsolidationInsightsHandler:
         mock_manager.save_entry.assert_not_called()
         mock_engine.create_captain_log_proposals.assert_not_called()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("enabled", "expected_calls"), [(False, 0), (True, 1)])
+    async def test_insights_enabled_flag_gates_the_analysis(
+        self, enabled: bool, expected_calls: int
+    ) -> None:
+        """FRE-1611 AC-2: insights_enabled=False stops the analysis stage.
+
+        The True case is the seeded control: it proves the handler reaches
+        analyze_patterns when the flag allows it, so the False case is not
+        passing for an unrelated reason.
+        """
+        mock_engine = MagicMock()
+        mock_engine.analyze_patterns = AsyncMock(return_value=[])
+
+        handler = build_consolidation_insights_handler()
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setitem(sys.modules, "personal_agent.insights", MagicMock())
+            mp.setitem(
+                sys.modules,
+                "personal_agent.insights.engine",
+                MagicMock(InsightsEngine=MagicMock(return_value=mock_engine)),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.config.settings",
+                MagicMock(
+                    get_settings=MagicMock(
+                        return_value=MagicMock(
+                            insights_enabled=enabled, insights_wiring_enabled=False
+                        )
+                    )
+                ),
+            )
+            await handler(_consolidation_event(captures_processed=3))
+
+        assert mock_engine.analyze_patterns.await_count == expected_calls
+
 
 # ---------------------------------------------------------------------------
 # build_consolidation_promotion_handler
@@ -533,6 +570,34 @@ class TestConsolidationPromotionHandler:
         _, kwargs = mock_pipeline_cls.call_args
         assert kwargs["sysgraph_repo"] is None
         mock_repo.disconnect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("enabled", "expected_runs"), [(False, 0), (True, 1)])
+    async def test_promotion_pipeline_enabled_flag_gates_the_run(
+        self, enabled: bool, expected_runs: int
+    ) -> None:
+        """FRE-1611 AC-2: promotion_pipeline_enabled=False stops the promotion stage.
+
+        The flag used to gate only the scheduler start, so promotion ran on every
+        consolidation.completed event with the flag false. The True case is the
+        seeded control.
+        """
+        mock_pipeline = MagicMock()
+        mock_pipeline.run = AsyncMock(return_value=[])
+
+        handler = build_consolidation_promotion_handler(linear_client=None)
+        modules = _promotion_modules(mock_pipeline)
+        modules["personal_agent.config.settings"] = MagicMock(
+            get_settings=MagicMock(
+                return_value=MagicMock(promotion_initial_cap=5, promotion_pipeline_enabled=enabled)
+            )
+        )
+        with pytest.MonkeyPatch().context() as mp:
+            for k, v in modules.items():
+                mp.setitem(sys.modules, k, v)
+            await handler(_consolidation_event())
+
+        assert mock_pipeline.run.await_count == expected_runs
 
 
 # ---------------------------------------------------------------------------

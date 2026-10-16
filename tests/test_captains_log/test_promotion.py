@@ -595,7 +595,7 @@ class TestPromotionPipelineRun:
 
         mock_create = AsyncMock(return_value="FF-1")
         lc = MagicMock()
-        lc.count_open_agent_issues = AsyncMock(return_value=10)
+        lc.count_open_pipeline_issues = AsyncMock(return_value=10)
         lc.list_issues = AsyncMock(return_value=[])
 
         with patch.object(promotion_module.settings, "seshat_open_ticket_cap", 10):
@@ -623,7 +623,7 @@ class TestPromotionPipelineRun:
 
         mock_create = AsyncMock(return_value="FF-1")
         lc = MagicMock()
-        lc.count_open_agent_issues = AsyncMock(return_value=10)
+        lc.count_open_pipeline_issues = AsyncMock(return_value=10)
         lc.list_issues = AsyncMock(return_value=[])
 
         es_handler = MagicMock()
@@ -661,7 +661,7 @@ class TestPromotionPipelineRun:
 
         mock_create = AsyncMock(return_value="FF-1")
         lc = MagicMock()
-        lc.count_open_agent_issues = AsyncMock(return_value=4)
+        lc.count_open_pipeline_issues = AsyncMock(return_value=4)
         lc.list_issues = AsyncMock(return_value=[])
 
         es_handler = MagicMock()
@@ -692,7 +692,7 @@ class TestPromotionPipelineRun:
         mock_create = AsyncMock(side_effect=AssertionError("save_issue should not be called"))
 
         lc = MagicMock()
-        lc.count_open_agent_issues = AsyncMock(return_value=4)
+        lc.count_open_pipeline_issues = AsyncMock(return_value=4)
         lc.list_issues = AsyncMock(
             return_value=[
                 {
@@ -832,7 +832,7 @@ class TestAdr0105BidirectionalLinkage:
         fp = data["proposed_change"]["fingerprint"]
 
         lc = MagicMock()
-        lc.count_open_agent_issues = AsyncMock(return_value=4)
+        lc.count_open_pipeline_issues = AsyncMock(return_value=4)
         lc.list_issues = AsyncMock(
             return_value=[
                 {

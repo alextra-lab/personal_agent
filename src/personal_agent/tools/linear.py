@@ -14,7 +14,11 @@ from typing import Any, Literal
 import httpx
 
 from personal_agent.config import settings
-from personal_agent.linear_labels import AGENT_AUTHORED_LABEL, AGENT_AUTHORED_LABEL_COLOR
+from personal_agent.linear_labels import (
+    AGENT_AUTHORED_LABEL,
+    AGENT_AUTHORED_LABEL_COLOR,
+    open_pipeline_issues_filter,
+)
 from personal_agent.security import EgressBlockedError, create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.contract import ToolError, error_codes
@@ -49,6 +53,7 @@ CreateLinearIssueCode = Literal[
     "label_not_configured",
     "label_create_failed",
     "duplicate_issue",
+    "ticket_cap_reached",
     "bad_reply",
 ]
 FindLinearIssuesCode = Literal[LinearApiCode, "invalid_argument"]
@@ -107,8 +112,8 @@ create_linear_issue_tool = ToolDefinition(
         "Do not use it before calling find_linear_issues with the proposed title: if a match "
         "exists, do not file a duplicate (a title match is refused). Do not use it in eval "
         "sessions or for other projects' files. "
-        "Agent filing is rate-limited per project per day; dry_run=true previews the payload "
-        "without creating anything. "
+        "Agent filing is rate-limited per project per day and is refused when the cap of open "
+        "self-filed tickets is full; dry_run=true previews the payload without creating anything. "
         'Example: create_linear_issue(title="Recall drops tags on notes_search", '
         'description="## Evidence\\n...\\n## Proposed action\\n...", priority=3).'
     ),
@@ -433,6 +438,39 @@ async def _get_state_id(team_id: str, state_name: str) -> str:
     return _state_id_cache[state_name]
 
 
+async def _refuse_at_ticket_cap() -> None:
+    """Refuse to file when the open pipeline-filed tickets reach the self-created cap.
+
+    The tool honors the same cap as the promotion pipeline, over the same population
+    (FRE-1611). The tool's own tickets do not count. The count query fails closed: a
+    failed call raises ``LinearError``, so an unreadable count cannot open the cap.
+
+    Raises:
+        CreateLinearIssueError: ``ticket_cap_reached`` when the cap is full.
+        LinearError: When the GraphQL call fails.
+    """
+    cap = settings.seshat_open_ticket_cap
+    data = await _gql(
+        """query($filter: IssueFilter, $first: Int) {
+          issues(filter: $filter, first: $first) {
+            nodes { id }
+          }
+        }""",
+        {"filter": open_pipeline_issues_filter(_TEAM_NAME), "first": cap},
+    )
+    open_count = len((data.get("issues") or {}).get("nodes") or [])
+    if open_count >= cap:
+        raise CreateLinearIssueError(
+            "ticket_cap_reached",
+            f"The cap of {cap} open self-filed tickets is reached ({open_count} open).",
+            retryable=False,
+            next_action=(
+                "Do not file it. Describe the issue in your answer. "
+                "The owner must close or cancel open tickets before new ones are filed."
+            ),
+        )
+
+
 async def _get_label_id(
     team_id: str,
     label_name: str,
@@ -713,7 +751,10 @@ async def create_linear_issue_executor(
         log.info("linear_create_issue_dry_run", trace_id=trace_id, title=title[:80])
         return {"dry_run": True, "payload": issue_input, "title": title}
 
-    # Dedup check: refuse if a similar title already exists in non-cancelled issues
+    # Dedup check: refuse if a similar title already exists. A canceled issue counts:
+    # the owner canceled it, so filing it again repeats a decided case. Only an issue
+    # closed as a duplicate is skipped, because the original it points to still matches.
+    # The state types here must be real Linear types: ``cancelled`` matched none (FRE-1611).
     dedup_data = await _gql(
         """query($filter: IssueFilter) {
           issues(filter: $filter, first: 5) {
@@ -724,7 +765,7 @@ async def create_linear_issue_executor(
             "filter": {
                 "title": {"containsIgnoreCase": title},
                 "team": {"name": {"eq": _TEAM_NAME}},
-                "state": {"type": {"nin": ["cancelled", "duplicate"]}},
+                "state": {"type": {"nin": ["duplicate"]}},
             }
         },
     )
@@ -740,6 +781,8 @@ async def create_linear_issue_executor(
                 "name them to the user."
             ),
         )
+
+    await _refuse_at_ticket_cap()
 
     data = await _gql(
         """

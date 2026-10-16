@@ -201,6 +201,17 @@ def build_consolidation_insights_handler(
     async def handler(event: EventBase) -> None:
         if not isinstance(event, ConsolidationCompletedEvent):
             return
+        from personal_agent.config.settings import get_settings
+
+        # FRE-1611: the flag gates the stage it names. It used to gate only the
+        # scheduler start, so analysis ran on every event with the flag false.
+        if not get_settings().insights_enabled:
+            log.debug(
+                "insights_analysis_skipped_disabled",
+                event_id=event.event_id,
+                trace_id=event.trace_id,
+            )
+            return
         if not event.captures_processed:
             log.debug(
                 "insights_analysis_skipped_no_captures",
@@ -208,7 +219,6 @@ def build_consolidation_insights_handler(
                 trace_id=event.trace_id,
             )
             return
-        from personal_agent.config.settings import get_settings
         from personal_agent.insights.engine import InsightsEngine
         from personal_agent.telemetry.queries import TelemetryQueries
 
@@ -410,6 +420,15 @@ def build_consolidation_promotion_handler(
         from personal_agent.config.settings import get_settings
 
         _settings = get_settings()
+        # FRE-1611: the flag gates the stage it names. It used to gate only the
+        # scheduler start, so promotion ran on every event with the flag false.
+        if not _settings.promotion_pipeline_enabled:
+            log.debug(
+                "promotion_skipped_disabled",
+                event_id=event.event_id,
+                trace_id=event.trace_id,
+            )
+            return
         promo_criteria = criteria or PromotionCriteria(
             max_existing_linear_issues=_settings.promotion_initial_cap,
         )

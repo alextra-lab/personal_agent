@@ -112,7 +112,7 @@ def _reinforced(*, seen_count: int, fingerprint: str, first_seen: datetime) -> R
 def _client(*, open_agent_issues: int = 4, existing: list[dict] | None = None) -> MagicMock:
     """A LinearClient double with the cap count and description-lookup wired."""
     lc = MagicMock()
-    lc.count_open_agent_issues = AsyncMock(return_value=open_agent_issues)
+    lc.count_open_pipeline_issues = AsyncMock(return_value=open_agent_issues)
     lc.list_issues = AsyncMock(return_value=existing or [])
     lc.resolve_project_id = AsyncMock(return_value="project-uuid")
     return lc
@@ -531,7 +531,7 @@ class TestAC5Cap:
         )
         create = AsyncMock(side_effect=AssertionError("must not create when uncounted"))
         lc = _client()
-        lc.count_open_agent_issues = AsyncMock(side_effect=RuntimeError("Linear down"))
+        lc.count_open_pipeline_issues = AsyncMock(side_effect=RuntimeError("Linear down"))
         pipeline = PromotionPipeline(
             log_dir=log_dir,
             criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
@@ -611,9 +611,10 @@ class TestAC6OneMarker:
     """AC-6: "created by Seshat" is a single unambiguous predicate."""
 
     def test_promotion_applies_the_marker(self) -> None:
-        """AC-6: the promotion path carries the marker label."""
+        """AC-6: the promotion path carries both marker labels (FRE-1611 added the cap's)."""
         source = pathlib.Path(promotion_module.__file__).read_text(encoding="utf-8")
         assert "AGENT_AUTHORED_LABEL" in source
+        assert "PIPELINE_FILED_LABEL" in source
 
     def test_agent_tool_path_applies_the_same_marker(self) -> None:
         """AC-6: the in-turn tool path imports the same constant, not its own literal."""

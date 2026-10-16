@@ -5,8 +5,8 @@ Operational guide for promoting Captain's Log entries to Linear and processing y
 ## Prerequisites
 
 1. **Service** running with Second Brain / scheduler (e.g. `AGENT_ENABLE_SECOND_BRAIN=true`).
-2. **MCP gateway** enabled (`AGENT_MCP_GATEWAY_ENABLED=true`) with **Linear** authorized in your Docker MCP setup.
-3. **One-time labels** in your Linear workspace (team-scoped): run when MCP is up:
+2. **Linear API key** in `AGENT_LINEAR_API_KEY`. The Linear client calls the Linear API directly. The MCP gateway is not used. Without the key the service logs `linear_client_unavailable`, and promotion and feedback polling do not run.
+3. **One-time labels** in your Linear workspace (team-scoped): run with the key set:
 
    ```bash
    uv run python -m personal_agent.captains_log.linear_client
@@ -20,10 +20,12 @@ All variables use the `AGENT_` prefix (see `AppConfig` in `src/personal_agent/co
 
 | Variable | Role |
 |----------|------|
-| `AGENT_PROMOTION_PIPELINE_ENABLED` | Weekly promotion of promotable CL entries to Linear (default `true`). |
-| `AGENT_FEEDBACK_POLLING_ENABLED` | Daily poll of Linear for label changes (default `true`). |
+| `AGENT_PROMOTION_PIPELINE_ENABLED` | Promotion of promotable CL entries to Linear. The promotion handler runs on each `consolidation.completed` event. When the flag is `false`, the handler returns and nothing is filed (default `true`). |
+| `AGENT_INSIGHTS_ENABLED` | Insights analysis on each `consolidation.completed` event. When the flag is `false`, the handler returns before it reads telemetry (default `true`). |
+| `AGENT_INSIGHTS_WIRING_ENABLED` | Whether insights results are published to the event bus and saved as Captain's Log proposals. When the flag is `false`, the analysis still runs and indexes to `agent-insights-*` (default `true`). |
+| `AGENT_FEEDBACK_POLLING_ENABLED` | Daily poll of Linear for label changes. When the flag is `false`, the daily job does not call Linear (default `true`). |
 | `AGENT_FEEDBACK_POLLING_HOUR_UTC` | Hour (0–23 UTC) for the daily feedback job (default `7`). |
-| `AGENT_SESHAT_OPEN_TICKET_CAP` | Skip promotion at or above this many open tickets **Seshat itself created** (default `10`, FRE-1354). |
+| `AGENT_SESHAT_OPEN_TICKET_CAP` | Skip promotion at or above this many open tickets that **the promotion pipeline filed** (default `10`). The count uses the `pipeline-filed` label. Tickets that the in-turn tool filed do not count. The in-turn tool refuses to file at the same cap, over the same count (FRE-1354, FRE-1611). |
 | `AGENT_PROMOTION_MIN_SEEN_COUNT` | Corroboration bar a reinforced proposal must reach to stay promotable (default `3`). |
 | `AGENT_PROMOTION_INITIAL_CAP` | Max new issues per promotion run (default `5`). |
 | `AGENT_LINEAR_TEAM_NAME` | Linear team name (default `FrenchForest`). |
@@ -45,23 +47,27 @@ Copy commented defaults from `.env.example` into `.env` and uncomment to overrid
 
 ## Schedules
 
-- **Promotion**: Fixed in code as **Sunday, 10:00 UTC** (`PROMOTION_WEEKDAY`, `PROMOTION_HOUR_UTC` in `src/personal_agent/brainstem/scheduler.py`). Changing this requires a code edit today; env-driven promotion time is not implemented yet.
+- **Promotion**: **Event-driven.** It runs after each `consolidation.completed` event (ADR-0041 Phase 3). There is no weekday or hour setting. A run files at most `AGENT_PROMOTION_INITIAL_CAP` tickets and stops at the open-ticket cap.
 - **Feedback polling**: **Daily** at `AGENT_FEEDBACK_POLLING_HOUR_UTC`.
 - **Outcome ingestion** (ADR-0105 D7): **Daily** at `AGENT_OUTCOME_INGESTION_HOUR_UTC` — sweeps promoted tickets awaiting an outcome, classifies shipped/owner-rejected/canceled-as-noise from Linear workflow state + labels, and updates the realized-value signal the next promotion run reads back to rank and suppress proposals.
-- **Insights** (related): daily / weekly hours via `AGENT_INSIGHTS_*` in `.env.example`.
+- **Insights** (related): **Event-driven.** It runs after each `consolidation.completed` event. The daily and weekly hour settings were removed in FRE-896.
 
 ## Telemetry
 
-- Poller state: `telemetry/feedback_poller_state.json` (gitignored).
-- Feedback history: under `telemetry/feedback_history/` (gitignored).
+- Poller state: `telemetry/feedback_history/feedback_poller_state.json` (gitignored).
+- Feedback history: `telemetry/feedback_history/<issue_identifier>.json` (gitignored).
+- Rejection suppression: `telemetry/feedback_history/suppressed_fingerprints.json` (gitignored).
+- Funnel refusals: the index `agent-captains-funnel-events-YYYY-MM` records each refusal by the ticket cap (`throttled_budget`) and each misconfigured project.
 
 ## Giving feedback on agent-filed issues
 
 The agent creates issues two ways:
-1. **Promotion pipeline** — `CL-*.json` entries promoted automatically once `seen_count ≥ 3` and age ≥ 7 days. Label: `Improvement`.
-2. **Direct tool call** — agent calls `create_linear_issue` during a conversation. Label: `agent-filed`.
+1. **Promotion pipeline** — `CL-*.json` entries promoted automatically once `seen_count ≥ AGENT_PROMOTION_MIN_SEEN_COUNT` (default 3) and age ≥ 7 days. Labels: `PersonalAgent`, `Improvement`, `agent-filed`, `pipeline-filed`.
+2. **Direct tool call** — agent calls `create_linear_issue` during a conversation. Labels: `PersonalAgent`, `agent-filed`. The tool refuses to file a title that matches an existing issue in any state except `Duplicate`. A `Canceled` issue blocks the title.
 
-**AgentFeedback labels work on ALL `PersonalAgent` issues**, including both types above. The `FeedbackPoller` queries by `label="PersonalAgent"`, which covers the union.
+Only the `pipeline-filed` label counts toward `AGENT_SESHAT_OPEN_TICKET_CAP`.
+
+**AgentFeedback labels work on ALL `PersonalAgent` issues**, including both types above. The `FeedbackPoller` lists issues with `label="PersonalAgent"` that changed in the last 3 days (up to 50), which covers the union.
 
 ### How to give feedback
 
@@ -69,11 +75,11 @@ Apply an `AgentFeedback/*` label to the issue in Linear. Do not leave a comment 
 
 | Label | What happens |
 |-------|-------------|
-| `AgentFeedback/Approved` | Agent may proceed with this change if/when implemented |
+| `AgentFeedback/Approved` | The poller moves the issue to the `Approved` state |
 | `AgentFeedback/Rejected` | Fingerprint suppressed for `AGENT_FEEDBACK_SUPPRESSION_DAYS` days; the issue is canceled |
-| `AgentFeedback/Deepen` | Agent generates a more detailed proposal (up to `AGENT_FEEDBACK_MAX_REEVALUATIONS` times) |
-| `AgentFeedback/Too Vague` | Same as Deepen — triggers a more specific proposal |
-| `AgentFeedback/Duplicate` | **Does not suppress.** The poller links the issue to the canonical issue, which keeps the idea alive |
+| `AgentFeedback/Deepen` | Agent comments a more detailed analysis, adds `Re-evaluated`, and returns the issue to `Needs Approval` (up to `AGENT_FEEDBACK_MAX_REEVALUATIONS` times) |
+| `AgentFeedback/Too Vague` | Same as Deepen, with a more specific proposal and the `Refined` label |
+| `AgentFeedback/Duplicate` | **Does not suppress.** The poller sets the issue to `Duplicate` of the issue with the same fingerprint, which keeps the idea alive. If no original is found, it comments |
 | `AgentFeedback/Defer` | **Does not suppress.** The poller records the date only; the revisit window is a placeholder |
 
 ### What a cancel does (FRE-1610)

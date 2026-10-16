@@ -14,7 +14,13 @@ import httpx
 
 from personal_agent.config import settings
 from personal_agent.exceptions import LinearProjectNotFoundError
-from personal_agent.linear_labels import AGENT_AUTHORED_LABEL, AGENT_AUTHORED_LABEL_COLOR
+from personal_agent.linear_labels import (
+    AGENT_AUTHORED_LABEL,
+    AGENT_AUTHORED_LABEL_COLOR,
+    PIPELINE_FILED_LABEL,
+    PIPELINE_FILED_LABEL_COLOR,
+    open_pipeline_issues_filter,
+)
 from personal_agent.security import EgressBlockedError, create_guarded_http_client
 from personal_agent.telemetry import get_logger
 
@@ -22,10 +28,12 @@ log = get_logger(__name__)
 
 _LINEAR_URL = "https://api.linear.app/graphql"
 
-# Linear workflow-state types considered terminal (no longer open work). FRE-598:
-# excluded from the open-issue backpressure count because Linear keeps Done/Canceled
-# issues non-archived while their project stays open, which would inflate the gate.
-_TERMINAL_STATE_TYPES: tuple[str, ...] = ("completed", "canceled", "duplicate")
+# Labels the cap depends on. They are created on first use: an unlabelled issue
+# would be invisible to the cap (FRE-1354, FRE-1611).
+_AUTO_CREATED_LABEL_COLORS: dict[str, str] = {
+    AGENT_AUTHORED_LABEL: AGENT_AUTHORED_LABEL_COLOR,
+    PIPELINE_FILED_LABEL: PIPELINE_FILED_LABEL_COLOR,
+}
 
 # Module-level caches — avoids repeated API round-trips within a process lifetime.
 _lc_team_id: str | None = None
@@ -394,9 +402,7 @@ class LinearClient:
                 name,
                 # The marker the ticket cap counts must never fail to attach: an
                 # unlabelled issue would be invisible to the cap (FRE-1354).
-                auto_create_color=(
-                    AGENT_AUTHORED_LABEL_COLOR if name == AGENT_AUTHORED_LABEL else None
-                ),
+                auto_create_color=_AUTO_CREATED_LABEL_COLORS.get(name),
             )
             for name in labels
         ]
@@ -557,10 +563,10 @@ class LinearClient:
         nodes = issues_data.get("nodes") or []
         return [_normalize_issue_node(n) for n in nodes if isinstance(n, dict)]
 
-    async def count_open_agent_issues(
+    async def count_open_pipeline_issues(
         self, team: str, page_limit: int = 250, *, trace_id: str | None = None
     ) -> int:
-        """Count open Linear issues that Seshat itself created (FRE-1354).
+        """Count open Linear issues that the promotion pipeline filed (FRE-1354, FRE-1611).
 
         This is the population the self-created ticket cap governs. It replaces
         ``count_open_issues``, which counted *every* non-terminal team issue — 259
@@ -568,14 +574,18 @@ class LinearClient:
         volume Seshat did not produce: 81 ``Backlog`` notes and the entire human
         queue. Backpressure on the thing actually being generated is the point.
 
+        FRE-1611 narrowed it again. The count used ``agent-filed``, which the in-turn
+        tool also applies, so the four tickets that the tool filed and the owner
+        approved (FRE-359..362) filled the whole cap of 4.
+
         Two filters, both load-bearing:
 
         * ``state.type.nin`` excludes ``completed``/``canceled``/``duplicate``
           (FRE-598 — Linear leaves Done/Canceled issues non-archived while their
           project is open, which would inflate the count indefinitely).
         * ``labels.some.name`` restricts to
-          :data:`~personal_agent.linear_labels.AGENT_AUTHORED_LABEL`, which both
-          creation paths apply, so the count cannot leak through the other path.
+          :data:`~personal_agent.linear_labels.PIPELINE_FILED_LABEL`, which only the
+          promotion pipeline applies, so tickets from the in-turn tool do not count.
 
         Args:
             team: Team name.
@@ -583,17 +593,13 @@ class LinearClient:
             trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
 
         Returns:
-            Open agent-authored issue count (capped at 10 000).
+            Open pipeline-filed issue count (capped at 10 000).
         """
         total = 0
         cursor: str | None = None
         while True:
             variables: dict[str, Any] = {
-                "filter": {
-                    "team": {"name": {"eq": team}},
-                    "state": {"type": {"nin": list(_TERMINAL_STATE_TYPES)}},
-                    "labels": {"some": {"name": {"in": [AGENT_AUTHORED_LABEL]}}},
-                },
+                "filter": open_pipeline_issues_filter(team),
                 "first": page_limit,
                 "orderBy": "updatedAt",
                 "includeArchived": False,

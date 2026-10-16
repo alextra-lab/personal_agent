@@ -30,10 +30,11 @@ from personal_agent.captains_log.models import (
     CaptainLogStatus,
     ChangeCategory,
     ProposalSource,
+    ProposedChange,
 )
 from personal_agent.captains_log.suppression import is_fingerprint_suppressed
 from personal_agent.config import settings
-from personal_agent.linear_labels import AGENT_AUTHORED_LABEL
+from personal_agent.linear_labels import AGENT_AUTHORED_LABEL, PIPELINE_FILED_LABEL
 from personal_agent.sysgraph import SysgraphRepository
 from personal_agent.sysgraph.repository import ProposalRecord
 from personal_agent.telemetry import get_logger
@@ -93,6 +94,19 @@ class PromotionCriteria(BaseModel):
             "dashboard and the standing graph-hygiene backlog ticket (FRE-621) instead."
         ),
     )
+
+
+def _issue_title(pc: ProposedChange) -> str:
+    """Return the Linear issue title for a proposal.
+
+    Args:
+        pc: The proposed change.
+
+    Returns:
+        ``[category] what``, with ``what`` cut at 80 characters.
+    """
+    category_tag = pc.category.value if pc.category else "improvement"
+    return f"[{category_tag}] {pc.what[:80]}"
 
 
 def _map_seen_count_to_priority(seen_count: int) -> int:
@@ -213,6 +227,7 @@ class PromotionPipeline:
         linear_client: LinearClient | None = None,
         sysgraph_repo: SysgraphRepository | None = None,
         es_handler: "ElasticsearchHandler | None" = None,
+        dry_run: bool = False,
     ) -> None:
         """Initialize the promotion pipeline.
 
@@ -230,6 +245,10 @@ class PromotionPipeline:
                 onto the source `agent-insights-*` document for STATISTICAL_DETECTOR-
                 sourced promotions (ADR-0105 D4). Falls back to
                 ``CaptainLogManager._default_es_handler`` when not provided.
+            dry_run: When True, :meth:`run` makes the same decisions but writes nothing:
+                no ticket, no link, no status change, no funnel event, no bus event.
+                It records each decision in :attr:`planned` (FRE-1611 AC-4). The reads
+                still happen: the ticket count, the project and the fingerprint lookup.
         """
         if log_dir is None:
             project_root = pathlib.Path(__file__).parent.parent.parent.parent
@@ -240,6 +259,8 @@ class PromotionPipeline:
         self._linear_client = linear_client
         self._sysgraph_repo = sysgraph_repo
         self._es_handler = es_handler
+        self._dry_run = dry_run
+        self.planned: list[dict[str, str]] = []
 
     def scan_promotable_entries(self) -> list[CaptainLogEntry]:
         """Find all AWAITING_APPROVAL entries that meet promotion criteria.
@@ -391,10 +412,18 @@ class PromotionPipeline:
                         # Linking creates no ticket, so it must not consume creation
                         # capacity — otherwise a link ahead of a genuinely new
                         # candidate takes the last slot and starves it every run.
+                        if self._dry_run:
+                            self._plan(entry, "link", existing_issue=existing_id)
+                            continue
                         await self._finalize_promotion(entry, existing_id, promoted)
                         continue
 
                 if create_capacity <= 0:
+                    continue
+
+                if self._dry_run:
+                    self._plan(entry, "file")
+                    create_capacity -= 1
                     continue
 
                 linear_id = await self._create_linear_issue(entry)
@@ -413,12 +442,46 @@ class PromotionPipeline:
             "promotion_pipeline_completed",
             scanned=len(entries),
             promoted=len(promoted),
+            dry_run=self._dry_run,
+            planned=len(self.planned),
         )
+        if self._dry_run:
+            return promoted
 
         # Publish promotion.issue_created events (Phase 3, ADR-0041)
         await self._publish_promotion_events(promoted, entries)
 
         return promoted
+
+    def _plan(self, entry: CaptainLogEntry, action: str, *, existing_issue: str = "") -> None:
+        """Record a dry-run decision with the premise the owner needs to judge it.
+
+        Args:
+            entry: The entry the pipeline would act on.
+            action: ``file`` (a new ticket) or ``link`` (to an existing ticket).
+            existing_issue: The existing ticket identifier, for ``link``.
+        """
+        pc = entry.proposed_change
+        if pc is None:
+            return
+        self.planned.append(
+            {
+                "action": action,
+                "entry_id": entry.entry_id,
+                "title": _issue_title(pc),
+                "priority": str(_map_seen_count_to_priority(pc.seen_count)),
+                "seen_count": str(pc.seen_count),
+                "first_seen": pc.first_seen.isoformat() if pc.first_seen else "",
+                "source": pc.source.value,
+                "category": pc.category.value if pc.category else "",
+                "scope": pc.scope.value if pc.scope else "",
+                "fingerprint": pc.fingerprint or "",
+                "what": pc.what,
+                "why": pc.why or "",
+                "how": pc.how or "",
+                "existing_issue": existing_issue,
+            }
+        )
 
     async def _ticket_cap_headroom(self) -> int | None:
         """Remaining room under the self-created ticket cap (FRE-1354, AC-5).
@@ -440,7 +503,7 @@ class PromotionPipeline:
         assert self._linear_client is not None
         cap = settings.seshat_open_ticket_cap
         try:
-            count = await self._linear_client.count_open_agent_issues(settings.linear_team_name)
+            count = await self._linear_client.count_open_pipeline_issues(settings.linear_team_name)
         except Exception as exc:
             log.warning(
                 "throttled_budget",
@@ -725,8 +788,7 @@ class PromotionPipeline:
         if pc is None:
             return None
 
-        category_tag = pc.category.value if pc.category else "improvement"
-        title = f"[{category_tag}] {pc.what[:80]}"
+        title = _issue_title(pc)
         description = _format_linear_description(entry)
         priority = _map_seen_count_to_priority(pc.seen_count)
 
@@ -746,10 +808,11 @@ class PromotionPipeline:
                 settings.linear_team_name,
                 description,
                 priority,
-                # AGENT_AUTHORED_LABEL is the counted marker (AC-6); "Improvement" is
-                # retained for continuity with ADR-0030 and the historical tickets,
-                # but it is never the counting predicate.
-                ["PersonalAgent", "Improvement", AGENT_AUTHORED_LABEL],
+                # PIPELINE_FILED_LABEL is the counted marker (FRE-1611): only this path
+                # applies it, so tickets from the in-turn tool do not fill the cap.
+                # "Improvement" is retained for continuity with ADR-0030 and the
+                # historical tickets, but it is never the counting predicate.
+                ["PersonalAgent", "Improvement", AGENT_AUTHORED_LABEL, PIPELINE_FILED_LABEL],
                 "Needs Approval",
                 settings.linear_promotion_project,
             )
@@ -941,6 +1004,8 @@ class PromotionPipeline:
             current_count: Count that tripped the refusal; ``-1`` when unreadable.
             threshold: The configured cap.
         """
+        if self._dry_run:
+            return
         from personal_agent.captains_log.manager import CaptainLogManager
 
         handler = self._es_handler or CaptainLogManager._default_es_handler

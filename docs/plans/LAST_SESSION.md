@@ -2,9 +2,9 @@
 
 ## Doing / discussing  (≤5 sentences)
 The owner ordered a full fix of the self-analysis pipeline in four parts: FRE-1608 (analysis), FRE-1609
-(history), FRE-1610 (backlog) and FRE-1611 (creation). Parts 1–3 are merged and deployed. Part 4,
-PR #1294, was bounced to build2 on 2026-10-16 for two reasons: the codex review did not run, and the
-dry-run runbook ran on the host instead of in the gateway. When #1294 returns, follow the order below.
+(history), FRE-1610 (backlog) and FRE-1611 (creation). All four are merged and deployed. FRE-1611
+(#1294, `0db7d4f2`) stays open for one owner decision. Its dry run, run inside the gateway, lists 0
+tickets to file. The owner chooses: restore the cap to 10 and the pipeline flag to true (step 6 below), or keep filing held.
 The owner approved the llama.cpp pin move, and production runs b11689 (0f4376268) since 08:16Z.
 The pin commit is d4a4fb3 in the slm_server repo. Rollback: point `SLM_LLAMA_SERVER_BIN` back to llama.cpp-master.
 
@@ -14,7 +14,8 @@ The pin commit is d4a4fb3 in the slm_server repo. Rollback: point `SLM_LLAMA_SER
   2026-10-14 at 16:32Z. Verified backup: `~/seshat-backups/fre1609-20261014T163213Z`. **Delete it
   when FRE-1611 closes.** The six fingerprints are suppressed in the gateway volume (FRE-1610 replay).
 - **Ticket filing is held.** `.env` has `AGENT_SESHAT_OPEN_TICKET_CAP=4`, with a comment, since
-  2026-10-14. The order for FRE-1611:
+  2026-10-14. `AGENT_PROMOTION_PIPELINE_ENABLED=false` (line 799) since 09:18Z on 2026-10-16. Line 387
+  holds an old commented copy. Steps 1–5 below are done:
   1. Merge #1294.
   2. Set `AGENT_PROMOTION_PIPELINE_ENABLED=false` in `.env`. The cap starts counting
      `pipeline-filed` only, so its count drops to 0, and the next consolidation can file up to 4

@@ -212,6 +212,7 @@ def _save_feedback_record(
     )
     safe_name = re.sub(r"[^\w\-]+", "_", ident) or iid
     path = feedback_history_dir() / f"{safe_name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
     log.info(
         "feedback_history_captured",

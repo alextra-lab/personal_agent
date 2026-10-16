@@ -34,6 +34,7 @@ All variables use the `AGENT_` prefix (see `AppConfig` in `src/personal_agent/co
 | `AGENT_OUTCOME_INGESTION_ENABLED` | Daily ticket-outcome ingestion into the realized-value signal, ADR-0105 D7 (default `true`). |
 | `AGENT_OUTCOME_INGESTION_HOUR_UTC` | Hour (0–23 UTC) for the daily outcome-ingestion job (default `8`). |
 | `AGENT_SIGNAL_WINDOW_DAYS` | Trailing window (days) the realized-value signal is computed over (default `90`). |
+| `AGENT_DECIDED_SKIP_DAYS` | Days a terminal outcome keeps skipping new proposals of the same source, category and scope (default `90`, FRE-1610). |
 | `AGENT_SIGNAL_SMOOTHING_PRIOR` | Additive-smoothing prior in `v = Σweights / (n + prior)` (default `2.0`). |
 | `AGENT_SIGNAL_PRIORITY_CLAMP` | Bound on promotion-ranking modulation (default `0.5`). |
 | `AGENT_SIGNAL_SUPPRESSION_THRESHOLD` | `v` at/below this value triggers suppression (default `-0.4`). |
@@ -69,17 +70,29 @@ Apply an `AgentFeedback/*` label to the issue in Linear. Do not leave a comment 
 | Label | What happens |
 |-------|-------------|
 | `AgentFeedback/Approved` | Agent may proceed with this change if/when implemented |
-| `AgentFeedback/Rejected` | Entry suppressed for `AGENT_FEEDBACK_SUPPRESSION_DAYS` days |
+| `AgentFeedback/Rejected` | Fingerprint suppressed for `AGENT_FEEDBACK_SUPPRESSION_DAYS` days; the issue is canceled |
 | `AgentFeedback/Deepen` | Agent generates a more detailed proposal (up to `AGENT_FEEDBACK_MAX_REEVALUATIONS` times) |
 | `AgentFeedback/Too Vague` | Same as Deepen — triggers a more specific proposal |
-| `AgentFeedback/Duplicate` | Entry suppressed; poller links it to the canonical issue |
-| `AgentFeedback/Defer` | Entry suppressed for `AGENT_FEEDBACK_DEFER_REVISIT_DAYS` days |
+| `AgentFeedback/Duplicate` | **Does not suppress.** The poller links the issue to the canonical issue, which keeps the idea alive |
+| `AgentFeedback/Defer` | **Does not suppress.** The poller records the date only; the revisit window is a placeholder |
+
+### What a cancel does (FRE-1610)
+
+Cancel a ticket in Linear and the next daily outcome-ingestion run suppresses its fingerprint for
+`AGENT_FEEDBACK_SUPPRESSION_DAYS` days. The `Rejected` label is not needed. State `Duplicate` does not
+suppress.
+
+A terminal outcome (`Done`, `Canceled`, `Duplicate`) also marks the kind decided. A decided kind skips new
+proposals with the same source, category and scope for `AGENT_DECIDED_SKIP_DAYS` days, counted from the
+outcome. A proposal with another scope is not skipped. After the window, nothing is skipped. A proposal
+that was not written during the window starts again at `seen_count` 1, so it must earn the normal bar
+(3 sightings, 7 days) with new evidence. The promotion scan applies the same rule to entries already on disk.
 
 ### Triage tips
 
 - Use Linear's **filter by label** to see all pending agent proposals: filter `label = PersonalAgent` + `state = Needs Approval`.
 - Bulk-label from mobile: Linear's iOS app supports label editing on individual issues.
-- If an issue is clearly wrong (eval artifact, fictional project), apply `AgentFeedback/Rejected` — or cancel it directly.
+- If an issue is clearly wrong (eval artifact, fictional project), apply `AgentFeedback/Rejected` — or cancel it directly. Both suppress the fingerprint.
 
 ## Normative design
 

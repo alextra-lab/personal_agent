@@ -492,7 +492,7 @@ rose from 143 at promotion to 197. That count was stamped onto every later sight
 After a promotion, a new sighting of the same group starts a new row at `seen_count` 1. A
 sighting whose fingerprint equals the promoted row's fingerprint writes nothing
 (`proposal_id` is `None`), and Guard 1 absorbs it into the promoted CL entry. Gating of decided
-kinds is FRE-1610.
+kinds is Guard 4 (FRE-1610).
 
 #### Guard 2: Suppression file for rejected proposals
 
@@ -526,6 +526,15 @@ if fingerprint and self._is_suppressed(fingerprint):
 
 Suppression duration is configurable (`feedback_suppression_days`, default 30). After expiry, the proposal can re-emerge — this is intentional, because the codebase may have changed enough that the proposal is now valid.
 
+**A cancel suppresses its fingerprint (FRE-1610).** The `Rejected` label is not the only trigger. The owner
+and master cancel tickets directly, so `run_outcome_ingestion()` writes the same suppression entry for any
+ticket in state `Canceled`, with or without the label. It writes the entry before it records the outcome, so
+a failed write leaves the ticket in the queue for a retry. State `Duplicate` does not suppress, because the
+canonical ticket keeps the idea alive. The `Defer` label does not suppress either.
+
+The promotion scan also reads this file. An entry that is already awaiting on disk is skipped when its
+fingerprint is suppressed. The write-time check in `save_entry()` alone cannot stop such an entry.
+
 #### Guard 3: Promotion-time Linear search (last resort)
 
 Before creating a Linear issue, the promotion pipeline queries Linear for an existing issue whose
@@ -544,13 +553,36 @@ The promotion pipeline includes the fingerprint in the Linear issue description.
 found, the pipeline links the CL entry to the existing issue instead of creating a new one. A
 canceled issue is still returned, so it stays a permanent tombstone for its fingerprint.
 
+#### Guard 4: a decided skip is bounded (FRE-1610)
+
+A kind is `decided` when it has a terminal outcome other than `deferred` (ADR-0105 D7). The skip that
+follows has a written scope and an expiry:
+
+1. **Scope.** The skip covers one `(source, category, scope)`. A proposal with another scope is not skipped.
+   A missing scope (`NULL`) is a scope of its own, the same group key that `read_before_emit()` uses for
+   awaiting proposals. `record_promotion()` now stores the scope, so a row created at promotion is not
+   scope-less.
+2. **Expiry.** The skip lasts `decided_skip_days` (default 90, equal to `signal_window_days`) from
+   `outcome.observed_at`. After that, nothing is skipped.
+3. **New evidence.** A skipped proposal writes no row. So the evidence that follows the window, or comes
+   from another scope, starts at `seen_count` 1 and must earn the normal bar: `promotion_min_seen_count`
+   (3) sightings and `min_age_days` (7).
+4. **Where it runs.** `read_before_emit()` applies the rule at generation. `PromotionPipeline` applies it
+   again at promotion, before ranking, to entries already on disk. If sysgraph cannot be read, the entry
+   stays promotable (ADR-0105 D9, fail-open).
+
+Not changed: the outcome weights (ADR-0105 D7) and the category-level cooldown
+(`signal_suppression_min_n`, default 5). The fingerprint rule and the bounded skip act on a single
+cancellation. The category-level cooldown does not need to.
+
 #### Summary of guards
 
 | Guard | Where | Catches | Cost |
 |-------|-------|---------|------|
 | Fingerprint match, any status, live and archived | `manager.save_entry()` | Re-emergence after promotion or archival | Disk scan; archive read only on a live miss |
 | No reinforcement after promotion | `SysgraphRepository.read_before_emit()` | Corroboration that keeps growing on a filed idea | Same query, one extra `NOT EXISTS` |
-| Suppression file | `manager.save_entry()` | Re-emergence after rejection | JSON file read (very cheap) |
+| Suppression file | `manager.save_entry()`, `PromotionPipeline.scan_promotable_entries()` | Re-emergence after a rejection or a cancel; an awaiting entry on disk | JSON file read (very cheap) |
+| Bounded decided skip | `SysgraphRepository.read_before_emit()`, `PromotionPipeline._drop_decided_kinds()` | A new proposal in a kind that has a recent terminal outcome | One indexed query |
 | Linear search | `promotion.run()` | Anything that slipped through guards 1-2 | 1 API call per promotion (negligible at daily rate) |
 
 ### 6.5 Re-evaluation loop guard

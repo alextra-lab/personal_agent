@@ -110,10 +110,11 @@ class ProposalRecord:
 # snapshot while generation-time reinforcement has moved the row on. Overwriting
 # would knock the canonical corroboration backwards.
 _RECORD_PROMOTION_UPSERT_PROPOSAL = """
-INSERT INTO sysgraph.proposal (source, category, fingerprint, what, why, how, seen_count)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO sysgraph.proposal (source, category, fingerprint, what, why, how, seen_count, scope)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (fingerprint) DO UPDATE
     SET seen_count = GREATEST(sysgraph.proposal.seen_count, EXCLUDED.seen_count),
+        scope = COALESCE(sysgraph.proposal.scope, EXCLUDED.scope),
         updated_at = NOW()
 RETURNING id;
 """
@@ -176,6 +177,10 @@ ON CONFLICT (ticket_id) DO NOTHING
 RETURNING id;
 """
 
+# FRE-1610: a decision is bounded. It covers the same (source, category, scope) as the
+# proposal under test -- NULL equals NULL, matching the group key of the awaiting lookup
+# below -- and only while the outcome is newer than $4 (`decided_skip_days`). Before this,
+# it matched (source, category) at any date, so one cancel silenced a whole category forever.
 _IS_KIND_DECIDED_QUERY = """
 SELECT EXISTS (
     SELECT 1
@@ -183,7 +188,10 @@ SELECT EXISTS (
     JOIN sysgraph.promoted_to pt ON pt.ticket_id = pr.ticket_id
     JOIN sysgraph.proposal p ON p.id = pt.proposal_id
     JOIN sysgraph.outcome o ON o.id = pr.outcome_id
-    WHERE p.source = $1 AND p.category = $2 AND o.result != 'deferred'
+    WHERE p.source = $1 AND p.category = $2
+      AND p.scope IS NOT DISTINCT FROM $3
+      AND o.result != 'deferred'
+      AND o.observed_at >= $4
 );
 """
 
@@ -423,6 +431,7 @@ class SysgraphRepository:
                 proposal.why,
                 proposal.how,
                 proposal.seen_count,
+                proposal.scope,
             )
             ticket_id = await conn.fetchval(
                 _RECORD_PROMOTION_UPSERT_TICKET, linear_issue_id, ticket_title
@@ -554,26 +563,33 @@ class SysgraphRepository:
         log.info("sysgraph_outcome_recorded", linear_issue_id=linear_issue_id, result=result)
         return True
 
-    async def is_kind_decided(self, source: str, category: str) -> bool:
-        """Whether ``(source, category)`` has any non-deferred terminal outcome (ADR-0105 D7).
+    async def is_kind_decided(self, source: str, category: str, scope: str | None = None) -> bool:
+        """Whether ``(source, category, scope)`` has a recent non-deferred terminal outcome (ADR-0105 D7).
 
         Derived on read from outcome existence — no persisted stamp, so it can
         never go stale relative to the outcome data. ``deferred`` never counts
-        ("right idea, wrong time" — not a decision). This method exists so
-        FRE-721 (T7, D9's generation-time read) has a fact to consult; FRE-717
-        only makes it queryable.
+        ("right idea, wrong time" — not a decision).
+
+        The decision is bounded (FRE-1610). It covers one scope, where ``None`` is a
+        scope of its own, and it counts only for ``settings.decided_skip_days`` after the
+        outcome. A proposal in another scope, or after the window, is not decided and
+        must earn the normal promotion bar with fresh evidence.
 
         Args:
             source: Proposal source discriminator (ADR-0105 D1).
             category: Proposal category.
+            scope: Proposal scope facet; ``None`` matches only scope-less proposals.
 
         Returns:
             ``True`` if a ``shipped``/``owner-rejected``/``canceled-as-noise``
-            outcome has ever been recorded for this key.
+            outcome was recorded for this key inside the window.
         """
         assert self.pool is not None, "call connect() first"
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.decided_skip_days)
         async with self.pool.acquire() as conn:
-            return bool(await conn.fetchval(_IS_KIND_DECIDED_QUERY, source, category))
+            return bool(
+                await conn.fetchval(_IS_KIND_DECIDED_QUERY, source, category, scope, cutoff)
+            )
 
     async def get_signal(self, source: str, category: str) -> SignalValue:
         """Compute the windowed realized-value signal for ``(source, category)`` (ADR-0105 D7).
@@ -671,8 +687,9 @@ class SysgraphRepository:
                 ``generate_new`` branch.
 
         Returns:
-            ``decided_skip`` when this ``(source, category)`` kind already has
-            a terminal, non-``deferred`` outcome (ADR-0105 D7) — no write.
+            ``decided_skip`` when this ``(source, category, scope)`` kind has a
+            terminal, non-``deferred`` outcome inside ``decided_skip_days``
+            (ADR-0105 D7, bounded by FRE-1610) — no write.
             ``reinforced`` when an awaiting (not yet promoted) equivalent
             already exists — its ``seen_count`` is incremented in place,
             ``proposal_id`` is the existing row's id. ``generate_new`` when
@@ -685,7 +702,10 @@ class SysgraphRepository:
         lock_key = f"{source}:{category}:{scope or ''}"
         async with self.pool.acquire() as conn, conn.transaction():
             await conn.execute(_ADVISORY_LOCK_QUERY, lock_key)
-            decided = bool(await conn.fetchval(_IS_KIND_DECIDED_QUERY, source, category))
+            cutoff = datetime.now(timezone.utc) - timedelta(days=settings.decided_skip_days)
+            decided = bool(
+                await conn.fetchval(_IS_KIND_DECIDED_QUERY, source, category, scope, cutoff)
+            )
             if decided:
                 return ReadBeforeEmitResult(decision="decided_skip", proposal_id=None)
 

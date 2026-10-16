@@ -1125,3 +1125,106 @@ class TestAdr0105SignalReadInPromotion:
         promoted = await pipeline.run()
 
         assert len(promoted) == 1
+
+
+class TestFre1610BacklogActsOnDecisions:
+    """FRE-1610 R1/R3: the promotion scan honours suppressed fingerprints and decided kinds."""
+
+    def test_scan_skips_suppressed_fingerprint(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1: an eligible entry whose fingerprint a cancel suppressed does not promote."""
+        from personal_agent.captains_log.suppression import record_rejection_suppression
+
+        monkeypatch.setattr(
+            "personal_agent.captains_log.suppression.feedback_history_dir", lambda: tmp_path
+        )
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, entry_id="CL-20260220-120000-001", what="Canceled idea")
+        fp = compute_proposal_fingerprint(
+            ChangeCategory.RELIABILITY, ChangeScope.LLM_CLIENT, "Canceled idea"
+        )
+        assert len(PromotionPipeline(log_dir=log_dir).scan_promotable_entries()) == 1
+
+        record_rejection_suppression(fp, issue_identifier="FRE-1")
+
+        assert PromotionPipeline(log_dir=log_dir).scan_promotable_entries() == []
+
+    @pytest.mark.asyncio
+    async def test_decided_kind_does_not_promote(self, tmp_path: pathlib.Path) -> None:
+        """AC-3: an eligible entry whose (source, category, scope) is decided never reaches Linear."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, what="Stale entry", source=ProposalSource.REFLECTION)
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.is_kind_decided = AsyncMock(return_value=True)
+        sysgraph_repo.get_signal = AsyncMock(return_value=SignalValue(0.0, 0, False))
+        mock_create = AsyncMock(return_value="FRE-SHOULD-NOT-CREATE")
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, sysgraph_repo=sysgraph_repo
+        )
+        promoted = await pipeline.run()
+
+        assert promoted == []
+        mock_create.assert_not_awaited()
+        sysgraph_repo.is_kind_decided.assert_awaited_once_with(
+            "reflection", "reliability", "llm_client"
+        )
+
+    @pytest.mark.asyncio
+    async def test_undecided_kind_still_promotes(self, tmp_path: pathlib.Path) -> None:
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, what="Fresh entry", source=ProposalSource.REFLECTION)
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.is_kind_decided = AsyncMock(return_value=False)
+        sysgraph_repo.get_signal = AsyncMock(return_value=SignalValue(0.0, 0, False))
+        mock_create = AsyncMock(return_value="FRE-NEW")
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, sysgraph_repo=sysgraph_repo
+        )
+        promoted = await pipeline.run()
+
+        assert len(promoted) == 1
+
+    @pytest.mark.asyncio
+    async def test_decided_read_failure_fails_open(self, tmp_path: pathlib.Path) -> None:
+        """ADR-0105 D9: an unreadable sysgraph keeps the entry promotable."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, what="Entry during outage", source=ProposalSource.REFLECTION)
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.is_kind_decided = AsyncMock(side_effect=RuntimeError("db down"))
+        sysgraph_repo.get_signal = AsyncMock(return_value=SignalValue(0.0, 0, False))
+        mock_create = AsyncMock(return_value="FRE-OK")
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, sysgraph_repo=sysgraph_repo
+        )
+        promoted = await pipeline.run()
+
+        assert len(promoted) == 1
+
+    @pytest.mark.asyncio
+    async def test_linkage_stores_scope(self, tmp_path: pathlib.Path) -> None:
+        """The promoted proposal row carries its scope, so the bounded skip can match it."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, what="Scoped entry", source=ProposalSource.REFLECTION)
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.is_kind_decided = AsyncMock(return_value=False)
+        sysgraph_repo.get_signal = AsyncMock(return_value=SignalValue(0.0, 0, False))
+        sysgraph_repo.record_promotion = AsyncMock()
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir,
+            create_issue_fn=AsyncMock(return_value="FRE-S"),
+            sysgraph_repo=sysgraph_repo,
+        )
+        await pipeline.run()
+
+        record = sysgraph_repo.record_promotion.await_args.args[0]
+        assert record.scope == "llm_client"

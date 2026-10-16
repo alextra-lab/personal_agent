@@ -2092,6 +2092,14 @@ class AppConfig(BaseSettings):
         ge=1,
         description="Trailing window (days) over which realized-value v is computed (ADR-0105 D7)",
     )
+    decided_skip_days: int = Field(
+        default=90,
+        ge=1,
+        description="Days a terminal outcome keeps skipping new proposals of the same "
+        "(source, category, scope), counted from the outcome (FRE-1610). Matches "
+        "signal_window_days, so a decision stops counting in the skip and in the signal "
+        "together. Another scope, or a later date, is not skipped.",
+    )
     signal_smoothing_prior: float = Field(
         default=2.0,
         ge=0,

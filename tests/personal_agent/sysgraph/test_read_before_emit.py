@@ -37,15 +37,22 @@ async def _cleanup_rbe_rows(sysgraph_pool: asyncpg.Pool) -> AsyncIterator[None]:
 
 
 async def _seed_decided_outcome(
-    pool: asyncpg.Pool, *, source: str, category: str, result: str = "owner-rejected"
+    pool: asyncpg.Pool,
+    *,
+    source: str,
+    category: str,
+    result: str = "owner-rejected",
+    scope: str | None = None,
+    observed_days_ago: int = 0,
 ) -> None:
-    """Seed a full proposal -> ticket -> outcome chain so (source, category) is decided."""
+    """Seed a full proposal -> ticket -> outcome chain so (source, category, scope) is decided."""
     async with pool.acquire() as conn:
         proposal_id = await conn.fetchval(
-            "INSERT INTO sysgraph.proposal (source, category, fingerprint, what, seen_count) "
-            "VALUES ($1, $2, 'fp-rbe-test-decided-seed', 'seed', 1) RETURNING id",
+            "INSERT INTO sysgraph.proposal (source, category, fingerprint, what, seen_count, scope) "
+            "VALUES ($1, $2, 'fp-rbe-test-decided-seed', 'seed', 1, $3) RETURNING id",
             source,
             category,
+            scope,
         )
         ticket_id = await conn.fetchval(
             "INSERT INTO sysgraph.ticket (linear_issue_id, title) "
@@ -57,13 +64,29 @@ async def _seed_decided_outcome(
             ticket_id,
         )
         outcome_id = await conn.fetchval(
-            "INSERT INTO sysgraph.outcome (result) VALUES ($1) RETURNING id", result
+            "INSERT INTO sysgraph.outcome (result, observed_at) "
+            "VALUES ($1, NOW() - make_interval(days => $2)) RETURNING id",
+            result,
+            observed_days_ago,
         )
         await conn.execute(
             "INSERT INTO sysgraph.produced (ticket_id, outcome_id) VALUES ($1, $2)",
             ticket_id,
             outcome_id,
         )
+
+
+def _new_proposal(category: str, scope: str | None) -> ProposalRecord:
+    return ProposalRecord(
+        source="reflection",
+        category=category,
+        fingerprint="fp-rbe-test-would-be-new",
+        what="new idea text",
+        why=None,
+        how=None,
+        seen_count=1,
+        scope=scope,
+    )
 
 
 @pytest.mark.integration
@@ -74,7 +97,9 @@ async def test_read_before_emit_decided_skip_no_new_row(
     _cleanup_rbe_rows: None,
 ) -> None:
     """AC-9: an equivalent already-decided kind produces no new proposal row."""
-    await _seed_decided_outcome(sysgraph_pool, source="reflection", category="rbe-decided-cat")
+    await _seed_decided_outcome(
+        sysgraph_pool, source="reflection", category="rbe-decided-cat", scope="orchestrator"
+    )
 
     result = await sysgraph_repo.read_before_emit(
         "reflection",
@@ -99,6 +124,58 @@ async def test_read_before_emit_decided_skip_no_new_row(
             "SELECT COUNT(*) FROM sysgraph.proposal WHERE fingerprint = 'fp-rbe-test-would-be-new'"
         )
     assert count == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_decided_skip_does_not_block_another_scope(
+    sysgraph_repo: SysgraphRepository,
+    sysgraph_pool: asyncpg.Pool,
+    _cleanup_rbe_rows: None,
+) -> None:
+    """FRE-1610 AC-2: a decision in scope A leaves the same category open in scope B."""
+    await _seed_decided_outcome(
+        sysgraph_pool, source="reflection", category="rbe-decided-cat", scope="orchestrator"
+    )
+
+    result = await sysgraph_repo.read_before_emit(
+        "reflection", "rbe-decided-cat", "brainstem", _new_proposal("rbe-decided-cat", "brainstem")
+    )
+
+    assert result.decision == "generate_new"
+    assert result.proposal_id is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_decided_skip_expires(
+    sysgraph_repo: SysgraphRepository,
+    sysgraph_pool: asyncpg.Pool,
+    _cleanup_rbe_rows: None,
+) -> None:
+    """FRE-1610 AC-2: after decided_skip_days the same scope is open again."""
+    from personal_agent.config import settings
+
+    await _seed_decided_outcome(
+        sysgraph_pool,
+        source="reflection",
+        category="rbe-decided-cat",
+        scope="orchestrator",
+        observed_days_ago=settings.decided_skip_days + 1,
+    )
+
+    result = await sysgraph_repo.read_before_emit(
+        "reflection",
+        "rbe-decided-cat",
+        "orchestrator",
+        _new_proposal("rbe-decided-cat", "orchestrator"),
+    )
+
+    assert result.decision == "generate_new"
+    assert (
+        await sysgraph_repo.is_kind_decided("reflection", "rbe-decided-cat", "orchestrator")
+        is False
+    )
 
 
 @pytest.mark.integration

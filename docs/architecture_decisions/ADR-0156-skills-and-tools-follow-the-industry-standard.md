@@ -98,7 +98,7 @@ At the PR gate, the owner answered two more points (FRE-1573, 2026-10-10 18:40 U
 4. A loaded skill body is never pruned from the context of its turn (S2, step 5).
 5. **Standard, quoted:** "Most implementations rely on the model's own judgment as the activation mechanism, rather than implementing harness-side trigger matching or keyword detection" (S2).
 6. **Risk:** a small model can fail to load a skill that it needs. D10 G2 measures this. A fallback is added only if G2 fails.
-7. **Amended 2026-10-16 (FRE-1606):** the owner's model (the system prompt holds an agent's base behaviour, other core work gets another agent, skills add capabilities on demand), and the cost formula that places content in the head or in a skill, with a telemetry query for each input. See the amendment in Status Updates.
+7. **Amended 2026-10-16 (FRE-1606):** the owner's model (the system prompt holds an agent's base behaviour, if needed other core work gets another agent, skills add capabilities on demand), and the cost formula that places content in the head or in a skill, with a telemetry query for each input. See the amendment in Status Updates.
 
 ### D3 — `read_skill(name, path?)` gives detail on demand (S2)
 
@@ -863,14 +863,14 @@ Implemented in `scripts/eval/fre1594/score.py` (PR #1270).
 
 #### Owner decisions
 
-- **2026-10-12, about 20:15Z, on FRE-1592, asked as a question:** "Rules/core instructions are not Skills." Then: "System prompts structure the base behavior of an agent. If needed, we have different agents for different types of core work, no? Skills add to an agent's core capabilities."
-- **2026-10-13, about 17:20Z, on the FRE-1592 decision brief:** "Accept all". This made the model of the question an accepted model.
+- **2026-10-12, on FRE-1592, asked as a question** (master's comment of 20:09Z, edited 20:12Z, which quotes the owner): "Rules/core instructions are not Skills." Then: "System prompts structure the base behavior of an agent. If needed, we have different agents for different types of core work, no? Skills add to an agent's core capabilities."
+- **2026-10-13, about 17:20Z, on the FRE-1592 decision brief** (comment of 17:18Z): "Accept all". This made the model of the question an accepted model.
 - **2026-10-16, in this seat:** "Go" on the seat's recommendations for this record: the corrected formula with the accepted form quoted beside it, a query in ES or Tempo for each input, and the queries written inline.
 
 #### The owner's model (amends D2)
 
 1. The system prompt holds an agent's base behaviour.
-2. A different kind of core work gets a different agent, with its own system prompt. Today these are the primary (`orchestrator/prompts.py`) and the sub-agent (`_SUB_AGENT_SYSTEM_PROMPT` in `orchestrator/sub_agent.py`) with the worker types `researcher` and `general` (ADR-0150 D2).
+2. If needed, a different kind of core work gets a different agent, with its own system prompt. Today these are the primary (`orchestrator/prompts.py`) and the sub-agent (`_SUB_AGENT_SYSTEM_PROMPT` in `orchestrator/sub_agent.py`) with the worker types `researcher` and `general` (ADR-0150 D2).
 3. Skills add capabilities on demand. D2's catalog and D3's `read_skill` are that mechanism.
 
 This record states the model as the owner gave it, and adds no wider rule to it. D5.1 does not change: each skill body still holds the success and recovery steps of its own procedure.
@@ -894,27 +894,27 @@ The head wins when `s × c × m < q × (L + s_r × c) + s_line × c × m`.
 | `s_r` | Size of the `read_skill` result as the model gets it: the body and its JSON wrapper. In M2 the wrapper added 318 tokens to a 3,728-token body. |
 | `s_line` | Size of the skill's catalog line (M1: 54–138 tokens, mean 101). |
 | `c` | Prefill time per uncached prompt token. |
-| `L` | Decode time of the model call that emits `read_skill`. |
+| `L` | Decode time of the primary model call that emits `read_skill`. |
 | `m` | Share of primary turns that start with a cold head. |
 | `q` | Share of primary turns that load this content. |
 
 **The accepted form, and the two corrections.** FRE-1592 gave the formula as: "The head wins when `s × c × (m − q) < q × L`". The owner accepted it on 2026-10-13. Then the owner approved two corrections on 2026-10-16:
 
-1. **`q` is the share for the one item that you place.** FRE-1592 gave 0.028 for all skills together. That value is correct for a question about all bodies together. For one skill, it makes the head look cheaper than it is.
+1. **`q` is the share for the one item that you place.** For a question about all bodies together, use the share for all skills. For one skill, the share for all skills makes the head look cheaper than it is.
 2. **The skill side pays its catalog line.** The line is in the head, so it costs `s_line × c × m` on every turn. If the content moves into the head, the line goes away.
 
 With `s_r = s` and `s_line = 0`, the corrected form is the accepted form.
 
-**Worked check** (`m` = 0.33, `L` = 2.2 s, `s_line` = 101, `s_r` = `s`). This table gives the body size below which the head wins:
+**Worked check.** The inputs are `m` = 0.33, `L` = 2.49 s and `s_r` = `s`, with `c` at both ends of its measured range (see the inputs below). This table gives the body size below which the head wins:
 
-| `q` | Accepted form, `c` = 2.6 / 2.3 ms | Corrected form, `c` = 2.6 / 2.3 ms |
-|---|---|---|
-| 0.5 | the head always wins (`q ≥ m`) | the head always wins |
-| 0.1 | 368 / 416 tokens | 513 / 561 tokens |
-| 0.028 (all skills, FRE-1592) | 78 / 89 tokens | 189 / 199 tokens |
-| 0.011 (`infrastructure-health`, per item) | 29 / 33 tokens | 134 / 137 tokens |
+| `q` | `s_line` | Accepted form, `c` = 2.65 / 2.3 ms | Corrected form, `c` = 2.65 / 2.3 ms |
+|---|---|---|---|
+| 0.5 | any | the head always wins (`q ≥ m`) | the head always wins |
+| 0.1 | 101 | 409 / 471 tokens | 553 / 616 tokens |
+| 0.032 (all skills) | 101 | 101 / 116 tokens | 213 / 228 tokens |
+| 0.022 (`infrastructure-health`) | 80 | 67 / 77 tokens | 153 / 163 tokens |
 
-The smallest skill body is 850 tokens (M1). So every body stays a skill for each `c` from 2.3 to 2.65 ms, in both forms. This is FRE-1592 recommendation 2.
+The smallest skill body is 850 tokens (M1). So every body stays a skill in both forms, at both ends of the `c` range, and also for a `q` of 0.1. This is FRE-1592 recommendation 2.
 
 #### The bounds of the formula
 
@@ -932,22 +932,22 @@ The smallest skill body is 850 tokens (M1). So every body stays a skill for each
 Rules for every query:
 
 - ES `agent-logs-*` holds production events only (the eval stack writes to its own ES). ES counts are provisional, because ES can lose events (FRE-1051).
-- Tempo also holds eval traffic. A Tempo input therefore uses the production trace ids from ES, and reads only the spans of those traces.
-- Tempo keeps spans for 14 days. The window of a Tempo input must be inside the last 14 days, and a run is valid only if Tempo returns every trace id.
+- Tempo also holds eval traffic. So a Tempo input reads only the `slm-server` span whose parent is a production model call. The `parentSpanId` of an `slm-server` `chat` span equals the `span_id` of the ES `model_call_completed` event of that call.
+- Tempo keeps spans for 14 days. The window of a Tempo input must be inside the last 14 days, and a run is valid only if every selected model call has its `slm-server` span.
 - For a new placement question, use the 14 days that end at the question. Give the window with each value.
 
-| Input | Store | FRE-1592 window and value | Value of the query on that window (run 2026-10-16) |
+| Input | Store | FRE-1592 window and value | Value of the query (run 2026-10-16) |
 |---|---|---|---|
-| `m` | ES | 2026-09-28T17:00Z – 2026-10-12T17:00Z: 27 of 83 = 0.33; 23 of the 27 after a prefix-hash change; 0.05 without those | 282 events, 93 turns, 83 kept, 27 misses = 0.33; 23 after a prefix-hash change. The same. |
-| `q` | ES | 2026-10-01T09:27Z – 2026-10-12T17:00Z: 5 loads in 176 turns = 0.028 | 5 calls in 4 turns of 178 = 0.022 per turn. Per skill: `infrastructure-health` 2 turns (0.011), `query-elasticsearch` 1, `self-telemetry` 1. The fifth call asked for `query-telemetry`, which is not a skill. |
-| `c` | ES + Tempo | 2.6 ms, from the M2 `fence` arm at a 12.6k context. FRE-1592 measured it in the M2 run, not with a query. | 2026-10-10T00:00Z – 2026-10-12T17:00Z: 50 traces, all in Tempo, 451 spans. 2.55 ms for all contexts (411 spans), 2.61 ms for an 8k–20k context (128 spans). |
-| `L` | ES + Tempo | 2.2 s, the M2 `read_skill` call. FRE-1592 measured it in the M2 run, not with a query. | 2026-10-10T00:00Z – 2026-10-12T17:00Z: 5 calls, decode 0.54, 1.08, 2.49, 2.88 and 3.52 s. Median 2.49 s. |
+| `m` | ES | 2026-09-28T17:00Z – 2026-10-12T17:00Z: 27 of 83 = 0.33; 23 of the 27 after a prefix-hash change; 0.05 without those | Same window: 282 events, 93 turns, 83 kept, 27 misses = 0.33; 23 after a prefix-hash change. The same. |
+| `q` | ES | 2026-10-01T09:27Z – 2026-10-12T17:00Z: 5 loads in 176 turns = 0.028 | Same window: 3 primary loads in 93 Flash-Next turns = 0.032. Per skill: `infrastructure-health` 2 (0.022), `self-telemetry` 1 (0.011). |
+| `c` | ES + Tempo | 2.6 ms, from the M2 `fence` arm at a 12.6k context. FRE-1592 measured it in the M2 run, not with a query. | 2026-10-10T00:00Z – 2026-10-12T17:00Z: 158 primary calls in 50 traces, each with its span. 2.52 ms for all contexts (143 spans), 2.65 ms for an 8,000–20,000-token context (46 spans). |
+| `L` | ES + Tempo | 2.2 s, the M2 `read_skill` call. FRE-1592 measured it in the M2 run, not with a query. | The `q` loads inside Tempo's retention (2026-10-10 and 2026-10-11): 3 calls, decode 3.52, 2.49 and 1.08 s. Median 2.49 s. |
 
 **Notes on the values.**
 
-- FRE-1600 measured `c` ≈ 2.3 ms on follow-up turns only. `c` changes with the context depth and with the kind of turn. Use the context band of the content that you place. The worked check above covers 2.3 to 2.65 ms.
-- `L` is the decode time only. The emitting call also prefills the end of the turn, but the turn prefills it with either delivery, so it is not extra. The M2 value of 2.2 s holds 0.81 s of that prefill and 1.32 s of decode (medians of 3). On the decode-only definition, M2 gives 1.32 s. The production calls emit more text with the call: 27–145 tokens, against 56–64 in M2.
-- The FRE-1592 `q` of 5 in 176 counted calls, not turns. The same query returns 178 turns now. Its window start (2026-10-01T09:27Z) is the start of that count. ES holds `read_skill` calls from 2026-07-31.
+- **The FRE-1592 `q` counted 5 calls, not loads by the primary.** One call asked for `query-telemetry`, which is not a skill, and loaded nothing. One `query-elasticsearch` load came from a `sub_agent` call. The other 3 are the primary loads above. The FRE-1592 denominator counted the `task_started` events of every primary model (the same query returns 178 now). This query counts Flash-Next turns, to match `m`.
+- **The range of `c` is 2.3 to 2.65 ms.** FRE-1600 measured about 2.3 ms on follow-up turns only. 2.65 ms is the 8,000–20,000-token band of the query above. `c` changes with the context depth and with the kind of turn. So use the band of the content that you place.
+- **`L` is the decode time only.** The emitting call also prefills the end of the turn. The turn prefills it with either delivery, so it is not extra. The M2 value of 2.2 s holds 0.81 s of that prefill and 1.32 s of decode (medians of 3). On the decode-only definition, M2 gives 1.32 s. The 3 production calls emit more text with the call: 58–111 tokens, against 56–64 in M2.
 
 **Query for `m` (ES).**
 
@@ -956,7 +956,7 @@ GET agent-logs-*/_search
 {
   "size": 5000,
   "sort": [{"@timestamp": "asc"}],
-  "_source": ["@timestamp", "trace_id", "input_tokens", "cache_read_tokens", "prompt_static_prefix_hash"],
+  "_source": ["@timestamp", "trace_id", "span_id", "input_tokens", "cache_read_tokens", "prompt_static_prefix_hash"],
   "query": {"bool": {"filter": [
     {"term": {"event_type": "model_call_completed"}},
     {"term": {"role": "primary"}},
@@ -977,45 +977,44 @@ GET agent-logs-*/_search
 ```json
 GET agent-logs-*/_search
 {
-  "size": 0,
+  "size": 1000,
+  "_source": ["@timestamp", "trace_id", "skill_name"],
   "query": {"bool": {"filter": [
-    {"term": {"event_type": "tool_call_started"}},
-    {"term": {"tool_name": "read_skill"}},
+    {"term": {"event_type": "read_skill_invoked"}},
+    {"exists": {"field": "body_chars"}},
     {"range": {"@timestamp": {"gte": "<start>", "lt": "<end>"}}}
-  ]}},
-  "aggs": {
-    "turns": {"cardinality": {"field": "trace_id"}},
-    "per_skill": {"terms": {"field": "arguments.name", "size": 50},
-                  "aggs": {"turns": {"cardinality": {"field": "trace_id"}}}}
-  }
+  ]}}
 }
 ```
 
-The denominator is the `hits.total` of the same query with `{"term": {"event_type": "task_started"}}` as its only event filter, and `"track_total_hits": true`. `q` = the turns of the item ÷ that total. The total counts the turns of every primary model.
+1. `read_skill` logs this event with `body_chars` only after it returns a body. So a request for an unknown skill does not count.
+2. For each event, find the call that emitted it: the latest `model_call_completed` event with the same `trace_id` and an `@timestamp` at or before the event's. Keep the event only if that call has `role` `primary` and `model` `unsloth/qwen3.8-flash-next`. This drops the loads of a worker.
+3. The denominator is the count of distinct `trace_id` values in the `m` query on the same window (all turns, before the 2,000-token filter).
+4. `q` = the distinct `trace_id` values of the kept events for the item (one `skill_name`, or all) ÷ the denominator.
 
 **Query for `c` (ES, then Tempo).**
 
-1. In ES, list the trace ids: the `m` filter with `"size": 0` and `"aggs": {"t": {"terms": {"field": "trace_id", "size": 10000}}}`.
-2. For each id, get `GET /api/traces/<trace_id>` from Tempo. If Tempo does not return a trace, run again or use a later window.
-3. Keep the spans of the `slm-server` service named `chat unsloth/qwen3.8-flash-next` with `slm.prompt_n` of 100 or more. `slm.prompt_n` is the count of uncached tokens. It equals ES `input_tokens − cache_read_tokens` (FRE-1600).
-4. Keep the spans whose context, `slm.prompt_n + slm.cache_reuse`, is in the band of the question.
-5. `c` = the least-squares slope of `slm.prefill_ms` on `slm.prompt_n`, in ms per token.
+1. Run the `m` query on the window, and keep every event (not only the first of each turn).
+2. For each `trace_id`, get `GET /api/traces/<trace_id>` from Tempo.
+3. For each event, take the `slm-server` span named `chat unsloth/qwen3.8-flash-next` whose `parentSpanId` equals the event's `span_id`. If an event has no such span, or the span lacks `slm.prefill_ms` or `slm.prompt_n`, the run is not valid. Run it again, or use a later window.
+4. Keep the spans with `slm.prompt_n` of 100 or more. `slm.prompt_n` is the count of uncached tokens. It equals ES `input_tokens − cache_read_tokens` (FRE-1600).
+5. For a band, keep the spans whose context, `slm.prompt_n + slm.cache_reuse`, is in the band. For the head, the band is 8,000–20,000 tokens (the production request was 12,617 tokens in M1). "All contexts" skips this step.
+6. `c` = the slope of an ordinary least-squares line, with an intercept, of `slm.prefill_ms` on `slm.prompt_n`, in ms per token.
 
 **Query for `L` (ES, then Tempo).**
 
-1. In ES, take the `q` filter with `"size": 100` and `"_source": ["@timestamp", "trace_id"]`. If more than one primary model ran in the window, keep the events whose trace holds a Flash-Next `model_call_completed` event.
-2. For each event, get its trace from Tempo.
-3. Take the `slm-server` `chat` span that ends last before the event's `@timestamp`. That is the call that emitted `read_skill`.
-4. `L` = the median of `slm.decode_ms` over these spans.
+1. Take the kept events of the `q` query, in the part of the window that Tempo still holds.
+2. For each event, take the `slm-server` span whose `parentSpanId` equals the `span_id` of the emitting call (step 2 of the `q` query).
+3. `L` = the median of `slm.decode_ms` over these spans.
 
 #### Verification / Acceptance Criteria of this amendment
 
 | # | Criterion | How it is checked | It fails if |
 |---|---|---|---|
-| V1 (FRE-1606 AC-1) | The owner's words are quoted verbatim and dated, and the model is stated without a wider rule. | Compare the quotes with the FRE-1592 comment of 2026-10-12 20:09Z (edited 20:12Z) and the comment of 2026-10-13 17:18Z. | A word differs, a date is missing, or the text states a stronger rule, for example "rules are never skills". |
-| V2 (FRE-1606 AC-2) | Each of `m`, `q`, `c` and `L` has a query with a store and a window, and each query returns its stated value. | Run the `m` and `q` queries on the FRE-1592 windows: 27 of 83, and 5 calls in 4 turns. The `task_started` total can be up to 2 above 178, because ES can deliver events late. Before 2026-10-24, run the `c` and `L` queries on 2026-10-10T00:00Z – 2026-10-12T17:00Z: `c` within 0.05 ms of 2.55 and 2.61, and `L` = 2.49 s over 5 calls. | An input has no query, or a query returns another value on its window. After 2026-10-24 Tempo no longer holds the spans, and only the ES part of this check can run. |
-| V3 (FRE-1606 AC-3) | The scope is stated: M2 and M3 are for Flash-Next only, and the M3 rules were test rules. | Read "The bounds of the formula". | The text applies an M3 result to another model or to a production rule. |
-| V4 | The corrected formula equals the accepted form when `s_r = s` and `s_line = 0`, and the worked check follows from it. | Substitute into the inequality, and solve it for `s` at the table's inputs. | The algebra or a table value is wrong. |
+| V1 (FRE-1606 AC-1) | The owner's words are quoted verbatim and dated, and the model is stated without a wider rule. | Compare the quotes with the FRE-1592 comments of 2026-10-12 20:09Z (edited 20:12Z) and 2026-10-13 17:18Z. Compare each numbered item of "The owner's model", D2 item 7 and the README row with the quotes. | A word differs, a date is missing, or a sentence states more than the quotes, for example "rules are never skills" or a different agent for all core work without "if needed". |
+| V2 (FRE-1606 AC-2) | Each of `m`, `q`, `c` and `L` has a query with a store and a window, and each query returns its stated value. | Master runs the queries at the gate. The ES part: `m` = 27 of 83, and `q` = 3 loads in 93 turns, on the stated windows. The Tempo part, before 2026-10-24: `c` within 0.05 ms of 2.52 and 2.65, with every call matched to its span, and `L` = 2.49 s over the same 3 calls. | An input has no query, or a query returns another value on its window. After 2026-10-24 Tempo no longer holds the spans, and only the ES part can run. ES keeps its monthly indices for at least 123 days. |
+| V3 (FRE-1606 AC-3) | Every M2 or M3 result is stated for Flash-Next only, and the M3 rules are stated as test rules. | Search the amendment, D2 item 7 and the README row for "M2" and "M3". Each M3 result must be under "The bounds of the formula", whose "Scope" item limits it to Flash-Next and to test rules. | A sentence applies an M2 or M3 result to another model or to a production rule. |
+| V4 | The corrected formula equals the accepted form when `s_r = s` and `s_line = 0`, and the worked check follows from it. | Substitute into the inequality, and solve it for `s` with the table's inputs. | The algebra or a table value is wrong. |
 
 #### Not in scope
 

@@ -990,7 +990,12 @@ class PromotionPipeline:
             return
         promoted.append({"entry_id": entry.entry_id, "linear_issue_id": linear_issue_id})
         await self._record_sysgraph_linkage(entry, linear_issue_id)
-        await self._stamp_reflection_linkage(entry.entry_id, linear_issue_id, filed_at=filed_at)
+        await self._stamp_reflection_linkage(
+            entry.entry_id,
+            linear_issue_id,
+            filed_at=filed_at,
+            trace_id=_trace_id_from_entry(entry),
+        )
         pc = entry.proposed_change
         if pc is not None and pc.source == ProposalSource.STATISTICAL_DETECTOR and pc.fingerprint:
             await self._stamp_insight_linkage(pc.fingerprint, linear_issue_id)
@@ -1108,7 +1113,12 @@ class PromotionPipeline:
             )
 
     async def _stamp_reflection_linkage(
-        self, entry_id: str, linear_issue_id: str, *, filed_at: str | None = None
+        self,
+        entry_id: str,
+        linear_issue_id: str,
+        *,
+        filed_at: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         """Stamp linear_issue_id onto the agent-captains-reflections-* doc (ADR-0105 D6), best-effort.
 
@@ -1127,6 +1137,7 @@ class PromotionPipeline:
             filed_at: ISO UTC time of a fresh filing (FRE-1612), the start of the
                 feedback-latency clock. ``None`` for a link to an existing ticket, because
                 the filing time is not the linking time.
+            trace_id: Correlation id for the log lines of this stamp.
         """
         from personal_agent.captains_log.manager import CaptainLogManager
 
@@ -1150,6 +1161,7 @@ class PromotionPipeline:
                     "promotion_reflection_linkage_matched_nothing",
                     entry_id=entry_id,
                     linear_issue_id=linear_issue_id,
+                    trace_id=trace_id,
                 )
         except Exception as exc:
             log.warning(
@@ -1157,6 +1169,7 @@ class PromotionPipeline:
                 entry_id=entry_id,
                 linear_issue_id=linear_issue_id,
                 error=str(exc),
+                trace_id=trace_id,
             )
 
     async def _stamp_insight_linkage(self, fingerprint: str, linear_issue_id: str) -> None:

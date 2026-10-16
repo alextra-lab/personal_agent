@@ -85,7 +85,10 @@ def fingerprint_to_suppress(issue: dict[str, Any]) -> str | None:
 
 
 async def _stamp_ticket_outcome(
-    es_handler: "ElasticsearchHandler | None", linear_issue_id: str, result: _OutcomeResult
+    es_handler: "ElasticsearchHandler | None",
+    linear_issue_id: str,
+    result: _OutcomeResult,
+    trace_id: str | None = None,
 ) -> None:
     """Stamp the classified outcome onto the source ES doc (ADR-0105 D6, FRE-719), best-effort.
 
@@ -100,6 +103,7 @@ async def _stamp_ticket_outcome(
         es_handler: Elasticsearch handler, or ``None``/disconnected to skip.
         linear_issue_id: The ticket identifier to match on.
         result: The classified outcome to stamp.
+        trace_id: Correlation id for the log lines of this stamp.
     """
     handler = es_handler
     if handler is None:
@@ -123,6 +127,7 @@ async def _stamp_ticket_outcome(
                 "outcome_ingestion_es_stamp_matched_nothing",
                 linear_issue_id=linear_issue_id,
                 result=result,
+                trace_id=trace_id,
             )
     except Exception as exc:
         log.warning(
@@ -130,6 +135,7 @@ async def _stamp_ticket_outcome(
             linear_issue_id=linear_issue_id,
             result=result,
             error=str(exc),
+            trace_id=trace_id,
         )
 
 
@@ -183,7 +189,7 @@ async def run_outcome_ingestion(
                 before = await repo.get_signal(*kind) if kind else None
                 recorded = await repo.record_outcome(linear_issue_id, result)
                 if recorded:
-                    await _stamp_ticket_outcome(es_handler, linear_issue_id, result)
+                    await _stamp_ticket_outcome(es_handler, linear_issue_id, result, trace_id)
                 if recorded and kind is not None:
                     after = await repo.compute_and_apply_signal(*kind)
                     log.info(

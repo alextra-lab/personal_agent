@@ -7,6 +7,7 @@ updates the realized-value signal the promotion pipeline reads back.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 from personal_agent.captains_log.linear_client import (
@@ -23,6 +24,19 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 _OutcomeResult = Literal["shipped", "owner-rejected", "canceled-as-noise"]
+
+# FRE-1612: the outcome, the time it was seen, and the hours since filing. A document
+# filed before FRE-1612 has no ``filed_at``, so it gets no ``hours_to_outcome``.
+# ``ticket_outcome_at`` is the sweep time that first saw the outcome, not the time
+# Linear changed the ticket.
+_STAMP_OUTCOME_SCRIPT = (
+    "ctx._source.ticket_outcome = params.ticket_outcome; "
+    "ctx._source.ticket_outcome_at = params.ticket_outcome_at; "
+    "if (ctx._source.filed_at != null) { "
+    "ctx._source.hours_to_outcome = "
+    "(ZonedDateTime.parse(params.ticket_outcome_at).toInstant().toEpochMilli() "
+    "- ZonedDateTime.parse(ctx._source.filed_at).toInstant().toEpochMilli()) / 3600000.0; }"
+)
 
 
 def _classify_outcome(issue: dict[str, Any]) -> _OutcomeResult | None:
@@ -76,7 +90,9 @@ async def _stamp_ticket_outcome(
     """Stamp the classified outcome onto the source ES doc (ADR-0105 D6, FRE-719), best-effort.
 
     Without this, the promoted proposal document (``agent-captains-reflections-*``)
-    never carries a queryable shipped/canceled signal for the funnel dashboard.
+    never carries a queryable shipped/canceled signal for the funnel dashboard. It also
+    stamps ``ticket_outcome_at`` and, when the document has ``filed_at``,
+    ``hours_to_outcome`` (FRE-1612).
     Requires ``linear_issue_id`` to already be present on the doc (see
     ``PromotionPipeline._stamp_reflection_linkage``).
 
@@ -93,12 +109,21 @@ async def _stamp_ticket_outcome(
     if handler is None or not getattr(handler, "_connected", False):
         return
     try:
-        await handler.es_logger.update_by_query(
+        updated = await handler.es_logger.update_by_query(
             "agent-captains-reflections-*",
             {"term": {"linear_issue_id": linear_issue_id}},
-            "ctx._source.ticket_outcome = params.ticket_outcome",
-            {"ticket_outcome": result},
+            _STAMP_OUTCOME_SCRIPT,
+            {
+                "ticket_outcome": result,
+                "ticket_outcome_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
+        if not updated:
+            log.warning(
+                "outcome_ingestion_es_stamp_matched_nothing",
+                linear_issue_id=linear_issue_id,
+                result=result,
+            )
     except Exception as exc:
         log.warning(
             "outcome_ingestion_es_stamp_failed",

@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import math
 import pathlib
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -205,6 +206,24 @@ def _format_linear_description(entry: CaptainLogEntry) -> str:
     return "\n".join(lines)
 
 
+@dataclass
+class _RunFunnel:
+    """The counts of one promotion run, written as the ``promotion_run`` funnel event (FRE-1612).
+
+    Attributes:
+        eligible: Entries that survived the scan, the decided-kind drop and the ranking.
+        filed: Entries that got a new ticket.
+        linked: Entries that linked to an existing ticket.
+        open_pipeline_count: Open ``pipeline-filed`` tickets at the cap check, or ``None``
+            when the run never read the count or the read failed.
+    """
+
+    eligible: int = 0
+    filed: int = 0
+    linked: int = 0
+    open_pipeline_count: int | None = None
+
+
 class PromotionPipeline:
     """Scans Captain's Log entries and promotes qualifying proposals to Linear.
 
@@ -261,6 +280,7 @@ class PromotionPipeline:
         self._es_handler = es_handler
         self._dry_run = dry_run
         self.planned: list[dict[str, str]] = []
+        self._funnel = _RunFunnel()
 
     def scan_promotable_entries(self) -> list[CaptainLogEntry]:
         """Find all AWAITING_APPROVAL entries that meet promotion criteria.
@@ -352,11 +372,24 @@ class PromotionPipeline:
         """Execute the promotion pipeline.
 
         Scans for promotable entries, creates Linear issues, and updates
-        the on-disk entries with linear_issue_id + APPROVED status.
+        the on-disk entries with linear_issue_id + APPROVED status. Every run
+        ends with one ``promotion_run`` funnel event (FRE-1612), including a run
+        that files nothing.
 
         Returns:
             List of dicts with keys ``entry_id`` and ``linear_issue_id``
             for each successfully promoted entry.
+        """
+        self._funnel = _RunFunnel()
+        promoted = await self._run_stages()
+        await self._emit_promotion_run()
+        return promoted
+
+    async def _run_stages(self) -> list[dict[str, str]]:
+        """Run the scan, filter, cap and filing stages; count them in ``self._funnel``.
+
+        Returns:
+            The promoted entries, as :meth:`run` returns them.
         """
         entries = self.scan_promotable_entries()
         if not entries:
@@ -373,6 +406,7 @@ class PromotionPipeline:
             log.info("promotion_pipeline_all_suppressed")
             return []
 
+        self._funnel.eligible = len(entries)
         create_capacity = self.criteria.max_existing_linear_issues
         if self._create_issue_fn is not None and self._linear_client is not None:
             headroom = await self._ticket_cap_headroom()
@@ -415,7 +449,9 @@ class PromotionPipeline:
                         if self._dry_run:
                             self._plan(entry, "link", existing_issue=existing_id)
                             continue
-                        await self._finalize_promotion(entry, existing_id, promoted)
+                        before = len(promoted)
+                        await self._finalize_promotion(entry, existing_id, promoted, linked=True)
+                        self._funnel.linked += len(promoted) - before
                         continue
 
                 if create_capacity <= 0:
@@ -429,7 +465,9 @@ class PromotionPipeline:
                 linear_id = await self._create_linear_issue(entry)
                 if linear_id:
                     create_capacity -= 1
+                    before = len(promoted)
                     await self._finalize_promotion(entry, linear_id, promoted)
+                    self._funnel.filed += len(promoted) - before
             except Exception as exc:
                 log.warning(
                     "promotion_linear_create_failed",
@@ -515,6 +553,7 @@ class PromotionPipeline:
             await self._emit_funnel_event("throttled_budget", -1, cap)
             return None
 
+        self._funnel.open_pipeline_count = count
         if count >= cap:
             # Event NAME, not a payload field: `event_type` in agent-logs is derived
             # from the structlog event name, and a payload key of that name would
@@ -917,6 +956,8 @@ class PromotionPipeline:
         entry: CaptainLogEntry,
         linear_issue_id: str,
         promoted: list[dict[str, str]],
+        *,
+        linked: bool = False,
     ) -> None:
         """Mark the entry promoted and record its linkage (ADR-0105 D4/AC-3).
 
@@ -930,6 +971,8 @@ class PromotionPipeline:
                 existing duplicate match).
             promoted: The running list of promoted {entry_id, linear_issue_id}
                 dicts this call appends to.
+            linked: True for a link to an existing ticket. The pipeline did not file that
+                ticket, so the reflection document gets no ``filed_at`` (FRE-1612).
         """
         if not self._mark_promoted(entry, linear_issue_id):
             # Not counted as promoted: the entry is still AWAITING_APPROVAL and will
@@ -938,7 +981,7 @@ class PromotionPipeline:
             return
         promoted.append({"entry_id": entry.entry_id, "linear_issue_id": linear_issue_id})
         await self._record_sysgraph_linkage(entry, linear_issue_id)
-        await self._stamp_reflection_linkage(entry.entry_id, linear_issue_id)
+        await self._stamp_reflection_linkage(entry.entry_id, linear_issue_id, filed=not linked)
         pc = entry.proposed_change
         if pc is not None and pc.source == ProposalSource.STATISTICAL_DETECTOR and pc.fingerprint:
             await self._stamp_insight_linkage(pc.fingerprint, linear_issue_id)
@@ -1004,6 +1047,35 @@ class PromotionPipeline:
             current_count: Count that tripped the refusal; ``-1`` when unreadable.
             threshold: The configured cap.
         """
+        await self._index_funnel_event(
+            event_type, {"current_count": current_count, "threshold": threshold}
+        )
+
+    async def _emit_promotion_run(self) -> None:
+        """Emit the ``promotion_run`` funnel event for the run that just ended (FRE-1612).
+
+        One document per run: ``eligible``, ``filed``, ``linked`` and ``cap``, plus
+        ``open_pipeline_count`` when the run read it. The dashboard reads the funnel
+        stages and the open count against the cap from this event.
+        """
+        funnel = self._funnel
+        fields: dict[str, int] = {
+            "eligible": funnel.eligible,
+            "filed": funnel.filed,
+            "linked": funnel.linked,
+            "cap": settings.seshat_open_ticket_cap,
+        }
+        if funnel.open_pipeline_count is not None:
+            fields["open_pipeline_count"] = funnel.open_pipeline_count
+        await self._index_funnel_event("promotion_run", fields)
+
+    async def _index_funnel_event(self, event_type: str, fields: Mapping[str, int]) -> None:
+        """Index one document into the monthly funnel-events index, best-effort.
+
+        Args:
+            event_type: The event name, stored as ``event_type``.
+            fields: The integer fields of the event.
+        """
         if self._dry_run:
             return
         from personal_agent.captains_log.manager import CaptainLogManager
@@ -1016,23 +1088,19 @@ class PromotionPipeline:
         try:
             await handler.es_logger.index_document(
                 index_name,
-                {
-                    "@timestamp": now.isoformat(),
-                    "event_type": event_type,
-                    "current_count": current_count,
-                    "threshold": threshold,
-                },
+                {"@timestamp": now.isoformat(), "event_type": event_type, **fields},
             )
         except Exception as exc:
             log.warning(
                 "promotion_throttle_event_emit_failed",
                 event_type=event_type,
-                current_count=current_count,
-                threshold=threshold,
+                fields=dict(fields),
                 error=str(exc),
             )
 
-    async def _stamp_reflection_linkage(self, entry_id: str, linear_issue_id: str) -> None:
+    async def _stamp_reflection_linkage(
+        self, entry_id: str, linear_issue_id: str, *, filed: bool = True
+    ) -> None:
         """Stamp linear_issue_id onto the agent-captains-reflections-* doc (ADR-0105 D6), best-effort.
 
         Unlike ``_stamp_insight_linkage`` (STATISTICAL_DETECTOR-only, keyed on
@@ -1047,19 +1115,34 @@ class PromotionPipeline:
         Args:
             entry_id: The promoted entry's id (also its ES document id).
             linear_issue_id: The Linear issue identifier just linked.
+            filed: True when the pipeline filed the ticket just now. The document then
+                gets ``filed_at`` (FRE-1612), the start of the feedback-latency clock.
+                A link to an existing ticket gets none, because the filing time is not
+                the linking time.
         """
         from personal_agent.captains_log.manager import CaptainLogManager
 
         handler = self._es_handler or CaptainLogManager._default_es_handler
         if handler is None or not getattr(handler, "_connected", False):
             return
+        script = "ctx._source.linear_issue_id = params.linear_issue_id"
+        params: dict[str, str] = {"linear_issue_id": linear_issue_id}
+        if filed:
+            script += "; ctx._source.filed_at = params.filed_at"
+            params["filed_at"] = datetime.now(timezone.utc).isoformat()
         try:
-            await handler.es_logger.update_by_query(
+            updated = await handler.es_logger.update_by_query(
                 "agent-captains-reflections-*",
                 {"term": {"entry_id": entry_id}},
-                "ctx._source.linear_issue_id = params.linear_issue_id",
-                {"linear_issue_id": linear_issue_id},
+                script,
+                params,
             )
+            if not updated:
+                log.warning(
+                    "promotion_reflection_linkage_matched_nothing",
+                    entry_id=entry_id,
+                    linear_issue_id=linear_issue_id,
+                )
         except Exception as exc:
             log.warning(
                 "promotion_reflection_linkage_stamp_failed",

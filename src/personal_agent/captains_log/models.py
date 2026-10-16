@@ -299,6 +299,18 @@ class CaptainLogEntry(BaseModel):
         ),
     )
 
+    # FRE-1612: reflection input health, read by the self-improvement funnel dashboard.
+    # ``None`` means unknown: an entry written before FRE-1612, or a reflection run with
+    # the failure path switched off.
+    had_errors: bool | None = Field(
+        default=None,
+        description="True when the reflected turn had at least one failure (FRE-1612).",
+    )
+    telemetry_available: bool | None = Field(
+        default=None,
+        description="True when the reflected turn had telemetry events to summarize (FRE-1612).",
+    )
+
     @field_validator("timestamp", mode="before")
     @classmethod
     def parse_timestamp(cls, v: Any) -> datetime:

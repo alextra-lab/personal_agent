@@ -158,12 +158,12 @@ class TestRunOutcomeIngestion:
 
         await run_outcome_ingestion(client, trace_id="test-trace", es_handler=es_handler)
 
-        es_handler.es_logger.update_by_query.assert_awaited_once_with(
-            "agent-captains-reflections-*",
-            {"term": {"linear_issue_id": "FRE-123"}},
-            "ctx._source.ticket_outcome = params.ticket_outcome",
-            {"ticket_outcome": "shipped"},
-        )
+        es_handler.es_logger.update_by_query.assert_awaited_once()
+        index, query, script, params = es_handler.es_logger.update_by_query.await_args.args
+        assert index == "agent-captains-reflections-*"
+        assert query == {"term": {"linear_issue_id": "FRE-123"}}
+        assert "ctx._source.ticket_outcome = params.ticket_outcome;" in script
+        assert params["ticket_outcome"] == "shipped"
 
     async def test_not_recorded_outcome_does_not_stamp_es(
         self, monkeypatch: pytest.MonkeyPatch

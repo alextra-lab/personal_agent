@@ -450,6 +450,20 @@ def test_reflections_source_and_ticket_outcome_are_explicit() -> None:
     assert props["ticket_outcome"]["type"] == "keyword"
 
 
+def test_reflections_health_and_latency_fields_are_explicit() -> None:
+    """FRE-1612: the funnel dashboard's health and latency fields have a pinned type.
+
+    A date left to dynamic detection turns into a keyword if the first value in a new
+    month is malformed, and a time-range panel then finds nothing.
+    """
+    props = _props(_load("captains-reflections-index-template.json"))
+    assert props["had_errors"]["type"] == "boolean"
+    assert props["telemetry_available"]["type"] == "boolean"
+    assert props["filed_at"]["type"] == "date"
+    assert props["ticket_outcome_at"]["type"] == "date"
+    assert props["hours_to_outcome"]["type"] == "float"
+
+
 def test_funnel_events_template_is_explicit_dynamic_false() -> None:
     """The new funnel-events family is dynamic:false with the throttle event's fields."""
     tpl = _load("captains-funnel-events-index-template.json")
@@ -461,6 +475,13 @@ def test_funnel_events_template_is_explicit_dynamic_false() -> None:
     assert props["event_type"]["type"] == "keyword"
     assert props["current_count"]["type"] == "integer"
     assert props["threshold"]["type"] == "integer"
+
+
+def test_funnel_events_template_maps_the_promotion_run_fields() -> None:
+    """FRE-1612: with dynamic:false, an unmapped field is stored but cannot be queried."""
+    props = _props(_load("captains-funnel-events-index-template.json"))
+    for field in ("eligible", "filed", "linked", "open_pipeline_count", "cap"):
+        assert props[field]["type"] == "integer", field
 
 
 # --------------------------------------------------------------------------- #

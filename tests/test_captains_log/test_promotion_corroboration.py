@@ -418,10 +418,13 @@ class TestAC3RefusalIsVisible:
         )
         await pipeline.run()
 
-        es.es_logger.index_document.assert_awaited_once()
-        args = es.es_logger.index_document.await_args.args
+        # FRE-1612: every run also writes a ``promotion_run`` event. Look at the refusal.
+        (args,) = [
+            c.args
+            for c in es.es_logger.index_document.await_args_list
+            if c.args[1]["event_type"] == "throttled_budget"
+        ]
         assert args[0].startswith("agent-captains-funnel-events-")
-        assert args[1]["event_type"] == "throttled_budget"
         assert args[1]["current_count"] == 10
         assert args[1]["threshold"] == 10
 
@@ -470,8 +473,8 @@ class TestAC4ProjectValidated:
         assert await pipeline.run() == []
         create.assert_not_called()
 
-        args = es.es_logger.index_document.await_args.args
-        assert args[1]["event_type"] == "misconfigured_project"
+        event_types = [c.args[1]["event_type"] for c in es.es_logger.index_document.await_args_list]
+        assert "misconfigured_project" in event_types
 
 
 # --------------------------------------------------------------------------- #

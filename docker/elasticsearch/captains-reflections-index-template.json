@@ -89,6 +89,11 @@
           }
         },
         "ticket_outcome": { "type": "keyword" },
+        "ticket_outcome_at": { "type": "date" },
+        "filed_at": { "type": "date" },
+        "hours_to_outcome": { "type": "float" },
+        "had_errors": { "type": "boolean" },
+        "telemetry_available": { "type": "boolean" },
         "supporting_metrics": { "type": "keyword" },
         "metrics_structured": {
           "type": "nested",

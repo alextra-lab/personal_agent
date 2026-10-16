@@ -25,12 +25,27 @@
         },
         "threshold": {
           "type": "integer"
+        },
+        "eligible": {
+          "type": "integer"
+        },
+        "filed": {
+          "type": "integer"
+        },
+        "linked": {
+          "type": "integer"
+        },
+        "open_pipeline_count": {
+          "type": "integer"
+        },
+        "cap": {
+          "type": "integer"
         }
       }
     }
   },
   "_meta": {
-    "description": "Self-improvement funnel pipeline-level events (ADR-0105 D6, FRE-719). One doc per event. event_type is 'throttled_budget' when promotion is paused by the self-created ticket cap (settings.seshat_open_ticket_cap; current_count is -1 when the count was unreadable and the gate failed closed), or 'misconfigured_project' when settings.linear_promotion_project names a project the team does not have (FRE-1354). Emitted by promotion.py::_emit_funnel_event, which makes the refusal a first-class queryable funnel state instead of a silent log.warning. The matching structlog line uses the event NAME 'throttled_budget' so it also lands in agent-logs, where the committed Grafana funnel panel queries event_type:'throttled_budget'. dynamic:false -- small, purpose-built event stream, explicit fields only. Monthly index agent-captains-funnel-events-YYYY-MM (FRE-1036; was daily YYYY-MM-DD).",
+    "description": "Self-improvement funnel pipeline-level events (ADR-0105 D6, FRE-719). One doc per event. event_type is 'throttled_budget' when promotion is paused by the self-created ticket cap (settings.seshat_open_ticket_cap; current_count is -1 when the count was unreadable and the gate failed closed), or 'misconfigured_project' when settings.linear_promotion_project names a project the team does not have (FRE-1354). Emitted by promotion.py::_emit_funnel_event, which makes the refusal a first-class queryable funnel state instead of a silent log.warning. The matching structlog line uses the event NAME 'throttled_budget' so it also lands in agent-logs, where the committed Grafana funnel panel queries event_type:'throttled_budget'. dynamic:false -- small, purpose-built event stream, explicit fields only. Also event_type 'promotion_run' (FRE-1612): one document per non-dry promotion run, with eligible, filed, linked, cap and, when read, open_pipeline_count. Monthly index agent-captains-funnel-events-YYYY-MM (FRE-1036; was daily YYYY-MM-DD).",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

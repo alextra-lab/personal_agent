@@ -64,6 +64,8 @@ The head wins over a skill when `s × c × (m − q) < q × L`. If `q ≥ m`, th
 | `q` | Share of turns that load a skill | 0.028 for all skills together (5 loads in 176 turns) | Production ES, `tool_call_started` with `tool_name` `read_skill`, since `read_skill` was first registered (2026-10-01 09:27Z) |
 | `s` | Content size | Rules 130–552 tokens; catalog lines 54–138; bodies 850–3,728 tokens | M1, measured with the served tokenizer and chat template |
 
+**Erratum (2026-10-16, FRE-1606).** ES holds `read_skill` calls from 2026-07-31, so 2026-10-01 09:27Z is the start of the `q` window, not the first registration. The 5 calls were not 5 loads by the primary: one asked for `query-telemetry`, which is not a skill, and one came from a `sub_agent` call. ADR-0156's 2026-10-16 amendment gives the query for each input, and its `q` is 3 primary loads in 93 Flash-Next turns (0.032).
+
 ### Results with these inputs (Flash-Next, `c` = 2.6 ms, `L` = 2.2 s)
 
 | Case | In the head | Elsewhere | Result |

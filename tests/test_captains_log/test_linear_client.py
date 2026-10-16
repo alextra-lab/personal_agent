@@ -17,7 +17,7 @@ from personal_agent.captains_log.linear_client import (
     extract_issue_identifier_from_description,
     extract_linear_identifier,
 )
-from personal_agent.linear_labels import AGENT_AUTHORED_LABEL
+from personal_agent.linear_labels import PIPELINE_FILED_LABEL
 
 # ── Helpers & fixtures ────────────────────────────────────────────────────────
 
@@ -450,11 +450,11 @@ class TestListIssues:
         assert result == []
 
 
-# ── count_open_agent_issues ───────────────────────────────────────────────────
+# ── count_open_pipeline_issues ───────────────────────────────────────────────────
 
 
-class TestCountOpenAgentIssues:
-    """count_open_agent_issues — the population the FRE-1354 ticket cap governs."""
+class TestCountOpenPipelineIssues:
+    """count_open_pipeline_issues — the population the ticket cap governs (FRE-1354, FRE-1611)."""
 
     @pytest.mark.asyncio
     async def test_count_single_page(self) -> None:
@@ -469,7 +469,7 @@ class TestCountOpenAgentIssues:
             }
         )
         with _make_httpx_patch([resp]):
-            count = await client.count_open_agent_issues("FrenchForest")
+            count = await client.count_open_pipeline_issues("FrenchForest")
         assert count == 3
 
     @pytest.mark.asyncio
@@ -493,7 +493,7 @@ class TestCountOpenAgentIssues:
             }
         )
         with _make_httpx_patch([page1, page2]):
-            count = await client.count_open_agent_issues("FrenchForest", page_limit=2)
+            count = await client.count_open_pipeline_issues("FrenchForest", page_limit=2)
         assert count == 3
 
     @pytest.mark.asyncio
@@ -519,12 +519,12 @@ class TestCountOpenAgentIssues:
             return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
 
         with patch.object(client, "_call", side_effect=_capture):
-            await client.count_open_agent_issues("FrenchForest")
+            await client.count_open_pipeline_issues("FrenchForest")
 
         filt = captured["variables"]["filter"]
         assert filt["team"] == {"name": {"eq": "FrenchForest"}}
         assert filt["state"] == {"type": {"nin": ["completed", "canceled", "duplicate"]}}
-        assert filt["labels"] == {"some": {"name": {"in": [AGENT_AUTHORED_LABEL]}}}
+        assert filt["labels"] == {"some": {"name": {"in": [PIPELINE_FILED_LABEL]}}}
 
 
 # ── update_issue ──────────────────────────────────────────────────────────────

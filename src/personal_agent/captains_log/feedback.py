@@ -212,6 +212,7 @@ def _save_feedback_record(
     )
     safe_name = re.sub(r"[^\w\-]+", "_", ident) or iid
     path = feedback_history_dir() / f"{safe_name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
     log.info(
         "feedback_history_captured",
@@ -481,7 +482,7 @@ class FeedbackPoller:
         # Warns at 80% of the cap; the old `threshold - 20` goes negative at a cap
         # of 10 and would have warned on every single poll.
         try:
-            n = await self._client.count_open_agent_issues(settings.linear_team_name)
+            n = await self._client.count_open_pipeline_issues(settings.linear_team_name)
             cap = settings.seshat_open_ticket_cap
             if n >= math.ceil(cap * 0.8):
                 log.warning(

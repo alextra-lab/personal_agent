@@ -178,6 +178,7 @@ async def test_create_missing_api_key_raises() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = None
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         with pytest.raises(ToolExecutionError, match="API key not configured") as exc_info:
             await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
         assert exc_info.value.code == "not_configured"
@@ -229,6 +230,7 @@ async def test_create_dry_run_returns_payload_without_creating() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
@@ -256,11 +258,14 @@ async def test_create_issue_success() -> None:
         _states_response(),
         _labels_response(),
         _label_create_response(),
+        _issue_search_response([]),  # dedup
+        _issue_search_response([]),  # the ticket-cap count (FRE-1611)
         _issue_create_response(),
     ]
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
@@ -285,7 +290,11 @@ async def test_create_issue_uses_cached_ids_on_second_call() -> None:
         _states_response(),
         _labels_response(),
         _label_create_response(),
+        _issue_search_response([]),  # first call: dedup
+        _issue_search_response([]),  # first call: the ticket-cap count (FRE-1611)
         _issue_create_response(),
+        _issue_search_response([]),  # second call: dedup
+        _issue_search_response([]),  # second call: the ticket-cap count
         _issue_create_response(),
     ]
     call_count = 0
@@ -309,6 +318,7 @@ async def test_create_issue_uses_cached_ids_on_second_call() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
             await create_linear_issue_executor(title="First", description="body", ctx=_CTX)
@@ -423,6 +433,7 @@ async def test_http_error_raises() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
             with pytest.raises(ToolExecutionError, match="HTTP 500") as exc_info:
                 await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
@@ -437,6 +448,7 @@ async def test_graphql_error_raises() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([error_response])
             with pytest.raises(ToolExecutionError, match="not authorized") as exc_info:
@@ -456,6 +468,7 @@ async def test_connect_error_raises() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
             with pytest.raises(ToolExecutionError, match="Cannot connect") as exc_info:
                 await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
@@ -470,6 +483,7 @@ async def test_unknown_team_raises() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([data])
             with pytest.raises(ToolExecutionError, match="team.*not found") as exc_info:
@@ -529,6 +543,7 @@ async def test_create_issue_uses_configured_label_id_not_name_lookup() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = configured_id
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
@@ -556,6 +571,7 @@ async def test_create_issue_raises_when_personal_agent_label_id_not_configured()
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = None
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
@@ -576,6 +592,7 @@ async def test_eval_mode_blocks_issue_creation() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         with pytest.raises(ToolExecutionError, match="disabled in evaluation sessions") as exc_info:
             await create_linear_issue_executor(title="T", description="D", ctx=eval_ctx)
         assert exc_info.value.code == "eval_session"
@@ -591,11 +608,13 @@ async def test_eval_mode_false_allows_creation() -> None:
         _states_response(),
         _labels_response([{"id": "lbl-af", "name": "agent-filed"}]),
         _issue_search_response([]),  # dedup check returns empty
+        _issue_search_response([]),  # the ticket-cap count (FRE-1611)
         _issue_create_response(),
     ]
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = "lbl-pa"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
@@ -630,6 +649,7 @@ async def test_eval_profile_sends_no_request_to_linear(executor, kwargs) -> None
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = "lbl-pa"
         ms.deployment_profile = "eval"
         with patch("personal_agent.tools.linear.create_guarded_http_client") as mock_client:
@@ -677,6 +697,7 @@ async def test_dedup_blocks_when_similar_issue_exists() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = "lbl-pa"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
@@ -696,11 +717,13 @@ async def test_dedup_passes_when_no_similar_issue() -> None:
         _states_response(),
         _labels_response([{"id": "lbl-af", "name": "agent-filed"}]),
         _issue_search_response([]),  # dedup returns empty
+        _issue_search_response([]),  # the ticket-cap count (FRE-1611)
         _issue_create_response(),
     ]
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.seshat_open_ticket_cap = 10
         ms.linear_personal_agent_label_id = "lbl-pa"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
@@ -724,6 +747,7 @@ def _raising_client(exc: Exception) -> AsyncMock:
 def _configured(ms: MagicMock) -> None:
     ms.linear_api_key = "lin_api_test"
     ms.linear_agent_rate_limit_per_day = 10
+    ms.seshat_open_ticket_cap = 10
     ms.linear_personal_agent_label_id = "lbl-pa"
 
 
@@ -756,6 +780,7 @@ def test_each_tool_declares_its_codes() -> None:
         "label_not_configured",
         "label_create_failed",
         "duplicate_issue",
+        "ticket_cap_reached",
         "bad_reply",
     }
     for tool in (
@@ -872,6 +897,7 @@ async def test_issue_creation_without_identifier_is_bad_reply() -> None:
         _states_response(),
         _labels_response([{"id": "lbl-af", "name": "agent-filed"}]),
         _issue_search_response([]),
+        _issue_search_response([]),  # the ticket-cap count (FRE-1611)
         _gql_ok({"issueCreate": {"issue": {}}}),
     ]
     with patch("personal_agent.tools.linear.settings") as ms:

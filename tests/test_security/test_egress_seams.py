@@ -685,6 +685,7 @@ class TestLinearToolSeam:
 
         responses = [
             {"issues": {"nodes": []}},  # dedup check: no existing issue
+            {"issues": {"nodes": []}},  # ticket-cap count: no open pipeline ticket (FRE-1611)
             {
                 "issueCreate": {
                     "issue": {"id": "1", "identifier": "FRE-1", "title": "T", "url": "https://x"}

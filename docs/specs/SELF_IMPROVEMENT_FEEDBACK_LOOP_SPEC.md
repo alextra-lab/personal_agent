@@ -2,10 +2,12 @@
 
 **Version**: 0.2  
 **Date**: 2026-04-04 (status update)  
-**Status**: Phases 1–2 implemented (April 2026); Phase 3 meta-learning pending  
+**Status**: Phases 1–2 implemented (April 2026). Phase 3: `analyze_feedback_patterns` exists but no job calls it (FRE-1611). Section 2 "What's missing" is the April 2026 starting point.  
 **ADR**: ADR-0040 (Linear as Async Feedback Channel)  
 **Extends**: ADR-0030 (Captain's Log Dedup & Self-Improvement Pipeline)  
 **Event Bus**: ADR-0041 — internal processing is event-driven (see ADR-0040 addendum)
+
+> **Reading note (FRE-1611).** The design sections below (3–11) keep the April 2026 wording, which assumed the Docker MCP gateway. The Linear client has called the Linear API directly with `AGENT_LINEAR_API_KEY` since FRE-243. The code is the authority where the two differ. The operational guide is `docs/guides/LINEAR_FEEDBACK_LOOP.md`.
 
 ---
 
@@ -26,9 +28,9 @@ Wire the existing Captain's Log promotion pipeline to Linear (replacing dry-run 
 | Captain's Log reflection | `captains_log/reflection.py` | Generates `CaptainLogEntry` with `ProposedChange` after each task |
 | Categorization + dedup | `captains_log/models.py`, `manager.py` | `ChangeCategory`, `ChangeScope`, fingerprint fields exist (ADR-0030) |
 | Promotion pipeline | `captains_log/promotion.py` | `PromotionPipeline` scans, filters, formats — but `create_issue_fn=None` (dry-run) |
-| Scheduler integration | `brainstem/scheduler.py:441` | Calls `promotion_pipeline.run()` weekly |
-| Insights engine | `insights/engine.py` | Weekly analysis, cost anomalies, delegation scaffold |
-| Linear MCP | Docker MCP toolkit (`MCPGatewayAdapter`) | `save_issue`, `get_issue`, `list_issues`, `save_comment`, `list_comments`, `create_issue_label` |
+| Promotion trigger | `events/pipeline_handlers.py` (`build_consolidation_promotion_handler`) | Calls `PromotionPipeline.run()` on each `consolidation.completed` event. `promotion_pipeline_enabled=false` stops it (FRE-1611) |
+| Insights engine | `insights/engine.py` | Runs on each `consolidation.completed` event. `insights_enabled=false` stops the analysis. `insights_wiring_enabled=false` keeps the analysis but stops the bus events and the Captain's Log proposals (FRE-1611) |
+| Linear client | `captains_log/linear_client.py` (`LinearClient`, API key `AGENT_LINEAR_API_KEY`) | Creates and updates issues, comments, and labels through the Linear GraphQL API. The MCP gateway is not used |
 
 ### What's missing
 
@@ -65,18 +67,26 @@ The reflection model must receive only inputs that production telemetry carries.
 > backpressure** so the agent never auto-files more *open* work than a human can triage. It now
 > counts **open (non-terminal) issues** — excluding Done/Canceled/Duplicate — because Linear keeps
 > terminal issues non-archived while their project is open, so a raw non-archived count would wedge
-> the gate shut on completed work. The threshold (200) is a tunable review-bandwidth knob, not a
-> plan limit.
+> the gate shut on completed work. The threshold (200 at that date; retired by the 2026-09-02 update below) was a
+> tunable review-bandwidth knob, not a plan limit.
 
 > **Update 2026-09-02 (FRE-1354):** the gate counted the wrong **population**, not the wrong
 > number. Counting *all* non-terminal team issues put it at 259 against a bar of 200 — shut — on
 > volume Seshat never produced: 81 `Backlog` notes and the entire human queue. Owner ruling: *"the
 > count should be based on the Self-Recommended count. Don't let Seshat create more than 10 self
-> help tickets."* `issue_budget_threshold` is retired; `seshat_open_ticket_cap` (default 10) counts
-> only issues carrying the `agent-filed` marker, which **both** creation paths now apply
-> (`tools/linear.py` and `captains_log/promotion.py`) — a cap against one label alone would leak
-> through the other. The gate refuses at or above the cap and **fails closed** when the count
-> cannot be read; `count_open_agent_issues` replaces `count_open_issues`.
+> help tickets."* `issue_budget_threshold` is retired; `seshat_open_ticket_cap` (default 10) is
+> its replacement. The gate refuses at or above the cap and **fails closed** when the count
+> cannot be read; `count_open_pipeline_issues` replaces `count_open_issues`.
+
+> **Update 2026-10-16 (FRE-1611):** the count used the `agent-filed` marker, which **both**
+> creation paths apply. The in-turn tool filed FRE-359..362 and the owner approved them, so four
+> approved tickets filled a cap of 4 and stopped the pipeline. The cap exists to throttle the
+> pipeline, so it now counts only issues that carry `pipeline-filed`. Only
+> `captains_log/promotion.py` applies that label (`linear_labels.PIPELINE_FILED_LABEL`). The
+> in-turn tool (`tools/linear.py`) honors the same cap over the same count and refuses to file
+> with the code `ticket_cap_reached`. Both build the filter with
+> `linear_labels.open_pipeline_issues_filter`, so they cannot disagree. Tickets that were open
+> before this change and lack the label are not counted.
 
 **Historical context (free tier)**: the original design targeted the free tier — 250 non-archived
 issues, 2 teams, 5,000 API requests/hour — where archived issues didn't count toward the 250 limit.
@@ -128,13 +138,14 @@ This means the insights engine can analyze feedback patterns from local history 
 
 ### Budget rules
 
-- **Capture before archive**: Every terminal-state transition captures feedback metadata locally first
-- **Archive on Rejected/Duplicate**: Free the slot immediately after capture
-- **Approved stays active**: Represents validated work — archive only when moved to Done
-- **Deferred stays active**: Until revisit date (default 90 days), then capture and archive
-- **Monitor count**: Daily feedback poll checks the open-issue count (FRE-598: non-terminal states only — excludes Done/Canceled/Duplicate, which Linear keeps non-archived while the project is open); pause promotion if > 200
-- **Initial promotion cap**: 5 issues per pipeline run (down from default 20)
-- **Plan**: paid Linear plan (unlimited issues) — the 200 gate is review-bandwidth backpressure, not a billing limit. Retune the threshold to match human triage capacity, not a plan cap.
+- **Capture before cancel**: The `Rejected` handler captures feedback metadata locally, then cancels the issue. It does not archive: the Linear client has no archive call, and `Canceled` is terminal, so the issue leaves the count.
+- **Rejected cancels**: The issue moves to `Canceled`, and its fingerprint is suppressed for `AGENT_FEEDBACK_SUPPRESSION_DAYS`.
+- **Duplicate sets the state**: The `Duplicate` handler moves the issue to `Duplicate` of the original, found by fingerprint. It does not suppress.
+- **Approved moves the state**: The `Approved` handler moves the issue to the `Approved` state. Nothing archives it.
+- **Deferred stays active**: The `Defer` handler records the date only. The revisit window (`AGENT_FEEDBACK_DEFER_REVISIT_DAYS`, default 90) has no consumer.
+- **The cap**: Promotion refuses at or above `AGENT_SESHAT_OPEN_TICKET_CAP` (default 10) open `pipeline-filed` tickets. The count excludes `completed`, `canceled` and `duplicate` states (FRE-598). The daily feedback poll logs `issue_budget_warning` from 80 % of the cap.
+- **Initial promotion cap**: 5 issues per pipeline run (`AGENT_PROMOTION_INITIAL_CAP`).
+- **Plan**: paid Linear plan (unlimited issues). The cap is review-bandwidth backpressure, not a billing limit. Tune it to match human triage capacity.
 
 ---
 
@@ -192,7 +203,7 @@ RESPONSE_LABELS = {
 ┌──────────────────────────────────────────────────────────────────────┐
 │                         Brainstem Scheduler                          │
 │                                                                      │
-│  Weekly:                          Every cycle:                       │
+│  On consolidation.completed:      Daily:                             │
 │  ┌─────────────────────┐          ┌──────────────────────────┐      │
 │  │ Promotion Pipeline   │          │ Feedback Polling Job      │      │
 │  │ (scan CL → promote)  │          │ (read Linear → respond)   │      │
@@ -202,7 +213,7 @@ RESPONSE_LABELS = {
               │                                 │
               ▼                                 ▼
 ┌──────────────────────┐          ┌──────────────────────────┐
-│  Linear MCP           │          │  Linear MCP               │
+│  Linear API           │          │  Linear API               │
 │  save_issue()         │◄────────►│  list_issues()            │
 │  (create proposal)    │          │  get_issue()              │
 │                       │          │  save_comment()           │
@@ -343,7 +354,7 @@ async def handle_approved(event: FeedbackEvent, client: LinearClient) -> None:
 
 ```python
 async def handle_rejected(event: FeedbackEvent, client: LinearClient) -> None:
-    """Archive issue. Suppress similar proposals for configured duration."""
+    """Cancel the issue. Suppress similar proposals for configured duration."""
     issue = await client.get_issue(event.issue_id)
 
     # 1. Extract fingerprint from issue description (embedded at creation time)
@@ -360,7 +371,7 @@ async def handle_rejected(event: FeedbackEvent, client: LinearClient) -> None:
     # 3. Capture feedback metadata locally (§3 history preservation)
     _save_feedback_record(issue, feedback_label="Rejected")
 
-    # 4. Move to Canceled and archive to free budget slot
+    # 4. Move to Canceled (terminal, so it leaves the cap count; no archive call exists)
     await client.update_issue(event.issue_id, state="Canceled")
 
     # 5. Record negative signal in insights engine
@@ -622,22 +633,19 @@ if (
 
 ### 6.6 Issue budget monitoring
 
-Add to the promotion pipeline's `run()` method:
+`PromotionPipeline._ticket_cap_headroom()` runs before `run()` creates anything. It counts the open tickets that the pipeline filed and returns the room left under `seshat_open_ticket_cap`.
 
 ```python
-async def _check_issue_budget(self) -> bool:
-    """Verify Linear issue count is within budget.
-
-    Returns:
-        True if promotion should proceed, False if budget is exhausted.
-    """
-    issues = await self._linear_client.list_issues(
-        team="FrenchForest", includeArchived=False, limit=1
-    )
-    # The response includes total count or we count non-archived
-    # If count > ISSUE_BUDGET_THRESHOLD (default 200), pause
+count = await self._linear_client.count_open_pipeline_issues(settings.linear_team_name)
+if count >= settings.seshat_open_ticket_cap:
+    # log throttled_budget, index a throttled_budget funnel event, return None (no creation)
     ...
+return settings.seshat_open_ticket_cap - count
 ```
+
+- The filter is `linear_labels.open_pipeline_issues_filter(team)`: team, state type not in `completed`/`canceled`/`duplicate`, and the label `pipeline-filed`.
+- A count that cannot be read also returns `None`. The gate fails closed and indexes a `throttled_budget` event with `current_count=-1`.
+- The in-turn tool (`tools/linear.py`) calls the same filter and refuses with the code `ticket_cap_reached` at the cap.
 
 ### 6.7 Meta-learning integration
 
@@ -647,8 +655,9 @@ Add to `InsightsEngine`:
 async def analyze_feedback_patterns(self, days: int = 30) -> list[Insight]:
     """Analyze human feedback on agent proposals.
 
-    Reads feedback events from the poller state file and correlates
-    with proposal categories to detect systematic patterns.
+    Reads the feedback records in telemetry/feedback_history/*.json
+    (written by the Rejected handler) and correlates them with proposal
+    categories to detect systematic patterns.
 
     Args:
         days: Lookback window.
@@ -702,7 +711,7 @@ seshat_open_ticket_cap: int = Field(
     default=10,
     ge=1,
     le=100,
-    description="Max open tickets Seshat itself may have outstanding (FRE-1354)",
+    description="Max open tickets the promotion pipeline may have outstanding; counts the pipeline-filed label only (FRE-1354, FRE-1611)",
 )
 promotion_min_seen_count: int = Field(
     default=3,
@@ -730,17 +739,27 @@ promotion_initial_cap: int = Field(
 | `feedback_deepen_completed` | Deepen re-analysis done | `issue_id`, `model_used`, `confidence_delta` |
 | `feedback_refine_completed` | Too Vague refinement done | `issue_id`, `files_identified`, `specificity_score` |
 | `feedback_rejection_recorded` | Rejection suppression set | `issue_id`, `fingerprint`, `suppression_until` |
-| `feedback_history_captured` | Metadata saved before archive | `issue_id`, `feedback_label`, `category` |
-| `feedback_issue_archived` | Issue archived to free budget | `issue_id`, `slots_remaining` |
-| `issue_budget_warning` | Non-archived count > threshold | `current_count`, `threshold` |
-| `issue_budget_promotion_paused` | Promotion skipped due to budget | `current_count`, `threshold` |
+| `feedback_history_captured` | Metadata saved before cancel | `issue_id`, `feedback_label`, `category` |
+| `feedback_issue_archived` | Rejected issue canceled (the name is historical; no archive call exists) | `issue_id`, `note` |
+| `issue_budget_warning` | Open `pipeline-filed` count at or above 80 % of the cap | `current_count`, `threshold` |
+| `throttled_budget` | Promotion refused at the cap, or the count was unreadable (`current_count=-1`). Also indexed in `agent-captains-funnel-events-*` | `current_count`, `threshold`, `reason` |
 
-### Dashboards (Kibana)
+### Dashboards (Grafana)
 
-- **Proposal quality**: acceptance rate over time, by category
-- **Feedback latency**: time-to-first-feedback distribution
-- **Model suitability signal**: Deepen frequency over time (declining = model is improving or adequate; rising = model needs upgrading)
-- **Budget health**: open (non-terminal) issue count trend
+Kibana is retired (ADR-0129 D6, FRE-1214). Grafana is the only dashboard UI. The dashboard is `config/grafana/dashboards/self_improvement_funnel.json` (uid `fre1072-self-improvement-funnel`).
+
+It holds two panels today:
+
+- **Reflection count**: all reflections in the time range (`es-captains-reflections`)
+- **Promotion throttle events**: the `throttled_budget` refusals (`es-agent-logs`)
+
+FRE-1612 adds these panels, built in the Grafana UI. They need telemetry that the pipeline does not write yet (a per-run funnel event, reflection health fields, filing and outcome times):
+
+- **Funnel by stage**: reflections, proposals, eligible, throttled, filed, outcome
+- **Proposal quality**: outcomes by category over time (approved, rejected, canceled)
+- **Feedback latency**: time from filing to the first outcome
+- **Open tickets against the cap**: open `pipeline-filed` count and the cap value
+- **Reflection inputs health**: the share of reflections with `had_errors=true`, and the share with no telemetry summary
 
 ---
 
@@ -762,14 +781,14 @@ promotion_initial_cap: int = Field(
 
 - `test_feedback.py`: Label detection, handler dispatch, state persistence, loop guard
 - `test_promotion_wired.py`: `create_issue_fn` integration (mock MCP response)
-- `test_budget_monitor.py`: Threshold logic, pause behavior
+- `test_fre_1611_cap_population.py`: the cap counts pipeline-filed tickets only; `test_fre_1611_tool_cap_and_dedup.py`: the tool honors the cap and the dedup
 - `test_feedback_metrics.py`: Acceptance rate calculation, deepen frequency
 
 ### Integration tests
 
 - Promotion → Linear: create real issue (or mock MCP), verify state and labels
 - Deepen flow: create issue → add Deepen label → verify comment posted and labels updated
-- Budget pause: set threshold to 0 → verify promotion skipped with correct log event
+- Budget pause: set `AGENT_SESHAT_OPEN_TICKET_CAP` to the open `pipeline-filed` count → verify promotion skipped with the `throttled_budget` event
 - Rejection suppression: reject → verify same fingerprint blocked for configured days
 
 ### Manual validation
@@ -788,7 +807,7 @@ promotion_initial_cap: int = Field(
 All steps (0–5c) are implemented:
 
 - `captains_log/linear_client.py` — `LinearClient` wrapper (Step 1)
-- `service/app.py` — `LinearClient` created from `MCPGatewayAdapter`, injected into scheduler and event bus consumers (Step 2)
+- `service/app.py` — `LinearClient` created from `AGENT_LINEAR_API_KEY` (no MCP gateway), injected into scheduler and event bus consumers (Step 2)
 - `captains_log/promotion.py` — accepts `create_issue_fn` + `linear_client`, defaults updated (Step 3)
 - `captains_log/suppression.py` — fingerprint suppression registry (Steps 5a–5c)
 - `brainstem/scheduler.py` — daily feedback polling integrated (Step 5)
@@ -805,8 +824,8 @@ All steps (6–12) are implemented:
 ### Phase 3: Meta-learning — **PENDING**
 
 - `build_feedback_insights_handler()` in `pipeline_handlers.py` is a stub (logs signal only)
-- `InsightsEngine.analyze_feedback_patterns()` does not exist yet
-- Kibana dashboard configs not created
+- `InsightsEngine.analyze_feedback_patterns()` exists (`insights/engine.py`) and reads `telemetry/feedback_history/*.json`. No job calls it, so it produces no insight yet
+- The Grafana panels above (FRE-1612) replace the Kibana dashboards, which were never built
 
 ### Phase 4: Evaluate — **NOT STARTED**
 
@@ -814,7 +833,7 @@ Requires Phase 3 + 4 weeks of real data.
 
 ### Event Bus integration (ADR-0041)
 
-Promotion is now triggered by `consolidation.completed` events (not weekly schedule). Feedback side-effects flow through `stream:feedback.received` to decoupled consumers. See ADR-0040 addendum.
+Promotion and insights are triggered by `consolidation.completed` events (not a weekly schedule). Each stage checks its own flag first (FRE-1611). Feedback side-effects flow through `stream:feedback.received` to decoupled consumers. See ADR-0040 addendum.
 
 ---
 
@@ -858,7 +877,7 @@ Promotion is now triggered by `consolidation.completed` events (not weekly sched
 |------|------|--------|------|
 | 6 | Build `FeedbackPoller` with state persistence | M | Unit: detection, idempotency |
 | 7 | Implement `Approved` handler | S | Unit + integration |
-| 8 | Implement `Rejected` handler (archive + suppress) | S | Unit + integration |
+| 8 | Implement `Rejected` handler (cancel + suppress) | S | Unit + integration |
 | 9 | Implement `Deepen` handler (model escalation + comment) | M | Unit + integration |
 | 10 | Implement `Too Vague` handler (refinement + comment) | M | Unit + integration |
 | 11 | Implement `Duplicate` handler | S | Unit + integration |
@@ -869,8 +888,8 @@ Promotion is now triggered by `consolidation.completed` events (not weekly sched
 | Step | Task | Effort | Test |
 |------|------|--------|------|
 | 13 | Add `analyze_feedback_patterns()` to insights engine | M | Unit: metric calculation |
-| 14 | Feed feedback metrics into weekly analysis | S | Integration |
-| 15 | Add Kibana dashboard configs | S | Manual verification |
+| 14 | Feed feedback metrics into the insights analysis | S | Integration |
+| 15 | Add Grafana dashboard panels | S | Manual verification |
 
 ### Phase 4: Evaluate (4+ weeks)
 
@@ -904,7 +923,7 @@ After 4 weeks of operation:
 - [ ] Project owner has applied feedback labels to at least 5 proposals
 - [ ] Acceptance rate is tracked and visible in insights output
 - [ ] At least 1 Deepen cycle has produced a noticeably better re-analysis
-- [ ] No issue budget warnings (staying under 200 open/non-terminal)
+- [ ] No `issue_budget_warning` events (open `pipeline-filed` tickets stay under 80 % of the cap)
 - [ ] The project owner can articulate whether the proposals are useful
 
 ---

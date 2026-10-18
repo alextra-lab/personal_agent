@@ -1,0 +1,54 @@
+diff --git a/src/personal_agent/request_gateway/decomposition.py b/src/personal_agent/request_gateway/decomposition.py
+index 69a367cb..ea088e0f 100644
+--- a/src/personal_agent/request_gateway/decomposition.py
++++ b/src/personal_agent/request_gateway/decomposition.py
+@@ -39,6 +39,7 @@ def assess_decomposition(
+     delegation_enabled: bool = False,
+     expansion_enabled: bool = True,
+     planner_mode_declared: bool = False,
++    follow_up: bool = False,
+ ) -> DecompositionResult:
+     """Assess how to handle this request: single, hybrid, decompose, or delegate.
+ 
+@@ -111,6 +112,7 @@ def assess_decomposition(
+         intent.complexity,
+         delegation_enabled,
+         planner_mode_declared,
++        follow_up,
+     )
+     logger.info(
+         "decomposition_assessed",
+@@ -133,6 +135,7 @@ def _apply_matrix(
+     complexity: Complexity,
+     delegation_enabled: bool,
+     planner_mode_declared: bool,
++    follow_up: bool = False,
+ ) -> tuple[DecompositionStrategy, str]:
+     """Apply the decomposition decision matrix.
+ 
+@@ -147,6 +150,10 @@ def _apply_matrix(
+         Tuple of (strategy, reason).
+     """
+     if planner_mode_declared and task_type in REGISTER_TASK_TYPES:
++        # FRE-1615 arm P1 (eval only, never merged): a deterministic pre-gate. A conversational,
++        # simple or follow-up turn skips the planner and runs SINGLE.
++        if task_type == TaskType.CONVERSATIONAL or complexity == Complexity.SIMPLE or follow_up:
++            return DecompositionStrategy.SINGLE, "p1_pregate_single"
+         # ADR-0154 D2: the planner decides, and it may decline (planner_may_decline).
+         return DecompositionStrategy.HYBRID, "planner_asked"
+ 
+diff --git a/src/personal_agent/request_gateway/pipeline.py b/src/personal_agent/request_gateway/pipeline.py
+index e2d72201..83ca2098 100644
+--- a/src/personal_agent/request_gateway/pipeline.py
++++ b/src/personal_agent/request_gateway/pipeline.py
+@@ -123,6 +123,10 @@ async def run_gateway_pipeline(
+         delegation_enabled=settings.delegation_enabled,
+         expansion_enabled=settings.expansion_enabled,
+         planner_mode_declared=primary_declares_planner_mode(trace_id=trace_id),
++        # FRE-1615 arm P1: a follow-up is a turn of at most 12 words in a session that already
++        # holds a user message.
++        follow_up=any(m.get("role") == "user" for m in session_messages)
++        and len(user_message.split()) <= 12,
+     )
+ 
+     logger.info(

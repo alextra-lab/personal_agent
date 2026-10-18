@@ -1,0 +1,62 @@
+# FRE-1615 Block 1 — the eval gateways for the planner arms.
+#
+# An override on top of docker-compose.cloud.yml and docker-compose.eval.yml. Each gateway runs one arm:
+#
+#   phase | control (:9002)                          | treatment (:9003)
+#   A     | S: forced SINGLE (expansion off)         | PL: the production planner
+#   B     | (idle)                                   | P2: the "prefer SINGLE" planner policy
+#
+# FRE1615_CONTROL_EXPANSION sets control's AGENT_EXPANSION_ENABLED ("false" for arm S).
+# FRE1615_TREATMENT_IMAGE names the treatment image (default: the eval image from main; phase B: the
+# P2 image built from a patched scratch worktree, `seshat-gateway:fre1615-p2`).
+#
+# Both gateways, against docker-compose.eval.yml:
+# - The FRE-1590 values: consolidation off (AGENT_ENABLE_SECOND_BRAIN "false", so a turn writes no graph
+#   node), the 5 s constraint pause, AGENT_TEMPO_URL, grounding "off", the disabled R2 settings (all R2
+#   tools register, as in production), and the five keys production reads from .env.
+# - AGENT_DELEGATION_ENABLED "false": production leaves it unset (default false). docker-compose.eval.yml
+#   sets "true", which routes a DELEGATION intent to DELEGATE on eval only.
+# - AGENT_PROMPT_DEBUG_CAPTURE_ENABLED "true": production runs with it on (FRE-1614). The files stay in
+#   the eval container (no volume), and the runner copies them into the run directory.
+# - The skill catalog is NOT masked (unlike FRE-1590 control): both arms are production plus one change.
+#
+# Use (from /opt/seshat, after `make eval-infra-up`): first the dry run through the FRE-1542 plan guard,
+# then the real `up` of the two gateways only:
+#
+#   F="-p seshat -f docker-compose.cloud.yml -f docker-compose.eval.yml -f <worktree>/scripts/eval/fre1615/docker-compose.fre1615.yml --env-file /opt/seshat/.env"
+#   export FRE1615_CONTROL_EXPANSION=false
+#   plan=$(docker compose $F up -d --no-deps --dry-run seshat-gateway-control seshat-gateway-treatment 2>&1) \
+#     && printf '%s\n' "$plan" | uv run python -m scripts.eval.compose_plan_guard \
+#     && docker compose $F up -d --no-deps seshat-gateway-control seshat-gateway-treatment
+#
+# To return to the plain eval stack: `make eval-infra-up`.
+
+x-fre1615-env: &fre1615-env
+  AGENT_ENABLE_SECOND_BRAIN: "false"
+  AGENT_CONSTRAINT_PAUSE_TIMEOUT_SECONDS: "5"
+  AGENT_TEMPO_URL: http://tempo:3200
+  AGENT_GROUNDING_VERIFICATION_MODE: "off"
+  AGENT_R2_ENDPOINT_URL: http://r2-disabled.invalid
+  AGENT_R2_ACCESS_KEY_ID: eval-disabled
+  AGENT_R2_SECRET_ACCESS_KEY: eval-disabled
+  AGENT_R2_BUCKET_NAME: eval-disabled
+  AGENT_SESSION_SUMMARY_ENABLED: ${AGENT_SESSION_SUMMARY_ENABLED}
+  AGENT_SLM_HEALTH_GENERATION_CHECK_ENABLED: ${AGENT_SLM_HEALTH_GENERATION_CHECK_ENABLED}
+  AGENT_SLM_TUNNEL_BASE_URL: ${AGENT_SLM_TUNNEL_BASE_URL}
+  AGENT_USER_DISPLAY_NAMES_JSON: ${AGENT_USER_DISPLAY_NAMES_JSON}
+  AGENT_DELEGATION_ENABLED: "false"
+  AGENT_PROMPT_DEBUG_CAPTURE_ENABLED: "true"
+  AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
+  AGENT_APPROVAL_UI_ENABLED: "false"
+
+services:
+  seshat-gateway-control:
+    environment:
+      <<: *fre1615-env
+      AGENT_EXPANSION_ENABLED: ${FRE1615_CONTROL_EXPANSION:?FRE1615_CONTROL_EXPANSION required}
+
+  seshat-gateway-treatment:
+    image: ${FRE1615_TREATMENT_IMAGE:-seshat-gateway:latest}
+    environment:
+      <<: *fre1615-env
+      AGENT_EXPANSION_ENABLED: ${AGENT_EXPANSION_ENABLED}

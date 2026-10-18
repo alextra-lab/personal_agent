@@ -130,7 +130,7 @@ The planner receives no tools array, no skill bodies and no primary system promp
 
 `planner_brief_mode=briefing` becomes the only behaviour, and the `current` path and its setting are removed. Production already runs `briefing`. The `current` mode is the input set that FRE-1517 F6 measured at 14/53 carry-through.
 
-**Against FRE-1138.** The planner runs once per turn, before the tool loop, so its input is not within-turn growth. Its input is bounded at 2,439 + 64,000 characters, and D6 records the real size per turn.
+**Against FRE-1138.** The planner runs once per turn, before the tool loop, so its input is not within-turn growth. Its input is bounded at 2,439 + 64,000 characters, and D6 records the real size per turn. *Amended by Amendment 2 (2026-10-18):* on a `planner_asked` turn, the static text grows by the skill line, so the bound at that date is 2,733 + 64,000 characters with 11 skills.
 
 ### D2 — The planner decides expansion for the four register types
 
@@ -676,7 +676,7 @@ The FRE-1581 run then uses `replay --arms decide,paired` and `longhist` with its
 ### Why
 
 - **The planner expands before any model sees a skill.** FRE-1598 (`docs/research/2026-10-13-fre-1598-benefit-run.md`) found the same event order on all 4 expanded treatment turns. The planner call had 820 input tokens and no catalog, the workers ran, and the first `skill_index_assembled` came on the synthesis call. On 3 of the 4 turns, no skill loaded.
-- **The single path with the skill was the better path.** On the 4 pairs that stayed single and where only the treatment loaded a skill, the skill gave 11 of the 13 points of difference, and the treatment turns took 28 to 105 s. The expanded skill-area treatment turns took 111 to 575 s and 17 to 56 tool calls. They gained 2 points in total, and FRE-1598 did not show that either point came from a skill.
+- **The single path with the skill was the better path.** On the 5 pairs that stayed single and where only the treatment loaded a skill, 4 improved and gave 11 of the 13 points of difference, and 1 tied. The 4 improved treatment turns took 28 to 105 s. The expanded skill-area treatment turns took 111 to 575 s and 17 to 56 tool calls. They gained 2 points in total, and FRE-1598 did not show that either point came from a skill.
 - **The worker fix alone does not remove the expansion.** The ADR-0156 amendment of 2026-10-18 (FRE-1607) gives the `general` worker its skills. A worker still runs one goal in its own budget, and the primary then synthesises. For a query that one skill covers, one assistant with the skill does the same work in one lane.
 - **Master's reason for the approval:** the owner's slow turn of 2026-10-18 (trace `2f36d026…`, 290 s) would have stayed single. This is master's judgment, and this amendment did not measure it.
 - **The evidence is small.** FRE-1598 ran one draw per arm at temperature 1.0, and 4 expanded treatment turns. So the claim that expansion hurts a skill-area turn is a direction. The probe of 2.3 measures the planner's side of it.
@@ -710,17 +710,17 @@ The FRE-1581 run then uses `replay --arms decide,paired` and `longhist` with its
 1. **Fixtures.** A new file `scripts/eval/fre1537/skills.yaml` holds 10 single-turn fixtures:
    - **6 that must decline:** the prompts of FRE-1598 `log-search#2`, `log-search#3` and `turn-explanation#1` (`scripts/eval/fre1598/part2_scenarios.yaml`), and one prompt each from the `evals.yaml` of `spend-and-tokens`, `model-latency` and `interaction-outcomes`;
    - **4 seeded negatives that must expand:** research questions on the open web that name the subject of a skill. One example: "Research how three open-source agent frameworks measure model latency, and compare their methods." The others name logs, spend and a knowledge graph.
-2. **Arms.** Each fixture runs 3 draws in two arms: the current prompt (the baseline) and the amended prompt. That is 60 planner calls, thinking off, on the local engine.
+2. **Arms.** Each fixture runs 5 draws in two arms: the current prompt (the baseline) and the amended prompt. That is 100 planner calls, thinking off, on the local engine. At the D7 delays (a decline p50 0.8 s, an expansion p50 9.6 s), the run takes about 10 minutes.
 3. **Thresholds, on the amended arm:**
 
    | Criterion | Threshold |
    |---|---|
-   | Skill-area decline | at least 16 of 18 |
-   | Skill-word expand | at least 11 of 12 |
+   | Skill-area decline | at least 27 of 30 |
+   | Skill-word expand | at least 18 of 20 |
    | Every existing D7 row, with Amendment 1 | passes as before |
 
    The existing expand-correct row (at least 43 of 48) is the main guard against a planner that declines too much.
-4. **The ship rule.** The line ships only if the amended arm passes all three rows **and** the baseline arm declines fewer than 16 of the 18 skill-area draws. If the baseline already reaches 16 of 18, the line adds tokens for no measured gain. It then does not ship, and the ticket records the result.
+4. **The ship rule.** The line ships only if the amended arm passes all three rows **and** it declines more skill-area draws than the baseline arm by a one-sided Fisher exact test at p < 0.05 (30 draws in each arm). For example, 27 of 30 against 20 of 30 gives p ≈ 0.03 and passes, and 27 of 30 against 21 of 30 gives p ≈ 0.05 and fails. The draws of one fixture are correlated, so the p-value is optimistic. A smaller gain is noise at this sample size, and a line that shows no gain adds tokens for nothing. It then does not ship, and the ticket records the result.
 5. **Where it runs.** FRE-1581 is Done, and model testing resumed after it. So the run belongs to the planner build ticket. It runs on the production configuration (Flash-Next, llama.cpp, the `planner` mode), and it needs the owner's approval under the preflight rule.
 
 ### 2.4 — The planner does not name a skill
@@ -745,7 +745,7 @@ The planner does not name a skill in a worker's task. The acting model chooses i
 |---|---|---|---|
 | A2-1 | The line is in the planner prompt exactly when the decline rule is, with the live names. | A unit test builds the prompt with and without `admit_single`. A seeded fixture skill added to the folder must appear in the line. The `render.py` byte-identity test. | The line is missing with the decline rule, present without it, a name differs from the skill folders, or the seeded skill is missing. |
 | A2-2 | The cost is as stated. | The served count of the line, by the FRE-1592 M1 method, in the approved window, posted on the ticket. `planner_input_chars` (D6) of a `planner_asked` turn before and after. | The served count is above 100 tokens, or the system prompt grows by more than the line's length. |
-| A2-3 | The probe shows the gain, and only then does the line ship. | The 2.3 run, its scorer report and fingerprint posted on the ticket before merge. | A threshold row fails, an existing D7 row fails, or the baseline arm already declines 16 of 18. In the last case, the line does not ship. |
+| A2-3 | The probe shows the gain, and only then does the line ship. | The 2.3 run, its scorer report with both arms, the Fisher p-value and the fingerprint, posted on the ticket before merge. | A threshold row fails, an existing D7 row fails, or the gain over the baseline has p ≥ 0.05. In the last case, the line does not ship. |
 
 Production is a floor, not a gate, as in Amendment 1, 1.4. The owner's traffic is too small to give a rate in a short window.
 

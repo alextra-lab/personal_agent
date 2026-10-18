@@ -162,3 +162,12 @@ def test_search_calls_dedupes_spans_across_span_sets() -> None:
     other = {"spanID": "b", **_span("3", **{"slm.prompt_n": "20"})}
     reply = {"traces": [{"spanSets": [{"spans": [span]}, {"spans": [span, other]}]}]}
     assert [c["slm.prompt_n"] for c in run.search_calls(reply)] == [20.0, 10.0]
+
+
+def test_every_suite_task_has_an_expect_line() -> None:
+    """The judges score each task against its expect line; every task has exactly one."""
+    import yaml
+
+    expects = yaml.safe_load((HERE / "expects.yaml").read_text())["expects"]
+    assert set(expects) == {str(t["id"]) for t in load_suite()}
+    assert all(isinstance(v, str) and v.strip() for v in expects.values())

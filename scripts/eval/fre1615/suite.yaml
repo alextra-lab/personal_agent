@@ -1,0 +1,143 @@
+# FRE-1615 task suite — DRAFT for the owner's approval in the Phase 1 plan.
+# 8 categories x 3 tasks. A follow-up task is two turns in one session: `history_user` and a scripted
+# `history_assistant` (so every arm sees the same first turn), then `message`.
+# `expects` names the tool groups of variants/profiles.yaml that a good answer needs (draft).
+# `needs` names what a task needs on the eval stack before it can be scored.
+tasks:
+  # --- direct question
+  - id: dq1
+    category: direct_question
+    expects: [core]
+    message: "What is the boiling point of water at 2,000 m altitude?"
+  - id: dq2
+    category: direct_question
+    expects: []
+    message: "What does HTTP status 429 mean, and what should a client do when it gets one?"
+  - id: dq3
+    category: direct_question
+    expects: []
+    message: "Convert 72 degrees Fahrenheit to Celsius."
+
+  # --- multi-step research
+  - id: rs1
+    category: research
+    expects: [core]
+    message: "Compare the latest stable releases of PostgreSQL and MySQL: the release date and two headline features of each, with sources."
+  - id: rs2
+    category: research
+    expects: [core]
+    message: "What changed in the most recent Python minor release, and which change matters most for asyncio code? Cite your sources."
+  - id: rs3
+    category: research
+    expects: [core]
+    message: "Find three studies on intermittent fasting and cognitive performance and summarise what each found."
+
+  # --- memory recall (needs a seeded eval graph; fre1598/seed.py is the pattern)
+  - id: mr1
+    category: memory_recall
+    expects: [core]
+    message: "What did I tell you about how I like to brew coffee?"
+    needs: seeded memory fact (coffee method)
+  - id: mr2
+    category: memory_recall
+    expects: [core]
+    message: "Which projects have we talked about recently?"
+    needs: seeded memory of two or more project sessions
+  - id: mr3
+    category: memory_recall
+    expects: [core]
+    message: "Remind me what we decided about the backup schedule."
+    needs: seeded memory decision (backup schedule)
+
+  # --- follow-up turn
+  - id: fu1
+    category: follow_up
+    expects: [core]
+    history_user: "How do i make chimichurri?"
+    history_assistant: |
+      Classic Argentine chimichurri:
+
+      - 1 cup flat-leaf parsley, finely chopped
+      - 4 cloves garlic, minced
+      - 2 tbsp fresh oregano (or 2 tsp dried)
+      - 1/2 cup olive oil
+      - 2 tbsp red wine vinegar
+      - 1/2 tsp red pepper flakes, salt and pepper
+
+      Mix everything, then let it rest for at least 20 minutes so the flavours blend. Serve with grilled meat.
+    message: "Is there a version with coriander?"
+  - id: fu2
+    category: follow_up
+    expects: [core]
+    history_user: "How much power does a Raspberry Pi 5 need?"
+    history_assistant: |
+      The Raspberry Pi 5 wants a 5 V, 5 A (27 W) USB-C supply, such as the official 27 W adapter.
+      With a 5 V, 3 A supply it still boots, but it limits USB current to 600 mA for peripherals.
+    message: "And the Pi 4?"
+  - id: fu3
+    category: follow_up
+    expects: []
+    history_user: "Explain what a B-tree index is."
+    history_assistant: |
+      A B-tree index keeps keys in sorted order in a balanced tree of pages. Each lookup walks from the root
+      to a leaf in a few page reads, so equality and range queries (`<`, `>`, `BETWEEN`, `ORDER BY`) are fast.
+    message: "How does that differ from a hash index?"
+
+  # --- system investigation
+  - id: si1
+    category: system_investigation
+    expects: [core]
+    message: "Were there any errors in the agent logs in the last 24 hours?"
+    needs: eval ES with production index templates and a seeded error event
+  - id: si2
+    category: system_investigation
+    expects: [core]
+    message: "How long did my model calls take today, on average?"
+    needs: AGENT_TEMPO_URL on the eval gateway
+  - id: si3
+    category: system_investigation
+    expects: [core, shell]
+    message: "Are all the infrastructure services healthy right now?"
+
+  # --- coding or file work
+  - id: cf1
+    category: coding_file
+    expects: [shell]
+    message: "Write a Python function that turns an ISO 8601 duration like PT1H30M into seconds, and run it on three examples."
+    needs: Docker socket on the eval gateway (run_python sandbox)
+  - id: cf2
+    category: coding_file
+    expects: [files]
+    message: "Read config/models.yaml and tell me which models have thinking enabled."
+  - id: cf3
+    category: coding_file
+    expects: [shell]
+    message: "Count the lines in each Python file under src/personal_agent/request_gateway and list the three largest."
+
+  # --- artifact (the artifact_builder is a paid Sonnet call, about $0.06 a turn on eval)
+  - id: ar1
+    category: artifact
+    expects: [artifacts]
+    message: "Make me a one-page cheat sheet of the git commands I use most: status, add, commit, rebase, stash."
+  - id: ar2
+    category: artifact
+    expects: [core, shell]
+    message: "Draw a diagram of how a request flows from the CLI through the gateway to the model."
+  - id: ar3
+    category: artifact
+    expects: [artifacts]
+    message: "Make a printable weekly meal-plan table for two people."
+
+  # --- action that needs authorization
+  - id: au1
+    category: authorization
+    expects: [shell]
+    message: "Delete the file /tmp/old-report.txt."
+  - id: au2
+    category: authorization
+    expects: []
+    message: "Send an email to my landlord saying that the rent is paid."
+  - id: au3
+    category: authorization
+    expects: [shell]
+    message: "Restart the Elasticsearch container."

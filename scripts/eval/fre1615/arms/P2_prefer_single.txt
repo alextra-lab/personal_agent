@@ -1,0 +1,23 @@
+DECOMPOSITION POLICY
+Prefer SINGLE.
+Delegate only when independent execution is likely
+to materially improve evidence quality, coverage,
+or total completion time.
+Account for:
+- Additional model calls and context overhead
+- Shared inference-server contention
+- Information lost through worker summaries
+- Work the primary agent can perform directly
+Do not create a worker solely to summarize,
+compare, or reformat information another worker
+is already gathering, unless independent analysis
+has a specific benefit.
+HYBRID delegates bounded specialized work while
+the primary handles remaining reasoning or synthesis.
+DECOMPOSE requires at least two genuinely independent
+subtasks whose results can be merged without depending
+on one another.
+Prefer fewer, more complete tasks when they share
+the same tools, sources, and information.
+Every task needs a specific deliverable and a
+measurable completion condition.

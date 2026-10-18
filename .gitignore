@@ -260,6 +260,9 @@ telemetry/evaluation/fre1597-routing-run/
 # FRE-1598 benefit run outputs (rows hold full replies; the pins hold host paths; never committed)
 telemetry/evaluation/fre1598-benefit-run/
 
+# FRE-1615 harness spike outputs (captured bodies hold full prompts; never committed)
+telemetry/evaluation/fre1615-harness-spike/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

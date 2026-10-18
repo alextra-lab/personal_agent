@@ -1,0 +1,53 @@
+diff --git a/src/personal_agent/orchestrator/expansion_controller.py b/src/personal_agent/orchestrator/expansion_controller.py
+index 1ae94e3e..0ae1e1fc 100644
+--- a/src/personal_agent/orchestrator/expansion_controller.py
++++ b/src/personal_agent/orchestrator/expansion_controller.py
+@@ -118,6 +118,35 @@ _DIGEST_TITLE = "What memory already holds, most relevant first"
+ _PLANNER_SCHEMA_STRATEGY = '"strategy": "HYBRID|DECOMPOSE"'
+ _PLANNER_SCHEMA_STRATEGY_WITH_DECLINE = '"strategy": "SINGLE|HYBRID|DECOMPOSE"'
+ _PLANNER_RULES_HEADING = "Rules:\n"
++# FRE-1615 arm P2 (eval only, never merged): the second evaluation's "prefer SINGLE" policy,
++# verbatim, "near the beginning of the planner's rules": its own block right before the Rules
++# heading, on a planner_asked turn only (the turns whose schema admits SINGLE). The FRE-1498
++# decline rule stays first in the Rules list, as in production.
++_P2_DECOMPOSITION_POLICY = (
++    "DECOMPOSITION POLICY\n"
++    "Prefer SINGLE.\n"
++    "Delegate only when independent execution is likely\n"
++    "to materially improve evidence quality, coverage,\n"
++    "or total completion time.\n"
++    "Account for:\n"
++    "- Additional model calls and context overhead\n"
++    "- Shared inference-server contention\n"
++    "- Information lost through worker summaries\n"
++    "- Work the primary agent can perform directly\n"
++    "Do not create a worker solely to summarize,\n"
++    "compare, or reformat information another worker\n"
++    "is already gathering, unless independent analysis\n"
++    "has a specific benefit.\n"
++    "HYBRID delegates bounded specialized work while\n"
++    "the primary handles remaining reasoning or synthesis.\n"
++    "DECOMPOSE requires at least two genuinely independent\n"
++    "subtasks whose results can be merged without depending\n"
++    "on one another.\n"
++    "Prefer fewer, more complete tasks when they share\n"
++    "the same tools, sources, and information.\n"
++    "Every task needs a specific deliverable and a\n"
++    "measurable completion condition.\n"
++)
+ _PLANNER_DECLINE_RULE = (
+     "- First decide whether this query needs independent sub-tasks at all. If one assistant working "
+     "alone, with the same tools, would answer it well in one pass — a greeting, a short factual "
+@@ -244,7 +273,11 @@ def _build_planner_system_prompt(
+     if admit_single:
+         prompt = prompt.replace(
+             _PLANNER_SCHEMA_STRATEGY, _PLANNER_SCHEMA_STRATEGY_WITH_DECLINE, 1
+-        ).replace(_PLANNER_RULES_HEADING, _PLANNER_RULES_HEADING + _PLANNER_DECLINE_RULE, 1)
++        ).replace(
++            _PLANNER_RULES_HEADING,
++            _P2_DECOMPOSITION_POLICY + "\n" + _PLANNER_RULES_HEADING + _PLANNER_DECLINE_RULE,
++            1,
++        )
+     return prompt
+ 
+ 

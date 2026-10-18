@@ -1,0 +1,25 @@
+# FRE-1615 variant C — DRAFT. One stable tool profile per Stage 4 TaskType
+# (personal_agent.request_gateway.types.TaskType), chosen with no model call.
+# `expand_tools` is the tool that a turn calls to add a missing group (an eval-only arm patch).
+# A group is a set of tools. A profile is a list of groups. Tool order stays the registry order.
+groups:
+  core: [read_skill, web_search, fetch_url, search_memory, recall_personal_history]
+  research: [perplexity_query, get_library_docs]
+  files: [read, write, edit]
+  shell: [bash, run_python]
+  notes: [notes_write, notes_search]
+  artifacts: [artifact_draft, artifact_write, artifact_list, artifact_read]
+  linear: [create_linear_issue, find_linear_issues, list_linear_projects, create_linear_project]
+  location: [get_location]
+# Variant C-prime: one static profile, the tools that production called in the 30 days to 2026-10-18
+# (production ES, tool_call_started). It needs no selector, so the cached prefix stays the same.
+used_30d: [web_search, bash, fetch_url, run_python, search_memory, read, write, recall_personal_history,
+  read_skill, perplexity_query, notes_search, artifact_draft]
+profiles:
+  conversational: [core]
+  memory_recall: [core, notes]
+  analysis: [core, research, files, shell]
+  planning: [core, notes, artifacts]
+  tool_use: [core, research, files, shell, notes, artifacts, linear, location]
+  delegation: [core, research, files, shell, notes, artifacts, linear, location]
+  self_improve: [core, files, shell, linear]

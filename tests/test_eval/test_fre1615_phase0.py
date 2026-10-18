@@ -178,3 +178,17 @@ def test_suite_has_three_tasks_per_category_and_known_groups() -> None:
     assert chimichurri["history_user"] == "How do i make chimichurri?"
     assert chimichurri["message"] == "Is there a version with coriander?"
     json.dumps(tasks)
+
+
+def test_with_tools_refuses_a_name_that_is_not_a_tool() -> None:
+    """A profile typo raises instead of shrinking the profile."""
+    with pytest.raises(ValueError, match="web_serch"):
+        variants.with_tools(_body(), {"web_serch"})
+
+
+def test_breakdown_refuses_a_body_without_a_system_message() -> None:
+    """The split needs the system block, so a body without one is refused."""
+    body = _body()
+    body["messages"] = body["messages"][1:]  # type: ignore[index]
+    with pytest.raises(ValueError, match="system message"):
+        Counter(TEMPLATE, _tokenizer()).breakdown(body)

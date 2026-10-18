@@ -14,8 +14,8 @@ with the model's own tokenizer:
 ``cache_n`` 0). ``count`` splits a body into the template's tool preamble, the tool definitions, the system
 prompt and the rest.
 
-    calibrate --report <prompt_size/report.json> ...
-    count     --body <file.json> [--json]
+    --props <props.json> --tokenizer <tokenizer.json> calibrate --report <prompt_size/report.json> ...
+    --props <props.json> --tokenizer <tokenizer.json> count --body <file.json> [--tools]
 
 Run from the repo root.
 """
@@ -120,13 +120,16 @@ class Counter:
             template's own text around them), ``system_prompt`` (the harness's system text) and
             ``conversation`` (every message after the system block, and the generation prompt).
         """
+        messages = body["messages"]
+        assert isinstance(messages, list)
+        first = messages[0]
+        if first["role"] != "system" or not isinstance(first["content"], str):
+            raise ValueError("breakdown needs a first system message with string content")
         text = self.render(body)
         total = self.tokens(text)
         system_end = text.index(_SYSTEM_END) + len(_SYSTEM_END)
         system_block, rest = text[:system_end], text[system_end:]
-        messages = body["messages"]
-        assert isinstance(messages, list)
-        system_text = str(messages[0]["content"]).strip() if messages[0]["role"] == "system" else ""
+        system_text = first["content"].strip()
         if _TOOLS_OPEN in system_block:
             start = system_block.index(_TOOLS_OPEN) + len(_TOOLS_OPEN)
             end = system_block.index(_TOOLS_CLOSE)

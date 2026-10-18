@@ -39,10 +39,17 @@ def with_system(body: Mapping[str, object], system: str) -> JsonDict:
 
 
 def with_tools(body: Mapping[str, object], names: set[str]) -> JsonDict:
-    """Return a copy of ``body`` that keeps only the tools in ``names``, in their order."""
+    """Return a copy of ``body`` that keeps only the tools in ``names``, in their order.
+
+    Raises:
+        ValueError: If a name in ``names`` is not a tool of ``body`` (a typo would shrink a profile).
+    """
     out = copy.deepcopy(dict(body))
     tools = out["tools"]
     assert isinstance(tools, list)
+    unknown = names - {t["function"]["name"] for t in tools}
+    if unknown:
+        raise ValueError(f"profile names not in the body's tools: {sorted(unknown)}")
     out["tools"] = [t for t in tools if t["function"]["name"] in names]
     return out
 

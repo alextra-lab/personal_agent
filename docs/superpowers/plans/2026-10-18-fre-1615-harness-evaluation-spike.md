@@ -66,7 +66,7 @@ primary call of **11,600** tokens with no cache reuse (Tempo `slm.prompt_n` 11,6
 | General, call 2 | 1,275 | 5,154 | 2.9 s | 9.5 s (313) |
 | Primary, final | 4,118 | 11,328 | 11.3 s | 30.1 s (1,150) |
 
-On the 290 s turn, prefill took about 71 s and decode about 171 s. Two cold first calls (researcher and general)
+On the 290 s turn, prefill took about 71 s and decode about 170 s. Two cold first calls (researcher and general)
 cost 18.9 s of prefill. The general helper's 4,214 tokens of tool definitions are most of its 13.0 s.
 
 The per-part split of the helper requests needs their bodies. The Phase 1 harness captures them (step H-0 below).

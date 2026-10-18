@@ -1,6 +1,6 @@
 # FRE-1615 variant C — DRAFT. One stable tool profile per Stage 4 TaskType
 # (personal_agent.request_gateway.types.TaskType), chosen with no model call.
-# `expand` is the tool that a turn calls to add a missing group (an eval-only arm patch).
+# `expand_tools` is the tool that a turn calls to add a missing group (an eval-only arm patch).
 # A group is a set of tools. A profile is a list of groups. Tool order stays the registry order.
 groups:
   core: [read_skill, web_search, fetch_url, search_memory, recall_personal_history]

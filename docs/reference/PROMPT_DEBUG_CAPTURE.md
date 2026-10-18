@@ -45,7 +45,7 @@ The counts use the cl100k encoding (`estimate_tokens`). They do not include the 
 
 ## Where the files are
 
-`/app/telemetry/prompt_debug/<session_id>/<trace_id>/<seq>-<role>.json` in the gateway, on the `seshat_telemetry_cloud` volume. A system trace with no session goes under `no-session/`. One file holds one call.
+`/app/telemetry/prompt_debug/<session_id>/<trace_id>/<seq>-<role>.json` in the gateway, on the `seshat_telemetry_cloud` volume. A system trace with no session goes under `no-session/`. One file holds one call. An empty hidden `.seq-NNN` file next to each capture reserves its sequence number, so two calls that run at the same time never get the same number. The path `telemetry/prompt_debug/` is in `.gitignore`.
 
 - **What a file holds:** the arguments handed to `litellm.acompletion`. For a local call, the `extra_body` block shows as a nested object. The SDK puts its keys at the top level of the wire JSON.
 - **Credentials:** only allow-listed parameters are written (`ALLOWED_PARAMS` in the writer). `api_key`, `api_base`, `client` and `extra_headers` are never written.

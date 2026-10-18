@@ -1616,3 +1616,27 @@ class TestPromptDebugCapture:
 
         capture.assert_not_called()
         assert list(tmp_path.rglob("*")) == []
+
+    @pytest.mark.asyncio
+    async def test_streaming_site_writes_after_the_slot_is_released(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The file write must never hold the deployment's concurrency slot."""
+        from personal_agent.config import settings
+        from personal_agent.llm_client.concurrency import get_inference_concurrency_controller
+        from personal_agent.telemetry import prompt_debug
+
+        held_at_capture: list[int] = []
+
+        async def _record_slots(**_kwargs: object) -> None:
+            status = get_inference_concurrency_controller().get_status()
+            held_at_capture.append(
+                sum(s["active"] for group in status.values() for s in group.values())
+            )
+
+        monkeypatch.setattr(settings, "prompt_debug_capture_enabled", True)
+        monkeypatch.setattr(prompt_debug, "capture_model_call", _record_slots)
+
+        await _dispatch()
+
+        assert held_at_capture == [0]

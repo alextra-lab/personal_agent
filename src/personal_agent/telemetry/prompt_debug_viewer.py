@@ -8,7 +8,7 @@ Run inside the gateway, where the capture volume is mounted::
 Each call gets a header (sequence, role, model, placement, start time, duration,
 the usage the provider reported), then every message in full with its role and an
 approximate token count, then the tool block with each tool's count. ``--full``
-adds the complete tool JSON. Counts use cl100k (``estimate_tokens``); they do not
+adds the complete tool JSON. Counts use cl100k (as ``estimate_tokens`` does); they do not
 include the chat template's own tokens, so they read a little under the reported
 ``prompt_tokens``.
 
@@ -18,6 +18,7 @@ The capture files come from :mod:`personal_agent.telemetry.prompt_debug`.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import pathlib
 import sys
@@ -25,12 +26,36 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
-from personal_agent.llm_client.token_counter import estimate_tokens
+import tiktoken
+
 from personal_agent.telemetry.prompt_debug import prompt_debug_root, safe_path_component
 
 _CAPTURE_GLOB = "[0-9]*.json"
 
 Record = dict[str, object]
+
+
+@functools.cache
+def _encoding() -> tiktoken.Encoding:
+    return tiktoken.get_encoding("cl100k_base")
+
+
+def count_tokens(text: str) -> int:
+    """Count cl100k tokens, as ``estimate_tokens`` does, but never raise on captured text.
+
+    ``estimate_tokens`` refuses text holding a special-token literal such as
+    ``<|endoftext|>``. Captured web pages and files can hold one, so here a special
+    token is counted as ordinary text.
+
+    Args:
+        text: Text to count.
+
+    Returns:
+        The token count; 0 for empty or whitespace-only text.
+    """
+    if not text or not text.strip():
+        return 0
+    return len(_encoding().encode(text, disallowed_special=()))
 
 
 @dataclass(frozen=True)
@@ -137,7 +162,7 @@ def _tool_name(tool: dict[str, object]) -> str:
 
 
 def _tool_tokens(tool: dict[str, object]) -> int:
-    return estimate_tokens(json.dumps(tool, ensure_ascii=False))
+    return count_tokens(json.dumps(tool, ensure_ascii=False))
 
 
 def estimate_record_tokens(record: Record) -> TokenEstimate:
@@ -150,7 +175,7 @@ def estimate_record_tokens(record: Record) -> TokenEstimate:
         The cl100k estimate of the message text and of the tool definitions.
     """
     return TokenEstimate(
-        messages=sum(estimate_tokens(_message_text(m)) for m in _messages(record)),
+        messages=sum(count_tokens(_message_text(m)) for m in _messages(record)),
         tools=sum(_tool_tokens(t) for t in _tools(record)),
     )
 
@@ -184,7 +209,7 @@ def render_record(record: Record, *, full: bool) -> str:
     ]
     for index, message in enumerate(_messages(record), start=1):
         text = _message_text(message)
-        lines.append(f"--- [{index}] {message.get('role')} · ~{estimate_tokens(text)} tok")
+        lines.append(f"--- [{index}] {message.get('role')} · ~{count_tokens(text)} tok")
         lines.append(text)
     tools = _tools(record)
     estimate = estimate_record_tokens(record)

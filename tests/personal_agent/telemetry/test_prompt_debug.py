@@ -148,14 +148,15 @@ class TestRetention:
         new = prompt_debug.write_record(record, root=tmp_path)
         now = time.time()
         eight_days_ago = now - 8 * 86400
-        os.utime(old, (eight_days_ago, eight_days_ago))
-        os.utime(old.parent, (eight_days_ago, eight_days_ago))
+        # The trace's capture file and its .seq-001 marker were written together.
+        for entry in [*old.parent.iterdir(), old.parent]:
+            os.utime(entry, (eight_days_ago, eight_days_ago))
         one_day_ago = now - 86400
         os.utime(new, (one_day_ago, one_day_ago))
 
         deleted = prompt_debug.prune_old_captures(tmp_path, now=now)
 
-        assert deleted == 1
+        assert deleted == 2, "the capture file and its sequence marker"
         assert not old.exists()
         assert not old.parent.exists(), "an emptied old trace directory is removed"
         assert new.exists()
@@ -245,7 +246,43 @@ def test_an_unknown_object_is_written_as_its_type_name_only(tmp_path: Path) -> N
 
 def test_publishing_leaves_no_temporary_file(tmp_path: Path) -> None:
     path = prompt_debug.write_record(_record(), root=tmp_path)
-    assert sorted(p.name for p in path.parent.iterdir()) == ["001-primary.json"]
+    assert sorted(p.name for p in path.parent.iterdir()) == [".seq-001", "001-primary.json"]
+
+
+def test_a_number_reserved_by_another_role_is_not_reused(tmp_path: Path) -> None:
+    """A concurrent sub_agent writer reserved 001 but has not published yet."""
+    trace_dir = tmp_path / SESSION_ID / TRACE_ID
+    trace_dir.mkdir(parents=True)
+    (trace_dir / ".seq-001").touch()
+    path = prompt_debug.write_record(_record(), root=tmp_path)
+    assert path.name == "002-primary.json"
+    assert json.loads(path.read_text(encoding="utf-8"))["seq"] == 2
+
+
+def test_every_capture_directory_is_private(tmp_path: Path) -> None:
+    root = tmp_path / "prompt_debug"
+    path = prompt_debug.write_record(_record(), root=root)
+    for directory in (root, path.parent.parent, path.parent):
+        assert directory.stat().st_mode & 0o777 == 0o700, directory
+
+
+def test_captures_are_ignored_by_git() -> None:
+    """A host process with capture on must not leave committable private files."""
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[3]
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "check-ignore",
+            "-q",
+            "telemetry/prompt_debug/s/t/001-primary.json",
+        ],
+        check=False,
+    )
+    assert result.returncode == 0
 
 
 @pytest.mark.asyncio

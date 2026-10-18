@@ -147,3 +147,26 @@ class TestMain:
     def test_main_needs_exactly_one_selector(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit):
             prompt_debug_viewer.main(["--root", str(tmp_path)])
+
+
+def test_a_special_token_literal_does_not_break_the_viewer(tmp_path: Path) -> None:
+    """Captured web pages and files can hold cl100k special-token text."""
+    record = prompt_debug.build_record(
+        trace_id=TRACE_A,
+        session_id=SESSION,
+        role="primary",
+        model="m",
+        provider="p",
+        placement="cloud",
+        started_at=datetime(2026, 10, 18, 9, 0, tzinfo=timezone.utc),
+        duration_ms=1,
+        request={"messages": [{"role": "tool", "content": "page text <|endoftext|> more"}]},
+        usage={},
+    )
+    with pytest.raises(ValueError):
+        estimate_tokens("<|endoftext|>")  # the shared counter refuses it
+    prompt_debug.write_record(record, root=tmp_path)
+    (loaded,) = prompt_debug_viewer.select_records(tmp_path, trace=TRACE_A)
+    text = prompt_debug_viewer.render_record(loaded, full=False)
+    assert "<|endoftext|>" in text
+    assert prompt_debug_viewer.count_tokens("<|endoftext|>") > 0

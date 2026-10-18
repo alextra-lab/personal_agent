@@ -65,6 +65,9 @@ telemetry/feedback_poller_state.json
 # FRE-407 per-turn rating audit logs (runtime NDJSON — must never be committed)
 telemetry/user_feedback/
 
+# FRE-1614 prompt debug captures — the owner's full prompts (must never be committed)
+telemetry/prompt_debug/
+
 # FRE-380 daily soak measurement outputs (regeneratable; ephemeral)
 telemetry/soak/
 

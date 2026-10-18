@@ -68,7 +68,7 @@ RETENTION_DAYS = 7
 _PRUNE_INTERVAL_S = 3600.0
 _NO_SESSION = "no-session"
 _UNSAFE_PATH_CHARS = re.compile(r"[^A-Za-z0-9_-]")
-_SEQ_PREFIX = re.compile(r"^(\d+)-")
+_SEQ_PREFIX = re.compile(r"^(?:\.seq-)?(\d+)")
 _MAX_SEQ_ATTEMPTS = 1000
 
 _last_prune_monotonic: float | None = None
@@ -163,7 +163,10 @@ def safe_path_component(value: object, fallback: str) -> str:
 
 
 def _next_seq(directory: pathlib.Path) -> int:
-    """Return one more than the highest sequence number already in ``directory``."""
+    """Return one more than the highest sequence number already used in ``directory``.
+
+    Both the capture files and the ``.seq-NNN`` reservation markers count.
+    """
     highest = 0
     for entry in directory.iterdir():
         match = _SEQ_PREFIX.match(entry.name)
@@ -183,40 +186,52 @@ def _json_fallback(value: object) -> object:
     return f"<{type(value).__name__}>"
 
 
-def _publish(directory: pathlib.Path, role: str, record: Mapping[str, object]) -> pathlib.Path:
-    """Write the record to a hidden temporary file, then link it to its final name.
+def _reserve_seq(directory: pathlib.Path) -> int:
+    """Reserve the next sequence number of a trace with an ``O_EXCL`` marker file.
 
-    ``os.link`` fails if the name exists, so publishing is atomic and exclusive: a
-    reader never sees a partial file, and a concurrent writer that took the number
-    makes this one move to the next number.
+    The marker name has no role in it, so two concurrent writers with different
+    roles cannot both take the same number. Markers stay until the retention prune:
+    deleting one would let a later writer take its number again.
     """
     seq = _next_seq(directory)
     for _ in range(_MAX_SEQ_ATTEMPTS):
-        payload = json.dumps(
-            {"seq": seq, **record}, default=_json_fallback, ensure_ascii=False, indent=1
-        )
-        tmp = directory / f".tmp-{uuid.uuid4().hex}"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-            final = directory / f"{seq:03d}-{role}.json"
-            try:
-                os.link(tmp, final)
-            except FileExistsError:
-                seq += 1
-                continue
-            return final
-        finally:
-            tmp.unlink(missing_ok=True)
+            os.close(os.open(directory / f".seq-{seq:03d}", os.O_CREAT | os.O_EXCL, 0o600))
+        except FileExistsError:
+            seq += 1
+            continue
+        return seq
     raise OSError(f"no free sequence number under {directory}")
+
+
+def _publish(directory: pathlib.Path, role: str, record: Mapping[str, object]) -> pathlib.Path:
+    """Write the record to a hidden temporary file, then link it to its final name.
+
+    ``os.link`` fails if the name exists, so publishing is atomic: a reader never
+    sees a partial file, and no file is overwritten.
+    """
+    seq = _reserve_seq(directory)
+    payload = json.dumps(
+        {"seq": seq, **record}, default=_json_fallback, ensure_ascii=False, indent=1
+    )
+    tmp = directory / f".tmp-{uuid.uuid4().hex}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        final = directory / f"{seq:03d}-{role}.json"
+        os.link(tmp, final)
+        return final
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def write_record(record: Mapping[str, object], *, root: pathlib.Path) -> pathlib.Path:
     """Write one record to ``<root>/<session>/<trace>/<seq>-<role>.json``.
 
-    The file has mode ``0o600`` and its directories ``0o700``. Publishing is atomic,
-    and a taken sequence number is never overwritten.
+    The file has mode ``0o600``. The root, session and trace directories are each
+    created with mode ``0o700`` (``mkdir(parents=True)`` would give the parents the
+    default mode). Publishing is atomic, and a sequence number is never reused.
 
     Args:
         record: A record from :func:`build_record`.
@@ -235,8 +250,10 @@ def write_record(record: Mapping[str, object], *, root: pathlib.Path) -> pathlib
     )
     role = safe_path_component(record.get("role"), "unknown")
     for _ in range(2):
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory.parent.mkdir(mode=0o700, exist_ok=True)
+            directory.mkdir(mode=0o700, exist_ok=True)
             return _publish(directory, role, record)
         except FileNotFoundError:
             continue  # The prune removed the directory after mkdir: create it again.

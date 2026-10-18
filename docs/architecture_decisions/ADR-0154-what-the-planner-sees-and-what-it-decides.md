@@ -723,9 +723,9 @@ The FRE-1581 run then uses `replay --arms decide,paired` and `longhist` with its
 4. **The ship rule.** The line ships only if the amended arm passes all three rows **and** it declines more skill-area draws than the baseline arm by a one-sided Fisher exact test at p < 0.05 (30 draws in each arm). For example, 27 of 30 against 20 of 30 gives p ≈ 0.03 and passes, and 27 of 30 against 21 of 30 gives p ≈ 0.05 and fails. The draws of one fixture are correlated, so the p-value is optimistic. A smaller gain is noise at this sample size, and a line that shows no gain adds tokens for nothing. It then does not ship, and the ticket records the result.
 5. **Where it runs.** FRE-1581 is Done, and model testing resumed after it. So the run belongs to the planner build ticket. It runs on the production configuration (Flash-Next, llama.cpp, the `planner` mode), and it needs the owner's approval under the preflight rule.
 
-### 2.4 — The planner does not name a skill
+### 2.4 — The plan has no skill field
 
-The planner does not name a skill in a worker's task. The acting model chooses its skill (ADR-0156 D2), and the `general` worker now gets its catalog (ADR-0156 amendment of 2026-10-18, B1). A name in the task adds a field to the plan schema and tokens to every plan. ADR-0156 B4.2 gives the full reason.
+The plan schema gets no skill field, and the harness never assigns a skill to a worker. The acting model chooses its skill (ADR-0156 D2), and the `general` worker now gets its catalog (ADR-0156 amendment of 2026-10-18, B1). A structured field adds tokens to every plan. The planner may still write a skill's name into a goal as free text, and nothing enforces otherwise. ADR-0156 B4.2 gives the full reason.
 
 ### 2.5 — Alternatives considered
 
@@ -737,7 +737,7 @@ The planner does not name a skill in a worker's task. The acting model chooses i
 
 **The primary decides expansion (design C).** *Rejected* as in Option 2: the primary started workers on 1 of 48 research draws.
 
-**The planner names a skill in each task.** *Rejected* as the default (2.4).
+**A structured skill field in each task.** *Rejected* as the default (2.4).
 
 ### 2.6 — Verification / Acceptance Criteria of this amendment
 

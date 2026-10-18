@@ -106,9 +106,13 @@ const state = {};
 let db = null;
 let canWrite = false;
 
+function escapeHtml(text) {
+  return (text || "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
 function md(text) {
-  const raw = (window.marked ? window.marked.parse(text || "") : (text || "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])));
-  return window.DOMPurify ? window.DOMPurify.sanitize(raw) : raw.replace(/<[^>]*>/g, "");
+  // Markdown becomes HTML only when both libraries loaded; otherwise the reply shows as escaped plain text.
+  if (!window.marked || !window.DOMPurify) return `<pre style="white-space:pre-wrap">${escapeHtml(text)}</pre>`;
+  return window.DOMPurify.sanitize(window.marked.parse(text || ""));
 }
 function el(tag, attrs, ...kids) {
   const n = document.createElement(tag);

@@ -140,6 +140,8 @@ def owner_pairs(
         if str(r["id"]) not in tasks:
             tasks.append(str(r["id"]))
     rng = random.Random(seed)  # nosec B311 — a blinding order, not a secret
+    # Each arm takes slot A on half the tasks (random which), so the slot says nothing about the arm.
+    first_arm_a = set(rng.sample(tasks, len(tasks) // 2))
     lines = [
         "# FRE-1615 Block 1 — blind pairs",
         "",
@@ -150,8 +152,7 @@ def owner_pairs(
     for task in tasks:
         if any((task, arm) not in kept for arm in arms):
             raise ValueError(f"task {task} lacks an arm of {list(arms)}")
-        order = list(arms)
-        rng.shuffle(order)
+        order = list(arms) if task in first_arm_a else list(reversed(arms))
         key[task] = {"A": order[0], "B": order[1]}
         first = kept[(task, order[0])]
         lines += [

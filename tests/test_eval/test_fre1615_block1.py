@@ -218,3 +218,16 @@ def test_owner_pairs_blind_two_arms_per_task() -> None:
     assert "reply-S" in text and "reply-PL" in text and "S" not in key["dq1"]
     with pytest.raises(ValueError):
         judge.owner_pairs(rows[:1], ["S", "PL"], {})
+
+
+def test_owner_pairs_put_each_arm_in_slot_a_on_half_the_tasks() -> None:
+    """With an even task count, each arm is A on exactly half the tasks."""
+    from scripts.eval.fre1615 import judge
+
+    rows = [
+        {"id": f"t{i}", "arm": arm, "message": "m", "reply": arm}
+        for i in range(24)
+        for arm in ("S", "PL")
+    ]
+    _, key = judge.owner_pairs(rows, ["S", "PL"], {})
+    assert sum(v["A"] == "S" for v in key.values()) == 12

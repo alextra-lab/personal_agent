@@ -789,6 +789,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         check_vision_capabilities()
 
+        # FRE-1614: the 7-day retention of prompt debug captures runs at every start,
+        # so old private files go even when capture is off or the gateway is idle.
+        from personal_agent.telemetry.prompt_debug import prune_captures_at_startup
+
+        await prune_captures_at_startup()
+
         # Served-catalog drift guard (ADR-0145 D5): compare each local deployment's
         # declared context_length/quantization against what its provider currently
         # serves and warn-log a mismatch. Fire-and-forget, not awaited: the probe hits

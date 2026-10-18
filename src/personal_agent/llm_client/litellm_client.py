@@ -30,6 +30,7 @@ import contextlib
 import copy
 import time
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -62,6 +63,7 @@ from personal_agent.security import (
     get_domain_guard,
     guard_event_hooks,
 )
+from personal_agent.telemetry import prompt_debug
 from personal_agent.telemetry.events import MODEL_CALL_ERROR, MODEL_CALL_RETRIED
 from personal_agent.telemetry.spans import model_call_span
 
@@ -1402,6 +1404,7 @@ class LiteLLMClient:
             raise
 
         start_time = time.monotonic()
+        started_at = datetime.now(timezone.utc)
 
         # ADR-0129 D3 / FRE-1067: the model-call span wraps ONLY the provider
         # call + response parsing (through usage extraction) — deliberately
@@ -1710,6 +1713,20 @@ class LiteLLMClient:
             response_model=_reported_str(getattr(response, "model", None)),
             extra=_extra,
         )
+        # FRE-1614: the arguments this call handed to litellm, one file per
+        # completed call. Off = one attribute read.
+        if prompt_debug.capture_enabled():
+            await prompt_debug.capture_model_call(
+                trace_ctx=trace_ctx,
+                role=role.value,
+                model=self._litellm_model,
+                provider=self.provider,
+                placement="cloud",
+                started_at=started_at,
+                duration_ms=latency_ms,
+                request=litellm_kwargs,
+                usage=usage,
+            )
 
         return LLMResponseType(
             role="assistant",
@@ -2001,6 +2018,8 @@ class LiteLLMClient:
                     extra={"max_tokens": effective_max_tokens},
                 )
 
+                started_at = datetime.now(timezone.utc)
+                dispatch_start = time.monotonic()
                 try:
                     attempts = 0
                     # FRE-1379: bounds BOTH stream creation (acompletion()) and
@@ -2175,5 +2194,21 @@ class LiteLLMClient:
                         "attempts": attempts,
                     },
                 )
+                duration_ms = int((time.monotonic() - dispatch_start) * 1000)
+
+        # FRE-1614: after the slot is released, so the file write never holds the
+        # deployment's concurrency slot.
+        if prompt_debug.capture_enabled():
+            await prompt_debug.capture_model_call(
+                trace_ctx=trace_ctx,
+                role=role.value,
+                model=self._telemetry_model,
+                provider=self.provider,
+                placement="local",
+                started_at=started_at,
+                duration_ms=duration_ms,
+                request=litellm_kwargs,
+                usage=usage,
+            )
 
         return llm_response

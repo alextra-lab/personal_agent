@@ -18,7 +18,9 @@ wire-up check on LiteLLMClient.respond().
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -55,11 +57,17 @@ def _make_mock_response(
     return response
 
 
-async def _call_respond(captured_log_calls: list[tuple], response: MagicMock | None = None) -> None:
+async def _call_respond(
+    captured_log_calls: list[tuple],
+    response: MagicMock | None = None,
+    *,
+    api_key: str = "test-key",
+) -> None:
     """Run LiteLLMClient.respond() with all external I/O mocked.
 
     The log.info calls are captured into captured_log_calls as (event, kwargs)
     tuples. ``response`` replaces the default mock provider response.
+    ``api_key`` is the credential the mocked settings resolve.
     """
     from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.llm_client.types import ModelRole
@@ -115,7 +123,7 @@ async def _call_respond(captured_log_calls: list[tuple], response: MagicMock | N
         ),
         patch(
             "personal_agent.config.settings.get_settings",
-            return_value=MagicMock(anthropic_api_key="test-key", openai_api_key=None),
+            return_value=MagicMock(anthropic_api_key=api_key, openai_api_key=None),
         ),
     ):
         await client.respond(
@@ -381,3 +389,55 @@ async def test_litellm_request_failed_includes_session_id() -> None:
     failed = [kwargs for event, kwargs in calls if event == "litellm_request_failed"]
     assert failed, f"litellm_request_failed not found in: {[e for e, _ in calls]}"
     assert failed[0]["session_id"] == _FAILING_TEST_SESSION_ID
+
+
+# ── FRE-1614: prompt debug capture at the cloud (non-streaming) site ──────────
+
+_SEEDED_API_KEY = "sk-ant-seeded-FRE1614-cloud-site"
+
+
+@pytest.mark.asyncio
+async def test_cloud_site_writes_the_full_request_when_capture_is_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-3 (non-streaming site) and AC-2: one file, the request, no credential."""
+    from personal_agent.config import settings
+    from personal_agent.telemetry import prompt_debug
+
+    monkeypatch.setattr(settings, "prompt_debug_capture_enabled", True)
+    monkeypatch.setattr(prompt_debug, "prompt_debug_root", lambda: tmp_path)
+
+    calls: list[tuple] = []
+    await _call_respond(calls, api_key=_SEEDED_API_KEY)
+
+    files = list(tmp_path.rglob("*.json"))
+    assert len(files) == 1
+    raw = files[0].read_text(encoding="utf-8")
+    assert _SEEDED_API_KEY not in raw
+    record = json.loads(raw)
+    assert record["role"] == "primary"
+    assert record["placement"] == "cloud"
+    assert record["messages"][-1]["role"] == "user"
+    assert record["usage"]["prompt_tokens"] == 100
+    assert record["params"]["max_tokens"] == 256
+    assert "api_key" not in record["params"]
+    assert record["trace_id"] == _get_completed_event(calls)["trace_id"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_site_writes_nothing_when_capture_is_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-1 (non-streaming site): the flag off means no file and no capture call."""
+    from personal_agent.config import settings
+    from personal_agent.telemetry import prompt_debug
+
+    monkeypatch.setattr(settings, "prompt_debug_capture_enabled", False)
+    monkeypatch.setattr(prompt_debug, "prompt_debug_root", lambda: tmp_path)
+    capture = AsyncMock()
+    monkeypatch.setattr(prompt_debug, "capture_model_call", capture)
+
+    await _call_respond([])
+
+    capture.assert_not_called()
+    assert list(tmp_path.rglob("*")) == []

@@ -471,6 +471,13 @@ class AppConfig(BaseSettings):
         "off, the durable route-trace + api_costs writes still happen; only the live "
         "turn_status surface is absent (ADR-0088 D8).",
     )
+    prompt_debug_capture_enabled: bool = Field(
+        default=False,
+        description="FRE-1614: write the full request of every model call (messages, tools, "
+        "allow-listed parameters, usage) to telemetry/prompt_debug/ as one JSON file per "
+        "call, kept 7 days. The files hold the owner's private content and never go to ES. "
+        "Read them with `make prompt-show`. Off: nothing is written.",
+    )
     mode_evaluation_interval_seconds: float = Field(
         default=30.0,
         gt=0,

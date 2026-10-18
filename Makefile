@@ -53,7 +53,7 @@ endif
         infra-up infra-down dev \
         deploy build build-full vps-bootstrap \
         tunnel-up tunnel-down tunnel-status _tunnel-guard \
-        sandbox-build \
+        sandbox-build prompt-show \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         test-pwa test-pwa-e2e \
         verify-envelope verify-lib verify-artifact-e2e \
@@ -327,6 +327,11 @@ cache-erosion-status: ## Jaccard prefix-hash stability for monitored callsites (
 
 render-prompt-corpus:
 	@uv run python scripts/render_prompt_corpus.py
+
+# FRE-1614: the capture files live on the gateway's telemetry volume, so the viewer
+# runs inside the container. ARGS: --last | --trace <id> | --session <id>, plus --full.
+prompt-show:  ## Show captured model-call prompts (ARGS="--last" | "--trace <id>")
+	@docker exec cloud-sim-seshat-gateway /app/.venv/bin/python -m personal_agent.telemetry.prompt_debug_viewer $(or $(ARGS),--last)
 
 # ─── Code quality ─────────────────────────────────────────────────────────────
 

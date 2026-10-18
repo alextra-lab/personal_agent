@@ -10,7 +10,7 @@ three memory facts (``memory_seed.py``, run inside the arm's gateway); wait unti
 flight; then the turn in a new session. A follow-up task (``history_user``) runs its first turn live on the
 same arm, then the follow-up in that session; the row scores the follow-up and keeps the first turn's trace.
 As in ``help.py``, this does not call ``IsolatedArmRunner.run_turn``: consolidation is off (no extraction to
-settle), and its 150 s idle guard would add 2.5 minutes to every turn. The wipe runs before every turn.
+settle), and its 150 s idle guard would add 2.5 minutes to every turn. The wipe runs before every task (once per follow-up pair).
 The arm order alternates by task position. After the turn: the turn's ES events (``help.read_turn``), the
 Stage 5 decision, the tool arguments, the llama.cpp per-call counts from Tempo (``slm-server`` spans of the
 turn's trace) and the turn's FRE-1614 prompt captures (copied into the run directory).
@@ -354,7 +354,7 @@ async def run_task(
     try:
         await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
         if str(task["id"]).startswith("mr"):
-            row["memory_seed"] = seed_memory(gateway)
+            row["memory_seed"] = await asyncio.to_thread(seed_memory, gateway)
         await wait_for_local_model_calls(es, gap_s=cfg.gap_s)
         session_id: str | None = None
         if task.get("history_user"):
@@ -381,14 +381,19 @@ async def run_task(
         row.update(await tool_arguments(es, trace_id))
         t_end = time.time()
         row["slm_calls"] = await tempo_calls(http, trace_id, t_begin, t_end)
+        if not row["slm_calls"] and int(cast(int, row.get("model_calls") or 0)) > 0:
+            raise ValueError(f"Tempo holds no slm-server call for trace {trace_id}")
         if isinstance(row.get("first_turn"), dict):
             first_turn = cast(dict[str, object], row["first_turn"])
             first_turn["stage5"] = await stage5(es, str(first_turn["trace_id"]))
             first_turn["slm_calls"] = await tempo_calls(
                 http, str(first_turn["trace_id"]), t_begin, t_end
             )
-        row["prompt_captures"] = copy_prompt_captures(
-            gateway, str(row["session_id"]), cfg.run_dir / "prompt_debug" / arm
+        row["prompt_captures"] = await asyncio.to_thread(
+            copy_prompt_captures,
+            gateway,
+            str(row["session_id"]),
+            cfg.run_dir / "prompt_debug" / arm,
         )
         row["graph_nodes_after"] = await part2.count_graph_nodes(driver)
     except (httpx.HTTPError, KeyError, ValueError) as exc:

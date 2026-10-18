@@ -231,3 +231,30 @@ def test_owner_pairs_put_each_arm_in_slot_a_on_half_the_tasks() -> None:
     ]
     _, key = judge.owner_pairs(rows, ["S", "PL"], {})
     assert sum(v["A"] == "S" for v in key.values()) == 12
+
+
+def test_owner_pairs_show_each_slot_its_own_earlier_answer() -> None:
+    """On a follow-up task, slot A and slot B each show their own first-turn reply."""
+    from scripts.eval.fre1615 import judge
+
+    rows = [
+        {
+            "id": "fu1",
+            "arm": "S",
+            "message": "And coriander?",
+            "reply": "S2",
+            "first_turn": {"reply": "S-first"},
+        },
+        {
+            "id": "fu1",
+            "arm": "PL",
+            "message": "And coriander?",
+            "reply": "PL2",
+            "first_turn": {"reply": "PL-first"},
+        },
+    ]
+    text, key = judge.owner_pairs(rows, ["S", "PL"], {"fu1": "Chimichurri?"})
+    a_part, b_part = text.split("### B")
+    first_of = {"S": "S-first", "PL": "PL-first"}
+    assert first_of[key["fu1"]["A"]] in a_part and first_of[key["fu1"]["B"]] in b_part
+    assert "USER: Chimichurri?" in text

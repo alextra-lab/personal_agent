@@ -66,7 +66,9 @@ The owner's follow-up case: in the preflight, PL expanded the chimichurri follow
    - Eval bash runs as `nobody` with an allow-list. The S arm's cf3 turn failed to count lines (no glob in `wc -l`), while a SINGLE turn of P2 on the same task passed.
    - A scratch worktree lacks the git-ignored `config/governance/budget.yaml`, and a gateway built from it does not start.
 
-## Recommendation (AC-4), pending the owner's blind veto
+## Recommendation (AC-4)
+
+**Owner decision, 2026-10-18 18:28Z:** "Agreed. Approved". P2 is adopted, and the design follows in FRE-1618 (ADR-0154 Amendment 3). S waits for the owner's blind scores of rs1–rs3. P1 is rejected as designed. The owner's blind verdict on the 6 P2/PL pairs is the veto in FRE-1618's ship rule.
 
 | Change | Recommendation | Why |
 |---|---|---|
@@ -81,4 +83,5 @@ One draw per arm. The eval gateway has 768 MB and 1 CPU (production 2 GB). Appro
 ## Files
 
 - Rows: `telemetry/evaluation/fre1615-harness-spike/block1-a/rows.jsonl` (S, PL), `block1-b/rows.jsonl` (P2), preflights `preflight-a`, `preflight-b` (git-ignored).
-- Judging: `telemetry/evaluation/fre1615-harness-spike/block1/judging/` (items, key, labels, report). Owner pairs: `block1/owner_blind.md`, key `block1/owner_key.json`.
+- Judging: `telemetry/evaluation/fre1615-harness-spike/block1/judging/` (items, key, labels, report).
+- Owner pairs: 24 S/PL pairs (`block1/owner_blind.md`, key `block1/owner_key.json`) and 6 P2/PL pairs (`block1/owner_p2_blind.md`, key `block1/owner_p2_key.json`). Each arm takes slot A on half the pairs. The scoring page is built by `scripts/eval/fre1615/owner_page/build.py`.

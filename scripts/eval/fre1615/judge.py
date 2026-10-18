@@ -154,17 +154,25 @@ def owner_pairs(
             raise ValueError(f"task {task} lacks an arm of {list(arms)}")
         order = list(arms) if task in first_arm_a else list(reversed(arms))
         key[task] = {"A": order[0], "B": order[1]}
-        first = kept[(task, order[0])]
-        lines += [
-            f"## {task}",
-            "",
-            "**Request**",
-            "",
-            request_text({**first, "history_user": history.get(task, "")}),
-            "",
-        ]
+        message = str(kept[(task, order[0])]["message"])
+        earlier = history.get(task, "")
+        request = f"(Earlier) USER: {earlier}\n\nUSER: {message}" if earlier else message
+        lines += [f"## {task}", "", "**Request**", "", request, ""]
         for slot, arm in zip("AB", order, strict=True):
-            lines += [f"### {slot}", "", str(kept[(task, arm)]["reply"]), ""]
+            row = kept[(task, arm)]
+            lines += [f"### {slot}", ""]
+            first = row.get("first_turn")
+            # Each slot shows its own earlier answer: the two arms' first turns differ.
+            if isinstance(first, dict):
+                lines += [
+                    f"*{slot}'s earlier answer:*",
+                    "",
+                    str(first.get("reply")),
+                    "",
+                    f"*{slot}'s reply:*",
+                    "",
+                ]
+            lines += [str(row["reply"]), ""]
     return "\n".join(lines) + "\n", key
 
 
@@ -198,6 +206,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             cmd.add_argument("--judge", required=True, choices=("1", "2", "3"))
         if name == "owner":
             cmd.add_argument("--arms", required=True)
+            cmd.add_argument("--ids", default="", help="comma-separated task ids (default: all)")
+            cmd.add_argument(
+                "--name", default="owner", help="file stem: <name>_blind.md, <name>_key.json"
+            )
     args = p.parse_args(argv)
     run_dir = Path(args.run_dir)
     jdir = j1598.judging_dir(run_dir)
@@ -232,10 +244,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 1 if report["missing"] else 0
-    text, key = owner_pairs(_rows(args.rows), [a.strip() for a in args.arms.split(",")], _history())
-    (run_dir / "owner_blind.md").write_text(text)
-    (run_dir / "owner_key.json").write_text(json.dumps(key, indent=2) + "\n")
-    print(f"{len(key)} pairs -> {run_dir / 'owner_blind.md'}")
+    ids = {i.strip() for i in args.ids.split(",") if i.strip()}
+    rows = [r for r in _rows(args.rows) if not ids or str(r["id"]) in ids]
+    text, key = owner_pairs(rows, [a.strip() for a in args.arms.split(",")], _history())
+    (run_dir / f"{args.name}_blind.md").write_text(text)
+    (run_dir / f"{args.name}_key.json").write_text(json.dumps(key, indent=2) + "\n")
+    print(f"{len(key)} pairs -> {run_dir / f'{args.name}_blind.md'}")
     return 0
 
 

@@ -1,6 +1,6 @@
 # ADR-0156: Skills and Tools Follow the Industry Standard — Agent Skills Folders Chosen by the Model, One Tool Contract, and One Permission Model That Asks the User
 
-**Status:** Accepted — the owner decided every item on 2026-10-10. Amended 2026-10-10 (FRE-1583), 2026-10-11 (FRE-1585) 2026-10-12 (FRE-1591, and twice for FRE-1594) and 2026-10-16 (FRE-1606); see Status Updates.
+**Status:** Accepted — the owner decided every item on 2026-10-10. Amended 2026-10-10 (FRE-1583), 2026-10-11 (FRE-1585) 2026-10-12 (FRE-1591, and twice for FRE-1594) 2026-10-16 (FRE-1606) and 2026-10-18 (FRE-1607); see Status Updates.
 **Date:** 2026-10-10
 **Deciders:** Owner (the directive, and an answer to each brief item, 2026-10-10), `master` (the commission, the production checks, the relay), `adr` seat at Opus 5.5 (author)
 **Tags:** skills, tools, permissions, approvals, workers, governance, evaluation
@@ -191,7 +191,7 @@ The migration table gives the verdict for each file.
 
 ### D9 — Workers
 
-1. **Each worker type gets a catalog** of the skills whose `metadata.requires-tools` that type holds. A filtered skill is hidden (S2: "Hide filtered skills entirely").
+1. **Each worker type gets a catalog** of the skills whose `metadata.requires-tools` that type holds. A filtered skill is hidden (S2: "Hide filtered skills entirely"). **Amended 2026-10-18 (FRE-1607):** a worker also needs every tool in `metadata.provides-tools`, and a body that a worker without `bash` sees holds no `bash` command. See the amendment in Status Updates.
 2. **Every worker type gets `read_skill`,** the researcher too. `read_skill` reads only the bundled skill files, not private data, so FRE-1564's outbound/private split holds.
 3. **Worker calls pass through the D8 rules.** An "ask" goes to the same card, per call, with the exact arguments and the worker named (brief item 9). This replaces row A4's "once per tool per turn" for ask rules, and it answers FRE-1565's scope item 2. The `operator` type and worker bash as `nobody` in its own workspace (FRE-1565) are unchanged.
 4. **Read-only file grant (owner, 2026-10-10).** The `general` worker may `read` the files that its task names. It may not write them. The `general` worker holds private reads and no outbound tool, so the FRE-1564 split holds. The grant works by these rules:
@@ -1019,6 +1019,100 @@ GET agent-logs-*/_search
 #### Not in scope
 
 The owner parked two ideas on 2026-10-12 (FRE-1592 comment of 20:30Z): rarely used tools behind skills, and a per-rule removal check of the system prompt rules. This record only names them.
+
+#### Codex review rounds
+
+Logged in the PR description.
+
+### 2026-10-18 - Amendment to D9.1 and D5: a worker sees the skills that its tools provide, and a body that a worker sees holds no `bash` command (FRE-1607)
+**Changed By:** Owner (decision), `adr` seat at Opus 5.5 (author)
+**Reason:** FRE-1598 found that on an expanded turn no model sees the skills before the workers run. The planner gets no catalog (ADR-0154 D1), and every telemetry skill is hidden from every worker. This amendment fixes the worker half. ADR-0154 Amendment 2 fixes the planner half.
+
+#### The evidence
+
+- **FRE-1598** (`docs/research/2026-10-13-fre-1598-benefit-run.md`, section "Why 3 treatment turns loaded no skill"). The planner expanded 4 of 11 treatment turns. On 3 of the 4, no skill loaded at all, and the reply came from the workers' digest. On the 4 pairs that both stayed single and where only the treatment loaded a skill, the skill gave 11 of the 13 points of difference.
+- **The filter hides the skills, not a missing catalog.** D9.1 shipped (`_worker_skill_catalog`, `orchestrator/sub_agent.py:895`). It shows a skill only when the worker holds every tool in its `metadata.requires-tools` (`skills_for_tools`, `orchestrator/skills.py:235`). Ten of the 11 skills declare `requires-tools: bash`, and no worker type holds `bash` (`orchestrator/worker_types.py:313-340`). Computed on `main` on 2026-10-16:
+
+  | Agent | Skills that it sees | Catalog |
+  |---|---|---|
+  | Primary | all 11 | 6,002 chars |
+  | `researcher` | `sequential-thinking` | 681 chars |
+  | `general` | `sequential-thinking` | 681 chars |
+
+  So the `general` worker holds `search_logs` and `measure_model_latency`, but it never sees `log-search` or `model-latency`, the skills that explain those tools.
+- **The FRE-1598 workers show it.** Eval ES holds 7 sub-agent captures for the 4 expanded treatment turns (`agent-captains-captures-subagents-2026-10`, read 2026-10-18). All 7 record `skill_index_block_chars` 688, the `sequential-thinking`-only catalog. The 6 `general` workers made 10 to 29 tool calls each, most of them `search_logs`. One of the 7 called `read_skill`.
+- **Most of each telemetry body needs no `bash`.** `log-search` and `turn-explanation` start with `search_logs`. `spend-and-tokens` uses curl only in Pattern 3b. `model-latency` already keeps its curl recipe in `references/latency-recipe.md`. `service-health` is mostly the `bash` probe, and its typed part is one search.
+- **Hermes Agent** (`NousResearch/hermes-agent`, commit `ad06e63c`, read 2026-10-18). Its catalog filter has two rules (`_skill_should_show`, `agent/prompt_builder.py:1180`). `requires_tools` hides a skill when a tool that it needs is missing, as our `requires-tools` does. `fallback_for_tools` hides a skill when the native tool that it replaces is present. The second rule keeps a workaround away from an agent that holds the real tool. A Hermes worker inherits the parent's tools minus five (`tools/delegate_tool_toolsets.py:14-22`), so its catalog is the parent's.
+
+#### Owner decision
+
+- **2026-10-18, relayed by master to this seat:** "Do we care about adr right now? If so, approve its recommendation." Master judged yes and approved the recommendation of 2026-10-18 as it stood: option 2 first (the worker sees the skills that its tools provide), then option 1 (the planner gets the skill names, ADR-0154 Amendment 2), with the Hermes refinement. The seat states its own defaults for the two open questions (B4).
+- **The owner's constraint of the same day, relayed by master:** the owner called Seshat "fat, bloated". So every line of prompt text that this amendment adds to a worker states its token cost, and the smallest form wins (B5).
+
+#### B1 — A worker sees the skills that its tools provide (amends D9.1)
+
+1. A worker sees a skill when it holds every tool in the skill's `metadata.requires-tools` **and** every tool in its `metadata.provides-tools`.
+2. The primary's rule does not change. The primary holds every tool in `requires-tools`, and A5 reveals the tools in `provides-tools`.
+3. The reason for the second condition: a worker does not read `sessions.revealed_tools` (A5.4), and its tool list is closed. A skill whose tool the worker cannot hold teaches it a method that it cannot use.
+4. A filtered skill stays hidden entirely (S2), and `read_skill`'s `name` enum stays narrowed to the visible skills (D9.1).
+
+#### B2 — A body that a worker sees holds no `bash` command (amends D5, after Hermes `fallback_for_tools`)
+
+1. In `log-search`, `spend-and-tokens` and `turn-explanation`, every step whose commands need `bash` moves to a file under the skill's `references/`. The body keeps one pointer line in its place, of this form: "Past the tool's limits, and only with the `bash` tool: read `references/<file>.md`." `model-latency` already has this form.
+2. Facts that the typed tool needs stay in the body: index families, field names, event types and the "Not for…" lines.
+3. These four skills then drop `requires-tools: bash`, because their bodies no longer need it. They keep `provides-tools`, so B1 shows them only to a worker that holds the tool.
+4. `service-health`, `interaction-outcomes`, `graph-inspection`, `system-metrics`, `system-diagnostics` and `mermaid-diagrams` keep `requires-tools: bash`. Their bodies are the `bash` procedure, so a worker without `bash` gains nothing from them.
+5. **How this applies the Hermes rule.** `fallback_for_tools` hides a whole skill. Our curl steps are the fallback, but they sit inside the skill that also holds the method. So the principle applies to the content: the fallback leaves the body, and only an agent with `bash` reads it. A whole-skill rule does not fit here. For the primary, the native tool is hidden until the skill reveals it (A5), so a rule keyed on the tool would hide the skill that reveals it.
+6. **The primary pays one more call only when it needs curl.** On a turn past the tool's limits, the primary reads the reference file with `read_skill(name, path)` (D3). On every other load, the body is smaller (B5).
+
+#### B3 — The worker's skill loads are recorded
+
+`SubAgentCapture` (`captains_log/capture.py:120`) gains `skills_loaded: list[str]`: the skills whose body `read_skill` returned to this worker, in load order. Today the capture records `skill_index_block_chars` and `tools_used`, so it shows that a worker called `read_skill`, but not which skill. The ES template of the sub-agent captures index gains the field as a `keyword`. This is an additive template change.
+
+#### B4 — The defaults for the two open questions
+
+1. **A worker never sees a command that it cannot run** (question 2). The alternative was to show the whole body and let the curl step fail. A refused `bash` call costs a round of the worker's budget and teaches nothing. So B2 moves the commands out.
+2. **The planner does not name a skill in a worker's task** (question 3). The acting model chooses its skill (D2), and B1 gives the worker its catalog. A name in the task adds a schema field and tokens to every plan, and it is harness routing by another model. Hermes names skills in a briefing only for its `/review` feature, and only skills that the primary already loaded (`website/docs/user-guide/features/delegation.md:307`). ADR-0154 Amendment 2 records the planner side.
+
+#### B5 — The token cost of each change
+
+Estimates from character counts, at the M1 ratio of FRE-1592: 4.49 chars per token on average over the 10 measured catalog lines, and 4.14 at the lowest. The served counts are recorded by V4.
+
+| Change | Where it is paid | Chars | Tokens, at 4.49 / 4.14 |
+|---|---|---|---|
+| Four catalog lines (`log-search` 559, `model-latency` 495, `spend-and-tokens` 477, `turn-explanation` 536 chars) | The `general` worker's system prompt. It is static per type, so it is in the cached prefix after the first worker call | +2,067 | +460 / +499 |
+| The `researcher` worker's catalog | Nowhere: it holds neither tool | 0 | 0 |
+| The primary's system prompt | Nowhere: the catalog lines do not change | 0 | 0 |
+| One pointer line in each of 3 bodies | Each load of the body | about +110 each | about +25 each |
+| The `bash` steps that leave the bodies: `log-search` Step 2 (3,123 chars), `turn-explanation` Steps 1b–4 (4,257), `spend-and-tokens` Pattern 3b (1,265), measured as whole sections | Each load of the body, by the primary or a worker | about −8,600 in total, less the facts that stay (B2.2) | about −1,900 in total |
+
+The smallest form is the existing one: the worker gets the same catalog line as the primary. A names-only worker catalog was not chosen, because the model chooses a skill by its description (D2.1, S2).
+
+#### Alternatives considered for this amendment
+
+**Widen the rule only, and keep the bodies whole.** A worker would see a skill when it holds one of its `provides-tools`, with no body change. *Rejected:* the worker would read curl steps that it cannot run (B4.1). This was the seat's first proposal on 2026-10-16, before the Hermes reading.
+
+**Give the `general` worker `bash`.** Every skill would then show, as in Hermes. *Rejected:* it reopens the FRE-1564 split of private reads from outbound tools and the FRE-1565 workspace rules, for a routing problem. Hermes has a different security model: it blocks five tools, and it keeps no such split.
+
+**A whole-skill `fallback-for-tools` field.** *Rejected:* for the primary, the native tool is hidden until the skill reveals it (B2.5).
+
+**The planner names a skill in each task.** *Rejected* as the default (B4.2).
+
+#### Verification / Acceptance Criteria of this amendment
+
+| # | Criterion | How it is checked | It fails if |
+|---|---|---|---|
+| V1 | The `general` worker sees exactly `log-search`, `model-latency`, `sequential-thinking`, `spend-and-tokens` and `turn-explanation`, and the `researcher` worker sees exactly `sequential-thinking`. | A unit test calls `assemble_skill_catalog` with each type's tools. A seeded fixture skill provides a tool that no worker holds. | A set differs, or the seeded skill shows to a worker. |
+| V2 | No body that a worker without `bash` can see holds a `bash` command. | A CI test: for each worker type without `bash`, each visible `SKILL.md` body has no fenced `bash` block. A seeded fixture skill with a `bash` block and no `requires-tools` must fail the test. | A visible body holds a `bash` block, or the seeded fixture passes. |
+| V3 | A worker on a telemetry task loads the skill before it acts, and a worker on a task with no skill loads none. | A run on the eval stack that the owner approves, under the preflight rule. It calls `run_sub_agent` with `general` specs. 3 telemetry goals × 3 draws. The goals are the `spec_task` of three FRE-1598 `general` captures in eval ES: the cache-erosion monitor (trace `6530f7e4…`, `log-search`), the context-counter jump (`6ee32b52…`, first task, `turn-explanation`) and the spans of one trace (`3060c3f5…`, first task, `turn-explanation`). The run copies them to the ticket before it starts. 2 goals that need no skill (a computation, a memory question) × 3 draws. `skills_loaded` (B3) and the event order in `agent-logs` decide each draw. | On the telemetry goals, fewer than 7 of 9 draws load the matching skill, or a draw that loads it calls `search_logs` or `measure_model_latency` before `read_skill_invoked`. On the other goals, more than 1 of 6 draws loads a telemetry skill. |
+| V4 | The cost is as stated. | The served count of the four catalog lines, by the FRE-1592 M1 method, in the same approved window, posted on the ticket. `SubAgentCapture.system_prompt_chars` of a `general` worker before and after. `read_skill_invoked.body_chars` of the three bodies before and after. | The served count is above 500 tokens, the system prompt grows by more than 2,100 chars, or a body does not shrink. |
+| V5 | The primary still reaches each moved step. | A unit test: each pointer line names a file that exists in its skill folder, and `read_skill(name, path)` returns it. | A pointer names a missing file. |
+
+V3 replaces the instrument of FRE-1607 AC-2. That criterion reads `skill_index_assembled`, which only the primary emits (`orchestrator/executor.py:6873`), so it can never show a worker's catalog.
+
+#### Tickets
+
+One build ticket delivers B1–B3 and V1–V5. It changes no planner text, so it needs no ADR-0154 D7 run. The planner ticket of ADR-0154 Amendment 2 follows it.
 
 #### Codex review rounds
 

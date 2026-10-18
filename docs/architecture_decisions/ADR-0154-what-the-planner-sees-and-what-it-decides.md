@@ -1,6 +1,6 @@
 # ADR-0154: What the Planner Sees and What It Decides — an Isolated Planner, Thinking Off, Asked on Every Turn of the Four Register Types
 
-**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it.
+**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain.
 **Date:** 2026-10-03
 **Deciders:** Owner (one ADR in place of two, 2026-10-02; the design choice, the memory digest and the measurement budget, 2026-10-03), `master` (the five ADR-0152 review findings and the scope of FRE-1537), `adr` seat at Opus 5.5 (author, the 2026-10-03 planner measurement)
 **Tags:** routing, expansion, planner, memory, decomposition, latency
@@ -485,6 +485,10 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 **Changed By:** `adr` seat (FRE-1587)
 **Reason:** The owner, 2026-10-11, relayed by master: the planner assessment "could and should be integrated into our model testing", then "Go now" for both steps (amend AC-5, and add the measurement to the FRE-1581 run). On FRE-1515, the same day: "no 14 day delay". In the ADR session of 2026-10-11, the owner chose four points that the ticket left open: the pair measures to the primary's first token, direct on the engine; the 10 decline fixtures give the short pairs; every configuration needs the paired arm, and the managed path is built later; and the missing engine field is a stated limit, with FRE-1588 filed to close it. Codex round 1 (4 blocking): a fixed pair-key set per split, a balanced arm order, a precondition over the complete primary request, and the `timings` shape of the stream result. Round 2 (1 blocking): the precondition compares the final `litellm.acompletion` arguments, because the client adds the catalog values after the executor. Round 3: no blocking finding. Its three non-blocking points were applied: the calls are told apart by their order, only `client` and the trace and span headers may differ, and two more offline tests.
 
+
+### 2026-10-18 - Amendment 2 accepted
+**Changed By:** Owner (decision), `adr` seat at Opus 5.5 (author, FRE-1607)
+**Reason:** The owner, 2026-10-18, relayed by master: "Do we care about adr right now? If so, approve its recommendation." Master judged yes and approved the seat's recommendation: the worker half first (ADR-0156 amendment of 2026-10-18), then the planner half (this amendment), each with its token cost and the smallest form. Codex review rounds are logged in the PR description.
 ---
 
 ## Amendment 1 — The planner's added delay is measured per configuration, in the D7 probe (FRE-1587, 2026-10-11)
@@ -662,6 +666,88 @@ Each call in `single` and `planner` holds the `stream` result, with its shape un
 **`scripts/eval/fre1537/README.md`:** steps 5 and 6 name the new files and their call counts, and the scorer's table gains the two rows.
 
 The FRE-1581 run then uses `replay --arms decide,paired` and `longhist` with its default arms, in `--mode planner`, and posts the scorer report on FRE-1515 (1.3).
+
+---
+
+## Amendment 2 — The planner sees the skill names, and declines a query that one skill covers (FRE-1607, 2026-10-18)
+
+**Status:** Accepted. The owner decided it on 2026-10-18 (Status Updates). It adds one line to the planner system prompt (D1 input 1, D2), and it adds fixtures, a baseline arm, two thresholds and a ship rule to D7. Every other part of this ADR is unchanged.
+
+### Why
+
+- **The planner expands before any model sees a skill.** FRE-1598 (`docs/research/2026-10-13-fre-1598-benefit-run.md`) found the same event order on all 4 expanded treatment turns. The planner call had 820 input tokens and no catalog, the workers ran, and the first `skill_index_assembled` came on the synthesis call. On 3 of the 4 turns, no skill loaded.
+- **The single path with the skill was the better path.** On the 4 pairs that stayed single and where only the treatment loaded a skill, the skill gave 11 of the 13 points of difference, and the treatment turns took 28 to 105 s. The expanded skill-area treatment turns took 111 to 575 s and 17 to 56 tool calls. They gained 2 points in total, and FRE-1598 did not show that either point came from a skill.
+- **The worker fix alone does not remove the expansion.** The ADR-0156 amendment of 2026-10-18 (FRE-1607) gives the `general` worker its skills. A worker still runs one goal in its own budget, and the primary then synthesises. For a query that one skill covers, one assistant with the skill does the same work in one lane.
+- **Master's reason for the approval:** the owner's slow turn of 2026-10-18 (trace `2f36d026…`, 290 s) would have stayed single. This is master's judgment, and this amendment did not measure it.
+- **The evidence is small.** FRE-1598 ran one draw per arm at temperature 1.0, and 4 expanded treatment turns. So the claim that expansion hurts a skill-area turn is a direction. The probe of 2.3 measures the planner's side of it.
+
+### 2.1 — The skill line (amends D1 input 1 and D2)
+
+1. When the decline rule is in the prompt (`planner_may_decline`, D2), the Rules list carries one more line, directly after the decline rule:
+
+   `- One assistant working alone can load these skills: <names>. If one of them covers the query, output SINGLE`
+
+2. `<names>` is the primary's skill names, sorted and comma-separated, rendered from the skill folders (`orchestrator/skills.py`). The text depends only on the skill files, so it is static per build and stays in the cached prefix.
+3. The line holds names only. D1's rule "no skill bodies" holds, and the planner gets no descriptions (2.2).
+4. Without `planner_may_decline`, the line is absent. The planner cannot output `SINGLE` there, so the line has no use.
+5. The FRE-1498 decline text stays unchanged (D2). The new line is a separate rule.
+6. `scripts/eval/fre1537/render.py` renders the same prompt, and the byte-identity test holds. The pinned hashes of `tests/personal_agent/orchestrator/test_fre1549_reasoning_discipline.py` move. This is a routing change under D7 requalification.
+
+### 2.2 — The token cost
+
+| Item | Value |
+|---|---|
+| The line, with today's 11 names | 294 chars |
+| Tokens, at the FRE-1592 M1 catalog ratio (4.49 chars per token mean, 4.14 lowest) | about 65 / 71 |
+| Tokens, at 3.0 chars per token, if the hyphenated names tokenize worse | about 98 |
+| D1 input 1 | grows from 2,439 chars (at the D1 date) by 294 chars, on `planner_asked` turns only |
+| Where it is paid | The planner system prompt. It is static, so after the first call it is in the cached prefix. A cold prefix pays it once: at most about 100 × 2.65 ms = 0.27 s |
+
+**The smallest form.** Names only. The full catalog lines are 6,002 chars, about 1,340 tokens, so they cost about 20 times as much. The planner does not load a skill. It decides only whether one assistant covers the query. The skill names state an objective (ADR-0156 A3), so a name can be enough for that decision. The probe of 2.3 tests this.
+
+### 2.3 — The D7 probe gains skill fixtures, a baseline arm and a ship rule (amends D7)
+
+1. **Fixtures.** A new file `scripts/eval/fre1537/skills.yaml` holds 10 single-turn fixtures:
+   - **6 that must decline:** the prompts of FRE-1598 `log-search#2`, `log-search#3` and `turn-explanation#1` (`scripts/eval/fre1598/part2_scenarios.yaml`), and one prompt each from the `evals.yaml` of `spend-and-tokens`, `model-latency` and `interaction-outcomes`;
+   - **4 seeded negatives that must expand:** research questions on the open web that name the subject of a skill. One example: "Research how three open-source agent frameworks measure model latency, and compare their methods." The others name logs, spend and a knowledge graph.
+2. **Arms.** Each fixture runs 3 draws in two arms: the current prompt (the baseline) and the amended prompt. That is 60 planner calls, thinking off, on the local engine.
+3. **Thresholds, on the amended arm:**
+
+   | Criterion | Threshold |
+   |---|---|
+   | Skill-area decline | at least 16 of 18 |
+   | Skill-word expand | at least 11 of 12 |
+   | Every existing D7 row, with Amendment 1 | passes as before |
+
+   The existing expand-correct row (at least 43 of 48) is the main guard against a planner that declines too much.
+4. **The ship rule.** The line ships only if the amended arm passes all three rows **and** the baseline arm declines fewer than 16 of the 18 skill-area draws. If the baseline already reaches 16 of 18, the line adds tokens for no measured gain. It then does not ship, and the ticket records the result.
+5. **Where it runs.** FRE-1581 is Done, and model testing resumed after it. So the run belongs to the planner build ticket. It runs on the production configuration (Flash-Next, llama.cpp, the `planner` mode), and it needs the owner's approval under the preflight rule.
+
+### 2.4 — The planner does not name a skill
+
+The planner does not name a skill in a worker's task. The acting model chooses its skill (ADR-0156 D2), and the `general` worker now gets its catalog (ADR-0156 amendment of 2026-10-18, B1). A name in the task adds a field to the plan schema and tokens to every plan. ADR-0156 B4.2 gives the full reason.
+
+### 2.5 — Alternatives considered
+
+**The full catalog lines for the planner.** About 1,340 tokens. *Rejected as the first form:* it costs about 20 times the names, and the planner does not load skills. If the names fail 2.3, this form is the next candidate, in a new amendment.
+
+**No planner change: the worker fix only.** *Rejected:* the owner ordered both halves (option 3). One expanded turn still costs a planner call, the workers and a synthesis call, where one lane with the skill was enough.
+
+**A harness rule that skips the planner when the message matches a skill.** *Rejected:* ADR-0156 D2 deleted keyword routing.
+
+**The primary decides expansion (design C).** *Rejected* as in Option 2: the primary started workers on 1 of 48 research draws.
+
+**The planner names a skill in each task.** *Rejected* as the default (2.4).
+
+### 2.6 — Verification / Acceptance Criteria of this amendment
+
+| # | Criterion | How it is checked | It fails if |
+|---|---|---|---|
+| A2-1 | The line is in the planner prompt exactly when the decline rule is, with the live names. | A unit test builds the prompt with and without `admit_single`. A seeded fixture skill added to the folder must appear in the line. The `render.py` byte-identity test. | The line is missing with the decline rule, present without it, a name differs from the skill folders, or the seeded skill is missing. |
+| A2-2 | The cost is as stated. | The served count of the line, by the FRE-1592 M1 method, in the approved window, posted on the ticket. `planner_input_chars` (D6) of a `planner_asked` turn before and after. | The served count is above 100 tokens, or the system prompt grows by more than the line's length. |
+| A2-3 | The probe shows the gain, and only then does the line ship. | The 2.3 run, its scorer report and fingerprint posted on the ticket before merge. | A threshold row fails, an existing D7 row fails, or the baseline arm already declines 16 of 18. In the last case, the line does not ship. |
+
+Production is a floor, not a gate, as in Amendment 1, 1.4. The owner's traffic is too small to give a rate in a short window.
 
 ---
 

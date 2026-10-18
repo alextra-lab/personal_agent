@@ -93,7 +93,7 @@ def test_summarize_counts_the_last_good_row_and_lists_expanded_tasks() -> None:
             "arm": "PL",
             "wall_s": 100.0,
             "model_calls": 6,
-            "planner_decision": ["HYBRID"],
+            "planner_decision": ["expanded"],
             "stage5": {"reason": "planner_asked"},
             "slm_calls": [{"slm.prompt_n": 1000, "slm.prefill_ms": 2000, "slm.decode_ms": 4000}],
         },
@@ -102,7 +102,7 @@ def test_summarize_counts_the_last_good_row_and_lists_expanded_tasks() -> None:
             "arm": "PL",
             "wall_s": 20.0,
             "model_calls": 2,
-            "planner_decision": ["SINGLE"],
+            "planner_decision": ["declined"],
             "stage5": {"reason": "planner_asked"},
             "slm_calls": [],
         },
@@ -119,7 +119,7 @@ def test_summarize_counts_the_last_good_row_and_lists_expanded_tasks() -> None:
     assert pl["tasks"] == 2 and pl["error_rows"] == 1
     assert pl["expanded"] == ["rs1"]
     assert pl["prompt_n"] == 1000 and pl["prefill_s"] == 2.0 and pl["decode_s"] == 4.0
-    assert pl["planner_decisions"] == {"HYBRID": 1, "SINGLE": 1}
+    assert pl["planner_decisions"] == {"expanded": 1, "declined": 1}
     assert s["S"]["stage5_reasons"] == {"expansion_disabled": 1}
 
 
@@ -154,3 +154,11 @@ def test_memory_seed_writes_six_entities_in_three_turns() -> None:
     value = ast.literal_eval(facts)
     assert len(value) == 3
     assert sum(len(f[3]) for f in value) == 6
+
+
+def test_search_calls_dedupes_spans_across_span_sets() -> None:
+    """A span listed in two span sets of a search reply counts once."""
+    span = {"spanID": "a", **_span("5", **{"slm.prompt_n": "10"})}
+    other = {"spanID": "b", **_span("3", **{"slm.prompt_n": "20"})}
+    reply = {"traces": [{"spanSets": [{"spans": [span]}, {"spans": [span, other]}]}]}
+    assert [c["slm.prompt_n"] for c in run.search_calls(reply)] == [20.0, 10.0]

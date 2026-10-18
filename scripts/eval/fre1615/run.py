@@ -148,22 +148,78 @@ def slm_calls(trace: Mapping[str, object]) -> list[dict[str, float]]:
             continue
         for scope in cast(list[dict[str, object]], batch.get("scopeSpans") or []):
             for span in cast(list[dict[str, object]], scope.get("spans") or []):
-                attrs = {
-                    str(a["key"]): next(iter(cast(dict[str, object], a["value"]).values()))
-                    for a in cast(list[dict[str, object]], span.get("attributes") or [])
-                }
-                call = {k: float(cast(str, attrs[k])) for k in _SLM_FIELDS if k in attrs}
-                if "slm.prompt_n" in call:
-                    call["start_ns"] = float(cast(str, span["startTimeUnixNano"]))
+                call = _span_call(span)
+                if call:
                     calls.append(call)
     return sorted(calls, key=lambda c: c["start_ns"])
 
 
-async def tempo_calls(http: httpx.AsyncClient, trace_id: str) -> list[dict[str, float]]:
-    """Read the turn's llama.cpp calls from Tempo (production's Tempo; read only)."""
+def _span_call(span: Mapping[str, object]) -> dict[str, float] | None:
+    """Return one span's ``slm.*`` counts and ``start_ns``, or ``None`` without ``slm.prompt_n``."""
+    attrs = {
+        str(a["key"]): next(iter(cast(dict[str, object], a["value"]).values()))
+        for a in cast(list[dict[str, object]], span.get("attributes") or [])
+    }
+    call = {k: float(cast(str, attrs[k])) for k in _SLM_FIELDS if k in attrs}
+    if "slm.prompt_n" not in call:
+        return None
+    call["start_ns"] = float(cast(str, span["startTimeUnixNano"]))
+    return call
+
+
+def search_calls(reply: Mapping[str, object]) -> list[dict[str, float]]:
+    """Return the llama.cpp counts of each span of a Tempo ``/api/search`` reply, in start order.
+
+    A span that appears in several span sets counts once (by ``spanID``).
+    """
+    seen: dict[str, dict[str, float]] = {}
+    for trace in cast(list[dict[str, object]], reply.get("traces") or []):
+        for span_set in cast(list[dict[str, object]], trace.get("spanSets") or []):
+            for span in cast(list[dict[str, object]], span_set.get("spans") or []):
+                call = _span_call(span)
+                if call:
+                    seen[str(span.get("spanID"))] = call
+    return sorted(seen.values(), key=lambda c: c["start_ns"])
+
+
+async def tempo_calls(
+    http: httpx.AsyncClient, trace_id: str, start_s: float, end_s: float
+) -> list[dict[str, float]]:
+    """Read the turn's llama.cpp calls from Tempo (production's Tempo; read only).
+
+    First the agent's own trace (the gateway sends ``traceparent``). When that trace holds no
+    ``slm-server`` span (an eval gateway exports no spans of its own), a TraceQL search on the
+    ``slm.client.trace_id`` that slm_server records from the ``X-Trace-Id`` header.
+
+    Raises:
+        httpx.HTTPError: The search failed.
+        ValueError: The search filled its page, so it may be truncated.
+    """
     resp = await http.get(f"{TEMPO_URL}/api/traces/{tempo_hex(trace_id)}", timeout=30.0)
+    if resp.status_code == 200:
+        calls = slm_calls(resp.json())
+        if calls:
+            return calls
+    ids = sorted({trace_id, tempo_hex(trace_id)})
+    match = " || ".join(f'span.slm.client.trace_id="{i}"' for i in ids)
+    query = f'{{resource.service.name="slm-server" && ({match})}} | select({", ".join(f"span.{k}" for k in _SLM_FIELDS)})'
+    limit = 100
+    resp = await http.get(
+        f"{TEMPO_URL}/api/search",
+        params={
+            "q": query,
+            "start": int(start_s) - 60,
+            "end": int(end_s) + 60,
+            "limit": limit,
+            "spss": 100,
+        },
+        timeout=60.0,
+    )
     resp.raise_for_status()
-    return slm_calls(resp.json())
+    reply = resp.json()
+    if len(reply.get("traces") or []) >= limit:
+        raise ValueError(f"Tempo search for {trace_id} filled its page of {limit}")
+    return search_calls(reply)
 
 
 def seed_memory(gateway: part2.Arm) -> dict[str, object]:
@@ -294,6 +350,7 @@ async def run_task(
         "expects": task.get("expects", []),
         "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    t_begin = time.time()
     try:
         await wipe_eval_graph(driver, uri=EVAL_NEO4J_URI)
         if str(task["id"]).startswith("mr"):
@@ -322,11 +379,14 @@ async def run_task(
         row.update(await part2.read_turn(es, trace_id, "treatment"))
         row["stage5"] = await stage5(es, trace_id)
         row.update(await tool_arguments(es, trace_id))
-        row["slm_calls"] = await tempo_calls(http, trace_id)
+        t_end = time.time()
+        row["slm_calls"] = await tempo_calls(http, trace_id, t_begin, t_end)
         if isinstance(row.get("first_turn"), dict):
             first_turn = cast(dict[str, object], row["first_turn"])
             first_turn["stage5"] = await stage5(es, str(first_turn["trace_id"]))
-            first_turn["slm_calls"] = await tempo_calls(http, str(first_turn["trace_id"]))
+            first_turn["slm_calls"] = await tempo_calls(
+                http, str(first_turn["trace_id"]), t_begin, t_end
+            )
         row["prompt_captures"] = copy_prompt_captures(
             gateway, str(row["session_id"]), cfg.run_dir / "prompt_debug" / arm
         )
@@ -429,10 +489,7 @@ def summarize(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
             "expanded": sorted(
                 str(r["id"])
                 for r in mine
-                if any(
-                    d in ("HYBRID", "DECOMPOSE")
-                    for d in cast(list[str], r.get("planner_decision") or [])
-                )
+                if any(d == "expanded" for d in cast(list[str], r.get("planner_decision") or []))
             ),
         }
     return out

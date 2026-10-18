@@ -171,3 +171,50 @@ def test_every_suite_task_has_an_expect_line() -> None:
     expects = yaml.safe_load((HERE / "expects.yaml").read_text())["expects"]
     assert set(expects) == {str(t["id"]) for t in load_suite()}
     assert all(isinstance(v, str) and v.strip() for v in expects.values())
+
+
+def test_request_text_shows_the_earlier_turn_of_a_follow_up() -> None:
+    """A follow-up REQUEST holds the first message and the arm's own first reply."""
+    from scripts.eval.fre1615 import judge
+
+    plain = {"message": "Convert 72 F."}
+    assert judge.request_text(plain) == "Convert 72 F."
+    follow = {
+        "message": "And coriander?",
+        "history_user": "Chimichurri?",
+        "first_turn": {"reply": "Parsley..."},
+    }
+    text = judge.request_text(follow)
+    assert "USER: Chimichurri?" in text and "ASSISTANT: Parsley..." in text
+    assert text.endswith("USER: And coriander?")
+
+
+def test_judge_score_uses_the_third_label_on_a_split() -> None:
+    """A PASS/FAIL split takes the third judge's label in place of the FAIL."""
+    from scripts.eval.fre1615 import judge
+
+    key = {"r01": {"id": "dq1", "arm": "S"}, "r02": {"id": "dq1", "arm": "PL"}}
+    labels = {
+        "1": {"r01": {"label": "PASS"}, "r02": {"label": "PASS"}},
+        "2": {"r01": {"label": "PASS"}, "r02": {"label": "FAIL"}},
+        "3": {"r02": {"label": "PARTIAL"}},
+    }
+    report = judge.score(key, labels)
+    assert report["points"] == {"dq1": {"S": 4, "PL": 3}}
+    assert report["splits"] == ["r02"] and report["missing"] == []
+    assert report["passes"] == {"PL": 0, "S": 1}
+
+
+def test_owner_pairs_blind_two_arms_per_task() -> None:
+    """Each task shows two replies as A and B; the key maps them back; a missing arm is refused."""
+    from scripts.eval.fre1615 import judge
+
+    rows = [
+        {"id": "dq1", "arm": "S", "message": "m", "reply": "reply-S"},
+        {"id": "dq1", "arm": "PL", "message": "m", "reply": "reply-PL"},
+    ]
+    text, key = judge.owner_pairs(rows, ["S", "PL"], {})
+    assert set(key["dq1"].values()) == {"S", "PL"}
+    assert "reply-S" in text and "reply-PL" in text and "S" not in key["dq1"]
+    with pytest.raises(ValueError):
+        judge.owner_pairs(rows[:1], ["S", "PL"], {})

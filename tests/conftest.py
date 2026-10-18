@@ -22,6 +22,10 @@ os.environ.setdefault("AGENT_ELASTICSEARCH_URL", "http://localhost:9201")
 # substrate_profile=="private" (its default), regardless of environment — so the
 # test suite must declare a non-"private" profile to stay out of its scope.
 os.environ.setdefault("AGENT_SUBSTRATE_PROFILE", "test")
+# FRE-1614: forced, not setdefault — an exported value or a .env with capture on must
+# never make the suite write prompt captures into the real telemetry/ tree. A test
+# that exercises capture turns it on itself and points the root at tmp_path.
+os.environ["AGENT_PROMPT_DEBUG_CAPTURE_ENABLED"] = "false"
 # FRE-808: the app-under-test connects as the restricted, non-superuser
 # `seshat_app` role; admin/DDL fixtures (migration tests, full-init.sql parity)
 # use AGENT_DATABASE_ADMIN_URL (the `agent` superuser). Both point at the test

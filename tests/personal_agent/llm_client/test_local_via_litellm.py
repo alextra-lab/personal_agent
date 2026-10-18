@@ -1564,3 +1564,79 @@ class TestStreamTransportErrorShape:
                 raise ValueError("unparseable chunk") from None
         except ValueError as unrelated:
             assert litellm_client_module._stream_transport_error_shape(unrelated) is None
+
+
+# ── FRE-1614 — prompt debug capture at the local (streaming) site ─────────
+
+
+class TestPromptDebugCapture:
+    @pytest.mark.asyncio
+    async def test_streaming_site_writes_the_full_request_when_capture_is_on(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-3 (streaming site): one file holding the wire request and its usage."""
+        from personal_agent.config import settings
+        from personal_agent.telemetry import prompt_debug
+
+        monkeypatch.setattr(settings, "prompt_debug_capture_enabled", True)
+        monkeypatch.setattr(prompt_debug, "prompt_debug_root", lambda: tmp_path)
+        tools = [{"type": "function", "function": {"name": "web_search", "parameters": {}}}]
+
+        captured = await _dispatch(system_prompt="You are Seshat.", tools=tools)
+
+        files = list(tmp_path.rglob("*.json"))
+        assert len(files) == 1
+        record = json.loads(files[0].read_text(encoding="utf-8"))
+        assert record["placement"] == "local"
+        assert record["role"] == "primary"
+        assert record["messages"] == captured.body["messages"]
+        assert record["tools"] == captured.body["tools"]
+        assert record["usage"]["prompt_tokens"] == USAGE_BLOCK["prompt_tokens"]
+        assert record["params"]["stream"] is True
+        assert record["params"]["extra_body"]["cache_prompt"] is True
+        # The propagation headers go on the wire, never into the file.
+        assert "extra_headers" not in record["params"]
+        assert "X-Trace-Id" not in files[0].read_text(encoding="utf-8")
+        assert record["trace_id"] == captured.completed_event()["trace_id"]
+
+    @pytest.mark.asyncio
+    async def test_streaming_site_writes_nothing_when_capture_is_off(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-1 (streaming site): the flag off means no file and no capture call."""
+        from personal_agent.config import settings
+        from personal_agent.telemetry import prompt_debug
+
+        monkeypatch.setattr(settings, "prompt_debug_capture_enabled", False)
+        monkeypatch.setattr(prompt_debug, "prompt_debug_root", lambda: tmp_path)
+        capture = AsyncMock()
+        monkeypatch.setattr(prompt_debug, "capture_model_call", capture)
+
+        await _dispatch()
+
+        capture.assert_not_called()
+        assert list(tmp_path.rglob("*")) == []
+
+    @pytest.mark.asyncio
+    async def test_streaming_site_writes_after_the_slot_is_released(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The file write must never hold the deployment's concurrency slot."""
+        from personal_agent.config import settings
+        from personal_agent.llm_client.concurrency import get_inference_concurrency_controller
+        from personal_agent.telemetry import prompt_debug
+
+        held_at_capture: list[int] = []
+
+        async def _record_slots(**_kwargs: object) -> None:
+            status = get_inference_concurrency_controller().get_status()
+            held_at_capture.append(
+                sum(s["active"] for group in status.values() for s in group.values())
+            )
+
+        monkeypatch.setattr(settings, "prompt_debug_capture_enabled", True)
+        monkeypatch.setattr(prompt_debug, "capture_model_call", _record_slots)
+
+        await _dispatch()
+
+        assert held_at_capture == [0]

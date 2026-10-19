@@ -130,7 +130,7 @@ The planner receives no tools array, no skill bodies and no primary system promp
 
 `planner_brief_mode=briefing` becomes the only behaviour, and the `current` path and its setting are removed. Production already runs `briefing`. The `current` mode is the input set that FRE-1517 F6 measured at 14/53 carry-through.
 
-**Against FRE-1138.** The planner runs once per turn, before the tool loop, so its input is not within-turn growth. Its input is bounded at 2,439 + 64,000 characters, and D6 records the real size per turn. *Amended by Amendment 2 (2026-10-18):* on a `planner_asked` turn, the static text grows by the skill line, so the bound at that date is 2,733 + 64,000 characters with 11 skills. *Amended by Amendment 3 (2026-10-19):* on a turn with the arm `p2`, the static text also grows by the 914-character policy block (Amendment 3, 3.2).
+**Against FRE-1138.** The planner runs once per turn, before the tool loop, so its input is not within-turn growth. Its input is bounded at 2,439 + 64,000 characters, and D6 records the real size per turn. *Amended by Amendment 2 (2026-10-18):* on a `planner_asked` turn, the static text grows by the skill line, so the bound at that date is 2,733 + 64,000 characters with 11 skills. *Amended by Amendment 3 (2026-10-19):* on a turn with the arm `p2`, the static text also grows by the 913-character policy block and its blank-line separator, 914 characters in total (Amendment 3, 3.2).
 
 ### D2 — The planner decides expansion for the four register types
 
@@ -854,7 +854,7 @@ D7's requalification rule says that a new prompt hash needs a passing probe run 
 
 A revert is one `.env` line (3.6), and a failed plan falls back to SINGLE. So the trial can do less harm than a D7 run can prevent.
 
-**What the exception covers.** During the trial (from the deploy until the review closes, 3.8), live `planner_outcome` events carry two hashes: the baseline hash (the hash that production renders at the deploy, 3.10), and the `p2` hash of the same configuration. AC-10 accepts the `p2` hash only while the setting is `ab`, only during the trial, and only on this amendment. The pre-ship gain probe and the blind veto that the ADR session of 2026-10-18 designed are replaced by the trial. They do not run.
+**What the exception covers.** During the trial (from the deploy until the review closes, 3.8), live `planner_outcome` events carry two hashes: the baseline hash (the hash that production renders at the deploy, 3.10), and the `p2` hash of the same configuration. AC-10 accepts the `p2` hash only while the setting is `ab`, only during the trial, and only on this amendment. The baseline hash is outside this exception. It is the prompt that production already runs, and its standing under D7 is the round-cap requalification that master records on FRE-1618 (3.10). The trial does not change it, in either direction. The pre-ship gain probe and the blind veto that the ADR session of 2026-10-18 designed are replaced by the trial. They do not run.
 
 **Adoption needs the D7 run.** Master sets `on`, makes `p2` the code default, or removes the switch, only after a D7 run of the `p2` prompt on the production configuration is posted on the adoption ticket. Every row must pass, with Amendment 1. If expand-correct is the only row that fails, `p2` is not adopted. The per-fixture result then goes to the owner, together with the trial data, and the owner decides by a new amendment (D7: "Only an amendment to this ADR, approved by the owner, can change a threshold or admit a deployment that missed one"). The probe's `render.py` already renders both arms (3.9), so the run needs no code change.
 
@@ -870,10 +870,14 @@ A revert is one `.env` line (3.6), and a failed plan falls back to SINGLE. So th
 **The turns.** The trial counts every `planner_asked` turn on the production deployment from the moment master sets `ab`, in the owner's sessions. Master excludes a turn that a seat sent (a live gateway probe), by its `trace_id`.
 
 **An owner-visible failure** on a counted turn is either of these:
-1. **No answer:** the turn has no Captain's Log capture with an assistant reply (a capture is written only for a completed turn), or the reply reports an error to the owner.
+1. **No answer:** the turn's Captain's Log capture is missing, its `outcome` is `failed` or `timeout`, its `assistant_response` is null or blank, or the reply reports an error to the owner.
 2. **A re-ask:** the owner's next message in the same session, sent within 30 minutes of the reply, asks again for what the turn asked, or says that the reply is wrong or incomplete.
 
+**The cohort is closed.** A check counts only the turns whose reply is at least 30 minutes old at the time of the check, so that every counted turn has a decided re-ask label.
+
 **The labels are blind.** Master labels every counted turn from its capture and the owner's next message before master reads `planner_policy_arm`. Then master joins the arm on `trace_id`.
+
+**The rates.** The failure rate of an arm is its failures divided by its counted turns. An arm with no counted turn has a rate of 0.
 
 **A notable drop** is both of these at once:
 - the `p2` arm has at least 3 failures; and
@@ -935,8 +939,8 @@ Example: `p2` 3 of 8 (37.5%) against `baseline` 1 of 8 (12.5%) is 25 points, so 
 | A3-2 | The `p2` prompt is the `baseline` prompt plus the block, and nothing else. | A unit test asserts that the `p2` prompt equals the `baseline` prompt with the block and one `\n` inserted directly before the first `Rules:\n`. Master compares the block constant with 3.1, word for word. A second test asserts that the block is absent without `admit_single`, in all three settings. | A character differs, the block is in another place, or the block appears without `admit_single`. |
 | A3-3 | The arm follows the setting, and the event records the arm that ran. | Unit tests: `off` gives only `baseline`, `on` only `p2`, and `ab` gives both. Over 1,000 choices with a fixed seed, the `p2` share is between 0.45 and 0.55. Each test reads `planner_outcome` and checks that `planner_policy_arm` matches `planner_system_prompt_sha256`. | An arm differs from its setting, the share is outside the range, or the arm and the hash disagree on any event. |
 | A3-4 | The probe renders both arms as production does. | The `render.py` byte-identity test, extended to both arms. | Either arm's render differs from production's. |
-| A3-5 | Live, both arms run and are recorded. | After master sets `ab`: `planner_outcome` of the first `planner_asked` turns, joined to `route_traces` on `trace_id`. | An event lacks `planner_policy_arm`, its hash does not match its arm, or no join exists. Fewer turns than needed for both arms is not a failure. Master reports it. |
-| A3-6 | The stops and the review run as stated. | Master's comments on FRE-1618 at day 7 and at the review, with the counts per arm of 3.7 and 3.8. A stop, when it happens, carries the turn that shows the baseline arm and the baseline hash. | A check or the review is missing, a count is missing, a notable drop does not lead to `off`, or `p2` reaches `on` without the D7 run of 3.5. |
+| A3-5 | Live, both arms run and are recorded. | After master sets `ab`: `planner_outcome` of the first `planner_asked` turns, joined to `route_traces` on `trace_id`. | An event lacks `planner_policy_arm`, its hash does not match its arm, or no join exists. It also fails if, once at least 8 counted turns exist, one arm holds none of them. Under a correct 50/50 split that happens with probability 2 × 0.5⁸ ≈ 0.8%. On this failure, master sets `off` (3.6) and reports the defect. |
+| A3-6 | The stops and the review run as stated. | Master's comments on FRE-1618 at day 7 and at the review, with the counts per arm of 3.7 and 3.8. A stop, when it happens, carries the turn that shows the baseline arm and the baseline hash. | A check or the review is missing, a count is missing, the day-28 report is missing after an extension, a notable drop does not lead to `off`, or `p2` reaches `on` without the D7 run of 3.5. |
 
 A3-1 to A3-4 belong to the build ticket. A3-5 and A3-6 are master's, after the deploy.
 

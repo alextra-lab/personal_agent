@@ -163,12 +163,15 @@ _SUB_AGENT_SYSTEM_PROMPT = (
 # ADR-0150 D3 (revising ADR-0149 move 1): the system prompt states how the budget
 # works, and the task message states the number. The number varies per task by
 # thoroughness level, and a per-task number here would split each type's shared
-# prefix by level.
+# prefix by level. FRE-1619 (owner, 2026-10-19): the last sentence tells the worker
+# to spend as few rounds as the task needs. It is static, so the prefix stays shared.
 _BUDGET_MECHANISM = (
     "Your task states your budget of tool rounds. A round is one reply that calls "
     "tools; it may call several tools in parallel. After each round you will be told "
     "how much budget remains. When the budget is spent, your next reply will have no "
-    "tools available, and you must write your report from the results you already hold."
+    "tools available, and you must write your report from the results you already hold. "
+    "The budget is a limit, not a target: use as few rounds as the task needs, and write "
+    "your report as soon as you hold enough to complete the task."
 )
 
 # ADR-0150 D5: the task message's budget line, rendered from the task's level via

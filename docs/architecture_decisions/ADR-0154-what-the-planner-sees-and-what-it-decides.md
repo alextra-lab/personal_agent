@@ -873,7 +873,7 @@ A revert is one `.env` line (3.6), and a failed plan falls back to SINGLE. So th
 1. **No answer:** the turn's Captain's Log capture is missing, its `outcome` is `failed` or `timeout`, its `assistant_response` is null or blank, or the reply reports an error to the owner.
 2. **A re-ask:** the owner's next message in the same session, sent within 30 minutes of the reply, asks again for what the turn asked, or says that the reply is wrong or incomplete.
 
-**The cohort is closed.** A check counts only the turns whose reply is at least 30 minutes old at the time of the check, so that every counted turn has a decided re-ask label.
+**The cohort is closed.** A check counts a turn only when its reply is at least 30 minutes old at the time of the check, so that every counted turn has a decided re-ask label. A turn with no reply or no capture counts once its `route_traces.created_at` is at least 30 minutes old.
 
 **The labels are blind.** Master labels every counted turn from its capture and the owner's next message before master reads `planner_policy_arm`. Then master joins the arm on `trace_id`.
 

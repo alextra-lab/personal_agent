@@ -1,6 +1,6 @@
 # ADR-0154: What the Planner Sees and What It Decides — an Isolated Planner, Thinking Off, Asked on Every Turn of the Four Register Types
 
-**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain.
+**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain. Amendment 3 accepted 2026-10-19 (owner, FRE-1618): on `planner_asked` turns the owner's "prefer SINGLE" policy runs in a 50/50 live trial behind a switch, and adoption needs a D7 run.
 **Date:** 2026-10-03
 **Deciders:** Owner (one ADR in place of two, 2026-10-02; the design choice, the memory digest and the measurement budget, 2026-10-03), `master` (the five ADR-0152 review findings and the scope of FRE-1537), `adr` seat at Opus 5.5 (author, the 2026-10-03 planner measurement)
 **Tags:** routing, expansion, planner, memory, decomposition, latency
@@ -130,7 +130,7 @@ The planner receives no tools array, no skill bodies and no primary system promp
 
 `planner_brief_mode=briefing` becomes the only behaviour, and the `current` path and its setting are removed. Production already runs `briefing`. The `current` mode is the input set that FRE-1517 F6 measured at 14/53 carry-through.
 
-**Against FRE-1138.** The planner runs once per turn, before the tool loop, so its input is not within-turn growth. Its input is bounded at 2,439 + 64,000 characters, and D6 records the real size per turn. *Amended by Amendment 2 (2026-10-18):* on a `planner_asked` turn, the static text grows by the skill line, so the bound at that date is 2,733 + 64,000 characters with 11 skills.
+**Against FRE-1138.** The planner runs once per turn, before the tool loop, so its input is not within-turn growth. Its input is bounded at 2,439 + 64,000 characters, and D6 records the real size per turn. *Amended by Amendment 2 (2026-10-18):* on a `planner_asked` turn, the static text grows by the skill line, so the bound at that date is 2,733 + 64,000 characters with 11 skills. *Amended by Amendment 3 (2026-10-19):* on a turn with the arm `p2`, the static text also grows by the 914-character policy block (Amendment 3, 3.2).
 
 ### D2 — The planner decides expansion for the four register types
 
@@ -239,6 +239,8 @@ The probe used for Appendix A must be committed under `scripts/eval/` before the
 | Planner call, 60,000-char history, cold | at most 60 s | 40.2 s |
 
 *Amended by Amendment 1 (2026-10-11):* the table gains two paired added-delay rows, one per history split. A configuration qualifies only if both pass (Amendment 1, 1.2).
+
+*Amended by Amendment 3 (2026-10-19):* the `p2` prompt hash is admitted without a D7 run for the live trial only, under the setting `ab`. Adoption of `p2` needs a passing D7 run (Amendment 3, 3.5).
 
 The decision thresholds sit one to three draws below the measured counts. The delay thresholds sit at about twice the measured values. The thresholds are a regression floor for this fixture set, not a claim about real-traffic accuracy. AC-4 measures real traffic.
 
@@ -489,6 +491,10 @@ Real traffic is small (18 real chat turns between 2026-09-15 and 2026-10-02) and
 ### 2026-10-18 - Amendment 2 accepted
 **Changed By:** Owner (decision), `adr` seat at Opus 5.5 (author, FRE-1607)
 **Reason:** The owner, 2026-10-18, relayed by master: "Do we care about adr right now? If so, approve its recommendation." Master judged yes and approved the seat's recommendation: the worker half first (ADR-0156 amendment of 2026-10-18), then the planner half (this amendment), each with its token cost and the smallest form. Codex review rounds are logged in the PR description.
+
+### 2026-10-19 - Amendment 3 accepted
+**Changed By:** Owner (decision), `adr` seat at Opus 5.5 (author, FRE-1618)
+**Reason:** The owner, 2026-10-18 18:28Z, relayed by master: "Agreed. Approved", on the FRE-1615 Block 1 recommendation to adopt P2. In the ADR session of 2026-10-18, the owner chose to keep every D7 row, a gain probe, and a blind veto on "PL wins more pairs". The veto fired (PL 4, P2 0, tie 2). On 2026-10-19 the owner decided: "Can we have an a/b switch. Enable it and check back in 2 weeks?", then "Easily disable it if the quality drops notably.", then "Approved : Trial as designed." The trial replaces the gain probe and the veto. Codex review rounds are logged in the PR description.
 ---
 
 ## Amendment 1 — The planner's added delay is measured per configuration, in the D7 probe (FRE-1587, 2026-10-11)
@@ -748,6 +754,191 @@ The plan schema gets no skill field, and the harness never assigns a skill to a 
 | A2-3 | The probe shows the gain, and only then does the line ship. | The 2.3 run, its scorer report with both arms, the Fisher p-value and the fingerprint, posted on the ticket before merge. | A threshold row fails, an existing D7 row fails, or the gain over the baseline has p ≥ 0.05. In the last case, the line does not ship. |
 
 Production is a floor, not a gate, as in Amendment 1, 1.4. The owner's traffic is too small to give a rate in a short window.
+
+---
+
+## Amendment 3 — The planner prefers SINGLE, in a 50/50 live trial behind a switch (FRE-1618, 2026-10-19)
+
+**Status:** Accepted. The owner decided it on 2026-10-18 and 2026-10-19 (Status Updates). It adds one block of text to the planner system prompt on `planner_asked` turns, behind a setting with the values `off`, `on` and `ab`. Under `ab`, half of the `planner_asked` turns get the block. The amendment admits the new prompt hash for the trial without a D7 run (3.5), and it states the stops, the review and the adoption path. Every other part of this ADR is unchanged.
+
+### Why
+
+- **The planner's cost sits in the turns that it expands.** FRE-1615 Block 1 (`docs/research/2026-10-18-fre-1615-block1-planner-arms.md`, one draw, eval stack, production llama.cpp) ran 24 tasks with three arms: S (forced SINGLE), PL (the production planner) and P2 (PL plus the owner's "prefer SINGLE" text). On the 18 tasks that PL did not expand, S and PL took about the same time (1,176 s and 1,098 s). On the 6 tasks that PL expanded, PL took 2,554 s and S took 1,127 s.
+- **P2 removed about a third of that extra time.** On the same 6 tasks, P2 against PL:
+
+  | Measure | P2 | PL | Change |
+  |---|---|---|---|
+  | Wall time | 1,892 s | 2,554 s | −26% |
+  | Model calls | 76 | 103 | −26% |
+  | Prefilled tokens (`slm.prompt_n`) | 218,838 | 360,114 | −39% |
+  | Judge points | 15 / 24 | 15 / 24 | equal |
+  | Expanded | 3 of 6 | 6 of 6 | P2 kept the 3 research expansions |
+
+- **The owner's case.** In the FRE-1615 preflight, PL expanded the owner's chimichurri follow-up "Is there a version with coriander?" (339 s), and P2 declined it (55 s). In the measured draw, PL declined it too, so one draw does not give the rate.
+- **The blind comparison went against P2.** The owner delegated the blind scoring of the 6 P2/PL pairs to master (FRE-1618, master's comment of 2026-10-18, corrected 23:25Z). All 12 replies were PASS. The grader preferred PL on 4 pairs, P2 on 0, and 2 were ties. On the 3 tasks where P2 changed the path (si1, cf3, ar1), PL won 2 and 1 was a tie. The two PL wins came from small errors in the P2 replies: a ratio of 2.76 called "more than three times", and `git add -P`, which is not a git option. On rs1 and rs2, both arms expanded, so those two wins are run-to-run variation. The grader is a Claude model.
+- **The owner's rule fired, and the owner then chose a live trial.** In the ADR session of 2026-10-18, the owner defined a loss as "PL wins more pairs". By that rule, the veto fired. On 2026-10-19 the owner decided: "Can we have an a/b switch. Enable it and check back in 2 weeks?", and then: "Easily disable it if the quality drops notably." The reason, as master recorded it on FRE-1618: the owner chose a live trial over a pre-ship decision that rests on one draw. This amendment records that override of the veto.
+
+### 3.1 — The policy text
+
+The block is the owner's pasted text, word for word, with its line breaks, as master copied it into FRE-1615 (comment of 2026-10-18 12:42Z, section "Arm P2"). It is the same text as `scripts/eval/fre1615/arms/P2.patch`, which FRE-1615 measured:
+
+```text
+DECOMPOSITION POLICY
+Prefer SINGLE.
+Delegate only when independent execution is likely
+to materially improve evidence quality, coverage,
+or total completion time.
+Account for:
+- Additional model calls and context overhead
+- Shared inference-server contention
+- Information lost through worker summaries
+- Work the primary agent can perform directly
+Do not create a worker solely to summarize,
+compare, or reformat information another worker
+is already gathering, unless independent analysis
+has a specific benefit.
+HYBRID delegates bounded specialized work while
+the primary handles remaining reasoning or synthesis.
+DECOMPOSE requires at least two genuinely independent
+subtasks whose results can be merged without depending
+on one another.
+Prefer fewer, more complete tasks when they share
+the same tools, sources, and information.
+Every task needs a specific deliverable and a
+measurable completion condition.
+```
+
+The block is 23 lines, and every line ends with a newline: 913 characters.
+
+### 3.2 — Where the block goes (amends D1 input 1 and D2)
+
+1. **The function.** `_build_planner_system_prompt` in `src/personal_agent/orchestrator/expansion_controller.py`.
+2. **The place.** Directly before the first `Rules:\n` (`_PLANNER_RULES_HEADING`), followed by one blank line. So the prompt reads: the schema line, then the block, then a blank line, then `Rules:`, then the FRE-1498 decline rule as the first rule.
+3. **The condition.** Only when the decline rule is in the prompt (`admit_single`, which the controller sets from `planner_may_decline`, so `planner_asked` turns only), and only when the turn's arm is `p2` (3.4). Without `admit_single`, the block is absent in every setting. The fallback planner never gets it.
+4. **No other change.** The decline rule, the schema line and every other rule stay byte for byte as they are. With the arm `baseline`, the prompt is byte-identical to the prompt before this amendment.
+5. **The size.** D1 input 1 grows by 914 characters (the block and the blank line) on `p2` turns only, about 200 tokens. The text is static, so it can stay in the cached prefix. *D1's bound at this date:* 2,439 + 914 + 64,000 characters on a `p2` turn, plus the Amendment 2 line when that line ships.
+
+### 3.3 — Order with Amendment 2, and which ships first
+
+- **The order in the prompt.** The block goes before the `Rules:` heading. The Amendment 2 skill line goes inside the Rules list, directly after the decline rule (2.1). So the two additions never touch: block, blank line, `Rules:`, decline rule, skill line, then the other rules.
+- **Amendment 3 ships first.** It has measured evidence and the owner's decision. Amendment 2's build ticket (FRE-1617) is in `Needs Approval` at this date and is blocked by FRE-1616.
+- **The effect on Amendment 2's probe.** Amendment 2's baseline arm is "the current prompt" (2.3). When FRE-1617 runs, its baseline is the prompt that production runs at that date. If the trial is still running, or P2 was adopted, FRE-1617 runs its probe on both arms of this amendment and reports each one. "Prefer SINGLE" can already decline some skill-area queries, so the Amendment 2 gain can be smaller on the `p2` arm. That is correct: Amendment 2 must show a gain over the prompt that it is added to.
+
+### 3.4 — The switch and the arm
+
+1. **The setting.** `planner_decomposition_policy` (environment variable `AGENT_PLANNER_DECOMPOSITION_POLICY`), with the values `off`, `on` and `ab`. The code default is `off`.
+
+   | Value | Arm of each `planner_asked` turn |
+   |---|---|
+   | `off` | `baseline`: the prompt before this amendment |
+   | `on` | `p2`: the prompt with the block |
+   | `ab` | `baseline` or `p2`, chosen at random with probability 0.5 each, independently for each turn |
+
+2. **When the arm is chosen.** Once per turn, before the planner prompt is rendered, and only when `admit_single` is true. The arm decides the rendered prompt and nothing else: the same schema, the same mode, the same sampling and the same validation.
+3. **The record.** The terminal planner event (`planner_outcome`) gains `planner_policy_arm`: `baseline` or `p2` when `admit_single` is true, and null otherwise. It is set on every planner attempt, including `input_too_large`. The event already carries `planner_system_prompt_sha256` (D7), so the arm and the hash must agree on every event. The arm joins the turn's `route_traces` row on `trace_id`. The arm needs no new `route_traces` column, so the change needs no Postgres migration.
+4. **The prompt cache.** Under `ab`, consecutive planner calls can use two different system prompts. The prefix up to the block is shared. On this hybrid model, llama.cpp reuses a cache only from its live end state or a checkpoint, so a planner call that follows a call of the other arm may prefill its whole prompt again: at most about 1,000 tokens × 2.16 ms ≈ 2 s. That cost falls on whichever arm follows a switch, so it does not favour one arm.
+
+### 3.5 — The D7 position: the trial runs without a D7 run, and adoption needs one
+
+D7's requalification rule says that a new prompt hash needs a passing probe run before it ships. This amendment, approved by the owner, admits the `p2` hash for the trial only. The owner's earlier answer for the expand-correct row stays: keep every row, and decide a FAIL on that row only by a new amendment.
+
+**Why no D7 run before the trial.** Each D7 row either cannot fail from this change in a way that harms a turn, or it measures the trial's own question:
+
+| D7 row | Effect of the block, and why the trial does not need the run first |
+|---|---|
+| Plans that fail to parse: 0 | The schema line and validation do not change. A plan that fails to parse is a planner failure, and D2 returns the turn to the tool loop with no worker. So the worst case is a SINGLE turn. |
+| Reasoning characters: 0; completion tokens on declined calls: p50 at most 40 | The mode and the sampling do not change. A decline is the same short JSON. |
+| Declined call p50 at most 2 s; the long-history rows; the paired rows | The block adds about 200 static tokens. Cold, at 2.65 ms per token, that is about 0.5 s. The paired short split measured about 1.0 s against its 3 s limit. |
+| Decline-correct, follow-up decline-correct | The block pushes toward SINGLE. A drop here means the planner expands more, which costs time and shows in the trial's expansion rate and wall time. |
+| Expand-correct, follow-up expand-correct | This is the row that P2 can fail: production passes at 44 of 48 against a threshold of 43, and the block asks the planner to decline more. Whether those declines cost answer quality is the trial's question, on real traffic, which D7's fixtures cannot answer. |
+
+A revert is one `.env` line (3.6), and a failed plan falls back to SINGLE. So the trial can do less harm than a D7 run can prevent.
+
+**What the exception covers.** During the trial (from the deploy until the review closes, 3.8), live `planner_outcome` events carry two hashes: the baseline hash (the hash that production renders at the deploy, 3.10), and the `p2` hash of the same configuration. AC-10 accepts the `p2` hash only while the setting is `ab`, only during the trial, and only on this amendment. The pre-ship gain probe and the blind veto that the ADR session of 2026-10-18 designed are replaced by the trial. They do not run.
+
+**Adoption needs the D7 run.** Master sets `on`, makes `p2` the code default, or removes the switch, only after a D7 run of the `p2` prompt on the production configuration is posted on the adoption ticket. Every row must pass, with Amendment 1. If expand-correct is the only row that fails, `p2` is not adopted. The per-fixture result then goes to the owner, together with the trial data, and the owner decides by a new amendment (D7: "Only an amendment to this ADR, approved by the owner, can change a threshold or admit a deployment that missed one"). The probe's `render.py` already renders both arms (3.9), so the run needs no code change.
+
+### 3.6 — How to stop the trial
+
+- **Disable.** Set `AGENT_PLANNER_DECOMPOSITION_POLICY=off` in `.env`, then force-recreate `seshat-gateway`. No code change and no PR. With `off`, the planner prompt is byte-identical to the prompt before this amendment (AC A3-1).
+- **The owner's stop.** The owner can stop the trial at any time with "P2 off". Master applies it at once and reports. The owner authorized this revert in advance on 2026-10-19: "Easily disable it if the quality drops notably."
+- **The quality stop.** Master applies the same disable when the rule of 3.7 fires, at the day-7 check, at the review, or on any earlier read.
+- **Verification of a stop.** The next `planner_asked` turn's `planner_outcome` carries `planner_policy_arm = baseline` and the baseline hash.
+
+### 3.7 — The quality stop, with numbers
+
+**The turns.** The trial counts every `planner_asked` turn on the production deployment from the moment master sets `ab`, in the owner's sessions. Master excludes a turn that a seat sent (a live gateway probe), by its `trace_id`.
+
+**An owner-visible failure** on a counted turn is either of these:
+1. **No answer:** the turn has no Captain's Log capture with an assistant reply (a capture is written only for a completed turn), or the reply reports an error to the owner.
+2. **A re-ask:** the owner's next message in the same session, sent within 30 minutes of the reply, asks again for what the turn asked, or says that the reply is wrong or incomplete.
+
+**The labels are blind.** Master labels every counted turn from its capture and the owner's next message before master reads `planner_policy_arm`. Then master joins the arm on `trace_id`.
+
+**A notable drop** is both of these at once:
+- the `p2` arm has at least 3 failures; and
+- the `p2` arm's failure rate is at least 15 percentage points above the `baseline` arm's.
+
+Example: `p2` 3 of 8 (37.5%) against `baseline` 1 of 8 (12.5%) is 25 points, so the trial stops. `p2` 3 of 8 against `baseline` 2 of 8 is 12.5 points, so it continues. A notable drop stops the trial (3.6). Master posts the counts and the failed turns' `trace_id`s on FRE-1618.
+
+**Day 7.** Master runs the check 7 days after setting `ab`, and posts the counts per arm even if the rule does not fire.
+
+**Why these numbers.** At about one `planner_asked` turn per day (3.10), an arm holds about 4 turns at day 7. Below 3 failures, one bad day decides the result. The 15-point margin keeps an incident that hits both arms equally, such as an engine outage, from stopping the trial, because the two arms share the same days.
+
+### 3.8 — The review
+
+**When.** 14 days after master sets `ab`. The review needs at least 10 counted turns in each arm. If an arm has fewer, master posts the counts, and the trial runs 14 more days, once. At day 28, master reports what exists, and the owner decides.
+
+**What master reports, per arm.** From `route_traces` and `planner_outcome`, joined on `trace_id`:
+
+| Measure | Source |
+|---|---|
+| Counted turns | `route_traces.decomposition_reason = planner_asked`, with the arm from `planner_outcome.planner_policy_arm` |
+| Expansion rate | `planner_decision = expanded`, of the counted turns |
+| Turn wall time, median and total | `first_token_ms`. Nothing streams token by token today, so it measures the whole reply (Amendment 1, 1.1) |
+| Helper calls | the sum of `sub_agent_count` |
+| Owner-visible failures, by kind | 3.7 |
+| Planner failures | `planner_decision = failed`, by `planner_failure_reason` |
+
+**The decision.** The owner decides. Master's recommendation is "adopt" only if the quality stop did not fire and the `p2` arm's expansion rate is lower than the `baseline` arm's. Otherwise it is "do not adopt". Adoption then follows 3.5. "Do not adopt" sets `off`, and a later ticket removes the switch and the block.
+
+### 3.9 — The probe renders both arms
+
+`scripts/eval/fre1537/render.py` renders the planner system prompt for an arm: `baseline` or `p2`. The byte-identity test covers both arms. The pinned hashes of `tests/personal_agent/orchestrator/test_fre1549_reasoning_discipline.py` do not move, because the prompt without `admit_single` does not change. A new pin holds the `admit_single` prompt with the arm `baseline`, at the value that `main` renders before this amendment.
+
+### 3.10 — Limits, stated in advance
+
+- **The sample is small.** `planner_asked` went live on 2026-10-13. Up to 2026-10-19, production recorded 7 `planner_asked` turns in `route_traces`. In 14 days, ES recorded 49 `planner_outcome` events, and 39 of them fall on 2026-10-09 and 2026-10-10, which were model-testing days. So a 14-day trial gives about 7 turns per arm. That is why the review has a minimum count and one extension.
+- **Most trial turns take the same path in both arms.** The block changes the path only on a turn that the baseline would expand. In FRE-1615, PL expanded 6 of 21 asked tasks. So the trial can show only a large difference, and the review is a watch with a decision rule, not a statistical test.
+- **The failure labels are master's judgment** on the capture and the next message. The labels are blind to the arm, but a Claude model makes them.
+- **A re-ask after 30 minutes, or in a new session, is not counted.**
+- **The helper round cap changed before the trial.** Since 2026-10-19 05:27Z (owner), `AGENT_SUB_AGENT_MAX_TOOL_ITERATIONS` is 12, so every thoroughness level gets 12 rounds. FRE-1615 ran at 20. The cap applies to both arms, so the comparison inside the trial holds, but the trial's wall times cannot be compared with FRE-1615's.
+- **The baseline hash is not the D7-qualified hash.** The planner prompt renders the round budget that binds (D3), so the 12-round cap changed the rendered prompt and its hash at 05:27Z. The qualified hash (`ffe08113…`, FRE-1581 and FRE-1515) is the 20-round prompt. Under D7, that change is a routing change of its own. Its requalification is outside this amendment, and master records it on FRE-1618. The trial's baseline arm is the prompt that production renders at the deploy.
+
+### 3.11 — Alternatives considered
+
+**Ship P2 without a switch.** *Rejected:* the blind comparison went against P2 (4–0–2), and one draw cannot separate that result from noise. A switch makes the revert one `.env` line and lets both arms run in the same period.
+
+**Two weeks on, then two weeks off.** *Rejected:* the two periods hold different questions on different days. A 50/50 split gives both arms the same period (master, FRE-1618).
+
+**The pre-ship gain probe and the blind veto (the design of 2026-10-18).** *Replaced:* the veto fired on one draw, and the owner chose a live trial instead (Why). The gain probe tested planner decisions on fixtures, and the trial measures turns on real traffic.
+
+**Run D7 on the `p2` prompt before the trial.** *Rejected for the trial, kept for adoption* (3.5): the run needs a llama.cpp measurement window, the expand-correct row will probably fail by design, and no row protects the trial's turns from a harm that the switch and D2's fallback do not already cover.
+
+**Do not adopt P2.** *Rejected by the owner* on 2026-10-19, in favour of the trial.
+
+### 3.12 — Verification / Acceptance Criteria of this amendment
+
+| # | Criterion | How it is checked | It fails if |
+|---|---|---|---|
+| A3-1 | `off` restores the current prompt byte for byte. | A unit test renders the `admit_single` prompt with the setting `off`, and with the setting unset, and compares the SHA-256 with a pin taken from `main` before this change. The existing pins without `admit_single` stay unedited. | Either hash differs from its pin, an existing pin is edited, or the code default is not `off`. |
+| A3-2 | The `p2` prompt is the `baseline` prompt plus the block, and nothing else. | A unit test asserts that the `p2` prompt equals the `baseline` prompt with the block and one `\n` inserted directly before the first `Rules:\n`. Master compares the block constant with 3.1, word for word. A second test asserts that the block is absent without `admit_single`, in all three settings. | A character differs, the block is in another place, or the block appears without `admit_single`. |
+| A3-3 | The arm follows the setting, and the event records the arm that ran. | Unit tests: `off` gives only `baseline`, `on` only `p2`, and `ab` gives both. Over 1,000 choices with a fixed seed, the `p2` share is between 0.45 and 0.55. Each test reads `planner_outcome` and checks that `planner_policy_arm` matches `planner_system_prompt_sha256`. | An arm differs from its setting, the share is outside the range, or the arm and the hash disagree on any event. |
+| A3-4 | The probe renders both arms as production does. | The `render.py` byte-identity test, extended to both arms. | Either arm's render differs from production's. |
+| A3-5 | Live, both arms run and are recorded. | After master sets `ab`: `planner_outcome` of the first `planner_asked` turns, joined to `route_traces` on `trace_id`. | An event lacks `planner_policy_arm`, its hash does not match its arm, or no join exists. Fewer turns than needed for both arms is not a failure. Master reports it. |
+| A3-6 | The stops and the review run as stated. | Master's comments on FRE-1618 at day 7 and at the review, with the counts per arm of 3.7 and 3.8. A stop, when it happens, carries the turn that shows the baseline arm and the baseline hash. | A check or the review is missing, a count is missing, a notable drop does not lead to `off`, or `p2` reaches `on` without the D7 run of 3.5. |
+
+A3-1 to A3-4 belong to the build ticket. A3-5 and A3-6 are master's, after the deploy.
 
 ---
 

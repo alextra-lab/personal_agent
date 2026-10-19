@@ -2011,18 +2011,20 @@ class TestTypedPrefix:
 # FRE-1561 AC-1: the full default system prompt (base, budget mechanism, type block and the
 # separators between them), as unchanged origin/main code produced it. FRE-1580 (ADR-0156
 # D9.1) appends the worker's skill catalog after the type block; the pin covers what precedes it.
+# FRE-1619 appends one sentence (145 characters with its space) to the budget mechanism, so
+# both pins moved by that sentence only (was 2116 / 1180).
 def _before_skill_catalog(system: str) -> str:
     return system.split("\n\n## Skills", 1)[0]
 
 
 _MAIN_SYSTEM_PROMPT_FINGERPRINT = {
     WorkerType.RESEARCHER: (
-        2116,
-        "de436dddc4114227473fa8c4246f62e1c9b765beb06bfe85b4a0ee46493a1538",
+        2261,
+        "99e8da2e093ed53d0cbf5d3d2ecfa44dfe6d67ff415491f69c7df6eb60acbd05",
     ),
     WorkerType.GENERAL: (
-        1180,
-        "00b9e9dc3206ee6cae3a99c24d65c0b74de5dfb79eb6afea8686e6a55a7bbed7",
+        1325,
+        "946b50b4fcf0db180b621a0c1c64a62bfa5308dfea4f70773642abf334801b70",
     ),
 }
 
@@ -2076,7 +2078,9 @@ class TestResearcherMinSearchRounds:
         assert len(set(contents.values())) == 1
 
     @pytest.mark.asyncio
-    async def test_general_worker_ignores_the_setting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_general_worker_ignores_the_setting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from personal_agent.config import settings
 
         monkeypatch.setattr(settings, "sub_agent_researcher_min_search_rounds", 5)
@@ -2140,6 +2144,40 @@ class TestThoroughnessBinds:
         assert len(sent) == 3
         assert result.stop_reason == "cap"
         assert result.tool_iterations == 2
+
+
+_FEWEST_ROUNDS_SENTENCE = (
+    "The budget is a limit, not a target: use as few rounds as the task needs, and write "
+    "your report as soon as you hold enough to complete the task."
+)
+
+
+class TestFewestRounds:
+    """FRE-1619: the worker is told its cap of 12 and to use as few rounds as it can."""
+
+    @pytest.mark.parametrize("worker_type", list(WorkerType))
+    def test_system_prompt_carries_the_sentence_for_every_type(
+        self, worker_type: WorkerType
+    ) -> None:
+        from personal_agent.orchestrator.sub_agent import _build_sub_agent_system_prompt
+
+        system = _build_sub_agent_system_prompt(_typed_spec(worker_type, "standard"))
+
+        assert _FEWEST_ROUNDS_SENTENCE in system
+
+    @pytest.mark.parametrize("level", ["quick", "standard", "thorough"])
+    def test_task_message_states_a_budget_of_12_at_every_level(
+        self, monkeypatch: pytest.MonkeyPatch, level: Thoroughness
+    ) -> None:
+        from personal_agent.config import settings
+        from personal_agent.orchestrator.sub_agent import _build_task_message
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 12)
+        monkeypatch.setattr(settings, "sub_agent_rounds_by_thoroughness", {})
+
+        message = _build_task_message(_typed_spec(WorkerType.GENERAL, level), "t", None)
+
+        assert "You have a budget of 12 tool round(s)" in message
 
 
 class TestTaskMessage:

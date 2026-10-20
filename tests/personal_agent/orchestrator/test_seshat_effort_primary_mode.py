@@ -43,6 +43,9 @@ _FAST = {
     "gpt-6.1-sol",
     "claude_haiku_5_5",
 }
+# FRE-1628: the first entry to declare a deep mode (ADR-0157 D5, effort high).
+_DEEP = {"claude_haiku_5_5"}
+_DECLARED = {"fast": _FAST, "deep": _DEEP}
 
 
 @pytest.fixture
@@ -54,8 +57,12 @@ def level(request: pytest.FixtureRequest) -> Iterator[str]:
         reset_current_effort(token)
 
 
+def _declared_mode(level: str, key: str) -> str | None:
+    return level if key in _DECLARED.get(level, set()) else None
+
+
 def _expected(level: str, key: str) -> str:
-    return "fast" if level == "fast" and key in _FAST else "default"
+    return _declared_mode(level, key) or "default"
 
 
 def test_there_are_twelve_pickable_deployments() -> None:
@@ -63,8 +70,8 @@ def test_there_are_twelve_pickable_deployments() -> None:
     assert _FAST <= set(_PICKABLE)
 
 
-def test_no_deployment_declares_a_deep_mode() -> None:
-    assert all("deep" not in _CONFIG.models[k].modes for k in _PICKABLE)
+def test_only_the_listed_deployments_declare_a_deep_mode() -> None:
+    assert {k for k in _PICKABLE if "deep" in _CONFIG.models[k].modes} == _DEEP
 
 
 @pytest.mark.parametrize("key", _PICKABLE)
@@ -86,8 +93,7 @@ def test_the_vision_escalation_path_requests_the_level_mode(level: str, key: str
 @pytest.mark.parametrize("level", list(EFFORT_LEVELS), indirect=True)
 def test_an_undeclared_level_mode_requests_nothing(level: str, key: str) -> None:
     """The client keeps its own resolution, so a binding's mode is not overridden."""
-    expected = "fast" if level == "fast" and key in _FAST else None
-    assert primary_mode_for(key) == expected
+    assert primary_mode_for(key) == _declared_mode(level, key)
 
 
 @pytest.mark.parametrize("key", _PICKABLE)

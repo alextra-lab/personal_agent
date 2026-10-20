@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import structlog
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from personal_agent.exceptions import SeshatEffortConfigError
@@ -280,7 +280,7 @@ def rounds_for_turn(level: Thoroughness) -> int:
     return spec_rounds(get_current_effort(), level)
 
 
-def effective_primary_mode(spec: EffortSpec | None, model_def: ModelDefinition) -> str:
+def effective_primary_mode(spec: EffortSpec | None, model_def: ModelDefinition) -> str | None:
     """Return the catalog mode that the answering deployment runs on this turn (ADR-0157 D5).
 
     Args:
@@ -288,7 +288,8 @@ def effective_primary_mode(spec: EffortSpec | None, model_def: ModelDefinition) 
         model_def: The answering deployment's catalog definition.
 
     Returns:
-        The level's mode when the deployment declares it, else its ``default_mode``. No warning
+        The level's mode when the deployment declares it, else its ``default_mode`` (``None``
+        only for a definition without modes). No warning
         is logged on the fallback: it is the designed case (Deep declares on no model at this
         date).
     """

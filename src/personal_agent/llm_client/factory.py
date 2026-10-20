@@ -284,8 +284,6 @@ def get_llm_client_for_key(model_key: str, *, budget_role: str, mode: str | None
     if mode is not None:
         from personal_agent.config.model_loader import with_requested_mode
 
-        model_def = with_requested_mode(
-            model_def, mode, role=budget_role, deployment_key=model_key
-        )
+        model_def = with_requested_mode(model_def, mode, role=budget_role, deployment_key=model_key)
 
     return _build_client(model_key, model_def, budget_role, config)

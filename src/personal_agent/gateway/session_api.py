@@ -16,6 +16,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from personal_agent.config.seshat_effort import EffortLevel, hydrate_effort
 from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
@@ -23,7 +24,6 @@ from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition, ProviderDefinition
 from personal_agent.memory.session_digest import SessionDigestView
 from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
-from personal_agent.config.seshat_effort import EffortLevel, hydrate_effort
 from personal_agent.service.models import SessionEffortUpdate, SessionSelectionUpdate
 from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 

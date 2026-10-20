@@ -1073,6 +1073,17 @@ class LiteLLMClient:
             return
         litellm_kwargs["reasoning_effort"] = effort
 
+    def _mode_name(self) -> str | None:
+        """Return the catalog mode this client requests (ADR-0157 D8).
+
+        ``with_requested_mode`` writes a requested mode into the definition's
+        ``default_mode``, so that field is the mode the call resolves.
+
+        Returns:
+            The mode name, or ``None`` for a client built without a catalog definition.
+        """
+        return self.model_def.default_mode if self.model_def is not None else None
+
     async def respond(
         self,
         role: ModelRole,
@@ -1684,6 +1695,8 @@ class LiteLLMClient:
             # reports cost_usd without naming the lane it was billed to
             # cannot answer a per-role cost question on its own.
             "budget_role": self.budget_role,
+            # ADR-0157 D8: the catalog mode of the call.
+            "mode": self._mode_name(),
         }
         if _reasoning_tokens is not None:
             _extra["reasoning_tokens"] = _reasoning_tokens
@@ -2192,6 +2205,8 @@ class LiteLLMClient:
                         "reasoning_content_chars": len(_reasoning_trace),
                         # FRE-1602: 1 for a clean call, 2 after a transport retry.
                         "attempts": attempts,
+                        # ADR-0157 D8: the catalog mode of the call.
+                        "mode": self._mode_name(),
                     },
                 )
                 duration_ms = int((time.monotonic() - dispatch_start) * 1000)

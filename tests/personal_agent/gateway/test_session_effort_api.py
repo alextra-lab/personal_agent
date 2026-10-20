@@ -38,6 +38,12 @@ class TestPatchEffort:
     def test_a_patch_writes_the_level_scoped_to_the_user_and_notifies_the_socket(self) -> None:
         db = AsyncMock()
         model = _session("standard")
+
+        async def _refresh(row: MagicMock) -> None:
+            # What the database holds after the UPDATE.
+            row.seshat_effort = db.execute.await_args.args[0].compile().params["seshat_effort"]
+
+        db.refresh = AsyncMock(side_effect=_refresh)
         get_mock = AsyncMock(return_value=model)
         with ExitStack() as stack:
             stack.enter_context(_patched_user_resolver())
@@ -55,7 +61,9 @@ class TestPatchEffort:
         assert resp.json()["seshat_effort"] == "fast"
         assert resp.json()["effort_provenance"] == "server-hydrated"
         assert get_mock.await_args.kwargs.get("user_id") == _TEST_USER_ID
-        assert model.seshat_effort == "fast"
+        update = db.execute.await_args.args[0].compile()
+        assert update.params["seshat_effort"] == "fast"
+        assert _TEST_USER_ID in update.params.values()  # the write is scoped to the owner
         db.commit.assert_awaited()
         emit.assert_awaited_once_with(session_id=str(model.session_id), seshat_effort="fast")
 
@@ -74,6 +82,7 @@ class TestPatchEffort:
                 )
 
         assert resp.status_code == 404
+        db.execute.assert_not_awaited()
         db.commit.assert_not_awaited()
         emit.assert_not_awaited()
 

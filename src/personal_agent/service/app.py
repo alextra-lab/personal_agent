@@ -2288,9 +2288,8 @@ async def _chat_impl(
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         # ADR-0157 D2: an existing session's stored level wins; a sent level is ignored.
-        effort_level, effort_provenance = hydrate_effort(getattr(session, "seshat_effort", None))
-        if effort_provenance == "server-hydrated":
-            effort_provenance = "stored"
+        effort_level, hydrated = hydrate_effort(getattr(session, "seshat_effort", None))
+        effort_provenance = "stored" if hydrated == "server-hydrated" else "default"
     else:
         primary_model_id, config_path_str = _resolve_active_model_attribution(
             trace_id=trace_id,
@@ -2719,7 +2718,7 @@ async def chat_stream_endpoint(
     message: str = Form(...),
     session_id: str = Form(...),
     primary_selection: str | None = Form(default=None),
-    seshat_effort: EffortLevel | None = Form(default=None),
+    seshat_effort: EffortLevel | None = Form(default=None),  # noqa: B008
     client_msg_id: str | None = Form(default=None),
     attachments: str | None = Form(default=None),
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008

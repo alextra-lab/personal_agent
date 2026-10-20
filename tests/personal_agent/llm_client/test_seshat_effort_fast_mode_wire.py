@@ -116,3 +116,19 @@ class TestTheCatalog:
         raw["models"][key]["modes"]["fast"] = fast
         with pytest.raises(ValueError, match="fast"):
             ModelConfig.model_validate(raw)
+
+
+class TestModelCallCompletedNamesTheMode:
+    """ADR-0157 D8: ``model_call_completed.extra.mode`` on the local and the cloud branch."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key", ["qwen3.8-flash-next", "claude_sonnet"])
+    async def test_the_event_carries_the_mode_of_the_call(self, key: str) -> None:
+        import structlog.testing
+
+        with structlog.testing.capture_logs() as logs:
+            _, mode = await _dispatch_primary_as(key)
+
+        (event,) = [e for e in logs if e.get("event") == "model_call_completed"]
+        assert mode == "fast"
+        assert event["mode"] == "fast"

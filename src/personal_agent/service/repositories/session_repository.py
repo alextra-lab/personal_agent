@@ -121,7 +121,11 @@ class SessionRepository:
         session = await self.get(session_id, user_id=user_id)
         if session is None:
             return None
-        session.seshat_effort = seshat_effort
+        await self.db.execute(
+            update(SessionModel)
+            .where(SessionModel.session_id == session_id, SessionModel.user_id == user_id)
+            .values(seshat_effort=seshat_effort)
+        )
         await self.db.commit()
         await self.db.refresh(session)
         return session

@@ -97,6 +97,14 @@ def _config_dict() -> dict[str, Any]:
     return load_model_config().model_dump()
 
 
+def test_the_remote_cost_map_is_off() -> None:
+    """The ticket's premise: ``LITELLM_LOCAL_MODEL_COST_MAP`` is in force, so no fetch ran."""
+    from litellm.litellm_core_utils.get_model_cost_map import _cost_map_source_info
+
+    assert _cost_map_source_info.is_env_forced is True
+    assert _cost_map_source_info.source == "local"
+
+
 def test_bundled_map_carries_the_new_models() -> None:
     """The premise of the offline tests: litellm's own map knows all four models."""
     for model in ("gpt-6-luna", "gpt-6.1-sol", "claude-haiku-5-5", "claude-sonnet-5-5"):
@@ -409,6 +417,40 @@ class TestSolCatalogRefusals:
         definition = load_model_config().models["gpt-6.1-sol"]
         assert definition.resolve_mode().reasoning_effort == "medium"
         assert definition.resolve_mode("worker").reasoning_effort == "low"
+
+
+class TestLocalPathRefusesTheBridgeToo:
+    """Codex review (FRE-1625): ``_respond_local`` is a second dispatch site.
+
+    The global flag and a ``responses/`` id prefix both make litellm route an
+    ``openai/*`` call to the Responses API, whose async bridge drops the guarded
+    client. Both need an environment or catalog change, so neither is reachable
+    today, but the refusal must not depend on which client path a model takes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_global_responses_flag_is_refused_on_the_local_stream_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.personal_agent.llm_client.test_local_via_litellm import (
+            BUDGET_KEY,
+            Captured,
+            _dispatch,
+        )
+
+        monkeypatch.setattr(litellm, "route_all_chat_openai_to_responses", True)
+        captured = Captured()
+        with pytest.raises(LLMClientError, match="Responses API bridge"):
+            await _dispatch(model_key=BUDGET_KEY, capture=captured)
+        assert captured.urls == [], "the request must not leave"
+
+    @pytest.mark.asyncio
+    async def test_without_the_flag_the_local_stream_path_still_dispatches(self) -> None:
+        """The positive control: the same harness sends when the route is chat."""
+        from tests.personal_agent.llm_client.test_local_via_litellm import BUDGET_KEY, _dispatch
+
+        captured = await _dispatch(model_key=BUDGET_KEY)
+        assert len(captured.urls) == 1
 
 
 class TestFastModes:

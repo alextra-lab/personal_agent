@@ -236,7 +236,13 @@ class MCPClientWrapper:
                 # mcp_call_failed in the gateway.
                 if e.code != INVALID_PARAMS and _JSONRPC_RESERVED_MIN <= e.code <= -32000:
                     raise
-                log.error("mcp_tool_returned_error", tool=name, error=e.message, trace_id=trace_id)
+                log.error(
+                    "mcp_tool_returned_error",
+                    tool=name,
+                    error=e.message,
+                    jsonrpc_code=e.code,
+                    trace_id=trace_id,
+                )
                 raise MCPToolError(
                     "mcp_tool_error",
                     f"MCP tool '{name}' returned an error: {e.message}",

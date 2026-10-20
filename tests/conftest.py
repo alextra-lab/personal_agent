@@ -26,6 +26,10 @@ os.environ.setdefault("AGENT_SUBSTRATE_PROFILE", "test")
 # never make the suite write prompt captures into the real telemetry/ tree. A test
 # that exercises capture turns it on itself and points the root at tmp_path.
 os.environ["AGENT_PROMPT_DEBUG_CAPTURE_ENABLED"] = "false"
+# FRE-1625: forced, not setdefault. litellm reads its cost map once, at import: unset, it
+# fetches the remote map (a failed fetch plus a background retry offline, a map that changes
+# under the tests online). The bundled map of the pinned release is the deterministic one.
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 # FRE-808: the app-under-test connects as the restricted, non-superuser
 # `seshat_app` role; admin/DDL fixtures (migration tests, full-init.sql parity)
 # use AGENT_DATABASE_ADMIN_URL (the `agent` superuser). Both point at the test

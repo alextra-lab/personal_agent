@@ -2091,6 +2091,11 @@ class LiteLLMClient:
             litellm_kwargs["tool_choice"] = tool_choice if tool_choice else "auto"
             if model_def.parallel_tool_calls:
                 litellm_kwargs["parallel_tool_calls"] = True
+        # FRE-1625 (Codex review): the same two checks as the cloud path, because this is a
+        # second dispatch site. The global Responses flag or a `responses/` id prefix would
+        # route this call to the bridge that drops the guarded client.
+        _gate_model_effort_domain(self.model_def, dialect, litellm_kwargs)
+        _refuse_unguarded_responses_bridge(litellm_kwargs, trace_id=trace_id)
 
         async with get_inference_concurrency_controller().request_slot(
             role=self.model_key,

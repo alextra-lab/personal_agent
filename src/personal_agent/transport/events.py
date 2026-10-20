@@ -23,9 +23,12 @@ class Phase(str, Enum):
 
     Members:
         PLANNING: The first primary-inference round of a turn — the model
-            deciding what to do (``step_planning_started``, ADR §2).
+            deciding what to do (``step_planning_started``, ADR §2). Also the
+            expansion planner call, which runs before any sub-agent (FRE-1634).
         SYNTHESIS: A post-tool primary-inference round — the model writing the
             response from gathered results (ADR §2 "final synthesis inference").
+            Also the primary call after a sub-agent fan-out, with detail
+            ``helpers`` when the worker reports were appended (FRE-1634).
         ARTIFACT_BUILD: The artifact-draft sub-agent HTML build (the multi-minute
             silence of the measured turn two).
         EXPANSION: The parent phase spanning a concurrent sub-agent fan-out.

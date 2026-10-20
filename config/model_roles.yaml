@@ -85,7 +85,11 @@ bindings:
     default_timeout: 600  # FRE-1496: committed baseline, 90s was cutting calls that legitimately run 25-65s
     open: true
     priority: ELEVATED
+  # FRE-1628 (2026-10-20): gpt-6-luna failed 2 of 8 bars against a same-day gpt-5.4-mini
+  # control (FRE-630 harness): empty_fallback 0.08 vs 0.00, claim_case recall 1/12 vs 3/12.
   entity_extraction:  { deployment: gpt-5.4-mini }
+  # FRE-1628: claude_haiku_5_5 was not worse on 7 of 10 blind pairs; the bar was 8
+  # (scripts/eval/fre1628_captains_log_ab).
   captains_log:       { deployment: claude_sonnet }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads the whole
   # conversation — the user's own text and the assistant's responses — so this
@@ -96,6 +100,8 @@ bindings:
   # and Amendment B (2026-07-24, summariser is conversation-ONLY — tool metadata
   # removed entirely) had already made false. The binding is still the egress
   # decision because the conversation itself is what egresses.
+  # FRE-1628: claude_haiku_5_5 failed AC-12 of session_digest_eval.py (2 schema_invalid
+  # digests, recall 7/8), which a same-day Sonnet control passed.
   session_summary:    { deployment: claude_sonnet }
   insights:           { deployment: claude_sonnet }
   compressor:         { deployment: gpt-5.4-mini }
@@ -111,6 +117,8 @@ bindings:
   # bounded by extraction recall, which is why the stronger model is the right default
   # here and why the cheaper one is a deliberate downgrade rather than a saving.
   # Reproduce either figure with harness.py --model-key.
+  # FRE-1628: claude_haiku_5_5 met 10/16 (precision 0.758, prose_in_fence 0.733); 62 of 156
+  # documents degraded on unanchored quotes, against about 1.7% for Sonnet in production.
   span_extraction:    { deployment: claude_sonnet }
   # ADR-0138 D3(d) (FRE-1286): the entailment judge. Bound to claude_sonnet because the
   # ADR names the failure mode directly when rejecting Option 5 — "requires the

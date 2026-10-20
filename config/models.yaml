@@ -739,6 +739,7 @@ models:
 
   gpt-6-luna:
     # OpenAI GPT-6 Luna (FRE-1621, FRE-1625). Replacement candidate for gpt-5.4-mini; binds no role yet.
+    # FRE-1628 measured it on entity_extraction and as eval judge 2; neither passed its bar.
     # Chat Completions takes temperature, and tool calls, only at reasoning_effort none.
     # Needs litellm >= 1.104 (1.98.0 rejected reasoning_effort on every gpt-6 model).
     id: "gpt-6-luna"
@@ -795,6 +796,7 @@ models:
 
   claude_haiku_5_5:
     # Anthropic Claude Haiku 5.5 (FRE-1621, FRE-1625). Replacement candidate for claude_haiku; binds no role yet.
+    # FRE-1628 measured it on span_extraction, session_summary and captains_log; none passed its bar.
     # Rejects temperature/top_p/top_k and budget_tokens thinking, so the dialect is adaptive.
     id: "claude-haiku-5-5"
     provider: "anthropic"

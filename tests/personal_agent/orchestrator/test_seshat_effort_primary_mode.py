@@ -1,8 +1,8 @@
 """FRE-1622 (ADR-0157 D5): the answering model runs the level's mode, else ``default`` (AC-4).
 
 Both client paths: the session's primary through ``get_llm_client``, and the vision escalation
-through ``get_llm_client_for_key``. The twelve pickable deployments (nine, plus the three that FRE-1625 added) are every ``kind: llm`` entry
-of the shipped catalog (``is_selectable_binding`` for the open ``primary`` role).
+through ``get_llm_client_for_key``. The thirteen pickable deployments (nine, plus the three that FRE-1625 added, plus the one that
+FRE-1631 added) are every ``kind: llm`` entry of the shipped catalog (``is_selectable_binding`` for the open ``primary`` role).
 """
 
 from __future__ import annotations

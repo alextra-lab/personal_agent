@@ -132,13 +132,17 @@ class RouteTraceRow:
         first_token_ms: Request receipt to the first user-visible push. Written by a
             conditional ``UPDATE`` after the push, so the seam's insert leaves it
             ``None``.
+        seshat_effort: The turn's Seshat effort level (ADR-0157 D8); ``None`` outside a
+            chat entry path.
+        primary_mode: The catalog mode the answering deployment requested: the session's
+            primary, or the vision deployment on an escalated turn (ADR-0157 D8).
     """
 
     trace_id: UUID
     session_id: UUID | None
     task_id: UUID | None = None
     created_at: datetime | None = None
-    schema_version: int = 3
+    schema_version: int = 4
 
     # Stimulus (PII-gated)
     user_message_chars: int = 0
@@ -215,3 +219,7 @@ class RouteTraceRow:
     expansion_budget: int | None = None
     synthesis_appended: bool | None = None
     first_token_ms: float | None = None
+
+    # ADR-0157 D8 (FRE-1622): the turn's Seshat effort level and the primary's catalog mode
+    seshat_effort: str | None = None
+    primary_mode: str | None = None

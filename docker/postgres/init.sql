@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS route_traces (
     session_id UUID,
     task_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    schema_version SMALLINT NOT NULL DEFAULT 3,
+    schema_version SMALLINT NOT NULL DEFAULT 4,
 
     -- Stimulus (PII-gated)
     user_message_chars INTEGER NOT NULL DEFAULT 0,
@@ -217,6 +217,12 @@ CREATE TABLE IF NOT EXISTS route_traces (
     expansion_budget INTEGER,
     synthesis_appended BOOLEAN,
     first_token_ms REAL,
+
+    -- ADR-0157 D8 (FRE-1622): the turn's Seshat effort level and the catalog mode the
+    -- answering deployment requested. NULL outside a chat entry path. Mirrors
+    -- docker/postgres/migrations/0035_route_trace_seshat_effort.sql.
+    seshat_effort VARCHAR(16),
+    primary_mode VARCHAR(40),
 
     -- ADR-0088 seam key (FRE-513): per-topology idempotency. NULLS NOT DISTINCT so the
     -- turn-level write (task_id NULL) still collapses to one row per trace_id.

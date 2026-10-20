@@ -96,7 +96,7 @@ def build_topology_doc(row: RouteTraceRow, *, topology: str) -> dict[str, Any]:
 
 
 def _add_planner_fields(doc: dict[str, Any], row: RouteTraceRow) -> None:
-    """Add the ADR-0154 D6 fields to ``doc`` (FRE-1512), omitting every ``None``.
+    """Add the ADR-0154 D6 and ADR-0157 D8 fields to ``doc``, omitting every ``None``.
 
     Segment rows leave all of them unset, so none reaches a segment document.
 
@@ -110,6 +110,9 @@ def _add_planner_fields(doc: dict[str, Any], row: RouteTraceRow) -> None:
         "planner_deployment",
         "planner_mode",
         "planner_gate_reason",
+        # ADR-0157 D8 (FRE-1622)
+        "seshat_effort",
+        "primary_mode",
     ):
         value = getattr(row, name)
         if value is not None:

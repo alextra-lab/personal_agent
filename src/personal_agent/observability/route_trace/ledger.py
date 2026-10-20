@@ -61,7 +61,8 @@ _INSERT_SQL = """
         planner_reasoning_chars, planner_duration_ms,
         planner_prompt_tokens, planner_completion_tokens, planner_input_chars,
         planner_gate_reason, conversation_history_chars, expansion_budget,
-        synthesis_appended, first_token_ms
+        synthesis_appended, first_token_ms,
+        seshat_effort, primary_mode
     ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8, $9,
@@ -81,7 +82,8 @@ _INSERT_SQL = """
         $48, $49,
         $50, $51, $52::jsonb,
         $53, $54, $55,
-        $56, $57
+        $56, $57,
+        $58, $59
     )
     ON CONFLICT (trace_id, task_id) DO NOTHING
 """
@@ -306,6 +308,8 @@ class RouteTraceLedger:
                 row.expansion_budget,
                 row.synthesis_appended,
                 row.first_token_ms,
+                row.seshat_effort,
+                row.primary_mode,
             )
         log.debug(
             "route_trace_written",
@@ -492,6 +496,8 @@ def _row_from_record(record: asyncpg.Record) -> RouteTraceRow:
         expansion_budget=record["expansion_budget"],
         synthesis_appended=record["synthesis_appended"],
         first_token_ms=record["first_token_ms"],
+        seshat_effort=record["seshat_effort"],
+        primary_mode=record["primary_mode"],
     )
 
 

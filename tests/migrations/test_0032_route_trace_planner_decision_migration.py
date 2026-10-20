@@ -4,7 +4,7 @@ Two ephemeral schemas in the test-stack Postgres:
 
 * schema A holds ``route_traces`` built from the ``CREATE TABLE`` statement in ``init.sql``;
 * schema B holds ``route_traces`` built from the ordered migration chain
-  (0009, 0010, 0031, 0032).
+  (0009, 0010, 0031, 0032, and 0035 for ADR-0157 D8, FRE-1622).
 
 AC-1: applying 0032 twice raises no error, and the two schemas have the same columns,
 types, lengths, nullability and defaults. Skips cleanly if the test stack is not running
@@ -31,6 +31,7 @@ _CHAIN = (
     "0010_route_trace_topology_key.sql",
     "0031_route_trace_pause_instrumentation.sql",
     "0032_route_trace_planner_decision.sql",
+    "0035_route_trace_seshat_effort.sql",
 )
 
 NEW_COLUMNS = {
@@ -48,6 +49,8 @@ NEW_COLUMNS = {
     "expansion_budget",
     "synthesis_appended",
     "first_token_ms",
+    "seshat_effort",
+    "primary_mode",
 }
 
 _COLUMNS_SQL = """
@@ -112,14 +115,19 @@ async def test_migration_chain_matches_init_sql(two_schemas) -> None:
 
 
 @pytest.mark.asyncio
-async def test_migration_0032_is_idempotent(two_schemas) -> None:
-    """Applying 0032 a second time raises no error and changes nothing."""
+@pytest.mark.parametrize(
+    "migration", ["0032_route_trace_planner_decision.sql", "0035_route_trace_seshat_effort.sql"]
+)
+async def test_migration_0032_is_idempotent(two_schemas, migration: str) -> None:
+    """Applying 0032 (or 0035, FRE-1622) a second time raises no error and changes nothing."""
     conn, _schema_a, schema_b = two_schemas
     await conn.execute(f"SET search_path TO {schema_b}")
-    for name in _CHAIN:
+    # The chain up to and including `migration`: a later migration moves the
+    # schema_version default on, so re-running an earlier one after it is not a no-op.
+    for name in _CHAIN[: _CHAIN.index(migration) + 1]:
         await conn.execute((_MIGRATIONS / name).read_text())
     before = await _columns(conn, schema_b)
 
     await conn.execute(f"SET search_path TO {schema_b}")
-    await conn.execute((_MIGRATIONS / _CHAIN[-1]).read_text())
+    await conn.execute((_MIGRATIONS / migration).read_text())
     assert await _columns(conn, schema_b) == before

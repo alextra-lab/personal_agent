@@ -216,7 +216,8 @@ def _build_planner_system_prompt(
         effort: The turn's Seshat effort spec (ADR-0157 D3 item 2). Its round budget is the
             number each level line renders, and a ``p2`` ``planner_policy`` adds the D6 block
             when ``admit_single`` is true. ``None`` reads the turn's spec
-            (:func:`~personal_agent.config.seshat_effort.get_current_effort`).
+            (:func:`~personal_agent.config.seshat_effort.get_current_effort`); outside a chat
+            turn there is none, and the prompt is the ``baseline`` one at the global budget.
 
     Returns:
         The complete planner system prompt. It carries ``_PLANNER_BRIEFING_RULES``
@@ -287,7 +288,8 @@ def _build_planner_system_prompt(
     prompt = f"{prompt}\n{briefing_rules}"
     if admit_single:
         # ADR-0157 D6: the P2 block, then one blank line, directly before the heading.
-        policy_block = _P2_DECOMPOSITION_POLICY + "\n" if spec.planner_policy == "p2" else ""
+        p2 = spec is not None and spec.planner_policy == "p2"
+        policy_block = _P2_DECOMPOSITION_POLICY + "\n" if p2 else ""
         prompt = prompt.replace(
             _PLANNER_SCHEMA_STRATEGY, _PLANNER_SCHEMA_STRATEGY_WITH_DECLINE, 1
         ).replace(
@@ -779,7 +781,7 @@ def planner_outcome_fields(
     completion_tokens: int | None,
     input_chars: Mapping[str, int],
     system_prompt_sha256: str | None,
-    seshat_effort: EffortLevel,
+    seshat_effort: EffortLevel | None,
     planner_policy: PlannerPolicy | None,
 ) -> dict[str, object]:
     """Build the fields of the one terminal planner event (ADR-0154 D5, ADR-0147 D5).
@@ -805,7 +807,7 @@ def planner_outcome_fields(
         input_chars: Characters of each planner input (ADR-0154 D6).
         system_prompt_sha256: SHA-256 hex of the rendered system prompt (ADR-0154 D7);
             ``None`` when it was never rendered.
-        seshat_effort: The turn's Seshat effort level (ADR-0157 D8).
+        seshat_effort: The turn's Seshat effort level (ADR-0157 D8); ``None`` outside a chat turn.
         planner_policy: The policy of the rendered prompt: ``baseline`` or ``p2`` on a D2 turn
             (``admit_single``), else ``None``. ``None`` too when no prompt was rendered, so the
             value always agrees with ``system_prompt_sha256`` (ADR-0157 D8).
@@ -1366,7 +1368,11 @@ class ExpansionController:
             )
             input_chars["system"] = len(planner_system_prompt)
             system_prompt_sha256 = hashlib.sha256(planner_system_prompt.encode()).hexdigest()
-            planner_policy = effort.planner_policy if may_decline else None
+            planner_policy = (
+                (effort.planner_policy if effort is not None else "baseline")
+                if may_decline
+                else None
+            )
             # ADR-0154 D1: the query is never cut, and the history receives what the bound
             # leaves. The last message is dropped when it is the current query (see
             # planner_history_text), so it is not rendered twice.
@@ -1602,7 +1608,7 @@ class ExpansionController:
                     completion_tokens=completion_tokens,
                     input_chars=input_chars,
                     system_prompt_sha256=system_prompt_sha256,
-                    seshat_effort=effort.level,
+                    seshat_effort=effort.level if effort is not None else None,
                     planner_policy=planner_policy,
                 ),
                 trace_id=trace_id,

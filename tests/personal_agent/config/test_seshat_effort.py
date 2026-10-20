@@ -138,17 +138,18 @@ class TestTheRefusals:
 
 
 class TestThePerTurnSpec:
-    def test_without_a_set_spec_the_default_level_applies(self) -> None:
-        assert get_current_effort() == effort_spec(None)
-        assert get_current_effort().level == "standard"
+    def test_without_a_set_spec_there_is_none(self) -> None:
+        assert get_current_effort() is None
+        assert effort_spec(None).level == "standard"
 
     def test_a_set_spec_is_read_back_and_reset(self) -> None:
         token = set_current_effort(effort_spec("deep"))
         try:
-            assert get_current_effort().level == "deep"
+            current = get_current_effort()
+            assert current is not None and current.level == "deep"
         finally:
             reset_current_effort(token)
-        assert get_current_effort().level == "standard"
+        assert get_current_effort() is None
 
     def test_the_spec_is_frozen(self) -> None:
         spec = effort_spec("deep")
@@ -165,14 +166,18 @@ class TestThePerTurnSpec:
             async def turn() -> str:
                 started.set()
                 await release.wait()
-                return get_current_effort().level
+                current = get_current_effort()
+                assert current is not None
+                return current.level
 
             set_current_effort(effort_spec("fast"))
             task = asyncio.create_task(turn())
             await started.wait()
             set_current_effort(effort_spec("deep"))
             release.set()
-            return await task, get_current_effort().level
+            outer = get_current_effort()
+            assert outer is not None
+            return await task, outer.level
 
         assert asyncio.run(scenario()) == ("fast", "deep")
 
@@ -196,6 +201,12 @@ class TestThePerTurnSpec:
             assert rounds_for_turn("standard") == 30
         finally:
             reset_current_effort(token)
+
+    def test_outside_a_turn_rounds_for_turn_is_the_global_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(get_settings(), "sub_agent_max_tool_iterations", 7)
+        assert rounds_for_turn("standard") == 7
 
     def test_effort_spec_is_an_effort_spec(self) -> None:
         assert isinstance(effort_spec("fast"), EffortSpec)

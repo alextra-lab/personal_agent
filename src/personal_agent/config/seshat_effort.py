@@ -9,6 +9,11 @@ and carries it through the turn in an async-safe context variable, the same mech
 it is created, so a level change during a turn never reaches that turn (ADR-0079 invariant 7),
 and the helpers, which run in tasks that the turn creates, read the turn's spec.
 
+Outside a chat turn no spec is set (a scheduled job, a script, a test that drives one function).
+Every reader then keeps the behavior from before ADR-0157: the global round budget, the
+``baseline`` planner prompt, expansion as the global settings allow, and the deployment's
+``default_mode``. Both chat entry paths always set a spec (ADR-0157 D2 rule 7).
+
 These readers take the spec, not the global settings (ADR-0157 D3):
 
 1. the decomposition step (``expansion``);
@@ -188,8 +193,7 @@ def effort_spec(level: EffortLevel | None) -> EffortSpec:
     return config.levels[level if level is not None else config.default_level]
 
 
-#: The spec of the current turn. ``None`` outside a chat turn; :func:`get_current_effort` then
-#: returns the default level's spec.
+#: The spec of the current turn. ``None`` outside a chat turn.
 _current_effort: contextvars.ContextVar[EffortSpec | None] = contextvars.ContextVar(
     "current_effort", default=None
 )
@@ -207,15 +211,14 @@ def set_current_effort(spec: EffortSpec) -> contextvars.Token[EffortSpec | None]
     return _current_effort.set(spec)
 
 
-def get_current_effort() -> EffortSpec:
+def get_current_effort() -> EffortSpec | None:
     """Return the spec of the current turn.
 
     Returns:
-        The spec set at turn launch, else the spec of ``default_level`` (a caller outside a chat
-        turn, such as the probe renderer or a test).
+        The spec set at turn launch, or ``None`` outside a chat turn. A reader then keeps the
+        behavior from before ADR-0157 (see the module docstring).
     """
-    spec = _current_effort.get()
-    return spec if spec is not None else effort_spec(None)
+    return _current_effort.get()
 
 
 def reset_current_effort(token: contextvars.Token[EffortSpec | None]) -> None:
@@ -227,18 +230,18 @@ def reset_current_effort(token: contextvars.Token[EffortSpec | None]) -> None:
     _current_effort.reset(token)
 
 
-def spec_rounds(spec: EffortSpec, level: Thoroughness) -> int:
+def spec_rounds(spec: EffortSpec | None, level: Thoroughness) -> int:
     """Return the helper round budget of a spec for one thoroughness level (ADR-0157 D3).
 
     Args:
-        spec: The level's spec.
+        spec: The level's spec, or ``None`` outside a chat turn.
         level: The task's thoroughness level.
 
     Returns:
         The spec's ``sub_agent_rounds``, else the global ``sub_agent_rounds_for(level)``. Only a
         level without expansion has no rounds, and such a level starts no helper.
     """
-    if spec.sub_agent_rounds is not None:
+    if spec is not None and spec.sub_agent_rounds is not None:
         return spec.sub_agent_rounds
     from personal_agent.config import get_settings  # noqa: PLC0415
 
@@ -257,11 +260,11 @@ def rounds_for_turn(level: Thoroughness) -> int:
     return spec_rounds(get_current_effort(), level)
 
 
-def effective_primary_mode(spec: EffortSpec, model_def: ModelDefinition) -> str:
+def effective_primary_mode(spec: EffortSpec | None, model_def: ModelDefinition) -> str:
     """Return the catalog mode that the answering deployment runs on this turn (ADR-0157 D5).
 
     Args:
-        spec: The turn's spec.
+        spec: The turn's spec, or ``None`` outside a chat turn.
         model_def: The answering deployment's catalog definition.
 
     Returns:
@@ -269,6 +272,6 @@ def effective_primary_mode(spec: EffortSpec, model_def: ModelDefinition) -> str:
         is logged on the fallback: it is the designed case (Deep declares on no model at this
         date).
     """
-    if spec.primary_mode is not None and spec.primary_mode in model_def.modes:
+    if spec is not None and spec.primary_mode is not None and spec.primary_mode in model_def.modes:
         return spec.primary_mode
     return model_def.default_mode

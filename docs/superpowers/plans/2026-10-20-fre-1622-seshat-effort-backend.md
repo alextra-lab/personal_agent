@@ -15,8 +15,11 @@
   `config/selection.py`. Each `asyncio.Task` copies the context, so a `PATCH` during a turn does not
   change that turn (ADR-0079 invariant 7). The helpers run in tasks that the turn task creates, so
   they inherit the spec.
-- `get_current_effort()` returns the spec of `default_level` when no spec is set. This covers
-  callers outside a chat turn (tests, scripts, the probe renderer). The chat paths always set it.
+- `get_current_effort()` returns `None` when no spec is set (outside a chat turn: scheduled jobs,
+  scripts, unit tests that drive one function). Every reader then keeps the behavior from before
+  ADR-0157: the global round budget, the `baseline` planner prompt, expansion as the globals allow,
+  and `default_mode`. Both chat paths always set a spec. (Changed during step 4: many existing
+  helper tests cap the loop through `sub_agent_max_tool_iterations` with no spec.)
 
 ### EffortSpec
 

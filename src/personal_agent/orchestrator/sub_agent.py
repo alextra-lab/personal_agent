@@ -66,6 +66,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
 from personal_agent.config import settings
+from personal_agent.config.seshat_effort import rounds_for_turn
 from personal_agent.governance.worker_read_grant import ReadGrant
 from personal_agent.llm_client.models import (
     Dialect,
@@ -175,7 +176,7 @@ _BUDGET_MECHANISM = (
 )
 
 # ADR-0150 D5: the task message's budget line, rendered from the task's level via
-# `settings.sub_agent_rounds_for` — never a literal, for the drift FRE-1389 AC-1
+# `rounds_for_turn` (the turn's Seshat effort level, ADR-0157 D3) — never a literal, for the drift FRE-1389 AC-1
 # ruled out.
 _BUDGET_BLOCK_TEMPLATE = "Thoroughness: {level}. You have a budget of {n} tool round(s)."
 
@@ -975,7 +976,7 @@ def _build_task_message(
         f"Task: {spec.task}",
         _SIBLING_LINE_TEMPLATE.format(siblings=", ".join(spec.sibling_tasks) or "none"),
         _BUDGET_BLOCK_TEMPLATE.format(
-            level=spec.thoroughness, n=settings.sub_agent_rounds_for(spec.thoroughness)
+            level=spec.thoroughness, n=rounds_for_turn(spec.thoroughness)
         ),
         render_report_instruction(spec.worker_type),
     ]
@@ -1928,8 +1929,9 @@ async def _run_tool_loop(
     """
     tool_choice = "auto" if tool_defs else None
     # ADR-0150 D3: the task's own budget, not the global cap. The countdown below
-    # and the forced synthesis on the cap both read this one number.
-    max_iterations = settings.sub_agent_rounds_for(spec.thoroughness)
+    # and the forced synthesis on the cap both read this one number. ADR-0157 D3: the
+    # number is the turn's Seshat effort level (the global value outside a chat turn).
+    max_iterations = rounds_for_turn(spec.thoroughness)
     while True:
         # ADR-0149 D3 move 5, FIRST — before any inference call. The primary's
         # loop checks its cap AFTER the call, so the model spends one whole
@@ -2502,7 +2504,7 @@ async def run_sub_agent(
             task=spec.task,
             worker_type=spec.worker_type.value,
             thoroughness=spec.thoroughness,
-            round_budget=settings.sub_agent_rounds_for(spec.thoroughness),
+            round_budget=rounds_for_turn(spec.thoroughness),
             sibling_tasks=list(spec.sibling_tasks),
             max_tokens=spec.max_tokens,
             timeout=effective_timeout,

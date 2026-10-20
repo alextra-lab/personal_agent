@@ -248,6 +248,18 @@ this golden, which resolves bound roles only; ``test_fre1625_new_cloud_entries.p
 asserts them. This rebaseline follows the twelfth (FRE-1622), whose hand-edited cell order
 is kept: the golden was not re-sorted by the regenerator.
 
+**Rebaselined a fourteenth time, deliberately, for FRE-1631.** Hand-edited, not regenerated:
+the regenerator re-sorts the cell order that FRE-1622 and FRE-1625 kept, and copies the
+local ``.env`` endpoints. Two explicit deltas, both additions of the catalog entry
+``claude_sonnet_5_5`` (Sonnet 5.5, pickable, bound to no role):
+
+1. **``concurrency.models`` gains one cell:** limit 10, idle.
+2. **``pricing`` gains one entry:** ``anthropic/claude-sonnet-5-5`` at 2e-06 / 1e-05.
+
+**No role binding, resolved key, resolved definition, timeout, existing concurrency cell
+or existing price changed** (AC-3). Its modes are not in this golden, which resolves bound
+roles only; ``test_fre1631_sonnet_5_5_entry.py`` asserts them.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

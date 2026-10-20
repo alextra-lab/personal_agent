@@ -14,7 +14,12 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["held_prompt_summary", "pane_tail_summary", "session_is_idle"]
+__all__ = [
+    "held_prompt_summary",
+    "model_switch_prompt_open",
+    "pane_tail_summary",
+    "session_is_idle",
+]
 
 # Idle/busy heuristic over ``capture-pane -p`` (best-effort, fail-safe = busy).
 # Idle requires the literal input-prompt line — a bare ``❯`` caret alone on its
@@ -71,6 +76,20 @@ _ACTIVE_REGION_LINES = 30
 # is not something response prose emits at the start of a line.
 _HELD_PROMPT_CHOICE_RE: re.Pattern[str] = re.compile(r"^\s*❯\s*\d+[.)].*$", re.MULTILINE)
 _PROMPT_SUMMARY_MAX_CHARS = 200
+
+# FRE-1629: the model-switch confirmation that a cross-tier ``/model <alias>``
+# opens, e.g. ``Switch model? ...`` then ``❯ 1. Yes, switch to Sonnet 5.5``. ONE
+# ordered match ties the title to the selector: the title, up to
+# ``_MODEL_SWITCH_MAX_GAP_LINES`` lines of explanation, then the selector with
+# the cursor on option 1. Two independent substring tests over the 30-line
+# active region could join a title in prose to a selector of another dialog.
+# The cursor must sit on option 1, because a bare Enter then picks ``Yes``.
+_MODEL_SWITCH_MAX_GAP_LINES = 8
+_MODEL_SWITCH_PROMPT_RE: re.Pattern[str] = re.compile(
+    r"Switch model\?[^\n]*\n"
+    rf"(?:[^\n]*\n){{0,{_MODEL_SWITCH_MAX_GAP_LINES}}}?"
+    r"[ \t]*❯[ \t]*1\.[ \t]*Yes,[ \t]*switch to"
+)
 
 
 def _active_region(pane_text: str) -> str:
@@ -136,6 +155,26 @@ def held_prompt_summary(pane_text: str) -> str | None:
         return None
     summary = region[: match.end()].strip()
     return summary[-_PROMPT_SUMMARY_MAX_CHARS:]
+
+
+def model_switch_prompt_open(pane_text: str) -> bool:
+    """Return whether the pane shows the open "Switch model?" confirmation (FRE-1629).
+
+    The dispatcher answers this one dialog with a bare Enter, because ``Yes`` is
+    the model that the ticket Tier asked for. It must answer nothing else, so
+    the match is narrow: title and ``❯ 1. Yes, switch to`` selector in one
+    dialog, and no live progress spinner (a working seat is not held).
+
+    Args:
+        pane_text: The ``tmux capture-pane -p`` output.
+
+    Returns:
+        ``True`` only when the active region holds the model-switch dialog with
+        the cursor on its ``Yes`` option.
+    """
+    if _BUSY_SPINNER_RE.search(pane_text):
+        return False
+    return _MODEL_SWITCH_PROMPT_RE.search(_active_region(pane_text)) is not None
 
 
 def pane_tail_summary(pane_text: str) -> str:

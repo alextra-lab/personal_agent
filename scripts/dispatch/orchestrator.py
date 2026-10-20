@@ -1312,6 +1312,7 @@ def _apply(
                 ticket=decision.ticket,
                 outcome=result.outcome,
                 launched=result.launched,
+                model_switch_answered=result.model_switch_answered,
                 attempts=attempts,
             )
             new_record = _record_for_result(

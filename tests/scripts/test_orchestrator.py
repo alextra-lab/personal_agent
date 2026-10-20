@@ -3463,3 +3463,53 @@ def test_a_dry_run_sends_no_notify_alert(tmp_path: Path) -> None:
     runner = _master_runner()
     _alert_tick(runner, path, 900.0, execute=False)
     assert _alert_texts(runner) == []
+
+
+# --- FRE-1629: the dispatch_execute log carries the model-switch answer ------
+
+
+class _InfoCapturingLogger(_NullLogger):
+    def __init__(self) -> None:
+        self.infos: list[tuple[str, dict[str, object]]] = []
+
+    def info(self, event: str, **fields: object) -> None:  # type: ignore[override]
+        self.infos.append((event, fields))
+
+
+@pytest.mark.parametrize("answered", [True, False])
+def test_dispatch_execute_log_carries_whether_the_model_switch_was_answered(
+    monkeypatch: pytest.MonkeyPatch, answered: bool
+) -> None:
+    """FRE-1629 AC-4 (log half): master reads the answer from ``dispatch_execute``."""
+    import scripts.dispatch.orchestrator as orch
+    from scripts.dispatch.launcher import LaunchResult
+
+    monkeypatch.setattr(
+        orch,
+        "execute_plan",
+        lambda plan, runner, sleeper=None: LaunchResult(
+            outcome="reuse", card="card", launched=True, model_switch_answered=answered
+        ),
+    )
+    logger = _InfoCapturingLogger()
+    run_once(
+        ["build1"],
+        {},
+        now=0.0,
+        stall_timeout_s=60,
+        board_fetcher=lambda s: [_issue("FRE-1", "Approved", _OPUS)],
+        reconcile=lambda _t: None,
+        runner=_SeatRunner(state="live"),
+        notifier=_Notifier(),
+        persist=lambda st: None,
+        logger=logger,
+        execute=True,
+        rc_alive=lambda: True,
+        sleeper=_no_wait,
+    )
+
+    (fields,) = [f for event, f in logger.infos if event == "dispatch_execute"]
+    assert fields["model_switch_answered"] is answered
+    assert fields["stream"] == "build1"
+    assert fields["ticket"] == "FRE-1"
+    assert fields["trace_id"]

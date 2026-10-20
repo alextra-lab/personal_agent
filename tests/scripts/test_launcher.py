@@ -42,6 +42,7 @@ from scripts.dispatch.launcher import (
     stream_for_tmux_session,
     topology_for,
 )
+from scripts.dispatch.pane_state import model_switch_prompt_open
 from scripts.dispatch.tmux_target import exact_pane, exact_session
 
 
@@ -1211,3 +1212,225 @@ def test_no_seat_name_is_a_prefix_of_another(  # FRE-909 AC-5
         others = [s for s in seats if s != seat]
         collisions = [other for other in others if other.startswith(seat)]
         assert not collisions, f"{seat!r} is a strict prefix of {collisions!r}"
+
+
+# --- FRE-1629: the dispatcher answers its own "Switch model?" prompt --------
+
+# Richer than ``_PROMPT_PANE``: the command echo above, an indented title and a
+# wrapped explanation, the shape a real cross-tier ``/model`` renders.
+_MODEL_SWITCH_PANE = (
+    "some earlier output\n"
+    "> /model sonnet\n"
+    "\n"
+    "  Switch model? Sonnet 5.5 is faster and cheaper for this task,\n"
+    "  and the conversation context is kept.\n"
+    "  ❯ 1. Yes, switch to Sonnet 5.5\n"
+    "    2. No, go back\n"
+)
+
+# A permission dialog also renders ``❯ 1. Yes``; it is not the dispatcher's own.
+_PERMISSION_PANE = (
+    "Bash command\n"
+    "  rm -rf build/\n"
+    "Do you want to proceed?\n"
+    "❯ 1. Yes\n"
+    "  2. No, and tell Claude what to do differently\n"
+)
+
+
+# Captured live 2026-09-13 (Claude Code 2.1.270) after ``/model sonnet``; the same
+# capture backs the FRE-1504 tests in test_orchestrator.py. Rule lines, a blank
+# gap and a wrapped explanation sit between the title and the selector.
+_LIVE_MODEL_SWITCH_PANE = (
+    "❯ /model sonnet\n"
+    + "─" * 64
+    + " cc-1build ─\n"
+    + "\n"
+    + "─" * 80
+    + "\n"
+    + "  Switch model?\n"
+    + "  Your next response will be slower and use more tokens\n"
+    + "\n"
+    + "  This conversation is cached for the current model. Switching to Sonnet 5\n"
+    + "  means the full history gets re-read on your next message.\n"
+    + "\n"
+    + "  ❯ 1. Yes, switch to Sonnet 5\n"
+    + "    2. No, go back\n"
+    + "\n"
+    + "\n"
+)
+# Captured live 2026-09-13: a real permission prompt also shows ``❯ 1. Yes``.
+_LIVE_PERMISSION_PANE = (
+    "─" * 80
+    + "\n"
+    + " Bash command\n"
+    + "\n"
+    + "   docker exec cloud-sim-seshat-gateway sh -c 'ls'\n"
+    + "\n"
+    + " Do you want to proceed?\n"
+    + " ❯ 1. Yes\n"
+    + "   2. No\n"
+    + "\n"
+    + " Esc to cancel · Tab to amend\n"
+)
+
+
+class _ModelSwitchSeat(_SeatRunner):
+    """A seat whose ``/model`` opens a modal that only a bare Enter answers.
+
+    After ``/model`` is typed, the command's own Enter submits it and the modal
+    shows. One further Enter answers it (when ``clears_on_answer``); the pane
+    then returns to the changing idle prompt.
+
+    Args:
+        modal: The pane text shown while the modal is held.
+        clears_on_answer: Whether a further Enter closes the modal.
+        rc_status_while_held: Remote Control's status while the modal is held.
+    """
+
+    def __init__(
+        self,
+        *,
+        modal: str,
+        clears_on_answer: bool = True,
+        rc_status_while_held: str = "waiting",
+    ) -> None:
+        super().__init__(state="live")
+        self._modal = modal
+        self._clears_on_answer = clears_on_answer
+        self._rc_status_while_held = rc_status_while_held
+        self._model_typed = False
+        self._enters_after_model = 0
+
+    def _held(self) -> bool:
+        if not self._model_typed or self._enters_after_model < 1:
+            return False
+        return not (self._clears_on_answer and self._enters_after_model >= 2)
+
+    def _pane_text(self) -> str:
+        return self._modal if self._held() else super()._pane_text()
+
+    def __call__(self, argv: Sequence[str]) -> _FakeRunResult:
+        argv = list(argv)
+        if "send-keys" in argv:
+            if "-l" in argv and argv[-1].startswith("/model"):
+                self._model_typed = True
+            elif argv[-1] == "Enter" and self._model_typed:
+                self._enters_after_model += 1
+        if argv[:2] == ["claude", "agents"] and self._held():
+            self.calls.append(tuple(argv))
+            return _FakeRunResult(
+                stdout=json.dumps(
+                    [
+                        {
+                            "name": "cc-1build",
+                            "sessionId": None,
+                            "cwd": _WORKTREE,
+                            "status": self._rc_status_while_held,
+                        }
+                    ]
+                )
+            )
+        return super().__call__(argv)
+
+    def keys(self) -> list[str]:
+        """Every send-keys payload in order: literal text, or ``Enter``."""
+        return [call[-1] for call in self.calls if "send-keys" in call]
+
+
+def _cross_tier_plan() -> launcher_module.LaunchPlan:
+    return plan_launch("build1", "FRE-1629", "sonnet", context_keep=False, seat="live")
+
+
+def test_ac1_model_switch_prompt_is_answered_with_one_enter_before_build() -> None:
+    """FRE-1629 AC-1: one bare Enter answers the prompt, then ``/build`` follows."""
+    runner = _ModelSwitchSeat(modal=_MODEL_SWITCH_PANE)
+    result = execute_plan(_cross_tier_plan(), runner, sleeper=_no_wait)
+
+    assert result.outcome == "reuse"
+    assert result.model_switch_answered is True
+    assert runner.keys() == [
+        "/clear",
+        "Enter",
+        "/model sonnet",
+        "Enter",  # the command's own Enter
+        "Enter",  # the one answer
+        "/build FRE-1629",
+        "Enter",
+    ]
+
+
+def test_ac1_transient_rc_busy_never_lets_build_reach_an_unseen_prompt() -> None:
+    """Codex plan-review: RC ``busy`` is not proof that a client ``/model`` was processed.
+
+    An ``idle → busy → waiting`` transition must not send ``/build`` into the
+    modal. The answer comes first even when RC reads ``busy`` while it is held.
+    """
+    runner = _ModelSwitchSeat(modal=_MODEL_SWITCH_PANE, rc_status_while_held="busy")
+    result = execute_plan(_cross_tier_plan(), runner, sleeper=_no_wait)
+
+    assert result.outcome == "reuse"
+    keys = runner.keys()
+    assert keys.index("/build FRE-1629") > keys.index("/model sonnet") + 2  # past the answer
+    assert keys.count("Enter") == 4
+
+
+def test_ac2_a_permission_prompt_is_never_answered() -> None:
+    """FRE-1629 AC-2: any dialog that is not the model switch gets no key."""
+    runner = _ModelSwitchSeat(modal=_PERMISSION_PANE, clears_on_answer=False)
+    result = execute_plan(_cross_tier_plan(), runner, sleeper=_no_wait)
+
+    assert result.outcome == "delivery-failed"  # the wedge path runs as today
+    assert result.model_switch_answered is False
+    assert runner.keys() == ["/clear", "Enter", "/model sonnet", "Enter"]
+
+
+def test_ac3_no_prompt_sends_no_extra_key() -> None:
+    """FRE-1629 AC-3: a same-tier launch types three commands and three Enters, no more."""
+    runner = _SeatRunner(state="live")
+    result = execute_plan(_cross_tier_plan(), runner, sleeper=_no_wait)
+
+    assert result.outcome == "reuse"
+    assert result.model_switch_answered is False
+    enters = [call for call in runner.calls if "send-keys" in call and call[-1] == "Enter"]
+    assert len(enters) == 3
+
+
+def test_a_prompt_that_stays_open_is_answered_once_then_fails_closed() -> None:
+    """Bounded: one answer, then ``delivery-failed`` so the FRE-1504 wedge alert stays the fallback."""
+    runner = _ModelSwitchSeat(modal=_MODEL_SWITCH_PANE, clears_on_answer=False)
+    result = execute_plan(_cross_tier_plan(), runner, sleeper=_no_wait)
+
+    assert result.outcome == "delivery-failed"
+    assert result.model_switch_answered is True
+    assert runner.keys() == ["/clear", "Enter", "/model sonnet", "Enter", "Enter"]
+
+
+@pytest.mark.parametrize(
+    ("pane", "expected"),
+    [
+        (_PROMPT_PANE, True),
+        (_MODEL_SWITCH_PANE, True),
+        (_LIVE_MODEL_SWITCH_PANE, True),
+        (_PERMISSION_PANE, False),
+        (_LIVE_PERMISSION_PANE, False),
+        (_PROSE_ABOUT_A_DECISION_PANE, False),
+        (_IDLE_PANE, False),
+        # Title with no selector.
+        ("Switch model? Sonnet 5.5 is faster.\n❯\n", False),
+        # The cursor sits on option 2: Enter would decline the switch.
+        ("Switch model? x\n  1. Yes, switch to Sonnet 5.5\n❯ 2. No, go back\n", False),
+        # Title in prose, an unrelated selector far below: two dialogs, not one.
+        (
+            "Switch model? is the question I asked earlier.\n"
+            + "filler line\n" * 12
+            + "Do you want to proceed?\n❯ 1. Yes, switch to the other branch\n",
+            False,
+        ),
+        # A live progress spinner means the seat is working, not held.
+        ("● Switching… (3s · ↑ 1k tokens)\n" + _PROMPT_PANE, False),
+    ],
+)
+def test_model_switch_prompt_open_matches_only_the_one_dialog(pane: str, expected: bool) -> None:
+    """The matcher ties the title to the selector on option 1 inside one dialog."""
+    assert model_switch_prompt_open(pane) is expected

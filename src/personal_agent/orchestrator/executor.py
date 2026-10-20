@@ -3765,6 +3765,25 @@ def _resolve_document_routing_key(
     )
 
 
+def _client_mode_name(llm_client: Any) -> str | None:
+    """Return the catalog mode an LLM client requests, or ``None`` when it has none (ADR-0157 D8).
+
+    ``with_requested_mode`` writes the requested mode into the definition's ``default_mode``,
+    so that field is the mode the client sends. The ``isinstance`` check keeps a test double's
+    auto-generated attribute out of the record.
+
+    Args:
+        llm_client: The client built for this pass.
+
+    Returns:
+        The mode name, or ``None``.
+    """
+    from personal_agent.llm_client.models import ModelDefinition  # noqa: PLC0415
+
+    model_def = getattr(llm_client, "model_def", None)
+    return model_def.default_mode if isinstance(model_def, ModelDefinition) else None
+
+
 def _effective_attachment_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     """Resolve the single effective model key for this turn's attachments.
 
@@ -6933,8 +6952,17 @@ async def step_llm_call(
                 escalated=effective_model_key != role_key,
             )
 
+        # ADR-0157 D5: the primary requests its Seshat effort level's mode on both paths
+        # (the level's mode where the answering deployment declares it, else default_mode).
+        # Only the primary: a level never changes another role's mode.
+        from personal_agent.config.seshat_effort import primary_mode_for  # noqa: PLC0415
+
+        is_primary = model_role is ModelRole.PRIMARY
         if effective_model_key == role_key:
-            llm_client = get_llm_client(role_name=model_role.value)
+            llm_client = get_llm_client(
+                role_name=model_role.value,
+                mode=primary_mode_for(role_key) if is_primary else None,
+            )
             respond_role = model_role
         else:
             from personal_agent.cost_gate import budget_role_for
@@ -6942,7 +6970,9 @@ async def step_llm_call(
             from personal_agent.llm_client.litellm_client import LiteLLMClient
 
             llm_client = get_llm_client_for_key(
-                effective_model_key, budget_role=budget_role_for(ModelRole.VISION.value)
+                effective_model_key,
+                budget_role=budget_role_for(ModelRole.VISION.value),
+                mode=primary_mode_for(effective_model_key) if is_primary else None,
             )
             # FRE-1037: relabel the call's telemetry role to VISION only when
             # it's provably safe — LiteLLMClient's model is fixed at
@@ -6960,6 +6990,9 @@ async def step_llm_call(
         # pass, so a tool loop's last generation — the one whose reply is verified — is
         # the one recorded.
         ctx.answering_model_key = effective_model_key
+        if is_primary:
+            # ADR-0157 D8: the mode the answering client requests, after the level's request.
+            ctx.primary_mode = _client_mode_name(llm_client)
 
         # ADR-0138 D5 (FRE-1285): choose light or heavy from the model's MEASURED
         # compliance, before this turn generates anything. Once per turn — the call

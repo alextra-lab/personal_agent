@@ -275,3 +275,25 @@ def effective_primary_mode(spec: EffortSpec | None, model_def: ModelDefinition) 
     if spec is not None and spec.primary_mode is not None and spec.primary_mode in model_def.modes:
         return spec.primary_mode
     return model_def.default_mode
+
+
+def primary_mode_for(deployment_key: str) -> str | None:
+    """Return the mode to request for the deployment that answers this turn (ADR-0157 D5).
+
+    Args:
+        deployment_key: The catalog key of the answering deployment: the session's primary, or
+            the vision deployment on an escalated turn.
+
+    Returns:
+        :func:`effective_primary_mode` for the turn's spec, or ``None`` outside a chat turn or for
+        a key without catalog modes (the client then keeps its own resolution).
+    """
+    spec = get_current_effort()
+    if spec is None:
+        return None
+    from personal_agent.config.model_loader import load_model_config  # noqa: PLC0415
+
+    model_def = load_model_config().models.get(deployment_key)
+    if model_def is None or not model_def.modes:
+        return None
+    return effective_primary_mode(spec, model_def)

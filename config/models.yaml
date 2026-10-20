@@ -180,6 +180,18 @@ models:
         min_p: 0.0                   # Qwen card Instruct (new)
         presence_penalty: 1.5        # Unsloth + Qwen card, Instruct/non-thinking
         repeat_penalty: 1.0          # llama.cpp's wire name (FRE-1430 F2)
+      # ADR-0157 D5 (FRE-1622): the Seshat effort Fast level's primary mode. Thinking off,
+      # with a COPY of this entry's `worker` sampling (the Qwen card's non-thinking preset), so a
+      # later `worker` change does not move Fast. Unmeasured with tools and the full prompt
+      # (ADR-0157 D5): Fast trades answer quality for speed, and the owner judges it.
+      fast:
+        enable_thinking: false
+        temperature: 0.7
+        top_p: 0.8
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repeat_penalty: 1.0
     supports_function_calling: true
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     supports_pdf_document: false  # No native PDF document block on the local SLM (ADR-0102 §3)
@@ -262,6 +274,18 @@ models:
         min_p: 0.0
         presence_penalty: 1.5
         repeat_penalty: 1.0     # llama.cpp's wire name (FRE-1430 F2); was `repetition_penalty`
+      # ADR-0157 D5 (FRE-1622): the Seshat effort Fast level's primary mode. Thinking off,
+      # with a COPY of this entry's `worker` sampling (the Qwen card's non-thinking preset), so a
+      # later `worker` change does not move Fast. Unmeasured with tools and the full prompt
+      # (ADR-0157 D5): Fast trades answer quality for speed, and the owner judges it.
+      fast:
+        enable_thinking: false
+        temperature: 0.7
+        top_p: 0.8
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repeat_penalty: 1.0
       # ADR-0154 D4 (FRE-1541): the planner call's mode. The `default` mode's sampling with
       # thinking off, NOT `worker`'s (which also changes the sampling). Admitted on this
       # deployment only because the committed probe (scripts/eval/fre1537) passed on it in
@@ -328,6 +352,18 @@ models:
         min_p: 0.0
         presence_penalty: 1.5
         repeat_penalty: 1.0
+      # ADR-0157 D5 (FRE-1622): the Seshat effort Fast level's primary mode. Thinking off,
+      # with a COPY of this entry's `worker` sampling (the Qwen card's non-thinking preset), so a
+      # later `worker` change does not move Fast. Unmeasured with tools and the full prompt
+      # (ADR-0157 D5): Fast trades answer quality for speed, and the owner judges it.
+      fast:
+        enable_thinking: false
+        temperature: 0.7
+        top_p: 0.8
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repeat_penalty: 1.0
     supports_function_calling: true
     supports_vision: false        # not verified on the MTPLX pack; the study sends no images
     supports_pdf_document: false
@@ -356,6 +392,18 @@ models:
         presence_penalty: 0.0
         repeat_penalty: 1.0
       worker:
+        enable_thinking: false
+        temperature: 0.7
+        top_p: 0.8
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repeat_penalty: 1.0
+      # ADR-0157 D5 (FRE-1622): the Seshat effort Fast level's primary mode. Thinking off,
+      # with a COPY of this entry's `worker` sampling (the Qwen card's non-thinking preset), so a
+      # later `worker` change does not move Fast. Unmeasured with tools and the full prompt
+      # (ADR-0157 D5): Fast trades answer quality for speed, and the owner judges it.
+      fast:
         enable_thinking: false
         temperature: 0.7
         top_p: 0.8
@@ -407,6 +455,18 @@ models:
         presence_penalty: 0.0
         repeat_penalty: 1.0
       worker:
+        enable_thinking: false
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 64
+        min_p: 0.0
+        presence_penalty: 0.0
+        repeat_penalty: 1.0
+      # ADR-0157 D5 (FRE-1622): the Seshat effort Fast level's primary mode. Thinking off,
+      # with a COPY of this entry's `worker` sampling (the Gemma 4 card's non-thinking preset), so a
+      # later `worker` change does not move Fast. Unmeasured with tools and the full prompt
+      # (ADR-0157 D5): Fast trades answer quality for speed, and the owner judges it.
+      fast:
         enable_thinking: false
         temperature: 1.0
         top_p: 0.95
@@ -519,6 +579,10 @@ models:
       # a quarter of the cost (ADR-0145 D6 table, FRE-1430 F13).
       worker:
         reasoning_effort: none
+      # ADR-0157 D5 (FRE-1622): the Fast level's primary mode, the bottom of the
+      # ovh_qwen dialect's range (thinking off).
+      fast:
+        reasoning_effort: none
     # PROVENANCE WARNING for the three capability flags below. OVH's models
     # endpoint returns exactly seven keys -- id, created, object, owned_by,
     # pricing, context_length, max_completion_tokens -- and no capability
@@ -578,6 +642,11 @@ models:
       # setting measured (USD 0.0108, below thinking-off's 0.0137), 10/10 correct
       # on the study's probe (ADR-0145 D6 table).
       worker:
+        effort: low
+      # ADR-0157 D5 (FRE-1622): the Fast level's primary mode, the bottom of the
+      # anthropic_adaptive dialect's range. Not thinking off: `effort` has no off value,
+      # so Sonnet's Fast still reasons, at low effort.
+      fast:
         effort: low
     min_concurrency: 1
     max_concurrency: 10

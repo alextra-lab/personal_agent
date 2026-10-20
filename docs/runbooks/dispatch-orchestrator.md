@@ -521,6 +521,45 @@ for the PR trigger `/master <n>`.
 - **Find an alert after the fact.** `grep -E 'gating_alert_(sent|deferred)|dispatch_alert_(sent|deferred)'`
   in the daemon journal, or read `alerted_at` and `attempts` in `python -m scripts.dispatch.trigger_ledger --all --json`.
 
+### Owner notification when `cc-master` is the stuck seat (FRE-1550)
+
+`cc-master` pushes a stall to the owner. If `cc-master` is itself the stuck party (a running turn, or
+an unsent draft in its input), the alert in the section above cannot land. On 2026-10-04 this hid a
+stall for five hours. Both daemons now send one line straight to the owner through an outbound ntfy
+webhook (`scripts/dispatch/owner_notify.py`).
+
+| Daemon | Condition | Owner line names |
+|--------|-----------|------------------|
+| `gating_watcher.py` | A worker alert is refused by `cc-master` for 15 more minutes (30 minutes after the first failed attempt). | the PR and the seat |
+| `gating_watcher.py` | A trigger to `cc-master` stays unconfirmed for `--queued-escalation-timeout` (30 minutes). | the PR, or the ticket when it is not a PR number |
+| `orchestrator.py` | A notify-ledger entry is refused by `cc-master` for 15 more minutes (30 minutes after it opened). | the condition, the stream and the ticket |
+
+- **Setting.** `AGENT_OWNER_NTFY_URL` holds the full topic URL. The daemons read the process
+  environment first, then the exact key in `.env` at the git toplevel. It is unset by default. If it
+  is unset, the daemon logs `owner_notify_unconfigured` and sends nothing. On ntfy.sh the topic name is
+  the secret. The URL is never logged, committed or put in a test. Do not print the `.env` line.
+- **Once per condition.** `owner_alerted_at` is stored in the same ledger file as `alerted_at`, so a
+  restart does not repeat the line. It is set only after ntfy accepts the line. A failed send is
+  logged as `owner_notify_failed` and tried again on the next tick. A gap of more than 30 minutes
+  starts a new episode and clears the latch, so a new stall is heard.
+- **The tick stays short.** A tick makes at most one attempt, with a 5 second timeout. A second due
+  condition waits for the next tick.
+- **The alert to master is not replaced.** When `cc-master` becomes idle, it still gets the
+  `[DISPATCH ALERT]` line.
+- **Worker alerts keep their route.** If `cc-master` is idle, the owner path is never used.
+- **Find it after the fact.** `grep -E 'gating_owner_notified|dispatch_owner_notified|owner_notify_'`
+  in the daemon journal, or read `owner_alerted_at` in
+  `python -m scripts.dispatch.trigger_ledger --all --json`.
+
+**Enable (owner and master, FRE-1550 AC-4).**
+
+1. The owner adds `AGENT_OWNER_NTFY_URL=<topic URL>` to `.env` and subscribes the phone to the topic.
+   Master does not print or handle the value.
+2. Master restarts the dispatch daemon and the gating watcher. The units read `.env` at start.
+3. Master runs `uv run python -m scripts.dispatch.owner_notify`. Expected last line: `sent`, exit 0.
+   `unconfigured` means the key is absent. `failed` means ntfy did not accept the line.
+4. The owner confirms that the test line arrived on the phone.
+
 ### cc-master channel and `trigger_id` (FRE-1555, ADR-0155 D2 track A)
 
 The watcher sends every master trigger to the `cc-master` channel first (port `MASTER_CHANNEL_PORT` in

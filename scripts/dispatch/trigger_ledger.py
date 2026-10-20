@@ -156,6 +156,10 @@ class LedgerEntry:
             e.g. ``busy`` or ``channel_delivery_failed+busy``. Empty if none.
         alerted_at: When master was alerted about this episode (FRE-1540). Set
             once; never cleared by a retry.
+        owner_alerted_at: When the owner was notified directly about this episode
+            (FRE-1550), because master could not take the alert. Set once, after
+            the send is accepted. A retry inside the episode and a renotify carry
+            it. A retry after ``EPISODE_GAP_S`` starts a new episode and clears it.
         trigger_id: The one stable id of this trigger (FRE-1555, ADR-0155 D8).
             ``record_pending`` and ``record_surfaced`` create it with the
             row. A retry or a renotify of the same episode keeps it. Every transport reads it from here, so the channel
@@ -180,6 +184,7 @@ class LedgerEntry:
     last_failure: str = ""
     alerted_at: float | None = None
     trigger_id: str = ""
+    owner_alerted_at: float | None = None
 
 
 Ledger = dict[str, LedgerEntry]
@@ -223,6 +228,7 @@ def record_pending(
     """
     existing = ledger.get(event_id)
     created_at, attempts, alerted_at, trigger_id = now, 1, None, new_trigger_id()
+    owner_alerted_at: float | None = None
     if existing is not None:
         if existing.consumed_at is None:
             return ledger, "duplicate"
@@ -234,6 +240,9 @@ def record_pending(
             if (now - existing.consumed_at) <= EPISODE_GAP_S:
                 created_at = existing.created_at
                 attempts = existing.attempts + 1
+                # The owner latch belongs to the episode (FRE-1550). A gap restarts the clock,
+                # and a new stall must be able to reach the owner again.
+                owner_alerted_at = existing.owner_alerted_at
                 # A row written before FRE-1555 has no id: give it one now.
                 trigger_id = existing.trigger_id or trigger_id
     updated = dict(ledger)
@@ -248,6 +257,7 @@ def record_pending(
         attempts=attempts,
         alerted_at=alerted_at,
         trigger_id=trigger_id,
+        owner_alerted_at=owner_alerted_at,
     )
     return updated, "new"
 
@@ -297,6 +307,17 @@ def mark_alerted(ledger: Ledger, event_id: str, now: float) -> Ledger:
     return updated
 
 
+def mark_owner_alerted(ledger: Ledger, event_id: str, now: float) -> Ledger:
+    """Record that the owner was notified directly about ``event_id``'s episode (FRE-1550).
+
+    Call it once, after the send is accepted. A failed send leaves the latch open, so the next
+    tick tries again. ``record_pending`` and ``record_surfaced`` carry the value forward.
+    """
+    updated = dict(ledger)
+    updated[event_id] = dataclasses.replace(updated[event_id], owner_alerted_at=now)
+    return updated
+
+
 def mark_consumed(ledger: Ledger, event_id: str, now: float) -> Ledger:
     """Close out an entry's bookkeeping (sent, or abandoned without sending)."""
     updated = dict(ledger)
@@ -332,14 +353,16 @@ def record_surfaced(
     expected to use a stable, per-episode key so a persisting condition
     updates one entry rather than accumulating one per call. While the old
     entry is still open (``consumed_at is None``) its ``created_at`` and
-    ``alerted_at`` carry over (FRE-1540); after it was consumed, a new call
-    starts a new episode.
+    ``alerted_at`` carry over (FRE-1540), and so does ``owner_alerted_at``
+    (FRE-1550); after it was consumed, a new call starts a new episode.
     """
     existing = ledger.get(event_id)
     created_at, alerted_at, trigger_id = now, None, new_trigger_id()
+    owner_alerted_at: float | None = None
     if existing is not None and existing.consumed_at is None:
-        # Same open episode (FRE-1540): keep its start, its alert latch and its id.
+        # Same open episode (FRE-1540): keep its start, its alert latches and its id.
         created_at, alerted_at = existing.created_at, existing.alerted_at
+        owner_alerted_at = existing.owner_alerted_at
         trigger_id = existing.trigger_id or trigger_id
     updated = dict(ledger)
     updated[event_id] = LedgerEntry(
@@ -353,6 +376,7 @@ def record_surfaced(
         surfaced_at=now,
         alerted_at=alerted_at,
         trigger_id=trigger_id,
+        owner_alerted_at=owner_alerted_at,
     )
     return updated
 
@@ -517,6 +541,7 @@ def load_ledger(path: Path, logger: Logger) -> Ledger:
             last_failure=str(fields.get("last_failure") or ""),
             alerted_at=fields.get("alerted_at"),
             trigger_id=str(fields.get("trigger_id") or ""),
+            owner_alerted_at=fields.get("owner_alerted_at"),
         )
     return entries
 
@@ -598,6 +623,7 @@ def _entry_to_json(entry: LedgerEntry) -> dict[str, object]:
         "last_failure": entry.last_failure,
         "alerted_at": entry.alerted_at,
         "trigger_id": entry.trigger_id,
+        "owner_alerted_at": entry.owner_alerted_at,
     }
 
 

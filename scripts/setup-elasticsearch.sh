@@ -475,6 +475,10 @@ put_resource "ILM policy: agent-topology-policy" \
 put_and_apply_template "Index template: agent-topology-template" \
   "/_index_template/agent-topology-template" \
   "$PROJECT_ROOT/docker/elasticsearch/topology-index-template.json"
+# FRE-1622: the template is dynamic:false, so the new seshat_effort and primary_mode fields
+#           need an explicit mapping on the month index that already exists.
+apply_month_index_mapping "agent-topology" \
+  "$PROJECT_ROOT/docker/elasticsearch/topology-index-template.json"
 
 # 8. Caddy access-log evidence, shipped by the Filebeat sidecar (FRE-1146 / ADR-0132 D3).
 #    caddy.logger distinguishes egress-block traffic (http.log.access.egress_slm/.egress_artifacts)

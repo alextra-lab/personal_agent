@@ -517,6 +517,20 @@ def test_setup_script_patches_the_funnel_events_month_index() -> None:
     )
 
 
+def test_setup_script_patches_the_topology_month_index() -> None:
+    """FRE-1622 (ADR-0157 D8): ``seshat_effort`` and ``primary_mode`` are searchable this month.
+
+    The topology template is dynamic:false and the monthly family has no write alias, so
+    `put_and_apply_template` does not reach the month index that already exists.
+    """
+    script = SETUP_SCRIPT.read_text()
+    assert re.search(
+        r'apply_month_index_mapping "agent-topology" \\\n\s+'
+        r'"\$PROJECT_ROOT/docker/elasticsearch/topology-index-template\.json"',
+        script,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # ILM + retention for the daily/monthly diagnostic families (FRE-543).
 # --------------------------------------------------------------------------- #

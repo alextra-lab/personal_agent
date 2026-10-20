@@ -58,7 +58,11 @@ from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
     derive_fallback_prompt_identity,
 )
-from personal_agent.llm_client.responses_route import aresponses_as_chat, routes_to_responses
+from personal_agent.llm_client.responses_route import (
+    aresponses_as_chat,
+    routes_to_responses,
+    to_responses_request,
+)
 from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
@@ -1456,12 +1460,16 @@ class LiteLLMClient:
             litellm_kwargs["num_retries"] = max_retries
         # FRE-1625: both run on the assembled request, before the cost gate.
         # FRE-1627: a bridged request on a provider with a guarded Responses
-        # route takes it; any other bridged request is still refused.
+        # route takes it; any other bridged request is still refused. The
+        # translation runs here too, so an unmapped key also fails before the
+        # gate (the Anthropic decoration below never applies to this route).
         _gate_model_effort_domain(self.model_def, dialect, litellm_kwargs)
-        use_responses_route = self.provider in _RESPONSES_ROUTE_PROVIDERS and routes_to_responses(
-            litellm_kwargs
-        )
-        if not use_responses_route:
+        responses_request: dict[str, Any] | None = None
+        if self.provider in _RESPONSES_ROUTE_PROVIDERS and routes_to_responses(litellm_kwargs):
+            responses_request = to_responses_request(
+                litellm_kwargs, client=_guarded_async_http_handler(resolved_guard)
+            )
+        else:
             _refuse_unguarded_responses_bridge(litellm_kwargs, trace_id=trace_id)
 
         # Anthropic prompt caching — eliminates re-processing of static system prompt
@@ -1574,11 +1582,8 @@ class LiteLLMClient:
                     # stubs do not declare.
                     response: Any
                     try:
-                        if use_responses_route:
-                            response = await aresponses_as_chat(
-                                litellm_kwargs,
-                                client=_guarded_async_http_handler(resolved_guard),
-                            )
+                        if responses_request is not None:
+                            response = await aresponses_as_chat(responses_request)
                         else:
                             response = await litellm.acompletion(**litellm_kwargs)
                     except asyncio.CancelledError:

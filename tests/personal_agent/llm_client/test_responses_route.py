@@ -101,6 +101,7 @@ class TestToResponsesRequest:
             {
                 "type": "function",
                 "name": "search_memory",
+                "strict": False,
                 "description": "Search stored memory.",
                 "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
             }
@@ -141,6 +142,12 @@ class TestToResponsesRequest:
         ]
         assert out["input"][1]["call_id"] == out["input"][2]["call_id"] == "call_1"
         assert "instructions" not in out
+
+    def test_a_declared_strict_tool_keeps_its_value(self) -> None:
+        """Only an undeclared ``strict`` takes the chat default (false)."""
+        strict_tool = {**_TOOL, "function": {**_TOOL["function"], "strict": True}}
+        out = to_responses_request(_request(tools=[strict_tool]), client=_CLIENT)
+        assert out["tools"][0]["strict"] is True
 
     def test_a_named_tool_choice_is_flattened(self) -> None:
         out = to_responses_request(

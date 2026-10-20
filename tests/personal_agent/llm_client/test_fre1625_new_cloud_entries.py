@@ -350,6 +350,7 @@ class TestLiteLLMClientRoute:
         assert body["reasoning"]["effort"] == "medium"
         assert body["store"] is False
         assert body["tools"][0]["name"] == "search_memory"
+        assert body["tools"][0]["strict"] is False, "the chat default, not the Responses one"
         gate.reserve.assert_awaited_once()
         gate.commit.assert_awaited_once()
 
@@ -359,6 +360,42 @@ class TestLiteLLMClientRoute:
         assert json.loads(response["tool_calls"][0]["arguments"]) == {"query": "paris"}
         assert response["finish_reason"] == "tool_calls"
         assert response["usage"]["reasoning_tokens"] == 8
+
+    @pytest.mark.asyncio
+    async def test_an_unmapped_key_on_the_responses_route_fails_before_the_gate(
+        self, _caught_requests: list[_Sent]
+    ) -> None:
+        """FRE-1627 review: like the bridge refusal, nothing reserves or sends."""
+        gate = _mock_gate()
+        with pytest.raises(LLMClientError, match="seed"):
+            await _respond("gpt-6.1-sol", gate, tools=[_FUNCTION_TOOL], seed=7)
+        assert _caught_requests == []
+        gate.reserve.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_responses_reply_refunds_the_reservation(self) -> None:
+        """FRE-1627 review: the new route sits inside the same refund handlers."""
+
+        async def _failed_send(
+            self: httpx.AsyncClient, request: httpx.Request, **kwargs: Any
+        ) -> httpx.Response:
+            body = {
+                **_SOL_RESPONSES_BODY,
+                "status": "failed",
+                "output": [],
+                "error": {"code": "server_error", "message": "boom"},
+            }
+            return httpx.Response(200, json=body, request=request)
+
+        gate = _mock_gate()
+        with (
+            patch.object(httpx.AsyncClient, "send", _failed_send),
+            pytest.raises(LLMClientError, match="boom"),
+        ):
+            await _respond("gpt-6.1-sol", gate, tools=[_FUNCTION_TOOL])
+        gate.reserve.assert_awaited_once()
+        gate.refund.assert_awaited_once()
+        gate.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_7c_a_luna_tool_call_at_effort_none_goes_to_chat_through_the_guard(

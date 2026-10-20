@@ -99,3 +99,13 @@ Changes in `litellm_client.py`:
 - Reasoning items across turns. The chat history keeps no Responses reasoning items, so each
   turn re-reasons. The API accepts this. Carrying encrypted reasoning is a separate change.
 - Streaming on the Responses route (the cloud path does not stream).
+
+## Review fold-ins
+
+- Codex plan review: `refusal` parts map to `message.refusal` (ADR-0150 D1).
+- Code review: `strict` defaults to `true` on the Responses API and to `false` on Chat
+  Completions (openai SDK `FunctionToolParam`). An undeclared `strict` is sent as `false`,
+  so the tool schemas keep their chat meaning.
+- Code review: `respond()` translates the request before the cost gate, so an unmapped key
+  fails before any reservation, like the bridge refusal. A test also proves that a failed
+  reply on the route refunds the reservation.

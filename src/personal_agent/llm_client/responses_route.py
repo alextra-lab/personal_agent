@@ -89,8 +89,16 @@ def _function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
     function = tool.get("function")
     if tool.get("type") != "function" or not isinstance(function, Mapping):
         return dict(tool)
-    flat: dict[str, Any] = {"type": "function", "name": function["name"]}
-    for key in ("description", "parameters", "strict"):
+    # `strict` defaults to false on Chat Completions and to true on the Responses
+    # API (openai SDK FunctionToolParam). A strict schema needs
+    # additionalProperties: false and every property required, which the tool
+    # registry does not promise, so an undeclared value keeps the chat meaning.
+    flat: dict[str, Any] = {
+        "type": "function",
+        "name": function["name"],
+        "strict": bool(function.get("strict", False)),
+    }
+    for key in ("description", "parameters"):
         if function.get(key) is not None:
             flat[key] = function[key]
     return flat
@@ -239,22 +247,20 @@ def to_chat_response(response: ResponsesAPIResponse) -> ModelResponse:
     )
 
 
-async def aresponses_as_chat(
-    request: Mapping[str, Any], *, client: AsyncHTTPHandler
-) -> ModelResponse:
-    """Dispatch a bridged chat request on the Responses API through ``client``.
+async def aresponses_as_chat(responses_request: Mapping[str, Any]) -> ModelResponse:
+    """Dispatch a translated request on the Responses API.
 
     Args:
-        request: The assembled litellm chat kwargs.
-        client: The egress-guarded handler that must carry the request.
+        responses_request: The output of :func:`to_responses_request`, which
+            carries the guarded client.
 
     Returns:
         The reply as a chat ``ModelResponse``.
 
     Raises:
-        LLMClientError: An unmapped key, an error in the reply, or a streamed reply.
+        LLMClientError: An error in the reply, or a streamed reply.
     """
-    reply = await litellm.aresponses(**to_responses_request(request, client=client))
+    reply = await litellm.aresponses(**responses_request)
     if not isinstance(reply, ResponsesAPIResponse):
         # The route never asks to stream, so a stream here is a litellm change.
         raise LLMClientError(f"expected a non-streamed Responses reply, got {type(reply).__name__}")

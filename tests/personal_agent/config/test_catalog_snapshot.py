@@ -219,6 +219,17 @@ One explicit delta, hand-edited rather than regenerated:
    ``captains_log``, ``insights`` and ``vision``. **No role binding, resolved key,
    timeout or concurrency changed.**
 
+**Rebaselined a twelfth time, deliberately, for FRE-1622 (ADR-0157 D5).**
+One explicit delta, hand-edited rather than regenerated:
+
+1. **A ``fast`` mode on every deployment the Seshat effort Fast level can request.** The
+   six cells whose definition resolves onto ``qwen3.8-flash-next`` (``primary``,
+   ``sub_agent``) or ``claude_sonnet`` (``artifact_builder``, ``captains_log``,
+   ``insights``, ``vision``) gain the same additive ``modes`` entry: thinking off with a
+   copy of the ``worker`` sampling on Flash-Next, ``effort: low`` on Sonnet. **No role
+   binding, resolved key, ``default_mode``, existing mode body, timeout, concurrency or
+   price changed.**
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

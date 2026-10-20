@@ -146,6 +146,20 @@
             "temperature": null,
             "top_k": null,
             "top_p": null
+          },
+          "fast": {
+            "budget_tokens": null,
+            "effort": "low",
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": null,
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
           }
         },
         "output_cost_per_token": 1e-05,
@@ -188,6 +202,20 @@
             "top_p": null
           },
           "worker": {
+            "budget_tokens": null,
+            "effort": "low",
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": null,
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
+          },
+          "fast": {
             "budget_tokens": null,
             "effort": "low",
             "enable_thinking": null,
@@ -387,6 +415,20 @@
             "temperature": null,
             "top_k": null,
             "top_p": null
+          },
+          "fast": {
+            "budget_tokens": null,
+            "effort": "low",
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": null,
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
           }
         },
         "output_cost_per_token": 1e-05,
@@ -443,6 +485,20 @@
             "top_p": 0.95
           },
           "worker": {
+            "budget_tokens": null,
+            "effort": null,
+            "enable_thinking": false,
+            "frequency_penalty": null,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "reasoning_effort": null,
+            "repeat_penalty": 1.0,
+            "seed": null,
+            "temperature": 0.7,
+            "top_k": 20,
+            "top_p": 0.8
+          },
+          "fast": {
             "budget_tokens": null,
             "effort": null,
             "enable_thinking": false,
@@ -573,6 +629,20 @@
             "temperature": 0.7,
             "top_k": 20,
             "top_p": 0.8
+          },
+          "fast": {
+            "budget_tokens": null,
+            "effort": null,
+            "enable_thinking": false,
+            "frequency_penalty": null,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "reasoning_effort": null,
+            "repeat_penalty": 1.0,
+            "seed": null,
+            "temperature": 0.7,
+            "top_k": 20,
+            "top_p": 0.8
           }
         },
         "output_cost_per_token": null,
@@ -615,6 +685,20 @@
             "top_p": null
           },
           "worker": {
+            "budget_tokens": null,
+            "effort": "low",
+            "enable_thinking": null,
+            "frequency_penalty": null,
+            "min_p": null,
+            "presence_penalty": null,
+            "reasoning_effort": null,
+            "repeat_penalty": null,
+            "seed": null,
+            "temperature": null,
+            "top_k": null,
+            "top_p": null
+          },
+          "fast": {
             "budget_tokens": null,
             "effort": "low",
             "enable_thinking": null,

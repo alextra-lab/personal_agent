@@ -26,11 +26,11 @@ Each harness lever is a process-wide setting:
 | Lever | Setting | Where it binds |
 |---|---|---|
 | Helpers on or off | `expansion_enabled` | `request_gateway/decomposition.py:101`, reason `expansion_disabled` |
-| Helper round budget | `sub_agent_max_tool_iterations`, `sub_agent_rounds_by_thoroughness` | `settings.sub_agent_rounds_for`, read at `sub_agent.py:975`, `:1929`, `:2505` and `expansion_controller.py:198` |
+| Helper round budget | `sub_agent_max_tool_iterations`, `sub_agent_rounds_by_thoroughness` | `settings.sub_agent_rounds_for`, read at `sub_agent.py:978` (task message), `:1932` (the loop's enforced cap), `:2505` (`sub_agent_start.round_budget`) and `expansion_controller.py:198` (planner prompt). `sub_agent_max_tool_iterations` also sizes the helper's outer deadline (`_effective_hard_deadline`, `sub_agent.py:459`). |
 | The planner's decomposition policy (P2) | none on `main` | — |
-| The primary's reasoning | the catalog mode `default` of each deployment | `executor.py:6937` builds the primary client with no mode, so `default_mode` applies (`llm_client/factory.py:212`) |
+| The primary's reasoning | the catalog mode `default` of each deployment | `executor.py:6937` builds the primary client with no mode, and `factory.py:133` resolves `default_mode` through `resolve_mode()` (`llm_client/models.py:741`). An attachment turn that escalates to the vision deployment builds its client through `get_llm_client_for_key` (`executor.py:6944`), which takes no mode. |
 
-The settings object loads once per process (`config/settings.py:3778`). `run_sub_agent` takes no override (`sub_agent.py:2392`). So a change needs an `.env` edit and a gateway restart, and it applies to every session at once.
+The settings object loads once per process (`config/settings.py:3778`). `run_sub_agent` takes no override (`sub_agent.py:2395`). So a change needs an `.env` edit and a gateway restart, and it applies to every session at once.
 
 The model choice is already per session. ADR-0121 §4 stores it server-side, and ADR-0079's eleven invariants govern it.
 
@@ -79,18 +79,20 @@ Seshat effort has three levels. The owner picks a level. A level sets all of its
 
 The values live in one committed file, `config/seshat_effort.yaml`, with `default_level: standard`. The gateway loads it once at start into a frozen model and refuses to start if it is invalid (D3). A new level, or a new value, is a PR to that file.
 
-The planner and the helpers keep thinking off at every level. The planner uses the `planner` mode (ADR-0154 D4), and the helpers use the `sub_agent` binding's `worker` mode. No level changes either mode. The planner's D7 qualification and ADR-0154 AC-7 rest on thinking off.
+The planner and the helpers keep their own modes at every level. The planner uses the `planner` mode (ADR-0154 D4: thinking off). The helpers use the `sub_agent` binding's `worker` mode (thinking off on the local models, `effort: low` on `claude_sonnet`). No level changes either mode. The planner's D7 qualification and ADR-0154 AC-7 rest on thinking off.
 
 The sentence of FRE-1619 ("The budget is a limit, not a target…") is static text in every helper prompt, at every level.
 
 ### D2 — The level is per session, and the server holds it
 
-The level is a choice per session, as the model is. It inherits the eleven invariants of ADR-0121 §4 unchanged. These four carry the design:
+The level is a choice per session, as the model is. It inherits the eleven invariants of ADR-0121 §4 unchanged, including invariant 2 (an explicit stored value, never a silent fallback) and invariant 3 with its post-deploy correction (the client keeps sending, and the server decides). The design:
 
-1. **Stored on the session.** A new nullable column `sessions.seshat_effort`, with the values `fast`, `standard` and `deep`. A null value means the default level, and its provenance is `default`.
-2. **A new session starts at Standard.** If the client sends a level for a new session, the server adopts it (invariant 3). The PWA sends none, so every new session starts at the default level (owner, 2026-10-20: "standard"). For an existing session, the stored value wins, and a sent value is ignored.
-3. **The change is a write.** `PATCH /api/v1/sessions/{session_id}/effort`, with `sessions:write`, scoped to the resolved user, with 404 on a mismatch (invariant 4). The session GET and `GET /{session_id}/config` return `seshat_effort` and `effort_provenance` (invariants 5 and 10).
-4. **An in-flight turn keeps its level.** A change applies from the next turn (invariant 7).
+1. **Stored on the session, always explicit.** A new column `sessions.seshat_effort`, `NOT NULL`, with a check on the values `fast`, `standard` and `deep`. The migration writes `standard` into every existing row. No row holds a null.
+2. **The client keeps sending.** The PWA sends the level that its selector shows with every chat request. On a new session, the selector shows Standard (owner, 2026-10-20: "standard"), and the server stores the sent level. If a request for a new session carries no level, the server stores `default_level` explicitly. For an existing session, the stored value wins, and a sent value is ignored.
+3. **The change is a write.** `PATCH /api/v1/sessions/{session_id}/effort`, with `sessions:write`, scoped to the resolved user, with 404 on a mismatch (invariant 4).
+4. **Hydration and notice.** The session GET and `GET /{session_id}/config` return `seshat_effort` and `effort_provenance` (`server-hydrated` or `default`). The WS `STATE_DELTA` on reconnect carries the level, and a change notifies the single active socket (invariants 5, 6 and 10).
+5. **A failed write reverts.** If the `PATCH` fails, the selector returns to the stored level and shows the error (invariant 9).
+6. **An in-flight turn keeps its level.** A change applies from the next turn (invariant 7).
 
 The selector sits next to the model picker. For each level, it shows the catalog mode that the session's model will run, or "model default" when the model declares no mode for that level (D5).
 
@@ -100,8 +102,10 @@ At turn launch, the gateway resolves the session's level into a frozen `EffortSp
 
 1. the decomposition step (`expansion`, D4);
 2. the planner prompt render (`sub_agent_rounds` and `planner_policy`, D6);
-3. the helper's round budget, its task message and `sub_agent_start.round_budget`;
-4. the primary client's mode (`primary_mode`, D5).
+3. the helper's round budget, in all three places: the loop's enforced cap, the task message and `sub_agent_start.round_budget`;
+4. the primary's mode on both client paths: the ordinary path and the vision escalation (`primary_mode`, D5).
+
+One reader keeps the global value on purpose: `_effective_hard_deadline` sizes the helper's outer deadline from `sub_agent_max_tool_iterations`. It is a safety net, not the round budget, and the ceiling below bounds every level's budget.
 
 The global settings stay, as ceilings and kill switches:
 
@@ -119,15 +123,15 @@ This amends ADR-0154 D2: `effort_fast` joins `expansion_denied`, `zero_budget` a
 
 ### D5 — The level selects the primary's catalog mode
 
-A level names a mode: `fast`, none, or `deep`. When the session's primary deployment declares that mode, the primary client requests it. When it does not, the client requests `default_mode`. The client never invents a field: every mode passes the existing catalog validation against its dialect (`DIALECT_FIELDS`, `DIALECT_VALUE_DOMAINS`) at load. So a level cannot send a field that a deployment refuses.
+A level names a mode: `fast`, none, or `deep`. When the deployment that answers the turn declares that mode, its client requests it. When it does not, the client requests `default_mode`. This holds on both client paths: the session's primary through `get_llm_client`, and the vision escalation through `get_llm_client_for_key`, which gains a mode argument. The client never invents a field: every mode passes the existing catalog validation against its dialect (`DIALECT_FIELDS`, `DIALECT_VALUE_DOMAINS`) at load. So a level cannot send a field that a deployment refuses.
 
-The build adds these `fast` modes. No `deep` mode is added at this date:
+Fast lowers the primary's reasoning to the bottom of each dialect's range. That is thinking off on the local models and on OVH, and low effort on `claude_sonnet`. The `anthropic_adaptive` dialect has no off value in its `effort` field, so Sonnet's Fast still reasons, at low effort. The build adds these `fast` modes. No `deep` mode is added at this date:
 
 | Deployment | `fast` mode | Reason |
 |---|---|---|
-| The five `llamacpp_qwen` deployments | `enable_thinking: false`, with that entry's own `worker` sampling values, copied | The Qwen card's non-thinking preset. A copy, so that a later `worker` change does not move Fast. |
+| The five `llamacpp_qwen` deployments | `enable_thinking: false`, with that entry's own `worker` sampling values, copied | Each entry's `worker` sampling is its model card's non-thinking preset: the Qwen card for the four Qwen entries, the Gemma 4 card for `gemma-4-26b-a4b`. A copy, so that a later `worker` change does not move Fast. |
 | `qwen3.8-27b-ovh` | `reasoning_effort: none` | The bottom of the dialect's range. |
-| `claude_sonnet` | `effort: low` | The bottom of the dialect's range. |
+| `claude_sonnet` | `effort: low` | The bottom of the dialect's range. Not thinking off. |
 | `claude_haiku`, `gpt-5.4-mini` | none | Their `default` is already thinking off or `none`. |
 
 So at this date, Deep uses `default` on every model, and the selector shows "model default" for Deep. A model gets a `deep` mode only in a change that adds it to its catalog entry. FRE-1621's follow-up adds `fast` and `deep` to the new GPT and Haiku entries.
@@ -174,7 +178,7 @@ measurable completion condition.
 
 This amends ADR-0154 D7 ("Requalification") and AC-10 (owner, 2026-10-19: "the D7 test binds the default level only. The owner chooses the other levels on purpose").
 
-1. **The configuration of a level.** ADR-0154 D7's fingerprint (engine and build, model and quant, the `planner` mode, the rendered planner prompt hash) is taken per level. A level's prompt depends on its `sub_agent_rounds` and its `planner_policy`.
+1. **The configuration of a level.** ADR-0154 D7's fingerprint (engine and build, model and quant, the `planner` mode, the rendered planner prompt hash) is taken per level. The prompt that D7 qualifies is the D2 prompt: the prompt of a `planner_asked` turn, with `admit_single` true, as the committed probe renders it (`scripts/eval/fre1537/`). It depends on the level's `sub_agent_rounds` and `planner_policy`, and on the worker tools that governance grants. A planner prompt with `admit_single` false runs only on a turn outside D2, for example a `DELEGATION` turn that the matrix expands. That prompt never carries P2 (D6). ADR-0154 D7 does not qualify it, and this ADR does not change that.
 2. **Only the default level requalifies.** A change to the default level's fingerprint is a routing change. It needs a passing D7 run, with Amendment 1's paired rows, before it ships. A change of which level is the default is a routing change too.
 3. **The other levels need no probe run.** Their prompt hashes are recorded with their level (D8), and AC-10 accepts them.
 4. **The deployment gate does not change.** A deployment reaches ADR-0154 D2 only with a `planner` mode, and it gets one only on a passing run of the default level's configuration.
@@ -190,7 +194,7 @@ This amends ADR-0154 D7 ("Requalification") and AC-10 (owner, 2026-10-19: "the D
 | Record | New field | Values |
 |---|---|---|
 | `route_traces` and its ES projection | `seshat_effort` | `fast`, `standard`, `deep` |
-| `route_traces` and its ES projection | `primary_mode` | the catalog mode that the primary requested |
+| `route_traces` and its ES projection | `primary_mode` | the catalog mode that the answering deployment requested: the session's primary, or the vision deployment on an escalated turn |
 | `planner_outcome` | `seshat_effort` | as above |
 | `planner_outcome` | `planner_policy` | `baseline` or `p2` when `admit_single` is true, else null |
 | `model_call_completed` (`extra`) | `mode` | the catalog mode of the call |
@@ -289,7 +293,7 @@ This amends ADR-0154 D7 ("Requalification") and AC-10 (owner, 2026-10-19: "the D
 
 ## Implementation Notes
 
-**Files (indicative):** `config/seshat_effort.yaml` (new); `config/models.yaml` (the `fast` modes); `src/personal_agent/config/` (the frozen loader and the start-up checks of D3); `request_gateway/decomposition.py` (D4); `orchestrator/expansion_controller.py` (D6, rounds from the spec); `orchestrator/sub_agent.py` (rounds from the spec); `orchestrator/executor.py` and `llm_client/factory.py` (the primary mode); `gateway/session_api.py` and `service/app.py` (D2); `observability/route_trace/` and the ES mapping (D8); `docker/postgres/migrations/` and `init.sql`; `scripts/eval/fre1537/render.py` (renders each level's prompt); `seshat-pwa/` (the selector).
+**Files (indicative):** `config/seshat_effort.yaml` (new); `config/models.yaml` (the `fast` modes); `src/personal_agent/config/` (the frozen loader and the start-up checks of D3); `request_gateway/decomposition.py` (D4); `orchestrator/expansion_controller.py` (D6, rounds from the spec); `orchestrator/sub_agent.py` (rounds from the spec); `orchestrator/executor.py` and `llm_client/factory.py` (the mode on both client paths, D5); `gateway/session_api.py` and `service/app.py` (D2); `observability/route_trace/` and the ES mapping (D8); `docker/postgres/migrations/` and `init.sql`; `scripts/eval/fre1537/render.py` (renders each level's prompt); `seshat-pwa/` (the selector).
 
 **Sequence.** Two build tickets:
 1. **Backend.** Everything except the PWA. Before its PR is ready, the build runs D7 on Standard, on the eval stack outside the production compose project (ADR-0154 Implementation Notes), and sets Standard's `planner_policy` by D7 rule 5. The run needs a llama.cpp measurement window, so every seat holds its tests and evals during it. Deploy class: `seshat-gateway` rebuild plus a Postgres migration (do-and-report).
@@ -303,21 +307,52 @@ This amends ADR-0154 D7 ("Requalification") and AC-10 (owner, 2026-10-19: "the D
 
 These criteria belong to this ADR. They are adjudicated on FRE-1620 after both build tickets deploy, not at the merge of this ADR. The live checks use the owner's own turns. No seat fires a live gateway turn for them.
 
-- **AC-1 — Each level runs its own values, and no reader takes the global value.** · **Check:** unit tests with the global settings at `expansion_enabled=true` and `sub_agent_max_tool_iterations=20`, and a spec for each level. Fast: the decomposition returns `SINGLE` with `effort_fast` for every task type, and no planner client is built. Standard: the planner prompt contains "(12 tool round(s) each)", and a helper's task message and `round_budget` are 12. Deep: 20 in both places. Live, over 14 days after both deploys: `route_traces` grouped by `seshat_effort`, joined to `sub_agent_start` on `trace_id`. · *Fails if* any test case differs. It also fails if any live Fast row has a non-null `planner_decision` or `sub_agent_count > 0`, or any live `round_budget` differs from its turn's level.
+- **AC-1 — Each level runs its own values, and every reader of D3 takes the spec.** · **Check:** unit tests with the global settings at `expansion_enabled=true` and `sub_agent_max_tool_iterations=20`, and a spec for each level:
+  - *Fast:* the decomposition returns `SINGLE` with `effort_fast` for every task type, and no planner call is made.
+  - *Standard:* a helper driven by a stub model that requests a tool on every call stops after exactly 12 tool rounds. Its task message states "budget of 12 tool round(s)", its `round_budget` is 12, and the planner prompt contains "(12 tool round(s) each)".
+  - *Deep:* the same, with 20.
 
-- **AC-2 — The level follows ADR-0121 §4.** · **Check:** tests. A new session with no level resolves to `standard` with provenance `default`. A new session with a sent level adopts it. An existing session ignores a sent level. A `PATCH` from another user returns 404 and writes nothing. A level change during a turn leaves that turn's spec unchanged. Live: the owner changes the level in a session, and the next turn's `route_traces` row carries the new level. · *Fails if* any test fails, or the live row after a change carries the old level.
+  Live, over 14 days after both deploys: `route_traces` grouped by `seshat_effort`, joined to `sub_agent_start` on `trace_id`. · *Fails if* any test case differs, any live Fast row has a non-null `planner_decision` or `sub_agent_count > 0`, or any live `round_budget` differs from its turn's level.
 
-- **AC-3 — The default level is qualified, and only its hash is held to it.** · **Check:** the backend ticket holds the passing D7 scorer output (with Amendment 1's paired rows) for Standard's shipped configuration, with its fingerprint, and the `p2` run's result if Standard ships with `baseline`. Live: `planner_outcome` events with `seshat_effort = standard`. · *Fails if* the output is missing, a posted row fails while Standard ships with `p2`, the posted fingerprint differs from the deployed configuration, or any live Standard event carries a `planner_system_prompt_sha256` other than the posted one.
+- **AC-2 — The level follows ADR-0121 §4.** · **Check:** tests, one per case:
+  1. A new session with a sent level stores it. A new session with no level stores `standard` explicitly.
+  2. An existing session ignores a sent level.
+  3. A `PATCH` from another user returns 404 and writes nothing.
+  4. A level change during a turn leaves that turn's spec unchanged.
+  5. A WS reconnect's `STATE_DELTA` carries the stored level, and the session GET returns it with `effort_provenance`.
+  6. In the PWA, a failed `PATCH` returns the selector to the stored level and shows the error.
 
-- **AC-4 — The primary runs the level's mode, or `default`, and never a refused field.** · **Check:** a test for each of the nine deployments and each level asserts the requested mode: the level's mode when the deployment declares it, else `default_mode`. The catalog load refuses a `fast` or `deep` mode with a field outside its dialect. Live: `route_traces.primary_mode` against the session's deployment and level. · *Fails if* any test case differs, the load accepts an invalid mode, or any live row records a mode other than the expected one.
+  After the migration, a query counts the `sessions` rows with no `seshat_effort`. Live: the owner changes the level in a session, and the next turn's `route_traces` row carries the new level. · *Fails if* any test fails, the count is above 0, or the live row after a change carries the old level.
 
-- **AC-5 — Fast turns thinking off where its mode says so.** · **Check:** live, `model_call_completed` events with `role = primary` and `mode = fast` on a deployment whose `fast` mode sets `enable_thinking: false` or `reasoning_effort: none`. The check needs at least 5 such calls, and the owner's Fast turns supply them. · *Fails if* any such call records `reasoning_content_chars` above 0, or the check reports a result with fewer than 5 calls.
+- **AC-3 — The default level is qualified, and its live prompt is the qualified one.** · **Check, three parts:**
+  1. The backend ticket holds the passing D7 scorer output, with Amendment 1's paired rows and its fingerprint, for Standard's shipped configuration. If Standard ships with `baseline`, the ticket also holds the failing `p2` output.
+  2. A pin test renders Standard's D2 prompt from the committed `config/seshat_effort.yaml` and asserts that its SHA-256 equals the posted hash. A later change to Standard's values or to the planner text then fails CI until a new run is posted.
+  3. Live: `planner_outcome` events with `seshat_effort = standard` and a non-null `planner_policy` (D2 turns). The live part needs at least 5 such events. If 30 days after the deploy hold fewer, master reports the count to the owner as "not decided", not as a pass.
 
-- **AC-6 — P2 appears only where D6 puts it, and the record names it.** · **Check:** unit tests. The Standard prompt with `admit_single` equals the `baseline` prompt with the 913-character block and one `\n` inserted directly before the first `Rules:\n`. The block is absent without `admit_single`, at every level. The Deep prompt with `admit_single` equals the 20-round `baseline` prompt byte for byte. Live: every `planner_outcome` event. · *Fails if* a character differs, the block appears in another place or on another level, or any live event has a `planner_policy` that disagrees with its prompt hash.
+  · *Fails if* the output is missing, a posted row fails while Standard ships with `p2`, the posted fingerprint differs from the deployed configuration, the pin test's hash differs from the posted hash, or any live event of part 3 carries another `planner_system_prompt_sha256`.
 
-- **AC-7 — The ceilings hold.** · **Check:** tests. The gateway refuses to start when a level's `sub_agent_rounds` is above `sub_agent_max_tool_iterations`, or when `sub_agent_rounds_by_thoroughness` is set. With `expansion_enabled=false`, every level records `expansion_disabled` and no helper starts. · *Fails if* the gateway starts in either refused case, or a turn expands with `expansion_enabled=false`.
+- **AC-4 — The answering model runs the level's mode, or `default`, and never a refused field.** · **Check:** tests for each of the nine deployments and each level, on both client paths: the ordinary primary path and the vision escalation through `get_llm_client_for_key`. Each asserts the requested mode: the level's mode when the deployment declares it, else `default_mode`. The catalog load refuses a `fast` or `deep` mode with a field outside its dialect. Live: `route_traces.primary_mode` against the answering deployment and the level. · *Fails if* any test case differs, the load accepts an invalid mode, or any live row records a mode other than the expected one.
 
-- **AC-8 — Every turn carries its level.** · **Check:** over 14 days after the backend deploy, `route_traces` and `planner_outcome`, joined on `trace_id`. · *Fails if* any row lacks `seshat_effort` or `primary_mode`, or a `planner_outcome` event's `seshat_effort` differs from its turn's row.
+- **AC-5 — Fast has no reasoning where its mode turns reasoning off.** · **Check:** live, `model_call_completed` events with `role = primary` and `mode = fast`:
+  - on a `llamacpp_qwen` deployment, `reasoning_content_chars`. This part needs at least 5 calls, and the owner's Fast turns supply them;
+  - on `qwen3.8-27b-ovh`, `reasoning_tokens` where the provider reports it. A call without the field cannot be decided, and the check reports its count.
+
+  Sonnet's Fast mode reasons at low effort by design (D5), so this check excludes it. · *Fails if* any local call records `reasoning_content_chars` above 0, any OVH call records `reasoning_tokens` above 0, or the local result is reported with fewer than 5 calls.
+
+- **AC-6 — P2 appears only where D6 puts it, and the record names it.** · **Check:** unit tests against Standard's shipped `planner_policy`:
+  - *Shipped `p2`:* Standard's D2 prompt equals its `baseline` prompt with the 913-character block and one `\n` inserted directly before the first `Rules:\n`.
+  - *Shipped `baseline`:* Standard's D2 prompt is byte-identical to the prompt that the pre-change renderer gives at 12 rounds.
+  - *Every level:* the block is absent without `admit_single`. Deep's D2 prompt is byte-identical to the prompt that the pre-change renderer gives at 20 rounds.
+
+  Live: every `planner_outcome` event. · *Fails if* a character differs, the block appears in another place or on another level, or any live event has a `planner_policy` that disagrees with its prompt hash.
+
+- **AC-7 — The ceilings hold.** · **Check:** tests. The gateway refuses to start when a level's `sub_agent_rounds` is above `sub_agent_max_tool_iterations`, or when `sub_agent_rounds_by_thoroughness` is set. With `expansion_enabled=false`, every level records `expansion_disabled`, makes no planner call and starts no helper. · *Fails if* the gateway starts in either refused case, or a turn with `expansion_enabled=false` calls the planner or starts a helper.
+
+- **AC-8 — Every turn carries its level.** · **Check:** over 14 days after the backend deploy, two queries:
+  1. Over every `route_traces` row in the window, as the full population: `seshat_effort`, and `primary_mode` on every row with a non-null `model_role`.
+  2. Over every `planner_outcome` event in the window: its `route_traces` row on `trace_id`, by a left join.
+
+  · *Fails if* a row of query 1 lacks either field, or an event of query 2 has no row or a `seshat_effort` that differs from its row's.
 
 ---
 
@@ -340,4 +375,4 @@ These criteria belong to this ADR. They are adjudicated on FRE-1620 after both b
 
 ### 2026-10-20 - Proposed
 **Changed By:** `adr` seat at Opus 5.5 (FRE-1620)
-**Reason:** Drafted on the owner's "Ok. Write it up" after the ADR discussion of 2026-10-20. The owner answered the five open points: P2 on Standard behind a D7 gate ("1 - yes"), Fast turns the primary's thinking off ("2- yes"), presets only ("Presets only"), and Standard for every new session ("5 - standard"). For point 3, the owner asked for a model refresh, filed by master as FRE-1621, and this ADR does not wait for it.
+**Reason:** Drafted on the owner's "Ok. Write it up" after the ADR discussion of 2026-10-20. The owner answered the five open points: P2 on Standard behind a D7 gate ("1 - yes"), Fast lowers the primary's reasoning to the bottom of each model's range, which is thinking off on the local models and low effort on Sonnet ("2- yes"), presets only ("Presets only"), and Standard for every new session ("5 - standard"). For point 3, the owner asked for a model refresh, filed by master as FRE-1621, and this ADR does not wait for it.

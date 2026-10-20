@@ -23,7 +23,8 @@ from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition, ProviderDefinition
 from personal_agent.memory.session_digest import SessionDigestView
 from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
-from personal_agent.service.models import SessionSelectionUpdate
+from personal_agent.config.seshat_effort import EffortLevel, hydrate_effort
+from personal_agent.service.models import SessionEffortUpdate, SessionSelectionUpdate
 from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
 log = structlog.get_logger(__name__)
@@ -222,6 +223,8 @@ async def get_session(
     )
     result["primary_selection"] = _resolved_primary
     result["selection_provenance"] = _selection_provenance
+    # ADR-0157 D2: the stored Seshat effort level, with its provenance.
+    result["seshat_effort"], result["effort_provenance"] = _session_effort(session)
 
     # FRE-943: resolve context_max against this session's actual selection
     # (just resolved above), not the in-turn-only ContextVar that
@@ -687,7 +690,14 @@ async def get_session_config(
         user_id=str(user_id),
         trace_id=ctx.trace_id,
     )
-    return {"session_id": session_id, "roles": roles, "providers": providers}
+    seshat_effort, effort_provenance = _session_effort(session)
+    return {
+        "session_id": session_id,
+        "roles": roles,
+        "providers": providers,
+        "seshat_effort": seshat_effort,
+        "effort_provenance": effort_provenance,
+    }
 
 
 @config_router.get("/config")
@@ -855,6 +865,75 @@ async def update_session_selection(
     return _session_to_dict(session)
 
 
+@router.patch("/{session_id}/effort")
+async def update_session_effort(
+    request: Request,
+    session_id: str,
+    body: SessionEffortUpdate,
+    token: TokenInfo = Depends(require_scope("sessions:write")),  # noqa: B008
+    db: AsyncSession = Depends(_get_db),  # noqa: B008
+) -> dict[str, Any]:
+    """Set a session's Seshat effort level (ADR-0157 D2).
+
+    The level change is a write, under ADR-0121 §4's invariants: the body is one of the three
+    levels (422 otherwise, before any read), the write is scoped to the authenticated user
+    (404 on a mismatch, nothing written), and the change is emitted to the single active
+    client as a ``session_effort`` STATE_DELTA. A turn already running keeps the level it
+    launched with; the change applies from the next turn (invariant 7).
+
+    Args:
+        request: FastAPI request (injected).
+        session_id: UUID string of the session.
+        body: The new level.
+        token: Validated bearer token with ``sessions:write`` scope.
+        db: Async SQLAlchemy session (injected).
+
+    Returns:
+        The session dict with ``seshat_effort`` and ``effort_provenance``.
+
+    Raises:
+        HTTPException(422): When ``session_id`` is not a valid UUID or the level is unknown.
+        HTTPException(404): When the session does not exist or is owned by another user.
+    """
+    get_rate_limiter().check(token)
+    from personal_agent.service.repositories.session_repository import SessionRepository
+    from personal_agent.transport.agui.transport import emit_session_effort
+
+    user_id = await _require_request_user_id(request, db)
+    ctx = SystemTraceContext.new("session_api", session_id=session_id)
+
+    try:
+        uuid = UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_parameter",
+                "message": "session_id must be a valid UUID",
+                "status": 422,
+            },
+        ) from exc
+
+    session = await SessionRepository(db).set_effort(
+        uuid, user_id=user_id, seshat_effort=body.seshat_effort
+    )
+    if session is None:
+        raise not_found("session")
+
+    await emit_session_effort(session_id=session_id, seshat_effort=body.seshat_effort)
+    log.info(
+        "gateway_sessions_set_effort",
+        session_id=session_id,
+        seshat_effort=body.seshat_effort,
+        token_name=token.name,
+        user_id=str(user_id),
+        trace_id=ctx.trace_id,
+    )
+    result = _session_to_dict(session)
+    result["seshat_effort"], result["effort_provenance"] = _session_effort(session)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -876,6 +955,18 @@ def _extract_title(messages: list[dict[str, Any]]) -> str | None:
             if text:
                 return text[:60] + ("…" if len(text) > 60 else "")
     return None
+
+
+def _session_effort(session: Any) -> tuple[EffortLevel, str]:
+    """Return a session's stored Seshat effort level and its provenance (ADR-0157 D2).
+
+    Args:
+        session: SQLAlchemy ``SessionModel`` instance.
+
+    Returns:
+        See :func:`~personal_agent.config.seshat_effort.hydrate_effort`.
+    """
+    return hydrate_effort(getattr(session, "seshat_effort", None))
 
 
 def _session_to_dict(session: Any, digest_view: SessionDigestView | None = None) -> dict[str, Any]:

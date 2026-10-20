@@ -26,10 +26,13 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
 
+from personal_agent.config.seshat_effort import hydrate_effort
 from personal_agent.config.settings import get_settings
 from personal_agent.service.auth import RequestUser
 from personal_agent.service.database import AsyncSessionLocal
+from personal_agent.service.models import SessionModel
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.service.ws_ticket import consume_ws_ticket
 from personal_agent.telemetry import get_logger
@@ -817,9 +820,10 @@ async def _send_attach_replay(conn: _ConnectionState) -> int | None:
     3. Read the status snapshot. It is read after step 2, and ``emit_turn_status`` stores a
        reading before it persists the event, so a reading at or below the step-2 seq is in
        the snapshot and a later one arrives live.
-    4. Send the snapshot (only when one exists: absent is never sent as zero), replay the
-       in-flight turn, and close the replay with ``REPLAY_COMPLETE`` carrying the highest seq
-       sent and whether a turn is still running.
+    4. Send the snapshot (only when one exists: absent is never sent as zero), then the
+       session's stored Seshat effort level as a ``session_effort`` STATE_DELTA (ADR-0157 D2:
+       the reconnect carries the level), replay the in-flight turn, and close the replay with
+       ``REPLAY_COMPLETE`` carrying the highest seq sent and whether a turn is still running.
 
     Args:
         conn: The attaching connection.
@@ -844,6 +848,11 @@ async def _send_attach_replay(conn: _ConnectionState) -> int | None:
             buf = SessionEventBuffer(db)
             latest = await buf.latest_seq(sid)
             snapshot = await TurnStatusStore(db).load(sid)
+            stored_effort = (
+                await db.execute(
+                    select(SessionModel.seshat_effort).where(SessionModel.session_id == sid)
+                )
+            ).scalar_one_or_none()
             replay_after = latest if inflight_start is None else min(inflight_start, latest)
             events = await buf.replay(sid, after_seq=replay_after)
     except Exception:
@@ -861,6 +870,18 @@ async def _send_attach_replay(conn: _ConnectionState) -> int | None:
                 "seq": None,
             }
         )
+    seshat_effort, effort_provenance = hydrate_effort(stored_effort)
+    frames.append(
+        {
+            "type": "STATE_DELTA",
+            "data": {
+                "key": "session_effort",
+                "value": {"seshat_effort": seshat_effort, "effort_provenance": effort_provenance},
+            },
+            "session_id": session_id,
+            "seq": None,
+        }
+    )
     max_sent_seq = replay_after
     saw_done = False
     for evt in events:

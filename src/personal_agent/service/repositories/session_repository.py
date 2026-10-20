@@ -10,6 +10,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from personal_agent.config.seshat_effort import EffortLevel, effort_spec
 from personal_agent.exceptions import InvalidMessageError
 from personal_agent.service.models import SessionCreate, SessionModel, SessionUpdate
 
@@ -45,6 +46,7 @@ class SessionRepository:
         *,
         primary_model_at_creation: str | None = None,
         model_config_path: str | None = None,
+        seshat_effort: EffortLevel | None = None,
     ) -> SessionModel:
         """Create a new session owned by user_id.
 
@@ -57,6 +59,9 @@ class SessionRepository:
                 pass the resolved value.
             model_config_path: Resolved YAML config path active when the
                 session opened. Same provenance contract.
+            seshat_effort: The session's Seshat effort level (ADR-0157 D2). ``None`` takes
+                ``data.seshat_effort``, then ``default_level``; the value is always written
+                explicitly.
 
         Returns:
             Created session model.
@@ -75,6 +80,7 @@ class SessionRepository:
             # ADR-0121 T5 (FRE-920): vestigial — nothing reads this back; the
             # selection store is the source of truth. Column stays NOT NULL.
             execution_profile="local",
+            seshat_effort=seshat_effort or data.seshat_effort or effort_spec(None).level,
         )
         self.db.add(session)
         await self.db.commit()
@@ -97,6 +103,28 @@ class SessionRepository:
             stmt = stmt.where(SessionModel.user_id == user_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def set_effort(
+        self, session_id: UUID, *, user_id: UUID, seshat_effort: EffortLevel
+    ) -> SessionModel | None:
+        """Set a session's Seshat effort level, scoped to its owner (ADR-0157 D2).
+
+        Args:
+            session_id: UUID of session.
+            user_id: The authenticated user. A session owned by another user is not written.
+            seshat_effort: The new level.
+
+        Returns:
+            The updated session, or ``None`` if not found / ownership mismatch (nothing is
+            written then).
+        """
+        session = await self.get(session_id, user_id=user_id)
+        if session is None:
+            return None
+        session.seshat_effort = seshat_effort
+        await self.db.commit()
+        await self.db.refresh(session)
+        return session
 
     async def update(
         self,

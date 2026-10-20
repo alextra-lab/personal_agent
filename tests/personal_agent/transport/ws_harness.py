@@ -250,10 +250,36 @@ class _FakeSessionRepository:
         return object()
 
 
+class FakeEffortDb:
+    """The one query the attach replay makes: the session's Seshat effort level (FRE-1622).
+
+    ``stored`` is the value every session reads; a test sets it to check the frame.
+    """
+
+    stored: object = "standard"
+
+    async def execute(self, _stmt: Any) -> Any:
+        """Return a result whose ``scalar_one_or_none`` is :attr:`stored`.
+
+        Args:
+            _stmt: The statement (unused).
+
+        Returns:
+            A result-like object.
+        """
+        stored = self.stored
+
+        class _Result:
+            def scalar_one_or_none(self) -> object:
+                return stored
+
+        return _Result()
+
+
 @asynccontextmanager
-async def _fake_async_session() -> AsyncGenerator[None, None]:
-    """Async context manager that yields ``None`` in place of a real DB session."""
-    yield None
+async def _fake_async_session() -> AsyncGenerator[FakeEffortDb, None]:
+    """Async context manager that yields a fake DB session in place of a real one."""
+    yield FakeEffortDb()
 
 
 def _fake_session_local_factory() -> Any:
@@ -316,6 +342,7 @@ def build_ws_test_app(
 
     # ── Patch TurnStatusStore (FRE-1543 snapshot) ───────────────────────────
     FakeTurnStatusStore.stored = {}
+    FakeEffortDb.stored = "standard"
     mp.setattr(_transport, "TurnStatusStore", FakeTurnStatusStore)
     mp.setattr(_wsep, "TurnStatusStore", FakeTurnStatusStore)
 

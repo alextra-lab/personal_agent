@@ -42,7 +42,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- FRE-1595). Only the server writes it (SessionRepository.add_revealed_tools); the
     -- PATCH endpoint cannot set or clear it. Pruning clears it with the messages. Mirrors
     -- docker/postgres/migrations/0033_sessions_revealed_tools.sql.
-    revealed_tools TEXT[] NOT NULL DEFAULT '{}'
+    revealed_tools TEXT[] NOT NULL DEFAULT '{}',
+    -- The session's Seshat effort level (ADR-0157 D2, FRE-1622). The application writes it
+    -- explicitly on every session it creates; the default matches default_level in
+    -- config/seshat_effort.yaml. Mirrors docker/postgres/migrations/0034_sessions_seshat_effort.sql.
+    seshat_effort VARCHAR(16) NOT NULL DEFAULT 'standard',
+    CONSTRAINT ck_sessions_seshat_effort CHECK (seshat_effort IN ('fast', 'standard', 'deep'))
 );
 
 CREATE INDEX idx_sessions_last_active ON sessions(last_active_at DESC);

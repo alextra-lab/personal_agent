@@ -193,6 +193,26 @@ def effort_spec(level: EffortLevel | None) -> EffortSpec:
     return config.levels[level if level is not None else config.default_level]
 
 
+EffortProvenance = Literal["server-hydrated", "default"]
+
+
+def hydrate_effort(stored: object) -> tuple[EffortLevel, EffortProvenance]:
+    """Return a stored level and its provenance, for the session GETs and the attach replay.
+
+    Args:
+        stored: The value read from ``sessions.seshat_effort``.
+
+    Returns:
+        ``(level, "server-hydrated")`` for a stored level, else ``(default_level, "default")``.
+        The database refuses any other value, so the second case means the value could not be
+        read. Provenance then never claims a stored choice (ADR-0121 invariant 2).
+    """
+    for level in EFFORT_LEVELS:
+        if stored == level:
+            return level, "server-hydrated"
+    return effort_spec(None).level, "default"
+
+
 #: The spec of the current turn. ``None`` outside a chat turn.
 _current_effort: contextvars.ContextVar[EffortSpec | None] = contextvars.ContextVar(
     "current_effort", default=None

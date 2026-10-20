@@ -79,7 +79,7 @@ Seshat effort has three levels. The owner picks a level. A level sets all of its
 
 The values live in one committed file, `config/seshat_effort.yaml`, with `default_level: standard`. The gateway loads it once at start into a frozen model and refuses to start if it is invalid (D3). A new level, or a new value, is a PR to that file.
 
-The planner and the helpers keep their own modes at every level. The planner uses the `planner` mode (ADR-0154 D4: thinking off). The helpers use the `sub_agent` binding's `worker` mode (thinking off on the local models, `effort: low` on `claude_sonnet`). No level changes either mode. The planner's D7 qualification and ADR-0154 AC-7 rest on thinking off.
+The planner and the helpers keep their own modes at every level. On a D2 turn, the planner uses the deployment's qualified `planner` mode (ADR-0154 D4: thinking off). Outside D2, a deployment without a `planner` mode answers the planner call with its `default` mode, as today (`config/model_loader.py:393`). The helpers use the `sub_agent` binding's `worker` mode (thinking off on the local models, `effort: low` on `claude_sonnet`). No level changes either mode. The planner's D7 qualification and ADR-0154 AC-7 rest on thinking off.
 
 The sentence of FRE-1619 ("The budget is a limit, not a target…") is static text in every helper prompt, at every level.
 
@@ -198,6 +198,7 @@ This amends ADR-0154 D7 ("Requalification") and AC-10 (owner, 2026-10-19: "the D
 | `planner_outcome` | `seshat_effort` | as above |
 | `planner_outcome` | `planner_policy` | `baseline` or `p2` when `admit_single` is true, else null |
 | `model_call_completed` (`extra`) | `mode` | the catalog mode of the call |
+| `chat_stream.launched` | `seshat_effort` | the level that the turn resolved at launch |
 
 - The two `route_traces` columns need an idempotent migration under `docker/postgres/migrations/` and the same columns in `docker/postgres/init.sql`, as does `sessions.seshat_effort` (D2). The migration runs as the `agent` role through `AGENT_DATABASE_ADMIN_URL`.
 - `planner_policy` must agree with `planner_system_prompt_sha256` on every event.
@@ -307,7 +308,7 @@ This amends ADR-0154 D7 ("Requalification") and AC-10 (owner, 2026-10-19: "the D
 
 These criteria belong to this ADR. They are adjudicated on FRE-1620 after both build tickets deploy, not at the merge of this ADR. The live checks use the owner's own turns. No seat fires a live gateway turn for them.
 
-- **AC-1 — Each level runs its own values, and every reader of D3 takes the spec.** · **Check:** unit tests with the global settings at `expansion_enabled=true` and `sub_agent_max_tool_iterations=20`, and a spec for each level:
+- **AC-1 — Each level runs its own values, and every reader of D3 takes the spec.** · **Check:** unit tests with the global settings at `expansion_enabled=true` and `sub_agent_max_tool_iterations=30`, so that the global value differs from every level's value, and a spec for each level:
   - *Fast:* the decomposition returns `SINGLE` with `effort_fast` for every task type, and no planner call is made.
   - *Standard:* a helper driven by a stub model that requests a tool on every call stops after exactly 12 tool rounds. Its task message states "budget of 12 tool round(s)", its `round_budget` is 12, and the planner prompt contains "(12 tool round(s) each)".
   - *Deep:* the same, with 20.
@@ -319,10 +320,12 @@ These criteria belong to this ADR. They are adjudicated on FRE-1620 after both b
   2. An existing session ignores a sent level.
   3. A `PATCH` from another user returns 404 and writes nothing.
   4. A level change during a turn leaves that turn's spec unchanged.
-  5. A WS reconnect's `STATE_DELTA` carries the stored level, and the session GET returns it with `effort_provenance`.
-  6. In the PWA, a failed `PATCH` returns the selector to the stored level and shows the error.
+  5. A WS reconnect's `STATE_DELTA` carries the stored level. The session GET and `GET /{session_id}/config` each return it with `effort_provenance`.
+  6. After a successful `PATCH`, the session's active socket receives an event that carries the new level.
+  7. In the PWA, a failed `PATCH` returns the selector to the stored level and shows the error.
+  8. A migration test on the test Postgres: after the migration, an insert or update of `sessions.seshat_effort` to null, or to a value outside `fast`, `standard` and `deep`, is refused by the database.
 
-  After the migration, a query counts the `sessions` rows with no `seshat_effort`. Live: the owner changes the level in a session, and the next turn's `route_traces` row carries the new level. · *Fails if* any test fails, the count is above 0, or the live row after a change carries the old level.
+  After the production migration, a query counts the `sessions` rows with no `seshat_effort`. Live: the owner changes the level in a session, and the next turn's `route_traces` row carries the new level. · *Fails if* any test fails, the count is above 0, or the live row after a change carries the old level.
 
 - **AC-3 — The default level is qualified, and its live prompt is the qualified one.** · **Check, three parts:**
   1. The backend ticket holds the passing D7 scorer output, with Amendment 1's paired rows and its fingerprint, for Standard's shipped configuration. If Standard ships with `baseline`, the ticket also holds the failing `p2` output.
@@ -333,11 +336,11 @@ These criteria belong to this ADR. They are adjudicated on FRE-1620 after both b
 
 - **AC-4 — The answering model runs the level's mode, or `default`, and never a refused field.** · **Check:** tests for each of the nine deployments and each level, on both client paths: the ordinary primary path and the vision escalation through `get_llm_client_for_key`. Each asserts the requested mode: the level's mode when the deployment declares it, else `default_mode`. The catalog load refuses a `fast` or `deep` mode with a field outside its dialect. Live: `route_traces.primary_mode` against the answering deployment and the level. · *Fails if* any test case differs, the load accepts an invalid mode, or any live row records a mode other than the expected one.
 
-- **AC-5 — Fast has no reasoning where its mode turns reasoning off.** · **Check:** live, `model_call_completed` events with `role = primary` and `mode = fast`:
-  - on a `llamacpp_qwen` deployment, `reasoning_content_chars`. This part needs at least 5 calls, and the owner's Fast turns supply them;
-  - on `qwen3.8-27b-ovh`, `reasoning_tokens` where the provider reports it. A call without the field cannot be decided, and the check reports its count.
+- **AC-5 — Fast has no reasoning where its mode turns reasoning off.** · **Check, two parts:**
+  1. *Every `fast` mode, by test.* For each deployment with a `fast` mode, a test builds the request through the dialect and asserts the reasoning field on the wire: `chat_template_kwargs.enable_thinking: false` on the five `llamacpp_qwen` deployments, `reasoning_effort: "none"` on `qwen3.8-27b-ovh`, and `effort: "low"` on `claude_sonnet`.
+  2. *The response, live, on the default local binding.* `model_call_completed` events with `role = primary` and `mode = fast` on `qwen3.8-flash-next`: `reasoning_content_chars`. This part needs at least 5 calls from the owner's Fast turns. If 30 days after the deploy hold fewer, master reports the count to the owner as "not decided".
 
-  Sonnet's Fast mode reasons at low effort by design (D5), so this check excludes it. · *Fails if* any local call records `reasoning_content_chars` above 0, any OVH call records `reasoning_tokens` above 0, or the local result is reported with fewer than 5 calls.
+  *Stated limit.* The response proves thinking off only where the owner runs Fast. Part 1 decides the other deployments at the request. Their live calls are reported when they exist: `reasoning_content_chars` on a local deployment, and `reasoning_tokens` on OVH where the provider sends the field. Sonnet's Fast mode reasons at low effort by design (D5). · *Fails if* any part 1 test differs, any live Fast call on a `llamacpp_qwen` deployment records `reasoning_content_chars` above 0, any live Fast call on OVH records `reasoning_tokens` above 0, or part 2 is reported as a pass with fewer than 5 calls.
 
 - **AC-6 — P2 appears only where D6 puts it, and the record names it.** · **Check:** unit tests against Standard's shipped `planner_policy`:
   - *Shipped `p2`:* Standard's D2 prompt equals its `baseline` prompt with the 913-character block and one `\n` inserted directly before the first `Rules:\n`.
@@ -346,13 +349,14 @@ These criteria belong to this ADR. They are adjudicated on FRE-1620 after both b
 
   Live: every `planner_outcome` event. · *Fails if* a character differs, the block appears in another place or on another level, or any live event has a `planner_policy` that disagrees with its prompt hash.
 
-- **AC-7 — The ceilings hold.** · **Check:** tests. The gateway refuses to start when a level's `sub_agent_rounds` is above `sub_agent_max_tool_iterations`, or when `sub_agent_rounds_by_thoroughness` is set. With `expansion_enabled=false`, every level records `expansion_disabled`, makes no planner call and starts no helper. · *Fails if* the gateway starts in either refused case, or a turn with `expansion_enabled=false` calls the planner or starts a helper.
+- **AC-7 — The ceilings hold.** · **Check:** tests. The gateway refuses to start when a level's `sub_agent_rounds` is above `sub_agent_max_tool_iterations`, or when `sub_agent_rounds_by_thoroughness` is set. With `expansion_enabled=false`, expansion permitted by governance and a positive expansion budget, every level records `expansion_disabled`, makes no planner call and starts no helper. · *Fails if* the gateway starts in either refused case, or a turn with `expansion_enabled=false` calls the planner or starts a helper.
 
-- **AC-8 — Every turn carries its level.** · **Check:** over 14 days after the backend deploy, two queries:
-  1. Over every `route_traces` row in the window, as the full population: `seshat_effort`, and `primary_mode` on every row with a non-null `model_role`.
-  2. Over every `planner_outcome` event in the window: its `route_traces` row on `trace_id`, by a left join.
+- **AC-8 — Every turn carries its level.** · **Check:** over 14 days after the backend deploy, three queries:
+  1. *The population.* Every `chat_stream.launched` event in the window, which the gateway writes once for each accepted chat request, before the turn runs. Each event carries `seshat_effort` (D8).
+  2. *The turn rows.* Each event of query 1, left-joined to `route_traces` on `trace_id`: the row's `seshat_effort`, and its `primary_mode` when its `model_role` is not null.
+  3. *The planner events.* Every `planner_outcome` event in the window, left-joined to `route_traces` on `trace_id`.
 
-  · *Fails if* a row of query 1 lacks either field, or an event of query 2 has no row or a `seshat_effort` that differs from its row's.
+  · *Fails if* an event of query 1 lacks `seshat_effort` or has no `route_traces` row, a joined row lacks a field of query 2 or carries a level other than its launch event's, or an event of query 3 has no row or a `seshat_effort` that differs from its row's.
 
 ---
 

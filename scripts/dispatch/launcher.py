@@ -92,7 +92,12 @@ import uuid
 from collections.abc import Callable, Sequence
 from typing import Literal, Protocol
 
-from scripts.dispatch.pane_state import held_prompt_summary, pane_tail_summary, session_is_idle
+from scripts.dispatch.pane_state import (
+    held_prompt_summary,
+    model_switch_prompt_open,
+    pane_tail_summary,
+    session_is_idle,
+)
 from scripts.dispatch.tmux_target import exact_pane, exact_session
 
 # Model tiers the launcher will place on a command line. Validated so no
@@ -452,11 +457,15 @@ class LaunchResult:
             preflight aborts or tmux fails).
         card: The device-visible message describing what happened.
         launched: Whether a session was actually started.
+        model_switch_answered: Whether the dispatcher sent the one Enter that
+            answers its own "Switch model?" prompt (FRE-1629). Set on a failed
+            delivery too, so the log shows the answer was tried.
     """
 
     outcome: ResultOutcome
     card: str
     launched: bool
+    model_switch_answered: bool = False
 
 
 def known_streams() -> tuple[str, ...]:
@@ -1042,7 +1051,7 @@ def deliver_to_seat(
     runner: CommandRunner,
     *,
     sleeper: Callable[[float], None] = time.sleep,
-) -> ResultOutcome:
+) -> tuple[ResultOutcome, bool]:
     """Type a plan's commands into a live seat, confirming each is processed.
 
     Never restarts, clears-by-recreation, or otherwise touches the seat's
@@ -1068,15 +1077,27 @@ def deliver_to_seat(
     changed) rather than *finished* — the seat is expected to still be working
     when this returns.
 
+    **The dispatcher answers its own model-switch prompt (FRE-1629).** A
+    ``/model`` that changes tier opens a blocking "Switch model?" dialog. While
+    confirming a ``/model`` command, and only then, one bare Enter is sent when
+    ``model_switch_prompt_open`` matches: ``Yes`` is the model that the ticket
+    Tier asked for. Any other dialog gets no key. For ``/model``, Remote
+    Control ``busy`` is not accepted as proof of processing, because a transient
+    ``busy`` reading before the dialog renders would let ``/build`` be typed
+    into it. Residual risk: the pane capture and the Enter are two tmux calls,
+    so a human who answers the dialog between them and meets a new dialog at
+    once can have that dialog answered. The window is milliseconds.
+
     Args:
         plan: The ``reuse`` plan whose ``deliveries`` are typed, in order.
         runner: The command runner seam.
         sleeper: The sleep seam (injectable for tests).
 
     Returns:
-        ``reuse`` when every command was delivered and confirmed, ``seat-busy``
-        when the seat was mid-turn, or ``delivery-failed`` when a command could
-        not be confirmed as processed.
+        A pair. The first item is ``reuse`` when every command was delivered and
+        confirmed, ``seat-busy`` when the seat was mid-turn, or
+        ``delivery-failed`` when a command could not be confirmed as processed.
+        The second item is whether the model-switch prompt was answered.
     """
     session = plan.tmux_session
     topology = topology_for(plan.stream)
@@ -1085,8 +1106,9 @@ def deliver_to_seat(
     # or an ambiguous worktree match), not the primary signal.
     busy = seat_is_busy(topology, runner)
     if busy is True or (busy is None and not session_is_idle(_capture_pane(session, runner))):
-        return "seat-busy"
+        return "seat-busy", False
 
+    model_switch_answered = False
     last = len(plan.deliveries) - 1
     for index, command in enumerate(plan.deliveries):
         before = _capture_pane(session, runner)
@@ -1103,20 +1125,38 @@ def deliver_to_seat(
         runner(["tmux", "send-keys", "-t", exact_pane(session), "-l", command])
         runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
         resubmits = [0]
+        answered = [False]
 
         def processed(
             before: str = before,
             is_last: bool = index == last,
             cmd: str = command,
             resubmits: list[int] = resubmits,
+            answered: list[bool] = answered,
         ) -> bool:
+            pane: str | None = None
+            if cmd.startswith("/model "):
+                # FRE-1629: ``/model`` is a client command. A tier change opens
+                # a "Switch model?" dialog that blocks the seat until a key
+                # answers it. The dialog is read BEFORE any busy shortcut, and
+                # RC ``busy`` never proves a ``/model`` was processed (a
+                # transient reading would let /build be typed into the dialog).
+                pane = _capture_pane(session, runner)
+                if model_switch_prompt_open(pane):
+                    if not answered[0]:
+                        answered[0] = True
+                        runner(["tmux", "send-keys", "-t", exact_pane(session), "Enter"])
+                    # Never fall through: the FRE-923 resubmit below must not
+                    # send a second Enter on the poll that answered.
+                    return False
             # The seat reporting itself busy is direct, structured evidence it
             # accepted the command and is working — stronger than any inference
             # from rendered text, and the only signal that distinguishes a
             # SUBMITTED /build from one merely echoed into the input box.
-            if seat_is_busy(topology, runner) is True:
+            elif seat_is_busy(topology, runner) is True:
                 return True
-            pane = _capture_pane(session, runner)
+            if pane is None:
+                pane = _capture_pane(session, runner)
             # FRE-923: the command still sitting in the box is positive evidence
             # its Enter was SWALLOWED — the TUI re-initializing after `/clear`
             # eats the keypress while buffering the characters. Re-press Enter
@@ -1138,7 +1178,9 @@ def deliver_to_seat(
                 return False
             return pane != before and session_is_idle(pane)
 
-        if _poll_until(processed, timeout_s=_DELIVERY_TIMEOUT_S, sleeper=sleeper):
+        confirmed = _poll_until(processed, timeout_s=_DELIVERY_TIMEOUT_S, sleeper=sleeper)
+        model_switch_answered = model_switch_answered or answered[0]
+        if confirmed:
             continue
 
         # Non-final commands are allowed one benign exception: an idle pane whose
@@ -1151,8 +1193,8 @@ def deliver_to_seat(
 
         # Otherwise fail closed: never continue to the next command on an
         # unconfirmed one. Proceeding is exactly what loses the dispatch.
-        return "delivery-failed"
-    return "reuse"
+        return "delivery-failed", model_switch_answered
+    return "reuse", model_switch_answered
 
 
 def _preflight_worktree(worktree: str, runner: CommandRunner) -> bool:
@@ -1224,14 +1266,20 @@ def execute_plan(
         )
 
     if plan.outcome == "reuse":
-        outcome = deliver_to_seat(plan, runner, sleeper=sleeper)
+        outcome, model_switch_answered = deliver_to_seat(plan, runner, sleeper=sleeper)
         if outcome != "reuse":
             return LaunchResult(
                 outcome=outcome,
                 card=_delivery_failure_card(plan, outcome),
                 launched=False,
+                model_switch_answered=model_switch_answered,
             )
-        return LaunchResult(outcome="reuse", card=plan.card, launched=True)
+        return LaunchResult(
+            outcome="reuse",
+            card=plan.card,
+            launched=True,
+            model_switch_answered=model_switch_answered,
+        )
 
     assert plan.command is not None  # noqa: S101 - guarded by LaunchPlan.__post_init__
 

@@ -35,8 +35,15 @@
 The analysis read official provider pages, the provider model-list endpoints, the litellm package and
 the litellm GitHub repository, the repo, and one read-only query on the cost ledger.
 
-- **No model calls.** No request went to any inference endpoint, paid or local. No token was
-  generated or billed.
+- **No model calls in the analysis.** No request in the analysis went to any inference endpoint,
+  paid or local.
+- **Three confirmation calls after the analysis, at the owner's direction.** On 2026-10-20 the
+  owner asked for a real call to each cloud model id in the config. The question was whether the
+  config names aliases or pinned snapshots (§4.4). I sent one direct API request per id:
+  `claude-sonnet-5`, `claude-haiku-4-5-20251001` and `gpt-5.4-mini`. Each request asked for the
+  word "ok", with `max_tokens` 16, and used 12 to 15 input tokens and 4 output tokens. The total
+  cost was below $0.001. The requests did not go through the gateway, so they wrote nothing to
+  memory or to `api_costs`.
 - **No config change.** `config/`, `.env` and the deployment are unchanged. The PR diff contains only
   `docs/`.
 - **Metadata reads only.** These requests list models or describe a package. None of them runs a
@@ -201,6 +208,35 @@ These are catalog facts that the providers now report differently. They are not 
 |---|---|---|---|
 | `claude_sonnet` | 200000 | 1,000,000 | Anthropic `/v1/models/claude-sonnet-5` |
 | `gpt-5.4-mini` | 128000 | 400,000 window, 272,000 max input | [model page](https://developers.openai.com/api/docs/models/gpt-5.4-mini) |
+
+### 4.4 Alias or pinned snapshot
+
+The confirmation calls in §2 returned the model that each API reports as served:
+
+| Catalog key | Config id | Served model in the response | Kind |
+|---|---|---|---|
+| `claude_sonnet` | `claude-sonnet-5` | `claude-sonnet-5` (`msg_011CgCyg82fSkPTHDzDQdJvx`) | Pinned snapshot |
+| `claude_haiku` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` (`msg_011CgCyhYCzp8cGJo91C7XcC`) | Pinned, dated snapshot |
+| `gpt-5.4-mini` | `gpt-5.4-mini` | `gpt-5.4-mini-2026-03-17` | **Alias** to a dated snapshot |
+
+- **Anthropic.** "Every Claude model ID is a pinned snapshot, including the dateless IDs used from
+  the 4.6 generation on" ([models overview](https://platform.claude.com/docs/en/models/overview)).
+  `claude-sonnet-5` is therefore pinned, although it has no date. The dated Haiku id is pinned.
+  Its alias `claude-haiku-4-5` is not in the config.
+- **OpenAI.** `gpt-5.4-mini` is an alias. OpenAI can point it at a later snapshot, and the config
+  would then run a different model with no change in the repo. The pinned form is
+  `gpt-5.4-mini-2026-03-17`, which `/v1/models` lists. The ledger records the request id
+  `openai/gpt-5.4-mini` and not the served snapshot, so the ledger cannot show such a move.
+- **gpt-6-luna.** Its model page lists one snapshot, `gpt-6-luna`, which is also the default. Today
+  the name and the snapshot are the same. A later dated snapshot can make it an alias.
+- **The served name is what the API reports.** It is the provider's statement, and it is the
+  strongest check available from outside the provider.
+
+**Recommendation.** Pin OpenAI ids to the dated snapshot in the catalog, as the Anthropic ids already
+are. For `gpt-5.4-mini` that is `gpt-5.4-mini-2026-03-17`. This is a separate one-line catalog
+change. It changes the model string in `api_costs` and in any panel keyed on it, so it does not
+belong in ticket A. For `gpt-6-luna`, ticket B uses `gpt-6-luna`, because no dated snapshot
+exists yet.
 
 ## 5. Where each model is named in the repo (AC-3)
 

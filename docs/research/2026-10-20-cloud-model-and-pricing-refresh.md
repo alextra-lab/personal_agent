@@ -238,6 +238,55 @@ change. It changes the model string in `api_costs` and in any panel keyed on it,
 belong in ticket A. For `gpt-6-luna`, ticket B uses `gpt-6-luna`, because no dated snapshot
 exists yet.
 
+### 4.5 The OpenAI model that compares to Sonnet 5.5
+
+The owner asked this on 2026-10-20. The answer rests on price and on each provider's own
+positioning. I read no benchmarks, so this note makes no quality claim.
+
+**Tiers as OpenAI positions them**
+([models](https://developers.openai.com/api/docs/models), the flagship-models intro):
+
+| Model | OpenAI's positioning | Input / output per MTok |
+|---|---|---|
+| `gpt-6-astra` | "complex reasoning and coding" | $10 / $50 |
+| `gpt-6.1-sol` | "balance intelligence and cost" | $2 / $10 |
+| `gpt-6-luna` | "cost-sensitive, high-volume workloads" | $0.10 / $0.50 |
+
+The pricing page also lists `gpt-6-sol` at $2 / $10. OpenAI's
+[product news](https://openai.com/news/product-releases/) describes `gpt-6.1-sol` (2026-09-29) as "a
+major upgrade to GPT‑6 Sol".
+
+**The match is `gpt-6.1-sol`.**
+- Positioning: Anthropic calls Sonnet 5.5 "the best combination of speed and intelligence", below
+  Opus and Fable. OpenAI calls Sol the model that balances intelligence and cost, below Astra. Both
+  are the middle tier.
+- Price: both list $2 input and $10 output, and both bill a cache read at $0.10.
+
+| Field | `claude-sonnet-5-5` | `gpt-6.1-sol` |
+|---|---|---|
+| Price up to the context tier | $2 / $10. Cache read $0.10. Cache write $2.50 (5m) or $4 (1h) | $2 / $10. Cached input $0.10. Cache write $2.50 (1.25x) |
+| Context tier | None: the 1M window bills at the standard rate | Above 272K tokens: $4 / $0.20 / $15 |
+| Batch | 50% off | $1 / $0.05 / $5 (Flex is the same) |
+| Context and output | 1M; 128K output (300K on Batch, beta) | 1,050,000 (922,000 input); 128,000 output |
+| Reasoning | `output_config.effort`: `low` to `max`. Default `high`. Lowest setting `between_tools` at `high` or below | `reasoning_effort`: `low` to `max`. Default `medium`. No `none`, so reasoning is always on |
+| Tools | Supported. A forced `tool_choice` returns 400 | Supported only on the Responses API |
+| Structured output | Supported | Supported |
+| Sampling | Any non-default `temperature`, `top_p` or `top_k` returns 400 | `temperature` and `top_p` not usable, because the effort is never `none` |
+| Caching | Minimum 512 tokens. TTL 5m or 1h | Minimum 1,024 tokens. TTL 30m only |
+| Released | 2026-09-28 | 2026-09-29 |
+| Retirement | Not sooner than 2027-09-28 | Unknown (not stated) |
+| Benchmarks | Unknown (not read) | Unknown (not read) |
+
+Sources: §4.1, plus the pages linked in this section.
+
+**Consequence for this repo.** litellm dispatches `openai/` models to Chat Completions.
+`gpt-6.1-sol` takes tool calls only on the Responses API, so every tool-using role would need that
+route. This repo has not tested the route. §7.1 therefore rejects `gpt-6.1-sol` for now.
+
+`gpt-6-sol`, the earlier Sol, has the same $2 / $10 price, with cached input at $0.20. The latest-model
+guide says it supports effort `none`, with function calling on Chat Completions only at `none`. I did
+not read its model page, so its context, output and other fields are unknown.
+
 ## 5. Where each model is named in the repo (AC-3)
 
 Appendix A lists every reference with file:line: 287 files and 1,188 lines. The pattern is

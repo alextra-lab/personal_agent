@@ -27,7 +27,7 @@ RUN=telemetry/evaluation/fre1537-planner-probe/$(date +%Y%m%d-%H%M)
 |---|---------|--------|---------------|
 | 1 | `uv run python -m scripts.eval.fre1537.gateway up --run-dir $RUN` | two containers | no |
 | 2 | `uv run python -m scripts.eval.fre1537.capture --run-dir $RUN` | `$RUN/captured/*.json` | no (stub) |
-| 3 | `uv run python -m scripts.eval.fre1537.gateway render --run-dir $RUN` | `$RUN/prompts.json` | no |
+| 3 | `uv run python -m scripts.eval.fre1537.gateway render --run-dir $RUN [--level standard]` | `$RUN/prompts.json` | no |
 | 4 | `uv run python -m scripts.eval.fre1537.gateway down` | removes the two containers | no |
 | 5 | `uv run python -m scripts.eval.fre1537.replay --run-dir $RUN --mode thinking_off` | `$RUN/rows/thinking_off/{decide,paired}.jsonl`, `fingerprint.json` | yes, 81 decision calls and 180 paired calls |
 | 6 | `uv run python -m scripts.eval.fre1537.longhist --run-dir $RUN --mode thinking_off` | `$RUN/rows/thinking_off/{longhist,longhist_paired}.jsonl` | yes, 9 cold-arm calls and 54 paired calls |
@@ -59,8 +59,11 @@ that adds the `planner` mode.
   The eval gateway needs two cloud API key settings to boot. The probe passes an inert placeholder for both,
   because its model is a stub, so no cloud call can spend money.
 - **`render`** builds the planner prompts with the production functions `_build_planner_system_prompt` and
-  `_render_planner_history`, inside the gateway, where the settings are those of the image. The ADR-0152 decline
-  rule is inserted, because production code does not carry it yet.
+  `_render_planner_history`, inside the gateway, where the settings are those of the image. The prompt is a
+  Seshat effort level's D2 prompt (ADR-0157 D7 rule 1): its round budget, the decline rule and, on a `p2` level,
+  the ADR-0157 D6 block. The probe inserts the decline rule and the block from its own copies, and a test asserts
+  that production renders the same bytes for every level. `--level fast|standard|deep` names the level; the
+  default is `default_level` in `config/seshat_effort.yaml`. `prompts.json` and the fingerprint record the level.
 - **`replay`** sends the planner request of each fixture (3 draws each) and the paired arm to llama.cpp. It
   records the configuration fingerprint first. A rerun resumes. A tag refuses rows of a different configuration.
   `--arms` takes `decide` and `paired`, and the default is both.

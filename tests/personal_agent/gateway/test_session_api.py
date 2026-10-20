@@ -723,6 +723,18 @@ def test_patch_selection_404_when_other_user_owns_it() -> None:
 # GET /api/v1/sessions/{id}/config — picker/observe-view read API (ADR-0121 §3, FRE-918)
 # ---------------------------------------------------------------------------
 
+# Every cloud-hosted primary candidate that stays selectable with slm_local down. FRE-1625
+# added gpt-6-luna, gpt-6.1-sol and claude_haiku_5_5 (pickable, bound to no role).
+_CLOUD_PRIMARY_CANDIDATES = {
+    "claude_sonnet",
+    "claude_haiku",
+    "claude_haiku_5_5",
+    "gpt-5.4-mini",
+    "gpt-6-luna",
+    "gpt-6.1-sol",
+    "qwen3.8-27b-ovh",
+}
+
 _CHECK_ALL_PROVIDERS = "personal_agent.llm_client.provider_health.check_all_providers"
 _CHECK_LOCAL_SERVED_IDS = "personal_agent.llm_client.provider_health.check_local_served_ids"
 _SELECTION_GET_ALL = (
@@ -810,7 +822,7 @@ def test_get_session_config_ac5_candidates_exclude_down_provider_both_directions
     # qwen3.8-27b-ovh is the same Qwen the local seat serves, hosted by OVH — a
     # cloud provider, so a down slm_local does not remove it. That is the point of
     # the deployment: it stays selectable exactly when the local model cannot serve.
-    assert candidates == {"claude_sonnet", "claude_haiku", "gpt-5.4-mini", "qwen3.8-27b-ovh"}
+    assert candidates == _CLOUD_PRIMARY_CANDIDATES
     assert "qwen3.8-flash-next" not in candidates
     assert "qwen3.6-35b-thinking" not in candidates
     assert "embedding" not in candidates
@@ -879,7 +891,7 @@ def test_get_session_config_fre1415_served_ids_probe_failure_excludes_all_local(
             resp = client.get(f"/api/v1/sessions/{sid}/config", headers=_AUTH_HEADERS)
 
     candidates = {c["key"] for c in resp.json()["roles"]["primary"]["candidates"]}
-    assert candidates == {"claude_sonnet", "claude_haiku", "gpt-5.4-mini", "qwen3.8-27b-ovh"}
+    assert candidates == _CLOUD_PRIMARY_CANDIDATES
 
 
 def test_get_session_config_pinned_role_has_no_candidates() -> None:

@@ -93,6 +93,7 @@ The level is a choice per session, as the model is. It inherits the eleven invar
 4. **Hydration and notice.** The session GET and `GET /{session_id}/config` return `seshat_effort` and `effort_provenance` (`server-hydrated` or `default`). The WS `STATE_DELTA` on reconnect carries the level, and a change notifies the single active socket (invariants 5, 6 and 10).
 5. **A failed write reverts.** If the `PATCH` fails, the selector returns to the stored level and shows the error (invariant 9).
 6. **An in-flight turn keeps its level.** A change applies from the next turn (invariant 7).
+7. **Both chat entry paths.** The rules above apply to `POST /chat/stream` (the PWA) and to `POST /chat` (the CLI and the evaluation harness, `service/app.py:2142`). A request on either path resolves the level in the same way.
 
 The selector sits next to the model picker. For each level, it shows the catalog mode that the session's model will run, or "model default" when the model declares no mode for that level (D5).
 
@@ -198,7 +199,7 @@ This amends ADR-0154 D7 ("Requalification") and AC-10 (owner, 2026-10-19: "the D
 | `planner_outcome` | `seshat_effort` | as above |
 | `planner_outcome` | `planner_policy` | `baseline` or `p2` when `admit_single` is true, else null |
 | `model_call_completed` (`extra`) | `mode` | the catalog mode of the call |
-| `chat_stream.launched` | `seshat_effort` | the level that the turn resolved at launch |
+| `chat_stream.launched` (`POST /chat/stream`), and a new `chat.launched` (`POST /chat`) | `seshat_effort` | the level that the turn resolved at launch. Each event fires once per accepted request, after the duplicate and validation checks and before the turn runs. |
 
 - The two `route_traces` columns need an idempotent migration under `docker/postgres/migrations/` and the same columns in `docker/postgres/init.sql`, as does `sessions.seshat_effort` (D2). The migration runs as the `agent` role through `AGENT_DATABASE_ADMIN_URL`.
 - `planner_policy` must agree with `planner_system_prompt_sha256` on every event.
@@ -316,7 +317,7 @@ These criteria belong to this ADR. They are adjudicated on FRE-1620 after both b
   Live, over 14 days after both deploys: `route_traces` grouped by `seshat_effort`, joined to `sub_agent_start` on `trace_id`. · *Fails if* any test case differs, any live Fast row has a non-null `planner_decision` or `sub_agent_count > 0`, or any live `round_budget` differs from its turn's level.
 
 - **AC-2 — The level follows ADR-0121 §4.** · **Check:** tests, one per case:
-  1. A new session with a sent level stores it. A new session with no level stores `standard` explicitly.
+  1. A new session with a sent level stores it. A new session with no level stores `standard` explicitly. Cases 1, 2 and 4 run on both `POST /chat/stream` and `POST /chat`.
   2. An existing session ignores a sent level.
   3. A `PATCH` from another user returns 404 and writes nothing.
   4. A level change during a turn leaves that turn's spec unchanged.
@@ -352,7 +353,7 @@ These criteria belong to this ADR. They are adjudicated on FRE-1620 after both b
 - **AC-7 — The ceilings hold.** · **Check:** tests. The gateway refuses to start when a level's `sub_agent_rounds` is above `sub_agent_max_tool_iterations`, or when `sub_agent_rounds_by_thoroughness` is set. With `expansion_enabled=false`, expansion permitted by governance and a positive expansion budget, every level records `expansion_disabled`, makes no planner call and starts no helper. · *Fails if* the gateway starts in either refused case, or a turn with `expansion_enabled=false` calls the planner or starts a helper.
 
 - **AC-8 — Every turn carries its level.** · **Check:** over 14 days after the backend deploy, three queries:
-  1. *The population.* Every `chat_stream.launched` event in the window, which the gateway writes once for each accepted chat request, before the turn runs. Each event carries `seshat_effort` (D8).
+  1. *The population.* Every `chat_stream.launched` and `chat.launched` event in the window. Together they cover each accepted request on both chat entry paths, written before the turn runs. Each event carries `seshat_effort` (D8).
   2. *The turn rows.* Each event of query 1, left-joined to `route_traces` on `trace_id`: the row's `seshat_effort`, and its `primary_mode` when its `model_role` is not null.
   3. *The planner events.* Every `planner_outcome` event in the window, left-joined to `route_traces` on `trace_id`.
 

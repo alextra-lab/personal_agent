@@ -58,6 +58,7 @@ from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
     derive_fallback_prompt_identity,
 )
+from personal_agent.llm_client.responses_route import aresponses_as_chat, routes_to_responses
 from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
@@ -99,6 +100,13 @@ _OPENAI_SDK_ROUTE_PROVIDERS = frozenset({"openai", "slm_local"})
 # which is AsyncHTTPHandler-based like Anthropic's own dedicated handler — not
 # a third mechanism.
 _ASYNC_HTTP_HANDLER_ROUTE_PROVIDERS = frozenset({"anthropic", "ovhcloud"})
+# FRE-1627: providers whose bridged requests take the guarded Responses route
+# (responses_route.aresponses_as_chat). Only `openai` has a native litellm
+# Responses config, whose handler keeps an AsyncHTTPHandler client=
+# (llm_http_handler.async_response_api_handler, litellm 1.106.0). A provider
+# without one falls back to litellm's Responses-to-chat transformation, which
+# is not verified to keep the client, so its bridged requests stay refused.
+_RESPONSES_ROUTE_PROVIDERS = frozenset({"openai"})
 # Layer-1 fallback for a provider with no catalog-declared base_url override
 # (anthropic, openai) — host-only; DomainGuard.check_url only extracts the
 # hostname, so this need not match litellm's own undocumented default URL
@@ -123,6 +131,23 @@ _KNOWN_DEFAULT_HOSTS: dict[str, str] = {
 # effective there.
 _guarded_httpx_clients: dict[tuple[str | None, int], httpx.AsyncClient] = {}
 _guarded_async_http_handlers: dict[int, AsyncHTTPHandler] = {}
+
+
+def _guarded_async_http_handler(guard: DomainGuard) -> AsyncHTTPHandler:
+    """Return the cached ``AsyncHTTPHandler`` that carries ``guard``'s request hook.
+
+    Args:
+        guard: The DomainGuard to inject.
+
+    Returns:
+        One handler per guard, shared by the AsyncHTTPHandler route and the
+        guarded Responses route (FRE-1627).
+    """
+    handler = _guarded_async_http_handlers.get(id(guard))
+    if handler is None:
+        handler = AsyncHTTPHandler(event_hooks=guard_event_hooks(guard=guard))
+        _guarded_async_http_handlers[id(guard)] = handler
+    return handler
 
 
 def _build_guarded_client(
@@ -170,11 +195,7 @@ def _build_guarded_client(
         )
 
     if provider in _ASYNC_HTTP_HANDLER_ROUTE_PROVIDERS:
-        handler = _guarded_async_http_handlers.get(id(guard))
-        if handler is None:
-            handler = AsyncHTTPHandler(event_hooks=guard_event_hooks(guard=guard))
-            _guarded_async_http_handlers[id(guard)] = handler
-        return handler
+        return _guarded_async_http_handler(guard)
 
     raise LLMClientError(
         f"provider {provider!r} is not classified into an egress-guard route "
@@ -413,8 +434,11 @@ def _refuse_unguarded_responses_bridge(request: Mapping[str, Any], *, trace_id: 
     egress-guard layer-2 hook. Layer 1 still ran, but ADR-0141 D2 treats an
     unguarded dispatch as a security regression, so the request is refused
     before the cost gate reserves anything. Owner decision 2026-10-20 (FRE-1625).
-    Today this is gpt-6.1-sol with tools; gpt-6-luna and gpt-5.4-mini stay on
-    Chat Completions at effort ``none``.
+
+    FRE-1627 narrows where this runs: the cloud path sends a bridged request on
+    a ``_RESPONSES_ROUTE_PROVIDERS`` provider through the guarded Responses
+    route instead. This still refuses a bridged request on any other provider,
+    and on the local stream path, which has no guarded Responses route.
 
     Args:
         request: The assembled litellm kwargs.
@@ -423,19 +447,9 @@ def _refuse_unguarded_responses_bridge(request: Mapping[str, Any], *, trace_id: 
     Raises:
         LLMClientError: litellm would route this request to the Responses API.
     """
-    from litellm.main import responses_api_bridge_check  # noqa: PLC0415
-
     from personal_agent.llm_client.types import LLMClientError  # noqa: PLC0415
 
-    provider, _, model = str(request["model"]).partition("/")
-    model_info, _ = responses_api_bridge_check(
-        model=model,
-        custom_llm_provider=provider,
-        tools=request.get("tools"),
-        reasoning_effort=request.get("reasoning_effort"),
-        api_base=request.get("api_base"),
-    )
-    if model_info.get("mode") == "responses":
+    if routes_to_responses(request):
         log.error(
             "litellm_responses_bridge_refused",
             model=request["model"],
@@ -1441,8 +1455,14 @@ class LiteLLMClient:
         if max_retries is not None:
             litellm_kwargs["num_retries"] = max_retries
         # FRE-1625: both run on the assembled request, before the cost gate.
+        # FRE-1627: a bridged request on a provider with a guarded Responses
+        # route takes it; any other bridged request is still refused.
         _gate_model_effort_domain(self.model_def, dialect, litellm_kwargs)
-        _refuse_unguarded_responses_bridge(litellm_kwargs, trace_id=trace_id)
+        use_responses_route = self.provider in _RESPONSES_ROUTE_PROVIDERS and routes_to_responses(
+            litellm_kwargs
+        )
+        if not use_responses_route:
+            _refuse_unguarded_responses_bridge(litellm_kwargs, trace_id=trace_id)
 
         # Anthropic prompt caching — eliminates re-processing of static system prompt
         # and tool list on every turn after the first (cache write: ~$0.30/MTok,
@@ -1549,8 +1569,18 @@ class LiteLLMClient:
                             "max_tokens": effective_max_tokens,
                         },
                     )
+                    # Both routes return a chat ModelResponse, read below through
+                    # litellm's dynamic attributes (usage, tool_calls), which its
+                    # stubs do not declare.
+                    response: Any
                     try:
-                        response = await litellm.acompletion(**litellm_kwargs)
+                        if use_responses_route:
+                            response = await aresponses_as_chat(
+                                litellm_kwargs,
+                                client=_guarded_async_http_handler(resolved_guard),
+                            )
+                        else:
+                            response = await litellm.acompletion(**litellm_kwargs)
                     except asyncio.CancelledError:
                         # FRE-973: a turn-level wall-clock deadline (asyncio.wait_for in the
                         # executor's step_llm_call) cancels this call directly. CancelledError

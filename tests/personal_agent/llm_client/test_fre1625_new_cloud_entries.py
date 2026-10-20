@@ -11,9 +11,9 @@ guarded client, litellm's own handlers, its aiohttp transport) sends through,
 and asserts the request it caught.
 
 Test 7 deviates from the ticket text by owner decision (2026-10-20): litellm
-1.106.0's async Responses bridge drops the guarded client, so ``LiteLLMClient``
-refuses a bridged request (7b) and the translation is proven at litellm's own
-boundary (7a).
+1.106.0's async Responses bridge drops the guarded client, and the translation is
+proven at litellm's own boundary (7a). FRE-1627 gives ``LiteLLMClient`` its own
+guarded Responses route, so a Sol tool call now dispatches through it (7b).
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from personal_agent.llm_client.types import (
     LLMResponse,
     ModelRole,
 )
+from personal_agent.security import _guard_request_hook
 from tests._helpers.trace import make_test_ctx
 
 _NEW_KEYS = ("gpt-6-luna", "gpt-6.1-sol", "claude_haiku_5_5")
@@ -233,6 +234,7 @@ class _Sent:
 
     request: httpx.Request
     request_hooks: int
+    guarded: bool = False
 
 
 @pytest.fixture
@@ -243,7 +245,9 @@ def _caught_requests() -> Iterator[list[_Sent]]:
     async def _fake_send(
         self: httpx.AsyncClient, request: httpx.Request, **kwargs: Any
     ) -> httpx.Response:
-        caught.append(_Sent(request, len(self.event_hooks.get("request", []))))
+        hooks = self.event_hooks.get("request", [])
+        guarded = any(getattr(hook, "func", None) is _guard_request_hook for hook in hooks)
+        caught.append(_Sent(request, len(hooks), guarded))
         body = _SOL_RESPONSES_BODY if request.url.path.endswith("/responses") else _LUNA_CHAT_BODY
         return httpx.Response(200, json=body, request=request)
 
@@ -332,16 +336,29 @@ class TestLiteLLMClientRoute:
     """Test 7 through ``LiteLLMClient``: the guard decides, not litellm's heuristics."""
 
     @pytest.mark.asyncio
-    async def test_7b_a_sol_tool_call_fails_closed_before_any_send_or_reservation(
+    async def test_7b_a_sol_tool_call_dispatches_through_the_guarded_responses_route(
         self, _caught_requests: list[_Sent]
     ) -> None:
-        """ADR-0141 D2: a request that would leave without layer 2 is refused."""
-        gate = _mock_gate()
-        with pytest.raises(LLMClientError, match="Responses API bridge") as exc_info:
-            await _respond("gpt-6.1-sol", gate, tools=[_FUNCTION_TOOL])
-        assert not isinstance(exc_info.value, DialectParameterRejected)
-        assert _caught_requests == []
-        gate.reserve.assert_not_awaited()
+        """FRE-1627 AC-1: the request reaches /v1/responses on a client with the guard hook."""
+        response, gate = await _respond("gpt-6.1-sol", tools=[_FUNCTION_TOOL])
+
+        assert len(_caught_requests) == 1
+        sent = _caught_requests[0]
+        assert sent.request.url.path == "/v1/responses"
+        assert sent.guarded, "the egress guard's request hook must ride on the client that sends"
+        body = json.loads(sent.request.content)
+        assert body["reasoning"]["effort"] == "medium"
+        assert body["store"] is False
+        assert body["tools"][0]["name"] == "search_memory"
+        gate.reserve.assert_awaited_once()
+        gate.commit.assert_awaited_once()
+
+        assert [(c["id"], c["name"]) for c in response["tool_calls"]] == [
+            ("call_fre1625", "search_memory")
+        ]
+        assert json.loads(response["tool_calls"][0]["arguments"]) == {"query": "paris"}
+        assert response["finish_reason"] == "tool_calls"
+        assert response["usage"]["reasoning_tokens"] == 8
 
     @pytest.mark.asyncio
     async def test_7c_a_luna_tool_call_at_effort_none_goes_to_chat_through_the_guard(
@@ -353,7 +370,7 @@ class TestLiteLLMClientRoute:
         assert len(_caught_requests) == 1
         sent = _caught_requests[0]
         assert sent.request.url.path.endswith("/chat/completions")
-        assert sent.request_hooks > 0, "layer 2 must ride on the client that sends"
+        assert sent.guarded, "layer 2 must ride on the client that sends"
         assert json.loads(sent.request.content)["reasoning_effort"] == "none"
         mock_gate.reserve.assert_awaited_once()
 

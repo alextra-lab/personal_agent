@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 import { getConfig, getSessionConfig } from '@/lib/agui-client';
-import type { SessionConfig } from '@/lib/types';
+import type { EffortLevelModes, SessionConfig } from '@/lib/types';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -11,6 +11,8 @@ export interface UseSessionConfigResult {
   /** Per-role config (open/pinned, resolved binding, candidates). Empty until first load. */
   roles: SessionConfig['roles'];
   providers: SessionConfig['providers'];
+  /** The catalog mode each effort level requests (ADR-0157 D5); undefined until the first load. */
+  effortLevels: EffortLevelModes | undefined;
   loading: boolean;
   /**
    * True once a session-scoped read has succeeded — `roles.primary.resolved`
@@ -37,6 +39,7 @@ export interface UseSessionConfigResult {
 export function useSessionConfig(sessionId: string | undefined): UseSessionConfigResult {
   const [roles, setRoles] = useState<SessionConfig['roles']>({});
   const [providers, setProviders] = useState<SessionConfig['providers']>([]);
+  const [effortLevels, setEffortLevels] = useState<EffortLevelModes | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [hydrated, setHydrated] = useState(false);
   const generationRef = useRef(0);
@@ -47,6 +50,7 @@ export function useSessionConfig(sessionId: string | undefined): UseSessionConfi
       if (generationRef.current !== generation) return;
       setRoles(config.roles);
       setProviders(config.providers);
+      setEffortLevels(config.effort_levels);
       setHydrated(isHydrated);
       setLoading(false);
     };
@@ -86,5 +90,5 @@ export function useSessionConfig(sessionId: string | undefined): UseSessionConfi
     return () => clearInterval(interval);
   }, [load]);
 
-  return { roles, providers, loading, hydrated, refetch: load };
+  return { roles, providers, effortLevels, loading, hydrated, refetch: load };
 }

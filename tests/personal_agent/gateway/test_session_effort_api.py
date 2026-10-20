@@ -10,9 +10,13 @@ from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from personal_agent.config import load_model_config
+from personal_agent.gateway.app import create_gateway_router
 from tests.personal_agent.gateway.test_session_api import (
+    _ALL_PROVIDERS_UP,
     _AUTH_HEADERS,
     _CHECK_ALL_PROVIDERS,
     _SELECTION_GET,
@@ -149,3 +153,63 @@ class TestHydration:
 
         model = _make_session_model()  # a MagicMock attribute, not a level
         assert _session_effort(model) == ("standard", "default")
+
+
+class TestConfigCarriesTheModes:
+    """FRE-1623 (ADR-0157 D2, D5): the selector reads each level's mode from the config GETs.
+
+    ``effort_levels`` names the mode that each level requests. ``modes`` on a candidate names the
+    modes that the deployment declares. The PWA shows a level's mode when the selected deployment
+    declares it, and "model default" when it does not.
+    """
+
+    _LEVELS = {"fast": "fast", "standard": None, "deep": "deep"}
+
+    @staticmethod
+    def _primary_candidates(payload: dict) -> list[dict]:
+        return payload["roles"]["primary"]["candidates"]
+
+    def _assert_modes(self, payload: dict) -> None:
+        assert payload["effort_levels"] == self._LEVELS
+        catalog = load_model_config().models
+        candidates = self._primary_candidates(payload)
+        assert candidates
+        for view in candidates:
+            assert view["modes"] == list(catalog[view["key"]].modes), view["key"]
+        # The selector tells apart a model that declares `fast` from one that does not.
+        declares = [v["key"] for v in candidates if "fast" in v["modes"]]
+        lacks = [v["key"] for v in candidates if "fast" not in v["modes"]]
+        assert declares and lacks
+
+    def test_the_sessionless_config_names_the_level_modes_and_the_declared_modes(self) -> None:
+        with (
+            patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP),
+            _served_ids_patch(),
+        ):
+            app = FastAPI()
+            app.include_router(create_gateway_router())
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get("/api/v1/config", headers=_AUTH_HEADERS)
+
+        assert resp.status_code == 200
+        self._assert_modes(resp.json())
+
+    def test_the_session_config_names_the_level_modes_and_the_declared_modes(self) -> None:
+        db = AsyncMock()
+        model = _session("standard")
+        with ExitStack() as stack:
+            stack.enter_context(_patched_user_resolver())
+            stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=model))
+            stack.enter_context(patch(_SELECTION_GET_ALL, new_callable=AsyncMock, return_value={}))
+            stack.enter_context(
+                patch(_CHECK_ALL_PROVIDERS, new_callable=AsyncMock, return_value=_ALL_PROVIDERS_UP)
+            )
+            stack.enter_context(_served_ids_patch())
+            app = _build_app_with_db_factory(db)
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get(
+                    f"/api/v1/sessions/{model.session_id}/config", headers=_AUTH_HEADERS
+                )
+
+        assert resp.status_code == 200
+        self._assert_modes(resp.json())

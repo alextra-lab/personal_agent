@@ -14,7 +14,7 @@
  * See: docs/architecture_decisions/ADR-0075-websocket-transport.md
  */
 
-import type { AGUIEvent, ClientMessage, SessionConfig } from './types';
+import type { AGUIEvent, ClientMessage, SeshatEffort, SessionConfig } from './types';
 
 /**
  * Base URL for the Seshat backend.
@@ -168,6 +168,11 @@ export interface SendMessageOptions {
    * the user's picker choice instead of silently adopting the default.
    */
   primarySelection?: string;
+  /**
+   * The effort level the selector shows (ADR-0157 D2). The server stores it for a
+   * brand-new session and ignores it for an existing one, whose stored level wins.
+   */
+  seshatEffort?: SeshatEffort;
   /** Client-generated idempotency key (UUID v4) — deduplicated server-side (FRE-392). */
   clientMsgId?: string;
   /** Completed uploads to attach to this turn (FRE-369). */
@@ -222,11 +227,14 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
   // picker choice so a NEW session is established with it; the server ignores
   // it for an existing session (stored value wins). The picker's canonical
   // mutator is setSessionSelection (PATCH .../selection).
-  const { message, sessionId, primarySelection, clientMsgId, attachments } = opts;
+  const { message, sessionId, primarySelection, seshatEffort, clientMsgId, attachments } = opts;
 
   const params: Record<string, string> = { message, session_id: sessionId };
   if (primarySelection) {
     params['primary_selection'] = primarySelection;
+  }
+  if (seshatEffort) {
+    params['seshat_effort'] = seshatEffort;
   }
   if (clientMsgId) {
     params['client_msg_id'] = clientMsgId;
@@ -707,6 +715,10 @@ export interface SessionSummary {
   /** How `primary_selection` was resolved — `stored` / `adopted` / `default`. */
   selection_provenance: string;
   message_count: number;
+  /** Server-stored Seshat effort level (ADR-0157 D2). */
+  seshat_effort?: SeshatEffort;
+  /** How `seshat_effort` was resolved — `server-hydrated` or `default`. */
+  effort_provenance?: string;
   /** Number of user turns (user-role messages only) in this session (FRE-521). */
   turn_count?: number;
   title: string | null;
@@ -860,6 +872,28 @@ export async function setSessionSelection(
     },
   );
   if (!resp.ok) throw new Error(`setSessionSelection failed: ${resp.status}`);
+}
+
+/**
+ * Set a session's Seshat effort level (ADR-0157 D2 — `PATCH .../effort`).
+ *
+ * The server holds the level. A turn already running keeps the level it launched with.
+ *
+ * @param sessionId - The session to update.
+ * @param level     - The new level.
+ * @throws Error when the backend returns a non-2xx status. The message ends with the status,
+ *   so a caller can tell 404 (no session row yet) from a real failure.
+ */
+export async function setSessionEffort(sessionId: string, level: SeshatEffort): Promise<void> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/sessions/${encodeURIComponent(sessionId)}/effort`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ seshat_effort: level }),
+    },
+  );
+  if (!resp.ok) throw new Error(`setSessionEffort failed: ${resp.status}`);
 }
 
 // --------------------------------------------------------------------------

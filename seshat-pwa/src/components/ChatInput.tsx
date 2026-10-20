@@ -13,6 +13,7 @@ import {
 import type { DeploymentView } from '@/lib/types';
 import type { UploadedAttachment, UploadState } from '@/lib/agui-client';
 import { presignUpload, uploadToR2, completeUpload } from '@/lib/agui-client';
+import { EffortSelector, type EffortSelectorProps } from './EffortSelector';
 import { ModelPicker } from './ModelPicker';
 
 interface ChatInputProps {
@@ -24,6 +25,8 @@ interface ChatInputProps {
   selectedModelKey: string | null;
   modelHydrated: boolean;
   onModelChange: (key: string) => void;
+  /** The Seshat effort selector, shown next to the model picker (ADR-0157 D2); omitted → hidden. */
+  effort?: EffortSelectorProps;
   /** While true the action button becomes a Stop control (ADR-0076). */
   isStreaming?: boolean;
   /** Invoked when the Stop button is tapped (sends USER_CANCEL). */
@@ -47,8 +50,8 @@ const MAX_TEXTAREA_HEIGHT = 200;
  * - Paste: image files trigger upload; text falls through to the textarea.
  * - Two-row composer (FRE-1263, corrected FRE-1266): the textarea spans the
  *   full width on its own row, starting at a single line and auto-growing up
- *   to the 200px ceiling before it scrolls; the model picker, attach, and
- *   send/stop controls sit on the row beneath.
+ *   to the 200px ceiling before it scrolls; the model picker, effort selector, attach,
+ *   and send/stop controls sit on the row beneath.
  * - Footer padding accounts for iOS home-indicator via safe-area-inset-bottom.
  * - Send is blocked while any upload is in-progress (status !== 'complete').
  * - Attachments carry no local/cloud override (ADR-0121 T5): vision is a
@@ -62,6 +65,7 @@ export function ChatInput({
   selectedModelKey,
   modelHydrated,
   onModelChange,
+  effort,
   isStreaming = false,
   onStop,
 }: ChatInputProps) {
@@ -329,6 +333,8 @@ export function ChatInput({
               hydrated={modelHydrated}
               onSelect={onModelChange}
             />
+
+            {effort && <EffortSelector {...effort} />}
 
             {/* Hidden file input */}
             <input

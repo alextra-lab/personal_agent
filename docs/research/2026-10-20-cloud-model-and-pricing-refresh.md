@@ -417,6 +417,58 @@ Open litellm issues that touch this change, read on GitHub on 2026-10-20:
 | Effort levels are recalibrated | Sonnet 5.5 | ADR-0145 D6's measured `worker: effort: low` for Sonnet 5 does not transfer. Run a new effort sweep |
 | `prompt_cache_options.ttl` replaces `prompt_cache_retention` | gpt-6 family | The repo sets neither (no match in `src/`), so no change is needed |
 
+### 6.3 litellm facts from master's check, verified 2026-10-20
+
+Master checked litellm for the owner and asked for each fact to be verified. "Verified" means that
+I reproduced the fact. "Source" means that I read it in the 1.106.0 wheel without running it.
+
+| Fact | Result | How |
+|---|---|---|
+| Installed litellm is 1.98.0. The latest on PyPI is 1.106.0, uploaded 2026-10-18 | Verified | `importlib.metadata`, PyPI JSON |
+| The 1.98.0 bundled map has no `gpt-6-*` and no `*-5-5` entries | Verified | `LITELLM_LOCAL_MODEL_COST_MAP=True` lookup (§3.2) |
+| litellm's main map on GitHub lists `gpt-6.1-sol`, `gpt-6-luna`, `gpt-6-astra`, `claude-sonnet-5-5` and `claude-haiku-5-5` with `mode: chat` and `supports_tool_choice: true` | Verified. The GitHub map also flags `claude-sonnet-5-5` with `supports_forced_tool_use: false`, and `claude-haiku-5-5` with `true`. The gpt-6 entries list `/v1/responses` among `supported_endpoints` | `raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json` |
+| `drop_params` is off on purpose, so an unsupported value raises and is not dropped | Verified. `litellm_client.py:245` and `:319`, and `models.py:316`, state it. No code sets `drop_params` | `git grep drop_params -- src` |
+| litellm's map had `claude-sonnet-5` at $2 / $10, and Seshat bills from its own config price (ADR-0101 §8b) | Verified. Both the bundled and the remote map have $2 / $10, and `register_model_pricing` overrides them with the catalog's $3 / $15 | §3.2 |
+| litellm does not route Sol tool calls to Responses by itself | **True on 1.98.0. Not true on 1.106.0, from the source** | See below |
+| litellm does not flag Sonnet 5.5's forced `tool_choice` | **True on 1.98.0. Not true on 1.106.0, from the source** | See below |
+
+**The Responses route.** litellm decides it in `litellm.main.responses_api_bridge_check`. It has
+three triggers:
+
+1. **An explicit `responses/` prefix on the model.** For example, `openai/responses/gpt-6.1-sol`.
+   Verified offline on 1.98.0: the function returns `mode: responses` and strips the prefix, for
+   both `responses/gpt-6.1-sol` and `responses/gpt-5.4-mini`.
+2. **A global flag, `litellm.route_all_chat_openai_to_responses`.** It sends every OpenAI chat call
+   to Responses. Read in the 1.98.0 source.
+3. **An automatic bridge for gpt-5.4 and later.** A request with a function tool and active
+   reasoning goes to Responses. On 1.98.0, offline, `gpt-5.4-mini` with a tool at effort `low`
+   returns `mode: responses`, and at effort `none` it returns `chat`. On 1.98.0 the same request to
+   `gpt-6.1-sol` or `gpt-6-luna` stays on `chat`, because 1.98.0 does not classify gpt-6 as gpt-5.4
+   or later. In 1.106.0 (source), `is_model_gpt_5_4_plus_model` compares a parsed series version
+   with `(5, 4)`, so `gpt-6` (`6.0`) qualifies.
+
+Therefore, on 1.106.0:
+- `gpt-6.1-sol` with tools is bridged to Responses automatically, because its effort is never
+  `none`.
+- `gpt-6-luna` with tools stays on Chat Completions at effort `none`, and is bridged at any other
+  effort.
+
+How the build selects the route: rely on trigger 3 after the upgrade, or set the catalog `id` with
+the `responses/` prefix. The prefix is explicit and does not depend on litellm's version
+heuristics. It changes the model string in `api_costs`, and it must be checked against the
+registered price key. Either way, the build must assert the route offline with
+`responses_api_bridge_check` before an entry binds a tool-using role. This repo has not exercised
+the Responses response shape for tool calls.
+
+**Forced tool use on Sonnet 5.5.** In 1.106.0 (source,
+`litellm/llms/anthropic/common_utils.py:680-702`), `forced_tool_use_downgraded` reads
+`supports_forced_tool_use`. When the flag is `false` and `drop_params` is off, it raises
+`UnsupportedParamsError`: "does not support forced tool use (tool_choice='required' or a named
+tool). Use tool_choice='auto' …". It raises before the request leaves the client. On 1.98.0 the
+forced choice reaches Anthropic, verified offline, and Anthropic returns a 400. The outcome for this
+repo is the same on both versions: the three forced-tool producers fail on Sonnet 5.5 until the code
+change in §6.2. On 1.106.0 the failure is earlier and clearer.
+
 ## 7. Recommendation (scope 4)
 
 ### 7.1 Per catalog entry
@@ -588,9 +640,19 @@ but every call to it fails with `UnsupportedParamsError`. The config guard does 
 cache rates of the 5.5 models also depend on a network fetch at import.
 
 **Change.**
-1. `pyproject.toml` and `uv.lock`: raise `litellm` to a release at or above 1.104.0. Record why that
-   release was chosen: its age, and whether its bundled map has `claude-haiku-5-5` (1.106.0 does,
-   1.105.1 does not).
+1. `pyproject.toml` and `uv.lock`: raise `litellm` to **1.106.0**, or to the latest 1.106.x patch at
+   build time. Lock the exact version. Reasons (FRE-1621 note §6.1 and §6.3):
+   - 1.106.0 is the first release whose bundled map has all four new models. Their cache prices
+     and capability flags then do not depend on the remote map fetch at import.
+   - It accepts `reasoning_effort` on gpt-6, which 1.98.0 rejects.
+   - It raises a clear client-side error for a forced `tool_choice` on Sonnet 5.5.
+   - It bridges gpt-6 tool calls with reasoning on to the Responses API.
+
+   Risk: the release is two days old on 2026-10-20, and the jump from 1.98.0 is eight minor
+   versions. Read the release notes from 1.99 to 1.106 for changes to cost calculation, the
+   Anthropic and OpenAI transformations, and `register_model`. Record what you find in the PR.
+   If 1.106.x shows a regression, 1.104.x is the fallback. It accepts gpt-6 effort, but its
+   bundled map has only `gpt-6-luna`.
 2. `config/models.yaml`: add `gpt-6-luna` and `claude_haiku_5_5` as in FRE-1621 note §9. Change no
    existing entry.
 3. `tests/personal_agent/config/catalog_snapshot_golden.json`: regenerate it with
@@ -605,10 +667,12 @@ cache rates of the 5.5 models also depend on a network fetch at import.
    - `anthropic/claude-haiku-5-5` with `reasoning_effort="low"` maps to
      `thinking: {type: adaptive}` and `output_config: {effort: low}`.
    - The registered prices of both new entries equal the official ones.
+   - `responses_api_bridge_check` keeps `openai/gpt-6-luna` on `chat` at effort `none` with a
+     function tool. This guards the tool-calling route that the entry relies on.
 5. Re-run the litellm-sensitive suites: reasoning, dialect, config guard and catalog snapshot.
 
 **Acceptance criteria.**
-- AC-1: the four unit tests above pass on the new litellm with the remote map disabled.
+- AC-1: the five unit tests above pass on the new litellm with the remote map disabled.
 - AC-2: the config guard boots with both new entries. `make test`, `make mypy` and `make ruff-check`
   pass.
 - AC-3: `config/model_roles.yaml` is unchanged. No role resolves to a new key.

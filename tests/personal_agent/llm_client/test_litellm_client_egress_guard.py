@@ -36,13 +36,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import litellm
 import pytest
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 from personal_agent.llm_client import litellm_client as litellm_client_module
 from personal_agent.llm_client.litellm_client import LiteLLMClient
 from personal_agent.llm_client.models import ModelConfig, Placement, ProviderDefinition
-from personal_agent.llm_client.types import ModelRole
+from personal_agent.llm_client.types import LLMClientError, ModelRole
 from personal_agent.security import DomainGuard, EgressBlockedError, GuardMode
 from tests._helpers.trace import make_test_ctx
 
@@ -115,6 +116,7 @@ async def _dispatch(
     provider: str,
     base_url: str,
     guard: DomainGuard,
+    model_id: str = "test-model",
 ) -> None:
     """Run LiteLLMClient.respond() with only side effects (not egress) mocked.
 
@@ -145,7 +147,7 @@ async def _dispatch(
     mock_tracker.record_api_call = AsyncMock()
 
     client = LiteLLMClient(
-        model_id="test-model",
+        model_id=model_id,
         provider=provider,
         max_tokens=256,
         budget_role="main_inference",
@@ -341,3 +343,94 @@ class TestRedirectHopsAreGuarded:
         assert checked_hosts[-2:] == [ALLOWED_HOST, BLOCKED_HOST], (
             f"expected the allowed first hop then the blocked redirect hop, got {checked_hosts}"
         )
+
+
+# ── FRE-1627: the guarded Responses route ─────────────────────────────────
+
+
+@pytest.fixture
+def _route_openai_to_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make litellm route every ``openai`` chat call to the Responses API.
+
+    The global flag is the deterministic trigger: the classification no longer
+    depends on a model's tool and effort heuristics. AC-1 in
+    ``test_fre1625_new_cloud_entries.py`` covers Sol's own trigger.
+    """
+    monkeypatch.setattr(litellm, "route_all_chat_openai_to_responses", True)
+
+
+@pytest.mark.usefixtures("_route_openai_to_responses")
+class TestResponsesRouteSeededNegative:
+    """FRE-1627 AC-2: ADR-0141's seeded negatives, on the Responses route."""
+
+    @pytest.mark.asyncio
+    async def test_layer2_alone_blocks_when_layer1_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm_client_module, "check_egress_or_raise", lambda *a, **kw: None)
+        mock_transport = httpx.MockTransport(_sentinel_never_reached)
+        monkeypatch.setattr(
+            AsyncHTTPHandler,
+            "create_async_transport",
+            staticmethod(lambda *a, **kw: mock_transport),
+        )
+        guard = _guard(blocklist=frozenset({BLOCKED_HOST}))
+        check_url_spy = _spy_check_url(guard)
+        with pytest.raises(Exception):  # noqa: B017 — route's own wrapper shape, per ADR D2.2
+            await _dispatch(provider="openai", base_url=f"https://{BLOCKED_HOST}", guard=guard)
+        checked = [str(c.args[0]) for c in check_url_spy.call_args_list]
+        assert checked == [f"https://{BLOCKED_HOST}/responses"], checked
+
+    @pytest.mark.asyncio
+    async def test_the_hook_fires_on_a_redirect_hop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Layer 1 disabled, as in ``TestRedirectHopsAreGuarded``."""
+        monkeypatch.setattr(litellm_client_module, "check_egress_or_raise", lambda *a, **kw: None)
+        redirect_target = f"https://{BLOCKED_HOST}/responses"
+        sent: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            sent.append(str(request.url))
+            if len(sent) == 1:
+                return httpx.Response(307, headers={"location": redirect_target}, request=request)
+            raise AssertionError("sentinel transport reached on the redirected hop")
+
+        mock_transport = httpx.MockTransport(_handler)
+        monkeypatch.setattr(
+            AsyncHTTPHandler,
+            "create_async_transport",
+            staticmethod(lambda *a, **kw: mock_transport),
+        )
+        guard = _guard(blocklist=frozenset({BLOCKED_HOST}))
+        check_url_spy = _spy_check_url(guard)
+
+        with pytest.raises(Exception):  # noqa: B017 — route's own wrapper shape, per ADR D2.2
+            await _dispatch(provider="openai", base_url=f"https://{ALLOWED_HOST}", guard=guard)
+
+        assert sent == [f"https://{ALLOWED_HOST}/responses"], "only the first hop may be sent"
+        assert _checked_hosts(check_url_spy)[-2:] == [ALLOWED_HOST, BLOCKED_HOST]
+
+
+class TestAnUnguardedBridgeIsStillRefused:
+    """FRE-1627 AC-3: the refusal stays for a bridged request with no guarded route."""
+
+    @pytest.mark.asyncio
+    async def test_a_bridged_ovhcloud_request_is_refused_before_any_send(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``responses/`` id makes litellm bridge it; only ``openai`` has the guarded route."""
+        mock_transport = httpx.MockTransport(_sentinel_never_reached)
+        monkeypatch.setattr(
+            AsyncHTTPHandler,
+            "create_async_transport",
+            staticmethod(lambda *a, **kw: mock_transport),
+        )
+        with patch.object(
+            httpx.AsyncHTTPTransport, "handle_async_request", side_effect=_sentinel_never_reached
+        ):
+            with pytest.raises(LLMClientError, match="Responses API bridge"):
+                await _dispatch(
+                    provider="ovhcloud",
+                    base_url=f"https://{ALLOWED_HOST}",
+                    guard=_guard(),
+                    model_id="responses/test-model",
+                )

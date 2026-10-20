@@ -768,10 +768,10 @@ models:
     # catalog"). The newest Sol on developers.openai.com/api/docs/models, 2026-10-20. Pickable
     # primary only; binds no role. Reasoning cannot be off (no 'none'), so no mode may set a
     # temperature or top_p. Tool calls work only on the Responses API, and litellm 1.106.0's
-    # async bridge to it drops the egress-guarded client, so LiteLLMClient REFUSES a Sol call
-    # with tools (ADR-0141 D2, owner decision 2026-10-20, FRE-1625). Until a follow-up gives
-    # the Responses path a guarded client, Sol completes only tool-free calls; a tool-bearing
-    # primary turn on it raises LLMClientError (FRE-1621 note §4.5, §6.3).
+    # async bridge to it drops the egress-guarded client (FRE-1625). LiteLLMClient therefore
+    # sends a Sol call with tools on its own guarded Responses route
+    # (llm_client/responses_route.py, ADR-0141 D2, FRE-1627); tool-free calls stay on Chat
+    # Completions (FRE-1621 note §4.5, §6.3).
     # max_tokens, concurrency and timeout copy claude_sonnet, the entry it compares to (§4.5).
     id: "gpt-6.1-sol"
     provider: "openai"

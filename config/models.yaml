@@ -755,6 +755,10 @@ models:
         reasoning_effort: none
       worker:
         reasoning_effort: none
+      # ADR-0157 D5 (FRE-1625): the Fast level's primary mode, the bottom of the
+      # dialect's range. A copy of `worker`, so a later `worker` change does not move Fast.
+      fast:
+        reasoning_effort: none
     input_cost_per_token: 0.0000001    # $0.10/MTok up to 272K (developers.openai.com/api/docs/pricing, 2026-10-20)
     output_cost_per_token: 0.0000005   # $0.50/MTok
 
@@ -782,6 +786,10 @@ models:
         reasoning_effort: medium   # the provider default, declared rather than inherited
       worker:
         reasoning_effort: low
+      # ADR-0157 D5 (FRE-1625): the Fast level's primary mode. Sol's reasoning cannot be
+      # off, so the bottom of its domain is `low`, the same as `worker`.
+      fast:
+        reasoning_effort: low
     input_cost_per_token: 0.000002     # $2/MTok up to 272K; $4 above (developers.openai.com/api/docs/pricing, 2026-10-20)
     output_cost_per_token: 0.00001     # $10/MTok up to 272K; $15 above
 
@@ -801,6 +809,10 @@ models:
       default:
         effort: medium        # the provider default, declared rather than inherited
       worker:
+        effort: low
+      # ADR-0157 D5 (FRE-1625): the Fast level's primary mode. anthropic_adaptive has no
+      # off value, so Fast still reasons, at the bottom of the range (`low`).
+      fast:
         effort: low
     supports_vision: true
     supports_pdf_document: true

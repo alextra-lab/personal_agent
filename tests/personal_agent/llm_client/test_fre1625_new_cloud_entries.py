@@ -411,6 +411,34 @@ class TestSolCatalogRefusals:
         assert definition.resolve_mode("worker").reasoning_effort == "low"
 
 
+class TestFastModes:
+    """ADR-0157 D5: the Fast level's mode on each new entry, at the bottom of its range."""
+
+    @pytest.mark.parametrize(
+        ("key", "field", "expected"),
+        [
+            ("gpt-6-luna", "reasoning_effort", "none"),
+            ("gpt-6.1-sol", "reasoning_effort", "low"),
+            ("claude_haiku_5_5", "effort", "low"),
+        ],
+    )
+    def test_fast_mode_is_declared_at_the_bottom_of_the_range(
+        self, key: str, field: str, expected: str
+    ) -> None:
+        """The mode exists, sets its dialect's lever, and keeps default_mode unchanged."""
+        definition = load_model_config().models[key]
+        fast = definition.resolve_mode("fast")
+        assert getattr(fast, field) == expected
+        assert definition.default_mode == "default"
+
+    def test_sol_fast_cannot_turn_reasoning_off_or_sample(self) -> None:
+        """Sol's domain has no none, so Fast stops at low and carries no sampler."""
+        fast = load_model_config().models["gpt-6.1-sol"].resolve_mode("fast")
+        assert fast.reasoning_effort != "none"
+        assert fast.temperature is None
+        assert fast.top_p is None
+
+
 class TestNoBindingChange:
     """AC-3: the entries are pickable, not bound."""
 

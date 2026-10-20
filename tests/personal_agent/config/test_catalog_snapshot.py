@@ -242,7 +242,11 @@ both additions of the three new catalog entries ``gpt-6-luna``, ``gpt-6.1-sol`` 
    2e-06 / 1e-05.
 
 **No role binding, resolved key, resolved definition, timeout, existing concurrency
-cell or existing price changed** — the entries are pickable, not bound (AC-3).
+cell or existing price changed** — the entries are pickable, not bound (AC-3). The
+``fast`` modes (ADR-0157 D5) that the same change adds to the three entries are not in
+this golden, which resolves bound roles only; ``test_fre1625_new_cloud_entries.py``
+asserts them. This rebaseline follows the twelfth (FRE-1622), whose hand-edited cell order
+is kept: the golden was not re-sorted by the regenerator.
 
 Regenerate deliberately — never to make a red test green:
 

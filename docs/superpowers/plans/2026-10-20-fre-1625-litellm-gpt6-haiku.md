@@ -139,6 +139,16 @@ Also found while running the suites: litellm 1.106.0 `AsyncHTTPHandler.create_cl
 `create_async_transport`, so the egress-guard tests' patch of `_create_async_transport` (now an alias)
 no longer replaced the transport. The tests now patch the public name.
 
+## Rebase onto FRE-1622 (2026-10-20, master's request)
+
+FRE-1622 merged (a3a6ea8a) while the PR was open. One conflict, the `test_catalog_snapshot.py` docstring:
+FRE-1622 keeps the twelfth rebaseline and this change is the thirteenth. Per ADR-0157 D5 and master's
+message, each new entry gains a `fast` mode at the bottom of its range: `gpt-6-luna` `reasoning_effort:
+none`, `gpt-6.1-sol` `reasoning_effort: low` (no `none`), `claude_haiku_5_5` `effort: low`. No `deep`
+mode: master asked for `fast`, D5 adds none at this date, and a `deep` mode on Luna (`high`) would send
+tool-bearing primary turns to the Responses bridge, which `LiteLLMClient` refuses (FRE-1627).
+`TestFastModes` asserts the modes; the golden holds only bound roles, so it does not show them.
+
 ## Out of scope
 
 Role binding swaps, Sonnet 5.5 forced-tool change, `ModeSpec` literal widening (`max`), eval judges,

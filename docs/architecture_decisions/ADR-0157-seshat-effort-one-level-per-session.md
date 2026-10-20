@@ -79,7 +79,7 @@ Seshat effort has three levels. The owner picks a level. A level sets all of its
 
 The values live in one committed file, `config/seshat_effort.yaml`, with `default_level: standard`. The gateway loads it once at start into a frozen model and refuses to start if it is invalid (D3). A new level, or a new value, is a PR to that file.
 
-The planner and the helpers keep their own modes at every level. On a D2 turn, the planner uses the deployment's qualified `planner` mode (ADR-0154 D4: thinking off). Outside D2, a deployment without a `planner` mode answers the planner call with its `default` mode, as today (`config/model_loader.py:393`). The helpers use the `sub_agent` binding's `worker` mode (thinking off on the local models, `effort: low` on `claude_sonnet`). No level changes either mode. The planner's D7 qualification and ADR-0154 AC-7 rest on thinking off.
+The planner and the helpers keep their own modes at every level. On a D2 turn, the planner uses the deployment's qualified `planner` mode (ADR-0154 D4: thinking off). Outside D2, a deployment without a `planner` mode answers the planner call with its `default` mode, as today (`with_requested_mode`, `config/model_loader.py:393`). The helpers use the `sub_agent` binding's `worker` mode (thinking off on the local models, `effort: low` on `claude_sonnet`). No level changes either mode. The planner's D7 qualification and ADR-0154 AC-7 rest on thinking off.
 
 The sentence of FRE-1619 ("The budget is a limit, not a target…") is static text in every helper prompt, at every level.
 

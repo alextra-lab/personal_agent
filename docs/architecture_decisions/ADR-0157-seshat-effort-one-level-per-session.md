@@ -1,6 +1,6 @@
 # ADR-0157: Seshat Effort — One Level per Session Sets the Harness and the Primary's Reasoning, and D7 Binds the Default Level
 
-**Status:** Proposed — 2026-10-20
+**Status:** Accepted — 2026-10-20 (owner: "Ok. Write it up"). Proposed 2026-10-20 (PR #1304).
 **Date:** 2026-10-20
 **Deciders:** Owner (the selector, its name, the three levels, per-session scope, presets only, Standard as the default, P2 on Standard, Fast thinking off, D7 on the default level only, 2026-10-19 and 2026-10-20), `master` (the starting table of levels, 2026-10-19), `adr` seat at Opus 5.5 (author, FRE-1620)
 **Tags:** routing, expansion, planner, pwa, model-selection, reasoning, config

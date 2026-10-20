@@ -11,7 +11,16 @@ from __future__ import annotations
 import pytest
 from scripts.eval.fre1537 import render
 
-from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
+from personal_agent.config.seshat_effort import (
+    EffortLevel,
+    effort_spec,
+    reset_current_effort,
+    set_current_effort,
+)
+from personal_agent.orchestrator.expansion_controller import (
+    _P2_DECOMPOSITION_POLICY,
+    _build_planner_system_prompt,
+)
 
 SURFACES = [
     [],
@@ -21,12 +30,24 @@ SURFACES = [
 
 
 @pytest.mark.parametrize("surface", SURFACES)
-def test_the_decline_prompt_equals_the_probe_rendering(surface: list[str]) -> None:
-    production = _build_planner_system_prompt(surface, admit_single=True)
-    assert production == render.render_system_prompt(surface)
+@pytest.mark.parametrize("level", ["fast", "standard", "deep", None])
+def test_the_decline_prompt_equals_the_probe_rendering(
+    surface: list[str], level: EffortLevel | None
+) -> None:
+    """FRE-1622 (ADR-0157 D7 rule 1): every level's D2 prompt, rendered as the turn renders it."""
+    token = set_current_effort(effort_spec(level))
+    try:
+        production = _build_planner_system_prompt(surface, admit_single=True)
+    finally:
+        reset_current_effort(token)
+    assert production == render.render_system_prompt(surface, level)
     assert render.prompt_hash(production) == render.prompt_hash(
-        render.render_system_prompt(surface)
+        render.render_system_prompt(surface, level)
     )
+
+
+def test_the_probe_carries_the_production_p2_block() -> None:
+    assert render.P2_BLOCK == _P2_DECOMPOSITION_POLICY
 
 
 @pytest.mark.parametrize("surface", SURFACES)

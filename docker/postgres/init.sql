@@ -42,7 +42,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- FRE-1595). Only the server writes it (SessionRepository.add_revealed_tools); the
     -- PATCH endpoint cannot set or clear it. Pruning clears it with the messages. Mirrors
     -- docker/postgres/migrations/0033_sessions_revealed_tools.sql.
-    revealed_tools TEXT[] NOT NULL DEFAULT '{}'
+    revealed_tools TEXT[] NOT NULL DEFAULT '{}',
+    -- The session's Seshat effort level (ADR-0157 D2, FRE-1622). The application writes it
+    -- explicitly on every session it creates; the default matches default_level in
+    -- config/seshat_effort.yaml. Mirrors docker/postgres/migrations/0034_sessions_seshat_effort.sql.
+    seshat_effort VARCHAR(16) NOT NULL DEFAULT 'standard',
+    CONSTRAINT ck_sessions_seshat_effort CHECK (seshat_effort IN ('fast', 'standard', 'deep'))
 );
 
 CREATE INDEX idx_sessions_last_active ON sessions(last_active_at DESC);
@@ -133,7 +138,7 @@ CREATE TABLE IF NOT EXISTS route_traces (
     session_id UUID,
     task_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    schema_version SMALLINT NOT NULL DEFAULT 3,
+    schema_version SMALLINT NOT NULL DEFAULT 4,
 
     -- Stimulus (PII-gated)
     user_message_chars INTEGER NOT NULL DEFAULT 0,
@@ -212,6 +217,12 @@ CREATE TABLE IF NOT EXISTS route_traces (
     expansion_budget INTEGER,
     synthesis_appended BOOLEAN,
     first_token_ms REAL,
+
+    -- ADR-0157 D8 (FRE-1622): the turn's Seshat effort level and the catalog mode the
+    -- answering deployment requested. NULL outside a chat entry path. Mirrors
+    -- docker/postgres/migrations/0035_route_trace_seshat_effort.sql.
+    seshat_effort VARCHAR(16),
+    primary_mode VARCHAR(40),
 
     -- ADR-0088 seam key (FRE-513): per-topology idempotency. NULLS NOT DISTINCT so the
     -- turn-level write (task_id NULL) still collapses to one row per trace_id.

@@ -353,11 +353,13 @@ def down() -> None:
     print("probe containers removed")
 
 
-def render(run_dir: Path) -> None:
+def render(run_dir: Path, level: str | None = None) -> None:
     """Render the design A planner prompts inside the running gateway and write ``prompts.json``.
 
     Args:
         run_dir: The run directory.
+        level: The Seshat effort level whose D2 prompt to render (ADR-0157 D7). ``None`` is the
+            committed ``default_level``.
 
     Raises:
         SystemExit: If the gateway printed no prompts line.
@@ -368,8 +370,10 @@ def render(run_dir: Path) -> None:
             for f in load_fixtures()
         ]
     )
+    level_args = ["--level", level] if level is not None else []
     result = run_docker(
-        ["exec", "-i", GATEWAY_NAME, CONTAINER_PYTHON, "/probe/render.py"], stdin=payload
+        ["exec", "-i", GATEWAY_NAME, CONTAINER_PYTHON, "/probe/render.py", *level_args],
+        stdin=payload,
     )
     lines = [x for x in result.stdout.splitlines() if x.startswith(PROMPTS_PREFIX)]
     if not lines:
@@ -393,13 +397,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("command", choices=("up", "render", "down"))
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--level", choices=("fast", "standard", "deep"), default=None)
     args = parser.parse_args(argv)
     if args.command != "down" and args.run_dir is None:
         parser.error(f"{args.command} needs --run-dir")
     if args.command == "up":
         up(args.run_dir, os.environ, args.port)
     elif args.command == "render":
-        render(args.run_dir)
+        render(args.run_dir, args.level)
     else:
         down()
     return 0

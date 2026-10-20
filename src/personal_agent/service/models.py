@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase
 
+from personal_agent.config.seshat_effort import EffortLevel
 from personal_agent.llm_client.message_content import MessageContent
 
 
@@ -62,6 +63,8 @@ class SessionCreate(BaseModel):
     channel: str | None = None
     mode: str = "NORMAL"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # ADR-0157 D2: the level the new session stores; None stores default_level explicitly.
+    seshat_effort: EffortLevel | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -83,6 +86,18 @@ class SessionSelectionUpdate(BaseModel):
 
     role: str = "primary"
     deployment_key: str
+
+
+class SessionEffortUpdate(BaseModel):
+    """Request to change a session's Seshat effort level (ADR-0157 D2).
+
+    The level is one of the three presets. Any other value is refused with 422 before the
+    session is read.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    seshat_effort: EffortLevel
 
 
 class ConstraintPreferenceUpdate(BaseModel):
@@ -239,6 +254,10 @@ class SessionModel(Base):
     revealed_tools: Column[list[str]] = Column(
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
+    # ADR-0157 D2 (FRE-1622) — the session's Seshat effort level. Every creation path
+    # writes it explicitly; the server default only backfills pre-migration rows. The
+    # database checks the three values (ck_sessions_seshat_effort).
+    seshat_effort = Column(String(16), nullable=False, server_default="standard")
 
 
 class MetricModel(Base):

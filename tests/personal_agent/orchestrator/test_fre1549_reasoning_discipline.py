@@ -13,6 +13,8 @@ AC-3 to AC-5 need live turns and are verified by master after deploy.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -179,15 +181,28 @@ class TestPrimaryPromptCarriesTheRule:
 
 
 @pytest.fixture
-def _pin_round_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fix the per-level round budgets the planner prompt renders from settings."""
-    import personal_agent.orchestrator.expansion_controller as ec
+def _pin_round_budgets(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Fix the per-level round budgets the planner prompt renders from settings.
 
+    FRE-1622 (ADR-0157 D3): a Seshat effort level now sets the budget. A spec without rounds
+    falls back to ``sub_agent_rounds_for``, so this pin keeps rendering the per-level budgets.
+    """
+    from personal_agent.config.seshat_effort import (
+        effort_spec,
+        reset_current_effort,
+        set_current_effort,
+    )
+
+    spec = effort_spec("standard").model_copy(update={"sub_agent_rounds": None})
     monkeypatch.setattr(
-        ec,
-        "get_settings",
+        "personal_agent.config.get_settings",
         lambda: SimpleNamespace(sub_agent_rounds_for=lambda level: _PINNED_ROUNDS[level]),
     )
+    token = set_current_effort(spec)
+    try:
+        yield
+    finally:
+        reset_current_effort(token)
 
 
 @pytest.mark.usefixtures("_pin_round_budgets")

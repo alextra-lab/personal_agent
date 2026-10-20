@@ -284,9 +284,12 @@ class AppConfig(BaseSettings):
         ge=0,
         description=(
             "FRE-1389 AC-2, FRE-1496: the sub-agent tool loop's outer bound. "
-            "ADR-0150 D3 introduced sub_agent_rounds_by_thoroughness as the operative "
-            "per-level control; this field is the cap enforced at load. Deliberately "
-            "separate from orchestrator_max_tool_iterations, the primary turn's ceiling."
+            "ADR-0157 D3: a Seshat effort level (config/seshat_effort.yaml) sets the "
+            "round budget of a chat turn; this field is the ceiling of every level "
+            "(the gateway refuses to start when a level is above it) and the budget "
+            "outside a chat turn. It also sizes the helper's outer deadline. "
+            "Deliberately separate from orchestrator_max_tool_iterations, the primary "
+            "turn's ceiling."
         ),
     )
     sub_agent_rounds_by_thoroughness: dict[Thoroughness, int] = Field(
@@ -296,8 +299,9 @@ class AppConfig(BaseSettings):
             "standard, thorough). A level not set here reads sub_agent_max_tool_iterations "
             "(see sub_agent_rounds_for), so by default every level equals the cap and "
             "nothing changes on merge. Each value is refused at load when above the cap. "
-            "Env form: AGENT_SUB_AGENT_ROUNDS_BY_THOROUGHNESS='{\"quick\": 2}'. The "
-            "numbers are FRE-1487's to set, on the owner's decision."
+            "Env form: AGENT_SUB_AGENT_ROUNDS_BY_THOROUGHNESS='{\"quick\": 2}'. "
+            "ADR-0157 D3: must stay empty while Seshat effort levels set the budget; "
+            "the gateway refuses to start when it is set."
         ),
     )
     sub_agent_researcher_min_search_rounds: int = Field(

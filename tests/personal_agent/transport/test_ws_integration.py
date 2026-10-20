@@ -740,8 +740,29 @@ def _turn_status(client: TestClient, session_id: str, *, tools: int, ctx: int) -
     )
 
 
+def _assert_effort_frame(frame: dict[str, Any], level: str) -> None:
+    """FRE-1622 (ADR-0157 D2): the attach replay carries the session's stored level."""
+    assert frame["type"] == "STATE_DELTA"
+    assert frame["seq"] is None
+    assert frame["data"] == {
+        "key": "session_effort",
+        "value": {"seshat_effort": level, "effort_provenance": "server-hydrated"},
+    }
+
+
 class TestAttach:
     """FRE-1543: the snapshot restores the bar; an in-flight turn replays from its start."""
+
+    def test_attach_carries_the_stored_seshat_effort_level(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        from tests.personal_agent.transport.ws_harness import FakeEffortDb
+
+        client, _ = harness
+        FakeEffortDb.stored = "deep"
+        with ws_connect(client, str(uuid4()), attach=True) as ws:
+            _assert_effort_frame(ws.receive_json(), "deep")
+            assert ws.receive_json()["type"] == "REPLAY_COMPLETE"
 
     def test_ac3_attach_after_a_restart_sends_the_last_reading(
         self, harness: tuple[TestClient, FakeSessionEventBuffer]
@@ -754,6 +775,7 @@ class TestAttach:
 
         with ws_connect(client, session_id, attach=True) as ws:
             snapshot = ws.receive_json()
+            _assert_effort_frame(ws.receive_json(), "standard")
             complete = ws.receive_json()
 
         assert snapshot["type"] == "STATE_DELTA"
@@ -775,6 +797,7 @@ class TestAttach:
         session_id = str(uuid4())
 
         with ws_connect(client, session_id, attach=True) as ws:
+            _assert_effort_frame(ws.receive_json(), "standard")
             first = ws.receive_json()
 
         assert first["type"] == "REPLAY_COMPLETE"
@@ -860,6 +883,7 @@ class TestAttach:
         client.post("/__test/done", params={"session_id": session_id})
 
         with ws_connect(client, session_id, attach=True) as ws:
+            _assert_effort_frame(ws.receive_json(), "standard")
             assert ws.receive_json()["type"] == "REPLAY_COMPLETE"
             client.post("/__test/text_delta", params={"session_id": session_id, "text": "b"})
             live = ws.receive_json()
@@ -876,9 +900,11 @@ class TestAttach:
         session_id = str(uuid4())
 
         with ws_connect(client, session_id, attach=True) as first:
+            _assert_effort_frame(first.receive_json(), "standard")
             assert first.receive_json()["type"] == "REPLAY_COMPLETE"
             old = wsep.get_active_connection(session_id)
             assert old is not None and old.sender_task is not None
             with ws_connect(client, session_id, attach=True) as second:
+                _assert_effort_frame(second.receive_json(), "standard")
                 assert second.receive_json()["type"] == "REPLAY_COMPLETE"
                 assert old.sender_task.done()

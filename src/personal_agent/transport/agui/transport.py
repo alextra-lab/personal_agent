@@ -693,6 +693,27 @@ async def emit_session_selection(*, session_id: str, role: str, deployment_key: 
     )
 
 
+async def emit_session_effort(*, session_id: str, seshat_effort: str) -> None:
+    """Persist + enqueue a ``session_effort`` STATE_DELTA event (ADR-0157 D2).
+
+    Best-effort live notification to the single active client that the session's Seshat
+    effort level changed. Other clients converge through the session GET and the attach
+    replay, which carries the stored level (ADR-0079 invariants 5, 6 and 10).
+
+    Args:
+        session_id: Target session identifier.
+        seshat_effort: The newly stored level.
+    """
+    await _push_event(
+        StateUpdateEvent(
+            key="session_effort",
+            value={"seshat_effort": seshat_effort, "effort_provenance": "server-hydrated"},
+            session_id=session_id,
+        ),
+        session_id,
+    )
+
+
 class AGUITransport:
     """AG-UI streaming transport via WebSocket.
 

@@ -27,6 +27,7 @@ _MIGRATION_CHAIN = (
     "0010_route_trace_topology_key.sql",
     "0031_route_trace_pause_instrumentation.sql",
     "0032_route_trace_planner_decision.sql",
+    "0035_route_trace_seshat_effort.sql",
 )
 
 
@@ -90,8 +91,9 @@ async def test_write_issues_idempotent_insert() -> None:
     # ADR-0088 seam key: per-topology rows are keyed by (trace_id, task_id), so the
     # idempotency conflict target migrated from (trace_id) to (trace_id, task_id).
     assert "ON CONFLICT (trace_id, task_id) DO NOTHING" in sql
-    # 57 bound parameters follow the SQL string (43 + the 14 ADR-0154 D6 columns, FRE-1512).
-    assert len(conn.execute.call_args.args) == 58
+    # 59 bound parameters follow the SQL string (43 + the 14 ADR-0154 D6 columns, FRE-1512,
+    # + the 2 ADR-0157 D8 columns, FRE-1622).
+    assert len(conn.execute.call_args.args) == 60
     # Identity params are passed first, as UUIDs; task_id is the third bound param.
     assert conn.execute.call_args.args[1] == row.trace_id
     assert conn.execute.call_args.args[2] == row.session_id
@@ -187,6 +189,8 @@ def _record(**overrides: object) -> dict[str, object]:
         expansion_budget=None,
         synthesis_appended=None,
         first_token_ms=None,
+        seshat_effort=None,
+        primary_mode=None,
     )
     base.update(overrides)
     return base

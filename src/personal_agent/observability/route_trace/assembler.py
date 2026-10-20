@@ -384,4 +384,7 @@ def assemble_route_trace(
         conversation_history_chars=getattr(ctx, "conversation_history_chars", None),
         expansion_budget=ctx_budget if ctx_budget is not None else gateway_expansion_budget,
         synthesis_appended=bool(getattr(ctx, "synthesis_appended", False)),
+        # ADR-0157 D8 (FRE-1622)
+        seshat_effort=getattr(ctx, "seshat_effort", None),
+        primary_mode=getattr(ctx, "primary_mode", None),
     )

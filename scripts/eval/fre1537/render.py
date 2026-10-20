@@ -2,15 +2,21 @@
 
 Design A is an isolated planner call: the planner system prompt, then one user message made of the
 rendered conversation history, an optional memory digest, and the query. The history and the
-system prompt come from the production functions in ``expansion_controller``. The decline rule is
-inserted as ADR-0152 D1 and the FRE-1502 probe wrote it, because production code does not carry it yet.
+system prompt come from the production functions in ``expansion_controller``. The probe keeps its own
+copy of the D2 additions: the decline rule as ADR-0152 D1 and the FRE-1502 probe wrote it, and, for a
+level whose ``planner_policy`` is ``p2``, the ADR-0157 D6 block placed as FRE-1615's P2.patch placed it.
+A test asserts that production's D2 prompt is byte-identical to this rendering for every level
+(``tests/personal_agent/orchestrator/test_fre1515_decline_prompt.py``).
 The user message comes from the production ``build_planner_user_message``, so the bound and the framing
 are those that ship (FRE-1541).
+
+ADR-0157 D7: the prompt that D7 qualifies is a Seshat effort level's D2 prompt. ``--level`` names the
+level, and the default is the committed ``default_level``.
 
 This file imports nothing from ``scripts``. The live step runs it inside the gateway container,
 where the settings are those of the image under test:
 
-    docker exec -i fre1537-gateway python /probe/render.py < fixtures.json
+    docker exec -i fre1537-gateway python /probe/render.py [--level standard] < fixtures.json
 
 The last stdout line is ``FRE1537_PROMPTS=<json>``. The gateway package logs to stdout on import,
 so the host reads that line and nothing else.
@@ -18,6 +24,7 @@ so the host reads that line and nothing else.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import sys
@@ -38,19 +45,58 @@ DECLINE_RULE = (
     '{"strategy": "SINGLE", "tasks": []} and nothing else. Choose HYBRID or DECOMPOSE only when '
     "splitting the work into independent sub-tasks would produce a better answer than one pass\n"
 )
+# ADR-0157 D6: the owner's P2 text, the probe's own copy of FRE-1615's P2.patch constant.
+P2_BLOCK = (
+    "DECOMPOSITION POLICY\n"
+    "Prefer SINGLE.\n"
+    "Delegate only when independent execution is likely\n"
+    "to materially improve evidence quality, coverage,\n"
+    "or total completion time.\n"
+    "Account for:\n"
+    "- Additional model calls and context overhead\n"
+    "- Shared inference-server contention\n"
+    "- Information lost through worker summaries\n"
+    "- Work the primary agent can perform directly\n"
+    "Do not create a worker solely to summarize,\n"
+    "compare, or reformat information another worker\n"
+    "is already gathering, unless independent analysis\n"
+    "has a specific benefit.\n"
+    "HYBRID delegates bounded specialized work while\n"
+    "the primary handles remaining reasoning or synthesis.\n"
+    "DECOMPOSE requires at least two genuinely independent\n"
+    "subtasks whose results can be merged without depending\n"
+    "on one another.\n"
+    "Prefer fewer, more complete tasks when they share\n"
+    "the same tools, sources, and information.\n"
+    "Every task needs a specific deliverable and a\n"
+    "measurable completion condition.\n"
+)
 
 
-def _production_system_prompt(surface: Sequence[str]) -> str:
+def _level_policy(level: str | None) -> tuple[str, str | None]:
+    """Return the resolved level name and its ``planner_policy``."""
+    from personal_agent.config.seshat_effort import effort_spec
+
+    spec = effort_spec(level)  # type: ignore[arg-type]
+    return spec.level, spec.planner_policy
+
+
+def _production_system_prompt(surface: Sequence[str], level: str | None = None) -> str:
+    """Return production's prompt without the D2 additions, at the level's round budget."""
+    from personal_agent.config.seshat_effort import effort_spec
     from personal_agent.orchestrator.expansion_controller import _build_planner_system_prompt
 
-    return _build_planner_system_prompt(list(surface))
+    return _build_planner_system_prompt(list(surface), effort=effort_spec(level))  # type: ignore[arg-type]
 
 
-def render_system_prompt(surface: Sequence[str]) -> str:
-    """Render the planner system prompt with the decline rule and a schema that admits ``SINGLE``.
+def render_system_prompt(surface: Sequence[str], level: str | None = None) -> str:
+    """Render a level's D2 planner system prompt (ADR-0154 D7, ADR-0157 D7 rule 1).
+
+    The decline rule, a schema that admits ``SINGLE`` and, on a ``p2`` level, the D6 block.
 
     Args:
         surface: Sub-agent tool names currently grantable.
+        level: The Seshat effort level. ``None`` is the committed ``default_level``.
 
     Returns:
         The system prompt of design A.
@@ -59,12 +105,14 @@ def render_system_prompt(surface: Sequence[str]) -> str:
         RuntimeError: If the production prompt no longer holds an anchor that the rule needs.
             The probe must be updated, not skipped, because a changed prompt is a changed instrument.
     """
-    base = _production_system_prompt(surface)
+    base = _production_system_prompt(surface, level)
     for anchor in (_SCHEMA_ANCHOR, _RULES_ANCHOR):
         if anchor not in base:
             raise RuntimeError(f"planner system prompt lost the anchor {anchor!r}")
+    _, policy = _level_policy(level)
+    block = P2_BLOCK + "\n" if policy == "p2" else ""
     return base.replace(_SCHEMA_ANCHOR, _SCHEMA_REPLACEMENT, 1).replace(
-        _RULES_ANCHOR, _RULES_ANCHOR + DECLINE_RULE, 1
+        _RULES_ANCHOR, block + _RULES_ANCHOR + DECLINE_RULE, 1
     )
 
 
@@ -169,14 +217,22 @@ def build_planner_request(
     }
 
 
-def main() -> None:
-    """Render every fixture on stdin and print the prompts file as the last stdout line."""
+def main(argv: Sequence[str] | None = None) -> None:
+    """Render every fixture on stdin and print the prompts file as the last stdout line.
+
+    Args:
+        argv: Command-line arguments. Default is ``sys.argv[1:]``.
+    """
     from personal_agent.config import settings
     from personal_agent.orchestrator.expansion_controller import _current_sub_agent_tool_surface
 
+    parser = argparse.ArgumentParser(description="Render a level's D2 planner prompts.")
+    parser.add_argument("--level", choices=("fast", "standard", "deep"), default=None)
+    args = parser.parse_args(argv)
+    level, policy = _level_policy(args.level)
     fixtures = json.load(sys.stdin)
     surface = _current_sub_agent_tool_surface("fre1537")
-    system = render_system_prompt(surface)
+    system = render_system_prompt(surface, level)
     max_chars = settings.planner_history_max_chars
     rendered: dict[str, dict[str, object]] = {}
     for fx in fixtures:
@@ -189,6 +245,8 @@ def main() -> None:
             "history_chars": req["history_chars"],
         }
     out = {
+        "level": level,
+        "planner_policy": policy,
         "surface": surface,
         "history_max_chars": max_chars,
         "system": system,

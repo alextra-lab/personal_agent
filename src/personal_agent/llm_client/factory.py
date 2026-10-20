@@ -228,7 +228,7 @@ def get_llm_client(
     return _build_client(resolved_key, model_def, budget_role_for(role_name), config, priority)
 
 
-def get_llm_client_for_key(model_key: str, *, budget_role: str) -> Any:
+def get_llm_client_for_key(model_key: str, *, budget_role: str, mode: str | None = None) -> Any:
     """Return an LLM client for a specific model key from **trusted config**.
 
     This is the trusted-config door, not a user-selection door. Every call site
@@ -264,6 +264,10 @@ def get_llm_client_for_key(model_key: str, *, budget_role: str) -> Any:
             disagreeing defaults to none at all: the lane is always named at the
             door, and omitting it is a ``TypeError`` rather than an arbitrary
             bucket.
+        mode: A named catalog mode this call site asks for (ADR-0157 D5: the Seshat
+            effort level's mode on the vision escalation). The deployment's own mode of
+            this name, or its default mode with a logged fallback when it declares none.
+            ``None`` keeps the catalog's ``default_mode``.
 
     Returns:
         A :class:`LiteLLMClient` configured for the key's placement.
@@ -277,5 +281,9 @@ def get_llm_client_for_key(model_key: str, *, budget_role: str) -> Any:
         raise ValueError(
             f"Unknown model key '{model_key}'. Available: {sorted(config.models.keys())}"
         )
+    if mode is not None:
+        from personal_agent.config.model_loader import with_requested_mode
+
+        model_def = with_requested_mode(model_def, mode, role=budget_role, deployment_key=model_key)
 
     return _build_client(model_key, model_def, budget_role, config)

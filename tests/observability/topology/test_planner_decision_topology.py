@@ -300,8 +300,17 @@ async def test_template_declares_every_projected_field_with_a_matching_type() ->
         conversation_history_chars=10,
         expansion_budget=1,
     )
-    row = RouteTraceRow(**{**_row_from_ctx(ctx).__dict__, "first_token_ms": 1.5})
+    row = RouteTraceRow(
+        **{
+            **_row_from_ctx(ctx).__dict__,
+            "first_token_ms": 1.5,
+            # ADR-0157 D8 (FRE-1622)
+            "seshat_effort": "fast",
+            "primary_mode": "fast",
+        }
+    )
     doc = build_topology_doc(row, topology="primary")
+    assert {"seshat_effort", "primary_mode"} <= set(doc)
 
     compatible = {
         str: {"keyword"},

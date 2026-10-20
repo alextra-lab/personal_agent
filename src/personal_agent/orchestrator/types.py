@@ -338,6 +338,14 @@ class PendingDocumentContinuation:
     original_trace_id: str
 
 
+def _current_effort_level() -> str | None:
+    """Return the turn's Seshat effort level, or ``None`` outside a chat turn (ADR-0157 D8)."""
+    from personal_agent.config.seshat_effort import get_current_effort  # noqa: PLC0415
+
+    spec = get_current_effort()
+    return spec.level if spec is not None else None
+
+
 @dataclass
 class ExecutionContext:
     """Mutable state container passed through execution steps.
@@ -620,6 +628,15 @@ class ExecutionContext:
     planner_gate_reason: PlannerGateReason | None = None
     conversation_history_chars: int | None = None
     synthesis_appended: bool = False
+
+    # --- ADR-0157 D8 (FRE-1622): what the route-trace row records about the level ---
+    # ``seshat_effort`` is the turn's Seshat effort level, read once when the context is
+    # built (the chat path sets the spec before it builds the context); ``None`` outside a
+    # chat turn. ``primary_mode`` is the catalog mode the answering deployment's client
+    # requested, stamped on every primary pass (the last pass wins, as
+    # ``answering_model_key`` does).
+    seshat_effort: str | None = field(default_factory=_current_effort_level)
+    primary_mode: str | None = None
 
     # --- FRE-661 / ADR-0101 §2 structured attachment carrier ---
     # Kept separate from user_message so Captain's Log + entity extraction never

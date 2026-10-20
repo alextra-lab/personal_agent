@@ -146,6 +146,10 @@ async def _call_chat_stream() -> tuple[str, list[MutableMapping[str, Any]]]:
             "personal_agent.service.app._resolve_session_selection",
             new=AsyncMock(return_value=("anthropic-sonnet", "default")),
         ),
+        patch(
+            "personal_agent.service.app._resolve_session_effort",
+            new=AsyncMock(return_value=("standard", "default")),
+        ),
         patch.object(asyncio, "create_task", side_effect=_capture_task),
         _capture() as captured,
     ):
@@ -153,6 +157,7 @@ async def _call_chat_stream() -> tuple[str, list[MutableMapping[str, Any]]]:
             message="hello",
             session_id=_SESSION_ID,
             primary_selection=None,
+            seshat_effort=None,
             client_msg_id=None,
             attachments=None,
             request_user=RequestUser(user_id=_USER_ID, email="o@example.test"),

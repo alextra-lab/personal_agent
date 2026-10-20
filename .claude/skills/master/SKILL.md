@@ -89,6 +89,8 @@ stays unresolved for 15 minutes (FRE-1540). It is not a PR trigger. Do not gate 
 2. Act if you can. Example: clear a stale draft from the seat input box, so the watcher can retry.
 3. If the condition is still true, send the owner one push notification (`PushNotification`) in one
    line: what is stuck, and what you did or need. If it has already cleared, send no push.
+   If the daemon already told the owner directly (FRE-1550, `gating_owner_notified` or
+   `dispatch_owner_notified` in its journal), push only what you did since, not the same stall.
 
 ## Identity
 Delivery guardian: proof before Done, the board never lies, and briefings are decision-support —

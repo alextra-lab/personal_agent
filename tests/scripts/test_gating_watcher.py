@@ -27,6 +27,7 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
 from scripts.dispatch import launcher
 from scripts.dispatch.gating_watcher import (
     DEFAULT_CONTEXT_PRESSURE_THRESHOLD,
@@ -3238,3 +3239,277 @@ def test_unroutable_trigger_over_a_just_sent_entry_is_not_a_failed_attempt() -> 
     _tick({}, _T0, runner, ledger, resolver=_no_session)
     assert _master_texts(runner) == []
     assert ledger[_WORKER_KEY].attempts == 1  # untouched: not recorded as a retry
+
+
+# --- FRE-1550: a stall in master's own input reaches the owner ---------------
+# 2026-10-04: `/master 1218` stayed an unsent draft in cc-master's input. Every alert went to
+# the blocked seat, so nobody heard for five hours.
+
+_OWNER_LIMIT_S = 1800.0  # the master alert is due at 900 s, then a further 900 s of deferral
+_DRAFT_PANE = _REAL_IDLE_PANE.replace("❯\xa0", "❯\xa0/master 1218", 1)
+
+
+class _OwnerBox:
+    """The owner notifier seam: records each line and answers ``ok``."""
+
+    def __init__(self, *, ok: bool = True) -> None:
+        self.ok = ok
+        self.attempts = 0
+        self.sent: list[str] = []
+
+    def __call__(self, message: str) -> bool:
+        self.attempts += 1
+        if self.ok:
+            self.sent.append(message)
+        return self.ok
+
+
+def test_the_draft_pane_fixture_reads_as_a_held_draft() -> None:
+    assert _DRAFT_PANE != _REAL_IDLE_PANE
+    assert not session_is_idle(_DRAFT_PANE)
+
+
+@pytest.mark.parametrize(
+    "master_pane", [_BUSY_PANE, _DRAFT_PANE], ids=["master-busy", "master-holds-a-draft"]
+)
+def test_fre1550_ac1_a_blocked_master_sends_the_worker_alert_to_the_owner_once(
+    monkeypatch, master_pane: str
+) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _PaneRunner({_SEAT_PANE: _BUSY_PANE, _MASTER_PANE: master_pane})
+    owner = _OwnerBox()
+    for minute in range(0, 30):  # t0 .. t0+1740: past the master alert, short of the limit
+        _tick(state, _T0 + minute * 60, runner, ledger, owner_notifier=owner)
+    assert owner.sent == []
+    for minute in range(30, 41):  # the limit, then ten more minutes of the same stall
+        _tick(state, _T0 + minute * 60, runner, ledger, owner_notifier=owner)
+
+    (line,) = owner.sent
+    assert "PR #412" in line and "cc-2build" in line and "\n" not in line
+    assert _master_texts(runner) == []  # nothing ever typed into the blocked seat
+    assert ledger[_WORKER_KEY].owner_alerted_at == _T0 + _OWNER_LIMIT_S
+    assert ledger[_WORKER_KEY].alerted_at is None
+
+
+def test_fre1550_a_failed_owner_send_retries_each_tick_and_latches_only_on_success(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _PaneRunner({_SEAT_PANE: _BUSY_PANE, _MASTER_PANE: _BUSY_PANE})
+    owner = _OwnerBox(ok=False)
+    for minute in range(0, 34):  # the limit is at minute 30; ntfy is down until minute 33
+        _tick(state, _T0 + minute * 60, runner, ledger, owner_notifier=owner)
+    assert owner.attempts == 4 and owner.sent == []
+    assert ledger[_WORKER_KEY].owner_alerted_at is None
+    owner.ok = True
+    for minute in range(34, 45):
+        _tick(state, _T0 + minute * 60, runner, ledger, owner_notifier=owner)
+    assert len(owner.sent) == 1
+    assert owner.attempts == 5
+
+
+def test_fre1550_a_restart_between_every_tick_still_sends_one_owner_line(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    from scripts.dispatch import trigger_ledger
+
+    _send_keys_mode(monkeypatch)
+    path = tmp_path / "ledger.json"
+    state: dict[str, float] = {}
+    runner = _PaneRunner({_SEAT_PANE: _BUSY_PANE, _MASTER_PANE: _BUSY_PANE})
+    owner = _OwnerBox()
+    for minute in range(0, 45):
+        ledger = trigger_ledger.load_ledger(path, _NullLogger())
+        run_once(
+            state,
+            now=_T0 + minute * 60,
+            board_fetcher=lambda: [_pr(ci="failure")],
+            session_resolver=_resolve_build2,
+            runner=runner,
+            persist=lambda _s: None,
+            logger=_NullLogger(),
+            execute=True,
+            ledger=ledger,
+            ledger_persist=lambda lg: trigger_ledger.save_ledger(path, lg),
+            owner_notifier=owner,
+        )
+    assert len(owner.sent) == 1
+
+
+def test_fre1550_an_unroutable_worker_trigger_reaches_the_owner_when_master_is_blocked() -> None:
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _PaneRunner({_SEAT_PANE: _BUSY_PANE, _MASTER_PANE: _BUSY_PANE})
+    owner = _OwnerBox()
+    for minute in range(0, 41):
+        _tick(state, _T0 + minute * 60, runner, ledger, resolver=_no_session, owner_notifier=owner)
+    (line,) = owner.sent
+    assert "PR #412" in line and "none" in line
+
+
+def test_fre1550_ac3_a_reachable_master_still_gets_the_worker_alert_and_the_owner_hears_nothing(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _stuck_runner()  # the seat is busy, master is idle
+    owner = _OwnerBox()
+    for minute in range(0, 41):
+        _tick(state, _T0 + minute * 60, runner, ledger, owner_notifier=owner)
+    (alert,) = _master_texts(runner)
+    assert alert.startswith("[DISPATCH ALERT]")
+    assert "PR #412" in alert and "cc-2build" in alert and "Reason: busy." in alert
+    assert owner.attempts == 0
+    assert ledger[_WORKER_KEY].alerted_at == _T0 + 900
+    assert ledger[_WORKER_KEY].owner_alerted_at is None
+
+
+def test_fre1550_without_an_owner_notifier_a_blocked_master_changes_nothing(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    _send_keys_mode(monkeypatch)
+    state: dict[str, float] = {}
+    ledger: dict = {}
+    runner = _PaneRunner({_SEAT_PANE: _BUSY_PANE, _MASTER_PANE: _BUSY_PANE})
+    for minute in range(0, 41):
+        _tick(state, _T0 + minute * 60, runner, ledger)
+    assert _master_texts(runner) == []
+    assert ledger[_WORKER_KEY].owner_alerted_at is None
+
+
+def _held_master_tick(
+    ledger: dict,
+    now: float,
+    owner: _OwnerBox | None,
+    *,
+    escalated: set[str] | None = None,
+    runner: _RecordingRunner | None = None,
+) -> _RecordingRunner:
+    runner = runner or _busy_runner()
+    run_once(
+        {},
+        now=now,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+        queued_escalated=escalated if escalated is not None else set(),
+        queued_escalation_s=1800.0,
+        owner_notifier=owner,
+    )
+    return runner
+
+
+def test_fre1550_ac2_a_held_master_trigger_sends_one_owner_line_naming_the_pr() -> None:
+    ledger = _queued_entry(created_at=100.0)
+    owner = _OwnerBox()
+    _held_master_tick(ledger, 1000.0, owner)
+    assert owner.sent == []  # under the limit
+    _held_master_tick(ledger, 1899.0, owner)
+    assert owner.sent == []  # one second short
+    runner = _held_master_tick(ledger, 1900.0, owner)  # 1800 s past created_at
+    (line,) = owner.sent
+    assert "PR #412" in line and "\n" not in line
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)  # still no keystroke
+    for now in range(1960, 1960 + 20 * 60, 60):  # twenty more ticks of the same stall
+        _held_master_tick(ledger, float(now), owner)
+    assert len(owner.sent) == 1  # never one per tick
+    assert ledger["master:412:abc1234def5678"].owner_alerted_at == 1900.0
+
+
+def test_fre1550_ac2_a_restart_of_the_watcher_does_not_repeat_the_owner_line() -> None:
+    """The in-memory ``escalated`` set is lost on a restart. The ledger latch must hold."""
+    ledger = _queued_entry(created_at=100.0)
+    owner = _OwnerBox()
+    for now in (1900.0, 1960.0, 5000.0, 9000.0):
+        _held_master_tick(ledger, now, owner, escalated=set())  # a fresh set each tick
+    assert len(owner.sent) == 1
+
+
+def test_fre1550_ac2_a_failed_owner_send_retries_and_latches_only_on_success() -> None:
+    ledger = _queued_entry(created_at=100.0)
+    owner = _OwnerBox(ok=False)
+    for now in (1900.0, 1960.0, 2020.0):
+        _held_master_tick(ledger, now, owner)
+    assert owner.attempts == 3 and owner.sent == []
+    assert ledger["master:412:abc1234def5678"].owner_alerted_at is None
+    owner.ok = True
+    for now in (2080.0, 2140.0, 2200.0):
+        _held_master_tick(ledger, now, owner)
+    assert len(owner.sent) == 1
+
+
+def test_fre1550_ac2_a_session_keyed_trigger_names_the_ticket_not_a_pr() -> None:
+    ledger = _queued_entry(
+        created_at=100.0,
+        ticket="cc-master",
+        event_id="context-pressure:cc-master",
+        source="context-pressure",
+    )
+    owner = _OwnerBox()
+    _held_master_tick(ledger, 1900.0, owner)
+    (line,) = owner.sent
+    assert "PR #" not in line and "context-pressure" in line
+
+
+def test_fre1550_ac2_a_delivered_master_trigger_sends_nothing_to_the_owner() -> None:
+    ledger = _queued_entry(created_at=100.0)
+    owner = _OwnerBox()
+    runner = _PaneRunner({_MASTER_PANE: _REAL_IDLE_PANE})  # master frees up before the limit
+    _held_master_tick(ledger, 1000.0, owner, runner=runner)
+    assert ledger["master:412:abc1234def5678"].sent_at is not None
+    _held_master_tick(ledger, 5000.0, owner, runner=runner)
+    assert owner.attempts == 0
+
+
+def test_fre1550_the_real_notifier_posts_the_held_trigger_line_to_a_local_server() -> None:
+    from scripts.dispatch.owner_notify import make_owner_notifier
+
+    from tests.scripts.test_owner_notify import _fake_ntfy
+
+    ledger = _queued_entry(created_at=100.0)
+    with _fake_ntfy() as (url, received):
+        notifier = make_owner_notifier(url, _NullLogger())  # type: ignore[arg-type]
+        run_once(
+            {},
+            now=1900.0,
+            board_fetcher=lambda: [_pr()],
+            session_resolver=_no_session,
+            runner=_busy_runner(),
+            persist=lambda _s: None,
+            logger=_NullLogger(),
+            execute=True,
+            ledger=ledger,
+            ledger_persist=ledger.update,
+            queued_escalation_s=1800.0,
+            owner_notifier=notifier,
+        )
+    (request,) = received.requests
+    assert "PR #412" in str(request["body"])
+
+
+def test_fre1550_a_tick_makes_at_most_one_owner_attempt_and_the_rest_wait_for_the_next_tick() -> (
+    None
+):
+    ledger = {
+        **_queued_entry(created_at=100.0),
+        **_queued_entry(created_at=100.0, ticket="413", event_id="master:413:def"),
+    }
+    owner = _OwnerBox()
+    _held_master_tick(ledger, 1900.0, owner)
+    assert owner.attempts == 1  # one POST in the tick, however many entries are due
+    _held_master_tick(ledger, 1960.0, owner)
+    assert owner.attempts == 2 and len(owner.sent) == 2  # the other entry, one tick later
+    _held_master_tick(ledger, 2020.0, owner)
+    assert owner.attempts == 2  # both latched
+    named = " ".join(owner.sent)
+    assert "PR #412" in named and "PR #413" in named

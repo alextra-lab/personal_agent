@@ -525,6 +525,7 @@ def _run(
     notify_ledger_path=None,
     head_stall_state=None,
     seat_turn_reader=None,
+    owner_notifier=None,
 ):
     # Default reconcile reads the tracked ticket's state from the board — a
     # stand-in for "the direct Linear lookup agrees with the board". Tests that
@@ -552,6 +553,7 @@ def _run(
         head_stall_state=head_stall_state,
         sleeper=_no_wait,
         seat_turn_reader=seat_turn_reader,
+        owner_notifier=owner_notifier,
     )
     return result, persisted
 
@@ -3463,6 +3465,189 @@ def test_a_dry_run_sends_no_notify_alert(tmp_path: Path) -> None:
     runner = _master_runner()
     _alert_tick(runner, path, 900.0, execute=False)
     assert _alert_texts(runner) == []
+
+
+# --- FRE-1550: a stall in master's own input reaches the owner ----------------
+# cc-master is the seat that pushes a stall to the owner. When it is the stuck seat, the alert
+# typed into it cannot land. After a further 15 minutes the owner is told directly.
+
+_DRAFT_MASTER_PANE = _IDLE_MASTER_PANE.replace("\u276f\u00a0", "\u276f\u00a0/master 1218", 1)
+_BUSY_MASTER_PANE = "\u273d Working\u2026 (esc to interrupt)"
+
+
+class _OwnerBox:
+    """The owner notifier seam: records each line and answers ``ok``."""
+
+    def __init__(self, *, ok: bool = True) -> None:
+        self.ok = ok
+        self.attempts = 0
+        self.sent: list[str] = []
+
+    def __call__(self, message: str) -> bool:
+        self.attempts += 1
+        if self.ok:
+            self.sent.append(message)
+        return self.ok
+
+
+def _owner_tick(
+    runner: _RecordingRunner,
+    path: Path,
+    now: float,
+    owner: _OwnerBox | None,
+    *,
+    execute: bool = True,
+) -> None:
+    _run(
+        {},
+        runner,
+        [],
+        now=now,
+        notify_ledger_path=path,
+        rc_alive=lambda: True,
+        execute=execute,
+        owner_notifier=owner,
+    )
+
+
+def test_the_draft_master_pane_fixture_holds_a_draft() -> None:
+    assert _DRAFT_MASTER_PANE != _IDLE_MASTER_PANE
+
+
+@pytest.mark.parametrize(
+    "master_pane", [_BUSY_MASTER_PANE, _DRAFT_MASTER_PANE], ids=["master-busy", "master-draft"]
+)
+def test_fre1550_ac1_a_blocked_master_sends_the_notify_alert_to_the_owner_once(
+    tmp_path: Path, master_pane: str
+) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    runner = _master_runner(master_pane)
+    owner = _OwnerBox()
+    for now in (900.0, 1200.0, 1500.0, 1799.0):  # the daemon ticks every 5 minutes
+        _owner_tick(runner, path, now, owner)
+    assert owner.sent == []  # the master alert is deferred, the limit is not reached
+    for now in (1800.0, 2100.0, 2400.0, 3000.0, 7200.0):  # the file is reloaded each tick
+        _owner_tick(runner, path, now, owner)
+
+    (line,) = owner.sent
+    for part in ("dispatch_seat_wedged", "build1", "FRE-786"):
+        assert part in line, part
+    assert "\n" not in line
+    assert _alert_texts(runner) == []  # nothing is typed into the blocked seat
+    entry = trigger_ledger.load_ledger(path, _NullLogger())[_ALERT_EVENT]
+    assert entry.owner_alerted_at == 1800.0
+    assert entry.alerted_at is None
+
+
+def test_fre1550_a_failed_owner_send_retries_and_latches_only_on_success(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    runner = _master_runner(_BUSY_MASTER_PANE)
+    owner = _OwnerBox(ok=False)
+    for now in (1800.0, 2100.0, 2400.0):
+        _owner_tick(runner, path, now, owner)
+    assert owner.attempts == 3 and owner.sent == []
+    assert trigger_ledger.load_ledger(path, _NullLogger())[_ALERT_EVENT].owner_alerted_at is None
+    owner.ok = True
+    for now in (2700.0, 3000.0, 3300.0):
+        _owner_tick(runner, path, now, owner)
+    assert len(owner.sent) == 1
+
+
+def test_fre1550_a_renotify_neither_resets_the_clock_nor_repeats_the_owner_line(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    runner = _master_runner(_BUSY_MASTER_PANE)
+    owner = _OwnerBox()
+    _owner_tick(runner, path, 1800.0, owner)
+    notifier = _trigger_ledger_notifier(path, _NullLogger())
+    notifier("dispatch_seat_wedged", trace_id="t", stream="build1", ticket="FRE-786")
+    for now in (2100.0, 4000.0):
+        _owner_tick(runner, path, now, owner)
+    assert len(owner.sent) == 1
+    entry = trigger_ledger.load_ledger(path, _NullLogger())[_ALERT_EVENT]
+    assert entry.created_at == 0.0 and entry.owner_alerted_at == 1800.0
+
+
+def test_fre1550_ac3_a_reachable_master_still_gets_the_alert_and_the_owner_hears_nothing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    runner = _master_runner()
+    owner = _OwnerBox()
+    for now in (900.0, 1200.0, 1800.0, 3000.0, 7200.0):
+        _owner_tick(runner, path, now, owner)
+    (text,) = _alert_texts(runner)
+    assert text.startswith("[DISPATCH ALERT]")
+    assert owner.attempts == 0
+    entry = trigger_ledger.load_ledger(path, _NullLogger())[_ALERT_EVENT]
+    assert entry.alerted_at == 900.0 and entry.owner_alerted_at is None
+
+
+def test_fre1550_a_master_that_frees_up_late_still_gets_its_alert(tmp_path: Path) -> None:
+    """The owner line does not replace the alert to master: the owner path only covers the gap."""
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    owner = _OwnerBox()
+    _owner_tick(_master_runner(_BUSY_MASTER_PANE), path, 1800.0, owner)
+    idle = _master_runner()
+    _owner_tick(idle, path, 2100.0, owner)
+    assert len(owner.sent) == 1
+    assert len(_alert_texts(idle)) == 1
+
+
+def test_fre1550_without_an_owner_notifier_a_blocked_master_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    runner = _master_runner(_BUSY_MASTER_PANE)
+    for now in (900.0, 1800.0, 7200.0):
+        _owner_tick(runner, path, now, None)
+    assert _alert_texts(runner) == []
+    assert trigger_ledger.load_ledger(path, _NullLogger())[_ALERT_EVENT].owner_alerted_at is None
+
+
+def test_fre1550_a_dry_run_and_a_consumed_entry_send_nothing_to_the_owner(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    owner = _OwnerBox()
+    _owner_tick(_master_runner(_BUSY_MASTER_PANE), path, 1800.0, owner, execute=False)
+    ledger = trigger_ledger.mark_consumed_if_present(
+        trigger_ledger.load_ledger(path, _NullLogger()), _ALERT_EVENT, 1000.0
+    )
+    trigger_ledger.save_ledger(path, ledger)
+    _owner_tick(_master_runner(_BUSY_MASTER_PANE), path, 2100.0, owner)
+    assert owner.attempts == 0
+
+
+def test_fre1550_a_tick_makes_at_most_one_owner_attempt(tmp_path: Path) -> None:
+    path = tmp_path / "notify.json"
+    _seed_open_entry(path)
+    second = "dispatch-notify:dispatch_stall:build2"
+    ledger = trigger_ledger.record_surfaced(
+        trigger_ledger.load_ledger(path, _NullLogger()),
+        event_id=second,
+        source="dispatch_stall",
+        target_pane="build2",
+        ticket="FRE-900",
+        preconditions={},
+        now=0.0,
+    )
+    trigger_ledger.save_ledger(path, ledger)
+    runner = _master_runner(_BUSY_MASTER_PANE)
+    owner = _OwnerBox()
+    _owner_tick(runner, path, 1800.0, owner)
+    assert owner.attempts == 1  # one POST in the tick, however many entries are due
+    _owner_tick(runner, path, 2100.0, owner)
+    assert owner.attempts == 2 and len(owner.sent) == 2
+    _owner_tick(runner, path, 2400.0, owner)
+    assert owner.attempts == 2
+    assert any("build2" in line for line in owner.sent)
 
 
 # --- FRE-1629: the dispatch_execute log carries the model-switch answer ------

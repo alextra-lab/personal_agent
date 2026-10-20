@@ -53,7 +53,7 @@ from urllib.parse import urlparse
 
 import structlog
 
-from scripts.dispatch import master_alert, trigger_ledger
+from scripts.dispatch import master_alert, owner_notify, trigger_ledger
 from scripts.dispatch.gating_watcher import MASTER_SESSION, send_to_session
 from scripts.dispatch.launcher import (
     CommandRunner,
@@ -908,6 +908,7 @@ def run_once(
     persist_head_stall: Callable[[dict[str, HeadStallState]], None] = lambda _state: None,
     sleeper: Callable[[float], None] = time.sleep,
     seat_turn_reader: Callable[[str], SeatTurn | None] | None = None,
+    owner_notifier: owner_notify.OwnerNotifier | None = None,
 ) -> dict[str, DispatchRecord]:
     """Run one orchestration tick across ``streams``, mutating and returning state.
 
@@ -985,6 +986,9 @@ def run_once(
             separates an in-progress stall awaiting the owner from a wedged
             seat. ``None`` (the default) disables both, so a caller that does
             not wire it never touches tmux or transcripts.
+        owner_notifier: Sends one line straight to the owner when ``cc-master`` is the stuck
+            seat and the stale-condition alert typed into it cannot land (FRE-1550).
+            ``None`` (the default) means no owner path. A tick makes at most one attempt.
 
     Returns:
         The updated state dict.
@@ -1098,12 +1102,23 @@ def run_once(
             seat_turn=seat_turn,
         )
     if execute and notify_ledger_path is not None:
-        _alert_stale_notifications(notify_ledger_path, runner=runner, now=now, logger=logger)
+        _alert_stale_notifications(
+            notify_ledger_path,
+            runner=runner,
+            now=now,
+            logger=logger,
+            owner_notifier=owner_notifier,
+        )
     return state
 
 
 def _alert_stale_notifications(
-    ledger_path: Path, *, runner: CommandRunner, now: float, logger: Logger
+    ledger_path: Path,
+    *,
+    runner: CommandRunner,
+    now: float,
+    logger: Logger,
+    owner_notifier: owner_notify.OwnerNotifier | None = None,
 ) -> None:
     """Tell ``cc-master`` once about each notify-ledger entry open for 15 minutes (FRE-1540).
 
@@ -1116,21 +1131,43 @@ def _alert_stale_notifications(
     tick retries, so the alert is late and never lost. A crash between the send and the save can
     repeat one alert, the safe direction to fail.
 
+    When ``cc-master`` itself is the stuck party, that retry never succeeds. An entry that stays
+    unalerted for a further ``OWNER_ALERT_AFTER_S`` sends one line to the owner (FRE-1550).
+    ``owner_alerted_at`` is the latch, set only after the send is accepted. A refused send to
+    master is not tried again for the other entries in the same tick: master is unreachable for
+    all of them alike.
+
     Args:
         ledger_path: The orchestrator's notify ledger.
         runner: The command runner seam (shells ``tmux``).
         now: Wall-clock epoch seconds.
         logger: Structured logger.
+        owner_notifier: Sends one line to the owner, or ``None`` for no owner path. The tick
+            makes at most one attempt through it.
     """
     trace_id = str(uuid.uuid4())
     ledger = trigger_ledger.load_ledger(ledger_path, logger)
+    send_to_owner = None if owner_notifier is None else owner_notify.once_per_tick(owner_notifier)
+    master_blocked = False
     for event_id, entry in list(ledger.items()):
-        if entry.consumed_at is not None or not master_alert.is_due(entry, now):
+        if entry.consumed_at is not None:
             continue
-        outcome = send_to_session(
-            MASTER_SESSION, master_alert.format_notify_entry(entry, now), runner
-        )
-        if outcome != "sent":
+        if master_alert.is_due(entry, now) and not master_blocked:
+            outcome = send_to_session(
+                MASTER_SESSION, master_alert.format_notify_entry(entry, now), runner
+            )
+            if outcome == "sent":
+                ledger = trigger_ledger.mark_alerted(ledger, event_id, now)
+                trigger_ledger.save_ledger(ledger_path, ledger)
+                logger.warning(
+                    "dispatch_alert_sent",
+                    trace_id=trace_id,
+                    dispatch_event=entry.source,
+                    stream=entry.target_pane,
+                    ticket=entry.ticket,
+                )
+                continue
+            master_blocked = True
             logger.warning(
                 "dispatch_alert_deferred",
                 trace_id=trace_id,
@@ -1138,16 +1175,17 @@ def _alert_stale_notifications(
                 stream=entry.target_pane,
                 master_outcome=outcome,
             )
-            return  # master is unreachable for every entry alike; retry next tick
-        ledger = trigger_ledger.mark_alerted(ledger, event_id, now)
-        trigger_ledger.save_ledger(ledger_path, ledger)
-        logger.warning(
-            "dispatch_alert_sent",
-            trace_id=trace_id,
-            dispatch_event=entry.source,
-            stream=entry.target_pane,
-            ticket=entry.ticket,
-        )
+        if send_to_owner is not None and master_alert.is_owner_due(entry, now):
+            if send_to_owner(master_alert.format_owner_notify_entry(entry, now)):
+                ledger = trigger_ledger.mark_owner_alerted(ledger, event_id, now)
+                trigger_ledger.save_ledger(ledger_path, ledger)
+                logger.warning(
+                    "dispatch_owner_notified",
+                    trace_id=trace_id,
+                    dispatch_event=entry.source,
+                    stream=entry.target_pane,
+                    ticket=entry.ticket,
+                )
 
 
 def _apply(
@@ -2475,6 +2513,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     logger = structlog.get_logger(__name__)
     notify_ledger_path = Path(args.notify_ledger_file)
     notifier = _trigger_ledger_notifier(notify_ledger_path, logger)
+    owner_notifier = owner_notify.make_owner_notifier(owner_notify.load_owner_ntfy_url(), logger)
     state_path = Path(args.state_file)
     wedge_state_path = Path(args.wedge_state_file)
     head_stall_state_path = Path(args.head_stall_state_file)
@@ -2523,6 +2562,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             head_stall_renotify_ticks=args.head_stall_renotify_ticks,
             persist_head_stall=lambda st: save_head_stall_state(head_stall_state_path, st),
             seat_turn_reader=lambda stream: read_seat_turn(topology_for(stream).tmux_session),
+            owner_notifier=owner_notifier,
         )
 
     if args.loop:

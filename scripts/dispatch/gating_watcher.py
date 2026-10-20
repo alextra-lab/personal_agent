@@ -52,6 +52,10 @@ into them.
 4. otherwise an alert, never a typed injection. A worker trigger that stays undelivered
    alerts ``cc-master`` after 15 minutes (``master_alert``). A master trigger that stays
    undelivered logs ``gating_trigger_unconfirmed_too_long`` after 30 minutes.
+5. when ``cc-master`` is the stuck seat, the alert to it cannot land (FRE-1550). A worker alert
+   that master refuses for a further 15 minutes, and a master trigger that stays unconfirmed for
+   30 minutes, send one line to the owner (``owner_notify``). The latch is ``owner_alerted_at`` in
+   the ledger, so a restart does not repeat it. A failed send retries on the next tick.
 
 **Held master triggers (FRE-939, FRE-1271, FRE-1556).** A master trigger that the gate refuses
 yields ``queued``: the command is **held, not injected**. Such an entry is deliberately **not**
@@ -116,7 +120,7 @@ from typing import ContextManager, Literal, Protocol, overload
 
 import structlog
 
-from scripts.dispatch import context_probe, master_alert, trigger_ledger
+from scripts.dispatch import context_probe, master_alert, owner_notify, trigger_ledger
 from scripts.dispatch.launcher import (
     MASTER_CHANNEL_PORT,
     CommandRunner,
@@ -1200,6 +1204,7 @@ def resolve_queued_triggers(
     ledger_persist: Callable[[trigger_ledger.Ledger], None],
     logger: Logger,
     trace_id: str,
+    owner_notifier: owner_notify.OwnerNotifier | None = None,
 ) -> tuple[trigger_ledger.Ledger, tuple[str, ...]]:
     """Resolve every deferred (``queued``) ledger entry (FRE-939, FRE-1271).
 
@@ -1265,6 +1270,11 @@ def resolve_queued_triggers(
         ledger_persist: Persists the ledger after each transition.
         logger: Structured logger.
         trace_id: The tick's trace id.
+        owner_notifier: Sends one line to the owner (FRE-1550). Past ``escalation_s`` an entry
+            that is still unconfirmed sends one, because the seat it waits on is ``cc-master``
+            itself and an alert typed into it cannot land. The line is latched by the entry's
+            ``owner_alerted_at`` once the send is accepted, and a failed send retries on the
+            next tick. ``None`` means no owner path.
 
     Returns:
         The updated ledger, and the event ids whose delivery was confirmed this
@@ -1354,6 +1364,17 @@ def resolve_queued_triggers(
                     age_s=round(now - entry.created_at, 1),
                     reoffer_outcome=outcome,
                 )
+            if owner_notifier is not None and entry.owner_alerted_at is None:
+                if owner_notifier(master_alert.format_owner_held_master_trigger(entry, now)):
+                    ledger = trigger_ledger.mark_owner_alerted(ledger, event_id, now)
+                    ledger_persist(ledger)
+                    logger.warning(
+                        "gating_owner_notified",
+                        trace_id=trace_id,
+                        event_id=event_id,
+                        pr=entry.ticket,
+                        session=entry.target_pane,
+                    )
     return ledger, tuple(delivered)
 
 
@@ -1368,6 +1389,7 @@ def _alert_master_if_due(
     logger: Logger,
     trace_id: str,
     ledger_persist: Callable[[trigger_ledger.Ledger], None],
+    owner_notifier: owner_notify.OwnerNotifier | None = None,
 ) -> trigger_ledger.Ledger:
     """Tell ``cc-master`` once that a worker trigger stays undelivered (FRE-1540).
 
@@ -1377,6 +1399,10 @@ def _alert_master_if_due(
     A busy or absent ``cc-master`` leaves ``alerted_at`` unset, so the next tick retries: the
     failing trigger runs again every tick. A crash between the send and the persist can repeat
     one alert. That is on purpose: a duplicate alert is the safe direction to fail.
+
+    When ``cc-master`` itself is the stuck party, the send is refused on every tick. A further
+    ``OWNER_ALERT_AFTER_S`` later, ``owner_notifier`` sends one line to the owner (FRE-1550).
+    ``owner_alerted_at`` is the latch, set only after the send is accepted.
 
     Args:
         ledger: The tick's ledger.
@@ -1388,9 +1414,11 @@ def _alert_master_if_due(
         logger: Structured logger.
         trace_id: The tick's trace id.
         ledger_persist: Persists the ledger after the alert is recorded.
+        owner_notifier: Sends one line to the owner, or ``None`` for no owner path.
 
     Returns:
-        The ledger, with ``alerted_at`` set when the alert was delivered.
+        The ledger, with ``alerted_at`` set when the alert was delivered, or
+        ``owner_alerted_at`` set when the owner was told instead.
     """
     entry = ledger.get(event_id)
     if entry is None or not master_alert.is_due(entry, now):
@@ -1408,6 +1436,14 @@ def _alert_master_if_due(
         logger.warning(
             "gating_alert_deferred", trace_id=trace_id, pr=pr, seat=seat, master_outcome=outcome
         )
+        if owner_notifier is not None and master_alert.is_owner_due(entry, now):
+            line = master_alert.format_owner_undelivered_trigger(
+                pr=pr, seat=seat, first_attempt_at=entry.created_at, now=now
+            )
+            if owner_notifier(line):
+                ledger = trigger_ledger.mark_owner_alerted(ledger, event_id, now)
+                ledger_persist(ledger)
+                logger.warning("gating_owner_notified", trace_id=trace_id, pr=pr, seat=seat)
         return ledger
     ledger = trigger_ledger.mark_alerted(ledger, event_id, now)
     ledger_persist(ledger)
@@ -1537,6 +1573,7 @@ def run_once(
     unroutable_ttl_s: float = DEFAULT_UNROUTABLE_LOG_TTL_S,
     worker_poke_escalation: int = DEFAULT_WORKER_POKE_ESCALATION,
     seat_reader: Callable[[], Sequence[SeatReading]] = lambda: (),
+    owner_notifier: owner_notify.OwnerNotifier | None = None,
 ) -> dict[str, float]:
     """Run one watcher tick, mutating and returning the dedup store.
 
@@ -1588,11 +1625,17 @@ def run_once(
             AC-4). Defaults to none, like ``context_reader``; ``main`` passes the
             real reader. It runs before the kill-switch check and in dry-run:
             reading a seat actuates nothing.
+        owner_notifier: Sends one line straight to the owner when ``cc-master`` is the stuck
+            seat and an alert typed into it cannot land (FRE-1550). ``None`` means no owner
+            path. The tick makes at most one attempt, so a down webhook costs one timeout.
 
     Returns:
         The updated dedup store.
     """
     trace_id = str(uuid.uuid4())
+    tick_owner_notifier = (
+        None if owner_notifier is None else owner_notify.once_per_tick(owner_notifier)
+    )
     _log_seat_readings(seat_reader, logger, trace_id)
     if kill_switch_engaged():
         logger.warning("gating_blocked", trace_id=trace_id, reason="kill-switch")
@@ -1633,6 +1676,7 @@ def run_once(
             ledger_persist=ledger_persist,
             logger=logger,
             trace_id=trace_id,
+            owner_notifier=tick_owner_notifier,
         )
         if redelivered:
             for event_id in redelivered:
@@ -1665,6 +1709,7 @@ def run_once(
                     logger=logger,
                     trace_id=trace_id,
                     ledger_persist=ledger_persist,
+                    owner_notifier=tick_owner_notifier,
                 )
         if trigger.session is None:
             unroutable_key = f"unroutable:{trigger.pr}:{trigger.head_sha}"
@@ -1903,6 +1948,7 @@ def run_once(
                     logger=logger,
                     trace_id=trace_id,
                     ledger_persist=ledger_persist,
+                    owner_notifier=tick_owner_notifier,
                 )
 
     for session, pct in context_pressure(context_reader(), context_pressure_threshold):
@@ -2126,6 +2172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolver = _resolver(api_key, logger)
     ledger_retention_s = args.ledger_retention_days * 86400.0
     channel_secret = load_channel_secret()
+    owner_notifier = owner_notify.make_owner_notifier(owner_notify.load_owner_ntfy_url(), logger)
     # One-shot unconfirmed-trigger alert latch, held across ticks for the life of
     # this daemon run and never persisted (FRE-939; the FRE-922/924 lesson —
     # a persisted crossing state can be first-observed already past its trigger
@@ -2166,6 +2213,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             queued_escalation_s=args.queued_escalation_timeout,
             worker_poke_escalation=args.worker_poke_escalation,
             seat_reader=_seat_reader(subprocess_runner),
+            owner_notifier=owner_notifier,
         )
         if not board_fetched:
             return  # kill-switch halted the tick before the board was read

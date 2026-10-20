@@ -28,6 +28,7 @@ from scripts.dispatch.trigger_ledger import (
     mark_consumed,
     mark_consumed_if_present,
     mark_failure,
+    mark_owner_alerted,
     mark_queued,
     mark_send_started,
     mark_sent,
@@ -1123,3 +1124,78 @@ def test_a_surfaced_entry_gets_a_trigger_id_and_an_open_renotify_keeps_it() -> N
     assert surface({"stall:cc-2build": closed}, 300.0)["stall:cc-2build"].trigger_id != (
         first.trigger_id
     )
+
+
+# --- owner_alerted_at (FRE-1550) ----------------------------------------------
+# The owner push is sent once per condition. Its latch rides the same rewrites as alerted_at.
+
+
+def test_mark_owner_alerted_sets_only_its_own_field() -> None:
+    entry = mark_owner_alerted(_abandon(_pend({}, 100.0), 100.0), _KEY, 2000.0)[_KEY]
+    assert entry.owner_alerted_at == 2000.0
+    assert entry.alerted_at is None
+
+
+def test_owner_alerted_at_carries_across_retries_within_the_gap() -> None:
+    ledger = _abandon(_pend({}, 100.0), 100.0)
+    ledger = mark_owner_alerted(_abandon(_pend(ledger, 160.0), 160.0), _KEY, 200.0)
+    retry = _pend(ledger, 220.0)[_KEY]
+    assert (retry.created_at, retry.owner_alerted_at) == (100.0, 200.0)
+
+
+def test_a_retry_after_a_gap_starts_a_new_episode_that_can_reach_the_owner_again() -> None:
+    """Unlike alerted_at, the owner latch belongs to the episode: a new stall must be heard."""
+    ledger = mark_owner_alerted(_abandon(_pend({}, 100.0), 100.0), _KEY, 2000.0)
+    entry = _pend(ledger, 100.0 + 1800.0 + 1.0)[_KEY]
+    assert entry.created_at == 100.0 + 1800.0 + 1.0
+    assert entry.owner_alerted_at is None
+
+
+def test_a_sent_entry_starts_a_fresh_episode_without_the_owner_latch() -> None:
+    ledger = mark_owner_alerted(_pend({}, 100.0), _KEY, 2000.0)
+    ledger = mark_consumed(
+        mark_sent(mark_send_started(ledger, _KEY, 2100.0), _KEY, 2100.0), _KEY, 2100.0
+    )
+    assert _pend(ledger, 2100.0 + 900.0)[_KEY].owner_alerted_at is None
+
+
+def test_renotify_of_an_open_surfaced_entry_keeps_owner_alerted_at() -> None:
+    key = "dispatch-notify:dispatch_stall:build1"
+    ledger = mark_owner_alerted(_surface({}, 100.0), key, 2000.0)
+    assert _surface(ledger, 2300.0)[key].owner_alerted_at == 2000.0
+
+
+def test_surfacing_again_after_the_entry_was_consumed_clears_the_owner_latch() -> None:
+    key = "dispatch-notify:dispatch_stall:build1"
+    ledger = mark_consumed_if_present(
+        mark_owner_alerted(_surface({}, 100.0), key, 2000.0), key, 2100.0
+    )
+    assert _surface(ledger, 5000.0)[key].owner_alerted_at is None
+
+
+def test_owner_alerted_at_survives_a_save_and_load(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.json"
+    save_ledger(path, mark_owner_alerted(_pend({}, 100.0), _KEY, 2000.0))
+    assert load_ledger(path, _NullLogger())[_KEY].owner_alerted_at == 2000.0
+
+
+def test_a_ledger_file_from_before_fre_1550_loads_with_no_owner_latch(tmp_path: Path) -> None:
+    path = tmp_path / "old.json"
+    path.write_text(
+        json.dumps(
+            {
+                _KEY: {
+                    "event_id": _KEY,
+                    "source": "s",
+                    "target_pane": "p",
+                    "ticket": "1",
+                    "command": "c",
+                    "preconditions": {},
+                    "created_at": 5.0,
+                    "alerted_at": 9.0,
+                }
+            }
+        )
+    )
+    entry = load_ledger(path, _NullLogger())[_KEY]
+    assert (entry.alerted_at, entry.owner_alerted_at) == (9.0, None)

@@ -238,6 +238,8 @@ telemetry/evaluation/fre996-digest-contract/
 # FRE-1628 Captain's Log side-by-side (real production turns and reflections; never committed —
 # the results live on the ticket)
 telemetry/evaluation/fre1628-captains-log-ab/
+# FRE-1630 reuses that run's inputs and Sonnet arm, so the same data lives here (never committed)
+telemetry/evaluation/fre1630-captains-log-ab/
 
 # FRE-1390 planner role A/B run outputs (raw runs never committed; the numbers that
 # matter live in the ticket handoff and the PR description)

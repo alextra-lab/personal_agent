@@ -1,8 +1,10 @@
-"""FRE-1628: Captain's Log reflection, claude_sonnet against claude_haiku_5_5, blind.
+"""FRE-1628, FRE-1630: Captain's Log reflection, claude_sonnet against one candidate, blind.
 
 Master approved this side-by-side on the FRE-1628 ticket (2026-10-20): stored real
 reflection inputs, both models through the production ``generate_reflection_entry``,
 blind pairs labelled by the FRE-1598 judge panel with the run date in the prompt.
+FRE-1630 added the ``luna`` arm and made ``judge`` and ``score`` compare ``sonnet``
+against one named candidate arm (``--candidate``, default ``haiku``).
 
 Four steps, each a subcommand:
 
@@ -11,19 +13,20 @@ Four steps, each a subcommand:
     # 2. Generate one reflection per turn and arm. Run steps 2 and 3 under the FRE-375
     #    test wrapper: both write cost-gate rows to settings.database_url.
     uv run python -m scripts.eval.fre1628_captains_log_ab.harness generate --arm sonnet
-    uv run python -m scripts.eval.fre1628_captains_log_ab.harness generate --arm haiku
+    uv run python -m scripts.eval.fre1628_captains_log_ab.harness generate --arm luna
     # 3. Label each blind pair with every judge, 4. score against the preregistered bar.
-    uv run python -m scripts.eval.fre1628_captains_log_ab.harness judge
-    uv run python -m scripts.eval.fre1628_captains_log_ab.harness score
+    uv run python -m scripts.eval.fre1628_captains_log_ab.harness judge --candidate luna
+    uv run python -m scripts.eval.fre1628_captains_log_ab.harness score --candidate luna
 
 ``generate`` changes no configuration: it patches ``resolve_role_model_key`` for the
 ``captains_log`` role only, and it feeds the stored events through
 ``_fetch_trace_events`` in place of the ES read (which also skips its 5.5 s wait).
 
-Bar (preregistered on the ticket): zero Haiku reflections off the DSPy path, and Haiku
-not worse (a judge majority for Haiku, or no majority for Sonnet) on at least 8 of 10
-pairs. All output lands in ``telemetry/evaluation/fre1628-captains-log-ab/``, which is
-gitignored: the inputs hold real conversation text.
+Bar (preregistered on the ticket): zero candidate reflections off the DSPy path, and the
+candidate not worse (a judge majority for it, or no majority for Sonnet) on at least 8 of
+10 pairs. All output lands in ``telemetry/evaluation/fre1630-captains-log-ab/``, which is
+gitignored: the inputs hold real conversation text. Labels and report are per candidate:
+``labels-<candidate>.jsonl`` and ``report-<candidate>.json``.
 """
 
 from __future__ import annotations
@@ -40,10 +43,14 @@ from typing import cast
 
 import httpx
 
-OUT_DIR = Path("telemetry/evaluation/fre1628-captains-log-ab")
+OUT_DIR = Path("telemetry/evaluation/fre1630-captains-log-ab")
 INPUTS = OUT_DIR / "inputs.jsonl"
-LABELS = OUT_DIR / "labels.jsonl"
-ARMS: dict[str, str] = {"sonnet": "claude_sonnet", "haiku": "claude_haiku_5_5"}
+ARMS: dict[str, str] = {
+    "sonnet": "claude_sonnet",
+    "haiku": "claude_haiku_5_5",
+    "luna": "gpt-6-luna",
+}
+CANDIDATES = sorted(a for a in ARMS if a != "sonnet")
 BLIND_SEED = 20261020
 MAX_TOKENS = 4000
 BAR_NOT_WORSE = 8
@@ -89,6 +96,10 @@ def _write_jsonl(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
 
 def _outputs_path(arm: str) -> Path:
     return OUT_DIR / f"outputs-{arm}.jsonl"
+
+
+def _labels_path(candidate: str) -> Path:
+    return OUT_DIR / f"labels-{candidate}.jsonl"
 
 
 # ── 1. pull ───────────────────────────────────────────────────────────────────
@@ -191,7 +202,7 @@ async def generate(arm: str, limit: int | None = None) -> int:
     """Run every stored turn through the production reflection producer on one arm.
 
     Args:
-        arm: ``sonnet`` or ``haiku``.
+        arm: ``sonnet`` or a candidate (``haiku``, ``luna``).
         limit: Run only the first N turns (the preflight trace).
 
     Returns:
@@ -308,8 +319,11 @@ def _parse_verdict(text: str) -> tuple[str, str] | None:
     return (verdict, str(data.get("reason", ""))) if verdict in ("A", "B", "tie") else None
 
 
-async def judge() -> int:
-    """Label every blind pair with every judge of the FRE-1598 panel.
+async def judge(candidate: str) -> int:
+    """Label every blind Sonnet/candidate pair with every judge of the FRE-1598 panel.
+
+    Args:
+        candidate: The arm that Sonnet is compared with (``haiku`` or ``luna``).
 
     Returns:
         Process exit code.
@@ -328,7 +342,10 @@ async def judge() -> int:
     )
 
     inputs = {str(r["rid"]): r for r in _read_jsonl(INPUTS)}
-    outputs = {arm: {str(o["rid"]): o for o in _read_jsonl(_outputs_path(arm))} for arm in ARMS}
+    outputs = {
+        arm: {str(o["rid"]): o for o in _read_jsonl(_outputs_path(arm))}
+        for arm in ("sonnet", candidate)
+    }
     run_date = datetime.now(timezone.utc).date().isoformat()
     system = JUDGE_SYSTEM.format(run_date=run_date)
     rng = random.Random(BLIND_SEED)
@@ -341,10 +358,10 @@ async def judge() -> int:
     try:
         calls = {key: _judge_call(key) for key in JUDGES.values()}
         for rid, row in inputs.items():
-            if rid not in outputs["sonnet"] or rid not in outputs["haiku"]:
+            if rid not in outputs["sonnet"] or rid not in outputs[candidate]:
                 continue
-            haiku_is_a = rng.random() < 0.5
-            first, second = ("haiku", "sonnet") if haiku_is_a else ("sonnet", "haiku")
+            candidate_is_a = rng.random() < 0.5
+            first, second = (candidate, "sonnet") if candidate_is_a else ("sonnet", candidate)
             user = JUDGE_USER.format(
                 user_message=str(row["user_message"])[:400],
                 final_state="COMPLETED",
@@ -372,7 +389,7 @@ async def judge() -> int:
                         "rid": rid,
                         "judge": key,
                         "model_id": catalog[key].id,
-                        "haiku_is_a": haiku_is_a,
+                        "candidate_is_a": candidate_is_a,
                         "verdict": verdict,
                         "winner": winner,
                         "reason": reason,
@@ -384,32 +401,35 @@ async def judge() -> int:
     finally:
         await gate.disconnect()
         set_default_gate(None)
-    _write_jsonl(LABELS, rows)
+    _write_jsonl(_labels_path(candidate), rows)
     return 0
 
 
 # ── 4. score ──────────────────────────────────────────────────────────────────
 
 
-def score() -> int:
-    """Apply the preregistered bar and write ``report.json``.
+def score(candidate: str) -> int:
+    """Apply the preregistered bar and write ``report-<candidate>.json``.
+
+    Args:
+        candidate: The arm that Sonnet is compared with (``haiku`` or ``luna``).
 
     Returns:
-        0 when Haiku passes the bar, else 1.
+        0 when the candidate passes the bar, else 1.
     """
-    labels = _read_jsonl(LABELS)
-    haiku_out = {str(o["rid"]): o for o in _read_jsonl(_outputs_path("haiku"))}
+    labels = _read_jsonl(_labels_path(candidate))
+    cand_out = {str(o["rid"]): o for o in _read_jsonl(_outputs_path(candidate))}
     sonnet_out = {str(o["rid"]): o for o in _read_jsonl(_outputs_path("sonnet"))}
     pairs: dict[str, list[str]] = {}
     for label in labels:
         pairs.setdefault(str(label["rid"]), []).append(str(label["winner"]))
     per_pair: dict[str, str] = {}
     for rid, winners in sorted(pairs.items()):
-        majority = [w for w in ("haiku", "sonnet") if winners.count(w) >= 2]
-        # A pair with an unparsed label is not evidence that Haiku is not worse.
+        majority = [w for w in (candidate, "sonnet") if winners.count(w) >= 2]
+        # A pair with an unparsed label is not evidence that the candidate is not worse.
         per_pair[rid] = "error" if "error" in winners else (majority[0] if majority else "tie")
-    not_worse = sum(1 for w in per_pair.values() if w in ("haiku", "tie"))
-    off_path = sorted(rid for rid, o in haiku_out.items() if o["path"] != "dspy")
+    not_worse = sum(1 for w in per_pair.values() if w in (candidate, "tie"))
+    off_path = sorted(rid for rid, o in cand_out.items() if o["path"] != "dspy")
     complete = len(per_pair) == len(_read_jsonl(INPUTS))
     passed = complete and not off_path and not_worse >= BAR_NOT_WORSE
     report: JSONDict = {
@@ -419,22 +439,26 @@ def score() -> int:
         "per_judge": {
             key: {
                 w: sum(1 for x in labels if x["judge"] == key and x["winner"] == w)
-                for w in ("haiku", "sonnet", "tie", "error")
+                for w in (candidate, "sonnet", "tie", "error")
             }
             for key in sorted({str(x["judge"]) for x in labels})
         },
-        "haiku_not_worse": not_worse,
+        f"{candidate}_not_worse": not_worse,
         "bar_not_worse": BAR_NOT_WORSE,
-        "haiku_off_dspy_path": off_path,
+        f"{candidate}_off_dspy_path": off_path,
         "sonnet_off_dspy_path": sorted(rid for rid, o in sonnet_out.items() if o["path"] != "dspy"),
         "cost_usd": {
             "sonnet_generate": sum(float(cast(float, o["cost_usd"])) for o in sonnet_out.values()),
-            "haiku_generate": sum(float(cast(float, o["cost_usd"])) for o in haiku_out.values()),
+            f"{candidate}_generate": sum(
+                float(cast(float, o["cost_usd"])) for o in cand_out.values()
+            ),
             "judges": sum(float(cast(float, x["cost_usd"])) for x in labels),
         },
         "passed": passed,
     }
-    (OUT_DIR / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (OUT_DIR / f"report-{candidate}.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8"
+    )
     print(json.dumps(report, indent=2))  # noqa: T201
     return 0 if passed else 1
 
@@ -453,16 +477,16 @@ def main() -> int:
     p_gen = sub.add_parser("generate")
     p_gen.add_argument("--arm", choices=sorted(ARMS), required=True)
     p_gen.add_argument("--limit", type=int, default=None)
-    sub.add_parser("judge")
-    sub.add_parser("score")
+    for step in ("judge", "score"):
+        sub.add_parser(step).add_argument("--candidate", choices=CANDIDATES, default="haiku")
     args = parser.parse_args()
     if args.step == "pull":
         return pull(args.count, args.days)
     if args.step == "generate":
         return asyncio.run(generate(args.arm, args.limit))
     if args.step == "judge":
-        return asyncio.run(judge())
-    return score()
+        return asyncio.run(judge(args.candidate))
+    return score(args.candidate)
 
 
 if __name__ == "__main__":

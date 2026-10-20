@@ -47,6 +47,8 @@ _OUTCOME_FIELDS = frozenset(
         "planner_completion_tokens",
         "planner_input_chars",
         "planner_system_prompt_sha256",
+        "seshat_effort",
+        "planner_policy",
         "memory_digest_eligible_items",
         "memory_digest_items",
         "memory_digest_items_dropped",
@@ -500,6 +502,8 @@ class TestAC5ExactlyOneTerminalEventPerRun:
             completion_tokens=13,
             input_chars={"system": 1, "history": 0, "digest": 10, "message": 5},
             system_prompt_sha256="abc",
+            seshat_effort="standard",
+            planner_policy="p2",
         )
 
         assert set(fields) == _OUTCOME_FIELDS
@@ -523,6 +527,8 @@ class TestAC5ExactlyOneTerminalEventPerRun:
             completion_tokens=None,
             input_chars={"system": 1, "history": 0, "digest": 0, "message": 5},
             system_prompt_sha256="abc",
+            seshat_effort="standard",
+            planner_policy="p2",
         )
 
         assert fields["memory_digest_items"] == 0

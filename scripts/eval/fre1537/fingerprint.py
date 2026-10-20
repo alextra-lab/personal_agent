@@ -140,6 +140,8 @@ def build_fingerprint(
         },
         "planner_mode": {"name": mode.name, "params": dict(mode.params), "sampling": base_sampling},
         "system_prompt_sha256": inputs.prompts["prompt_hash"],
+        # ADR-0157 D7 rule 1: the fingerprint is taken per Seshat effort level.
+        "seshat_effort": inputs.prompts.get("level", "unknown"),
         "captured_primary": _captured_summary(paths, inputs),
         "git_head": _git_head(),
     }
@@ -251,6 +253,7 @@ def build_cloud_fingerprint(
         },
         "planner_mode": {"name": target.mode_name, "params": dict(target.declared)},
         "system_prompt_sha256": inputs.prompts["prompt_hash"],
+        "seshat_effort": inputs.prompts.get("level", "unknown"),
         "captured_primary": _captured_summary(paths, inputs),
         "client": {"litellm": importlib.metadata.version("litellm")},
         "git_head": _git_head(),

@@ -106,7 +106,9 @@ def test_history_is_trimmed_from_the_oldest_end_by_the_production_function() -> 
 
 
 def test_missing_rule_anchor_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(render, "_production_system_prompt", lambda surface: "no schema here")
+    monkeypatch.setattr(
+        render, "_production_system_prompt", lambda surface, level=None: "no schema here"
+    )
     with pytest.raises(RuntimeError, match="anchor"):
         render.render_system_prompt(SURFACE)
 

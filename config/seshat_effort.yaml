@@ -1,0 +1,36 @@
+# Seshat effort (ADR-0157 D1): three presets. The owner picks one level per session, and a
+# level sets all of its values together. No value can be set alone ("Presets only").
+#
+# The gateway loads this file once at start (src/personal_agent/config/seshat_effort.py) and
+# refuses to start when it is invalid (ADR-0157 D3):
+#   - a level's sub_agent_rounds is above AGENT_SUB_AGENT_MAX_TOOL_ITERATIONS (the ceiling);
+#   - AGENT_SUB_AGENT_ROUNDS_BY_THOROUGHNESS is set;
+#   - a level name, a planner_policy or a primary_mode name is unknown.
+#
+# A change to the default level's values changes its D2 planner prompt. That is a routing
+# change: it needs a passing ADR-0154 D7 probe run first, and the pin test
+# (tests/personal_agent/orchestrator/test_seshat_effort_prompt_pin.py) fails until the new
+# hash is posted (ADR-0157 D7 rule 2).
+
+default_level: standard
+
+levels:
+  fast:
+    # No planner call and no helper: every turn is SINGLE with reason effort_fast (D4).
+    expansion: false
+    sub_agent_rounds: null
+    planner_policy: null
+    # The primary's catalog mode `fast` where the deployment declares one, else default_mode (D5).
+    primary_mode: fast
+  standard:
+    expansion: true
+    sub_agent_rounds: 12
+    # D6, under the ship rule of D7 rule 5 (FRE-1622).
+    planner_policy: p2
+    primary_mode: null
+  deep:
+    expansion: true
+    sub_agent_rounds: 20
+    planner_policy: baseline
+    # No deployment declares a `deep` mode at this date, so Deep runs default_mode (D5).
+    primary_mode: deep

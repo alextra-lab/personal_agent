@@ -39,6 +39,7 @@ def assess_decomposition(
     delegation_enabled: bool = False,
     expansion_enabled: bool = True,
     planner_mode_declared: bool = False,
+    effort_expansion: bool = True,
 ) -> DecompositionResult:
     """Assess how to handle this request: single, hybrid, decompose, or delegate.
 
@@ -69,6 +70,10 @@ def assess_decomposition(
             ``config.model_loader.primary_declares_planner_mode``). It opens the
             ``planner_asked`` route for the four register types. ``False`` (the default)
             keeps today's routing and records ``planner_mode_absent`` on those types.
+        effort_expansion: The ``expansion`` value of the turn's Seshat effort spec (ADR-0157
+            D4, from ``config.seshat_effort.get_current_effort``). When False (the Fast level),
+            every request forces SINGLE with reason ``effort_fast``, checked after the
+            resource-pressure forcings and after ``expansion_disabled``, before the matrix.
 
     Returns:
         DecompositionResult with strategy and human-readable reason.
@@ -103,6 +108,14 @@ def assess_decomposition(
         return DecompositionResult(
             strategy=DecompositionStrategy.SINGLE,
             reason="expansion_disabled",
+            planner_gate_reason=planner_gate_reason,
+        )
+
+    if not effort_expansion:
+        logger.debug("decomposition_forced_single", reason="effort_fast")
+        return DecompositionResult(
+            strategy=DecompositionStrategy.SINGLE,
+            reason="effort_fast",
             planner_gate_reason=planner_gate_reason,
         )
 

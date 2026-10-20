@@ -133,6 +133,15 @@ class LinearProjectNotFoundError(ValueError):
         super().__init__(f"Linear project {project!r} does not exist on team {team!r}.")
 
 
+class SeshatEffortConfigError(ValueError):
+    """Raised when ``config/seshat_effort.yaml`` is invalid (ADR-0157 D3).
+
+    The gateway refuses to start on it: an unknown level, planner policy or mode name, a level
+    round budget above ``sub_agent_max_tool_iterations``, or a set
+    ``sub_agent_rounds_by_thoroughness``.
+    """
+
+
 class PlannerInputTooLargeError(ValueError):
     """Raised when the planner's query and digest alone exceed the input bound.
 

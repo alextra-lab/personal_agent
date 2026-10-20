@@ -116,6 +116,7 @@ async def run_gateway_pipeline(
     from personal_agent.config.model_loader import (  # noqa: PLC0415
         primary_declares_planner_mode,
     )
+    from personal_agent.config.seshat_effort import get_current_effort  # noqa: PLC0415
 
     decomposition = assess_decomposition(
         intent=intent,
@@ -123,6 +124,8 @@ async def run_gateway_pipeline(
         delegation_enabled=settings.delegation_enabled,
         expansion_enabled=settings.expansion_enabled,
         planner_mode_declared=primary_declares_planner_mode(trace_id=trace_id),
+        # ADR-0157 D4: the turn's level, resolved once at launch by the chat path.
+        effort_expansion=get_current_effort().expansion,
     )
 
     logger.info(

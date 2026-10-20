@@ -789,6 +789,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         check_vision_capabilities()
 
+        # ADR-0157 D3: load the Seshat effort presets once and refuse to start on an invalid
+        # file, a level above the round ceiling or a set thoroughness map. Fatal by design.
+        from personal_agent.config.seshat_effort import get_seshat_effort
+
+        get_seshat_effort()
+
         # FRE-1614: the 7-day retention of prompt debug captures runs at every start,
         # so old private files go even when capture is off or the gateway is idle.
         from personal_agent.telemetry.prompt_debug import prune_captures_at_startup

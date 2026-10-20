@@ -35,6 +35,13 @@ import structlog
 
 from personal_agent.brainstem import ModeManagerError, get_current_mode
 from personal_agent.config import GovernanceConfigError, get_settings, load_governance_config
+from personal_agent.config.seshat_effort import (
+    EffortLevel,
+    EffortSpec,
+    PlannerPolicy,
+    get_current_effort,
+    spec_rounds,
+)
 from personal_agent.exceptions import PlannerInputTooLargeError
 from personal_agent.governance.sub_agent_tools import (
     SUB_AGENT_DENIED_MODES,
@@ -118,6 +125,36 @@ _DIGEST_TITLE = "What memory already holds, most relevant first"
 _PLANNER_SCHEMA_STRATEGY = '"strategy": "HYBRID|DECOMPOSE"'
 _PLANNER_SCHEMA_STRATEGY_WITH_DECLINE = '"strategy": "SINGLE|HYBRID|DECOMPOSE"'
 _PLANNER_RULES_HEADING = "Rules:\n"
+# ADR-0157 D6: the owner's "prefer SINGLE" policy (P2), word for word, as FRE-1615 measured it
+# (scripts/eval/fre1615/arms/P2.patch): 913 characters, 23 lines. It goes directly before the
+# first `Rules:` heading, followed by one blank line, on a D2 turn (`admit_single`) of a level
+# whose `planner_policy` is `p2` only. The D7 probe carries its own copy
+# (scripts/eval/fre1537/render.py), and a test asserts the two renderings are byte-identical.
+_P2_DECOMPOSITION_POLICY = (
+    "DECOMPOSITION POLICY\n"
+    "Prefer SINGLE.\n"
+    "Delegate only when independent execution is likely\n"
+    "to materially improve evidence quality, coverage,\n"
+    "or total completion time.\n"
+    "Account for:\n"
+    "- Additional model calls and context overhead\n"
+    "- Shared inference-server contention\n"
+    "- Information lost through worker summaries\n"
+    "- Work the primary agent can perform directly\n"
+    "Do not create a worker solely to summarize,\n"
+    "compare, or reformat information another worker\n"
+    "is already gathering, unless independent analysis\n"
+    "has a specific benefit.\n"
+    "HYBRID delegates bounded specialized work while\n"
+    "the primary handles remaining reasoning or synthesis.\n"
+    "DECOMPOSE requires at least two genuinely independent\n"
+    "subtasks whose results can be merged without depending\n"
+    "on one another.\n"
+    "Prefer fewer, more complete tasks when they share\n"
+    "the same tools, sources, and information.\n"
+    "Every task needs a specific deliverable and a\n"
+    "measurable completion condition.\n"
+)
 _PLANNER_DECLINE_RULE = (
     "- First decide whether this query needs independent sub-tasks at all. If one assistant working "
     "alone, with the same tools, would answer it well in one pass — a greeting, a short factual "
@@ -156,7 +193,10 @@ def _current_sub_agent_tool_surface(trace_id: str) -> list[str]:
 
 
 def _build_planner_system_prompt(
-    available_sub_agent_tools: list[str], *, admit_single: bool = False
+    available_sub_agent_tools: list[str],
+    *,
+    admit_single: bool = False,
+    effort: EffortSpec | None = None,
 ) -> str:
     """Build the planner system prompt with the live sub-agent tool surface.
 
@@ -173,6 +213,10 @@ def _build_planner_system_prompt(
         admit_single: Whether the planner may decline (``planner_may_decline``, ADR-0154
             D2). Adds the decline rule first in the Rules list and ``SINGLE`` to the
             schema line. ``False`` returns the prompt without them.
+        effort: The turn's Seshat effort spec (ADR-0157 D3 item 2). Its round budget is the
+            number each level line renders, and a ``p2`` ``planner_policy`` adds the D6 block
+            when ``admit_single`` is true. ``None`` reads the turn's spec
+            (:func:`~personal_agent.config.seshat_effort.get_current_effort`).
 
     Returns:
         The complete planner system prompt. It carries ``_PLANNER_BRIEFING_RULES``
@@ -192,11 +236,11 @@ def _build_planner_system_prompt(
         for worker_type, spec in WORKER_TYPES.items()
     )
     # ADR-0149 D2 / ADR-0150 D3: the planner is told what each level buys, rendered
-    # live from the setting — a hardcoded number here drifts from the value that
-    # binds, and nothing detects it (the reason FRE-1389 AC-1 gave for the tools).
-    rounds_by_level = {
-        level: get_settings().sub_agent_rounds_for(level) for level in THOROUGHNESS_LEVELS
-    }
+    # live from the value that binds — a hardcoded number here drifts from it, and
+    # nothing detects it (the reason FRE-1389 AC-1 gave for the tools). Since ADR-0157
+    # D3 that value is the turn's Seshat effort level, the same one the helpers read.
+    spec = effort if effort is not None else get_current_effort()
+    rounds_by_level = {level: spec_rounds(spec, level) for level in THOROUGHNESS_LEVELS}
     if len(set(rounds_by_level.values())) == 1:
         (uniform_rounds,) = set(rounds_by_level.values())
         levels = f"{', '.join(THOROUGHNESS_LEVELS)} ({uniform_rounds} tool round(s) each)"
@@ -242,9 +286,15 @@ def _build_planner_system_prompt(
     briefing_rules = "\n".join(f"- {rule}" for rule in _PLANNER_BRIEFING_RULES)
     prompt = f"{prompt}\n{briefing_rules}"
     if admit_single:
+        # ADR-0157 D6: the P2 block, then one blank line, directly before the heading.
+        policy_block = _P2_DECOMPOSITION_POLICY + "\n" if spec.planner_policy == "p2" else ""
         prompt = prompt.replace(
             _PLANNER_SCHEMA_STRATEGY, _PLANNER_SCHEMA_STRATEGY_WITH_DECLINE, 1
-        ).replace(_PLANNER_RULES_HEADING, _PLANNER_RULES_HEADING + _PLANNER_DECLINE_RULE, 1)
+        ).replace(
+            _PLANNER_RULES_HEADING,
+            policy_block + _PLANNER_RULES_HEADING + _PLANNER_DECLINE_RULE,
+            1,
+        )
     return prompt
 
 
@@ -729,6 +779,8 @@ def planner_outcome_fields(
     completion_tokens: int | None,
     input_chars: Mapping[str, int],
     system_prompt_sha256: str | None,
+    seshat_effort: EffortLevel,
+    planner_policy: PlannerPolicy | None,
 ) -> dict[str, object]:
     """Build the fields of the one terminal planner event (ADR-0154 D5, ADR-0147 D5).
 
@@ -753,6 +805,10 @@ def planner_outcome_fields(
         input_chars: Characters of each planner input (ADR-0154 D6).
         system_prompt_sha256: SHA-256 hex of the rendered system prompt (ADR-0154 D7);
             ``None`` when it was never rendered.
+        seshat_effort: The turn's Seshat effort level (ADR-0157 D8).
+        planner_policy: The policy of the rendered prompt: ``baseline`` or ``p2`` on a D2 turn
+            (``admit_single``), else ``None``. ``None`` too when no prompt was rendered, so the
+            value always agrees with ``system_prompt_sha256`` (ADR-0157 D8).
 
     Returns:
         The event fields, without ``trace_id``.
@@ -774,6 +830,8 @@ def planner_outcome_fields(
         "planner_completion_tokens": completion_tokens,
         "planner_input_chars": dict(input_chars),
         "planner_system_prompt_sha256": system_prompt_sha256,
+        "seshat_effort": seshat_effort,
+        "planner_policy": planner_policy,
         "memory_digest_eligible_items": digest.eligible_count if digest is not None else 0,
         "memory_digest_items": digest_items,
         "memory_digest_items_dropped": digest.dropped_count if digest is not None else 0,
@@ -1297,14 +1355,18 @@ class ExpansionController:
         call_started: float | None = None
         call_duration_ms: float | None = None
         system_prompt_sha256: str | None = None
+        # ADR-0157 D3/D8: one read of the turn's spec renders the prompt and names its policy.
+        effort = get_current_effort()
+        planner_policy: PlannerPolicy | None = None
         digest_text = memory_digest.text if memory_digest is not None else ""
         try:
             tool_surface = _current_sub_agent_tool_surface(trace_id)
             planner_system_prompt = _build_planner_system_prompt(
-                tool_surface, admit_single=may_decline
+                tool_surface, admit_single=may_decline, effort=effort
             )
             input_chars["system"] = len(planner_system_prompt)
             system_prompt_sha256 = hashlib.sha256(planner_system_prompt.encode()).hexdigest()
+            planner_policy = effort.planner_policy if may_decline else None
             # ADR-0154 D1: the query is never cut, and the history receives what the bound
             # leaves. The last message is dropped when it is the current query (see
             # planner_history_text), so it is not rendered twice.
@@ -1540,6 +1602,8 @@ class ExpansionController:
                     completion_tokens=completion_tokens,
                     input_chars=input_chars,
                     system_prompt_sha256=system_prompt_sha256,
+                    seshat_effort=effort.level,
+                    planner_policy=planner_policy,
                 ),
                 trace_id=trace_id,
             )

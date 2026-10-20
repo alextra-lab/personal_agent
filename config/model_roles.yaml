@@ -90,6 +90,10 @@ bindings:
   entity_extraction:  { deployment: gpt-5.4-mini }
   # FRE-1628: claude_haiku_5_5 was not worse on 7 of 10 blind pairs; the bar was 8
   # (scripts/eval/fre1628_captains_log_ab).
+  # FRE-1630 (2026-10-20): gpt-6-luna was not worse on 4 of 10 blind pairs against claude_sonnet;
+  # the bar was 8 (same harness, --candidate luna). All 10 Luna reflections stayed on the DSPy
+  # path, but only 2 of 10 proposed a change (Sonnet and Haiku: 10 of 10). The judges chose
+  # slot A in 23 of 30 labels, so the order of the pair confounds this result.
   captains_log:       { deployment: claude_sonnet }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads the whole
   # conversation — the user's own text and the assistant's responses — so this

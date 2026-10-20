@@ -276,15 +276,23 @@ async def test_7a_the_bridge_translates_a_sol_responses_tool_call(
     assert tool_calls[0].id == "call_fre1625"
 
 
-async def _respond(model_key: str, **call: Any) -> tuple[LLMResponse, MagicMock]:
+def _mock_gate() -> MagicMock:
+    """A cost gate whose reserve/commit/refund calls the test can inspect."""
+    gate = MagicMock()
+    gate.reserve = AsyncMock(return_value="res-fre1625")
+    gate.commit = AsyncMock()
+    gate.refund = AsyncMock()
+    return gate
+
+
+async def _respond(
+    model_key: str, mock_gate: MagicMock | None = None, **call: Any
+) -> tuple[LLMResponse, MagicMock]:
     """Dispatch through the trusted-key door with the cost gate and tracker mocked."""
     from personal_agent.llm_client.factory import get_llm_client_for_key
 
-    mock_gate = MagicMock()
-    mock_gate.reserve = AsyncMock(return_value="res-fre1625")
-    mock_gate.commit = AsyncMock()
-    mock_gate.refund = AsyncMock()
-
+    if mock_gate is None:
+        mock_gate = _mock_gate()
     client = get_llm_client_for_key(model_key, budget_role="captains_log")
     with (
         patch("litellm.completion_cost", return_value=0.001),
@@ -320,10 +328,12 @@ class TestLiteLLMClientRoute:
         self, _caught_requests: list[_Sent]
     ) -> None:
         """ADR-0141 D2: a request that would leave without layer 2 is refused."""
+        gate = _mock_gate()
         with pytest.raises(LLMClientError, match="Responses API bridge") as exc_info:
-            await _respond("gpt-6.1-sol", tools=[_FUNCTION_TOOL])
+            await _respond("gpt-6.1-sol", gate, tools=[_FUNCTION_TOOL])
         assert not isinstance(exc_info.value, DialectParameterRejected)
         assert _caught_requests == []
+        gate.reserve.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_7c_a_luna_tool_call_at_effort_none_goes_to_chat_through_the_guard(

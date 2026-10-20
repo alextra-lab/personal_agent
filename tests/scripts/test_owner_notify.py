@@ -239,6 +239,40 @@ def test_a_malformed_url_is_a_failed_send_not_an_exception(url: str) -> None:
     assert notify("x") is False
 
 
+def test_the_default_opener_never_creates_an_ipv6_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-1632: ntfy.sh limits anonymous publishers per IPv6 /64, and the VPS shares its /64."""
+    families: list[socket.AddressFamily] = []
+
+    class _SpySocket(socket.socket):
+        def __init__(self, family: int = -1, *args: object, **kwargs: object) -> None:
+            families.append(socket.AddressFamily(family))
+            super().__init__(family, *args, **kwargs)  # type: ignore[arg-type]
+
+    with _fake_ntfy() as (url, received):
+        port = int(url.rsplit(":", 1)[1].split("/")[0])
+        resolved = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", port, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port)),
+        ]
+
+        real_getaddrinfo = socket.getaddrinfo
+
+        def fake_getaddrinfo(
+            host: str, port: int, family: int = 0, *args: int, **kwargs: int
+        ) -> list[tuple[object, ...]]:
+            """Like the real call for the fake host: IPv6 first, and the family honored."""
+            if host != "ntfy.test":
+                return real_getaddrinfo(host, port, family, *args, **kwargs)  # type: ignore[return-value]
+            return [entry for entry in resolved if family in (0, entry[0])]
+
+        monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+        monkeypatch.setattr(socket, "socket", _SpySocket)
+        assert owner_notify.post_ntfy(f"http://ntfy.test:{port}/fake-topic", "x") is True
+    assert len(received.requests) == 1
+    assert socket.AF_INET6 not in families
+    assert socket.AF_INET in families
+
+
 def test_a_message_that_cannot_be_encoded_is_a_failed_send_not_an_exception() -> None:
     with _fake_ntfy() as (url, received):
         assert owner_notify.post_ntfy(url, "bad \ud800 text") is False

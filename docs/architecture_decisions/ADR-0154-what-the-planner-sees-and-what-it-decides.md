@@ -1,6 +1,6 @@
 # ADR-0154: What the Planner Sees and What It Decides — an Isolated Planner, Thinking Off, Asked on Every Turn of the Four Register Types
 
-**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain.
+**Status:** Accepted — 2026-10-03 (owner). Proposed 2026-10-03 (PR #1196). Amendment 1 accepted 2026-10-11 (owner, FRE-1587): the planner's added delay is measured per configuration in the D7 probe, and AC-5 moves to it. Amendment 2 accepted 2026-10-18 (owner, FRE-1607): on a `planner_asked` turn the planner sees the skill names and declines a query that one skill covers, if the D7 probe shows the gain. Amended by [ADR-0157](ADR-0157-seshat-effort-one-level-per-session.md) (FRE-1620, 2026-10-20): the Seshat effort level sets the round budget (D3) and adds the forced-SINGLE reason `effort_fast` (D2), and D7's requalification and AC-10 bind the default level only.
 **Date:** 2026-10-03
 **Deciders:** Owner (one ADR in place of two, 2026-10-02; the design choice, the memory digest and the measurement budget, 2026-10-03), `master` (the five ADR-0152 review findings and the scope of FRE-1537), `adr` seat at Opus 5.5 (author, the 2026-10-03 planner measurement)
 **Tags:** routing, expansion, planner, memory, decomposition, latency
@@ -247,6 +247,8 @@ The decision thresholds sit one to three draws below the measured counts. The de
 The default local primary binding must qualify before the routing change ships. Other deployments a user can select for a session, today the OVH `Qwen3.8-27B` and `claude_sonnet`, are probed after it. Until each one qualifies, its sessions keep today's routing.
 
 **Requalification.** The probe output records a configuration fingerprint: the engine and its build, the model and quant, the `planner` mode's parameters, and a hash of the rendered planner system prompt. A change to any of these is a routing change. It needs a new passing probe run, on every deployment it affects, before it ships. The terminal planner event carries the same prompt hash, so a live turn shows which configuration ran.
+
+*Amended by ADR-0157 D7 (2026-10-20):* the fingerprint is taken per Seshat effort level, and only the default level's D2 prompt requalifies. A non-default level's prompt needs no probe run, and AC-10 accepts its hash.
 
 ---
 

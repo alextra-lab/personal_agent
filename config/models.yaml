@@ -826,6 +826,48 @@ models:
     input_cost_per_token: 0.0000001    # $0.10/MTok up to 100K prompt tokens (pricing page, 2026-10-20)
     output_cost_per_token: 0.0000005   # $0.50/MTok; above 100K: $0.50/$2.50 from litellm's map
 
+  claude_sonnet_5_5:
+    # Anthropic Claude Sonnet 5.5 (FRE-1631, owner 2026-10-20: "yes to sonnet 5.5"). Pickable
+    # primary only; binds no role, and `claude_sonnet` (Sonnet 5) keeps every bound role. The
+    # API returns 400 on a forced `tool_choice`, and litellm 1.106.0 refuses it client-side
+    # (supports_forced_tool_use: false). The span_extraction, entailment and session_summary
+    # producers force a tool, so they must not bind this entry (FRE-1621 note §6.2). The
+    # primary and the sub-agents send `auto` or `none` only. Rejects temperature/top_p/top_k,
+    # so the dialect is adaptive. Effort levels are recalibrated from Sonnet 5: the Sonnet 5
+    # measurements (ADR-0145 D6) do not transfer, and no effort sweep exists for this entry.
+    id: "claude-sonnet-5-5"
+    provider: "anthropic"
+    dialect: anthropic_adaptive
+    max_tokens: 128000        # provider ceiling; policy clamp is settings.artifact_draft_max_tokens
+    context_length: 1000000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 180
+    default_mode: default
+    modes:
+      default:
+        effort: high          # the provider default, declared rather than inherited
+      # A pickable primary needs a `worker` mode: sub_agent inherits the primary and requests
+      # `worker`, and a missing one falls back to `default` (effort high) at every HYBRID call
+      # (test_dialect_modes). `low` copies `claude_sonnet` and `claude_haiku_5_5`.
+      worker:
+        effort: low
+      # ADR-0157 D5 (FRE-1631): the Fast level's primary mode. anthropic_adaptive has no off
+      # value, so Fast still reasons, at the bottom of the range (`low`).
+      fast:
+        effort: low
+      # ADR-0157 D5 (FRE-1631): the Deep level's mode. Deep equals Standard on this entry
+      # (`high` both), because the levels above `high` (`xhigh`, `max`) need ModeSpec's
+      # `effort` literal widened, which is out of scope. Deep gains a distinct setting when it is.
+      deep:
+        effort: high
+    supports_vision: true
+    supports_pdf_document: true
+    # $2 / $10 per MTok; cache reads $0.10 (0.05x base), which litellm's map carries and this
+    # catalog has no field for (platform.claude.com/docs/en/about-claude/pricing, read 2026-10-20).
+    input_cost_per_token: 0.000002    # $2/MTok
+    output_cost_per_token: 0.00001    # $10/MTok
+
 
   # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
   embedding:

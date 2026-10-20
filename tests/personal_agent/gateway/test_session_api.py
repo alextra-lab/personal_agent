@@ -724,9 +724,11 @@ def test_patch_selection_404_when_other_user_owns_it() -> None:
 # ---------------------------------------------------------------------------
 
 # Every cloud-hosted primary candidate that stays selectable with slm_local down. FRE-1625
-# added gpt-6-luna, gpt-6.1-sol and claude_haiku_5_5 (pickable, bound to no role).
+# added gpt-6-luna, gpt-6.1-sol and claude_haiku_5_5 (pickable, bound to no role); FRE-1631
+# added claude_sonnet_5_5 the same way.
 _CLOUD_PRIMARY_CANDIDATES = {
     "claude_sonnet",
+    "claude_sonnet_5_5",
     "claude_haiku",
     "claude_haiku_5_5",
     "gpt-5.4-mini",

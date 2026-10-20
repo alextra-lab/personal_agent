@@ -42,9 +42,11 @@ _FAST = {
     "gpt-6-luna",
     "gpt-6.1-sol",
     "claude_haiku_5_5",
+    # FRE-1631: Sonnet 5.5 declares fast and deep (picker-only, bound to no role).
+    "claude_sonnet_5_5",
 }
 # FRE-1628: the first entry to declare a deep mode (ADR-0157 D5, effort high).
-_DEEP = {"claude_haiku_5_5"}
+_DEEP = {"claude_haiku_5_5", "claude_sonnet_5_5"}
 _DECLARED = {"fast": _FAST, "deep": _DEEP}
 
 
@@ -65,8 +67,8 @@ def _expected(level: str, key: str) -> str:
     return _declared_mode(level, key) or "default"
 
 
-def test_there_are_twelve_pickable_deployments() -> None:
-    assert len(_PICKABLE) == 12
+def test_there_are_thirteen_pickable_deployments() -> None:
+    assert len(_PICKABLE) == 13
     assert _FAST <= set(_PICKABLE)
 
 

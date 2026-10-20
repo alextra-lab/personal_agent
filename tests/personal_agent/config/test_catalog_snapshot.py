@@ -209,6 +209,16 @@ One explicit delta, hand-edited rather than regenerated:
    that cell moved. ``sub_agent`` keeps its binding's 8192. **No role binding, resolved key,
    timeout, concurrency or price changed, and no cloud cell changed.**
 
+**Rebaselined an eleventh time, deliberately, for FRE-1624 (FRE-1621 ticket A).**
+One explicit delta, hand-edited rather than regenerated:
+
+1. **``claude_sonnet`` price $3 / $15 -> $2 / $10 per MTok** (``input_cost_per_token``
+   3e-06 -> 2e-06, ``output_cost_per_token`` 1.5e-05 -> 1e-05). The official price is
+   $2 / $10; the increase planned for 2026-09-01 did not take effect. The change shows in
+   five places: ``pricing`` and the resolved definitions of ``artifact_builder``,
+   ``captains_log``, ``insights`` and ``vision``. **No role binding, resolved key,
+   timeout or concurrency changed.**
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

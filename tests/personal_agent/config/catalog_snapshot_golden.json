@@ -87,10 +87,10 @@
       "output_cost_per_token": 5e-06
     },
     "anthropic/claude-sonnet-5": {
-      "input_cost_per_token": 3e-06,
+      "input_cost_per_token": 2e-06,
       "litellm_provider": "anthropic",
       "mode": "chat",
-      "output_cost_per_token": 1.5e-05
+      "output_cost_per_token": 1e-05
     },
     "openai/gpt-5.4-mini": {
       "input_cost_per_token": 7.5e-07,
@@ -113,7 +113,7 @@
         "dialect": "anthropic_adaptive",
         "endpoint": null,
         "id": "claude-sonnet-5",
-        "input_cost_per_token": 3e-06,
+        "input_cost_per_token": 2e-06,
         "input_cost_per_token_eur": null,
         "max_concurrency": 10,
         "max_tokens": 128000,
@@ -148,7 +148,7 @@
             "top_p": null
           }
         },
-        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 1e-05,
         "parallel_tool_calls": true,
         "placement": "cloud",
         "provider": "anthropic",
@@ -167,7 +167,7 @@
         "dialect": "anthropic_adaptive",
         "endpoint": null,
         "id": "claude-sonnet-5",
-        "input_cost_per_token": 3e-06,
+        "input_cost_per_token": 2e-06,
         "input_cost_per_token_eur": null,
         "max_concurrency": 10,
         "max_tokens": 128000,
@@ -202,7 +202,7 @@
             "top_p": null
           }
         },
-        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 1e-05,
         "parallel_tool_calls": true,
         "placement": "cloud",
         "provider": "anthropic",
@@ -354,7 +354,7 @@
         "dialect": "anthropic_adaptive",
         "endpoint": null,
         "id": "claude-sonnet-5",
-        "input_cost_per_token": 3e-06,
+        "input_cost_per_token": 2e-06,
         "input_cost_per_token_eur": null,
         "max_concurrency": 10,
         "max_tokens": 128000,
@@ -389,7 +389,7 @@
             "top_p": null
           }
         },
-        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 1e-05,
         "parallel_tool_calls": true,
         "placement": "cloud",
         "provider": "anthropic",
@@ -594,7 +594,7 @@
         "dialect": "anthropic_adaptive",
         "endpoint": null,
         "id": "claude-sonnet-5",
-        "input_cost_per_token": 3e-06,
+        "input_cost_per_token": 2e-06,
         "input_cost_per_token_eur": null,
         "max_concurrency": 10,
         "max_tokens": 128000,
@@ -629,7 +629,7 @@
             "top_p": null
           }
         },
-        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 1e-05,
         "parallel_tool_calls": true,
         "placement": "cloud",
         "provider": "anthropic",

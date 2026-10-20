@@ -209,9 +209,9 @@ def test_projection_prices_each_stage_at_its_own_model() -> None:
         scoring_output_tokens=0,
     )
 
-    assert projection.generation_usd == pytest.approx(3.00)
+    assert projection.generation_usd == pytest.approx(2.00)
     assert projection.scoring_usd == pytest.approx(0.75)
-    assert projection.total_usd == pytest.approx(3.75)
+    assert projection.total_usd == pytest.approx(2.75)
 
 
 def test_projection_counts_output_at_the_output_rate() -> None:
@@ -222,7 +222,7 @@ def test_projection_counts_output_at_the_output_rate() -> None:
         scoring_output_tokens=1_000_000,
     )
 
-    assert projection.generation_usd == pytest.approx(15.00)
+    assert projection.generation_usd == pytest.approx(10.00)
     assert projection.scoring_usd == pytest.approx(4.50)
 
 

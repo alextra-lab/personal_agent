@@ -814,6 +814,11 @@ models:
       # off value, so Fast still reasons, at the bottom of the range (`low`).
       fast:
         effort: low
+      # ADR-0157 D5 (FRE-1628, owner 2026-10-20: "Include."): the Deep level's mode. `high` is
+      # Anthropic's level for "knowledge work, longer agent tasks, and strict instruction
+      # following" (FRE-1621 note §8). The highest value that ModeSpec's `effort` accepts.
+      deep:
+        effort: high
     supports_vision: true
     supports_pdf_document: true
     input_cost_per_token: 0.0000001    # $0.10/MTok up to 100K prompt tokens (pricing page, 2026-10-20)

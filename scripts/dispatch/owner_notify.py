@@ -10,7 +10,7 @@ Unset means the notifier logs ``owner_notify_unconfigured`` and sends nothing. O
 name is the secret, so the URL never goes in the repo, in a log line or in a test fixture. This
 module never logs it.
 
-**Transport.** One plain-text ``POST`` with a timeout. A failed send returns ``False`` and never
+**Transport.** One plain-text ``POST`` over IPv4 (FRE-1632), with a timeout. A failed send returns ``False`` and never
 raises, so the caller leaves its latch open and the next tick tries again. A daemon wraps its
 notifier with ``once_per_tick``, so a tick makes at most one attempt and blocks for at most
 ``timeout_s``, however many conditions are due.
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import http.client
 import os
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -43,6 +44,56 @@ OwnerNotifier = Callable[[str], bool]
 """Sends one line to the owner. Returns ``True`` when the line was accepted."""
 
 Opener = Callable[..., ContextManager[object]]
+
+
+def _create_ipv4_connection(
+    address: tuple[str, int],
+    timeout: float | None,
+    source_address: tuple[str, int] | None = None,
+) -> socket.socket:
+    """Open a TCP connection to the first IPv4 address of ``address`` (FRE-1632).
+
+    Only the first address is tried, so one connection attempt takes at most ``timeout`` seconds.
+
+    Raises:
+        OSError: When the host has no IPv4 address, or the connection fails.
+    """
+    host, port = address
+    infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+    if not infos:
+        raise OSError(f"no IPv4 address for {host}")
+    return socket.create_connection((infos[0][4][0], port), timeout, source_address)
+
+
+class _IPv4HTTPConnection(http.client.HTTPConnection):
+    def connect(self) -> None:
+        self._create_connection = _create_ipv4_connection
+        super().connect()
+
+
+class _IPv4HTTPSConnection(http.client.HTTPSConnection):
+    def connect(self) -> None:
+        self._create_connection = _create_ipv4_connection
+        super().connect()
+
+
+class _IPv4HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_IPv4HTTPConnection, req)
+
+
+class _IPv4HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_IPv4HTTPSConnection, req)
+
+
+urlopen_ipv4: Opener = urllib.request.build_opener(_IPv4HTTPHandler, _IPv4HTTPSHandler).open
+"""The default opener (FRE-1632). It connects over IPv4 only, whatever the host prefers.
+
+ntfy.sh limits anonymous publishers per IPv6 /64. The VPS shares its /64 with other tenants, so an
+IPv6 publish hit the daily quota (429). The change is local to this sender: the host address
+preference (``/etc/gai.conf``) stays as it is.
+"""
 
 
 def load_owner_ntfy_url() -> str | None:
@@ -109,7 +160,7 @@ def post_ntfy(
     url: str,
     message: str,
     *,
-    opener: Opener = urllib.request.urlopen,
+    opener: Opener = urlopen_ipv4,
     timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> bool:
     """Send one line to an ntfy topic.
@@ -155,7 +206,7 @@ def make_owner_notifier(
     url: str | None,
     logger: Logger,
     *,
-    opener: Opener = urllib.request.urlopen,
+    opener: Opener = urlopen_ipv4,
     timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> OwnerNotifier:
     """Build the notifier that the daemons call (FRE-1550).

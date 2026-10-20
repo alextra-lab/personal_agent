@@ -23,6 +23,7 @@ import pytest_asyncio
 
 from personal_agent.config import settings
 from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
+from tests.migrations.test_0034_sessions_seshat_effort_migration import pre_0034_statement
 
 _DOCKER_DIR = Path(__file__).resolve().parents[2] / "docker" / "postgres"
 _MIGRATION = _DOCKER_DIR / "migrations" / "0033_sessions_revealed_tools.sql"
@@ -37,11 +38,8 @@ _COLUMNS_SQL = """
 
 
 def _init_sql_sessions_statement() -> str:
-    """Return the ``CREATE TABLE ... sessions`` statement from ``init.sql``."""
-    text = (_DOCKER_DIR / "init.sql").read_text()
-    match = re.search(r"CREATE TABLE IF NOT EXISTS sessions \(.*?\n\);\n", text, flags=re.DOTALL)
-    assert match is not None, "sessions CREATE TABLE not found in init.sql"
-    return match.group(0)
+    """The ``sessions`` statement as ``init.sql`` had it after 0033, before 0034 (FRE-1622)."""
+    return pre_0034_statement()
 
 
 def _pre_0033_statement() -> str:

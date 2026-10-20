@@ -25,6 +25,12 @@ from personal_agent.brainstem.sensors.metrics_daemon import (
     set_global_metrics_daemon,
 )
 from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler, set_es_indexer
+from personal_agent.config.seshat_effort import (
+    EffortLevel,
+    effort_spec,
+    hydrate_effort,
+    set_current_effort,
+)
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 from personal_agent.memory.service import MemoryService
@@ -280,6 +286,7 @@ async def _process_chat_stream_background(
     user_id: UUID,
     trace_id: str,
     primary_selection_key: str | None = None,
+    seshat_effort: EffortLevel | None = None,
     user_email: str | None = None,
     user_display_name: str | None = None,
     client_msg_id: str | None = None,
@@ -296,6 +303,9 @@ async def _process_chat_stream_background(
         message: User's message text.
         user_id: Authenticated user UUID — used for session ownership scoping.
         trace_id: Pre-generated trace ID (from the endpoint, used for dedup record).
+        seshat_effort: The Seshat effort level resolved at launch (ADR-0157 D2). Set as this
+            task's spec before anything runs and written on a new session. A change after launch
+            never reaches this task (ADR-0079 invariant 7). ``None`` sets no spec.
         primary_selection_key: The resolved server-authoritative ``primary``
             deployment key for this turn (ADR-0121 §4). Pinned into the per-turn
             selection context so the factory resolves ``primary`` against the
@@ -335,6 +345,9 @@ async def _process_chat_stream_background(
             from personal_agent.config.selection import set_current_selection
 
             set_current_selection({"primary": primary_selection_key})
+        # ADR-0157 D3: the level's spec, resolved once at launch, in this task's own context.
+        if seshat_effort is not None:
+            set_current_effort(effort_spec(seshat_effort))
 
         # FRE-1033: resolve the bus once — determines both whether we wait for
         # a prior turn's async consumer-append (below) and, at the end of this
@@ -388,10 +401,16 @@ async def _process_chat_stream_background(
                     # nothing reads it back; the selection store below is now
                     # the source of truth. The DB column stays NOT NULL.
                     execution_profile="local",
+                    # ADR-0157 D2: the level resolved at launch, written explicitly.
+                    seshat_effort=seshat_effort or effort_spec(None).level,
                 )
                 db.add(session)
                 await db.commit()
                 await db.refresh(session)
+                if seshat_effort is not None:
+                    from personal_agent.transport.agui.transport import emit_session_effort
+
+                    await emit_session_effort(session_id=session_id, seshat_effort=seshat_effort)
 
                 # ADR-0121 §4: persist the adopted primary selection on first
                 # turn (invariant 2 — an explicit stored value, never a silent
@@ -2151,6 +2170,7 @@ async def chat(
     session_id: str | None = None,
     model: str | None = None,
     channel: str = "CHAT",
+    seshat_effort: EffortLevel | None = None,
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> dict[str, str]:
@@ -2172,6 +2192,9 @@ async def chat(
             session's existing selection (or the binding default) governs.
         channel: Request channel — pass "EVAL" from eval/benchmark harnesses to
             prevent side-effecting tools (e.g. create_linear_issue) from executing.
+        seshat_effort: Optional Seshat effort level (ADR-0157 D2). A new session stores it,
+            or ``default_level`` when omitted. An existing session ignores it: the stored level
+            wins, and the sole mutator is ``PATCH /api/v1/sessions/{id}/effort``.
         request_user: Resolved user identity (injected by FastAPI)
         db: Database session (injected by FastAPI)
 
@@ -2192,6 +2215,7 @@ async def chat(
             channel=channel,
             request_user=request_user,
             db=db,
+            seshat_effort=seshat_effort,
         )
         # The JSON response is this path's first (and only) user-visible output.
         delivered = True
@@ -2210,6 +2234,7 @@ async def _chat_impl(
     channel: str,
     request_user: RequestUser,
     db: AsyncSession,
+    seshat_effort: EffortLevel | None = None,
 ) -> dict[str, str]:
     """Process a chat message (implementation body — see ``chat`` for the public entrypoint).
 
@@ -2223,6 +2248,7 @@ async def _chat_impl(
             prevent side-effecting tools (e.g. create_linear_issue) from executing.
         request_user: Resolved user identity (injected by FastAPI)
         db: Database session (injected by FastAPI)
+        seshat_effort: Optional Seshat effort level — see ``chat``.
 
     Returns:
         Response with assistant message and session_id
@@ -2261,15 +2287,23 @@ async def _chat_impl(
         session = await repo.get(parsed_session_id, user_id=request_user.user_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        # ADR-0157 D2: an existing session's stored level wins; a sent level is ignored.
+        effort_level, effort_provenance = hydrate_effort(getattr(session, "seshat_effort", None))
+        if effort_provenance == "server-hydrated":
+            effort_provenance = "stored"
     else:
         primary_model_id, config_path_str = _resolve_active_model_attribution(
             trace_id=trace_id,
         )
+        # ADR-0157 D2: a new session stores the sent level, else default_level, explicitly.
+        effort_level = seshat_effort or effort_spec(None).level
+        effort_provenance = "adopted" if seshat_effort is not None else "default"
         session = await repo.create(
             SessionCreate(),
             user_id=request_user.user_id,
             primary_model_at_creation=primary_model_id,
             model_config_path=config_path_str,
+            seshat_effort=effort_level,
         )
 
     # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
@@ -2354,6 +2388,18 @@ async def _chat_impl(
         )
 
     set_current_selection({"primary": resolved_selection})
+    # ADR-0157 D3: the level's spec for this turn, set before the gateway pipeline reads it.
+    set_current_effort(effort_spec(effort_level))
+    # ADR-0157 D8: one launch event per accepted request, after the duplicate and session
+    # checks and before the turn runs (the /chat counterpart of chat_stream.launched).
+    log.info(
+        "chat.launched",
+        session_id=sid,
+        primary_selection=resolved_selection,
+        seshat_effort=effort_level,
+        effort_provenance=effort_provenance,
+        trace_id=trace_id,
+    )
 
     # --- Phase: gateway_pipeline ---
     # Compute expansion budget from brainstem sensors before pipeline.
@@ -2498,6 +2544,7 @@ async def _chat_impl(
         "response": response_content,
         "trace_id": trace_id,
         "primary_selection": resolved_selection,
+        "seshat_effort": effort_level,
     }
 
 
@@ -2625,11 +2672,54 @@ async def _resolve_session_selection(
     return resolve_selected_deployment("primary", None, config), "default"
 
 
+async def _resolve_session_effort(
+    session_id: str, supplied: EffortLevel | None, user_id: UUID
+) -> tuple[EffortLevel, str]:
+    """Resolve the session's Seshat effort level at turn launch (ADR-0157 D2).
+
+    The same asymmetry as :func:`_resolve_session_selection`:
+
+    - **Existing session** → the stored level wins; ``supplied`` is ignored.
+    - **New session** → ``supplied``, else ``default_level``. The background task writes the
+      value explicitly when it creates the session row.
+
+    Reads one column, not the session's messages.
+
+    Args:
+        session_id: Client-generated session UUID string.
+        supplied: The level the request carried, or ``None``.
+        user_id: Authenticated owner — scopes the read.
+
+    Returns:
+        ``(level, provenance)`` with provenance ``stored`` / ``adopted`` / ``default``.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from personal_agent.service.models import SessionModel  # noqa: PLC0415
+
+    async with AsyncSessionLocal() as db:
+        stored = (
+            await db.execute(
+                select(SessionModel.seshat_effort).where(
+                    SessionModel.session_id == UUID(session_id),
+                    SessionModel.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+    if stored is not None:
+        level, provenance = hydrate_effort(stored)
+        return level, "stored" if provenance == "server-hydrated" else "default"
+    if supplied is not None:
+        return supplied, "adopted"
+    return effort_spec(None).level, "default"
+
+
 @app.post("/chat/stream")
 async def chat_stream_endpoint(
     message: str = Form(...),
     session_id: str = Form(...),
     primary_selection: str | None = Form(default=None),
+    seshat_effort: EffortLevel | None = Form(default=None),
     client_msg_id: str | None = Form(default=None),
     attachments: str | None = Form(default=None),
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
@@ -2652,6 +2742,9 @@ async def chat_stream_endpoint(
         primary_selection: Optional advisory ``primary`` model deployment key
             (ADR-0121 §4). Existing session → ignored (stored selection wins);
             new session → adopted if valid.
+        seshat_effort: Optional Seshat effort level that the selector shows (ADR-0157 D2).
+            Existing session → ignored (the stored level wins); new session → stored, or
+            ``default_level`` when omitted. Any other value is refused with 422.
         client_msg_id: Optional client-generated idempotency key (UUID v4).
             When provided, duplicate submissions within the TTL window are
             detected and silently ignored (FRE-392).
@@ -2713,12 +2806,17 @@ async def chat_stream_endpoint(
     resolved_selection, selection_provenance = await _resolve_session_selection(
         session_id, primary_selection, request_user.user_id, trace_id=trace_id
     )
+    # ADR-0157 D2: the level resolves at launch, by the same rules.
+    effort_level, effort_provenance = await _resolve_session_effort(
+        session_id, seshat_effort, request_user.user_id
+    )
 
     asyncio.create_task(
         _process_chat_stream_background(
             session_id=session_id,
             message=message,
             primary_selection_key=resolved_selection,
+            seshat_effort=effort_level,
             user_id=request_user.user_id,
             trace_id=trace_id,
             user_email=request_user.email,
@@ -2735,6 +2833,8 @@ async def chat_stream_endpoint(
         primary_selection=resolved_selection,
         primary_selection_supplied=primary_selection,
         selection_provenance=selection_provenance,
+        seshat_effort=effort_level,
+        effort_provenance=effort_provenance,
         trace_id=trace_id,
     )
     return {
@@ -2742,6 +2842,8 @@ async def chat_stream_endpoint(
         "status": "streaming",
         "primary_selection": resolved_selection,
         "selection_provenance": selection_provenance,
+        "seshat_effort": effort_level,
+        "effort_provenance": effort_provenance,
     }
 
 

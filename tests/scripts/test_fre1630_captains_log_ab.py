@@ -15,7 +15,7 @@ def _write(path: pathlib.Path, rows: list[dict[str, object]]) -> None:
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
 
-def _labels(candidate: str, winners: dict[str, list[str]]) -> list[dict[str, object]]:
+def _labels(winners: dict[str, list[str]]) -> list[dict[str, object]]:
     """Three judge rows per pair, ``winners[rid]`` in judge order."""
     return [
         {"rid": rid, "judge": f"j{n}", "winner": w, "cost_usd": 0.01}
@@ -59,7 +59,7 @@ def test_arms_bind_luna_and_keep_haiku() -> None:
 
 
 def test_haiku_rescore_keeps_the_fre1628_report_shape(run_dir: pathlib.Path) -> None:
-    _write(run_dir / "labels-haiku.jsonl", _labels("haiku", _wins("haiku", 6, 1)))
+    _write(run_dir / "labels-haiku.jsonl", _labels(_wins("haiku", 6, 1)))
 
     assert harness.score("haiku") == 1  # 7 of 10 < bar 8
     report = json.loads((run_dir / "report-haiku.json").read_text(encoding="utf-8"))
@@ -73,7 +73,7 @@ def test_haiku_rescore_keeps_the_fre1628_report_shape(run_dir: pathlib.Path) -> 
 
 
 def test_luna_passes_at_eight_not_worse(run_dir: pathlib.Path) -> None:
-    _write(run_dir / "labels-luna.jsonl", _labels("luna", _wins("luna", 6, 2)))
+    _write(run_dir / "labels-luna.jsonl", _labels(_wins("luna", 6, 2)))
 
     assert harness.score("luna") == 0
     report = json.loads((run_dir / "report-luna.json").read_text(encoding="utf-8"))
@@ -86,7 +86,7 @@ def test_luna_passes_at_eight_not_worse(run_dir: pathlib.Path) -> None:
 
 
 def test_luna_fails_at_seven_not_worse(run_dir: pathlib.Path) -> None:
-    _write(run_dir / "labels-luna.jsonl", _labels("luna", _wins("luna", 6, 1)))
+    _write(run_dir / "labels-luna.jsonl", _labels(_wins("luna", 6, 1)))
 
     assert harness.score("luna") == 1
     report = json.loads((run_dir / "report-luna.json").read_text(encoding="utf-8"))
@@ -96,7 +96,7 @@ def test_luna_fails_at_seven_not_worse(run_dir: pathlib.Path) -> None:
 
 
 def test_luna_off_dspy_path_fails_the_bar(run_dir: pathlib.Path) -> None:
-    _write(run_dir / "labels-luna.jsonl", _labels("luna", _wins("luna", 10)))
+    _write(run_dir / "labels-luna.jsonl", _labels(_wins("luna", 10)))
     outputs: list[dict[str, object]] = [
         {"rid": rid, "arm": "luna", "path": "manual" if rid == "c03" else "dspy", "cost_usd": 0.1}
         for rid in RIDS
@@ -112,8 +112,8 @@ def test_luna_off_dspy_path_fails_the_bar(run_dir: pathlib.Path) -> None:
 
 
 def test_luna_score_ignores_haiku_labels(run_dir: pathlib.Path) -> None:
-    _write(run_dir / "labels-haiku.jsonl", _labels("haiku", _wins("haiku", 10)))
-    _write(run_dir / "labels-luna.jsonl", _labels("luna", _wins("luna", 0)))
+    _write(run_dir / "labels-haiku.jsonl", _labels(_wins("haiku", 10)))
+    _write(run_dir / "labels-luna.jsonl", _labels(_wins("luna", 0)))
 
     assert harness.score("luna") == 1
     report = json.loads((run_dir / "report-luna.json").read_text(encoding="utf-8"))
@@ -124,7 +124,7 @@ def test_luna_score_ignores_haiku_labels(run_dir: pathlib.Path) -> None:
 def test_an_unparsed_pair_is_not_evidence(run_dir: pathlib.Path) -> None:
     winners = _wins("luna", 8)  # exactly the bar
     winners["c01"] = ["luna", "luna", "error"]
-    _write(run_dir / "labels-luna.jsonl", _labels("luna", winners))
+    _write(run_dir / "labels-luna.jsonl", _labels(winners))
 
     assert harness.score("luna") == 1
     report = json.loads((run_dir / "report-luna.json").read_text(encoding="utf-8"))
@@ -137,7 +137,7 @@ def test_an_unparsed_pair_is_not_evidence(run_dir: pathlib.Path) -> None:
 def test_a_missing_pair_is_incomplete(run_dir: pathlib.Path) -> None:
     winners = _wins("luna", 10)
     del winners["c10"]
-    _write(run_dir / "labels-luna.jsonl", _labels("luna", winners))
+    _write(run_dir / "labels-luna.jsonl", _labels(winners))
 
     assert harness.score("luna") == 1
     report = json.loads((run_dir / "report-luna.json").read_text(encoding="utf-8"))

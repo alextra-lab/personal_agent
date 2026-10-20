@@ -1136,27 +1136,34 @@ class ExpansionController:
         settings = get_settings()
 
         # --- Phase 1: Planning ---
-        plan = await self._run_planner(
-            query=query,
-            strategy=strategy,
-            llm_client=planner_llm_client if planner_llm_client is not None else llm_client,
-            trace_id=trace_id,
-            timeout_s=settings.planner_timeout_seconds,
-            result=result,
-            session_id=session_id,
-            user_id=user_id,
-            authenticated=authenticated,
-            expansion_budget=expansion_budget,
-            eval_mode=eval_mode,
-            # FRE-1521: the same conversation window `_run_dispatch` already
-            # slices for sub-agents (messages[-4:]) — here in full, for the
-            # planner's briefing user message.
-            messages=messages,
-            history_max_chars=settings.planner_history_max_chars,
-            input_max_chars=settings.planner_input_max_chars,
-            memory_digest=memory_digest,
-            may_decline=planner_may_decline,
-        )
+        # FRE-1634: the planner call is a model wait of its own (16-30 s measured), so it
+        # is bracketed as a transport PLANNING phase. The span closes before dispatch
+        # opens EXPANSION, so the two never nest.
+        from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
+        from personal_agent.transport.events import Phase  # noqa: PLC0415
+
+        async with phase_span(session_id=session_id, phase=Phase.PLANNING):
+            plan = await self._run_planner(
+                query=query,
+                strategy=strategy,
+                llm_client=planner_llm_client if planner_llm_client is not None else llm_client,
+                trace_id=trace_id,
+                timeout_s=settings.planner_timeout_seconds,
+                result=result,
+                session_id=session_id,
+                user_id=user_id,
+                authenticated=authenticated,
+                expansion_budget=expansion_budget,
+                eval_mode=eval_mode,
+                # FRE-1521: the same conversation window `_run_dispatch` already
+                # slices for sub-agents (messages[-4:]) — here in full, for the
+                # planner's briefing user message.
+                messages=messages,
+                history_max_chars=settings.planner_history_max_chars,
+                input_max_chars=settings.planner_input_max_chars,
+                memory_digest=memory_digest,
+                may_decline=planner_may_decline,
+            )
         result.plan = plan
         run = result.planner_run
         if on_planner_run is not None and run is not None:

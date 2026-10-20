@@ -7466,16 +7466,27 @@ async def step_llm_call(
         # hook — so it never overlaps the EXPANSION parent phase.
         from personal_agent.transport.events import Phase  # noqa: PLC0415
 
-        _inference_phase = Phase.PLANNING if ctx.tool_iteration_count == 0 else Phase.SYNTHESIS
+        # FRE-1634: after an expansion the first primary call still has
+        # `tool_iteration_count == 0`, but it writes over the helpers' work, not a
+        # plan. `sub_agents_dispatched` also covers a fan-out whose workers all
+        # raised, which appends no synthesis message.
+        _after_expansion = ctx.synthesis_appended or ctx.sub_agents_dispatched > 0
+        _inference_phase = (
+            Phase.SYNTHESIS if ctx.tool_iteration_count > 0 or _after_expansion else Phase.PLANNING
+        )
         # FRE-937 (master PR #758 bounce, ADR-0123 owner comment 2026-07-28): a
         # multi-round tool loop re-enters SYNTHESIS once per pass, and every pass
         # was emitted with no `detail` — the client rendered the same generic
         # label N times with no way to tell them apart. `tool_iteration_count` is
         # already incremented per round by the time this fires (line ~4940 in the
         # prior pass), so it is a cheap, always-available round distinguisher.
-        _inference_detail = (
-            f"round {ctx.tool_iteration_count}" if _inference_phase is Phase.SYNTHESIS else None
-        )
+        _inference_detail: str | None
+        if ctx.tool_iteration_count > 0:
+            _inference_detail = f"round {ctx.tool_iteration_count}"
+        elif ctx.synthesis_appended:
+            _inference_detail = "helpers"
+        else:
+            _inference_detail = None
         try:
             call_result = await _call_primary_llm(
                 ctx,

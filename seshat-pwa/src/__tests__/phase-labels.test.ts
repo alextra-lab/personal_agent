@@ -32,7 +32,7 @@ describe('labelFor — unaffected phases', () => {
     expect(labelFor({ phase: 'sub_agent', detail: 'pricing history' })).toBe('pricing history');
   });
 
-  it('planning ignores detail (it is only ever entered once per turn, never re-entered)', () => {
+  it('planning ignores detail (a turn can show it twice: the expansion planner, then the primary)', () => {
     expect(labelFor({ phase: 'planning', detail: 'round 1' })).toBe('Thinking');
   });
 

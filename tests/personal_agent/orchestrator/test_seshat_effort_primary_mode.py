@@ -1,7 +1,7 @@
 """FRE-1622 (ADR-0157 D5): the answering model runs the level's mode, else ``default`` (AC-4).
 
 Both client paths: the session's primary through ``get_llm_client``, and the vision escalation
-through ``get_llm_client_for_key``. The nine pickable deployments are every ``kind: llm`` entry
+through ``get_llm_client_for_key``. The twelve pickable deployments (nine, plus the three that FRE-1625 added) are every ``kind: llm`` entry
 of the shipped catalog (``is_selectable_binding`` for the open ``primary`` role).
 """
 
@@ -38,6 +38,10 @@ _FAST = {
     "gemma-4-26b-a4b",
     "qwen3.8-27b-ovh",
     "claude_sonnet",
+    # FRE-1625: the three entries it added declare a fast mode (ADR-0157 D5).
+    "gpt-6-luna",
+    "gpt-6.1-sol",
+    "claude_haiku_5_5",
 }
 
 
@@ -54,8 +58,8 @@ def _expected(level: str, key: str) -> str:
     return "fast" if level == "fast" and key in _FAST else "default"
 
 
-def test_there_are_nine_pickable_deployments() -> None:
-    assert len(_PICKABLE) == 9
+def test_there_are_twelve_pickable_deployments() -> None:
+    assert len(_PICKABLE) == 12
     assert _FAST <= set(_PICKABLE)
 
 

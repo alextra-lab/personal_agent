@@ -36,7 +36,7 @@ dependencies = [
   "psutil>=5.9.0",        # system metrics for sensor polling
   "macmon-python>=0.1.0",  # Apple Silicon GPU metrics (no sudo required)
   "dspy>=3.1.0",          # DSPy framework for Captain's Log reflection (ChainOfThought) - ADR-0010
-  "mcp>=1.28.1,<2.0.0",    # Model Context Protocol SDK for MCP Gateway integration - ADR-0011; FRE-1323 Dependabot — GHSA-vj7q-gjh5-988w/GHSA-hvrp-rf83-w775/GHSA-jpw9-pfvf-9f58
+  "mcp>=2.2.0,<3",    # Model Context Protocol SDK for MCP Gateway integration - ADR-0011; FRE-1625 — litellm 1.106.0 imports mcp.types.CacheableResult (2.x) on every tool call (litellm #46045); was >=1.28.1,<2.0.0 (FRE-1323)
   "pre-commit>=3.5.0",    # git hooks (required for all contributors)
   # Service layer (Phase 2.1)
   "fastapi>=0.109.0",     # async web framework for service API
@@ -50,7 +50,7 @@ dependencies = [
   # Neo4j (Phase 2.2 - memory graph)
   "neo4j>=5.15.0",        # Neo4j driver for knowledge graph
   "cryptography>=50.0.0",  # FRE-1323 Dependabot — GHSA-g6cj-pr64-35w5, was 48.0.1 (FRE-578); direct dep for test RSA key gen
-  "litellm>=1.98.0",  # FRE-1324 — general capability upgrade (bugfixes/model-map refresh); ovhcloud/Qwen3.6 + GPT-5.6 binding investigated, neither changed
+  "litellm==1.106.0",  # FRE-1625 — exact pin: first release whose bundled map has gpt-6-luna, gpt-6.1-sol, claude-haiku-5-5, claude-sonnet-5-5 (1.105.1 lacks haiku-5-5); accepts reasoning_effort on gpt-6. Fallback 1.104.x
   # Event bus (ADR-0041 — Redis Streams)
   "redis[hiredis]>=5.0.0",
   "python-multipart>=0.0.30",  # FRE-578 Dependabot — quadratic-time DoS via semicolon querystring

@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+# Lowest code of the JSON-RPC 2.0 reserved range (-32768..-32000).
+_JSONRPC_RESERVED_MIN = -32768
+
 
 def _load_mcp_sdk() -> tuple[Any, Any, Any]:
     """Import MCP SDK types and stdio transport.
@@ -173,8 +176,10 @@ class MCPClientWrapper:
 
         try:
             result = await asyncio.wait_for(self.session.list_tools(), timeout=self.timeout)
-            # MCP returns ListToolsResult with .tools attribute
-            tools = [tool.model_dump() for tool in result.tools]
+            # MCP returns ListToolsResult with .tools attribute. mcp 2.x dumps
+            # snake_case keys by default; by_alias keeps the wire spelling
+            # (inputSchema) that mcp_to_tool_definition reads (FRE-1625).
+            tools = [tool.model_dump(by_alias=True, mode="json") for tool in result.tools]
             log.debug("mcp_tools_listed", count=len(tools))
             return tools
 
@@ -215,14 +220,40 @@ class MCPClientWrapper:
         try:
             log.info("mcp_tool_calling", tool=name, arguments=arguments, trace_id=trace_id)
 
+            from mcp.shared.exceptions import MCPError
+            from mcp.types import INVALID_PARAMS
+
             # Call without explicit timeout - let the SDK/gateway handle it
             # asyncio.wait_for causes anyio cancel scope conflicts with the MCP SDK
-            result = await self.session.call_tool(name, arguments)
+            try:
+                result = await self.session.call_tool(name, arguments)
+            except MCPError as e:
+                # mcp 2.x raises a tool rejection instead of returning isError
+                # (FRE-1625); the model still gets mcp_tool_error (ADR-0156 D6.6).
+                # Only INVALID_PARAMS or an application code is the tool's verdict:
+                # the rest of the JSON-RPC reserved range (-32768..-32000) is a
+                # timeout, a closed connection or a protocol fault, which stays
+                # mcp_call_failed in the gateway.
+                if e.code != INVALID_PARAMS and _JSONRPC_RESERVED_MIN <= e.code <= -32000:
+                    raise
+                log.error(
+                    "mcp_tool_returned_error",
+                    tool=name,
+                    error=e.message,
+                    jsonrpc_code=e.code,
+                    trace_id=trace_id,
+                )
+                raise MCPToolError(
+                    "mcp_tool_error",
+                    f"MCP tool '{name}' returned an error: {e.message}",
+                    retryable=False,
+                    next_action="Correct the arguments as the message states, or use another tool.",
+                ) from e
 
             log.info("mcp_tool_response_received", tool=name, trace_id=trace_id)
 
             # Check if tool returned an error
-            if result.isError:
+            if result.is_error:
                 error_msg = self._extract_error_message(result)
                 log.error("mcp_tool_returned_error", tool=name, error=error_msg, trace_id=trace_id)
                 raise MCPToolError(
@@ -233,9 +264,9 @@ class MCPClientWrapper:
                 )
 
             # Check structuredContent first (some tools use this)
-            if result.structuredContent:
+            if result.structured_content:
                 log.debug("mcp_tool_structured_content", tool=name, trace_id=trace_id)
-                return result.structuredContent
+                return result.structured_content
 
             # Parse MCP content (can be text, blob, or resource)
             if not result.content:

@@ -737,6 +737,88 @@ models:
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok
 
+  gpt-6-luna:
+    # OpenAI GPT-6 Luna (FRE-1621, FRE-1625). Replacement candidate for gpt-5.4-mini; binds no role yet.
+    # Chat Completions takes temperature, and tool calls, only at reasoning_effort none.
+    # Needs litellm >= 1.104 (1.98.0 rejected reasoning_effort on every gpt-6 model).
+    id: "gpt-6-luna"
+    provider: "openai"
+    max_tokens: 8192
+    context_length: 1050000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 60
+    default_mode: default
+    modes:
+      default:
+        temperature: 0.0
+        reasoning_effort: none
+      worker:
+        reasoning_effort: none
+      # ADR-0157 D5 (FRE-1625): the Fast level's primary mode, the bottom of the
+      # dialect's range. A copy of `worker`, so a later `worker` change does not move Fast.
+      fast:
+        reasoning_effort: none
+    input_cost_per_token: 0.0000001    # $0.10/MTok up to 272K (developers.openai.com/api/docs/pricing, 2026-10-20)
+    output_cost_per_token: 0.0000005   # $0.50/MTok
+
+  gpt-6.1-sol:
+    # OpenAI GPT-6.1 Sol (FRE-1625, owner 2026-10-20: "I want gpt-6-# sol added to the model
+    # catalog"). The newest Sol on developers.openai.com/api/docs/models, 2026-10-20. Pickable
+    # primary only; binds no role. Reasoning cannot be off (no 'none'), so no mode may set a
+    # temperature or top_p. Tool calls work only on the Responses API, and litellm 1.106.0's
+    # async bridge to it drops the egress-guarded client, so LiteLLMClient REFUSES a Sol call
+    # with tools (ADR-0141 D2, owner decision 2026-10-20, FRE-1625). Until a follow-up gives
+    # the Responses path a guarded client, Sol completes only tool-free calls; a tool-bearing
+    # primary turn on it raises LLMClientError (FRE-1621 note §4.5, §6.3).
+    # max_tokens, concurrency and timeout copy claude_sonnet, the entry it compares to (§4.5).
+    id: "gpt-6.1-sol"
+    provider: "openai"
+    max_tokens: 128000        # provider ceiling; policy clamp is settings.artifact_draft_max_tokens
+    context_length: 1050000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 180
+    reasoning_effort_domain: [low, medium, high, xhigh]   # provider adds max; ModeSpec has no max yet
+    default_mode: default
+    modes:
+      default:
+        reasoning_effort: medium   # the provider default, declared rather than inherited
+      worker:
+        reasoning_effort: low
+      # ADR-0157 D5 (FRE-1625): the Fast level's primary mode. Sol's reasoning cannot be
+      # off, so the bottom of its domain is `low`, the same as `worker`.
+      fast:
+        reasoning_effort: low
+    input_cost_per_token: 0.000002     # $2/MTok up to 272K; $4 above (developers.openai.com/api/docs/pricing, 2026-10-20)
+    output_cost_per_token: 0.00001     # $10/MTok up to 272K; $15 above
+
+  claude_haiku_5_5:
+    # Anthropic Claude Haiku 5.5 (FRE-1621, FRE-1625). Replacement candidate for claude_haiku; binds no role yet.
+    # Rejects temperature/top_p/top_k and budget_tokens thinking, so the dialect is adaptive.
+    id: "claude-haiku-5-5"
+    provider: "anthropic"
+    dialect: anthropic_adaptive
+    max_tokens: 128000        # provider ceiling; policy clamp is settings.artifact_draft_max_tokens
+    context_length: 1000000
+    min_concurrency: 1
+    max_concurrency: 20
+    default_timeout: 60       # adaptive thinking is on by default; Haiku 4.5's 30 s assumed none
+    default_mode: default
+    modes:
+      default:
+        effort: medium        # the provider default, declared rather than inherited
+      worker:
+        effort: low
+      # ADR-0157 D5 (FRE-1625): the Fast level's primary mode. anthropic_adaptive has no
+      # off value, so Fast still reasons, at the bottom of the range (`low`).
+      fast:
+        effort: low
+    supports_vision: true
+    supports_pdf_document: true
+    input_cost_per_token: 0.0000001    # $0.10/MTok up to 100K prompt tokens (pricing page, 2026-10-20)
+    output_cost_per_token: 0.0000005   # $0.50/MTok; above 100K: $0.50/$2.50 from litellm's map
+
 
   # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
   embedding:

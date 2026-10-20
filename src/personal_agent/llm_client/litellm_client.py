@@ -47,7 +47,13 @@ from personal_agent.llm_client.concurrency import (
     InferenceSlotTimeout,
     get_inference_concurrency_controller,
 )
-from personal_agent.llm_client.models import Dialect, ModeSpec, Placement, dialect_accepts
+from personal_agent.llm_client.models import (
+    Dialect,
+    ModelDefinition,
+    ModeSpec,
+    Placement,
+    dialect_accepts,
+)
 from personal_agent.llm_client.prompt_identity import (
     PromptIdentity,
     derive_fallback_prompt_identity,
@@ -68,7 +74,7 @@ from personal_agent.telemetry.events import MODEL_CALL_ERROR, MODEL_CALL_RETRIED
 from personal_agent.telemetry.spans import model_call_span
 
 if TYPE_CHECKING:
-    from personal_agent.llm_client.models import ModelDefinition, ProviderDefinition
+    from personal_agent.llm_client.models import ProviderDefinition
     from personal_agent.llm_client.types import GenerationProgress, LLMResponse, ModelRole, ToolCall
     from personal_agent.security import DomainGuard
     from personal_agent.telemetry.trace import TraceContext
@@ -354,6 +360,94 @@ def _gate_call_site_params(
                 "the model, not at the call site."
             )
     return supplied
+
+
+def _gate_model_effort_domain(
+    model_def: ModelDefinition | None,
+    dialect: Dialect | None,
+    request: Mapping[str, Any],
+) -> None:
+    """Refuse a combined request outside the model's own effort domain (FRE-1625).
+
+    The catalog refuses a mode that leaves ``reasoning_effort_domain``; this
+    refuses the same values when a call-site override reintroduces them on top
+    of a valid mode. litellm accepts ``reasoning_effort="none"`` on gpt-6.1-sol
+    client-side, so without this the provider would be the first to refuse it.
+
+    Args:
+        model_def: The catalog entry, or ``None`` when not catalog-backed.
+        dialect: The model's resolved dialect, or ``None`` when unknown.
+        request: The assembled litellm kwargs (mode block plus call-site values).
+
+    Raises:
+        DialectParameterRejected: The effort is outside the domain, or a sampler
+            is set on ``openai_gpt5`` where the domain has no ``'none'``.
+    """
+    from personal_agent.llm_client.types import DialectParameterRejected  # noqa: PLC0415
+
+    if model_def is None or model_def.reasoning_effort_domain is None:
+        return
+    domain = model_def.reasoning_effort_domain
+    effort = request.get("reasoning_effort")
+    if effort is not None and effort not in domain:
+        raise DialectParameterRejected(
+            f"reasoning_effort={effort!r} is outside model {model_def.id!r}'s domain "
+            f"{sorted(domain)}; refusing to dispatch it (FRE-1625)."
+        )
+    if dialect is Dialect.OPENAI_GPT5 and "none" not in domain:
+        samplers = [name for name in ("temperature", "top_p") if request.get(name) is not None]
+        if samplers:
+            raise DialectParameterRejected(
+                f"{samplers} set for model {model_def.id!r}, whose reasoning cannot be "
+                "off; openai_gpt5 accepts temperature and top_p only at effort 'none' "
+                "(FRE-1625)."
+            )
+
+
+def _refuse_unguarded_responses_bridge(request: Mapping[str, Any], *, trace_id: str) -> None:
+    """Fail closed on a request litellm would bridge to the Responses API (ADR-0141 D2).
+
+    litellm 1.106.0's async Responses bridge does not forward ``client=``
+    (``completion_extras/litellm_responses_transformation/handler.py``), so a
+    bridged request leaves through litellm's own HTTP client, without the
+    egress-guard layer-2 hook. Layer 1 still ran, but ADR-0141 D2 treats an
+    unguarded dispatch as a security regression, so the request is refused
+    before the cost gate reserves anything. Owner decision 2026-10-20 (FRE-1625).
+    Today this is gpt-6.1-sol with tools; gpt-6-luna and gpt-5.4-mini stay on
+    Chat Completions at effort ``none``.
+
+    Args:
+        request: The assembled litellm kwargs.
+        trace_id: Trace identifier for the refusal log.
+
+    Raises:
+        LLMClientError: litellm would route this request to the Responses API.
+    """
+    from litellm.main import responses_api_bridge_check  # noqa: PLC0415
+
+    from personal_agent.llm_client.types import LLMClientError  # noqa: PLC0415
+
+    provider, _, model = str(request["model"]).partition("/")
+    model_info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=provider,
+        tools=request.get("tools"),
+        reasoning_effort=request.get("reasoning_effort"),
+        api_base=request.get("api_base"),
+    )
+    if model_info.get("mode") == "responses":
+        log.error(
+            "litellm_responses_bridge_refused",
+            model=request["model"],
+            reasoning_effort=request.get("reasoning_effort"),
+            tools=len(request.get("tools") or []),
+            trace_id=trace_id,
+        )
+        raise LLMClientError(
+            f"{request['model']!r} would be routed to the Responses API bridge, which "
+            "litellm dispatches without the egress-guard client (ADR-0141 D2); refusing "
+            "to dispatch it unguarded (FRE-1625)."
+        )
 
 
 def _exception_chain(exc: BaseException, *, limit: int = 8) -> list[BaseException]:
@@ -1346,6 +1440,9 @@ class LiteLLMClient:
             litellm_kwargs["timeout"] = timeout_s
         if max_retries is not None:
             litellm_kwargs["num_retries"] = max_retries
+        # FRE-1625: both run on the assembled request, before the cost gate.
+        _gate_model_effort_domain(self.model_def, dialect, litellm_kwargs)
+        _refuse_unguarded_responses_bridge(litellm_kwargs, trace_id=trace_id)
 
         # Anthropic prompt caching — eliminates re-processing of static system prompt
         # and tool list on every turn after the first (cache write: ~$0.30/MTok,
@@ -1994,6 +2091,11 @@ class LiteLLMClient:
             litellm_kwargs["tool_choice"] = tool_choice if tool_choice else "auto"
             if model_def.parallel_tool_calls:
                 litellm_kwargs["parallel_tool_calls"] = True
+        # FRE-1625 (Codex review): the same two checks as the cloud path, because this is a
+        # second dispatch site. The global Responses flag or a `responses/` id prefix would
+        # route this call to the bridge that drops the guarded client.
+        _gate_model_effort_domain(self.model_def, dialect, litellm_kwargs)
+        _refuse_unguarded_responses_bridge(litellm_kwargs, trace_id=trace_id)
 
         async with get_inference_concurrency_controller().request_slot(
             role=self.model_key,

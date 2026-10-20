@@ -10,12 +10,15 @@ actually builds one:
 - OpenAI-SDK route (``openai``): ``httpx.AsyncHTTPTransport`` — the plain
   default ``create_guarded_http_client()`` builds, no litellm involvement.
 - AsyncHTTPHandler route (``anthropic``, ``ovhcloud``): litellm's own
-  ``AsyncHTTPHandler._create_async_transport`` staticmethod, patched to
+  ``AsyncHTTPHandler.create_async_transport`` staticmethod, patched to
   return a deterministic ``httpx.MockTransport`` — the real default is an
-  **aiohttp**-backed transport (verified against litellm 1.98.0), not
+  **aiohttp**-backed transport (verified against litellm 1.98.0 and 1.106.0), not
   ``httpx.AsyncHTTPTransport``, so patching the httpx one would never fire
   for this route and could pass a broken guard for the wrong reason (a real
-  failed network call in a sandboxed CI environment also raises).
+  failed network call in a sandboxed CI environment also raises). FRE-1625:
+  litellm 1.106.0 ``create_client`` calls the public name; the private
+  ``_create_async_transport`` survives only as an alias, so patching it no
+  longer replaced the transport.
 
 The primary assertion in every test is that ``DomainGuard.check_url`` was
 actually invoked with the expected URL (proves the guard mechanism engaged,
@@ -224,7 +227,7 @@ class TestAsyncHttpHandlerRouteSeededNegative:
         mock_transport = httpx.MockTransport(_sentinel_never_reached)
         monkeypatch.setattr(
             AsyncHTTPHandler,
-            "_create_async_transport",
+            "create_async_transport",
             staticmethod(lambda *a, **kw: mock_transport),
         )
         guard = _guard(blocklist=frozenset({BLOCKED_HOST}))
@@ -241,7 +244,7 @@ class TestAsyncHttpHandlerRouteSeededNegative:
         mock_transport = httpx.MockTransport(_sentinel_never_reached)
         monkeypatch.setattr(
             AsyncHTTPHandler,
-            "_create_async_transport",
+            "create_async_transport",
             staticmethod(lambda *a, **kw: mock_transport),
         )
         guard = _guard(blocklist=frozenset({BLOCKED_HOST}))
@@ -289,7 +292,7 @@ class TestGuardAttachedCallsStillSucceed:
         mock_transport = httpx.MockTransport(_handler)
         monkeypatch.setattr(
             AsyncHTTPHandler,
-            "_create_async_transport",
+            "create_async_transport",
             staticmethod(lambda *a, **kw: mock_transport),
         )
         guard = _guard(blocklist=frozenset())
@@ -324,7 +327,7 @@ class TestRedirectHopsAreGuarded:
         mock_transport = httpx.MockTransport(_handler)
         monkeypatch.setattr(
             AsyncHTTPHandler,
-            "_create_async_transport",
+            "create_async_transport",
             staticmethod(lambda *a, **kw: mock_transport),
         )
         guard = _guard(blocklist=frozenset({BLOCKED_HOST}))

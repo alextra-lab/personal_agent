@@ -292,9 +292,12 @@ Sources: the PyPI release history, and the wheels read as archives
 
 - **gpt-6 needs an upgrade.** On 1.98.0, `get_optional_params(model="gpt-6-luna",
   reasoning_effort="none")` raises `UnsupportedParamsError`. The same call on `gpt-5.4-mini` and
-  `gpt-5.6-luna` passes. The config guard requires a reasoning declaration on every bound deployment,
-  and `none` is the declaration that keeps the FRE-758 pin. So a bound `gpt-6-luna` entry cannot
-  work on 1.98.0.
+  `gpt-5.6-luna` passes. Every bound deployment must declare a reasoning effort, and `none` is the
+  declaration that keeps the FRE-758 pin. So every call to a bound `gpt-6-luna` entry fails on
+  1.98.0. The config guard does not catch this: for the `openai_gpt5` dialect,
+  `_dialect_declares_effort` (`config_guard.py:1414-1444`) accepts `none` without the litellm probe.
+  The entry loads and boots, and the error appears only at call time. The ticket order is the
+  protection: ticket B upgrades litellm in the same PR that adds the entry.
 - **Anthropic 5.5 works on 1.98.0, with a condition.** It maps `reasoning_effort` correctly for both
   5.5 models (`thinking: {type: adaptive}`, `output_config: {effort: …}`, verified offline). That
   holds only while the remote map fetch succeeds at import (§3.2).
@@ -323,7 +326,7 @@ Open litellm issues that touch this change, read on GitHub on 2026-10-20:
 | Assistant prefill returns 400 | Haiku 5.5 | Check that no Haiku-reachable path ends `messages` with an assistant turn |
 | Adaptive thinking is on by default, and thinking counts toward `max_tokens` | Haiku 5.5 | An empty mode now means effort `medium` with thinking, not "thinking off". Declare the effort explicitly. Review `default_timeout: 30` on `claude_haiku` |
 | About 30% more tokens per text, and a price step above 100K prompt tokens | Haiku 5.5 | Cost estimates measured on Haiku 4.5 do not transfer. The litellm map carries `*_above_100k_tokens` rates. Verify that `completion_cost` applies them before a long-context role binds Haiku 5.5 |
-| Function calling on Chat Completions only at effort `none` | gpt-6-luna | A tool-using mode above `none` needs the Responses API. litellm dispatches `openai/` models to Chat Completions. A `deep` mode is safe only on producers that send no tools. `entity_extraction` sends `tools=None` (`entity_extraction.py:1226`), and the compressor call passes no `tools` (`context_compressor.py:252-262`) |
+| Function calling on Chat Completions only at effort `none` | gpt-6-luna | A tool-using mode above `none` needs the Responses API. litellm dispatches `openai/` models to Chat Completions. A `deep` mode is safe only on producers that send no tools. The cloud extraction call passes no `tools` (`entity_extraction.py:1167-1174`), and neither does the compressor call (`context_compressor.py:252-262`) |
 | `temperature` / `top_p` only at effort `none` | gpt-6-luna | The `openai_gpt5` rule at `models.py:928-937` already enforces exactly this |
 | `max` effort exists | gpt-6-luna, Haiku 5.5, Sonnet 5.5 | Widen the `ModeSpec` literals: `reasoning_effort` gets `max`, and `effort` gets `xhigh` and `max`. This is needed only if FRE-1620 declares those levels |
 | Effort levels are recalibrated | Sonnet 5.5 | ADR-0145 D6's measured `worker: effort: low` for Sonnet 5 does not transfer. Run a new effort sweep |
@@ -447,7 +450,12 @@ Ticket A changes only the two Sonnet price lines. Ticket B adds two entries. Nei
 ```
 
 The ticket-B values `max_tokens`, `max_concurrency` and `default_timeout` copy the entries that the
-new keys replace, except the Haiku timeout. They are starting values and not measurements.
+new keys replace, with two exceptions on Haiku:
+- `max_tokens` is 128000, the Haiku 5.5 provider ceiling. `claude_haiku` declares 64000, the Haiku
+  4.5 ceiling. The artifact clamp `settings.artifact_draft_max_tokens` still applies.
+- `default_timeout` is 60, because adaptive thinking is on by default.
+
+All of these are starting values and not measurements.
 
 ## 10. Build ticket text (AC-6)
 
@@ -475,8 +483,10 @@ the real spend, and the Sonnet-only caps deny work at about 70% of their nominal
 - AC-1: after `register_model_pricing(load_model_config())`, the call
   `litellm.cost_per_token(model="anthropic/claude-sonnet-5", prompt_tokens=1_000_000, completion_tokens=1_000_000)`
   returns (2.0, 10.0). A unit test asserts this outcome.
-- AC-2: `make test` passes with the regenerated golden. The golden diff shows only the two
-  `claude_sonnet` price values.
+- AC-2: `make test` passes with the regenerated golden. The golden diff changes only
+  `input_cost_per_token` and `output_cost_per_token` of `claude_sonnet`. These two values appear in
+  five places: the `pricing` entry, and the resolved definitions for `artifact_builder`,
+  `captains_log`, `insights` and `vision`.
 - AC-3: the PR diff touches only the four places above.
 - AC-4: post-deploy, the gateway's `model_pricing_registered` log line lists
   `anthropic/claude-sonnet-5`. The next `api_costs` row for that model satisfies
@@ -488,7 +498,8 @@ stricter class, so the owner authorizes it per the trust ladder. No schema chang
 ### Ticket B: litellm upgrade and the two new catalog entries (no binding change)
 
 **Why.** litellm 1.98.0 rejects `reasoning_effort` on every gpt-6 model, and its bundled price map
-lacks the four new models (FRE-1621 note §6.1). Without the upgrade, no gpt-6 entry can exist. The
+lacks the four new models (FRE-1621 note §6.1). Without the upgrade, a gpt-6 entry loads and boots,
+but every call to it fails with `UnsupportedParamsError`. The config guard does not detect this. The
 cache rates of the 5.5 models also depend on a network fetch at import.
 
 **Change.**
@@ -497,7 +508,11 @@ cache rates of the 5.5 models also depend on a network fetch at import.
    1.105.1 does not).
 2. `config/models.yaml`: add `gpt-6-luna` and `claude_haiku_5_5` as in FRE-1621 note §9. Change no
    existing entry.
-3. Unit tests (offline, `LITELLM_LOCAL_MODEL_COST_MAP=True`, no network):
+3. `tests/personal_agent/config/catalog_snapshot_golden.json`: regenerate it with
+   `python -m tests.personal_agent.config.test_catalog_snapshot --write`, and declare the rebaseline
+   in the test's docstring. The golden lists every catalog entry in its `concurrency.models` and
+   `pricing` sections, so two new entries change it.
+4. Unit tests (offline, `LITELLM_LOCAL_MODEL_COST_MAP=True`, no network):
    - `get_optional_params` for `openai/gpt-6-luna` with `reasoning_effort="none", temperature=0.0`
      returns both parameters.
    - The same call with `reasoning_effort="high", temperature=0.0` is refused by the
@@ -505,7 +520,7 @@ cache rates of the 5.5 models also depend on a network fetch at import.
    - `anthropic/claude-haiku-5-5` with `reasoning_effort="low"` maps to
      `thinking: {type: adaptive}` and `output_config: {effort: low}`.
    - The registered prices of both new entries equal the official ones.
-4. Re-run the litellm-sensitive suites: reasoning, dialect, config guard and catalog snapshot.
+5. Re-run the litellm-sensitive suites: reasoning, dialect, config guard and catalog snapshot.
 
 **Acceptance criteria.**
 - AC-1: the four unit tests above pass on the new litellm with the remote map disabled.

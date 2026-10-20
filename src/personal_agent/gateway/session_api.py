@@ -16,7 +16,12 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from personal_agent.config.seshat_effort import EffortLevel, hydrate_effort
+from personal_agent.config.seshat_effort import (
+    EFFORT_LEVELS,
+    EffortLevel,
+    get_seshat_effort,
+    hydrate_effort,
+)
 from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
@@ -565,7 +570,23 @@ def _deployment_view(key: str, model: ModelDefinition, config: ModelConfig) -> d
         "supports_pdf_document": model.supports_pdf_document,
         "input_cost_per_token": model.input_cost_per_token,
         "output_cost_per_token": model.output_cost_per_token,
+        # ADR-0157 D5: the selector shows a level's mode only when the deployment declares it.
+        "modes": list(model.modes),
     }
+
+
+def _effort_levels() -> dict[EffortLevel, str | None]:
+    """Return the catalog mode that each Seshat effort level requests (ADR-0157 D1, D5).
+
+    The effort selector pairs this with each candidate's ``modes``: a level shows its mode when
+    the selected deployment declares it, and "model default" when it does not.
+
+    Returns:
+        A mapping from each level to the mode name it requests, or ``None`` when the level
+        requests the deployment's ``default_mode``.
+    """
+    levels = get_seshat_effort().levels
+    return {name: levels[name].primary_mode for name in EFFORT_LEVELS}
 
 
 def _provider_view(key: str, provider: ProviderDefinition, available: bool) -> dict[str, Any]:
@@ -618,7 +639,8 @@ async def get_session_config(
 
     Returns:
         ``{"session_id": ..., "roles": {role: {"open", "resolved",
-        "provenance", "candidates"?}}, "providers": [...]}``.
+        "provenance", "candidates"?}}, "providers": [...], "seshat_effort",
+        "effort_provenance", "effort_levels": {level: mode | None}}``.
 
     Raises:
         HTTPException(422): When ``session_id`` is not a valid UUID.
@@ -697,6 +719,7 @@ async def get_session_config(
         "providers": providers,
         "seshat_effort": seshat_effort,
         "effort_provenance": effort_provenance,
+        "effort_levels": _effort_levels(),
     }
 
 
@@ -721,7 +744,8 @@ async def get_config(
 
     Returns:
         ``{"roles": {role: {"open", "resolved", "provenance", "candidates"?}},
-        "providers": [...]}`` — the same shape as ``GET /{session_id}/config``;
+        "providers": [...], "effort_levels": {level: mode | None}}`` — the same shape as
+        ``GET /{session_id}/config`` minus the stored effort level;
         ``provenance`` is always ``"default"`` here since there is no session
         to hydrate a stored selection from.
     """
@@ -764,7 +788,7 @@ async def get_config(
     ]
 
     log.info("gateway_config_get", token_name=token.name, trace_id=ctx.trace_id)
-    return {"roles": roles, "providers": providers}
+    return {"roles": roles, "providers": providers, "effort_levels": _effort_levels()}
 
 
 @router.patch("/{session_id}/selection")

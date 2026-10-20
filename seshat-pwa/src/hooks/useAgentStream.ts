@@ -25,6 +25,7 @@ import type {
   PhaseSnapshotEntry,
   PhaseStartData,
   ResolvedConstraint,
+  SeshatEffort,
   ToolApprovalRequestData,
   ToolCallEndData,
   ToolCallStartData,
@@ -32,6 +33,7 @@ import type {
   TurnStatus,
   TurnSummary,
 } from '@/lib/types';
+import { EFFORT_LEVELS } from '@/lib/effort';
 import { reconcilePhaseSnapshot } from '@/lib/phase-state';
 import { buildTurnSummary, parseTurnSummary } from '@/lib/phase-summary';
 import { clearStoredTools, mergeTurnStatus, persistTurnStatus } from '@/lib/turn-status-store';
@@ -40,6 +42,13 @@ import { clearStoredTools, mergeTurnStatus, persistTurnStatus } from '@/lib/turn
 export interface ServerSelection {
   role: string;
   deploymentKey: string;
+}
+
+/** Server-authoritative effort-level change, from a `session_effort` STATE_DELTA (ADR-0157 D2). */
+export interface ServerEffort {
+  /** The session the event belongs to — a notice for another session must not apply. */
+  sessionId: string;
+  level: SeshatEffort;
 }
 
 // --------------------------------------------------------------------------
@@ -76,6 +85,11 @@ export interface UseAgentStreamReturn {
    * picker to this when it changes elsewhere (another tab, a WS reconnect).
    */
   serverSelection: ServerSelection | null;
+  /**
+   * Server-authoritative effort-level change from a `session_effort` STATE_DELTA
+   * (ADR-0157 D2); null until one arrives. It also arrives as the replay on reconnect.
+   */
+  serverEffort: ServerEffort | null;
   /** Active constraint pause awaiting a decision (ADR-0076); null when none. */
   pendingConstraint: PendingConstraint | null;
   /** Constraints resolved this turn, rendered as collapsed pills. */
@@ -100,7 +114,13 @@ export interface UseAgentStreamReturn {
   classifiedError: ClassifiedErrorData | null;
   /** Dismiss the ClassifiedErrorCard (user action or next send). */
   dismissClassifiedError: () => void;
-  sendMessage: (text: string, sessionId: string, primarySelection?: string, attachments?: UploadedAttachment[]) => Promise<void>;
+  sendMessage: (
+    text: string,
+    sessionId: string,
+    primarySelection?: string,
+    attachments?: UploadedAttachment[],
+    seshatEffort?: SeshatEffort,
+  ) => Promise<void>;
   resolveInterrupt: (choice: string) => void;
   /** Post an approve/deny decision for the current pendingApproval. */
   handleApprovalDecision: (decision: 'approve' | 'approve_session' | 'deny') => void;
@@ -159,6 +179,7 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   const [phases, setPhases] = useState<PhaseNode[]>([]);
   const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
   const [serverSelection, setServerSelection] = useState<ServerSelection | null>(null);
+  const [serverEffort, setServerEffort] = useState<ServerEffort | null>(null);
   // FRE-928: a QUEUE, not a single slot. Nothing stops two turns running
   // concurrently on one session (/chat/stream is fire-and-forget), and a second
   // pause used to overwrite the first — leaving the first card unanswerable while
@@ -478,6 +499,13 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
             setServerSelection({ role, deploymentKey: deployment_key });
           }
         }
+        // ADR-0157 D2: server-authoritative effort level → reconcile the selector. Shape-guarded.
+        if (key === 'session_effort' && value !== null && typeof value === 'object') {
+          const level = (value as { seshat_effort?: unknown }).seshat_effort;
+          if (EFFORT_LEVELS.includes(level as SeshatEffort)) {
+            setServerEffort({ sessionId: ownerSessionId, level: level as SeshatEffort });
+          }
+        }
         // ADR-0123 §6 / FRE-986: full-state phase snapshot → converge the active phase
         // set from this single message (self-correcting; newest wins). Shape-guarded —
         // a malformed payload is ignored, never thrown on.
@@ -742,7 +770,13 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
   // --------------------------------------------------------------------------
 
   const sendMessage = useCallback(
-    async (text: string, sessionId: string, primarySelection?: string, attachments?: UploadedAttachment[]) => {
+    async (
+      text: string,
+      sessionId: string,
+      primarySelection?: string,
+      attachments?: UploadedAttachment[],
+      seshatEffort?: SeshatEffort,
+    ) => {
       // Close any existing stream.
       streamRef.current?.close();
       streamRef.current = null;
@@ -822,7 +856,14 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
       // a second POST that might arrive if the WS reconnects mid-request (FRE-392).
       const clientMsgId = generateUUID();
       try {
-        await sendChatMessage({ message: text, sessionId, primarySelection, clientMsgId, attachments });
+        await sendChatMessage({
+          message: text,
+          sessionId,
+          primarySelection,
+          seshatEffort,
+          clientMsgId,
+          attachments,
+        });
       } catch (err) {
         // FRE-1414: the POST can reject well after a later sendMessage() for
         // a different session has become current — closing "the" streamRef
@@ -1025,6 +1066,7 @@ export function useAgentStream(activeSessionId?: string): UseAgentStreamReturn {
     phases,
     turnStatus,
     serverSelection,
+    serverEffort,
     pendingConstraint,
     resolvedConstraints,
     cancelled,

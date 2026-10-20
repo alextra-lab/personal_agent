@@ -352,6 +352,8 @@ export interface DeploymentView {
   supports_pdf_document: boolean;
   input_cost_per_token: number | null;
   output_cost_per_token: number | null;
+  /** Names of the catalog modes this deployment declares (ADR-0157 D5). Optional for older fixtures. */
+  modes?: string[];
 }
 
 /** A single provider row, for the observe view's provider table. */
@@ -376,11 +378,27 @@ export interface SessionConfigRole {
   candidates?: DeploymentView[];
 }
 
+/** The three Seshat effort levels (ADR-0157 D1). */
+export type SeshatEffort = 'fast' | 'standard' | 'deep';
+
+/**
+ * The catalog mode each effort level requests, or `null` for the deployment's
+ * `default_mode` (ADR-0157 D1, D5). A level shows its mode only when the selected
+ * deployment lists it in `DeploymentView.modes`.
+ */
+export type EffortLevelModes = Record<SeshatEffort, string | null>;
+
 /** Response shape shared by `GET /{id}/config` and the sessionless `GET /config`. */
 export interface SessionConfig {
   session_id?: string;
   roles: Record<string, SessionConfigRole>;
   providers: ProviderView[];
+  /** The stored effort level — session-scoped read only (ADR-0157 D2). */
+  seshat_effort?: SeshatEffort;
+  /** `server-hydrated` or `default` — session-scoped read only. */
+  effort_provenance?: string;
+  /** The mode each level requests (ADR-0157 D5). */
+  effort_levels?: EffortLevelModes;
 }
 
 /** Pending HITL interrupt requiring user decision. */

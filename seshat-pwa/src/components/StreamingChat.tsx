@@ -9,6 +9,7 @@ import { getSession, getSessionMessages, setSessionSelection, type UploadedAttac
 import { generateUUID } from '@/lib/uuid';
 import { LAST_SESSION_KEY } from '@/lib/session';
 import { useAgentStream } from '@/hooks/useAgentStream';
+import { useSeshatEffort } from '@/hooks/useSeshatEffort';
 import { useSessionConfig } from '@/hooks/useSessionConfig';
 import { loadTurnStatus } from '@/lib/turn-status-store';
 
@@ -75,6 +76,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
   const {
     roles: configRoles,
+    effortLevels,
     hydrated: configHydrated,
     refetch: refetchConfig,
   } = useSessionConfig(sessionId);
@@ -131,6 +133,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     phases,
     turnStatus,
     serverSelection,
+    serverEffort,
     pendingConstraint,
     resolvedConstraints,
     cancelled,
@@ -148,6 +151,11 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     seedTurnStatus,
     attach,
   } = useAgentStream(sessionId);
+
+  // ADR-0157 D2: the Seshat effort level. The server holds it; this hook shows it, writes a
+  // change, and takes the server's notices (including the replay on reconnect).
+  const effort = useSeshatEffort(sessionId, serverEffort);
+  const selectedModel = modelCandidates.find((c) => c.key === selectedModelKey);
 
   // Reconcile the picker when the server broadcasts a selection change to the
   // active socket (ADR-0121 §4 — e.g. a change made elsewhere, or the live
@@ -259,8 +267,9 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     setLastUserMessage(text);
     setLastAttachments(attachments);
     // ADR-0121 §4: send the picker's choice so a NEW session adopts it; the
-    // server ignores it for an existing session (stored selection wins).
-    sendMessage(text, sessionId, pendingSelection ?? undefined, attachments);
+    // server ignores it for an existing session (stored selection wins). The effort level
+    // follows the same rule (ADR-0157 D2).
+    sendMessage(text, sessionId, pendingSelection ?? undefined, attachments, effort.sendLevel);
   };
 
   const handleInterruptChoice = (choice: string) => {
@@ -544,13 +553,22 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
           onSend={handleSend}
           // Block Send only while a decision is pending; streaming shows Stop,
           // and the textarea stays writable so the user can compose ahead (FRE-421).
-          disabled={pendingInterrupt !== null || pendingApproval !== null}
+          // The effort level also gates Send until the session GET answers, so a send never
+          // carries Standard for a session that holds another level (ADR-0157 D2).
+          disabled={pendingInterrupt !== null || pendingApproval !== null || !effort.ready}
           isStreaming={isStreaming}
           onStop={sendUserCancel}
           candidates={modelCandidates}
           selectedModelKey={selectedModelKey}
           modelHydrated={configHydrated || pendingSelection !== null}
           onModelChange={handleModelChange}
+          effort={{
+            level: effort.level,
+            levelModes: effortLevels,
+            declaredModes: selectedModel?.modes,
+            error: effort.error,
+            onSelect: effort.change,
+          }}
         />
       </footer>
     </div>

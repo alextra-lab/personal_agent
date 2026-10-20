@@ -51,11 +51,12 @@ vi.mock('@/lib/uuid', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { useAgentStream } from '@/hooks/useAgentStream';
-import { connectWebSocket, getSessionMessages } from '@/lib/agui-client';
+import { connectWebSocket, getSessionMessages, sendChatMessage } from '@/lib/agui-client';
 import { submitTurnRating } from '@/lib/submitTurnRating';
 
 const mockConnect = connectWebSocket as Mock;
 const mockGetSessionMessages = getSessionMessages as Mock;
+const mockSendChatMessage = sendChatMessage as Mock;
 const mockSubmitRating = submitTurnRating as Mock;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -222,6 +223,49 @@ describe('useAgentStream — STATE_DELTA (session_selection, ADR-0121 §4)', () 
     });
 
     expect(hook.result.current.serverSelection).toBeNull();
+  });
+});
+
+describe('useAgentStream — STATE_DELTA (session_effort, ADR-0157 D2)', () => {
+  it('sets serverEffort, with its session, from a well-formed session_effort STATE_DELTA', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent({
+      type: 'STATE_DELTA',
+      data: {
+        key: 'session_effort',
+        value: { seshat_effort: 'deep', effort_provenance: 'server-hydrated' },
+      },
+      seq: 1,
+    });
+
+    expect(hook.result.current.serverEffort).toEqual({ sessionId: 'session-1', level: 'deep' });
+  });
+
+  it('ignores a level outside the three presets', async () => {
+    const hook = renderHook(() => useAgentStream());
+    await startTurn(hook);
+
+    pushEvent({
+      type: 'STATE_DELTA',
+      data: { key: 'session_effort', value: { seshat_effort: 'turbo' } },
+      seq: 1,
+    });
+
+    expect(hook.result.current.serverEffort).toBeNull();
+  });
+
+  it('sends the level of the selector with the chat request', async () => {
+    const hook = renderHook(() => useAgentStream());
+
+    await act(async () => {
+      await hook.result.current.sendMessage('hello', 'session-1', undefined, undefined, 'deep');
+    });
+
+    expect(mockSendChatMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', seshatEffort: 'deep' }),
+    );
   });
 });
 

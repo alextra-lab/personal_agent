@@ -230,6 +230,20 @@ One explicit delta, hand-edited rather than regenerated:
    binding, resolved key, ``default_mode``, existing mode body, timeout, concurrency or
    price changed.**
 
+**Rebaselined a thirteenth time, deliberately, for FRE-1625 (FRE-1621 ticket B).**
+Regenerated, then the three ``slm.*`` endpoint cells that the regenerator copied from
+the local ``.env`` were reverted to ``http://localhost:9099/v1``. Two explicit deltas,
+both additions of the three new catalog entries ``gpt-6-luna``, ``gpt-6.1-sol`` and
+``claude_haiku_5_5``:
+
+1. **``concurrency.models`` gains three cells:** limits 10, 10 and 20, all idle.
+2. **``pricing`` gains three entries:** ``openai/gpt-6-luna`` and
+   ``anthropic/claude-haiku-5-5`` at 1e-07 / 5e-07, ``openai/gpt-6.1-sol`` at
+   2e-06 / 1e-05.
+
+**No role binding, resolved key, resolved definition, timeout, existing concurrency
+cell or existing price changed** — the entries are pickable, not bound (AC-3).
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

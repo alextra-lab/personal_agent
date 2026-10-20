@@ -124,7 +124,8 @@ class TestDeclarationReachesTheRequest:
         )
         assert error is None
         assert shape["output_config"] == {"effort": "high"}
-        assert shape["thinking"] == {"type": "adaptive"}
+        # FRE-1625: litellm >= 1.100 adds display=summarized (litellm #37979).
+        assert shape["thinking"] == {"type": "adaptive", "display": "summarized"}
 
 
 class TestNonAnthropicVocabulary:

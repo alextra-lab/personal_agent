@@ -64,8 +64,10 @@ class TestProviderWireShape:
 
         shape, error = reasoning_wire_shape("claude-sonnet-5", "anthropic", {}, "high")
         assert error is None
+        # FRE-1625: litellm >= 1.100 also asks for summarized thinking; without
+        # it Anthropic returns a blank thinking block (litellm #37979).
         assert shape == {
-            "thinking": {"type": "adaptive"},
+            "thinking": {"type": "adaptive", "display": "summarized"},
             "output_config": {"effort": "high"},
         }
 
@@ -295,7 +297,8 @@ class TestOpenSelectionWalksEverySelectableEntry:
         ADR-0145 D1 (FRE-1445) deleted the two local `-instruct` twins, dropping
         the reachable set from eight entries to six. FRE-1517 added the two MTPLX
         study deployments, raising it to eight. FRE-1517 stage 2 added the Gemma
-        study deployment, raising it to nine.
+        study deployment, raising it to nine. FRE-1625 added gpt-6-luna,
+        gpt-6.1-sol and claude_haiku_5_5, raising it to twelve.
         """
         catalog = _load_yaml(_REPO_ROOT / "config" / "models.yaml")
         bindings = load_matrix(_REPO_ROOT).get("bindings")
@@ -311,6 +314,9 @@ class TestOpenSelectionWalksEverySelectableEntry:
             "claude_sonnet",
             "claude_haiku",
             "gpt-5.4-mini",
+            "gpt-6-luna",
+            "gpt-6.1-sol",
+            "claude_haiku_5_5",
         }
 
     def test_an_open_selectable_unbound_model_is_walked_and_clean(self) -> None:

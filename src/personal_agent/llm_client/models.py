@@ -532,6 +532,9 @@ class ModelDefinition(BaseModel):
         dialect: Override of the provider's default wire vocabulary (ADR-0145
             D3a). Required when the provider declares none, or when this model
             disagrees with its provider's default (the Anthropic case).
+        reasoning_effort_domain: Optional per-model narrowing of the dialect's
+            ``reasoning_effort`` domain (FRE-1625). Without ``'none'`` on
+            ``openai_gpt5``, no mode may set ``temperature`` or ``top_p``.
         modes: Named sampler/thinking presets, written in this model's dialect
             vocabulary (ADR-0145 D3a). The only declarative home for samplers
             and thinking — there is no top-level fallback. Required, with at
@@ -626,6 +629,17 @@ class ModelDefinition(BaseModel):
             "Override of the provider's default dialect (ADR-0145 D3a). "
             "Required when the provider declares none for this kind=llm model."
         ),
+    )
+    reasoning_effort_domain: frozenset[Literal["none", "low", "medium", "high", "xhigh"]] | None = (
+        Field(
+            None,
+            description=(
+                "Narrows the dialect's reasoning_effort domain for this one model "
+                "(FRE-1625). gpt-6.1-sol cannot turn reasoning off, so it omits "
+                "'none' — and on openai_gpt5 that also refuses temperature/top_p, "
+                "which are legal only at 'none'. None = the dialect's domain applies."
+            ),
+        )
     )
     modes: dict[str, ModeSpec] = Field(
         default_factory=dict,
@@ -908,6 +922,19 @@ class ModelConfig(BaseModel):
                 )
             accepted = DIALECT_FIELDS[dialect]
             domains = DIALECT_VALUE_DOMAINS.get(dialect, {})
+            model_domain = definition.reasoning_effort_domain
+            if model_domain is not None:
+                # FRE-1625: a per-model domain may only narrow the dialect's.
+                dialect_domain = domains.get("reasoning_effort")
+                if "reasoning_effort" not in accepted or (
+                    dialect_domain is not None and not model_domain <= dialect_domain
+                ):
+                    raise ValueError(
+                        f"deployment {key!r} declares reasoning_effort_domain "
+                        f"{sorted(model_domain)}, which does not narrow dialect "
+                        f"{dialect.value!r}'s reasoning_effort domain (FRE-1625)"
+                    )
+                domains = {**domains, "reasoning_effort": model_domain}
             for mode_name, spec in definition.modes.items():
                 where = f"deployment {key!r} mode {mode_name!r} (dialect {dialect.value!r})"
                 set_fields = spec.model_dump(exclude_none=True)
@@ -934,6 +961,17 @@ class ModelConfig(BaseModel):
                         f"{where} sets temperature/top_p alongside "
                         f"reasoning_effort={spec.reasoning_effort!r} — openai_gpt5 accepts "
                         "temperature and top_p only at effort 'none' (FRE-1430 F1, F5)"
+                    )
+                if (
+                    dialect is Dialect.OPENAI_GPT5
+                    and model_domain is not None
+                    and "none" not in model_domain
+                    and (spec.temperature is not None or spec.top_p is not None)
+                ):
+                    raise ValueError(
+                        f"{where} sets temperature/top_p, but this model's reasoning_effort "
+                        f"domain {sorted(model_domain)} has no 'none' — openai_gpt5 accepts "
+                        "temperature and top_p only at effort 'none' (FRE-1625)"
                     )
                 if (
                     dialect is Dialect.ANTHROPIC_BUDGET

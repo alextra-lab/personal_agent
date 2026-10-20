@@ -6,6 +6,10 @@
           "active": 0,
           "limit": 20
         },
+        "claude_haiku_5_5": {
+          "active": 0,
+          "limit": 20
+        },
         "claude_sonnet": {
           "active": 0,
           "limit": 10
@@ -14,13 +18,21 @@
           "active": 0,
           "limit": 50
         },
+        "gemma-4-26b-a4b": {
+          "active": 0,
+          "limit": 3
+        },
         "gpt-5.4-mini": {
           "active": 0,
           "limit": 10
         },
-        "gemma-4-26b-a4b": {
+        "gpt-6-luna": {
           "active": 0,
-          "limit": 3
+          "limit": 10
+        },
+        "gpt-6.1-sol": {
+          "active": 0,
+          "limit": 10
         },
         "qwen3.6-35b-thinking": {
           "active": 0,
@@ -86,6 +98,12 @@
       "mode": "chat",
       "output_cost_per_token": 5e-06
     },
+    "anthropic/claude-haiku-5-5": {
+      "input_cost_per_token": 1e-07,
+      "litellm_provider": "anthropic",
+      "mode": "chat",
+      "output_cost_per_token": 5e-07
+    },
     "anthropic/claude-sonnet-5": {
       "input_cost_per_token": 2e-06,
       "litellm_provider": "anthropic",
@@ -97,6 +115,18 @@
       "litellm_provider": "openai",
       "mode": "chat",
       "output_cost_per_token": 4.5e-06
+    },
+    "openai/gpt-6-luna": {
+      "input_cost_per_token": 1e-07,
+      "litellm_provider": "openai",
+      "mode": "chat",
+      "output_cost_per_token": 5e-07
+    },
+    "openai/gpt-6.1-sol": {
+      "input_cost_per_token": 2e-06,
+      "litellm_provider": "openai",
+      "mode": "chat",
+      "output_cost_per_token": 1e-05
     },
     "ovhcloud/Qwen3.8-27B": {
       "input_cost_per_token": 4.7e-07,

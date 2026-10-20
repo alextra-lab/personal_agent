@@ -137,7 +137,7 @@ def baseline_compatible(baseline_meta: Mapping[str, Any], current_meta: Mapping[
 # ── The matrix (owner-specified) ────────────────────────────────────────────────
 _MINI_IN, _MINI_OUT = 7.5e-07, 4.5e-06  # gpt-5.4-mini $0.75/$4.50 per MTok
 _FULL_IN, _FULL_OUT = 2.5e-06, 1.5e-05  # gpt-5.4 (full) $2.50/$15 per MTok
-_SONNET_IN, _SONNET_OUT = 3e-06, 1.5e-05  # claude-sonnet-5 $3/$15 per MTok
+_SONNET_IN, _SONNET_OUT = 2e-06, 1e-05  # claude-sonnet-5 $2/$10 per MTok
 
 #: mini@NONE — the baseline row = the CURRENT PROD extractor. MEASURED 2026-07-03:
 #: gpt-5.4-mini with reasoning_effort unset produces ZERO reasoning tokens (identical to

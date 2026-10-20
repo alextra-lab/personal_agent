@@ -11,6 +11,7 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import litellm
 import pytest
 from litellm import ModelResponse, Usage
 
@@ -114,9 +115,7 @@ def test_dated_response_model_still_commits_nonzero() -> None:
     assert cost > 0
 
 
-@pytest.mark.parametrize(
-    "config_path", [Path("config/models.yaml")]
-)
+@pytest.mark.parametrize("config_path", [Path("config/models.yaml")])
 @pytest.mark.parametrize("claude_key", ["claude_sonnet", "claude_haiku"])
 def test_claude_cloud_document_pricing_present(claude_key: str, config_path: Path) -> None:
     """ADR-0102 T2 / AC-10 (pricing-present half): cloud Claude carries per-token pricing.
@@ -166,3 +165,21 @@ def test_gpt_cloud_ids_reconcile_config_price(gpt_key: str) -> None:
     ) * Decimal(str(definition.output_cost_per_token))
     assert cost == pytest.approx(expected, rel=1e-6)
     assert cost > 0
+
+
+def test_claude_sonnet_registers_two_ten_per_mtok() -> None:
+    """FRE-1624 AC-1: the registered claude-sonnet-5 price is the official $2 / $10 per MTok.
+
+    Loads the real ``config/models.yaml``, registers its pricing, and asks litellm for the
+    cost of one million tokens each way. The config owns this rate: a stale $3 / $15 made
+    the cost gate record about 1.43x the real Sonnet spend.
+    """
+    register_model_pricing(load_model_config(Path("config/models.yaml")))
+
+    input_cost, output_cost = litellm.cost_per_token(
+        model="anthropic/claude-sonnet-5",
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+    )
+
+    assert (input_cost, output_cost) == pytest.approx((2.0, 10.0))

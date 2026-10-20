@@ -468,28 +468,14 @@ models:
     # one local slot.
     max_concurrency: 25
     default_timeout: 300
-    # NOT copied from OVH's model record, and this is the one place the 3.8
-    # entry departs from "provider truth" -- deliberately, with the reason
-    # stated so a later reader does not "correct" it back.
-    #
-    # Read live 2026-09-06, the Qwen3.8-27B record reports pricing.prompt "0"
-    # and pricing.completion "0", while the model's own catalog page quotes
-    # EUR 0.4 /Mtok input and EUR 2.7 /Mtok output. The record was created
-    # 2026-09-03, so the zeros are far more likely an unpopulated launch-window
-    # record than a genuinely free model. Copying them would make every call
-    # bill at zero, which hides real spend from the cost gate -- the exact
-    # "silently register as zero" failure the outgoing entry's own comment
-    # warned about for a different reason.
-    #
-    # The declared values are carried forward from Qwen3.6-27B, which is sound
-    # arithmetic rather than a guess: that model's page quotes the SAME
-    # EUR 0.4 / EUR 2.7, and its populated record reports USD 0.00000047 /
-    # 0.00000319 -- an implied rate of ~1.18 applied to both figures. Same list
-    # price in, same conversion out.
-    #
-    # This fails SAFE. If the model really is free for now, the budget gate
-    # reserves more than it spends. Re-read the record once OVH populates it,
-    # and replace these with provider truth.
+    # FRE-1624: these are now provider truth. The Qwen3.8-27B record was read
+    # 2026-09-06 and reported pricing.prompt "0" and pricing.completion "0"
+    # (an unpopulated launch-window record, created 2026-09-03), so the values
+    # were first carried forward from Qwen3.6-27B (the same EUR 0.4 / EUR 2.7
+    # list price at an implied rate of ~1.18). The OVH record now reports
+    # USD 0.00000047 / 0.00000319, which equal the declared values below.
+    # Do not replace them with zeros if the record regresses: a zero price
+    # hides real spend from the cost gate.
     input_cost_per_token: 0.00000047     # $0.47/MTok (EUR 0.4 at the 3.6 entry's rate)
     output_cost_per_token: 0.00000319    # $3.19/MTok (EUR 2.7 at the 3.6 entry's rate)
     # 1.0 is the model card's THINKING-mode value, and thinking mode is the one
@@ -598,8 +584,10 @@ models:
     default_timeout: 180
     supports_vision: true         # Claude Sonnet is vision-capable (ADR-0101)
     supports_pdf_document: true   # Claude Sonnet accepts the native PDF document block (ADR-0102 §3)
-    input_cost_per_token: 0.000003    # $3/MTok (ADR-0101 §8b / FRE-691 — config-owned cost matrix)
-    output_cost_per_token: 0.000015   # $15/MTok
+    # FRE-1624: $2 / $10 per MTok is the official claude-sonnet-5 price (platform.claude.com/docs/en/about-claude/pricing,
+    # footnote 3, read 2026-10-20). The $3 / $15 increase planned for 2026-09-01 did not take effect.
+    input_cost_per_token: 0.000002    # $2/MTok (ADR-0101 §8b / FRE-691 — config-owned cost matrix)
+    output_cost_per_token: 0.00001    # $10/MTok
 
   claude_haiku:
     # Anthropic Claude Haiku — fast, low-cost sub-agent model for cloud profile

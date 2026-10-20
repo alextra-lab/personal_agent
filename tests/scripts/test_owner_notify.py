@@ -225,3 +225,21 @@ def test_the_cli_reports_failed_and_unconfigured(
     monkeypatch.setattr(owner_notify, "_git_toplevel", lambda: tmp_path)
     assert owner_notify.main([]) == 1
     assert capsys.readouterr().out.strip().splitlines()[-1] == "unconfigured"
+
+
+@pytest.mark.parametrize("url", ["http://[abc/topic", "http://[notip]/x"])
+def test_a_malformed_url_is_a_failed_send_not_an_exception(url: str) -> None:
+    """An operator typo in .env must not kill a daemon tick."""
+
+    def never(*_a: object, **_k: object) -> ContextManager[object]:
+        raise AssertionError("the opener must not be called")
+
+    assert owner_notify.post_ntfy(url, "x", opener=never) is False
+    notify = owner_notify.make_owner_notifier(url, _CapturingLogger(), opener=never)
+    assert notify("x") is False
+
+
+def test_a_message_that_cannot_be_encoded_is_a_failed_send_not_an_exception() -> None:
+    with _fake_ntfy() as (url, received):
+        assert owner_notify.post_ntfy(url, "bad \ud800 text") is False
+    assert received.requests == []

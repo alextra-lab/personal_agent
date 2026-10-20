@@ -72,21 +72,26 @@ def load_owner_ntfy_url() -> str | None:
 
 
 def _post(url: str, message: str, opener: Opener, timeout_s: float) -> str | None:
-    """POST ``message`` to ``url``. Return ``None`` on success, else the failure kind."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        return "bad_url"
-    request = urllib.request.Request(  # noqa: S310 - scheme is checked above
-        url,
-        data=message.encode("utf-8"),
-        headers={
-            "Content-Type": "text/plain; charset=utf-8",
-            "Title": _TITLE,
-            "Priority": "high",
-        },
-        method="POST",
-    )
+    """POST ``message`` to ``url``. Return ``None`` on success, else the failure kind.
+
+    Everything that can raise sits inside the ``try``: ``urlparse`` raises ``ValueError`` for a
+    malformed bracketed host, and ``encode`` raises ``UnicodeEncodeError`` for a lone surrogate.
+    An operator typo in ``.env`` must not stop a daemon tick.
+    """
     try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return "bad_url"
+        request = urllib.request.Request(  # noqa: S310 - scheme is checked above
+            url,
+            data=message.encode("utf-8"),
+            headers={
+                "Content-Type": "text/plain; charset=utf-8",
+                "Title": _TITLE,
+                "Priority": "high",
+            },
+            method="POST",
+        )
         with opener(request, timeout=timeout_s) as response:  # noqa: S310
             status = int(getattr(response, "status", 0))
     except (

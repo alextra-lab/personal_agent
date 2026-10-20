@@ -8,7 +8,8 @@ Four steps, each a subcommand:
 
     # 1. Copy N recent real turns from production ES. Read only; no personal_agent import.
     uv run python -m scripts.eval.fre1628_captains_log_ab.harness pull --count 10
-    # 2. Generate one reflection per turn and arm (run under the FRE-375 test wrapper).
+    # 2. Generate one reflection per turn and arm. Run steps 2 and 3 under the FRE-375
+    #    test wrapper: both write cost-gate rows to settings.database_url.
     uv run python -m scripts.eval.fre1628_captains_log_ab.harness generate --arm sonnet
     uv run python -m scripts.eval.fre1628_captains_log_ab.harness generate --arm haiku
     # 3. Label each blind pair with every judge, 4. score against the preregistered bar.
@@ -32,7 +33,7 @@ import asyncio
 import json
 import random
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -159,7 +160,9 @@ def pull(count: int, days: int) -> int:
             if len(rows) == count:
                 break
     _write_jsonl(INPUTS, rows)
-    print(f"pulled {len(rows)} turns, {sum(len(cast(list, r['events'])) for r in rows)} events")  # noqa: T201
+    print(
+        f"pulled {len(rows)} turns, {sum(len(cast(list[JSONDict], r['events'])) for r in rows)} events"
+    )  # noqa: T201
     return 0 if len(rows) == count else 1
 
 
@@ -272,7 +275,7 @@ async def generate(arm: str, limit: int | None = None) -> int:
 # ── 3. judge ──────────────────────────────────────────────────────────────────
 
 
-def _judge_call(key: str) -> Callable[[str, str], object]:
+def _judge_call(key: str) -> Callable[[str, str], Awaitable[tuple[str, float]]]:
     from personal_agent.llm_client import ModelRole  # noqa: PLC0415
     from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
     from personal_agent.telemetry.trace import SystemTraceContext  # noqa: PLC0415
@@ -357,7 +360,7 @@ async def judge() -> int:
             for key, call in calls.items():
                 parsed, cost = None, 0.0
                 for _attempt in range(2):
-                    text, spent = await call(system, user)  # type: ignore[operator]
+                    text, spent = await call(system, user)
                     cost += spent
                     parsed = _parse_verdict(text)
                     if parsed:
@@ -403,12 +406,15 @@ def score() -> int:
     per_pair: dict[str, str] = {}
     for rid, winners in sorted(pairs.items()):
         majority = [w for w in ("haiku", "sonnet") if winners.count(w) >= 2]
-        per_pair[rid] = majority[0] if majority else "tie"
-    not_worse = sum(1 for w in per_pair.values() if w != "sonnet")
+        # A pair with an unparsed label is not evidence that Haiku is not worse.
+        per_pair[rid] = "error" if "error" in winners else (majority[0] if majority else "tie")
+    not_worse = sum(1 for w in per_pair.values() if w in ("haiku", "tie"))
     off_path = sorted(rid for rid, o in haiku_out.items() if o["path"] != "dspy")
-    passed = not off_path and not_worse >= BAR_NOT_WORSE
+    complete = len(per_pair) == len(_read_jsonl(INPUTS))
+    passed = complete and not off_path and not_worse >= BAR_NOT_WORSE
     report: JSONDict = {
         "pairs": len(per_pair),
+        "complete": complete,
         "per_pair": per_pair,
         "per_judge": {
             key: {

@@ -118,9 +118,10 @@ Each step: failing test first, then code. Test command per step:
   `fast` sampling equals that entry's `worker` sampling at this date.
 
 ### 6. Primary mode on both client paths (D5, AC-4)
-- `config/seshat_effort.py`: `effective_primary_mode(spec, model_def) -> str`: the level's mode if
-  `model_def.modes` declares it, else `model_def.default_mode`. No warning log on a fallback (Deep
-  falls back on every model at this date).
+- `config/seshat_effort.py`: `primary_mode_for(deployment_key) -> str | None`: the level's mode if
+  the deployment's `modes` declares it, else `None`, so the client keeps its own resolution and a
+  binding's mode is not overridden. No warning log on a fallback (Deep falls back on every model
+  at this date).
 - `llm_client/factory.py`: `get_llm_client_for_key(model_key, *, budget_role, mode=None)` applies
   `with_requested_mode` when `mode` is set.
 - `executor.py` `step_llm_call` (~6905): when `model_role is ModelRole.PRIMARY`, resolve the

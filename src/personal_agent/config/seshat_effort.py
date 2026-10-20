@@ -19,7 +19,7 @@ These readers take the spec, not the global settings (ADR-0157 D3):
 1. the decomposition step (``expansion``);
 2. the planner prompt render (``sub_agent_rounds`` and ``planner_policy``);
 3. the helper's round budget (:func:`rounds_for_turn`);
-4. the primary's catalog mode on both client paths (:func:`effective_primary_mode`).
+4. the primary's catalog mode on both client paths (:func:`primary_mode_for`).
 """
 
 from __future__ import annotations
@@ -38,7 +38,6 @@ from personal_agent.exceptions import SeshatEffortConfigError
 
 if TYPE_CHECKING:
     from personal_agent.config.settings import AppConfig, Thoroughness
-    from personal_agent.llm_client.models import ModelDefinition
 
 log = structlog.get_logger(__name__)
 
@@ -280,24 +279,6 @@ def rounds_for_turn(level: Thoroughness) -> int:
     return spec_rounds(get_current_effort(), level)
 
 
-def effective_primary_mode(spec: EffortSpec | None, model_def: ModelDefinition) -> str | None:
-    """Return the catalog mode that the answering deployment runs on this turn (ADR-0157 D5).
-
-    Args:
-        spec: The turn's spec, or ``None`` outside a chat turn.
-        model_def: The answering deployment's catalog definition.
-
-    Returns:
-        The level's mode when the deployment declares it, else its ``default_mode`` (``None``
-        only for a definition without modes). No warning
-        is logged on the fallback: it is the designed case (Deep declares on no model at this
-        date).
-    """
-    if spec is not None and spec.primary_mode is not None and spec.primary_mode in model_def.modes:
-        return spec.primary_mode
-    return model_def.default_mode
-
-
 def primary_mode_for(deployment_key: str) -> str | None:
     """Return the mode to request for the deployment that answers this turn (ADR-0157 D5).
 
@@ -306,15 +287,16 @@ def primary_mode_for(deployment_key: str) -> str | None:
             the vision deployment on an escalated turn.
 
     Returns:
-        :func:`effective_primary_mode` for the turn's spec, or ``None`` outside a chat turn or for
-        a key without catalog modes (the client then keeps its own resolution).
+        The level's mode when the deployment declares it. ``None`` outside a chat turn, for a
+        level without a mode, or for a mode the deployment does not declare: the client then
+        keeps its own resolution, so a binding's mode is not overridden.
     """
     spec = get_current_effort()
-    if spec is None:
+    if spec is None or spec.primary_mode is None:
         return None
     from personal_agent.config.model_loader import load_model_config  # noqa: PLC0415
 
     model_def = load_model_config().models.get(deployment_key)
-    if model_def is None or not model_def.modes:
+    if model_def is None or spec.primary_mode not in model_def.modes:
         return None
-    return effective_primary_mode(spec, model_def)
+    return spec.primary_mode

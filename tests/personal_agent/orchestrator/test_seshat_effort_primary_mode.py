@@ -79,6 +79,14 @@ def test_the_vision_escalation_path_requests_the_level_mode(level: str, key: str
 
 
 @pytest.mark.parametrize("key", _PICKABLE)
+@pytest.mark.parametrize("level", list(EFFORT_LEVELS), indirect=True)
+def test_an_undeclared_level_mode_requests_nothing(level: str, key: str) -> None:
+    """The client keeps its own resolution, so a binding's mode is not overridden."""
+    expected = "fast" if level == "fast" and key in _FAST else None
+    assert primary_mode_for(key) == expected
+
+
+@pytest.mark.parametrize("key", _PICKABLE)
 def test_outside_a_turn_no_mode_is_requested(key: str) -> None:
     assert primary_mode_for(key) is None
     assert get_llm_client_for_key(key, budget_role="vision").model_def.default_mode == "default"

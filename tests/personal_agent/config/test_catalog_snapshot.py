@@ -260,6 +260,14 @@ local ``.env`` endpoints. Two explicit deltas, both additions of the catalog ent
 or existing price changed** (AC-3). Its modes are not in this golden, which resolves bound
 roles only; ``test_fre1631_sonnet_5_5_entry.py`` asserts them.
 
+**Rebaselined a fifteenth time, deliberately, for FRE-1633.** Hand-edited, not regenerated, for
+the same reasons as the fourteenth. One explicit delta: **the ``binding|captains_log`` cell
+moves from ``claude_sonnet`` to ``claude_haiku_5_5``** (id, context length, timeout,
+concurrency, price, modes and key of the resolved definition). The binding follows the
+swapped-order side-by-side of the Captain's Log pairs: Haiku 5.5 was not worse on 9 of 10 pairs
+(bar 8). **No other role binding, resolved key, existing concurrency cell or price changed.**
+``test_fre1633_captains_log_binding.py`` asserts the binding.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

@@ -365,64 +365,24 @@ fetch_url_tool = ToolDefinition(
 )
 
 
-async def fetch_url_executor(
-    url: str = "",
-    max_chars: int | None = None,
-    *,
-    ctx: TraceContext,
-) -> dict[str, Any]:
-    """Fetch and extract readable text from a URL.
+async def download_text(url: str, *, trace_id: str) -> tuple[str, int]:
+    """Download one page and extract its readable text, with no length cut.
+
+    The download and extraction half of ``fetch_url``. The FRE-1641 harness records its page
+    fixtures through this function, so the text it scores is the text the tool extracts
+    (ADR-0158 D1.8).
 
     Args:
-        url: Target URL (http or https).
-        max_chars: Maximum characters to return (default 10,000, max 50,000).
-        ctx: Trace context for logging.
+        url: Target URL (http or https), already validated.
+        trace_id: Trace id for logging.
 
     Returns:
-        Dict with ``url``, ``text`` (extracted content), ``char_count``,
-        and ``truncated`` (bool) keys.
+        The whole extracted text and the HTTP status of the response.
 
     Raises:
-        FetchError: On invalid URL, a private target, a blocked domain, connection failure,
-            timeout, non-2xx HTTP response, or a successful response that yields
-            no readable text content.
+        FetchError: On a private target, a blocked domain, connection failure, timeout, or a
+            non-2xx HTTP response.
     """
-    url = (url or "").strip()
-    if not url:
-        raise FetchError(
-            "missing_url",
-            "'url' parameter is required and cannot be empty.",
-            retryable=True,
-            next_action="Call fetch_url again with a full http:// or https:// URL.",
-        )
-    if not url.startswith(("http://", "https://")):
-        raise FetchError(
-            "invalid_url",
-            f"Invalid URL '{url}'. Must start with http:// or https://.",
-            retryable=True,
-            next_action="Call fetch_url again with a full http:// or https:// URL.",
-        )
-
-    cap = max(1, min(int(max_chars or _DEFAULT_MAX_CHARS), _MAX_CHARS_CAP))
-    trace_id = ctx.trace_id
-
-    log.info("fetch_url_started", trace_id=trace_id, url=url)
-
-    # FRE-1330: observe-only signal on what the model *targeted* — fires regardless of
-    # whether the fetch below succeeds, is blocked, or errors. Wrapped in its own
-    # try/except: a tracker I/O failure must never block or fail a fetch.
-    try:
-        novelty = await get_novelty_tracker().check_and_record(url)
-        if novelty.novel:
-            log.info(
-                "fetch_url_novel_destination",
-                trace_id=trace_id,
-                url=url,
-                domain=novelty.registrable_domain,
-            )
-    except Exception as exc:
-        log.warning("fetch_url_novelty_check_failed", trace_id=trace_id, url=url, error=str(exc))
-
     try:
         async with create_guarded_http_client(
             timeout=_TIMEOUT,
@@ -506,13 +466,74 @@ async def fetch_url_executor(
             next_action=_OTHER_SOURCE,
         ) from exc
 
-    if not text.strip():
-        log.warning(
-            "fetch_url_empty_extraction", trace_id=trace_id, url=url, status=resp.status_code
+    return text, resp.status_code
+
+
+async def fetch_url_executor(
+    url: str = "",
+    max_chars: int | None = None,
+    *,
+    ctx: TraceContext,
+) -> dict[str, Any]:
+    """Fetch and extract readable text from a URL.
+
+    Args:
+        url: Target URL (http or https).
+        max_chars: Maximum characters to return (default 10,000, max 50,000).
+        ctx: Trace context for logging.
+
+    Returns:
+        Dict with ``url``, ``text`` (extracted content), ``char_count``,
+        and ``truncated`` (bool) keys.
+
+    Raises:
+        FetchError: On invalid URL, a private target, a blocked domain, connection failure,
+            timeout, non-2xx HTTP response, or a successful response that yields
+            no readable text content.
+    """
+    url = (url or "").strip()
+    if not url:
+        raise FetchError(
+            "missing_url",
+            "'url' parameter is required and cannot be empty.",
+            retryable=True,
+            next_action="Call fetch_url again with a full http:// or https:// URL.",
         )
+    if not url.startswith(("http://", "https://")):
+        raise FetchError(
+            "invalid_url",
+            f"Invalid URL '{url}'. Must start with http:// or https://.",
+            retryable=True,
+            next_action="Call fetch_url again with a full http:// or https:// URL.",
+        )
+
+    cap = max(1, min(int(max_chars or _DEFAULT_MAX_CHARS), _MAX_CHARS_CAP))
+    trace_id = ctx.trace_id
+
+    log.info("fetch_url_started", trace_id=trace_id, url=url)
+
+    # FRE-1330: observe-only signal on what the model *targeted* — fires regardless of
+    # whether the fetch below succeeds, is blocked, or errors. Wrapped in its own
+    # try/except: a tracker I/O failure must never block or fail a fetch.
+    try:
+        novelty = await get_novelty_tracker().check_and_record(url)
+        if novelty.novel:
+            log.info(
+                "fetch_url_novel_destination",
+                trace_id=trace_id,
+                url=url,
+                domain=novelty.registrable_domain,
+            )
+    except Exception as exc:
+        log.warning("fetch_url_novelty_check_failed", trace_id=trace_id, url=url, error=str(exc))
+
+    text, status = await download_text(url, trace_id=trace_id)
+
+    if not text.strip():
+        log.warning("fetch_url_empty_extraction", trace_id=trace_id, url=url, status=status)
         raise FetchError(
             "no_readable_text",
-            f"Fetched {url} (HTTP {resp.status_code}) but extracted no readable text content.",
+            f"Fetched {url} (HTTP {status}) but extracted no readable text content.",
             retryable=False,
             next_action=(
                 "The page has no readable text (it may need JavaScript). " + _OTHER_SOURCE

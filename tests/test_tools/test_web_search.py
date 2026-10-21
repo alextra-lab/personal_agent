@@ -908,3 +908,37 @@ async def test_web_search_blocked_in_lockdown_mode() -> None:
     assert result.success is False
     assert result.error is not None
     assert "LOCKDOWN" in result.error or "not allowed" in result.error.lower()
+
+
+def test_shape_search_response_is_the_executor_shape() -> None:
+    """FRE-1641: the harness shapes recorded responses with this function (ADR-0158 D1.8)."""
+    from personal_agent.tools.web import build_search_params, shape_search_response
+
+    data = {
+        "results": [
+            {"title": f"T{i}", "url": f"https://e.com/{i}", "content": f"S{i}", "engine": "exa"}
+            for i in range(4)
+        ],
+        "answers": [{"engine": "calc", "answer": "42"}],
+        "unresponsive_engines": [["braveapi", "timeout"]],
+        "suggestions": ["s"],
+        "infoboxes": [],
+    }
+    out = shape_search_response(data, query="q", categories="general", engines=None, max_results=2)
+    assert out["results"] == [
+        {"title": "T0", "url": "https://e.com/0", "snippet": "S0", "engine": "exa", "score": None},
+        {"title": "T1", "url": "https://e.com/1", "snippet": "S1", "engine": "exa", "score": None},
+    ]
+    assert out["result_count"] == 2
+    assert out["answers"] == [{"engine": "calc", "answer": "42"}]
+    assert out["engines_contributed"] == ["exa"]
+    assert out["degraded_retrieval"] is True
+    assert out["retrieval_warning"].startswith("1 engine(s) failed this search (braveapi)")
+    assert build_search_params("q", "general", None, "en", "year") == {
+        "q": "q",
+        "format": "json",
+        "categories": "general",
+        "language": "en",
+        "pageno": "1",
+        "time_range": "year",
+    }

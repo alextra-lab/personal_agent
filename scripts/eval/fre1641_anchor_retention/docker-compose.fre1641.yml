@@ -1,0 +1,53 @@
+# FRE-1641 (ADR-0158 D5.2) — the harness SearXNG instances, one per Exa highlight length.
+#
+# A standalone compose file under its own project name (`-p fre1641`). It defines only these five
+# services, has no `depends_on`, and joins no production network, so an `up` cannot reach the
+# production `cloud-sim-searxng` (the FRE-1517 path). `run.py searxng-up` checks the `--dry-run`
+# plan and refuses any container that is not `fre1641-*`.
+#
+# Each instance mounts its own copy of the production settings.yml with only the exa engine's
+# `content_max_characters` changed. The 2000 instance is the unchanged copy: the full form of D5.3.
+# The copies hold vendor keys: they sit in a 0700 directory and `searxng-down` deletes them.
+#
+# FRE1641_SEARXNG_IMAGE is read from the running production container, so both run one image.
+# Use `uv run python -m scripts.eval.fre1641_anchor_retention.run searxng-up|searxng-down`.
+
+x-searxng: &searxng
+  image: ${FRE1641_SEARXNG_IMAGE:?FRE1641_SEARXNG_IMAGE required}
+  environment:
+    - SEARXNG_BASE_URL=http://localhost:8080
+  mem_limit: 256m
+  cpus: 0.5
+  restart: "no"
+
+services:
+  searxng-500:
+    <<: *searxng
+    ports: ["127.0.0.1:18500:8080"]
+    volumes:
+      - ${FRE1641_ROOT:?FRE1641_ROOT required}/500/settings.yml:/etc/searxng/settings.yml:ro
+      - ${FRE1641_ROOT}/500/limiter.toml:/etc/searxng/limiter.toml:ro
+  searxng-800:
+    <<: *searxng
+    ports: ["127.0.0.1:18501:8080"]
+    volumes:
+      - ${FRE1641_ROOT}/800/settings.yml:/etc/searxng/settings.yml:ro
+      - ${FRE1641_ROOT}/800/limiter.toml:/etc/searxng/limiter.toml:ro
+  searxng-1200:
+    <<: *searxng
+    ports: ["127.0.0.1:18502:8080"]
+    volumes:
+      - ${FRE1641_ROOT}/1200/settings.yml:/etc/searxng/settings.yml:ro
+      - ${FRE1641_ROOT}/1200/limiter.toml:/etc/searxng/limiter.toml:ro
+  searxng-1600:
+    <<: *searxng
+    ports: ["127.0.0.1:18503:8080"]
+    volumes:
+      - ${FRE1641_ROOT}/1600/settings.yml:/etc/searxng/settings.yml:ro
+      - ${FRE1641_ROOT}/1600/limiter.toml:/etc/searxng/limiter.toml:ro
+  searxng-2000:
+    <<: *searxng
+    ports: ["127.0.0.1:18504:8080"]
+    volumes:
+      - ${FRE1641_ROOT}/2000/settings.yml:/etc/searxng/settings.yml:ro
+      - ${FRE1641_ROOT}/2000/limiter.toml:/etc/searxng/limiter.toml:ro

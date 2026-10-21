@@ -939,3 +939,21 @@ documentation. The planner request changes, so ADR-0154 D7 applies again.
   asks for worker-only tools.
 - `query_telemetry` is not on the retrieval table of ADR-0138 D2. Telemetry is partly agent-written,
   so it is not a citable source. This matches the `bash` and `curl` route it replaces for a worker.
+
+### 2026-10-21 — Amendment to D1: the schema goes after the history on OpenAI (FRE-1639)
+
+- **The defect.** On `gpt-6.1-sol` the report-writing call sent `response_format`, which the
+  Responses API takes as `text.format`. OpenAI renders that schema into the prompt ahead of the
+  history. The prefix changed from its first token, so each landing paid full input price. On the
+  owner's turn of 2026-10-20, three landings cost $0.93, 45% of the turn.
+- **The measurement.** Same history and tools: the rounds cached 10,515 of 10,518 input tokens.
+  `tool_choice="none"` alone cached 10,443. `response_format` with `tool_choice="none"` sent 10,819
+  input tokens and cached 0. A larger `max_tokens` and an appended message did not break the cache.
+- **The change.** `LANDING_SCHEMA_BREAKS_PREFIX_CACHE` (`llm_client/models.py`) is `True` for
+  `OPENAI_GPT5` only. For that dialect the landing sends no `response_format`. It appends the
+  schema as text in a last user message, and the same parse and validate backstop scores the reply.
+  The validity table and the other dialects do not change.
+- **The result.** End to end on `gpt-6.1-sol`, 10 landings (5 voluntary stops, 5 forced
+  syntheses) cached 93.9% to 95.8% of their input, and all 10 reports validated.
+- **A known exception.** When the window is nearly full, `_trim_for_landing` stubs older tool
+  results and the prefix changes from the first stub. Fitting the window outranks the cache there.

@@ -536,12 +536,10 @@ class TestFastModes:
 
 
 class TestNoBindingChange:
-    """AC-3: the entries are pickable, not bound (FRE-1633 binds one)."""
+    """AC-3: the entries are pickable, not bound."""
 
     def test_no_role_resolves_to_a_new_key(self) -> None:
-        """Every declared role resolves to a pre-existing key, but one measured binding."""
+        """Every declared role resolves to a pre-existing key."""
         roles = yaml.safe_load(Path("config/model_roles.yaml").read_text())["bindings"]
         resolved = {role: resolve_role_model_key(role) for role in roles}
-        bound = {role: key for role, key in resolved.items() if key in _NEW_KEYS}
-        # FRE-1633: claude_haiku_5_5 passed the captains_log bar in both orders.
-        assert bound == {"captains_log": "claude_haiku_5_5"}, resolved
+        assert not set(resolved.values()) & set(_NEW_KEYS), resolved

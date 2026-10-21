@@ -795,10 +795,8 @@ models:
     output_cost_per_token: 0.00001     # $10/MTok up to 272K; $15 above
 
   claude_haiku_5_5:
-    # Anthropic Claude Haiku 5.5 (FRE-1621, FRE-1625). Replacement candidate for claude_haiku.
-    # FRE-1628 measured it on span_extraction, session_summary and captains_log; none passed its bar
-    # in one order. FRE-1633 judged the captains_log pairs in both orders: 9 of 10 not worse (bar 8),
-    # so it binds captains_log (config/model_roles.yaml).
+    # Anthropic Claude Haiku 5.5 (FRE-1621, FRE-1625). Replacement candidate for claude_haiku; binds no role yet.
+    # FRE-1628 measured it on span_extraction, session_summary and captains_log; none passed its bar.
     # Rejects temperature/top_p/top_k and budget_tokens thinking, so the dialect is adaptive.
     id: "claude-haiku-5-5"
     provider: "anthropic"

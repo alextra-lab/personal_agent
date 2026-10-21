@@ -651,9 +651,8 @@ async def generate_reflection_entry(
             role=ModelRole.CAPTAINS_LOG,
             messages=[{"role": "user", "content": prompt}],
             # FRE-1440: the `temperature=0.3` that stood here was a live latent
-            # defect. captains_log bound claude_sonnet (model_roles.yaml; since
-            # FRE-1633 claude_haiku_5_5), whose dialect is anthropic_adaptive,
-            # and Sonnet 5 rejects every sampler (so does Haiku 5.5)
+            # defect. captains_log binds claude_sonnet (model_roles.yaml), whose
+            # dialect is anthropic_adaptive, and Sonnet 5 rejects every sampler
             # as deprecated — litellm raises for that pair with or without
             # allowed_openai_params (FRE-1430 F5/F6). It went unnoticed because
             # this is the manual fallback beneath reflection's DSPy path. A

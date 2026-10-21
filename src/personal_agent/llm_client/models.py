@@ -294,6 +294,50 @@ def landing_accepts_json_schema(dialect: Dialect | None) -> bool:
     return LANDING_ACCEPTS_JSON_SCHEMA[dialect]
 
 
+#: Whether a dialect's provider renders a ``response_format`` schema into the prompt
+#: ahead of the history (FRE-1639), so a landing call that carries one misses the
+#: prompt cache its rounds built.
+#:
+#: - ``OPENAI_GPT5`` — ``True``, measured 2026-10-21 on ``gpt-6.1-sol`` over the guarded
+#:   Responses route (``response_format`` becomes ``text.format``). Same history, same
+#:   tools: rounds 10,518 input / 10,515 cached; ``tool_choice="none"`` alone 10,443
+#:   cached; ``response_format`` + ``tool_choice="none"`` 10,819 input (+301) / **0**
+#:   cached; the same call repeated 10,744 cached. Each helper's history is its own, so
+#:   every landing is a first call and misses. ``tool_choice``, ``max_tokens`` and an
+#:   appended message did not break the cache.
+#: - ``LLAMACPP_QWEN`` / ``OVH_QWEN`` — ``False`` by construction, not probed: the schema
+#:   becomes a sampling grammar and the prompt tokens do not change.
+#: - ``ANTHROPIC_ADAPTIVE`` / ``ANTHROPIC_BUDGET`` — ``False``: they take the prose
+#:   landing (:data:`LANDING_ACCEPTS_JSON_SCHEMA`), so no schema is sent.
+#:
+#: A ``True`` dialect sends the schema as text in a trailing user message instead, and
+#: the landing's reply is scored by the same parse and validate backstop.
+LANDING_SCHEMA_BREAKS_PREFIX_CACHE: Mapping[Dialect, bool] = {
+    Dialect.LLAMACPP_QWEN: False,
+    Dialect.OVH_QWEN: False,
+    Dialect.OPENAI_GPT5: True,
+    Dialect.ANTHROPIC_ADAPTIVE: False,
+    Dialect.ANTHROPIC_BUDGET: False,
+}
+
+
+def landing_schema_breaks_prefix_cache(dialect: Dialect | None) -> bool:
+    """Whether a ``response_format`` on the landing call loses the rounds' prompt cache.
+
+    Args:
+        dialect: The resolved dialect of the model being dispatched to, or ``None``
+            when the deployment is not catalog-backed.
+
+    Returns:
+        ``True`` when the provider renders the schema into the prompt prefix. An
+        unresolved dialect returns ``False``: it already takes the prose landing
+        (:func:`landing_accepts_json_schema`), so no schema is sent.
+    """
+    if dialect is None:
+        return False
+    return LANDING_SCHEMA_BREAKS_PREFIX_CACHE[dialect]
+
+
 def dialect_accepts(dialect: Dialect, param: str) -> bool:
     """Whether a **call-site** parameter name is in this dialect's vocabulary (ADR-0145 D2/D3a).
 

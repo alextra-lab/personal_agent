@@ -71,6 +71,7 @@ from personal_agent.governance.worker_read_grant import ReadGrant
 from personal_agent.llm_client.models import (
     Dialect,
     landing_accepts_json_schema,
+    landing_schema_breaks_prefix_cache,
     synthesis_retains_tools,
 )
 from personal_agent.llm_client.types import (
@@ -1350,6 +1351,28 @@ def _landing_response_format() -> dict[str, Any]:
     return cast(dict[str, Any], _to_plain_containers(WORKER_REPORT_RESPONSE_FORMAT))
 
 
+def _landing_schema_message() -> dict[str, Any]:
+    """The user message that states the report schema as text (FRE-1639).
+
+    For a dialect whose provider renders ``response_format`` into the prompt ahead of
+    the history (:func:`~personal_agent.llm_client.models.landing_schema_breaks_prefix_cache`),
+    the landing carries the schema here instead, after the history, so the rounds'
+    prompt cache survives. The reply is scored by the same parse and validate backstop.
+
+    Returns:
+        A ``user`` message naming ``worker_report_v1`` and carrying its JSON Schema.
+    """
+    schema = _landing_response_format()["json_schema"]["schema"]
+    return {
+        "role": "user",
+        "content": (
+            f"Reply with one JSON object and nothing else: no code fence, no text before "
+            f"or after it. It must match this JSON Schema ({WORKER_REPORT_SCHEMA_NAME}) "
+            f"exactly:\n{json.dumps(schema, separators=(',', ':'))}"
+        ),
+    }
+
+
 def _parse_and_validate_worker_report(content: str) -> WorkerReport | None:
     """Parse landing content as JSON and validate it against ``worker_report_v1``.
 
@@ -1509,10 +1532,16 @@ async def _write_landing_report(
     report_schema_name = WORKER_TYPES[spec.worker_type].report_schema
     response_format: dict[str, Any] | None = None
     schema_active = False
+    schema_in_suffix = False
     if report_schema_name is not None:
         if landing_accepts_json_schema(dialect):
             schema_active = True
-            response_format = _landing_response_format()
+            # FRE-1639: on a provider that renders the schema ahead of the history,
+            # `response_format` would turn the whole cached prefix into a miss. The
+            # schema goes after the history as text instead.
+            schema_in_suffix = landing_schema_breaks_prefix_cache(dialect)
+            if not schema_in_suffix:
+                response_format = _landing_response_format()
         else:
             # ADR-0150 D1: reports as text this turn. `report`/`report_schema`
             # stay None below — the prose branch never sets them.
@@ -1532,10 +1561,17 @@ async def _write_landing_report(
     # for. `state.messages` itself is never mutated: `landing_messages` is a local
     # trimmed copy used for this one call only, so `_build_ledger` (which reads
     # state.tool_calls, not state.messages) and the capture's `rounds` stay unaffected.
+    # FRE-1639: the schema suffix joins the list BEFORE the trim, so it counts toward the
+    # fit and the trim's no-op return is never `state.messages` itself. A trim that does
+    # stub older tool results changes the prefix from the first stub on; that happens
+    # only near a full window, and fitting the window outranks the cache there.
     landing_max_tokens = _landing_max_tokens(llm_client)
     landing_context_length = _resolve_deployment_context_length(llm_client)
+    landing_input = (
+        [*state.messages, _landing_schema_message()] if schema_in_suffix else state.messages
+    )
     landing_messages, dropped_results, dropped_chars = _trim_for_landing(
-        state.messages, landing_max_tokens, landing_context_length
+        landing_input, landing_max_tokens, landing_context_length
     )
     if dropped_results:
         logger.info(
@@ -1559,6 +1595,7 @@ async def _write_landing_report(
         retains_tools=retains_tools,
         dialect=getattr(dialect, "value", None),
         schema_active=schema_active,
+        schema_in_suffix=schema_in_suffix,
         tool_iterations=state.tool_iterations,
         tool_result_chars_absorbed=state.tool_result_chars_absorbed,
         trace_id=trace_id,
@@ -1681,10 +1718,11 @@ def _score_schema_landing(
     trace_id: str,
     session_id: str | None,
 ) -> _ToolLoopOutcome:
-    """Apply ADR-0150 D1's validity table to a constrained landing response.
+    """Apply ADR-0150 D1's validity table to a schema-backed landing response.
 
-    Called only when the request actually carried ``response_format`` and
-    ``finish_reason`` is not ``"length"`` (the caller checks both first).
+    Called only when the landing asked for the report schema, as ``response_format``
+    or (FRE-1639) as text in a trailing user message, and ``finish_reason`` is not
+    ``"length"`` (the caller checks both first).
 
     Args:
         raw_response: The value returned by ``llm_client.respond``.

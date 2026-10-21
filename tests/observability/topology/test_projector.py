@@ -1346,3 +1346,116 @@ async def test_hybrid_turn_cost_climbs_across_trace_id_renderings(
     )
     assert emitted[-1]["turn_cost_usd"] == pytest.approx(total)
     assert hexed not in proj._by_trace
+
+
+async def test_hybrid_turn_session_cost_includes_the_running_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1648 AC-1: ``session_cost_usd`` climbs mid-turn and never counts the turn twice.
+
+    The PWA status bar shows ``session_cost_usd``, not ``turn_cost_usd``. The session
+    total held only completed turns, so the displayed cost stayed flat until
+    ``turn.completed``. Every emission after the first costed call must carry the prior
+    session total plus the running turn cost, and the final value must equal the prior
+    total plus the turn total.
+    """
+    from uuid import UUID
+
+    import personal_agent.events as events_pkg
+    from personal_agent.llm_client.cost_tracker import _publish_model_call_completed
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    class _Bus:
+        async def publish(self, stream: str, event: Any, **_: Any) -> None:
+            await proj.handle(event)
+
+    monkeypatch.setattr(events_pkg, "get_event_bus", lambda: _Bus())
+
+    session_uuid = UUID("12f8ede2-6f0f-4eaa-99d1-a9fac2f2be43")
+    session = str(session_uuid)
+    hexed = "00ee8f34e7e3da26a9ecd6e8ed42a5ca"
+    trace_uuid = UUID(hexed)
+
+    # A prior turn in the same session.
+    prior = 0.40
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            session_id=session,
+            topology="primary",
+            cost_authoritative_usd=prior,
+        )
+    )
+
+    await proj.handle(TopologyEnteredEvent(trace_id=hexed, session_id=session, topology="hybrid"))
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(prior)
+    seen = len(emitted)
+    running = 0.0
+
+    steps: list[tuple[str, float]] = [
+        ("planner", 0.50),
+        ("helper_a", 0.30),
+        ("helper_b", 0.20),
+        ("synthesis", 0.10),
+    ]
+    for role, cost in steps:
+        await _publish_model_call_completed(
+            trace_id=trace_uuid,
+            session_id=session_uuid,
+            cost_usd=cost,
+            input_tokens=100,
+            output_tokens=50,
+            model_role=role,
+        )
+        running += cost
+        assert len(emitted) > seen
+        for value in emitted[seen:]:
+            assert value["turn_cost_usd"] == pytest.approx(running), role
+            assert value["session_cost_usd"] == pytest.approx(prior + running), role
+        seen = len(emitted)
+
+    total = 1.10
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id=hexed, session_id=session, topology="hybrid", cost_authoritative_usd=total
+        )
+    )
+    # Prior + turn total, once: not prior + 2 x turn.
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(prior + total)
+
+
+async def test_session_cost_running_turn_not_doubled_by_hydrated_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1648: a hydrated partial row for the running trace is replaced, not added.
+
+    Hydration reads ``api_costs`` on first touch. A turn that already billed calls then
+    appears there under its dashed id. The live turn cost must replace that entry in the
+    mid-turn sum, or the running turn counts twice.
+    """
+    from personal_agent.observability.topology.projector import SessionHydration
+
+    emitted = _capture(monkeypatch)
+    dashed = "6306095c-a2b4-4f4b-811e-8a640255e115"
+    hexed = "6306095ca2b44f4b811e8a640255e115"
+
+    async def _source(session_id: str) -> SessionHydration:
+        return SessionHydration(costs={"prior-trace": 0.4, dashed: 0.1})
+
+    proj = TurnObservationProjector(hydration_source=_source)
+    await proj.handle(TopologyEnteredEvent(trace_id=hexed, session_id="s-1", topology="primary"))
+    await proj.handle(
+        ModelCallCompletedEvent(
+            trace_id=hexed,
+            session_id="s-1",
+            cost_usd=0.25,
+            input_tokens=10,
+            output_tokens=5,
+            model_role="primary",
+        )
+    )
+
+    # 0.4 prior + 0.25 live (replaces the 0.1 partial), not 0.75.
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.65)

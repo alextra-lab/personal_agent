@@ -72,6 +72,8 @@ function turnStatusEvent(opts: {
   ctx: number;
   max: number | null;
   tools?: [number, number] | null;
+  /** `session_cost_usd` the server reports; defaults to 0.09. */
+  cost?: number;
 }) {
   return {
     type: 'STATE_DELTA',
@@ -83,8 +85,8 @@ function turnStatusEvent(opts: {
         context_max: opts.max,
         tool_iteration: opts.tools ? opts.tools[0] : null,
         tool_iteration_max: opts.tools ? opts.tools[1] : null,
-        turn_cost_usd: 0.09,
-        session_cost_usd: 0.09,
+        turn_cost_usd: opts.cost ?? 0.09,
+        session_cost_usd: opts.cost ?? 0.09,
         session_context_tokens: opts.ctx,
         compaction_count: 0,
         cache_reset_count: 0,
@@ -271,5 +273,23 @@ describe('StreamingChat status bar (FRE-1538)', () => {
 
     expect(screen.getByText(TOOLS_UNKNOWN)).toBeInTheDocument();
     expect(screen.getByText(CTX_12K)).toBeInTheDocument();
+  });
+});
+
+describe('StreamingChat status bar cost (FRE-1648)', () => {
+  it('shows each higher session cost at once, before DONE', async () => {
+    render(<StreamingChat sessionId="sess-a" />);
+    await send();
+
+    deliver('sess-a', turnStatusEvent({ ctx: 12000, max: 128000, tools: [1, 6], cost: 0.1 }));
+    expect(screen.getByText('$0.10')).toBeInTheDocument();
+
+    // The planner completes and the turn is still running: no DONE has arrived.
+    deliver('sess-a', turnStatusEvent({ ctx: 12000, max: 128000, tools: [2, 6], cost: 0.57 }));
+    expect(screen.getByText('$0.57')).toBeInTheDocument();
+    expect(screen.queryByText('$0.10')).not.toBeInTheDocument();
+
+    deliver('sess-a', turnStatusEvent({ ctx: 12000, max: 128000, tools: [3, 6], cost: 0.87 }));
+    expect(screen.getByText('$0.87')).toBeInTheDocument();
   });
 });

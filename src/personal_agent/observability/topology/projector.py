@@ -158,8 +158,9 @@ class SessionAggregate:
         costs: Idempotent ``{trace_id_str: authoritative_cost_usd}`` map (set, never ``+=``).
             Keyed through :func:`_cost_key` so the dashed ids hydration reads from
             ``api_costs`` and the 32-hex ids live events carry collapse to one entry
-            per trace (FRE-1215). The surfaced ``session_cost_usd`` is
-            ``sum(costs.values())``.
+            per trace (FRE-1215). The surfaced ``session_cost_usd`` is the sum of the
+            entries for the other traces plus the emitting turn's live cost (FRE-1648),
+            so it climbs during a turn.
         context_tokens: Latest real ``context_tokens`` reading for this session; carried
             across turns so the session lane never resets to zero on new user input (D3).
             ``0`` means that no real reading has arrived in this process (FRE-1547): the
@@ -544,7 +545,17 @@ class TurnObservationProjector:
         # ADR-0092 §D2/§D3: session-lane fields (zero when no aggregate yet — shouldn't
         # occur in practice since _ensure_session always precedes _emit).
         sess = self._by_session.get(obs.session_id)
-        session_cost_usd = round(sum(sess.costs.values()), 6) if sess else 0.0
+        # FRE-1648: the PWA status bar shows this field, so it must climb with the turn.
+        # The session total is the other traces' recorded cost plus THIS turn's live cost.
+        # The turn's own ``costs`` entry (a hydrated partial row, or the authoritative
+        # value set at ``turn.completed``) is skipped: ``obs.live_cost_usd`` replaces it,
+        # so the running turn is never counted twice (the FRE-1215 rule).
+        if sess:
+            own_key = _cost_key(obs.trace_id)
+            other_traces_usd = sum(c for key, c in sess.costs.items() if key != own_key)
+            session_cost_usd = round(other_traces_usd + obs.live_cost_usd, 6)
+        else:
+            session_cost_usd = 0.0
         session_context_tokens = sess.context_tokens if sess else 0
         # FRE-1547: the ctx group is a reading only when the session holds a real one. With
         # none, the ceiling goes out absent, so the client (``mergeTurnStatus``) and the

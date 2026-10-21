@@ -46,7 +46,7 @@ class TestRolesResolveToTheAllValue:
             # matrix (see TestUndeclaredRole below for the now-undeclared case).
             ("primary", "qwen3.8-flash-next"),
             ("entity_extraction", "gpt-5.4-mini"),
-            ("captains_log", "claude_sonnet"),
+            ("captains_log", "gpt-6.1-sol"),
             ("insights", "claude_sonnet"),
             ("compressor", "gpt-5.4-mini"),
             ("embedding", "embedding"),

@@ -49,19 +49,19 @@ def test_role_is_declared_in_bindings() -> None:
     assert "session_summary" in matrix["bindings"]
 
 
-def test_resolved_deployment_is_byte_identical_to_captains_log() -> None:
-    """The no-op requirement — the whole point of AC-14.
+def test_resolved_deployment_stays_claude_sonnet_when_captains_log_moves() -> None:
+    """The role keeps its own binding when ``captains_log`` is re-bound.
 
-    A different model here would mean the role's introduction smuggled in the model
-    change ADR-0124 explicitly defers.
+    AC-14 landed the role as a no-op: it resolved to what ``captains_log`` resolved to.
+    That equality held until FRE-1646 bound ``captains_log`` to ``gpt-6.1-sol`` on a
+    measured result for that one role. The summariser has its own measured bar (FRE-1628),
+    so its model stays a separate choice (ADR-0124 D2).
     """
     matrix = _matrix()
 
-    assert (
-        matrix["bindings"]["session_summary"]["deployment"]
-        == matrix["bindings"]["captains_log"]["deployment"]
-    )
-    assert resolve_role_model_key("session_summary") == resolve_role_model_key("captains_log")
+    assert matrix["bindings"]["session_summary"]["deployment"] == "claude_sonnet"
+    assert resolve_role_model_key("session_summary") == "claude_sonnet"
+    assert resolve_role_model_key("captains_log") == "gpt-6.1-sol"
 
 
 def test_role_is_pinned_not_user_selectable() -> None:

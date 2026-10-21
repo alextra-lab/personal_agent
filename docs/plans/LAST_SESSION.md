@@ -1,10 +1,11 @@
 # Last session — master, 2026-10-20 to 2026-10-21 19:40 UTC
 
 ## Doing / discussing  (≤5 sentences)
-Three merged and deployed fixes wait for one normal owner turn in the PWA: FRE-1646 (Sol writes the
-captain's log), FRE-1648 (the cost shown rises during the turn) and FRE-1638 (a cache read counted
-once). The owner was asked for that turn. Postgres `api_costs` held 0 rows after 2026-10-21 10:00Z
-at 19:35Z, so no turn ran yet. Each ticket's AC-3 comment states the exact check.
+The owner reset with two deployed fixes unverified: "Reset anyway" (2026-10-21 ~19:58Z). FRE-1638
+(a cache read counted once) needs any Anthropic call. A background `session_summary` or `insights`
+call is enough, so check `api_costs` first. FRE-1648 (the cost shown rises during the turn) needs a
+turn with a cloud cost. Master's offer: the owner picks Sonnet 5 in the PWA and asks a tool question.
+The 19:46Z owner turn (trace `4b72555a…`) ran fully local, which verified FRE-1646 (now Done) only.
 FRE-1620 (ADR-0157 effort selector) still owes master's adjudication from its ticket comments.
 
 ## What was decided and why

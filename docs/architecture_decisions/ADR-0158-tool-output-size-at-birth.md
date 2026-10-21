@@ -119,13 +119,14 @@ Round 2, in the adr session on 2026-10-21:
 3. **The model is never worse off than today.** If no passage matches, the tool returns today's cut from the top and sets `focus_matched: false`.
 4. **Without `focus`,** the behavior does not change. `max_chars` keeps its range of up to 50,000.
 5. **Telemetry.** The tool logs `focus_present` and `focus_matched` on `fetch_url_completed`. The live adoption criterion (AC-6) reads them.
-6. **Verbatim only.** The tool never rewrites, joins or paraphrases a passage. The text the model reads is the page's own text, so the source stays the author (FRE-1303).
-7. **Description.** The `fetch_url` description explains `focus` with one example call. The researcher prompt does not change. Its rule "Record a claim only when a fetched result states it" (`worker_types.py:279`) stays, and `focus` makes that fetch cheap.
-8. **Out of scope:** PDF and other non-HTML bodies. Today they come back as raw text (`tools/fetch.py:458`). Passage ranking works on any text, but extraction of PDFs is a separate problem.
+6. **No silent truncation (ADR-0125 D5).** A tool result is assembled context, so every shortened form records that it is shortened and by how much. A focused result carries `chars_total`, `chars_ranked`, `passages_total` and the index of each returned passage. The fallback cut from the top carries `truncated` and `chars_total`. A `web_search` snippet is the vendor's own excerpt at the configured length, and the tool does not cut it further.
+7. **Verbatim only.** The tool never rewrites, joins or paraphrases a passage. The text the model reads is the page's own text, so the source stays the author (FRE-1303).
+8. **Description.** The `fetch_url` description explains `focus` with one example call. The researcher prompt does not change. Its rule "Record a claim only when a fetched result states it" (`worker_types.py:279`) stays, and `focus` makes that fetch cheap.
+9. **Out of scope:** PDF and other non-HTML bodies. Today they come back as raw text (`tools/fetch.py:458`). Passage ranking works on any text, but extraction of PDFs is a separate problem.
 
 ### D4 — The passage ranker is chosen by results, from fixed arms
 
-The ADR fixes the arms and the rule. The harness picks the arm (owner decision 7).
+The ADR fixes the arms and the rule. The harness picks the arm and the budget (owner decision 7).
 
 | Arm | Description |
 | -- | -- |
@@ -328,6 +329,7 @@ These are the ADR's own criteria. They are checked on the umbrella ticket FRE-16
 - ADR-0150 D1 — the worker report schema with `findings[].claim` and `source_url`
 - ADR-0149 D6 — tools retained on the landing call to keep the cache
 - ADR-0028 — tool integration tiers (Option B would be Tier 1)
+- ADR-0125 D5 — no silent truncation on an evidence path (D3.6)
 - ADR-0081, ADR-0061 — the primary's context compaction, unchanged
 - FRE-1303 — the authorship-independence rule (Option 1 rejected)
 - FRE-1331, FRE-1339 — Exa highlight mode and SearXNG engine health fields

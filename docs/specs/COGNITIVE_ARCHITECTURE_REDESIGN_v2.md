@@ -815,10 +815,16 @@ the wall-clock win it appeared to. Sub-agents exist for context isolation --
 a digest reaches synthesis, never the full transcript -- a property
 sequential dispatch preserves identically.
 
+FRE-1635 (owner direction 2026-10-20) narrows FRE-1380 to the local model.
+When the sub-agent deployment is a cloud deployment, the tasks run side by
+side, at most the smallest of the task count, the deployment's effective
+ADR-0029 ceiling and the `expansion_budget`. The local model stays serial.
+On both paths the digests reach synthesis in plan order.
+
 - Each sub-agent inference call still integrates with the ADR-0029
-  concurrency controller, but dispatch never issues more than one call at a
-  time, so the controller's `max_concurrency` limit is not a binding
-  constraint for sub-agents.
+  concurrency controller. On the local model, dispatch never issues more than
+  one call at a time. On a cloud deployment, the fan-out is sized at or below
+  the controller's ceiling, so siblings never queue behind each other.
 - Sub-agent tasks respect the same timeout and cancellation mechanisms as
   regular inference calls.
 - If the user sends a new message while sub-agents are running, the new
@@ -835,10 +841,12 @@ The brainstem gains two new signals:
 Brainstem evaluates current GPU utilization, available memory headroom, active
 inference count (concurrency controller), and recent error rate. Produces
 `expansion_budget: int` -- how many sub-agents are safe to run in this
-expansion (dispatched sequentially, not concurrently -- FRE-1380).
+expansion. On the local model they run one at a time (FRE-1380). On a cloud
+deployment the budget also bounds how many run side by side (FRE-1635).
 
 - 0: force SINGLE, system under pressure.
-- 1 or more: sequential sub-agent dispatch, one task at a time.
+- 1 or more: sub-agent dispatch, serial on the local model, at most
+  `expansion_budget` at once on a cloud deployment.
 
 **Contraction Trigger:**
 
@@ -1476,7 +1484,7 @@ concrete tasks during implementation planning.
 | **ADR-0024** (Session Graph) | Unchanged |
 | **ADR-0025** (Memory Recall) | Unchanged. Mechanism moves into gateway Stage 4 |
 | **ADR-0026** (search_memory tool) | Unchanged |
-| **ADR-0029** (Concurrency Control) | Unchanged. Sub-agent dispatch is sequential (FRE-1380), so it does not add concurrent load beyond regular inference |
+| **ADR-0029** (Concurrency Control) | Unchanged. Sub-agent dispatch is sequential on the local model (FRE-1380), so it adds no concurrent local load. On a cloud deployment the fan-out is sized at or below the controller's ceiling (FRE-1635) |
 
 ### 9.3 Phase Structure -- Revised
 

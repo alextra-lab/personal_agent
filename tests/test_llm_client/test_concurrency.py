@@ -119,6 +119,49 @@ class TestPrioritySemaphore:
         assert sem.active == 0
         assert await sem.acquire(InferencePriority.USER_FACING, timeout=0.1) is True
 
+    @pytest.mark.asyncio
+    async def test_a_cancelled_queued_waiter_leaves_the_queue(self) -> None:
+        """FRE-1635: a waiter cancelled in the queue must not keep its place.
+
+        A later release() would otherwise hand the permit to a waiter that is gone, and
+        nobody would release it. A worker's deadline cancels an LLM call that waits for a
+        slot, so this path is live.
+        """
+        sem = _PrioritySemaphore(1)
+        assert await sem.acquire(InferencePriority.USER_FACING) is True
+
+        w = asyncio.create_task(sem.acquire(InferencePriority.USER_FACING))
+        await asyncio.sleep(0)
+        assert len(sem._waiters) == 1
+        w.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await w
+
+        assert sem._waiters == []
+        await sem.release()
+        assert sem.active == 0
+        assert await sem.acquire(InferencePriority.USER_FACING, timeout=0.1) is True
+
+    @pytest.mark.asyncio
+    async def test_a_waiter_cancelled_after_its_grant_passes_the_permit_on(self) -> None:
+        """FRE-1635: release() handed the permit over, then the waiter was cancelled.
+
+        release() pops the slot and sets its event without decrementing ``_active``. The
+        cancelled waiter must return that permit, or ``_active`` stays pinned.
+        """
+        sem = _PrioritySemaphore(1)
+        assert await sem.acquire(InferencePriority.USER_FACING) is True
+
+        w = asyncio.create_task(sem.acquire(InferencePriority.USER_FACING))
+        await asyncio.sleep(0)
+        await sem.release()  # the handoff to w: its slot is popped, _active stays 1
+        w.cancel()  # before w runs again
+        with pytest.raises(asyncio.CancelledError):
+            await w
+
+        assert sem.active == 0
+        assert await sem.acquire(InferencePriority.USER_FACING, timeout=0.1) is True
+
 
 class TestInferenceConcurrencyController:
     """Test the main concurrency controller."""

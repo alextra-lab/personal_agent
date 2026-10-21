@@ -2417,7 +2417,7 @@ async def run_sub_agent(
             onto the per-sub-agent audit record for EVAL provenance (FRE-523).
         max_deadline_seconds: Caller-supplied ceiling on the outer ``wait_for``
             deadline (FRE-1397) — a dispatcher with a shrinking turn budget
-            passes what is actually left so a serialized fan-out cannot
+            passes what is actually left so the fan-out cannot
             outlive the turn. Only ever shrinks ``_effective_hard_deadline``'s
             own result via ``min()``, never extends it. ``None`` (the
             default) leaves that deadline exactly as computed today.

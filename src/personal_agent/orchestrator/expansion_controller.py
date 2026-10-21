@@ -25,7 +25,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -48,7 +48,9 @@ from personal_agent.governance.sub_agent_tools import (
     SubAgentToolGrant,
     evaluate_sub_agent_tool_grant,
 )
+from personal_agent.llm_client.concurrency import get_inference_concurrency_controller
 from personal_agent.llm_client.message_content import get_text_content
+from personal_agent.llm_client.models import Placement
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.observability.route_trace.types import PlannerDecision, PlannerFailureReason
 from personal_agent.observability.topology import report_degradation
@@ -914,12 +916,13 @@ class ExpansionResult:
         planner_cost_usd: USD cost of the LLM planner call (0.0 on the fallback
             planner, which makes no LLM call) (FRE-501).
         dispatch_intervals: Wall-clock window each sub-agent occupied during
-            dispatch, in plan order (FRE-1380 AC-1) — proof the fan-out ran
-            sequentially, from real timestamps rather than the dispatch loop's
-            own structure.
+            dispatch, in plan order (FRE-1380 AC-1) — proof from real
+            timestamps, rather than the dispatch loop's own structure, of how
+            the fan-out ran: one after another on the local model, side by
+            side on a cloud deployment (FRE-1635).
         skipped_tasks: Plan task names never dispatched because the turn's
             remaining budget (FRE-1397) was already exhausted when their turn
-            came up in the serialized loop, or because an earlier worker's
+            came up (in plan order), or because an earlier worker's
             model server failed (FRE-1501). Distinct from a failed
             ``SubAgentResult`` — these never ran at all, so they are reported
             here rather than fabricated into ``sub_agent_results`` (AC-3
@@ -967,6 +970,56 @@ class ExpansionResult:
     def failed_count(self) -> int:
         """Count of sub-agents that failed."""
         return sum(1 for r in self.sub_agent_results if not r.success)
+
+
+@dataclass(frozen=True)
+class _TaskOutcome:
+    """What one plan task left behind in dispatch (FRE-1635).
+
+    Attributes:
+        results: The task's results in dispatch order: the original, then the gap
+            replacement if one ran.
+        intervals: The task's wall-clock windows, the replacement's included.
+        raw: Each ``run_sub_agent`` call's result or the exception it raised.
+        skip_reason: Why the task never ran, or ``None`` when it ran.
+    """
+
+    results: tuple[SubAgentResult, ...] = ()
+    intervals: tuple[SubAgentInterval, ...] = ()
+    raw: tuple[SubAgentResult | Exception, ...] = ()
+    skip_reason: SkipReason | None = None
+
+
+def _fan_out_limit(llm_client: Any, task_count: int, expansion_budget: int | None) -> int:
+    """Return how many helpers may be in flight at once (FRE-1635).
+
+    FRE-1380 serialized the fan-out because the local model server gains about 19%
+    aggregate throughput from concurrency 1 to 3 while per-request throughput falls
+    2.57x. A cloud API has no such limit, so a cloud deployment runs its helpers side by
+    side, up to the inference controller's own ceiling for it. Sized at that ceiling,
+    the fan-out never queues for an inference slot behind its own siblings.
+
+    Args:
+        llm_client: The dispatch client.
+        task_count: Tasks in the plan.
+        expansion_budget: The brainstem's count of safe concurrent sub-agents
+            (FRE-1382), or ``None`` for no bound.
+
+    Returns:
+        1 (serial) for a local deployment, a client with no placement, or a deployment
+        the inference controller does not know. Otherwise the smallest of the task
+        count, the deployment's effective ceiling and the expansion budget, at least 1.
+    """
+    if getattr(llm_client, "placement", None) is not Placement.CLOUD:
+        return 1
+    deployment = getattr(llm_client, "model_key", None)
+    ceiling = get_inference_concurrency_controller().effective_ceiling(
+        deployment if isinstance(deployment, str) else None, default=1
+    )
+    limit = min(task_count, ceiling)
+    if expansion_budget is not None:
+        limit = min(limit, expansion_budget)
+    return max(1, limit)
 
 
 def _compute_sub_agent_grants(
@@ -1222,6 +1275,7 @@ class ExpansionController:
             user_id=user_id,
             authenticated=authenticated,
             turn_started_at=turn_started_at,
+            expansion_budget=expansion_budget,
         )
         result.sub_agent_results = sub_results
 
@@ -1702,21 +1756,27 @@ class ExpansionController:
         user_id: UUID | None = None,
         authenticated: bool = False,
         turn_started_at: datetime | None = None,
+        expansion_budget: int | None = None,
     ) -> list[SubAgentResult]:
-        """Phase 2: Dispatch sub-agents sequentially, one task at a time.
+        """Phase 2: Dispatch sub-agents — serially on the local model, side by side on a cloud one.
 
-        FRE-1380 (owner direction, 2026-09-04): the fan-out is serialized, not
-        concurrent. slm_server's own concurrency benchmark shows aggregate
+        FRE-1380 (owner direction, 2026-09-04): on the local model the fan-out is
+        serialized. slm_server's own concurrency benchmark shows aggregate
         throughput rising only ~19% from concurrency 1→3 while per-request
         throughput falls 2.57x (docs/reference/SLM_SERVER_CLIENT_SEMANTICS.md), so
         concurrent dispatch never bought the wall-clock win it appeared to.
         Sub-agents exist for context isolation — a digest reaches synthesis, never
         the full transcript — and that property holds identically whether tasks
-        run side by side or one after another. Serializing also deletes the
-        FRE-1374 admission race outright: with no concurrency ceiling to queue
-        behind, no task can ever fail to be admitted, so the fan-out's former
-        per-window admission timeout setting and its "not admitted" result no
-        longer exist (AC-3) — the failure mode is gone, not merely rarer.
+        run side by side or one after another.
+
+        FRE-1635 (owner direction, 2026-10-20): a cloud deployment has no such limit,
+        so its tasks run side by side, at most :func:`_fan_out_limit` at a time. Both
+        paths run the same per-task body, and the outcomes merge in plan order, so
+        synthesis reads the digests in plan order whatever the finish order. Neither
+        path has an admission timeout or a "not admitted" result (FRE-1374): a task
+        that waits for a slot either runs with a fresh deadline cap or is skipped and
+        recorded. The fan-out limit never exceeds the deployment's inference ceiling,
+        so siblings never queue for an inference slot behind each other.
 
         Args:
             plan: Validated expansion plan with tasks.
@@ -1729,7 +1789,8 @@ class ExpansionController:
                 to per-sub-agent audit records for EVAL provenance (FRE-523).
             turn_deadline_monotonic: The turn's absolute ``time.monotonic()``
                 deadline (FRE-1397), or ``None`` for no bound (today's
-                behavior). Re-checked fresh before each serialized task: once
+                behavior). Re-checked fresh as each task starts (on the
+                parallel path, once it holds a slot): once
                 the remaining time hits zero, every task still queued is
                 skipped outright — recorded in ``result.skipped_tasks``, never
                 given a fabricated ``SubAgentResult`` (AC-3) — and each
@@ -1741,7 +1802,9 @@ class ExpansionController:
                 ``turn_deadline_monotonic`` by more than one task's own small
                 post-``wait_for`` cleanup overhead (already documented as
                 negligible against these 60-300s budgets elsewhere on
-                ``SubAgentResult.elapsed_generation_ms``).
+                ``SubAgentResult.elapsed_generation_ms``). On the parallel path a
+                task that waits for a slot waits for a sibling whose own cap is
+                within the deadline, so the same bound holds.
             user_id: The turn's owning user UUID (FRE-1467), threaded to every
                 worker call this method makes — the per-task dispatch AND the
                 replacement dispatch below. Both, or a granted tool works on the
@@ -1753,6 +1816,9 @@ class ExpansionController:
                 and, through ``dataclasses.replace``, the replacement spec in
                 ``_maybe_redispatch_on_gap``. Both, or a retried worker loses the
                 date the first attempt had.
+            expansion_budget: The brainstem's count of safe concurrent sub-agents
+                (FRE-1382). Bounds the cloud fan-out (FRE-1635). ``None`` leaves it
+                bounded by the task count and the deployment's ceiling only.
 
         Returns:
             List of SubAgentResult, in dispatch order — one entry per task that
@@ -1766,12 +1832,19 @@ class ExpansionController:
             dropped from this list; see ``result.dispatch_intervals`` for the
             complete per-task record of what raised, and
             ``result.skipped_tasks`` for what never ran.
+
+        Raises:
+            Exception: A task's dispatch raised outside the ``run_sub_agent`` call
+                (a bug, not a worker failure). On the parallel path the lowest plan
+                index wins, and no new task starts once one has raised.
         """
         start_ms = time.monotonic() * 1000
+        fan_out_limit = _fan_out_limit(llm_client, len(plan.tasks), expansion_budget)
 
         logger.info(
             "expansion_dispatch_started",
             task_count=len(plan.tasks),
+            fan_out_limit=fan_out_limit,
             trace_id=trace_id,
         )
 
@@ -1825,117 +1898,141 @@ class ExpansionController:
         dispatch_start = time.monotonic()
 
         # ADR-0123 §1/AC-8 (FRE-934): a sub-agent fan-out is one parent EXPANSION
-        # phase with N sequential SUB_AGENT children, each with its own lifecycle.
-        # Each child span wraps one run_sub_agent call so its end fires as that
-        # agent finishes (or raises); the parent span's end fires only after the
-        # last child's dispatch completes.
+        # phase with N SUB_AGENT children, each with its own lifecycle. Each child
+        # span wraps one run_sub_agent call so its end fires as that agent finishes
+        # (or raises); the parent span's end fires only after the last child's
+        # dispatch completes. On the cloud path the children overlap (FRE-1635).
         from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
         from personal_agent.transport.events import Phase  # noqa: PLC0415
-
-        raw_results: list[SubAgentResult | Exception] = []
-        intervals: list[SubAgentInterval] = []
-        sub_results: list[SubAgentResult] = []
 
         # FRE-1501: set once any worker's model server answers 5xx after the
         # client's retries. On 2026-09-12 one worker's 500 was followed within
         # 20 seconds by 503 for every caller, and the next sibling started into it.
         # No timed wait: the health probe cannot see a dead backend (FRE-1474).
+        # FRE-1635: a one-way latch. A sibling's replacement that ends later must
+        # never clear it.
         origin_failed = False
+
+        async def _dispatch_task(
+            task: PlanTask, spec: SubAgentSpec, parent_id: str | None
+        ) -> _TaskOutcome:
+            nonlocal origin_failed
+            if origin_failed:
+                logger.warning(
+                    "sub_agent_dispatch_skipped_origin_error",
+                    task_name=task.name,
+                    trace_id=trace_id,
+                )
+                return _TaskOutcome(skip_reason="origin_error")
+
+            # FRE-1397: recomputed fresh for every task rather than divided
+            # up-front across the plan — most sub-agents finish well under
+            # their own ceiling, so a live "whatever's left" check wastes
+            # none of that headroom on tasks earlier in the loop.
+            worker_max_deadline: float | None = None
+            if turn_deadline_monotonic is not None:
+                remaining = turn_deadline_monotonic - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(
+                        "sub_agent_dispatch_skipped_turn_budget_exhausted",
+                        task_name=task.name,
+                        trace_id=trace_id,
+                    )
+                    return _TaskOutcome(skip_reason="turn_budget")
+                worker_max_deadline = remaining
+
+            intervals: list[SubAgentInterval] = []
+            interval_start = time.monotonic()
+            sub_result: SubAgentResult | None = None
+            raw: SubAgentResult | Exception
+            try:
+                async with phase_span(
+                    session_id=session_id,
+                    phase=Phase.SUB_AGENT,
+                    detail=spec.task[:80],
+                    parent_id=parent_id,
+                ):
+                    result.dispatched_count += 1
+                    sub_result = await run_sub_agent(
+                        spec=spec,
+                        llm_client=llm_client,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        eval_mode=eval_mode,
+                        max_deadline_seconds=worker_max_deadline,
+                        user_id=user_id,
+                        authenticated=authenticated,
+                    )
+            except Exception as exc:
+                raw = exc
+            else:
+                raw = sub_result
+            finally:
+                intervals.append(SubAgentInterval(task.name, interval_start, time.monotonic()))
+
+            if sub_result is None:
+                return _TaskOutcome(intervals=tuple(intervals), raw=(raw,))
+
+            if sub_result.stop_reason == "origin_error":
+                # Checked before the gap replacement below, which would
+                # otherwise send a replacement worker into the same origin.
+                origin_failed = True
+                return _TaskOutcome(results=(sub_result,), intervals=tuple(intervals), raw=(raw,))
+
+            # FRE-1389 AC-5: single-shot replacement dispatch when this
+            # result stated a tool gap — the controller (not the
+            # sub-agent) decides whether to grant more, acting per task
+            # so the replacement is always paired with the right task even
+            # if another task in this same plan raised a raw exception. On
+            # the parallel path it runs inside its task's slot.
+            replacement = await self._maybe_redispatch_on_gap(
+                task=task,
+                spec=spec,
+                original_result=sub_result,
+                llm_client=llm_client,
+                trace_id=trace_id,
+                session_id=session_id,
+                eval_mode=eval_mode,
+                parent_span_id=parent_id,
+                intervals=intervals,
+                result=result,
+                turn_deadline_monotonic=turn_deadline_monotonic,
+                user_id=user_id,
+                authenticated=authenticated,
+            )
+            results: tuple[SubAgentResult, ...] = (sub_result,)
+            if replacement is not None:
+                results = (sub_result, replacement)
+                if replacement.stop_reason == "origin_error":
+                    origin_failed = True
+            return _TaskOutcome(results=results, intervals=tuple(intervals), raw=(raw,))
 
         async with phase_span(
             session_id=session_id,
             phase=Phase.EXPANSION,
             detail=f"{len(specs)} sub-agents",
         ) as _parent_id:
-            for task, spec in zip(plan.tasks, specs, strict=True):
-                if origin_failed:
-                    logger.warning(
-                        "sub_agent_dispatch_skipped_origin_error",
-                        task_name=task.name,
-                        trace_id=trace_id,
-                    )
-                    result.skipped_tasks.append(task.name)
-                    result.skip_reason = "origin_error"
-                    continue
-
-                # FRE-1397: recomputed fresh for every task rather than divided
-                # up-front across the plan — most sub-agents finish well under
-                # their own ceiling, so a live "whatever's left" check wastes
-                # none of that headroom on tasks earlier in the loop.
-                worker_max_deadline: float | None = None
-                if turn_deadline_monotonic is not None:
-                    remaining = turn_deadline_monotonic - time.monotonic()
-                    if remaining <= 0:
-                        logger.warning(
-                            "sub_agent_dispatch_skipped_turn_budget_exhausted",
-                            task_name=task.name,
-                            trace_id=trace_id,
-                        )
-                        result.skipped_tasks.append(task.name)
-                        result.skip_reason = "turn_budget"
-                        continue
-                    worker_max_deadline = remaining
-
-                interval_start = time.monotonic()
-                sub_result: SubAgentResult | None = None
-                try:
-                    async with phase_span(
-                        session_id=session_id,
-                        phase=Phase.SUB_AGENT,
-                        detail=spec.task[:80],
-                        parent_id=_parent_id,
-                    ):
-                        result.dispatched_count += 1
-                        sub_result = await run_sub_agent(
-                            spec=spec,
-                            llm_client=llm_client,
-                            trace_id=trace_id,
-                            session_id=session_id,
-                            eval_mode=eval_mode,
-                            max_deadline_seconds=worker_max_deadline,
-                            user_id=user_id,
-                            authenticated=authenticated,
-                        )
-                except Exception as exc:
-                    raw_results.append(exc)
-                else:
-                    raw_results.append(sub_result)
-                finally:
-                    intervals.append(SubAgentInterval(task.name, interval_start, time.monotonic()))
-
-                if sub_result is None:
-                    continue
-                sub_results.append(sub_result)
-
-                if sub_result.stop_reason == "origin_error":
-                    # Checked before the gap replacement below, which would
-                    # otherwise send a replacement worker into the same origin.
-                    origin_failed = True
-                    continue
-
-                # FRE-1389 AC-5: single-shot replacement dispatch when this
-                # result stated a tool gap — the controller (not the
-                # sub-agent) decides whether to grant more, acting in-loop so
-                # the replacement is always paired with the right task even
-                # if an earlier task in this same plan raised a raw exception.
-                replacement = await self._maybe_redispatch_on_gap(
-                    task=task,
-                    spec=spec,
-                    original_result=sub_result,
-                    llm_client=llm_client,
-                    trace_id=trace_id,
-                    session_id=session_id,
-                    eval_mode=eval_mode,
-                    parent_span_id=_parent_id,
-                    intervals=intervals,
-                    result=result,
-                    turn_deadline_monotonic=turn_deadline_monotonic,
-                    user_id=user_id,
-                    authenticated=authenticated,
+            if fan_out_limit == 1:
+                outcomes = [
+                    await _dispatch_task(task, spec, _parent_id)
+                    for task, spec in zip(plan.tasks, specs, strict=True)
+                ]
+            else:
+                outcomes = await self._dispatch_side_by_side(
+                    plan.tasks, specs, _parent_id, fan_out_limit, _dispatch_task
                 )
-                if replacement is not None:
-                    sub_results.append(replacement)
-                    origin_failed = replacement.stop_reason == "origin_error"
+
+        # Merged in plan order, whatever the finish order (FRE-1635).
+        raw_results: list[SubAgentResult | Exception] = []
+        intervals: list[SubAgentInterval] = []
+        sub_results: list[SubAgentResult] = []
+        for task, outcome in zip(plan.tasks, outcomes, strict=True):
+            raw_results.extend(outcome.raw)
+            intervals.extend(outcome.intervals)
+            sub_results.extend(outcome.results)
+            if outcome.skip_reason is not None:
+                result.skipped_tasks.append(task.name)
+                result.skip_reason = outcome.skip_reason
 
         result.dispatch_intervals = intervals
         logger.info(
@@ -1982,6 +2079,58 @@ class ExpansionController:
             )
 
         return sub_results
+
+    async def _dispatch_side_by_side(
+        self,
+        tasks: Sequence[PlanTask],
+        specs: Sequence[SubAgentSpec],
+        parent_id: str | None,
+        limit: int,
+        dispatch_task: Callable[[PlanTask, SubAgentSpec, str | None], Awaitable[_TaskOutcome]],
+    ) -> list[_TaskOutcome]:
+        """Run every task's dispatch with at most ``limit`` in flight (FRE-1635).
+
+        No child raises: an exception from a task's dispatch is recorded by plan index,
+        and a task that gets a slot after one has raised starts nothing. Siblings already
+        in flight run to their end under their own deadline caps. Only then is the
+        lowest-index exception raised, so the caller sees one original exception, as on
+        the serial path, never an ``ExceptionGroup``. The task group cancels children
+        only when the turn itself is cancelled.
+
+        Args:
+            tasks: The plan's tasks, in plan order.
+            specs: One spec per task, in the same order.
+            parent_id: The EXPANSION phase span id, for each child's SUB_AGENT span.
+            limit: Most tasks in flight at once.
+            dispatch_task: The per-task body that ``_run_dispatch`` defines.
+
+        Returns:
+            One outcome per task, in plan order.
+
+        Raises:
+            Exception: The lowest-index exception that a task's dispatch raised.
+        """
+        slots = asyncio.Semaphore(limit)
+        fatal: dict[int, Exception] = {}
+
+        async def _admitted(index: int, task: PlanTask, spec: SubAgentSpec) -> _TaskOutcome:
+            async with slots:
+                if fatal:
+                    return _TaskOutcome()
+                try:
+                    return await dispatch_task(task, spec, parent_id)
+                except Exception as exc:
+                    fatal[index] = exc
+                    return _TaskOutcome()
+
+        async with asyncio.TaskGroup() as group:
+            children = [
+                group.create_task(_admitted(index, task, spec))
+                for index, (task, spec) in enumerate(zip(tasks, specs, strict=True))
+            ]
+        if fatal:
+            raise fatal[min(fatal)]
+        return [child.result() for child in children]
 
     async def _maybe_redispatch_on_gap(
         self,
@@ -2032,7 +2181,7 @@ class ExpansionController:
                 the replacement when it is handed to ``run_sub_agent`` (ADR-0151 D1).
             turn_deadline_monotonic: The turn's absolute deadline (FRE-1397),
                 threaded from ``_run_dispatch`` — this is still one more
-                serialized ``run_sub_agent`` call inside the same dispatch
+                ``run_sub_agent`` call inside the same dispatch
                 phase, so it must respect the same bound or the aggregate
                 guarantee would have a hole exactly here.
             user_id: The turn's owning user UUID (FRE-1467), threaded exactly as

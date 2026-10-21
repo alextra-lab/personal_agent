@@ -30,6 +30,38 @@ DEFAULT_LANGUAGE = str(inspect.signature(web_search_executor).parameters["langua
 _TRACE_ID = "fre1641-harness"
 
 
+#: The keyed vendor engines. One of them unresponsive means the replay did not see what production
+#: sees: on 2026-10-21 run r1, both ran out of credit mid-run and SearXNG suspended them.
+VENDOR_ENGINES = frozenset({"exa", "braveapi"})
+
+
+class VendorRefused(Exception):
+    """A vendor engine refused access (for example, no credit left). The replay stops."""
+
+
+def vendor_failures(data: object) -> list[str]:
+    """Return ``"engine: reason"`` for each keyed vendor engine that SearXNG reports unresponsive.
+
+    Args:
+        data: A raw SearXNG response, or ``None``.
+
+    Returns:
+        The failures. Empty for a healthy response.
+    """
+    if not isinstance(data, dict):
+        return []
+    return [
+        f"{e[0]}: {e[1]}"
+        for e in as_list(data.get("unresponsive_engines"))
+        if isinstance(e, list) and len(e) >= 2 and e[0] in VENDOR_ENGINES
+    ]
+
+
+def usable(row: Mapping[str, object]) -> bool:
+    """Whether a recorded search row holds a response with every vendor engine healthy."""
+    return isinstance(row.get("data"), dict) and not vendor_failures(row["data"])
+
+
 def as_list(value: object) -> list[object]:
     """Return ``value`` if it is a JSON list, else an empty list."""
     return value if isinstance(value, list) else []
@@ -176,22 +208,35 @@ async def record_search(
 
     Returns:
         The number of rows written.
+
+    Raises:
+        VendorRefused: If a vendor engine refused access. The rows recorded so far are kept, and a
+            rerun replays only the rows that are not usable.
     """
     written = 0
     lock = asyncio.Lock()
+    # A vendor that refuses access (no credit) stops every instance, so no call is wasted.
+    stop = asyncio.Event()
+    reasons: set[str] = set()
     async with httpx.AsyncClient() as client:
 
         async def instance(length: int, port: int) -> int:
             out = run_dir / f"search_{length}.jsonl.gz"
-            done = {str(r["replay_id"]) for r in read_jsonl_gz(out) if r.get("data") is not None}
+            done = {str(r["replay_id"]) for r in read_jsonl_gz(out) if usable(r)}
             todo = [r for r in replays if str(r["replay_id"]) not in done]
             sem = asyncio.Semaphore(per_instance)
 
             async def one(replay: Mapping[str, object]) -> None:
                 async with sem:
+                    if stop.is_set():
+                        return
                     row = await search_one(client, port, replay)
                 async with lock:
                     _append(out, row)
+                refused = [f for f in vendor_failures(row["data"]) if "access denied" in f]
+                if refused:
+                    stop.set()
+                    reasons.update(refused)
                 n = (
                     len((row["data"] or {}).get("results") or [])
                     if isinstance(row["data"], dict)
@@ -204,4 +249,6 @@ async def record_search(
 
         counts = await asyncio.gather(*(instance(length, port) for length, port in PORTS.items()))
         written = sum(counts)
+    if stop.is_set():
+        raise VendorRefused(f"stopped after a vendor refused access: {sorted(reasons)}")
     return written

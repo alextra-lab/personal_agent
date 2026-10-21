@@ -271,3 +271,26 @@ def test_an_unranked_page_blocks_the_selection(tmp_path: Path) -> None:
     doc = analyze(tmp_path, usd_per_token=5e-8)
     assert doc["fetch"]["pages_unranked"] == 1
     assert "no ranking" in str(doc["blocked"])
+
+
+def test_a_vendor_engine_down_makes_a_replay_unusable() -> None:
+    """Run r1: Exa and Brave ran out of credit mid-run; those replays must not be scored."""
+    from scripts.eval.fre1641_anchor_retention.record import usable, vendor_failures
+
+    down = {"results": [], "unresponsive_engines": [["exa", "Suspended: access denied"]]}
+    assert vendor_failures(down) == ["exa: Suspended: access denied"]
+    assert not usable({"data": down})
+    assert usable(
+        {"data": {"results": [], "unresponsive_engines": [["pubmed", "too many requests"]]}}
+    )
+    assert not usable({"data": None})
+
+
+def test_an_unusable_replay_blocks_the_selection(tmp_path: Path) -> None:
+    _write_run(tmp_path)
+    path = tmp_path / "search_800.jsonl.gz"
+    data = {"results": [], "unresponsive_engines": [["braveapi", "Suspended: access denied"]]}
+    _gz(path, [{"replay_id": "q0000", "data": data, "error": None, "attempts": 1}])
+    doc = analyze(tmp_path, usd_per_token=5e-8)
+    assert doc["search"]["replay_errors"][800] == 1
+    assert "without a usable response" in str(doc["blocked"])

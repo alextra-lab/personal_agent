@@ -128,7 +128,11 @@ def test_read_turn_reads_a_skill_load_on_a_production_mapped_index() -> None:
                 "model": "m",
             },
             {"trace_id": "t1", "event_type": "read_skill_invoked", "skill_name": "model-latency"},
-            {"trace_id": "t2", "event_type": "read_skill_invoked", "skill_name": "graph-inspection"},
+            {
+                "trace_id": "t2",
+                "event_type": "read_skill_invoked",
+                "skill_name": "graph-inspection",
+            },
         ]
     )
     turn = g2.read_turn(es, "t1", settle_s=0)  # type: ignore[arg-type]

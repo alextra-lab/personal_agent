@@ -110,7 +110,7 @@ def markdown(doc: Mapping[str, object]) -> str:
         f"chars: {float(str(search['full_form_median_chars'])):,.0f}.",
         f"- Seeded negative, 100-character snippets: {_pct(search['negative_100'])} (must be "  # type: ignore[arg-type]
         "below 95%).",
-        f"- Replays: {search['replays']}; failed per instance: {search['replay_errors']}.",
+        f"- Replays: {search['replays']}; unusable per instance (a vendor engine down, or no data): {search['replay_errors']}.",
         "",
         *_search_rows(search["cells"]),  # type: ignore[arg-type]
         "",

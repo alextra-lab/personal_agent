@@ -18,7 +18,7 @@ from pathlib import Path
 
 from scripts.eval.fre1641_anchor_retention.anchors import Anchor, TextIndex
 from scripts.eval.fre1641_anchor_retention.rank import ARMS
-from scripts.eval.fre1641_anchor_retention.record import as_list, read_jsonl_gz
+from scripts.eval.fre1641_anchor_retention.record import as_list, read_jsonl_gz, usable
 from scripts.eval.fre1641_anchor_retention.score import (
     MIN_CLASS_SUPPORTED,
     MIN_FETCH_SUPPORTED,
@@ -294,7 +294,8 @@ class _Search:
         for length in PORTS:
             rows = read_jsonl_gz(run_dir / f"search_{length}.jsonl.gz")
             self.attempts[length] = sum(int(str(r.get("attempts", 1))) for r in rows)
-            ok = {str(r["replay_id"]): r["data"] for r in rows if isinstance(r.get("data"), dict)}
+            # A rerun appends rows; a usable row wins over an earlier unusable one.
+            ok = {str(r["replay_id"]): r["data"] for r in rows if usable(r)}
             self.data[length] = ok  # type: ignore[assignment]
             self.errors[length] = len(self.replays) - len(ok)
         self._shaped: dict[tuple[int, int, str], dict[str, object]] = {}
@@ -415,6 +416,13 @@ def analyze(run_dir: Path, usd_per_token: float) -> dict[str, object]:
         )
     neg_f: Retention = fetch["negative_200"]  # type: ignore[assignment]
     neg_s: Retention = search["negative_100"]  # type: ignore[assignment]
+    replay_errors: dict[int, int] = search["replay_errors"]  # type: ignore[assignment]
+    unusable = {k: v for k, v in replay_errors.items() if v}
+    if unusable:
+        blocked.append(
+            f"replays without a usable response (vendor engine down or no data) per instance: "
+            f"{unusable}"
+        )
     if int(str(fetch["pages_unranked"])) > 0:
         blocked.append(
             f"{fetch['pages_unranked']} supported pages have no ranking: run `rank` again"

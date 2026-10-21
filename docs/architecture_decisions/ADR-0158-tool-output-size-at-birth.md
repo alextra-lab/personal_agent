@@ -1,6 +1,6 @@
 # ADR-0158: Tool Output Size at Birth — Search Returns Pointers, `fetch_url` Returns Focused Passages
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-21
 **Deciders:** Owner (design decisions, 2026-10-20 and 2026-10-21), adr session (analysis and authoring)
 **Tags:** context, tools, web_search, fetch_url, cost, prompt-cache, sub-agents
@@ -344,6 +344,10 @@ These are the ADR's own criteria. They are checked on the umbrella ticket FRE-16
 ---
 
 ## Status Updates
+
+### 2026-10-21 - Accepted
+**Changed By:** adr session, at master's gate request on PR #1324
+**Reason:** The owner decided every item in two rounds on 2026-10-21, both recorded on FRE-1636. Round 1, relayed by master: "1 yes, 2 both, 3 separate, 4 reject" (frame, scope, FRE-1639 split, Option C rejected). Round 2, direct: SearXNG Option A with Option B as the fallback, search pointers with `fetch_url` `focus` for depth, the ranker chosen by results, the 95% bar, no feature flag, and "go". Codex review closed in 3 rounds with no blocking finding open. AC-1 to AC-7 stay open until FRE-1641 to FRE-1643 deploy.
 
 ### 2026-10-21 - Proposed
 **Changed By:** adr session

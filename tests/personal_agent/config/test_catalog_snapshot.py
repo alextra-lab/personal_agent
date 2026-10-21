@@ -260,6 +260,14 @@ local ``.env`` endpoints. Two explicit deltas, both additions of the catalog ent
 or existing price changed** (AC-3). Its modes are not in this golden, which resolves bound
 roles only; ``test_fre1631_sonnet_5_5_entry.py`` asserts them.
 
+**Rebaselined a fifteenth time, deliberately, for FRE-1646.** Hand-edited, not regenerated, for
+the same reasons as the fourteenth. One explicit delta: **the ``binding|captains_log`` cell
+moves from ``claude_sonnet`` to ``gpt-6.1-sol``** (key, id, provider, context length, timeout,
+concurrency, price, dialect and modes of the resolved definition). The owner chose the binding on
+the FRE-1640 study, F4: Sol was not worse than Sonnet on 20 of 20 blind pairs (bar 16). **No other
+role binding, resolved key, existing concurrency cell or price changed.**
+``test_fre1646_captains_log_binding.py`` asserts the binding.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

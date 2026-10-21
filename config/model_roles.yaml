@@ -97,7 +97,12 @@ bindings:
   # FRE-1633 (2026-10-21): judged in both orders, claude_haiku_5_5 was not worse on 9 of 10 pairs
   # and gpt-6-luna on 5 of 10. The owner decides any swap ("I decide if we swap"), and asked for
   # a fuller study first (stronger candidates, an Opus + Sol judge panel), so this stays Sonnet.
-  captains_log:       { deployment: claude_sonnet }
+  # FRE-1646 (2026-10-21): the owner chose gpt-6.1-sol ("Sol") on the FRE-1640 study, F4
+  # (docs/research/2026-10-21-fre-1640-cloud-role-model-matrix.md). 20 real turns, blind pairs
+  # against claude_sonnet, judged by Opus 5.5 and gpt-6.1-sol in both orders: not worse on 20
+  # of 20 (bar 16), at $2.45 against $7.95 per 30 days. The conversation text that the
+  # reflection reads now goes to OpenAI. Rollback: set this back to claude_sonnet.
+  captains_log:       { deployment: gpt-6.1-sol }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads the whole
   # conversation — the user's own text and the assistant's responses — so this
   # binding IS the egress decision, and it is the owner's to make once in

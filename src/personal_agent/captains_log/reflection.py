@@ -522,7 +522,7 @@ async def generate_reflection_entry(
 
             # FRE-989 finding eight: DSPy calls its provider directly, so this
             # channel reserved nothing and wrote no api_costs row — reflection
-            # on `captains_log` (bound to claude_sonnet, cloud) was spending
+            # on `captains_log` (cloud: claude_sonnet then, gpt-6.1-sol since FRE-1646) was spending
             # invisibly, on the very role behind the FRE-987 incident.
             #
             # Only the CLOUD placement is gated: a local DSPy call is free and
@@ -651,13 +651,14 @@ async def generate_reflection_entry(
             role=ModelRole.CAPTAINS_LOG,
             messages=[{"role": "user", "content": prompt}],
             # FRE-1440: the `temperature=0.3` that stood here was a live latent
-            # defect. captains_log binds claude_sonnet (model_roles.yaml), whose
+            # defect. captains_log bound claude_sonnet (model_roles.yaml), whose
             # dialect is anthropic_adaptive, and Sonnet 5 rejects every sampler
             # as deprecated — litellm raises for that pair with or without
             # allowed_openai_params (FRE-1430 F5/F6). It went unnoticed because
             # this is the manual fallback beneath reflection's DSPy path. A
             # sampler now lives only in a mode on the model (ADR-0145 D3a), and
             # anthropic_adaptive accepts none, so there is nothing to declare.
+            # Since FRE-1646 the binding is gpt-6.1-sol, which takes no sampler either.
             max_tokens=3000,  # Increased for reasoning models with thinking process
             # FRE-1007: the hard-coded reasoning_effort="medium" that stood here is
             # removed — the depth is declared on the deployment now, so this fallback

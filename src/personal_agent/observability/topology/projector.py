@@ -34,6 +34,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 import structlog
 
@@ -77,14 +78,33 @@ _ROLLING_EMIT_SECONDS = 300.0
 _HEALTH_INDEX_PREFIX = "agent-monitors-projector-health"
 
 
+def _canonical_trace_id(trace_id: str) -> str:
+    """Return a trace id in the 32-hex rendering the turn seam publishes (FRE-1637).
+
+    The turn seam publishes the OTel span's 32-hex id, while ``record_api_call`` publishes
+    ``str(UUID)`` — dashed. Keyed raw, the projector tracked one turn as two traces and the
+    cost events landed on a non-turn observation that never emits.
+
+    Args:
+        trace_id: A trace id in either rendering, or any other string.
+
+    Returns:
+        The 32-hex form when ``trace_id`` parses as a UUID, else ``trace_id`` unchanged.
+    """
+    try:
+        return UUID(trace_id).hex
+    except ValueError:
+        return trace_id
+
+
 def _cost_key(trace_id: str) -> str:
     """Canonical key for the session cost map, insensitive to trace-id rendering.
 
     The two writers into ``SessionAggregate.costs`` disagree on rendering, and the map
     is summed rather than deduplicated — so an un-normalised key double-counts a turn
     (FRE-1215). Hydration reads ``api_costs`` and keys on ``str(uuid)``, which Postgres
-    renders dashed; live completion keys on the raw event string, which is the OTel
-    span's 32-hex form. Both name the same trace.
+    renders dashed; live completion keys on the event's trace id, which ``handle``
+    canonicalizes to the OTel span's 32-hex form. Both name the same trace.
 
     Args:
         trace_id: A trace id in either rendering.
@@ -351,6 +371,12 @@ class TurnObservationProjector:
         name = type(event).__name__
         self._events_by_type[name] = self._events_by_type.get(name, 0) + 1
         self._maybe_emit_rolling()
+
+        # FRE-1637: one trace, one key — whatever rendering the publisher used.
+        if event.trace_id is not None:
+            canonical = _canonical_trace_id(event.trace_id)
+            if canonical != event.trace_id:
+                event = event.model_copy(update={"trace_id": canonical})
 
         # FRE-1401: a straggler for a trace already popped at completion. Per-trace
         # events are dropped outright — letting ``_observation`` recreate one would

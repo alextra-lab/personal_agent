@@ -277,12 +277,15 @@ async def cmd_rank(run_dir: Path) -> None:
                     fh.write(json.dumps(row) + "\n")
             print(f"rank {row.get('passages_total')} {row['error'] or ''} {url[:90]}", flush=True)
 
-        await asyncio.gather(*(one(t, u) for t, u in todo))
-    state = _state(run_dir)
-    sessions = list(state.get("rank_sessions") or [])  # type: ignore[call-overload]
-    sessions.append({"calls": voyage.calls, "tokens": voyage.tokens, "pages": len(todo)})
-    state["rank_sessions"] = sessions
-    _save_state(run_dir, state)
+        try:
+            await asyncio.gather(*(one(t, u) for t, u in todo))
+        finally:
+            # The billed tokens are saved even when the step fails, so the cost line stays whole.
+            state = _state(run_dir)
+            sessions = list(state.get("rank_sessions") or [])  # type: ignore[call-overload]
+            sessions.append({"calls": voyage.calls, "tokens": voyage.tokens, "pages": len(todo)})
+            state["rank_sessions"] = sessions
+            _save_state(run_dir, state)
     print(f"ranked {len(todo)} pages: {voyage.calls} Voyage calls, {voyage.tokens} tokens")
 
 

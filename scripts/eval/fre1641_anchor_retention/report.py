@@ -192,7 +192,9 @@ class _Fetch:
         chosen = select_within_budget(order, self.pages(url), budget)
         focus = str(self.helpers[task]["spec_task"])
         if focus_matched(focus, chosen):
-            return FetchForm([(p.start, p.end) for p in chosen], sum(len(p.text) for p in chosen), False)
+            return FetchForm(
+                [(p.start, p.end) for p in chosen], sum(len(p.text) for p in chosen), False
+            )
         cut = min(len(self.texts[url]), _DEFAULT_MAX_CHARS)
         return FetchForm([(0, cut)], cut, True)
 
@@ -413,6 +415,10 @@ def analyze(run_dir: Path, usd_per_token: float) -> dict[str, object]:
         )
     neg_f: Retention = fetch["negative_200"]  # type: ignore[assignment]
     neg_s: Retention = search["negative_100"]  # type: ignore[assignment]
+    if int(str(fetch["pages_unranked"])) > 0:
+        blocked.append(
+            f"{fetch['pages_unranked']} supported pages have no ranking: run `rank` again"
+        )
     if neg_f.passes or neg_s.passes:
         blocked.append("a seeded negative reached the bar (D5.8): the instrument is broken")
     full_f: Retention = fetch["full_form"]  # type: ignore[assignment]

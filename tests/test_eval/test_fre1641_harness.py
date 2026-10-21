@@ -262,3 +262,12 @@ def test_a_scored_run_keeps_the_full_form_and_fails_the_negatives(tmp_path: Path
     assert doc["search_selection"].cell is None
     assert doc["fetch_selection"].cell is None
     assert doc["code"]["commit"]  # AC-7
+
+
+def test_an_unranked_page_blocks_the_selection(tmp_path: Path) -> None:
+    """A page that the rank step missed must not count as a silent loss."""
+    _write_run(tmp_path)
+    (tmp_path / "ranks.jsonl.gz").unlink()
+    doc = analyze(tmp_path, usd_per_token=5e-8)
+    assert doc["fetch"]["pages_unranked"] == 1
+    assert "no ranking" in str(doc["blocked"])

@@ -93,7 +93,8 @@ async def record_fetch(urls: Iterable[str], out: Path, concurrency: int = 8) -> 
     Returns:
         The number of rows written.
     """
-    done = {str(r["url"]) for r in read_jsonl_gz(out)}
+    # A failed fetch is tried again on a rerun; the later row wins when the report reads them.
+    done = {str(r["url"]) for r in read_jsonl_gz(out) if not r.get("error")}
     todo = sorted(set(urls) - done)
     sem = asyncio.Semaphore(concurrency)
     lock = asyncio.Lock()

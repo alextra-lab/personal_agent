@@ -530,9 +530,7 @@ async def fetch_url_executor(
     text, status = await download_text(url, trace_id=trace_id)
 
     if not text.strip():
-        log.warning(
-            "fetch_url_empty_extraction", trace_id=trace_id, url=url, status=status
-        )
+        log.warning("fetch_url_empty_extraction", trace_id=trace_id, url=url, status=status)
         raise FetchError(
             "no_readable_text",
             f"Fetched {url} (HTTP {status}) but extracted no readable text content.",

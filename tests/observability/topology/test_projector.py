@@ -1268,3 +1268,81 @@ async def test_a_new_session_without_a_real_reading_emits_absent_ctx(
 
     assert emitted[-1]["context_max"] is None
     assert emitted[-1]["tool_iteration"] == 1
+
+
+async def test_hybrid_turn_cost_climbs_across_trace_id_renderings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1637 AC-1/AC-2: a HYBRID turn's meter climbs mid-turn, then reconciles.
+
+    The turn seam publishes the OTel span's 32-hex trace id, while
+    ``record_api_call`` publishes ``str(UUID)`` — dashed. The projector keyed them as two
+    traces, so every cost landed on a non-turn observation that never emitted and the
+    meter stayed at 0 until ``turn.completed`` (``model_calls_received`` was 0 on every
+    health doc). This drives the real publisher into the projector and asserts the
+    outcome: every emission after the first costed call carries the running sum.
+    """
+    from uuid import UUID
+
+    import personal_agent.events as events_pkg
+    from personal_agent.llm_client.cost_tracker import _publish_model_call_completed
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    class _Bus:
+        async def publish(self, stream: str, event: Any, **_: Any) -> None:
+            await proj.handle(event)
+
+    monkeypatch.setattr(events_pkg, "get_event_bus", lambda: _Bus())
+
+    hexed = "00ee8f34e7e3da26a9ecd6e8ed42a5ca"
+    trace_uuid = UUID(hexed)
+    session_uuid = UUID("12f8ede2-6f0f-4eaa-99d1-a9fac2f2be43")
+    session = str(session_uuid)
+
+    async def _costed_call(cost: float, role: str) -> None:
+        await _publish_model_call_completed(
+            trace_id=trace_uuid,
+            session_id=session_uuid,
+            cost_usd=cost,
+            input_tokens=100,
+            output_tokens=50,
+            model_role=role,
+        )
+
+    await proj.handle(TopologyEnteredEvent(trace_id=hexed, session_id=session, topology="hybrid"))
+    seen = len(emitted)
+    running = 0.0
+
+    # planner, two helpers, synthesis — with helper progress ticks between them.
+    steps: list[tuple[str, float]] = [
+        ("planner", 0.50),
+        ("helper_a", 0.30),
+        ("helper_b", 0.20),
+        ("synthesis", 0.10),
+    ]
+    for role, cost in steps:
+        await _costed_call(cost, role)
+        running += cost
+        if role.startswith("helper"):
+            await proj.handle(
+                SubAgentProgressEvent(
+                    trace_id=hexed, session_id=session, task_id=role, iteration=1, iteration_max=5
+                )
+            )
+        # Every emission since the last step — cost event or progress tick — carries the sum.
+        assert len(emitted) > seen
+        for value in emitted[seen:]:
+            assert value["turn_cost_usd"] == pytest.approx(running), role
+            assert value["trace_id"] == hexed
+        seen = len(emitted)
+
+    total = 1.10
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id=hexed, session_id=session, topology="hybrid", cost_authoritative_usd=total
+        )
+    )
+    assert emitted[-1]["turn_cost_usd"] == pytest.approx(total)
+    assert hexed not in proj._by_trace

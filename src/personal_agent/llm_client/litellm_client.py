@@ -1134,6 +1134,34 @@ class LiteLLMClient:
 
         return provider_reasoning_support(self.model_id, self.provider) is True
 
+    @property
+    def supports_forced_tool_use(self) -> bool:
+        """Whether this deployment accepts a forced ``tool_choice`` (FRE-1647).
+
+        Read from litellm's own map, the same record that makes litellm refuse a
+        forced choice client-side. Measured offline on litellm 1.106.0:
+        ``claude-sonnet-5-5`` is ``False``, ``claude-haiku-5-5`` is ``True``, and
+        ``claude-sonnet-5`` has no key.
+
+        Returns:
+            ``False`` only when this provider's map entry holds
+            ``supports_forced_tool_use: False``. An unknown model, a missing key, or a
+            bare-id entry that belongs to another provider returns ``True``, which keeps
+            the forced request that every deployment sent before FRE-1647.
+        """
+        import litellm  # noqa: PLC0415
+
+        table: dict[str, Any] = getattr(litellm, "model_cost", {})
+        # litellm keys Anthropic models by the bare id only (see lookup_model_pricing).
+        # The bare-id fallback is accepted only for this client's own provider, so a
+        # local or OVH model whose id equals another provider's cannot inherit its flag.
+        entry: dict[str, Any] = table.get(self._litellm_model) or {}
+        if not entry:
+            bare = table.get(self.model_id) or {}
+            if bare.get("litellm_provider") == self.provider:
+                entry = bare
+        return entry.get("supports_forced_tool_use") is not False
+
     def _apply_undeclared_effort(
         self,
         litellm_kwargs: dict[str, Any],

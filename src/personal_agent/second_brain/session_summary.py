@@ -615,6 +615,7 @@ async def _call_model(
         )
         if provider is not None:
             from personal_agent.llm_client.factory import get_llm_client_for_key  # noqa: PLC0415
+            from personal_agent.llm_client.forced_tool import can_force_tool  # noqa: PLC0415
 
             # The contract is applied on the cloud path only. The local path forwards tools
             # to llama-server, but that behaviour is outside FRE-996's evidence and the
@@ -624,6 +625,12 @@ async def _call_model(
             # budget_role stays captains_log: ADR-0124 D2 defers splitting cost
             # attribution as a separate, smaller decision.
             cloud_client = get_llm_client_for_key(role_name, budget_role="captains_log")
+            # FRE-1647: a deployment that refuses a forced choice gets `auto` with the same
+            # tool. A prose reply then reaches parse_model_output through _reply_payload's
+            # text fallback, and the parser rejects it as schema_invalid.
+            tool_choice: str | dict[str, Any] | None = None
+            if use_contract:
+                tool_choice = digest_tool_choice() if can_force_tool(cloud_client) else "auto"
             response: dict[str, Any] = await cloud_client.respond(
                 role=ModelRole.SESSION_SUMMARY,
                 messages=[{"role": "user", "content": prompt}],
@@ -633,7 +640,7 @@ async def _call_model(
                 # synthetic forced tool AND overwrites the provider's stop_reason with
                 # "stop", which would hide truncation entirely. See session_digest_wire.
                 tools=[digest_tool()] if use_contract else None,
-                tool_choice=digest_tool_choice() if use_contract else None,
+                tool_choice=tool_choice,
                 # Without this the client falls back to the deployment's max_tokens
                 # (128k) for an artifact bounded at 400 rendered tokens, and the cost gate
                 # reserves against that ceiling on every call — exhausting a shared

@@ -832,8 +832,9 @@ models:
     # primary only; binds no role, and `claude_sonnet` (Sonnet 5) keeps every bound role. The
     # API returns 400 on a forced `tool_choice`, and litellm 1.106.0 refuses it client-side
     # (supports_forced_tool_use: false). The span_extraction, entailment and session_summary
-    # producers force a tool, so they must not bind this entry (FRE-1621 note §6.2). The
-    # primary and the sub-agents send `auto` or `none` only. Rejects temperature/top_p/top_k,
+    # producers force a tool elsewhere; on this entry they send `auto` with the same single
+    # tool (FRE-1647). A binding to them is the owner's decision, after FRE-1647's
+    # measurements. The primary and the sub-agents send `auto` or `none` only. Rejects temperature/top_p/top_k,
     # so the dialect is adaptive. Effort levels are recalibrated from Sonnet 5: the Sonnet 5
     # measurements (ADR-0145 D6) do not transfer, and no effort sweep exists for this entry.
     id: "claude-sonnet-5-5"

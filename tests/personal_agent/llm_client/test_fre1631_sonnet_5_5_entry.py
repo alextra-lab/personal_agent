@@ -103,7 +103,7 @@ class TestModesOnTheWire:
     def test_a_forced_tool_choice_is_refused_before_it_leaves_the_client(
         self, tool_choice: Any
     ) -> None:
-        """Documents the limit: the reason no forced-tool producer may bind this entry."""
+        """Documents the limit: the producers send ``auto`` on this entry (FRE-1647)."""
         with pytest.raises(UnsupportedParamsError, match="does not support forced tool use"):
             _build_request("high", tool_choice)
 

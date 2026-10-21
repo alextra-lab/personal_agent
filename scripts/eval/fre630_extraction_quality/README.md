@@ -58,6 +58,12 @@ headline) · stance/claim emission recall. Metrics return `None` on a vacuous
 denominator so they are excluded from aggregates rather than averaged as a misleading
 `1.0`.
 
+## Metric changes — do not compare figures across them
+
+| Date | Change | Effect on old figures |
+|------|--------|-----------------------|
+| 2026-10-21 (FRE-1644) | `empty_fallback_rate` counts an empty extraction only when the gold case expects at least one **entity** (`metrics.extraction_empty(n, gold_expects_entity)`). Before, it used `GoldCase.has_positive_label`, which is also true for claim-only cases, so a correct entity-less output on `claim-*` cases counted as a fallback. | Any run scored before this date has an `empty_fallback_rate` that is too high for a model that answers claim-only cases correctly (a precise model, not a broken one). Re-score the stored JSON offline: a sample is empty under the new rule only if it was empty under the old rule **and** its case has `expect_entities`. No other metric changed. |
+
 ## Run protocol
 
 The extractor always routes through LiteLLM + the ADR-0065 cost gate, so the harness

@@ -206,10 +206,41 @@ def test_forbidden_edge_type_rate() -> None:
 
 
 def test_extraction_empty() -> None:
-    """Empty extraction against a positive-labeled case is flagged; otherwise not."""
-    assert extraction_empty(0, gold_has_positive=True) is True
-    assert extraction_empty(0, gold_has_positive=False) is False
-    assert extraction_empty(3, gold_has_positive=True) is False
+    """Empty extraction against an entity-expecting case is flagged; otherwise not."""
+    assert extraction_empty(0, gold_expects_entity=True) is True
+    assert extraction_empty(0, gold_expects_entity=False) is False
+    assert extraction_empty(3, gold_expects_entity=True) is False
+
+
+def _claim_only_case() -> GoldCase:
+    return GoldCase(
+        case_id="claim-relocation",
+        tags=("claim", "personal"),
+        source_user="We're moving to a coastal town next month.",
+        source_assistant="Coastal relocations often mean adjusting to humidity.",
+        expect_entities=(),
+        expect_relationships=(),
+        expect_claims=(
+            GoldClaim(facet="current_city", content_gist="the user is relocating to a coast"),
+        ),
+    )
+
+
+def test_claim_only_output_is_not_an_empty_fallback() -> None:
+    """FRE-1644 AC-1: a gold case that expects claims and no entities scores an
+    entity-less output with the expected claim as a correct answer, not a fallback.
+    """
+    case = _claim_only_case()
+    result = {"entities": [], "claims": [{"facet": "current_city"}]}
+    score = score_case(case, result, entity_type_field="v2")
+    assert score.is_empty_fallback is False
+    assert score.claim_emission_recall == 1.0
+
+
+def test_entity_expected_but_none_returned_is_an_empty_fallback() -> None:
+    """FRE-1644 AC-1: a gold case that expects an entity and an empty output is a fallback."""
+    score = score_case(_full_case(), {}, entity_type_field="v2")
+    assert score.is_empty_fallback is True
 
 
 def test_dedup_convergence() -> None:

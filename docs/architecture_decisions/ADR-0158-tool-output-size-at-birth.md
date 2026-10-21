@@ -345,6 +345,10 @@ These are the ADR's own criteria. They are checked on the umbrella ticket FRE-16
 
 ## Status Updates
 
+### 2026-10-21 - Implementation stopped after T1
+**Changed By:** master, on the owner's decision
+**Reason:** The owner: "cancel the rest of adr-0158. I don't think it is necessary." T1 (FRE-1641) shipped the harness and the passage module and found no search cell and no fetch cell at the 95% bar. The post-mortem on FRE-1641 found that today's fetch (the first 10,000 characters) keeps 97.5% of the supported facts, more than any focused cell (best: R2 × 4,000 at 92.2%), and that most of the search drift is real vendor variation. Meanwhile FRE-1639 (the landing-call cache, D7) and FRE-1635 (parallel cloud helpers) cut the owner's research turn from about 10 min and $2.08 to 3 min 53 s and $0.87, and the owner accepted that performance. T2 (FRE-1642) and T3 (FRE-1643) are canceled. D2, D3, D4 and D6 are not implemented. `src/personal_agent/tools/passages.py` stays only because the FRE-1641 harness imports it. AC-1 to AC-7 of this ADR are not adjudicated.
+
 ### 2026-10-21 - Accepted
 **Changed By:** adr session, at master's gate request on PR #1324
 **Reason:** The owner decided every item in two rounds on 2026-10-21, both recorded on FRE-1636. Round 1, relayed by master: "1 yes, 2 both, 3 separate, 4 reject" (frame, scope, FRE-1639 split, Option C rejected). Round 2, direct: SearXNG Option A with Option B as the fallback, search pointers with `fetch_url` `focus` for depth, the ranker chosen by results, the 95% bar, no feature flag, and "go". Codex review closed in 3 rounds with no blocking finding open. AC-1 to AC-7 stay open until FRE-1641 to FRE-1643 deploy.

@@ -17,6 +17,9 @@ Four steps, each a subcommand:
     # 3. Label each blind pair with every judge, 4. score against the preregistered bar.
     uv run python -m scripts.eval.fre1628_captains_log_ab.harness judge --candidate luna
     uv run python -m scripts.eval.fre1628_captains_log_ab.harness score --candidate luna
+    # FRE-1633: judge the same pairs again with A and B exchanged, then score all 6 votes.
+    uv run python -m scripts.eval.fre1628_captains_log_ab.harness judge --candidate luna --swapped
+    uv run python -m scripts.eval.fre1628_captains_log_ab.harness score --candidate luna --combined
 
 ``generate`` changes no configuration: it patches ``resolve_role_model_key`` for the
 ``captains_log`` role only, and it feeds the stored events through
@@ -27,6 +30,13 @@ candidate not worse (a judge majority for it, or no majority for Sonnet) on at l
 10 pairs. All output lands in ``telemetry/evaluation/fre1630-captains-log-ab/``, which is
 gitignored: the inputs hold real conversation text. Labels and report are per candidate:
 ``labels-<candidate>.jsonl`` and ``report-<candidate>.json``.
+
+FRE-1633: one order cannot separate a quality gap from position bias (the judges chose slot A
+in 23 of 30 Luna labels). ``judge --swapped`` reads the slot the candidate held in the stored
+labels and exchanges it, writing ``labels-<candidate>-swapped.jsonl``. ``score --combined``
+pools the 3 stored and the 3 swapped votes of each pair: the pair is worse for the candidate
+only when Sonnet holds a majority of the valid votes (4 of 6 with no error label); a tie vote
+counts for neither side. The bar stays 8 of 10 pairs not worse.
 """
 
 from __future__ import annotations
@@ -98,8 +108,8 @@ def _outputs_path(arm: str) -> Path:
     return OUT_DIR / f"outputs-{arm}.jsonl"
 
 
-def _labels_path(candidate: str) -> Path:
-    return OUT_DIR / f"labels-{candidate}.jsonl"
+def _labels_path(candidate: str, swapped: bool = False) -> Path:
+    return OUT_DIR / f"labels-{candidate}{'-swapped' if swapped else ''}.jsonl"
 
 
 # ── 1. pull ───────────────────────────────────────────────────────────────────
@@ -319,14 +329,30 @@ def _parse_verdict(text: str) -> tuple[str, str] | None:
     return (verdict, str(data.get("reason", ""))) if verdict in ("A", "B", "tie") else None
 
 
-async def judge(candidate: str) -> int:
+def _stored_slot(label: Mapping[str, object], candidate: str) -> bool:
+    """Whether the candidate held slot A in a stored label.
+
+    The FRE-1628 Haiku labels name the key ``haiku_is_a``; later labels name it
+    ``candidate_is_a``.
+    """
+    key = "candidate_is_a" if "candidate_is_a" in label else f"{candidate}_is_a"
+    return bool(label[key])
+
+
+async def judge(candidate: str, swapped: bool = False, limit: int | None = None) -> int:
     """Label every blind Sonnet/candidate pair with every judge of the FRE-1598 panel.
 
     Args:
         candidate: The arm that Sonnet is compared with (``haiku`` or ``luna``).
+        swapped: Exchange A and B against the stored labels of the candidate (FRE-1633):
+            the slot that the candidate held there goes to Sonnet, and the reverse.
+        limit: Judge only the first N pairs (the preflight trace).
 
     Returns:
         Process exit code.
+
+    Raises:
+        ValueError: ``swapped`` is set and a pair has no stored label to exchange.
     """
     from scripts.eval.fre1598.judge import JUDGES  # noqa: PLC0415
 
@@ -346,6 +372,16 @@ async def judge(candidate: str) -> int:
         arm: {str(o["rid"]): o for o in _read_jsonl(_outputs_path(arm))}
         for arm in ("sonnet", candidate)
     }
+    stored_slot = (
+        {str(x["rid"]): _stored_slot(x, candidate) for x in _read_jsonl(_labels_path(candidate))}
+        if swapped
+        else {}
+    )
+    pairs = list(inputs.items())[:limit]
+    if swapped:
+        missing = [rid for rid, _ in pairs if rid not in stored_slot]
+        if missing:
+            raise ValueError(f"no stored label to exchange for {missing}")
     run_date = datetime.now(timezone.utc).date().isoformat()
     system = JUDGE_SYSTEM.format(run_date=run_date)
     rng = random.Random(BLIND_SEED)
@@ -357,10 +393,10 @@ async def judge(candidate: str) -> int:
     rows: list[JSONDict] = []
     try:
         calls = {key: _judge_call(key) for key in JUDGES.values()}
-        for rid, row in inputs.items():
+        for rid, row in pairs:
             if rid not in outputs["sonnet"] or rid not in outputs[candidate]:
                 continue
-            candidate_is_a = rng.random() < 0.5
+            candidate_is_a = not stored_slot[rid] if swapped else rng.random() < 0.5
             first, second = (candidate, "sonnet") if candidate_is_a else ("sonnet", candidate)
             user = JUDGE_USER.format(
                 user_message=str(row["user_message"])[:400],
@@ -401,22 +437,26 @@ async def judge(candidate: str) -> int:
     finally:
         await gate.disconnect()
         set_default_gate(None)
-    _write_jsonl(_labels_path(candidate), rows)
+    _write_jsonl(_labels_path(candidate, swapped), rows)
     return 0
 
 
 # ── 4. score ──────────────────────────────────────────────────────────────────
 
 
-def score(candidate: str) -> int:
+def score(candidate: str, combined: bool = False) -> int:
     """Apply the preregistered bar and write ``report-<candidate>.json``.
 
     Args:
         candidate: The arm that Sonnet is compared with (``haiku`` or ``luna``).
+        combined: Pool the stored and the swapped labels (FRE-1633) and write
+            ``report-<candidate>-combined.json`` instead.
 
     Returns:
         0 when the candidate passes the bar, else 1.
     """
+    if combined:
+        return _score_combined(candidate)
     labels = _read_jsonl(_labels_path(candidate))
     cand_out = {str(o["rid"]): o for o in _read_jsonl(_outputs_path(candidate))}
     sonnet_out = {str(o["rid"]): o for o in _read_jsonl(_outputs_path("sonnet"))}
@@ -463,6 +503,67 @@ def score(candidate: str) -> int:
     return 0 if passed else 1
 
 
+def _combined_verdict(winners: Sequence[str]) -> str:
+    """Pool the votes of one pair over both orders (FRE-1633).
+
+    Args:
+        winners: The winner of each label: a model name, ``tie`` or ``error``.
+
+    Returns:
+        ``worse`` when Sonnet holds a majority of the valid votes, else ``not_worse``.
+        An ``error`` label is left out of the count. A tie vote counts for neither side.
+    """
+    valid = [w for w in winners if w != "error"]
+    return "worse" if 2 * valid.count("sonnet") > len(valid) else "not_worse"
+
+
+def _slot_a_rate(labels: Sequence[Mapping[str, object]]) -> float | None:
+    parsed = [x for x in labels if x.get("verdict") in ("A", "B", "tie")]
+    return sum(1 for x in parsed if x["verdict"] == "A") / len(parsed) if parsed else None
+
+
+def _score_combined(candidate: str) -> int:
+    """Apply the FRE-1633 rule to both orders and write ``report-<candidate>-combined.json``."""
+    stored = _read_jsonl(_labels_path(candidate))
+    swapped = _read_jsonl(_labels_path(candidate, swapped=True))
+    cand_out = {str(o["rid"]): o for o in _read_jsonl(_outputs_path(candidate))}
+    sonnet_out = {str(o["rid"]): o for o in _read_jsonl(_outputs_path("sonnet"))}
+    winners: dict[str, list[str]] = {}
+    for label in (*stored, *swapped):
+        winners.setdefault(str(label["rid"]), []).append(str(label["winner"]))
+    table = {
+        rid: {w: ws.count(w) for w in (candidate, "sonnet", "tie", "error")}
+        for rid, ws in sorted(winners.items())
+    }
+    per_pair = {rid: _combined_verdict(ws) for rid, ws in sorted(winners.items())}
+    not_worse = sum(1 for v in per_pair.values() if v == "not_worse")
+    off_path = sorted(rid for rid, o in cand_out.items() if o["path"] != "dspy")
+    in_both = {str(x["rid"]) for x in stored} & {str(x["rid"]) for x in swapped}
+    complete = in_both == {str(r["rid"]) for r in _read_jsonl(INPUTS)}
+    passed = complete and not off_path and not_worse >= BAR_NOT_WORSE
+    report: JSONDict = {
+        "pairs": len(per_pair),
+        "complete": complete,
+        "per_pair": per_pair,
+        "table": table,
+        "slot_a_rate": {"stored": _slot_a_rate(stored), "swapped": _slot_a_rate(swapped)},
+        f"{candidate}_not_worse": not_worse,
+        "bar_not_worse": BAR_NOT_WORSE,
+        f"{candidate}_off_dspy_path": off_path,
+        "sonnet_off_dspy_path": sorted(rid for rid, o in sonnet_out.items() if o["path"] != "dspy"),
+        "cost_usd": {
+            "judges_stored": sum(float(cast(float, x["cost_usd"])) for x in stored),
+            "judges_swapped": sum(float(cast(float, x["cost_usd"])) for x in swapped),
+        },
+        "passed": passed,
+    }
+    (OUT_DIR / f"report-{candidate}-combined.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8"
+    )
+    print(json.dumps(report, indent=2))  # noqa: T201
+    return 0 if passed else 1
+
+
 def main() -> int:
     """Parse arguments and run one step.
 
@@ -477,16 +578,20 @@ def main() -> int:
     p_gen = sub.add_parser("generate")
     p_gen.add_argument("--arm", choices=sorted(ARMS), required=True)
     p_gen.add_argument("--limit", type=int, default=None)
-    for step in ("judge", "score"):
-        sub.add_parser(step).add_argument("--candidate", choices=CANDIDATES, default="haiku")
+    p_judge, p_score = sub.add_parser("judge"), sub.add_parser("score")
+    for p in (p_judge, p_score):
+        p.add_argument("--candidate", choices=CANDIDATES, default="haiku")
+    p_judge.add_argument("--swapped", action="store_true")
+    p_judge.add_argument("--limit", type=int, default=None)
+    p_score.add_argument("--combined", action="store_true")
     args = parser.parse_args()
     if args.step == "pull":
         return pull(args.count, args.days)
     if args.step == "generate":
         return asyncio.run(generate(args.arm, args.limit))
     if args.step == "judge":
-        return asyncio.run(judge(args.candidate))
-    return score(args.candidate)
+        return asyncio.run(judge(args.candidate, args.swapped, args.limit))
+    return score(args.candidate, args.combined)
 
 
 if __name__ == "__main__":

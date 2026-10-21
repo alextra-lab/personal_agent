@@ -94,7 +94,11 @@ bindings:
   # the bar was 8 (same harness, --candidate luna). All 10 Luna reflections stayed on the DSPy
   # path, but only 2 of 10 proposed a change (Sonnet and Haiku: 10 of 10). The judges chose
   # slot A in 23 of 30 labels, so the order of the pair confounds this result.
-  captains_log:       { deployment: claude_sonnet }
+  # FRE-1633 (2026-10-20): the same pairs judged again with A and B exchanged, 6 votes per
+  # pair (Sonnet at 4 or more of 6 counts against the candidate), bar 8 of 10 not worse.
+  # claude_haiku_5_5 was not worse on 9 of 10 and passed, so it is bound here. gpt-6-luna
+  # was not worse on 5 of 10 and failed. The DSPy path held for 10 of 10 reflections of both.
+  captains_log:       { deployment: claude_haiku_5_5 }
   # ADR-0124 D2 (FRE-947): pinned — no `open: true`. The summariser reads the whole
   # conversation — the user's own text and the assistant's responses — so this
   # binding IS the egress decision, and it is the owner's to make once in

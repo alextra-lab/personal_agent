@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+
 from personal_agent.grounding.entailment import (
     ENTAILMENT_TOOL_NAME,
     MAX_OUTPUT_TOKENS,
@@ -22,6 +24,7 @@ from personal_agent.grounding.entailment import (
     parse_judgement,
     select_excerpt,
 )
+from personal_agent.telemetry.trace import SystemTraceContext
 
 
 class _StubClient:
@@ -181,3 +184,79 @@ def test_judge_sends_only_the_selected_excerpt() -> None:
     body = client.calls[0]["messages"][0]["content"]
     assert "the reactor is safe" in body
     assert len(body) < 1000
+
+
+# ── a deployment that cannot force a tool (FRE-1647) ────────────────────────────
+
+
+_PINNED_TRACE = SystemTraceContext.new("entailment")
+"""One trace for every request a FRE-1647 test compares."""
+
+
+class _UnforcedStub(_StubClient):
+    """A client whose deployment cannot force a tool (litellm's map flags Sonnet 5.5)."""
+
+    supports_forced_tool_use = False
+
+
+class _ForcedStub(_StubClient):
+    """A client whose deployment says, explicitly, that it can force a tool."""
+
+    supports_forced_tool_use = True
+
+
+def _request_for(client: _StubClient, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The kwargs one judgement dispatches, with the per-call nonce and trace pinned."""
+    import personal_agent.grounding.entailment as entailment
+
+    monkeypatch.setattr(entailment, "new_delimiter_nonce", lambda: "0000aaaa")
+    asyncio.run(
+        ModelEntailmentJudge(client, timeout_s=1.0).judge(
+            "a claim", "a passage", trace_ctx=_PINNED_TRACE
+        )
+    )
+    (call,) = client.calls
+    return call
+
+
+def test_an_unforceable_deployment_gets_auto_with_the_single_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: Sonnet 5.5 refuses a forced choice, so the judge asks for ``auto``."""
+    call = _request_for(_UnforcedStub('{"verdict": "supported"}'), monkeypatch)
+    assert call["tool_choice"] == "auto"
+    assert call["tools"] == [entailment_tool()]
+
+
+def test_a_forceable_deployment_keeps_todays_exact_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: *fails if* any forced-capable request changes.
+
+    The control is a client that does not state the capability at all, which is every
+    client before FRE-1647; the whole request is compared, not one key.
+    """
+    control = _request_for(_StubClient('{"verdict": "supported"}'), monkeypatch)
+    forced = _request_for(_ForcedStub('{"verdict": "supported"}'), monkeypatch)
+    assert forced == control
+    assert forced["tool_choice"] == {
+        "type": "function",
+        "function": {"name": ENTAILMENT_TOOL_NAME},
+    }
+    assert forced["tools"] == [entailment_tool()]
+
+
+def test_a_reply_with_no_tool_call_under_auto_is_undecided() -> None:
+    """AC-2: with ``auto`` the judge may answer in prose; that reply decides nothing."""
+
+    class _ProseClient(_UnforcedStub):
+        async def respond(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {"content": "The passage supports the claim.", "tool_calls": []}
+
+    client = _ProseClient(None)
+    judgement = asyncio.run(
+        ModelEntailmentJudge(client, timeout_s=1.0).judge("a claim", "a passage")
+    )
+    assert client.calls[0]["tool_choice"] == "auto"
+    assert judgement.verdict is EntailmentVerdict.UNDECIDED

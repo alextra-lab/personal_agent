@@ -461,3 +461,81 @@ async def test_a_long_reply_is_tiled_completely() -> None:
     assert len(extraction.non_exempt) == len(sentences)
     assert extraction.non_exempt[-1].end == len(output)
     assert _truncation_events(captured) == []
+
+
+# ── a deployment that cannot force a tool (FRE-1647) ────────────────────────────
+
+
+_PINNED_TRACE = SystemTraceContext.new("span_extraction")
+"""One trace for every request a FRE-1647 test compares."""
+
+
+class _UnforcedStub(StubClient):
+    """A client whose deployment cannot force a tool (litellm's map flags Sonnet 5.5)."""
+
+    supports_forced_tool_use = False
+
+
+class _ForcedStub(StubClient):
+    """A client whose deployment says, explicitly, that it can force a tool."""
+
+    supports_forced_tool_use = True
+
+
+async def _request_for(client: StubClient, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The kwargs one extraction dispatches, with the per-call nonce and trace pinned."""
+    import personal_agent.grounding.extractor as extractor
+
+    monkeypatch.setattr(extractor, "new_delimiter_nonce", lambda: "0000aaaa")
+    await ModelSpanExtractor(client).extract("Ortiz is Spanish.", trace_ctx=_PINNED_TRACE)
+    (call,) = client.calls
+    return call
+
+
+@pytest.mark.asyncio
+async def test_an_unforceable_deployment_gets_auto_with_the_single_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: Sonnet 5.5 refuses a forced choice, so the producer asks for ``auto``."""
+    call = await _request_for(_UnforcedStub([]), monkeypatch)
+    assert call["tool_choice"] == "auto"
+    assert call["tools"] == [span_tool()]
+
+
+@pytest.mark.asyncio
+async def test_a_forceable_deployment_keeps_todays_exact_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: *fails if* any forced-capable request changes.
+
+    The control is a client that does not state the capability at all, which is every
+    client before FRE-1647; the whole request is compared, not one key.
+    """
+    control = await _request_for(StubClient([]), monkeypatch)
+    forced = await _request_for(_ForcedStub([]), monkeypatch)
+    assert forced == control
+    assert forced["tool_choice"] == {"type": "function", "function": {"name": SPAN_TOOL_NAME}}
+    assert forced["tools"] == [span_tool()]
+
+
+@pytest.mark.asyncio
+async def test_a_prose_reply_under_auto_fails_closed() -> None:
+    """AC-2: with ``auto`` the model may answer in prose; that reply decides nothing.
+
+    The existing path applies: no tool payload, so every classifiable part becomes a
+    non-exempt coverage gap.
+    """
+
+    class _ProseClient(_UnforcedStub):
+        async def respond(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {"content": "Ortiz is Spanish: claim_exempt.", "tool_calls": []}
+
+    output = "Ortiz is a Spanish brand sold in most French supermarkets."
+    client = _ProseClient([])
+    extraction = await ModelSpanExtractor(client).extract(output)
+    assert client.calls[0]["tool_choice"] == "auto"
+    assert extraction.degraded
+    assert extraction.non_exempt
+    assert all(s.reason is NonExemptReason.COVERAGE_GAP for s in extraction.non_exempt)
+    assert not any(s.label is SpanLabel.CLAIM_EXEMPT for s in extraction.spans)

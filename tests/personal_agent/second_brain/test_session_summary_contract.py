@@ -319,3 +319,113 @@ async def test_local_path_passes_session_summary_role(monkeypatch: pytest.Monkey
     await ss._call_model("prompt", role_name="qwen3.6-35b-thinking", provider=None, session_id="s")
 
     assert fake_client.kwargs["role"] is ModelRole.SESSION_SUMMARY
+
+
+# ── a deployment that cannot force a tool (FRE-1647) ──────────────────────────
+
+
+class _UnforcedClient(_FakeClient):
+    """A client whose deployment cannot force a tool (litellm's map flags Sonnet 5.5)."""
+
+    supports_forced_tool_use = False
+
+
+class _ForcedClient(_FakeClient):
+    """A client whose deployment says, explicitly, that it can force a tool."""
+
+    supports_forced_tool_use = True
+
+
+async def _request_for(client: _FakeClient, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The kwargs one cloud generation dispatches, minus the per-call trace context."""
+    _install(monkeypatch, client)
+    await ss._call_model("prompt", role_name="claude_sonnet", provider="anthropic", session_id="s")
+    return {k: v for k, v in client.kwargs.items() if k != "trace_ctx"}
+
+
+def _reply() -> dict[str, Any]:
+    return {"content": _valid_output(), "tool_calls": [], "finish_reason": "stop"}
+
+
+@pytest.mark.asyncio
+async def test_an_unforceable_deployment_gets_auto_with_the_single_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: Sonnet 5.5 refuses a forced choice, so the producer asks for ``auto``."""
+    from personal_agent.memory.session_digest_wire import digest_tool
+
+    request = await _request_for(_UnforcedClient(_reply()), monkeypatch)
+    assert request["tool_choice"] == "auto"
+    assert request["tools"] == [digest_tool()]
+
+
+@pytest.mark.asyncio
+async def test_a_forceable_deployment_keeps_todays_exact_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: *fails if* any forced-capable request changes.
+
+    The control is a client that does not state the capability at all, which is every
+    client before FRE-1647. The whole request is compared except the trace context,
+    which is minted per call and never reaches the provider.
+    """
+    control = await _request_for(_FakeClient(_reply()), monkeypatch)
+    forced = await _request_for(_ForcedClient(_reply()), monkeypatch)
+    assert forced == control
+    assert forced["tool_choice"] == {"type": "function", "function": {"name": DIGEST_TOOL_NAME}}
+
+
+@pytest.mark.asyncio
+async def test_the_contract_off_sends_no_choice_on_an_unforceable_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The switch still wins: no contract means no tools and no choice, whatever the model."""
+    from personal_agent.config.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "session_digest_structured_output", False)
+    request = await _request_for(_UnforcedClient(_reply()), monkeypatch)
+    assert request.get("tools") is None
+    assert request.get("tool_choice") is None
+
+
+@pytest.mark.asyncio
+async def test_a_prose_reply_under_auto_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-2: with ``auto`` the model may answer in prose; that reply stores nothing.
+
+    The existing path applies: the text fallback hands the prose to the parser, which
+    rejects it, so the session fails as ``schema_invalid`` and stays eligible for retry.
+    """
+    client = _UnforcedClient(
+        {
+            "content": "The session covered a cluster check.",
+            "tool_calls": [],
+            "finish_reason": "stop",
+        }
+    )
+    _install(monkeypatch, client)
+
+    outcome = await ss.generate_session_digest(_session(), session_id="sess-1", ended_at=_T0)
+
+    assert client.kwargs["tool_choice"] == "auto"
+    assert outcome.status is SessionSummaryStatus.FAILED
+    assert outcome.failure_reason is SummaryFailureReason.SCHEMA_INVALID
+
+
+@pytest.mark.asyncio
+async def test_a_schema_valid_json_text_reply_under_auto_is_accepted_as_today(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The existing path is kept on purpose (FRE-1647, Codex plan review item 1).
+
+    ``_reply_payload`` reads text when no tool call came back, on every deployment
+    (``test_text_content_is_still_accepted``). Under ``auto`` the same parser and checks
+    apply, so a valid digest in text is a real answer, not a silent success. Requiring the
+    tool call would change reply handling for the forced-capable deployments too.
+    """
+    client = _UnforcedClient(_reply())
+    _install(monkeypatch, client)
+
+    outcome = await ss.generate_session_digest(_session(), session_id="sess-1", ended_at=_T0)
+
+    assert client.kwargs["tool_choice"] == "auto"
+    assert outcome.status is SessionSummaryStatus.GENERATED

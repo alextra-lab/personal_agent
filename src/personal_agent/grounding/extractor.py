@@ -458,6 +458,7 @@ class ModelSpanExtractor:
         if not classifiable:
             return apply_policy(output, regions, ())
 
+        from personal_agent.llm_client.forced_tool import can_force_tool  # noqa: PLC0415
         from personal_agent.llm_client.types import ModelRole  # noqa: PLC0415
 
         effective_trace = trace_ctx or SystemTraceContext.new("span_extraction")
@@ -473,7 +474,9 @@ class ModelSpanExtractor:
             ],
             system_prompt=SYSTEM_PROMPT,
             tools=[span_tool()],
-            tool_choice=span_tool_choice(),
+            # FRE-1647: a deployment that refuses a forced choice gets `auto`; the prompt
+            # says to answer only through the tool, and no tool call fails closed below.
+            tool_choice=span_tool_choice() if can_force_tool(self._client) else "auto",
             max_tokens=MAX_OUTPUT_TOKENS,
             trace_ctx=effective_trace,
         )

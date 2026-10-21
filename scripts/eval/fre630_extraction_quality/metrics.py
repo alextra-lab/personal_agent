@@ -277,21 +277,23 @@ def forbidden_edge_type_rate(
     return hits / len(extracted_rels)
 
 
-def extraction_empty(extracted_entity_count: int, gold_has_positive: bool) -> bool:
-    """Whether the extractor returned nothing while gold expected positives (codex P2).
+def extraction_empty(extracted_entity_count: int, gold_expects_entity: bool) -> bool:
+    """Whether the extractor returned no entities while gold expected at least one (codex P2).
 
     Catches the ``_default_extraction_result`` fallback (timeout / parse-fail / empty
     response) so it is counted separately and never masquerades as a precision/recall
-    miss.
+    miss. A case that expects only claims or stances has no entity to miss, so an
+    entity-less output is a correct answer there, not a fallback (FRE-1644; before
+    2026-10-21 the flag was ``case.has_positive_label`` and counted it as one).
 
     Args:
         extracted_entity_count: Number of entities the extractor returned.
-        gold_has_positive: Whether the case carries any positive expectation.
+        gold_expects_entity: Whether the case expects at least one entity.
 
     Returns:
-        ``True`` on an empty extraction against a positive-labeled case.
+        ``True`` on an empty extraction against an entity-expecting case.
     """
-    return extracted_entity_count == 0 and gold_has_positive
+    return extracted_entity_count == 0 and gold_expects_entity
 
 
 def _surface_key(name: str) -> str:

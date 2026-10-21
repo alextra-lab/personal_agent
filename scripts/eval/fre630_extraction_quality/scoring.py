@@ -135,7 +135,7 @@ class CaseScore:
         description_integrity: Deterministic description proxy.
         stance_emission_recall: Structured-stance recall.
         claim_emission_recall: Structured-claim recall.
-        is_empty_fallback: Extractor returned nothing on a positive-labeled case.
+        is_empty_fallback: Extractor returned no entities on an entity-expecting case.
         match_tier_counts: exact/alias/fuzzy match tallies (audit).
         diffs: Human-legible per-case diffs (missed/spurious/wrong-type/…).
     """
@@ -261,7 +261,7 @@ def score_case(
             case.expect_claims, parsed.claim_facets
         ),
         is_empty_fallback=metrics.extraction_empty(
-            len(parsed.entity_names), case.has_positive_label
+            len(parsed.entity_names), bool(case.expect_entities)
         ),
         match_tier_counts=tier_counts,
         diffs={k: v for k, v in diffs.items() if v},

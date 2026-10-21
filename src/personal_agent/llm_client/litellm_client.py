@@ -1664,15 +1664,15 @@ class LiteLLMClient:
                             usage["cache_creation_input_tokens"] = cache_write
 
                         # OpenAI: automatic server-side caching → prompt_tokens_details.cached_tokens
-                        # (gpt-4o, gpt-4o-mini, o1, and newer models; no client headers needed)
+                        # (gpt-4o, gpt-4o-mini, o1, and newer models; no client headers needed).
+                        # FRE-1638: litellm reports an Anthropic cache read in BOTH fields, with
+                        # the same value — so the details count is a fallback, never an addend.
                         prompt_details = getattr(response.usage, "prompt_tokens_details", None)
-                        if prompt_details is not None:
+                        if prompt_details is not None and not usage.get("cache_read_input_tokens"):
                             openai_cached = getattr(prompt_details, "cached_tokens", None)
                             if openai_cached is not None and openai_cached > 0:
                                 # Use the same field so the log line is uniform across providers
-                                usage["cache_read_input_tokens"] = (
-                                    usage.get("cache_read_input_tokens", 0) + openai_cached
-                                )
+                                usage["cache_read_input_tokens"] = openai_cached
 
                         # FRE-766: reasoning-token count from the reasoning models (GPT-5 family
                         # via litellm). Defensive across shapes — completion_tokens_details may be a

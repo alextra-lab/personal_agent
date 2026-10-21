@@ -104,6 +104,25 @@ covers both directions.
 - Deploy succeeds but the live endpoint returns the wrong response — file a follow-up, not Done.
 - Same error recurs after 3 fix attempts — escalate per MODEL_ROUTING_POLICY.
 
+## Paid runs (owner, 2026-10-21)
+
+A paid run is any eval, probe or fixture recording that calls a paid API (model, search, rerank).
+
+- Before the run, post a preflight on the ticket: the environment, a 1-to-2 item trace, and the
+  projected calls, time and cost.
+- The preflight checks the remaining credit or quota of every paid API that the run calls, against
+  the projected calls with margin. A rate-limit header is not a credit balance. If a balance cannot
+  be read, the preflight says so. A run that could use up credit that production shares does not
+  start.
+- If the ticket or the preflight says that the run waits for the owner's go, the run starts only
+  after that go is recorded on the ticket, quoted and dated. A go given in a seat session is
+  recorded on the ticket first.
+- Stop the run and tell master if the spend reaches 1.5 times the projection, or if a vendor
+  returns a credit or quota error.
+
+Origin: FRE-1641 run r1 (2026-10-21) started without a recorded go and used up the Exa and Brave
+credit that production web search shares.
+
 ---
 
 *The three sections below moved here from `.claude/CLAUDE.md` on 2026-09-14 (doctor): they are session mechanics for build, master and adr, so they load on skill use rather than in every session.*

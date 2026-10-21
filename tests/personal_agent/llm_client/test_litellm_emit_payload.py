@@ -62,15 +62,18 @@ async def _call_respond(
     response: MagicMock | None = None,
     *,
     api_key: str = "test-key",
+    cost_rows: list[dict] | None = None,
 ) -> None:
     """Run LiteLLMClient.respond() with all external I/O mocked.
 
     The log.info calls are captured into captured_log_calls as (event, kwargs)
     tuples. ``response`` replaces the default mock provider response.
-    ``api_key`` is the credential the mocked settings resolve.
+    ``api_key`` is the credential the mocked settings resolve. When
+    ``cost_rows`` is given, the kwargs of each ``record_api_call`` land in it.
     """
     from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.llm_client.types import ModelRole
+    from personal_agent.telemetry.trace import TraceContext
     from tests._helpers.trace import make_test_ctx
 
     mock_response = response if response is not None else _make_mock_response()
@@ -82,7 +85,9 @@ async def _call_respond(
     mock_tracker = AsyncMock()
     mock_tracker.connect = AsyncMock()
     mock_tracker.disconnect = AsyncMock()
-    mock_tracker.record_api_call = AsyncMock()
+    mock_tracker.record_api_call = AsyncMock(
+        side_effect=lambda **kw: cost_rows.append(kw) if cost_rows is not None else None
+    )
 
     mock_log = MagicMock()
 
@@ -129,7 +134,12 @@ async def _call_respond(
         await client.respond(
             role=ModelRole.PRIMARY,
             messages=[{"role": "user", "content": "hello"}],
-            trace_ctx=make_test_ctx("litellm_emit_payload"),
+            # A cost row needs a session id; system contexts carry none.
+            trace_ctx=(
+                make_test_ctx("litellm_emit_payload")
+                if cost_rows is None
+                else TraceContext.new_trace(session_id=_FAILING_TEST_SESSION_ID)
+            ),
         )
 
 
@@ -235,6 +245,88 @@ async def test_model_call_completed_uses_cache_creation_input_tokens() -> None:
     kwargs = _get_completed_event(calls)
     assert "cache_creation_input_tokens" in kwargs
     assert "cache_write_tokens" not in kwargs
+
+
+def _anthropic_usage(*, cache_read: int) -> object:
+    """The usage object litellm builds from a recorded Anthropic response.
+
+    Mirrors FRE-1638's trace: 7,069 uncached + 15,972 cache-read input tokens.
+    litellm reports the cache read twice here: as ``cache_read_input_tokens``
+    and as ``prompt_tokens_details.cached_tokens``.
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    return AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 7069,
+            "output_tokens": 507,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": 0,
+        },
+        reasoning_content=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_read_is_recorded_once() -> None:
+    """FRE-1638 AC-1: litellm's two names for one Anthropic cache read do not add up."""
+    response = _make_mock_response()
+    response.usage = _anthropic_usage(cache_read=15972)
+    calls: list[tuple] = []
+    cost_rows: list[dict] = []
+    await _call_respond(calls, response, cost_rows=cost_rows)
+    kwargs = _get_completed_event(calls)
+    assert kwargs["cache_read_tokens"] == 15972
+    assert kwargs["cache_read_tokens"] <= kwargs["input_tokens"]
+    # The api_costs row takes the same value from the same source.
+    [row] = cost_rows
+    assert row["cache_read_input_tokens"] == 15972
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_cache_read_keeps_its_value() -> None:
+    """FRE-1638 AC-2: OpenAI Chat Completions reports the cache read only in the details."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    response = _make_mock_response()
+    response.usage = Usage(
+        prompt_tokens=71479,
+        completion_tokens=20,
+        total_tokens=71499,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=59312),
+    )
+    calls: list[tuple] = []
+    await _call_respond(calls, response)
+    assert _get_completed_event(calls)["cache_read_tokens"] == 59312
+
+
+@pytest.mark.asyncio
+async def test_responses_route_cache_read_keeps_its_value() -> None:
+    """FRE-1638 AC-2: the Responses route maps input_tokens_details to the same details field."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    from personal_agent.llm_client.responses_route import to_chat_response
+
+    responses_reply = ResponsesAPIResponse(
+        id="resp_1",
+        object="response",
+        created_at=1760900000,
+        status="completed",
+        model="gpt-6.1-sol-2026-09-29",
+        output=[],
+        usage={
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "total_tokens": 70,
+            "input_tokens_details": {"cached_tokens": 10},
+            "output_tokens_details": {"reasoning_tokens": 8},
+        },
+    )
+    response = _make_mock_response()
+    response.usage = to_chat_response(responses_reply).usage
+    calls: list[tuple] = []
+    await _call_respond(calls, response)
+    assert _get_completed_event(calls)["cache_read_tokens"] == 10
 
 
 @pytest.mark.asyncio

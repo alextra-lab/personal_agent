@@ -123,7 +123,7 @@ Sonnet 5 control: 20/20 on DSPy, 20/20 proposals.
 
 30-day base: production ES `agent-logs-*`, `event_type=dspy_job_settled`, `budget_role=captains_log`, now-30d, sum `settled_usd`: **168 jobs, $7.9494**. Projection = base × (candidate per-reflection cost ÷ Sonnet 5 per-reflection cost on the same 20 turns). Sonnet 5.5 made 25 litellm calls for 20 reflections (5 DSPy repeats); its cost includes them.
 
-Note: main binds `captains_log` to `claude_haiku_5_5` since PR #1320, and the deploy is held. Haiku 5.5 passes this bar too.
+Note: PR #1320 bound `captains_log` to `claude_haiku_5_5`, and PR #1321 (`69f2eff8`) reverted it on 2026-10-21. Main and production both bind `claude_sonnet`. This study's control names Sonnet 5 explicitly, so the revert does not change any result here.
 
 ### F5 — `session_summary`: both candidates pass
 
@@ -290,7 +290,7 @@ Sources: `cost_usd` on each run's `model_call_completed` lines, `settled_usd` on
 
 ## Proposals
 
-1. **`captains_log`: the owner decides among three passing candidates.** Sol (20/20, $2.45 per 30 days, 12.3 s), Haiku 5.5 (18/20, $0.38, 9.8 s), Sonnet 5.5 (17/20, $8.53, 11.5 s). The held PR #1320 binding (Haiku 5.5) passes this bar too. This study changes no binding.
+1. **`captains_log`: the owner decides among three passing candidates.** Sol (20/20, $2.45 per 30 days, 12.3 s), Haiku 5.5 (18/20, $0.38, 9.8 s), Sonnet 5.5 (17/20, $8.53, 11.5 s). Main and production bind `claude_sonnet` (PR #1321 reverted the PR #1320 Haiku 5.5 binding). This study changes no binding.
 2. **`session_summary`: the owner decides.** Sol and Luna low both pass. The saving is $0.18 or $0.41 per 30 days. Luna low is the only arm that meets AC-10's dominant-tag bar.
 3. **`span_extraction` stays on Sonnet 5 under the bars.** Sol is the near miss: recall 1.000, precision 0.853, and over the FP bar only on two small exempt classes. If the owner wants Sol here, the next step is a look at those classes' false positives against `ADJUDICATION.md`, not a new paid run.
 4. **`entity_extraction` stays on gpt-5.4-mini.** The personal-fact gap is shared by Sol and Luna, so no catalog model fixes it. A fix is prompt or compile work on claim facets (FRE-764 is the existing compile ticket), not a model swap.

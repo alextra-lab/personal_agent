@@ -3400,3 +3400,514 @@ class TestReadPathsReachTheGeneralWorker:
         assert replacement.worker_type == WorkerType.RESEARCHER
         assert replacement.read_paths == ()
         assert replacement.context == []
+
+
+_FAKE_CLOUD_DEPLOYMENT = "fake-cloud"
+
+
+def _helper_client(placement: Any, model_key: str = _FAKE_CLOUD_DEPLOYMENT) -> SimpleNamespace:
+    """A dispatch client stand-in that carries the two facts the fan-out reads."""
+    return SimpleNamespace(placement=placement, model_key=model_key)
+
+
+def _concurrency_controller(ceiling: int) -> Any:
+    """A real inference controller with the fake cloud deployment registered at ``ceiling``."""
+    from personal_agent.llm_client.concurrency import InferenceConcurrencyController
+
+    controller = InferenceConcurrencyController()
+    controller.register_provider("fake", max_concurrency=50)
+    controller.register_model(_FAKE_CLOUD_DEPLOYMENT, max_concurrency=ceiling, provider="fake")
+    return controller
+
+
+def _goal_index(spec: Any) -> int:
+    """The plan index of a ``_make_plan_json`` task, read from its goal text."""
+    return int(spec.task.removeprefix("Goal for task "))
+
+
+class TestCloudParallelDispatch:
+    """FRE-1635 — helpers on a cloud deployment run side by side; the local model stays serial.
+
+    FRE-1380's reason (slm_server gains ~19% aggregate throughput from concurrency 1 to 3
+    while per-request throughput falls 2.57x) holds for the local model only. A cloud API
+    has no such limit, so the fan-out on a cloud deployment saves about two helper
+    durations per three-helper turn.
+    """
+
+    @staticmethod
+    async def _dispatch(
+        placement: Any,
+        durations: list[float],
+        *,
+        ceiling: int = 10,
+        deadline_in: float | None = None,
+        expansion_budget: int | None = None,
+        session_id: str | None = None,
+    ) -> tuple[list[SubAgentResult], Any, list[tuple[int, float, float]], list[float | None]]:
+        """Dispatch ``len(durations)`` tasks; a worker stops at its deadline cap, as the real one does.
+
+        ``deadline_in`` is read just before the dispatch call, so setup time in this
+        helper never eats the turn's budget.
+        """
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(len(durations)), "DECOMPOSE")
+        assert plan is not None
+        expansion_result = ExpansionResult()
+        observed: list[tuple[int, float, float]] = []
+        caps: list[float | None] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            index = _goal_index(kwargs["spec"])
+            cap = kwargs["max_deadline_seconds"]
+            caps.append(cap)
+            start = time.monotonic()
+            await asyncio.sleep(durations[index] if cap is None else min(durations[index], cap))
+            observed.append((index, start, time.monotonic()))
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_run,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                return_value=_concurrency_controller(ceiling),
+            ),
+        ):
+            results = await ExpansionController()._run_dispatch(
+                plan=plan,
+                llm_client=_helper_client(placement),
+                trace_id="test-trace-fre1635",
+                messages=[],
+                result=expansion_result,
+                session_id=session_id,
+                turn_deadline_monotonic=(
+                    None if deadline_in is None else time.monotonic() + deadline_in
+                ),
+                expansion_budget=expansion_budget,
+            )
+        return results, expansion_result, observed, caps
+
+    @pytest.mark.asyncio
+    async def test_cloud_helpers_overlap(self) -> None:
+        """AC-1 — three 0.2 s helpers take about one helper's time, measured from the intervals."""
+        from personal_agent.llm_client.models import Placement
+
+        started = time.monotonic()
+        results, expansion_result, observed, _caps = await self._dispatch(
+            Placement.CLOUD, [0.2, 0.2, 0.2]
+        )
+        elapsed = time.monotonic() - started
+
+        assert len(results) == 3
+        intervals = expansion_result.dispatch_intervals
+        assert len(intervals) == 3
+        # Every helper started before any helper ended: all three were in flight at once.
+        assert max(iv.start_monotonic for iv in intervals) < min(
+            iv.end_monotonic for iv in intervals
+        )
+        # The stub's own call windows agree with the controller's recording.
+        assert max(start for _i, start, _e in observed) < min(end for _i, _s, end in observed)
+        assert elapsed < 0.4
+
+    @pytest.mark.asyncio
+    async def test_local_helpers_run_one_after_another(self) -> None:
+        """AC-2 — the same plan on the local model runs one helper at a time, as today."""
+        from personal_agent.llm_client.models import Placement
+
+        started = time.monotonic()
+        results, expansion_result, _observed, _caps = await self._dispatch(
+            Placement.LOCAL, [0.2, 0.2, 0.2]
+        )
+        elapsed = time.monotonic() - started
+
+        assert len(results) == 3
+        intervals = expansion_result.dispatch_intervals
+        for earlier, later in zip(intervals, intervals[1:], strict=False):
+            assert later.start_monotonic >= earlier.end_monotonic
+        assert elapsed >= 0.6
+
+    @pytest.mark.parametrize(
+        ("placement_name", "expected_skipped"),
+        [("LOCAL", ["task_1", "task_2", "task_3"]), ("CLOUD", ["task_2", "task_3"])],
+    )
+    @pytest.mark.asyncio
+    async def test_deadline_skips_without_a_fabricated_result(
+        self, placement_name: str, expected_skipped: list[str]
+    ) -> None:
+        """AC-3 — a task that cannot start before the turn deadline is skipped and recorded.
+
+        Four 1 s tasks against a 0.4 s deadline (the margin covers the governance lookup
+        before the first task, about 0.1 s). The cloud deployment admits two at a time, so
+        tasks 2 and 3 wait for a slot that frees after the deadline. The local model runs
+        task 0 alone, and every later task finds the deadline passed.
+        """
+        from personal_agent.llm_client.models import Placement
+
+        started = time.monotonic()
+        results, expansion_result, observed, caps = await self._dispatch(
+            Placement[placement_name], [1.0, 1.0, 1.0, 1.0], ceiling=2, deadline_in=0.4
+        )
+        elapsed = time.monotonic() - started
+
+        assert expansion_result.skipped_tasks == expected_skipped
+        assert expansion_result.skip_reason == "turn_budget"
+        dispatched = {f"task_{index}" for index, _s, _e in observed}
+        assert dispatched.isdisjoint(expected_skipped)
+        # No fabricated result: one result per dispatched task, none for a skipped one.
+        assert len(results) == len(dispatched) == 4 - len(expected_skipped)
+        assert {r.spec_task for r in results} == {
+            f"Goal for task {name.removeprefix('task_')}" for name in dispatched
+        }
+        assert all(cap is not None and cap <= 0.4 for cap in caps)
+        # The dispatch ends at the deadline, not after four (or two) full tasks.
+        assert elapsed < 0.5
+
+    @pytest.mark.asyncio
+    async def test_cloud_deadline_already_passed_dispatches_nothing(self) -> None:
+        """AC-3 — a turn already over its deadline skips every task on the parallel path too."""
+        from personal_agent.llm_client.models import Placement
+
+        results, expansion_result, observed, _caps = await self._dispatch(
+            Placement.CLOUD, [0.01, 0.01, 0.01], deadline_in=-5.0
+        )
+
+        assert observed == []
+        assert results == []
+        assert expansion_result.skipped_tasks == ["task_0", "task_1", "task_2"]
+
+    @pytest.mark.asyncio
+    async def test_digests_reach_synthesis_in_plan_order(self) -> None:
+        """AC-4 — the helpers finish in reverse order; synthesis still reads them in plan order."""
+        from personal_agent.llm_client.models import Placement
+
+        durations = [0.15, 0.10, 0.05]
+        finished: list[int] = []
+        planner = AsyncMock()
+        planner.respond = AsyncMock(return_value={"content": _make_plan_json(3)})
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            index = _goal_index(kwargs["spec"])
+            await asyncio.sleep(durations[index])
+            finished.append(index)
+            return _make_sub_agent_result(kwargs["spec"].task, summary=f"digest {index}")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_run,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                return_value=_concurrency_controller(10),
+            ),
+        ):
+            result = await ExpansionController().execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=_helper_client(Placement.CLOUD),
+                planner_llm_client=planner,
+                trace_id="test-trace-fre1635-order",
+                messages=[],
+            )
+
+        assert finished == [2, 1, 0]
+        assert [r.spec_task for r in result.sub_agent_results] == [
+            "Goal for task 0",
+            "Goal for task 1",
+            "Goal for task 2",
+        ]
+        assert [iv.task_name for iv in result.dispatch_intervals] == ["task_0", "task_1", "task_2"]
+        positions = [result.synthesis_context.index(f"digest {i}") for i in range(3)]
+        assert positions == sorted(positions)
+
+    @pytest.mark.asyncio
+    async def test_cloud_child_phases_overlap_and_pair(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each helper keeps its own SUB_AGENT phase; on the cloud path the phases overlap."""
+        import personal_agent.transport.agui.transport as transport_mod
+        from personal_agent.llm_client.models import Placement
+        from personal_agent.transport.events import Phase, PhaseEndEvent, PhaseStartEvent
+
+        events: list[Any] = []
+
+        async def _capture(event: Any, session_id: str) -> None:
+            if isinstance(event, (PhaseStartEvent, PhaseEndEvent)):
+                events.append(event)
+
+        monkeypatch.setattr(transport_mod, "_push_event", _capture)
+
+        await self._dispatch(Placement.CLOUD, [0.05, 0.05, 0.05], session_id=str(uuid4()))
+
+        children = [e for e in events if e.phase is Phase.SUB_AGENT]
+        starts = [e for e in children if isinstance(e, PhaseStartEvent)]
+        ends = [e for e in children if isinstance(e, PhaseEndEvent)]
+        assert len(starts) == 3
+        assert len(ends) == 3
+        assert {e.phase_id for e in starts} == {e.phase_id for e in ends}
+        # All three children started before the first one ended.
+        assert children.index(ends[0]) > max(children.index(s) for s in starts)
+        parent_start = next(
+            e for e in events if e.phase is Phase.EXPANSION and isinstance(e, PhaseStartEvent)
+        )
+        assert all(e.parent_id == parent_start.phase_id for e in children)
+        assert events[-1].phase is Phase.EXPANSION
+        assert isinstance(events[-1], PhaseEndEvent)
+
+    @pytest.mark.asyncio
+    async def test_origin_error_skips_a_queued_cloud_sibling(self) -> None:
+        """FRE-1501 on the parallel path: a sibling in flight finishes, a queued one skips."""
+        from dataclasses import replace
+
+        from personal_agent.llm_client.models import Placement
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        expansion_result = ExpansionResult()
+        dispatched: list[int] = []
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            index = _goal_index(kwargs["spec"])
+            dispatched.append(index)
+            if index == 0:
+                await asyncio.sleep(0.01)  # task 1 is in flight by now; task 2 waits
+                return replace(
+                    _make_sub_agent_result(kwargs["spec"].task, success=False),
+                    stop_reason="origin_error",
+                )
+            await asyncio.sleep(0.1)
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_run,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                return_value=_concurrency_controller(2),
+            ),
+        ):
+            results = await ExpansionController()._run_dispatch(
+                plan=plan,
+                llm_client=_helper_client(Placement.CLOUD),
+                trace_id="test-trace-fre1635-origin",
+                messages=[],
+                result=expansion_result,
+            )
+
+        assert sorted(dispatched) == [0, 1]
+        assert [r.stop_reason for r in results] == ["origin_error", "completed"]
+        assert expansion_result.skipped_tasks == ["task_2"]
+        assert expansion_result.skip_reason == "origin_error"
+
+    @pytest.mark.asyncio
+    async def test_a_raise_outside_the_worker_call_keeps_its_type(self) -> None:
+        """A bug outside ``run_sub_agent`` surfaces as itself, not wrapped in an ExceptionGroup."""
+        from personal_agent.llm_client.models import Placement
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        controller = ExpansionController()
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=lambda **kwargs: _make_sub_agent_result(kwargs["spec"].task),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                return_value=_concurrency_controller(10),
+            ),
+            patch.object(
+                controller, "_maybe_redispatch_on_gap", AsyncMock(side_effect=RuntimeError("bug"))
+            ),
+            pytest.raises(RuntimeError, match="bug"),
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=_helper_client(Placement.CLOUD),
+                trace_id="test-trace-fre1635-raise",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_raises_surface_the_lowest_plan_index(self) -> None:
+        """Two tasks raise outside the worker call; the serial path would surface task 0's."""
+        from personal_agent.llm_client.models import Placement
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        controller = ExpansionController()
+
+        async def _bug(**kwargs: Any) -> SubAgentResult | None:
+            name = kwargs["task"].name
+            if name == "task_0":
+                await asyncio.sleep(0.05)  # task 0 raises last
+            raise RuntimeError(f"bug in {name}")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=lambda **kwargs: _make_sub_agent_result(kwargs["spec"].task),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                return_value=_concurrency_controller(10),
+            ),
+            patch.object(controller, "_maybe_redispatch_on_gap", side_effect=_bug),
+            pytest.raises(RuntimeError, match="bug in task_0"),
+        ):
+            await controller._run_dispatch(
+                plan=plan,
+                llm_client=_helper_client(Placement.CLOUD),
+                trace_id="test-trace-fre1635-raises",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_gap_replacement_runs_inside_its_task_slot(self) -> None:
+        """The replacement holds its task's slot: the limit binds, and it follows its original."""
+        from personal_agent.llm_client.models import Placement
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        plan = _validate_plan_json(_make_plan_json(3))
+        assert plan is not None
+        controller = ExpansionController()
+        state = {"in_flight": 0, "max": 0}
+
+        async def _occupy(seconds: float) -> None:
+            state["in_flight"] += 1
+            state["max"] = max(state["max"], state["in_flight"])
+            await asyncio.sleep(seconds)
+            state["in_flight"] -= 1
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            await _occupy(0.03)
+            return _make_sub_agent_result(kwargs["spec"].task)
+
+        async def _replace(**kwargs: Any) -> SubAgentResult | None:
+            if kwargs["task"].name != "task_0":
+                return None
+            await _occupy(0.06)
+            return _make_sub_agent_result("replacement for task 0")
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_run,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                return_value=_concurrency_controller(2),
+            ),
+            patch.object(controller, "_maybe_redispatch_on_gap", side_effect=_replace),
+        ):
+            results = await controller._run_dispatch(
+                plan=plan,
+                llm_client=_helper_client(Placement.CLOUD),
+                trace_id="test-trace-fre1635-gap",
+                messages=[],
+                result=ExpansionResult(),
+            )
+
+        assert state["max"] == 2
+        assert [r.spec_task for r in results] == [
+            "Goal for task 0",
+            "replacement for task 0",
+            "Goal for task 1",
+            "Goal for task 2",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_execute_forwards_the_expansion_budget_to_dispatch(self) -> None:
+        planner = AsyncMock()
+        planner.respond = AsyncMock(return_value={"content": _make_plan_json(2)})
+        controller = ExpansionController()
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=lambda **kwargs: _make_sub_agent_result(kwargs["spec"].task),
+            ),
+            patch.object(
+                controller, "_run_dispatch", wraps=controller._run_dispatch
+            ) as spy_dispatch,
+        ):
+            await controller.execute(
+                query="Compare Redis and Memcached",
+                strategy="HYBRID",
+                llm_client=AsyncMock(),
+                planner_llm_client=planner,
+                trace_id="test-trace-fre1635-budget",
+                messages=[],
+                expansion_budget=2,
+            )
+
+        assert spy_dispatch.call_args.kwargs["expansion_budget"] == 2
+
+
+class TestFanOutLimit:
+    """FRE-1635 — the number of helpers in flight at once."""
+
+    @staticmethod
+    def _limit(client: Any, task_count: int, expansion_budget: int | None, ceiling: int) -> int:
+        from personal_agent.orchestrator.expansion_controller import _fan_out_limit
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+            return_value=_concurrency_controller(ceiling),
+        ):
+            return _fan_out_limit(client, task_count, expansion_budget)
+
+    def test_cloud_is_bounded_by_the_task_count(self) -> None:
+        from personal_agent.llm_client.models import Placement
+
+        assert self._limit(_helper_client(Placement.CLOUD), 3, None, ceiling=10) == 3
+
+    def test_cloud_is_bounded_by_the_deployment_ceiling(self) -> None:
+        from personal_agent.llm_client.models import Placement
+
+        assert self._limit(_helper_client(Placement.CLOUD), 3, None, ceiling=2) == 2
+
+    @pytest.mark.parametrize(("budget", "expected"), [(1, 1), (0, 1), (2, 2)])
+    def test_cloud_is_bounded_by_the_expansion_budget(self, budget: int, expected: int) -> None:
+        from personal_agent.llm_client.models import Placement
+
+        assert self._limit(_helper_client(Placement.CLOUD), 3, budget, ceiling=10) == expected
+
+    def test_cloud_is_bounded_by_a_tighter_provider_ceiling(self) -> None:
+        from personal_agent.llm_client.concurrency import InferenceConcurrencyController
+        from personal_agent.llm_client.models import Placement
+        from personal_agent.orchestrator.expansion_controller import _fan_out_limit
+
+        controller = InferenceConcurrencyController()
+        controller.register_provider("fake", max_concurrency=2)
+        controller.register_model(_FAKE_CLOUD_DEPLOYMENT, max_concurrency=10, provider="fake")
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+            return_value=controller,
+        ):
+            assert _fan_out_limit(_helper_client(Placement.CLOUD), 3, None) == 2
+
+    def test_local_is_serial(self) -> None:
+        from personal_agent.llm_client.models import Placement
+
+        assert self._limit(_helper_client(Placement.LOCAL), 3, None, ceiling=10) == 1
+
+    def test_a_client_without_placement_is_serial(self) -> None:
+        assert self._limit(AsyncMock(), 3, None, ceiling=10) == 1
+
+    def test_an_unregistered_cloud_deployment_is_serial(self) -> None:
+        from personal_agent.llm_client.models import Placement
+
+        client = _helper_client(Placement.CLOUD, model_key="not-in-the-catalog")
+        assert self._limit(client, 3, None, ceiling=10) == 1

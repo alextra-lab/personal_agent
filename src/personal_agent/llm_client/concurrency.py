@@ -126,22 +126,35 @@ class _PrioritySemaphore:
             return True
         except asyncio.TimeoutError:
             async with self._lock:
-                if slot in self._waiters:
-                    # Still queued — a clean timeout, nothing was handed to us.
-                    self._waiters.remove(slot)
-                    return False
-                # Race: release() popped this slot and set its event in the
-                # window between wait_for firing and us re-acquiring the lock.
-                # That slot IS a live grant — release() hands off without
-                # decrementing _active — so abandoning it here would leak the
-                # permit forever and, once _active pins at _limit, wedge every
-                # future acquire on this semaphore. Pass the grant on instead of
-                # dropping it: to the next waiter, or back to the pool.
-                if self._waiters:
-                    self._waiters.pop(0).event.set()
-                else:
-                    self._active -= 1
+                self._abandon(slot)
             return False
+        except asyncio.CancelledError:
+            # FRE-1635: a worker's deadline cancels an LLM call that waits here. No
+            # await on this path, so a second cancellation cannot interrupt it, and no
+            # locked section of this class awaits while it holds the lock.
+            self._abandon(slot)
+            raise
+
+    def _abandon(self, slot: _PrioritySlot) -> None:
+        """Give up a slot whose waiter stopped waiting, without leaking a permit.
+
+        Args:
+            slot: The waiter's slot.
+        """
+        if slot in self._waiters:
+            # Still queued — nothing was handed to us.
+            self._waiters.remove(slot)
+            return
+        # Race: release() popped this slot and set its event before the waiter
+        # stopped waiting. That slot IS a live grant — release() hands off without
+        # decrementing _active — so abandoning it here would leak the permit forever
+        # and, once _active pins at _limit, wedge every future acquire on this
+        # semaphore. Pass the grant on instead of dropping it: to the next waiter, or
+        # back to the pool.
+        if self._waiters:
+            self._waiters.pop(0).event.set()
+        else:
+            self._active -= 1
 
     async def release(self) -> None:
         """Release a slot and wake the highest-priority waiter."""

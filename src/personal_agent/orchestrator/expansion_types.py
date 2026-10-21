@@ -129,7 +129,8 @@ class PhaseResult:
 class SubAgentInterval:
     """Wall-clock window one sub-agent occupied during dispatch (FRE-1380 AC-1).
 
-    Recorded around each dispatch call so serialization can be verified from real
+    Recorded around each dispatch call so the fan-out's shape — serial on the local
+    model, overlapping on a cloud deployment (FRE-1635) — can be verified from real
     timestamps rather than from the dispatch implementation asserting its own semaphore
     value.
 

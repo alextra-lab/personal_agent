@@ -606,7 +606,7 @@ models:
 
   claude_sonnet:
     # Anthropic Claude Sonnet — used for background reasoning tasks
-    # (entity extraction, Captain's Log reflection, insights analysis)
+    # (insights analysis, session summary; Captain's Log reflection moved to gpt-6.1-sol in FRE-1646)
     # LiteLLM model string: "anthropic/claude-sonnet-5" (prefixed at call time)
     id: "claude-sonnet-5"
     provider: "anthropic"
@@ -616,7 +616,7 @@ models:
     # FRE-1007: MANDATORY for a role-bound llm deployment — config_guard's
     # check_reasoning_declaration refuses to boot without it. Omission is not
     # "the default": it means nobody chose, and the provider's own default
-    # applies at call time. Every producer bound here (captains_log,
+    # applies at call time. Every producer bound here (captains_log until FRE-1646,
     # session_summary, insights, artifact_builder, vision) was inheriting
     # exactly that.
     #

@@ -522,7 +522,7 @@ async def generate_reflection_entry(
 
             # FRE-989 finding eight: DSPy calls its provider directly, so this
             # channel reserved nothing and wrote no api_costs row — reflection
-            # on `captains_log` (bound to claude_sonnet, cloud) was spending
+            # on `captains_log` (cloud: claude_sonnet then, gpt-6.1-sol since FRE-1646) was spending
             # invisibly, on the very role behind the FRE-987 incident.
             #
             # Only the CLOUD placement is gated: a local DSPy call is free and

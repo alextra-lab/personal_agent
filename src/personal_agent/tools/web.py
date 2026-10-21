@@ -187,69 +187,28 @@ web_search_tool = ToolDefinition(
 )
 
 
-async def web_search_executor(
-    query: str = "",
-    categories: str | None = None,
-    engines: str | None = None,
-    language: str = "en",
-    time_range: str | None = None,
-    max_results: int | None = None,
-    *,
-    ctx: TraceContext,
-) -> dict[str, Any]:
-    """Execute a web search via the local SearXNG instance.
+def build_search_params(
+    query: str,
+    categories: str,
+    engines: str | None,
+    language: str,
+    time_range: str | None,
+) -> dict[str, str]:
+    """Build the SearXNG ``/search`` query parameters of one ``web_search`` call.
 
-    Follows the same executor contract as ``search_memory_executor``:
-    keyword arguments matching the tool's parameter names, optional
-    ``ctx`` for tracing, returns a plain dict (the ``ToolExecutionLayer``
-    wraps it in a ``ToolResult``), and raises ``WebSearchError`` on
-    failure.
+    Shared with the FRE-1641 harness, which replays logged searches through the same code
+    (ADR-0158 D1.8).
 
     Args:
-        query: Search query text.
-        categories: Comma-separated SearXNG categories (default from config).
-        engines: Comma-separated engine names (overrides categories).
+        query: Search query text, after the weather-prefix strip.
+        categories: Comma-separated SearXNG categories.
+        engines: Comma-separated engine names, or ``None``.
         language: BCP-47 language code.
-        time_range: Time filter ('day', 'week', 'month', 'year').
-        max_results: Maximum results to return (1-50, default from config).
-        ctx: Trace context for logging.
+        time_range: Time filter, or ``None``.
 
     Returns:
-        Dict with ``answers`` (plugin results: timezone, unit conversion,
-        calculator, weather), ``results``, ``result_count``, ``suggestions``,
-        ``infoboxes``, ``unresponsive_engines`` (per-engine failure reasons),
-        ``engines_contributed`` (engines that actually returned a result),
-        ``degraded_retrieval`` (True when any engine failed — a ``retrieval_warning``
-        string is added in that case), and query metadata.
-
-    Raises:
-        WebSearchError: When the query is empty, or SearXNG is unreachable, times out,
-            or returns an unparseable response.
+        The query parameters.
     """
-    query = (query or "").strip()
-    if not query:
-        raise WebSearchError(
-            "missing_query",
-            "query parameter is required and cannot be empty.",
-            retryable=True,
-            next_action="Call web_search again with a query.",
-        )
-
-    categories = categories or settings.searxng_default_categories
-    capped_max = min(max(int(max_results or settings.searxng_max_results), 1), 50)
-    query = _strip_weather_prefix_if_targeted(query, categories, engines)
-
-    trace_id = ctx.trace_id
-
-    log.info(
-        "web_search_started",
-        trace_id=trace_id,
-        query=query[:120],
-        categories=categories,
-        engines=engines,
-        time_range=time_range,
-    )
-
     params: dict[str, str] = {
         "q": query,
         "format": "json",
@@ -261,63 +220,32 @@ async def web_search_executor(
         params["engines"] = engines
     if time_range:
         params["time_range"] = time_range
+    return params
 
-    # SearXNG's botdetection logs ERROR on requests missing X-Forwarded-For
-    # / X-Real-IP. The agent calls SearXNG directly over the docker network
-    # (no Caddy proxy in front), so we set the header explicitly to keep
-    # telemetry signal clean. The botdetection limiter itself is disabled
-    # via docker/searxng/settings.yml (server.limiter: false).
-    headers = {"X-Forwarded-For": "127.0.0.1"}
 
-    try:
-        async with create_guarded_http_client(
-            timeout=settings.searxng_timeout_seconds,
-        ) as client:
-            response = await client.get(
-                f"{settings.searxng_base_url}/search",
-                params=params,
-                headers=headers,
-            )
-            response.raise_for_status()
-            data = response.json()
+def shape_search_response(
+    data: dict[str, Any],
+    *,
+    query: str,
+    categories: str,
+    engines: str | None,
+    max_results: int,
+) -> dict[str, Any]:
+    """Shape a raw SearXNG JSON response into the ``web_search`` result.
 
-    except httpx.ConnectError as exc:
-        error_msg = (
-            f"Cannot connect to SearXNG at {settings.searxng_base_url}. "
-            "Is the searxng Docker service running?"
-        )
-        log.error("web_search_connect_failed", trace_id=trace_id, error=error_msg)
-        raise WebSearchError(
-            "search_unavailable",
-            error_msg,
-            retryable=True,
-            next_action="Call web_search once more; if it fails again, tell the user.",
-        ) from exc
+    Shared with the FRE-1641 harness, which shapes recorded SearXNG responses through the same
+    code, so the form it scores is the form the tool returns (ADR-0158 D1.8).
 
-    except httpx.TimeoutException as exc:
-        error_msg = f"SearXNG request timed out after {settings.searxng_timeout_seconds}s."
-        log.error("web_search_timeout", trace_id=trace_id, error=error_msg)
-        raise WebSearchError(
-            "search_timeout",
-            error_msg,
-            retryable=True,
-            next_action="Call web_search once more, or with fewer engines or categories.",
-        ) from exc
+    Args:
+        data: The parsed SearXNG JSON response.
+        query: The query sent.
+        categories: The categories sent.
+        engines: The engines sent, or ``None``.
+        max_results: The number of results to keep (already clamped to 1-50).
 
-    except Exception as exc:
-        log.error(
-            "web_search_failed",
-            trace_id=trace_id,
-            error=str(exc),
-            exc_info=True,
-        )
-        raise WebSearchError(
-            "search_failed",
-            f"The search failed: {type(exc).__name__}: {exc}",
-            retryable=False,
-            next_action="Change the query or the categories, or use perplexity_query.",
-        ) from exc
-
+    Returns:
+        The ``web_search`` result dict.
+    """
     # SearXNG's own `number_of_results` total has been observed to read 0 on a
     # response whose `results` array held 20 real entries — it is independently
     # untrustworthy and must never be used as the count. `result_count` below is
@@ -330,7 +258,7 @@ async def web_search_executor(
             "engine": item.get("engine", ""),
             "score": item.get("score"),
         }
-        for item in (data.get("results") or [])[:capped_max]
+        for item in (data.get("results") or [])[:max_results]
     ]
 
     # FRE-1339: SearXNG reports engines it suspended or that errored in the same
@@ -404,6 +332,136 @@ async def web_search_executor(
             "Treat this result set with caution — it may not be representative of what "
             "a healthy search would return."
         )
+    return output
+
+
+async def web_search_executor(
+    query: str = "",
+    categories: str | None = None,
+    engines: str | None = None,
+    language: str = "en",
+    time_range: str | None = None,
+    max_results: int | None = None,
+    *,
+    ctx: TraceContext,
+) -> dict[str, Any]:
+    """Execute a web search via the local SearXNG instance.
+
+    Follows the same executor contract as ``search_memory_executor``:
+    keyword arguments matching the tool's parameter names, optional
+    ``ctx`` for tracing, returns a plain dict (the ``ToolExecutionLayer``
+    wraps it in a ``ToolResult``), and raises ``WebSearchError`` on
+    failure.
+
+    Args:
+        query: Search query text.
+        categories: Comma-separated SearXNG categories (default from config).
+        engines: Comma-separated engine names (overrides categories).
+        language: BCP-47 language code.
+        time_range: Time filter ('day', 'week', 'month', 'year').
+        max_results: Maximum results to return (1-50, default from config).
+        ctx: Trace context for logging.
+
+    Returns:
+        Dict with ``answers`` (plugin results: timezone, unit conversion,
+        calculator, weather), ``results``, ``result_count``, ``suggestions``,
+        ``infoboxes``, ``unresponsive_engines`` (per-engine failure reasons),
+        ``engines_contributed`` (engines that actually returned a result),
+        ``degraded_retrieval`` (True when any engine failed — a ``retrieval_warning``
+        string is added in that case), and query metadata.
+
+    Raises:
+        WebSearchError: When the query is empty, or SearXNG is unreachable, times out,
+            or returns an unparseable response.
+    """
+    query = (query or "").strip()
+    if not query:
+        raise WebSearchError(
+            "missing_query",
+            "query parameter is required and cannot be empty.",
+            retryable=True,
+            next_action="Call web_search again with a query.",
+        )
+
+    categories = categories or settings.searxng_default_categories
+    capped_max = min(max(int(max_results or settings.searxng_max_results), 1), 50)
+    query = _strip_weather_prefix_if_targeted(query, categories, engines)
+
+    trace_id = ctx.trace_id
+
+    log.info(
+        "web_search_started",
+        trace_id=trace_id,
+        query=query[:120],
+        categories=categories,
+        engines=engines,
+        time_range=time_range,
+    )
+
+    params = build_search_params(query, categories, engines, language, time_range)
+
+    # SearXNG's botdetection logs ERROR on requests missing X-Forwarded-For
+    # / X-Real-IP. The agent calls SearXNG directly over the docker network
+    # (no Caddy proxy in front), so we set the header explicitly to keep
+    # telemetry signal clean. The botdetection limiter itself is disabled
+    # via docker/searxng/settings.yml (server.limiter: false).
+    headers = {"X-Forwarded-For": "127.0.0.1"}
+
+    try:
+        async with create_guarded_http_client(
+            timeout=settings.searxng_timeout_seconds,
+        ) as client:
+            response = await client.get(
+                f"{settings.searxng_base_url}/search",
+                params=params,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+    except httpx.ConnectError as exc:
+        error_msg = (
+            f"Cannot connect to SearXNG at {settings.searxng_base_url}. "
+            "Is the searxng Docker service running?"
+        )
+        log.error("web_search_connect_failed", trace_id=trace_id, error=error_msg)
+        raise WebSearchError(
+            "search_unavailable",
+            error_msg,
+            retryable=True,
+            next_action="Call web_search once more; if it fails again, tell the user.",
+        ) from exc
+
+    except httpx.TimeoutException as exc:
+        error_msg = f"SearXNG request timed out after {settings.searxng_timeout_seconds}s."
+        log.error("web_search_timeout", trace_id=trace_id, error=error_msg)
+        raise WebSearchError(
+            "search_timeout",
+            error_msg,
+            retryable=True,
+            next_action="Call web_search once more, or with fewer engines or categories.",
+        ) from exc
+
+    except Exception as exc:
+        log.error(
+            "web_search_failed",
+            trace_id=trace_id,
+            error=str(exc),
+            exc_info=True,
+        )
+        raise WebSearchError(
+            "search_failed",
+            f"The search failed: {type(exc).__name__}: {exc}",
+            retryable=False,
+            next_action="Change the query or the categories, or use perplexity_query.",
+        ) from exc
+
+    output = shape_search_response(
+        data, query=query, categories=categories, engines=engines, max_results=capped_max
+    )
+    results = output["results"]
+    unresponsive_engines = output["unresponsive_engines"]
+    degraded_retrieval = output["degraded_retrieval"]
 
     log.info(
         "web_search_completed",

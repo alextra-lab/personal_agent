@@ -802,3 +802,18 @@ async def test_unexpected_client_failure_raises_fetch_failed() -> None:
     assert exc_info.value.code == "fetch_failed"
     assert exc_info.value.retryable is False
     assert "RuntimeError: decoder broke" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_download_text_returns_the_whole_text_uncut() -> None:
+    """FRE-1641: the harness records fixtures past the 50,000 cap through download_text."""
+    from personal_agent.tools.fetch import download_text
+
+    resp = _mock_html_response(f"<p>{'y' * 120_000}</p>")
+    with patch(
+        "personal_agent.tools.fetch.create_guarded_http_client", return_value=_mock_client(resp)
+    ):
+        text, status = await download_text("https://example.com", trace_id=_CTX.trace_id)
+
+    assert text == "y" * 120_000
+    assert status == 200

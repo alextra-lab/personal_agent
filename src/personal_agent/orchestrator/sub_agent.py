@@ -1480,7 +1480,12 @@ async def _write_landing_report(
     (:func:`~personal_agent.llm_client.models.landing_accepts_json_schema`),
     the call carries ``response_format`` and the response is scored against
     D1's validity table: parse, schema validation, the whitespace check, the
-    ``source_url`` drop, then non-emptiness. Every other case — a
+    ``source_url`` drop, then non-emptiness. When the dialect renders that
+    schema ahead of the history
+    (:func:`~personal_agent.llm_client.models.landing_schema_breaks_prefix_cache`,
+    FRE-1639), the call sends no ``response_format``: it appends the schema as
+    text in a last user message, so the rounds' prompt cache survives, and the
+    same table scores the reply. Every other case — a
     text-reporting worker, or a schema-backed worker whose dialect declares
     ``False`` — takes today's prose landing, unchanged, with a WARNING logged
     on the declared-``False`` case (``structured_landing_unsupported_declared``).

@@ -1,82 +1,52 @@
-# Last session — master, 2026-10-13 to 2026-10-16 08:30 UTC
+# Last session — master, 2026-10-20 to 2026-10-21 19:40 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The owner ordered a full fix of the self-analysis pipeline in four parts: FRE-1608 (analysis), FRE-1609
-(history), FRE-1610 (backlog) and FRE-1611 (creation). All four are merged and deployed. FRE-1611
-(#1294, `0db7d4f2`) stays open for one owner decision. Its dry run, run inside the gateway, lists 0
-tickets to file. The owner chooses: restore the cap to 10 and the pipeline flag to true (step 6 below), or keep filing held.
-The owner approved the llama.cpp pin move, and production runs b11689 (0f4376268) since 08:16Z.
-The pin commit is d4a4fb3 in the slm_server repo. Rollback: point `SLM_LLAMA_SERVER_BIN` back to llama.cpp-master.
+Three merged and deployed fixes wait for one normal owner turn in the PWA: FRE-1646 (Sol writes the
+captain's log), FRE-1648 (the cost shown rises during the turn) and FRE-1638 (a cache read counted
+once). The owner was asked for that turn. Postgres `api_costs` held 0 rows after 2026-10-21 10:00Z
+at 19:35Z, so no turn ran yet. Each ticket's AC-3 comment states the exact check.
+FRE-1620 (ADR-0157 effort selector) still owes master's adjudication from its ticket comments.
 
 ## What was decided and why
-- **Owner: clear the Captain's Log history and start from zero.** The bad analysis already filed 6
-  tickets (FRE-1373, 1378, 1404, 1412, 1418, 1429, all canceled). Master ran the FRE-1609 reset on
-  2026-10-14 at 16:32Z. Verified backup: `~/seshat-backups/fre1609-20261014T163213Z`. **Delete it
-  when FRE-1611 closes.** The six fingerprints are suppressed in the gateway volume (FRE-1610 replay).
-- **Ticket filing is held.** `.env` has `AGENT_SESHAT_OPEN_TICKET_CAP=4`, with a comment, since
-  2026-10-14. `AGENT_PROMOTION_PIPELINE_ENABLED=false` (line 799) since 09:18Z on 2026-10-16. Line 387
-  holds an old commented copy. Steps 1–5 below are done:
-  1. Merge #1294.
-  2. Set `AGENT_PROMOTION_PIPELINE_ENABLED=false` in `.env`. The cap starts counting
-     `pipeline-filed` only, so its count drops to 0, and the next consolidation can file up to 4
-     tickets unseen.
-  3. Deploy.
-  4. Run the dry run **inside the gateway**: `docker cp` the script, then run it with
-     `/app/.venv/bin/python`.
-  5. Post the list on FRE-1611.
-  6. The owner reads the list. Only then set the cap to 10, set the pipeline flag to true, and restart.
-
-  Streams 2 and 4 (feedback polling, insights) stay off. They are the owner's decision.
-- **Escalated diffs were waived** for #1290, #1291, #1292 under the 2026-08-31 directive ("Waive
-  unless seriously necessary"). Each one was test-isolated or refused to run without a verified backup.
-- **Secrets rotated, all owner-approved, all in `pass`:**
-  - sysgraph_role password (2026-10-14). A helper printed the `.env` URL.
-  - `AGENT_SESHAT_CHANNEL_SECRET` (2026-10-14). A prefix grep printed it.
-  - `GATEWAY_TOKEN_PWA` (2026-10-16). Master's `curl localhost:3000` printed the PWA page, which embeds it.
-
-  Check: the new token gives 200 and the old one 401 on
-  `/api/v1/observations/route-traces/session/<nil-uuid>`. Open PWA tabs need a reload.
-- **FRE-1600:** no storage change. Stored history costs about 256 tokens per follow-up turn.
-  `preserve_thinking` saves at most about 0.6 s per turn but costs about 4,500 tokens per stored turn.
-- **FRE-1606:** the owner said "Go" in the adrs seat to all three recommendations.
-- **Owner: "The elastic dashboards should become grafana dashboards."** The five panels moved to
-  FRE-1612, filed by build2 and in Needs Approval for the owner.
-- **The owner's model-testing hold (FRE-1573) still stands.** The llama.cpp pin move is an engine
-  fix, not a model test.
+- **Owner: "I decide if we swap. Not you."** Master merged #1320 (Haiku 5.5 on `captains_log`)
+  because a bar passed. #1321 reverted it. Eval tickets report results and never swap. Memory:
+  `feedback_owner_decides_model_swaps.md`.
+- **`captains_log` → `gpt-6.1-sol`:** the owner said "Sol" after the FRE-1640 study (FRE-1646).
+- **Sonnet 5 stays on all six roles.** The owner skipped the FRE-1647 paid run ("Ok.  Skip.") and
+  said of Sonnet 5.5: "It is more expensive". The per-token price is the same, but FRE-1640 measured
+  $8.53 against $7.95 per 30 days on `captains_log`, and Sonnet 5.5 scored lowest (17/20).
+  `claude_sonnet_5_5` stays picker-only. The `auto` tool-choice code from #1333 stays.
+- **Sol as an LLM judge prefers OpenAI models** (120/120 in FRE-1640). Master applied a stricter
+  rule: a pair is worse if either judge prefers the control in both orders. Use two judges from
+  different vendors in every blind comparison.
+- **Paid search testing is over.** Owner: "Search testing has reached my decided budget". The
+  owner then said "cancel the rest of adr-0158" (T2 FRE-1642 and T3 FRE-1643 canceled).
+- **FRE-1641 spent about $50 and decided nothing.** The harness had no baseline arm and no noise
+  arm. Memory: `feedback_harness_must_answer_the_decision.md`. The paid-run rules that came from it
+  are in `.claude/skills/lifecycle-rules.md` § Paid runs (#1328).
+- **The $0 post-mortem on FRE-1641:** search drift is mostly real vendor variation plus the
+  FRE-1584 engine change. Today's 10k-character fetch cut keeps 97.5%, better than every focused
+  cell. Do not reopen the fetch-size question without a new reason.
+- **Turn performance is accepted.** Owner: "That performance is also acceptable to me" (3 min 53 s
+  and $0.87, against 10 min and $2.08 before FRE-1634, FRE-1635 and FRE-1639).
+- **Sol's slow planner (72 s against 30 s)** was provider-side output speed, not our code.
 
 ## Worktrees — anything special
-- `build2` holds `fre-1611-creation-cap-flags-docs-dashboards`, which is bounced PR #1294.
-- `agent-ad5db2001c2a5c5f9` holds `fre-1590-artifact-design-out-of-catalog`, which is not this
-  session's work. Check it before removing it.
+- `explore` has `docker/searxng/settings.yml.example` modified. It is the known uid-977 SearXNG
+  file problem, not a study change. Check it with the explore seat before any cleanup.
+- `agent-ad5db2001c2a5c5f9` (`fre-1590-artifact-design-out-of-catalog`) is still not this session's.
 
 ## Answers for the fresh start
-- **The master channel (port 8789) held the OLD secret until this restart.** That is why the watcher's
-  triggers for #1290, #1289 and #1291 never arrived. After the restart, check that the new secret is
-  loaded:
-  1. Read `ss -ltnpH` for the pid on 127.0.0.1:8789.
-  2. Read `SESHAT_CHANNEL_SECRET` from `/proc/<pid>/environ`.
-  3. Compare it in Python with the `.env` value, and print only a boolean.
-
-  Ports 8790, 8791 and 8792 were True on 2026-10-14.
-- **A seat can sit on a Claude Code dialog for hours** (2026-10-16: `/auto-mode-setup`, 7 h on
-  build2). The dispatcher still saw the seat as busy after Esc. `cc-sessions restart cc-2build`
-  cleared the stale status, and the next tick launched the ticket.
-- **Timed reads that master owes** (each ticket's comment has the query):
-  - FRE-1602 (overdue since 2026-10-14 13:38Z).
-  - FRE-1570 AC-4, on or after 2026-10-17 20:09Z.
-  - FRE-1584 AC-2, on or after 2026-10-18.
-  - FRE-1601, on or after 2026-10-20.
-  - FRE-1600 AC-4 re-baseline, on or after 2026-10-21, from ES only.
-  - FRE-1605 AC-4, on or after 2026-11-13.
-  - FRE-1608 live check: the first non-eval reflection after 2026-10-14 08:53Z must show no "0ms" or
-    "2.00/3", and a failed turn must give `had_errors=true`.
-  - FRE-1322: an integer `host_clusters` field on `missing_skill_pattern_analysis_complete`.
-
-  `Awaiting Deploy` holds more tickets from earlier sessions. Triage them from their comments.
-- **Owner-pending:**
-  - Approve FRE-1612 (dashboards).
-  - Approve FRE-1607 (the planner and sub-agents never see the skill catalog on an expanded turn).
-  - Turn on Streams 2 and 4, or keep them off.
-  - Restart cloudflared on the Mac. It was planned for Friday 2026-10-16. Only the owner can do it.
-- **Stale `/master <n>` text** can collect in master's input box (1217–1219 on 2026-10-16). Check
-  `gh pr view` before you gate.
+- **Exa and Brave credit:** FRE-1641 drained the shared credit mid-run on 2026-10-21, which also
+  degraded production search. Master saw no top-up recorded. Ask the owner before you assume
+  search works.
+- **Owner alerts:** `.env` holds `AGENT_OWNER_NTFY_URL` with a random topic, and the owner is
+  subscribed. The topic is a secret. Never write it into Linear or the repo. The sender forces
+  IPv4 (FRE-1632), because the VPS IPv6 /64 already used up the ntfy.sh quota.
+- **FRE-1637 is in Verify Failed** because the PWA shows `session_cost_usd`. FRE-1648 is the fix.
+  If the owner's turn verifies FRE-1648, close FRE-1637 with a pointer to it.
+- **Awaiting Deploy holds about 25 tickets.** Only FRE-1646, FRE-1648 and FRE-1638 are from this
+  session. The rest are older. The 2026-10-16 file listed timed reads for some of them. Master did
+  not check them in this session, so triage each one from its comments.
+- **Owner-pending:** the PWA turn only. The 2026-10-16 file also listed FRE-1607 approval and
+  Streams 2 and 4. This session did not raise them. Check FRE-1607 in Linear.

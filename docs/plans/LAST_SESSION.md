@@ -1,12 +1,11 @@
 # Last session — master, 2026-10-20 to 2026-10-21 19:40 UTC
 
 ## Doing / discussing  (≤5 sentences)
-The owner reset with two deployed fixes unverified: "Reset anyway" (2026-10-21 ~19:58Z). FRE-1638
-(a cache read counted once) needs any Anthropic call. A background `session_summary` or `insights`
-call is enough, so check `api_costs` first. FRE-1648 (the cost shown rises during the turn) needs a
-turn with a cloud cost. Master's offer: the owner picks Sonnet 5 in the PWA and asks a tool question.
-The 19:46Z owner turn (trace `4b72555a…`) ran fully local, which verified FRE-1646 (now Done) only.
+All of this session's deployed fixes are verified live and Done: FRE-1646, FRE-1638 and FRE-1648
+(owner test turns on 2026-10-22, traces `805c8877…` and `cf2bcc6c…`). FRE-1637 closed with them.
 FRE-1620 (ADR-0157 effort selector) still owes master's adjudication from its ticket comments.
+A 6-step Sonnet turn hit the `spend_threshold` pause (iteration 6 of 6) at $0.05. The pause counts
+iterations, not dollars. The owner found it interesting and chose `answer_now`, with no decision yet.
 
 ## What was decided and why
 - **Owner: "I decide if we swap. Not you."** Master merged #1320 (Haiku 5.5 on `captains_log`)

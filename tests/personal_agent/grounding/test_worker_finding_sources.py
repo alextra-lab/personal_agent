@@ -218,6 +218,21 @@ def test_a_url_found_only_inside_page_text_is_not_a_retrieval() -> None:
     assert registration.admissibility is Admissibility.NOT_RETRIEVED
 
 
+def test_a_url_field_inside_a_fetched_json_page_is_not_a_retrieval() -> None:
+    """A fetched page served as JSON can carry ``url`` fields: links, not fetches."""
+    registry = SourceRegistry(turn_id=TURN)
+    page = RetrievedToolResult(
+        tool_name="fetch_url",
+        arguments={"url": BUSINESS},
+        content=json.dumps({"ok": True, "url": BUSINESS, "text": "", "links": [{"url": KAYAK}]}),
+    )
+
+    registration = registry.register_worker_finding(source_url=KAYAK, retrieved=(page,))
+
+    assert registration.source is None
+    assert registration.admissibility is Admissibility.NOT_RETRIEVED
+
+
 def test_a_url_printed_by_arbitrary_code_is_refused() -> None:
     """D2: ``run_python`` output is the model's own words, whatever URL it prints."""
     registry = SourceRegistry(turn_id=TURN)

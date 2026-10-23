@@ -1070,7 +1070,7 @@ class SourceRegistry:
         Computed from :meth:`sources` rather than a counter incremented on every
         ``ADMISSIBLE`` return: :meth:`_register` reuses an existing source's identifier
         when a D4 retry resubmits identical content (its dedupe key is ``(kind, origin,
-        content)``), so a per-call counter would overcount a retried admission that
+        content, referent)``), so a per-call counter would overcount a retried admission that
         produced no new source. Deriving the count from the registered-source collection
         is correct by construction — which is exactly AC-3's reconciliation claim
         (ADR-0139 D1), not a coincidence.
@@ -1399,8 +1399,11 @@ class SourceRegistry:
             return it.
         """
         referent = self._referent_of(result.tool_name, result.arguments)
-        if referent is not None and _normalised_url(referent) == target:
-            return result.content
+        if referent is not None:
+            # A tool that names its referent retrieved that one thing. Its body is the
+            # page's own text, so a ``url`` field inside a JSON page is a link the page
+            # carries, never a second retrieval (security review).
+            return result.content if _normalised_url(referent) == target else None
         try:
             parsed = json.loads(result.content)
         except (json.JSONDecodeError, TypeError, ValueError):

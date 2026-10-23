@@ -229,6 +229,10 @@ These paths sit behind CF Access in production so the practical risk is low, but
 
 ADR-0069 records the substrate-side details under "Implementation Deviations § Dev-3".
 
+## Update 2026-10-23 — the follow-up above is done (FRE-1531, ADR-0153 D11)
+
+With `gateway_auth_enabled=True`, `service/auth.py:resolve_request_email` takes identity only from the verified `email` claim of `Cf-Access-Jwt-Assertion`. The verifier uses the main app's audience (`cf_access_main_aud`), which differs from the artifact Worker's (`cf_access_aud`). The plaintext header is not read in that mode. Without `cf_access_team_domain` and `cf_access_main_aud`, the user routes return 503. The dev and CLI fallback (D4) is unchanged. `get_request_user`, `gateway/session_api.py`, `gateway/feedback_api.py` and `gateway/knowledge_api.py` all use the one resolver. The regression test is `tests/test_service/test_auth_jwt.py`.
+
 ---
 
 ## Related

@@ -1,9 +1,10 @@
-"""Inbound user identity resolution via Cloudflare Access (ADR-0064).
+"""Inbound user identity resolution via Cloudflare Access (ADR-0064, ADR-0153 D11).
 
-Reads Cf-Access-Authenticated-User-Email from inbound requests and maps
-it to a stable user_id UUID in the Postgres users table. Provides a
-dev-mode fallback to the deployment owner identity when no CF header is
-present and gateway_auth_enabled=False.
+With gateway_auth_enabled=True, the email comes from the verified claim of the
+Cf-Access-Jwt-Assertion JWT and maps to a stable user_id UUID in the Postgres
+users table. The plaintext Cf-Access-Authenticated-User-Email header is read
+only in dev mode (gateway_auth_enabled=False), which also falls back to the
+deployment owner identity when no header is present.
 """
 
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.config.settings import get_settings
+from personal_agent.service.cf_access_jwt import CFAccessVerifierError, get_main_app_verifier
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import UserModel
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -26,6 +28,8 @@ log = structlog.get_logger(__name__)
 settings = get_settings()
 
 _CF_EMAIL_HEADER = "cf-access-authenticated-user-email"
+_CF_JWT_HEADER = "cf-access-jwt-assertion"
+_jwt_identity_logged = False
 
 
 @dataclass(frozen=True)
@@ -173,14 +177,92 @@ async def _get_user_with_display_name(db: AsyncSession, email: str) -> tuple[UUI
     return user_id, None
 
 
+async def _verified_jwt_email(request: Request, trace_id: str) -> str:
+    """Return the email claim of the request's Cloudflare Access JWT.
+
+    Args:
+        request: The incoming FastAPI request.
+        trace_id: Trace id for the log lines.
+
+    Returns:
+        The verified, lowercased ``email`` claim.
+
+    Raises:
+        HTTPException: 503 when the main-app verifier is not configured, 401 when the
+            JWT is absent or fails verification. The 401 is opaque by design.
+    """
+    verifier = get_main_app_verifier()
+    if verifier is None:
+        log.error(
+            "request_auth_misconfigured",
+            reason="cf_access_team_domain or cf_access_main_aud unset",
+            trace_id=trace_id,
+        )
+        raise HTTPException(status_code=503, detail="Authentication unavailable")
+
+    token = request.headers.get(_CF_JWT_HEADER)
+    if not token:
+        log.warning("unauthenticated_request", path=request.url.path, trace_id=trace_id)
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        claims = await verifier.verify(token)
+    except CFAccessVerifierError as exc:
+        log.warning(
+            "request_jwt_invalid",
+            path=request.url.path,
+            error_class=type(exc).__name__,
+            trace_id=trace_id,
+        )
+        raise HTTPException(status_code=401, detail="Authentication required") from exc
+    return claims.email
+
+
+async def resolve_request_email(request: Request, *, owner_fallback: bool = True) -> str:
+    """Resolve the caller's email for a request.
+
+    With ``gateway_auth_enabled=True`` the email comes only from the verified
+    ``Cf-Access-Jwt-Assertion`` claim (ADR-0153 D11). The plaintext
+    ``Cf-Access-Authenticated-User-Email`` header is not read in that mode.
+
+    With ``gateway_auth_enabled=False`` (dev, CLI, eval) the header is accepted as
+    before. If it is absent and ``owner_fallback`` is true, the deployment owner is
+    used (ADR-0064 D4).
+
+    Args:
+        request: The incoming FastAPI request.
+        owner_fallback: Whether dev mode may fall back to ``agent_owner_email``.
+
+    Returns:
+        The caller's email.
+
+    Raises:
+        HTTPException: 401 when no identity can be resolved, 503 when production
+            verification is not configured.
+    """
+    trace_id = SystemTraceContext.new("request_auth").trace_id
+    if settings.gateway_auth_enabled:
+        return await _verified_jwt_email(request, trace_id)
+
+    email: str | None = request.headers.get(_CF_EMAIL_HEADER)
+    if not email and owner_fallback:
+        email = settings.agent_owner_email
+    if not email:
+        log.warning(
+            "unauthenticated_request",
+            path=request.url.path,
+            gateway_auth_enabled=False,
+            trace_id=trace_id,
+        )
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return email
+
+
 async def get_request_user(request: Request) -> RequestUser:
     """FastAPI dependency — resolve the authenticated user for a request.
 
-    Resolution order:
-    1. Cf-Access-Authenticated-User-Email header (CF Access, production path).
-    2. Dev-mode fallback: if gateway_auth_enabled=False and agent_owner_email
-       is set, use the deployment owner identity (CLI / local dev path).
-    3. Raise HTTP 401 if neither condition is met.
+    Identity comes from :func:`resolve_request_email`: the verified Cloudflare
+    Access JWT in production, the header or the owner in dev mode.
 
     Args:
         request: The incoming FastAPI request.
@@ -189,26 +271,25 @@ async def get_request_user(request: Request) -> RequestUser:
         RequestUser with stable user_id, verified email, and optional display_name.
 
     Raises:
-        HTTPException: 401 when no identity can be resolved.
+        HTTPException: 401 when no identity can be resolved, 503 when production
+            verification is not configured.
     """
+    global _jwt_identity_logged
     ctx = SystemTraceContext.new("request_auth")
-    email: str | None = request.headers.get(_CF_EMAIL_HEADER)
-
-    if not email:
-        if not settings.gateway_auth_enabled and settings.agent_owner_email:
-            email = settings.agent_owner_email
-        else:
-            log.warning(
-                "unauthenticated_request",
-                path=request.url.path,
-                gateway_auth_enabled=settings.gateway_auth_enabled,
-                trace_id=ctx.trace_id,
-            )
-            raise HTTPException(status_code=401, detail="Authentication required")
+    email = await resolve_request_email(request)
 
     async with _get_db_session() as db:
         user_id, display_name = await _get_user_with_display_name(db, email)
 
+    if settings.gateway_auth_enabled and not _jwt_identity_logged:
+        # One production-visible proof that JWT identity works. The per-request line
+        # below is debug level and is not emitted in production.
+        _jwt_identity_logged = True
+        log.info(
+            "request_user_jwt_identity_first_verified",
+            user_id=str(user_id),
+            trace_id=ctx.trace_id,
+        )
     log.debug(
         "request_user_resolved",
         email=email,

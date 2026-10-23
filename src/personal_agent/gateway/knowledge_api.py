@@ -106,7 +106,7 @@ async def _get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
 
 
 async def _require_request_user_id(request: Request, db: AsyncSession) -> Any:
-    """Resolve the authenticated user's UUID from the CF Access header.
+    """Resolve the authenticated user's UUID from the verified CF Access identity.
 
     Mirrors the same-named helper in :mod:`personal_agent.gateway.session_api`
     (which can't be imported here without creating a cross-module cycle).

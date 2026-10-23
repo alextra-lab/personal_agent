@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import jwt
 import structlog
 
@@ -42,6 +43,8 @@ _JWKS_TTL_SECONDS = 3600
 # caller that sends random ``kid`` values makes every request fetch from Cloudflare.
 _JWKS_FORCE_REFRESH_COOLDOWN_SECONDS = 60
 _JWKS_FETCH_TIMEOUT_SECONDS = 10.0
+# After a failed TTL refresh with keys cached, retry the fetch after this many seconds.
+_JWKS_STALE_RETRY_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -168,11 +171,27 @@ class CFAccessVerifier:
                 return
             if force:
                 self._last_forced_at = time.monotonic()
-            async with create_guarded_http_client(timeout=_JWKS_FETCH_TIMEOUT_SECONDS) as client:
-                resp = await client.get(self._certs_url)
-                resp.raise_for_status()
-                self._jwks = resp.json()
-                self._cached_at = time.monotonic()
+            try:
+                async with create_guarded_http_client(
+                    timeout=_JWKS_FETCH_TIMEOUT_SECONDS
+                ) as client:
+                    resp = await client.get(self._certs_url)
+                    resp.raise_for_status()
+                    self._jwks = resp.json()
+                    self._cached_at = time.monotonic()
+            except (httpx.HTTPError, ValueError) as exc:
+                if force or not self._jwks:
+                    raise
+                # TTL refresh failed and keys are cached: keep serving them, so a
+                # Cloudflare certs outage does not fail every request. Token expiry is
+                # still enforced. Retry after the stale-retry delay, not on each request.
+                self._cached_at = time.monotonic() - _JWKS_TTL_SECONDS + _JWKS_STALE_RETRY_SECONDS
+                log.warning(
+                    "cf_access_jwks_refresh_failed_serving_cached",
+                    certs_url=self._certs_url,
+                    error_class=type(exc).__name__,
+                )
+                return
             keys = self._jwks.get("keys", [])
             log.info(
                 "cf_access_jwks_refreshed",

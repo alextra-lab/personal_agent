@@ -6,8 +6,7 @@ inline card. The event flows to Elasticsearch via the structlog handler
 join click-rates against artifact_write rates per ADR-0070 D8.
 
 Security: uses ``get_request_user`` (same as chat/session endpoints) which
-reads the ``Cf-Access-Authenticated-User-Email`` header injected by CF Access
-at the edge. Best-effort — a verified request always returns 204 even when
+resolves the user from the verified Cloudflare Access JWT (ADR-0153 D11). Best-effort — a verified request always returns 204 even when
 the emit logic encounters a transient error, so telemetry never blocks the
 user interaction that triggered it.
 """

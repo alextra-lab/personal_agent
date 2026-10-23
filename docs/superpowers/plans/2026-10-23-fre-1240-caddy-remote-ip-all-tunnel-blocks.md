@@ -16,6 +16,11 @@ Diff class: security config, Caddy restart on deploy. Not a gateway rebuild.
   and the VPS public IP for master's own-public-IP check of the ES host.
 - So a request from the VPS to its own public IP is **outside** `172.25.0.0/16`. AC-2 will see 403.
 - `remote_ip` tests the TCP peer address. `X-Forwarded-For` cannot forge it.
+- **IPv6 (found during self-review, measured):** a request to the VPS public IPv4 address reaches
+  Caddy with its true source. A request to the public IPv6 address reaches Caddy as `172.25.0.1`,
+  the bridge gateway, because Docker serves IPv6 through its userland proxy. `172.25.0.1` is
+  inside `172.25.0.0/16`, so the subnet check alone passes a direct IPv6 request. Caddy listens on
+  `[::]:80`. `harden.sh` drops inbound IPv6, but the live `ip6tables` INPUT policy is `ACCEPT`.
 
 ## Design
 
@@ -30,11 +35,16 @@ One snippet, imported first in each of the four unrestricted blocks:
 }
 ```
 
+The snippet also holds `@bridge_gateway remote_ip 172.25.0.1/32` with its own `handle` that
+answers 403. The gateway is the host or its userland proxy, never cloudflared, so refusing that one
+address costs nothing and closes the IPv6 path. The OTLP block gets `not remote_ip 172.25.0.1/32`
+in its `@allowed` matcher for the same reason.
+
 Why `handle`, not a bare `respond`: Caddy orders `handle` before `respond`. A bare
 `respond @not_tunnel` would run after the block's own `handle`/`reverse_proxy` and not guard
 anything. The `handle` blocks run in file order, so the import must be the first line of the block.
 
-Not changed: the OTLP block (already restricted, inline, covered by FRE-1239 tests), the
+Not changed: the rest of the OTLP block (path, method, body cap, log redaction), the
 `localhost` block (SSH-tunnel dev access), the `:8600`/`:8601` egress listeners (loopback-bound).
 
 ## Steps
@@ -54,6 +64,8 @@ Not changed: the OTLP block (already restricted, inline, covered by FRE-1239 tes
    run the full committed Caddyfile in a disposable Caddy on a throwaway network.
    - Guard subnet replaced by one that excludes the client: every tunnel host answers 403,
      including ES `/_bulk` and `/slm-requests-x`, and the graph WebSocket upgrade shape.
+   - Guard keeps the network's real gateway, and the client arrives as that gateway: every route is
+     403 although the peer is inside the subnet (the IPv6 case).
    - Guard subnet replaced by the network's own subnet: the same requests are **not** 403
      (they reach `reverse_proxy` and fail, since no upstream exists). The assertion is "not 403":
      the AGENT and API blocks turn the 502 into a 500 through `handle_errors`, while GRAPH and ES
@@ -74,4 +86,8 @@ Not changed: the OTLP block (already restricted, inline, covered by FRE-1239 tes
 
 - Import placed after another `handle` → guard bypassed. Smoke test covers each block.
 - Subnet drift between Caddyfile and compose → static test compares both.
-- Loopback `127.0.0.1:80` requests arrive as `172.25.0.1` and pass. Accepted: host-local only.
+- Loopback `127.0.0.1:80` requests arrive as `172.25.0.1`. They are now refused on the tunnel hosts.
+  No tool in the repo uses that route for a tunnel host name (the access log shows the gateway only
+  on the `:8600` egress listener, which is not guarded).
+- `tests/scripts/test_fre1239_otlp_ingress_smoke.py` swaps the gateway literal for an unused
+  address, since its client always arrives as the gateway.

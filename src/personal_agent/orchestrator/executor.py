@@ -1980,8 +1980,9 @@ def _with_entry_sources(
     for key in call_keys:
         items = parsed.get(key)
         for item in items if isinstance(items, list) else ():
+            # setdefault: an object that is also an entry keeps its own, admitted marker.
             if isinstance(item, dict):
-                item["_citation"] = f"[{call_identifier}]"
+                item.setdefault("_citation", f"[{call_identifier}]")
     return json.dumps(parsed)
 
 

@@ -442,3 +442,60 @@ def test_snapshot_shows_each_entry_url(caplog: Any) -> None:
     assert _ORTIZ in rendered
     assert _BIARRITZ in rendered
     assert "Bonito del norte" not in rendered
+
+
+def test_a_url_only_in_the_query_gets_no_marker_in_the_model_content() -> None:
+    """FRE-1662 AC-2 through the executor: the echoed query is not an entry."""
+    ctx = _context()
+    assert ctx.source_registry is not None
+    planted = "https://invented.example/tuna-ranking"
+    content = json.dumps(
+        {
+            "ok": True,
+            "results": [{"title": "Ortiz", "url": _ORTIZ, "snippet": "Bonito del norte."}],
+            "query": planted,
+        }
+    )
+    arguments = {"query": planted}
+    identifier = _register_tool_source(
+        ctx, tool_name="web_search", arguments=arguments, content=content, success=True
+    )
+    assert identifier is not None
+
+    marked = _with_entry_sources(
+        ctx,
+        tool_name="web_search",
+        arguments=arguments,
+        content=content,
+        call_identifier=identifier,
+    )
+
+    assert json.loads(marked)["query"] == planted
+    referents = [s.referent for s in ctx.source_registry.sources() if s.referent]
+    assert referents == [_ORTIZ]
+
+
+def test_an_answer_that_is_also_an_entry_keeps_its_own_marker() -> None:
+    """The call-level marker never overwrites an entry's admitted marker."""
+    ctx = _context()
+    assert ctx.source_registry is not None
+    content = json.dumps(
+        {
+            "ok": True,
+            "answers": [{"engine": "wikidata", "answer": "Ortiz, 1891.", "url": _ORTIZ}],
+            "results": [{"title": "Epicerie", "url": _BIARRITZ, "snippet": "Sold here."}],
+        }
+    )
+
+    marked = json.loads(
+        _with_entry_sources(
+            ctx,
+            tool_name="web_search",
+            arguments=_SEARCH_ARGS,
+            content=content,
+            call_identifier="S2@0123456789abcdef",
+        )
+    )
+
+    answer_source = ctx.source_registry.resolve(marked["answers"][0]["_citation"].strip("[]"))
+    assert answer_source is not None and answer_source.referent == _ORTIZ

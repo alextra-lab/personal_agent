@@ -8,6 +8,7 @@ import re
 import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -942,3 +943,92 @@ def test_shape_search_response_is_the_executor_shape() -> None:
         "pageno": "1",
         "time_range": "year",
     }
+
+
+# ── FRE-1656: paid-engine cost recording ───────────────────────────────────
+
+
+def _paid_ctx() -> TraceContext:
+    return TraceContext(trace_id=uuid4().hex, session_id=str(uuid4()))
+
+
+def _paid_result(engine: str, n: int = 0) -> dict:
+    return {
+        "title": f"{engine} {n}",
+        "url": f"https://example.com/{engine}/{n}",
+        "content": "x",
+        "engine": engine,
+    }
+
+
+async def _search_recording_costs(
+    resp: MagicMock, ctx: TraceContext, **kwargs: object
+) -> AsyncMock:
+    record = AsyncMock()
+    with (
+        patch("personal_agent.tools.web.httpx.AsyncClient", return_value=_mock_client(resp)),
+        patch("personal_agent.tools.web.record_vendor_cost", record),
+    ):
+        await web_search_executor(query="flights", ctx=ctx, **kwargs)
+    return record
+
+
+@pytest.mark.asyncio
+async def test_web_search_records_one_row_per_paid_engine_used() -> None:
+    """AC-2: a search that used Brave and Exa writes one non-zero cost row for each."""
+    ctx = _paid_ctx()
+    resp = _mock_searxng_response(
+        results=[_paid_result("braveapi"), _paid_result("exa"), _paid_result("exa", 1)]
+    )
+
+    record = await _search_recording_costs(resp, ctx)
+
+    calls = {c.kwargs["provider"]: c.kwargs for c in record.await_args_list}
+    assert sorted(calls) == ["brave", "exa"]
+    assert calls["brave"]["model"] == "brave/braveapi"
+    assert calls["exa"]["model"] == "exa/exa"
+    for call in calls.values():
+        assert call["cost_usd"] > 0
+        assert call["purpose"] == "web_search"
+        assert call["trace_id"] == ctx.trace_id
+        assert call["session_id"] == ctx.session_id
+
+
+@pytest.mark.asyncio
+async def test_web_search_counts_an_engine_cut_by_max_results() -> None:
+    """The engine list comes from the raw results, not the ``max_results`` slice."""
+    resp = _mock_searxng_response(results=[_paid_result("exa"), _paid_result("braveapi")])
+
+    record = await _search_recording_costs(resp, _paid_ctx(), max_results=1)
+
+    assert sorted(c.kwargs["provider"] for c in record.await_args_list) == ["brave", "exa"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_records_a_named_paid_engine_that_returned_nothing() -> None:
+    """An engine the caller named is billed per request even when it finds no result."""
+    record = await _search_recording_costs(
+        _mock_searxng_response(results=[]), _paid_ctx(), engines="exa"
+    )
+
+    assert [c.kwargs["provider"] for c in record.await_args_list] == ["exa"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_does_not_record_a_named_engine_that_failed() -> None:
+    """A named engine in ``unresponsive_engines`` did not serve the request."""
+    resp = _mock_searxng_response(results=[], unresponsive_engines=[["exa", "HTTP error"]])
+
+    record = await _search_recording_costs(resp, _paid_ctx(), engines="exa")
+
+    record.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_web_search_records_nothing_for_free_engines() -> None:
+    """A search served only by free engines writes no cost row."""
+    resp = _mock_searxng_response(results=[_paid_result("google"), _paid_result("duckduckgo")])
+
+    record = await _search_recording_costs(resp, _paid_ctx())
+
+    record.assert_not_awaited()

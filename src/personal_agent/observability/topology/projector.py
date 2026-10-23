@@ -176,6 +176,9 @@ class SessionAggregate:
             ``len()`` = ``quality_alert_count``.
         quality_alert: Transient this-turn A alert dict; ``None`` when no A fired this turn
             or after the next clean ``turn.completed`` (§D5).
+        last_status: The last ``turn_status`` value this session emitted, or ``None``. A cost
+            that lands after the turn ended (FRE-1656) re-emits it with only
+            ``session_cost_usd`` replaced, so the stored snapshot stays right.
     """
 
     session_id: str
@@ -187,6 +190,7 @@ class SessionAggregate:
     compaction_d_ids: set[str] = field(default_factory=set)
     quality_alert_ids: set[str] = field(default_factory=set)
     quality_alert: dict[str, Any] | None = None
+    last_status: dict[str, Any] | None = None
 
 
 @dataclass
@@ -433,9 +437,12 @@ class TurnObservationProjector:
                 obs.sub_agent_iteration_max.get(event.task_id, 0), event.iteration_max
             )
         elif isinstance(event, ModelCallCompletedEvent):
-            if trace_completed:
-                return
             sess = await self._ensure_session(event.session_id)
+            if trace_completed:
+                # FRE-1656: a row billed after its turn ended (Captain's Log, post-turn
+                # embeddings) is session spend; only the per-trace state stays dropped.
+                await self._fold_background_cost(sess)
+                return
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.model_calls_received += 1
@@ -444,6 +451,10 @@ class TurnObservationProjector:
             obs.output_tokens += event.output_tokens
             if event.topology is not None:
                 obs.topology = event.topology
+            if not obs.is_turn:
+                # FRE-1656: a trace with no turn lifecycle (entity extraction) never
+                # completes, so its cost would never reach ``sess.costs``.
+                await self._fold_background_cost(sess)
         elif isinstance(event, TurnDegradedEvent):
             if trace_completed:
                 return
@@ -568,37 +579,84 @@ class TurnObservationProjector:
         cache_reset_count = len(sess.compaction_d_ids) if sess else 0
         quality_alert_count = len(sess.quality_alert_ids) if sess else 0
         quality_alert = sess.quality_alert if sess else None
+        value: dict[str, Any] = {
+            "context_tokens": context_tokens,
+            "context_max": context_max,
+            "tool_iteration": tool_iteration,
+            "tool_iteration_max": tool_iteration_max,
+            "turn_cost_usd": round(obs.live_cost_usd, 6),
+            # FRE-407: the client stamps trace_id onto the assistant message so the
+            # rating control (which joins on trace_id) can render after DONE.
+            "trace_id": obs.trace_id,
+            "topology": obs.topology,
+            "degraded": obs.degraded,
+            "degradations": list(obs.degradations),
+            # ADR-0092 §D2/§D3 session lane.
+            "session_cost_usd": session_cost_usd,
+            "session_context_tokens": session_context_tokens,
+            # ADR-0092 §D5/§D6/§D7 compaction lane.
+            "compaction_count": compaction_count,
+            "cache_reset_count": cache_reset_count,
+            "quality_alert_count": quality_alert_count,
+            "quality_alert": quality_alert,
+        }
+        if sess:
+            sess.last_status = dict(value)
         try:
-            await emit_turn_status(
-                session_id=obs.session_id,
-                value={
-                    "context_tokens": context_tokens,
-                    "context_max": context_max,
-                    "tool_iteration": tool_iteration,
-                    "tool_iteration_max": tool_iteration_max,
-                    "turn_cost_usd": round(obs.live_cost_usd, 6),
-                    # FRE-407: the client stamps trace_id onto the assistant message so the
-                    # rating control (which joins on trace_id) can render after DONE.
-                    "trace_id": obs.trace_id,
-                    "topology": obs.topology,
-                    "degraded": obs.degraded,
-                    "degradations": list(obs.degradations),
-                    # ADR-0092 §D2/§D3 session lane.
-                    "session_cost_usd": session_cost_usd,
-                    "session_context_tokens": session_context_tokens,
-                    # ADR-0092 §D5/§D6/§D7 compaction lane.
-                    "compaction_count": compaction_count,
-                    "cache_reset_count": cache_reset_count,
-                    "quality_alert_count": quality_alert_count,
-                    "quality_alert": quality_alert,
-                },
-            )
+            await emit_turn_status(session_id=obs.session_id, value=value)
         except Exception:
             log.debug(
                 "turn_status_emit_failed",
                 trace_id=obs.trace_id,
                 session_id=obs.session_id,
             )
+
+    async def _fold_background_cost(self, sess: SessionAggregate) -> None:
+        """Fold spend that no turn lifecycle reports into the session total (FRE-1656).
+
+        Two kinds of ``api_costs`` row miss the bar: rows billed to a trace after its
+        ``turn.completed`` (Captain's Log, post-turn embeddings), and rows billed to a trace
+        that is never a turn (entity extraction). Both raise a ``ModelCallCompletedEvent``.
+        The fold re-reads the session's per-trace costs and assigns them (never ``+=``), so a
+        redelivered event, or a row that hydration already counted, cannot count twice.
+
+        If no turn of the session is running, the last emitted status goes out again with only
+        ``session_cost_usd`` changed — the stored snapshot is the number a reload shows. It
+        goes out only when the bar's cents change, so ~30 post-turn embeddings worth
+        ``0.000002`` each do not write 30 snapshots. A running turn is never overwritten: its
+        next emit carries the session total.
+
+        Best-effort: with no hydration source, or a failing one, nothing changes.
+
+        Args:
+            sess: The session aggregate that the event belongs to.
+        """
+        if self._hydration_source is None:
+            return
+        try:
+            hydration = await self._hydration_source(sess.session_id)
+        except Exception:
+            log.debug("projector_cost_refresh_failed", session_id=sess.session_id)
+            return
+        for tid, cost in hydration.costs.items():
+            sess.costs[_cost_key(tid)] = cost
+
+        last = sess.last_status
+        if last is None or any(
+            o.is_turn and o.session_id == sess.session_id for o in self._by_trace.values()
+        ):
+            return
+        total = round(sum(sess.costs.values()), 6)
+        if round(total, 2) == round(float(last["session_cost_usd"]), 2):
+            return
+        # ``last`` already carries the turn's ``trace_id``; only the cost changes.
+        refreshed = {**last, "session_cost_usd": total}
+        try:
+            await emit_turn_status(session_id=sess.session_id, value=refreshed)
+        except Exception:
+            log.debug("turn_status_emit_failed", session_id=sess.session_id)
+            return
+        sess.last_status = refreshed
 
     def _maybe_emit_rolling(self) -> None:
         """Emit the rolling bus-delivery gauge every N events or T seconds (FRE-557).

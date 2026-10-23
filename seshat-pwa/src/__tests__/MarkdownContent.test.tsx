@@ -21,9 +21,50 @@ vi.mock('mermaid', () => ({
 import { MarkdownContent } from '@/components/MarkdownContent';
 
 describe('MarkdownContent — math (KaTeX)', () => {
-  it('renders inline math', () => {
-    const { container } = render(<MarkdownContent content={'Energy is $E=mc^2$.'} />);
+  // FRE-1651: single dollar signs are money, not math. Inline math is written
+  // with double dollar signs inside a paragraph.
+  it('renders inline math written with double dollar signs', () => {
+    const { container } = render(<MarkdownContent content={'Energy is $$E=mc^2$$.'} />);
     expect(container.querySelector('.katex')).not.toBeNull();
+    expect(container.querySelector('.katex-display')).toBeNull();
+  });
+
+  // FRE-1651 AC-1 / AC-2: this test fails against `remarkMath` with its defaults.
+  it('renders dollar amounts as plain text with their dollar signs', () => {
+    const content =
+      'Fares run $554–816 typical; cheapest $506. Other dates: $425–580 against $660–820.';
+    const { container } = render(<MarkdownContent content={content} />);
+    expect(container.querySelector('.katex')).toBeNull();
+    for (const amount of ['$554–816', '$506', '$425–580', '$660–820']) {
+      expect(container.textContent).toContain(amount);
+    }
+  });
+
+  // FRE-1651 AC-3
+  it('renders a block with double dollar signs as display math', () => {
+    const { container } = render(
+      <MarkdownContent content={'$$\nx^2 + y^2\n$$'} />,
+    );
+    expect(container.querySelector('.katex-display')).not.toBeNull();
+  });
+
+  // FRE-1651: a wide table and a wide display-math block each scroll inside their own box.
+  it('wraps a table in its own horizontal scroll box', () => {
+    const { container } = render(
+      <MarkdownContent content={'| a | b |\n|---|---|\n| 1 | 2 |'} />,
+    );
+    const table = container.querySelector('table');
+    expect(table).not.toBeNull();
+    expect(table!.parentElement!.className).toContain('overflow-x-auto');
+  });
+
+  it('gives display math its own horizontal scroll box', () => {
+    const { container } = render(
+      <MarkdownContent content={'$$\nx^2 + y^2\n$$'} />,
+    );
+    const display = container.querySelector('.katex-display');
+    expect(display).not.toBeNull();
+    expect(display!.parentElement!.className).toContain('overflow-x-auto');
   });
 
   it('renders display math', () => {

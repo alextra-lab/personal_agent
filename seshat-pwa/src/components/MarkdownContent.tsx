@@ -139,6 +139,26 @@ const markdownComponents: Components = {
       </CodeBlock>
     );
   },
+  // FRE-1651: a wide table scrolls inside its own box, so it cannot widen the
+  // message column.
+  table({ children }) {
+    return (
+      <div className="overflow-x-auto">
+        <table>{children}</table>
+      </div>
+    );
+  },
+  // FRE-1651: same for display math, which KaTeX sets on one unwrappable line.
+  span({ className, children }) {
+    if (className?.split(' ').includes('katex-display')) {
+      return (
+        <div className="overflow-x-auto overflow-y-hidden">
+          <span className={className}>{children}</span>
+        </div>
+      );
+    }
+    return <span className={className}>{children}</span>;
+  },
   a({ href, children }) {
     // Tier 3 (ADR-0070): intercept artifact URLs and render an inline card.
     const artifactId = tryParseArtifactId(href);
@@ -188,7 +208,9 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
       ].join(' ')}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        // FRE-1651: single dollar signs are money ("$554–816"), not math. Inline
+        // math needs double dollar signs; display math is unchanged.
+        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
         rehypePlugins={[rehypeKatex]}
         components={markdownComponents}
       >

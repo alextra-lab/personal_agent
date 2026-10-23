@@ -419,7 +419,10 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
           unclipped flow position, which can be thousands of px into a long
           conversation) escapes the clip and pushes the *document* itself into
           overflow even though nothing is visibly out of place (FRE-1266 AC-1). */}
-      <main className="relative flex-1 min-h-0 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+      {/* overflow-x-hidden (FRE-1651): `overflow-y-auto` alone makes the computed
+          overflow-x `auto` too, so one wide child scrolled the whole list sideways.
+          Wide tables and display math scroll inside their own boxes instead. */}
+      <main className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
         {/* FRE-236: reconnecting banner — shown when WS was lost mid-turn */}
         {isReconnecting && (
           <div className="sticky top-0 z-10 px-4 py-2 bg-amber-900/80 backdrop-blur-sm text-amber-200 text-xs text-center border-b border-amber-800/50">

@@ -542,6 +542,23 @@ class AppConfig(BaseSettings):
         le=50,
         description="Maximum results to return per search",
     )
+    brave_search_cost_per_call_usd: float = Field(
+        default=0.005,
+        ge=0,
+        description=(
+            "Cost of one Brave Search API request in USD, recorded in api_costs per "
+            "web_search that used it (FRE-1656). List price $5 per 1,000 (ADR-0034)."
+        ),
+    )
+    exa_search_cost_per_call_usd: float = Field(
+        default=0.007,
+        ge=0,
+        description=(
+            "Cost of one Exa /search request in USD, recorded in api_costs per web_search "
+            "that used it (FRE-1656). List price $7 per 1,000, up to 10 results "
+            "(exa.ai pricing page, read 2026-08-29)."
+        ),
+    )
 
     @field_validator("mcp_gateway_command", mode="before")
     @classmethod

@@ -1459,3 +1459,131 @@ async def test_session_cost_running_turn_not_doubled_by_hydrated_partial(
 
     # 0.4 prior + 0.25 live (replaces the 0.1 partial), not 0.75.
     assert emitted[-1]["session_cost_usd"] == pytest.approx(0.65)
+
+
+# ---------------------------------------------------------------------------
+# FRE-1656 — the session total counts spend that lands after the turn ends
+# ---------------------------------------------------------------------------
+
+_TURN = "4b72555ab25a4e5f8f1d2c3b4a596877"
+_ENTITY_TRACE = "e14407e8a1b24c3d9e5f60718293a4b5"
+
+
+def _ledger(rows: dict[str, float]) -> Any:
+    """Return a hydration source that reads ``rows`` live, like ``api_costs`` does."""
+    from personal_agent.observability.topology.projector import SessionHydration
+
+    async def _source(session_id: str) -> SessionHydration:
+        return SessionHydration(costs=dict(rows))
+
+    return _source
+
+
+def _late_call(trace_id: str, cost: float) -> ModelCallCompletedEvent:
+    return ModelCallCompletedEvent(
+        trace_id=trace_id,
+        session_id="s-1",
+        cost_usd=cost,
+        input_tokens=10,
+        output_tokens=5,
+        model_role="captains_log",
+    )
+
+
+async def test_late_rows_on_a_completed_trace_reach_the_session_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: background rows billed after ``turn.completed`` are summed into the bar.
+
+    The turn itself cost 0 (local model). Captain's Log and the post-turn embeddings bill
+    the same trace after it completed, so the authoritative value set at completion is 0.
+    """
+    emitted = _capture(monkeypatch)
+    rows: dict[str, float] = {}
+    proj = TurnObservationProjector(hydration_source=_ledger(rows))
+    await _complete_tool_turn(proj)
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.02)
+    emitted_after_turn = len(emitted)
+
+    rows["turn-1"] = 0.02 + 0.0125 + 0.0153
+    await proj.handle(_late_call("turn-1", 0.0125))
+
+    assert len(emitted) == emitted_after_turn + 1
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.0478)
+    # Only the cost moved: the reading the owner sees is the last good one.
+    assert (emitted[-1]["tool_iteration"], emitted[-1]["tool_iteration_max"]) == (2, 25)
+    assert emitted[-1]["session_context_tokens"] == 24000
+    assert emitted[-1]["trace_id"] == "turn-1"
+
+
+async def test_rows_on_a_non_turn_trace_reach_the_session_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-1: entity extraction bills under its own trace, which has no turn lifecycle."""
+    emitted = _capture(monkeypatch)
+    rows: dict[str, float] = {}
+    proj = TurnObservationProjector(hydration_source=_ledger(rows))
+    await _complete_tool_turn(proj)
+
+    rows[_ENTITY_TRACE] = 0.0153
+    await proj.handle(_late_call(_ENTITY_TRACE, 0.0153))
+
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.0353)
+    assert emitted[-1]["trace_id"] == "turn-1"
+
+
+async def test_a_redelivered_late_event_does_not_double_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fold re-reads the ledger and assigns, so a second delivery changes nothing."""
+    emitted = _capture(monkeypatch)
+    rows: dict[str, float] = {}
+    proj = TurnObservationProjector(hydration_source=_ledger(rows))
+    await _complete_tool_turn(proj)
+
+    rows[_ENTITY_TRACE] = 0.0153
+    await proj.handle(_late_call(_ENTITY_TRACE, 0.0153))
+    emitted_once = len(emitted)
+    await proj.handle(_late_call(_ENTITY_TRACE, 0.0153))
+
+    assert len(emitted) == emitted_once
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.0353)
+
+
+async def test_a_late_row_does_not_emit_over_a_running_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A re-emit of the previous turn's reading must not replace a running turn's bar."""
+    emitted = _capture(monkeypatch)
+    rows: dict[str, float] = {}
+    proj = TurnObservationProjector(hydration_source=_ledger(rows))
+    await _complete_tool_turn(proj)
+    await proj.handle(TopologyEnteredEvent(trace_id="turn-2", session_id="s-1", topology="primary"))
+    emitted_mid_turn = len(emitted)
+
+    rows[_ENTITY_TRACE] = 0.0153
+    await proj.handle(_late_call(_ENTITY_TRACE, 0.0153))
+    assert len(emitted) == emitted_mid_turn
+
+    # The next emit of the running turn carries the late row.
+    await proj.handle(_late_call("turn-2", 0.001))
+    assert emitted[-1]["trace_id"] == "turn-2"
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.02 + 0.0153 + 0.001)
+
+
+async def test_a_change_under_one_cent_does_not_re_emit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bar shows cents, so embeddings worth 0.000002 each must not write a snapshot each."""
+    emitted = _capture(monkeypatch)
+    rows: dict[str, float] = {}
+    proj = TurnObservationProjector(hydration_source=_ledger(rows))
+    await _complete_tool_turn(proj)
+    emitted_after_turn = len(emitted)
+
+    rows["turn-1"] = 0.020002
+    await proj.handle(_late_call("turn-1", 0.000002))
+
+    assert len(emitted) == emitted_after_turn
+    # The sum is still kept: the next emit shows it.
+    rows["turn-1"] = 0.0125 + 0.02
+    await proj.handle(_late_call("turn-1", 0.0125))
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.0325)

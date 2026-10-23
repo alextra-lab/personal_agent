@@ -11,6 +11,7 @@ from typing import Any, Literal
 import httpx
 
 from personal_agent.config import settings
+from personal_agent.llm_client.cost_tracker import record_vendor_cost
 from personal_agent.security import create_guarded_http_client
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.contract import ToolError, error_codes
@@ -335,6 +336,65 @@ def shape_search_response(
     return output
 
 
+# SearXNG engine name -> (api_costs provider, canonical model id). Both engines bill per
+# request to the owner's keys (docker/searxng/settings.yml.example).
+_PAID_ENGINES: dict[str, tuple[str, str]] = {
+    "braveapi": ("brave", "brave/braveapi"),
+    "exa": ("exa", "exa/exa"),
+}
+
+
+def paid_engines_used(data: dict[str, Any], engines: str | None) -> list[str]:
+    """Return the paid SearXNG engines that served a search, sorted.
+
+    An engine counts when it appears in the raw results (before the ``max_results`` cut), or
+    when the caller named it and it is not in ``unresponsive_engines``. A named engine is
+    billed per request even when it finds nothing. A ``general`` search whose paid engine
+    returns no result is not visible in the response, so that call is not counted.
+
+    Args:
+        data: The parsed SearXNG JSON response.
+        engines: The ``engines`` argument of the search, or ``None``.
+
+    Returns:
+        Names from ``_PAID_ENGINES`` that the search used.
+    """
+    used = {str(r.get("engine", "")) for r in data.get("results") or []}
+    named = {e.strip() for e in (engines or "").split(",")}
+    failed = {
+        str(entry[0])
+        for entry in data.get("unresponsive_engines") or []
+        if isinstance(entry, list | tuple) and entry
+    }
+    used |= named - failed
+    return sorted(used & _PAID_ENGINES.keys())
+
+
+async def _record_search_cost(data: dict[str, Any], engines: str | None, ctx: TraceContext) -> None:
+    """Write one ``api_costs`` row per paid engine the search used (FRE-1656).
+
+    Args:
+        data: The parsed SearXNG JSON response.
+        engines: The ``engines`` argument of the search, or ``None``.
+        ctx: Trace context that carries the trace and session ids.
+    """
+    per_call_usd = {
+        "braveapi": settings.brave_search_cost_per_call_usd,
+        "exa": settings.exa_search_cost_per_call_usd,
+    }
+    for engine in paid_engines_used(data, engines):
+        provider, model = _PAID_ENGINES[engine]
+        await record_vendor_cost(
+            provider=provider,
+            model=model,
+            tokens=0,
+            cost_usd=per_call_usd[engine],
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            purpose="web_search",
+        )
+
+
 async def web_search_executor(
     query: str = "",
     categories: str | None = None,
@@ -455,6 +515,8 @@ async def web_search_executor(
             retryable=False,
             next_action="Change the query or the categories, or use perplexity_query.",
         ) from exc
+
+    await _record_search_cost(data, engines, ctx)
 
     output = shape_search_response(
         data, query=query, categories=categories, engines=engines, max_results=capped_max

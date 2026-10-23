@@ -271,7 +271,9 @@ def providers_of(tool_name: str) -> tuple[str, ...]:
 def tools_revealed_by(skill_name: str, held: Collection[str] | None = None) -> frozenset[str]:
     """Return the tools that loading a skill reveals to a principal (ADR-0156 A5.3, AC-R3).
 
-    A skill that the principal cannot see (D9.1) reveals nothing to it.
+    A skill whose ``requires-tools`` the principal does not hold (D9.1) reveals nothing to it.
+    The ``provides-tools`` condition of :func:`skills_for_tools` does not apply: a skill reveals
+    tools that the principal does not hold yet.
 
     Args:
         skill_name: The loaded skill.
@@ -279,7 +281,8 @@ def tools_revealed_by(skill_name: str, held: Collection[str] | None = None) -> f
             is the primary, which sees every skill.
 
     Returns:
-        The revealed tool names; empty for an unknown or a hidden skill.
+        The revealed tool names; empty for an unknown skill or one whose ``requires-tools``
+        the principal lacks.
     """
     doc = _get_cache().docs.get(skill_name)
     # The skill reveals tools that the principal does not hold yet, so B1's provides-tools

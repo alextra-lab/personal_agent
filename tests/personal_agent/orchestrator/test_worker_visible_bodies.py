@@ -29,10 +29,12 @@ from personal_agent.orchestrator.worker_types import WORKER_TYPES, WorkerType
 from tests._helpers.worker_run import run_worker, shared_layer, worker_layer
 
 COMMAND_WORDS = ("curl", "date", "docker", "grep", "jq", "ps", "psql", "python3")
-SHELL_LABELS = ("", "bash", "sh", "shell", "console")
+SHELL_LABELS = ("", "bash", "sh", "shell", "console", "zsh", "shell-session")
 
 _COMMAND_START = re.compile(rf"^\s*(?:\$\s*)?(?:{'|'.join(COMMAND_WORDS)})(?![\w-])")
-_FENCE = re.compile(r"^```(\w*)\s*$")
+# A fence opens with three or more backticks or tildes, maybe indented, with an info string.
+# Its label is the first word of the info string: ``bash title=x`` is a ``bash`` fence.
+_FENCE = re.compile(r"^\s*(?:`{3,}|~{3,})\s*([\w-]*)")
 _INLINE_CODE = re.compile(r"`([^`\n]+)`")
 
 
@@ -92,10 +94,24 @@ _WORD_FIXTURES = {
 _FIXTURES = {**_LABEL_FIXTURES, **_WORD_FIXTURES}
 
 
+# Fence shapes beyond the 13: each one must open a shell fence (review of FRE-1616).
+_SHAPE_FIXTURES = {
+    "indented": "  ```bash\n  echo hello\n  ```\n",
+    "tilde": "~~~bash\necho hello\n~~~\n",
+    "info-string": "```bash title=x\necho hello\n```\n",
+    "zsh": "```zsh\necho hello\n```\n",
+    "four-backtick": "````bash\necho hello\n````\n",
+}
+
+
 class TestTheDetector:
     def test_there_are_thirteen_fixtures_one_per_label_and_one_per_word(self) -> None:
         assert len(_FIXTURES) == 13
         assert set(_WORD_FIXTURES) == set(COMMAND_WORDS)
+
+    @pytest.mark.parametrize("name", sorted(_SHAPE_FIXTURES))
+    def test_a_shell_fence_in_another_shape_is_flagged(self, name: str) -> None:
+        assert forbidden_forms(_SHAPE_FIXTURES[name]), name
 
     @pytest.mark.parametrize("name", sorted(_FIXTURES))
     def test_each_seeded_fixture_is_flagged(self, name: str) -> None:

@@ -431,6 +431,20 @@ though the default already denies them, because "this is structurally a launderi
 channel" and "nobody has classified this yet" call for different remedies.
 """
 
+ENTRY_SOURCE_TOOLS: Mapping[str, tuple[str, ...]] = {
+    "web_search": ("answers", "infoboxes"),
+}
+"""Tools whose result entries register as sources of their own (FRE-1662).
+
+The value names the top-level keys whose objects the call-level source covers. Each entry of
+a ``web_search`` result is one page the search engine returned, so its ``url`` field is a
+retrieval and becomes the entry source's referent. That makes a citation of the entry a link.
+
+Membership is the decision, as in the sets above. A ``url`` field inside a file that ``read``
+returns, a Linear issue or a fetched JSON page is a link that the content carries. That
+content did not retrieve the page, so those tools are absent.
+"""
+
 
 def _digest(turn_id: str, ordinal: int, kind: SourceKind, content: str) -> str:
     """Return the content-bound digest carried by an identifier.
@@ -1000,6 +1014,33 @@ def _object_with_url(node: object, target: str) -> Mapping[str, object] | None:
     return None
 
 
+def url_entries(node: object) -> list[dict[str, object]]:
+    """Return every JSON object whose ``url`` field is a non-empty string, in pre-order.
+
+    The entries of a :data:`ENTRY_SOURCE_TOOLS` result (FRE-1662). Pre-order puts a parent
+    before any entry nested in it, so a caller that marks each entry after it registers it
+    never registers a marker as content. A url inside a string field (a snippet that names a
+    page) is not an entry.
+
+    Args:
+        node: A parsed JSON value.
+
+    Returns:
+        The objects themselves, not copies, so the caller can write a marker into them.
+    """
+    found: list[dict[str, object]] = []
+    if isinstance(node, dict):
+        url = node.get("url")
+        if isinstance(url, str) and url.strip():
+            found.append(node)
+        for value in node.values():
+            found.extend(url_entries(value))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(url_entries(value))
+    return found
+
+
 class SourceRegistry:
     """The sources one turn retrieved, and the identifiers citations resolve against.
 
@@ -1052,9 +1093,11 @@ class SourceRegistry:
         call is a genuine offer even when :meth:`_register` later dedupes its content
         against an earlier source (ADR-0139 D1).
 
-        The unit is one offer to the registry: one per primary tool result, and since
-        FRE-442 one per sub-agent finding offered through :meth:`register_worker_finding`.
-        Counting each finding keeps :attr:`tool_results_admitted` at or below this number.
+        The unit is one offer to the registry: one per primary tool result, since FRE-442
+        one per sub-agent finding offered through :meth:`register_worker_finding`, and since
+        FRE-1662 one per result entry offered through :meth:`register_result_entry`.
+        Counting each finding and entry keeps :attr:`tool_results_admitted` at or below this
+        number.
         A turn whose workers offered findings and had none admitted is therefore
         ``uncitable`` (ADR-0139 D1): the system offered nothing that could be cited.
         """
@@ -1386,6 +1429,68 @@ class SourceRegistry:
             reason=f"no tool result of the worker returned {source_url} (ADR-0138 D2)",
         )
 
+    def register_result_entry(
+        self, *, tool_name: str, arguments: Mapping[str, object], entry: Mapping[str, object]
+    ) -> ToolRegistration:
+        """Offer one entry of the primary's own tool result as a source (FRE-1662).
+
+        :meth:`register_tool_result` registers a ``web_search`` call as one source with no
+        referent, so a citation of it cannot become a link. Each entry that
+        :func:`url_entries` finds is offered here as well, and registers with its ``url`` as
+        the referent. The executor offers entries only after the call itself registered.
+
+        The same ADR-0138 D2 rules apply as on the sub-agent path: the policy table, the
+        turn's taint, the argument-echo strip and the entitlement. Only a tool in
+        :data:`ENTRY_SOURCE_TOOLS` registers entries.
+
+        Each call is one offer, so ``tool_results_admitted`` never exceeds
+        ``tool_results_offered`` (ADR-0139 D1).
+
+        Args:
+            tool_name: The tool that ran.
+            arguments: The model's own arguments to the call. Never admissible content.
+            entry: One object from the parsed result, as :func:`url_entries` returns it.
+
+        Returns:
+            The outcome. A registered source's ``referent`` is the entry's ``url``.
+        """
+        self._tool_results_offered += 1
+        excluded = tuple(
+            ExcludedArgument(name=name, value=str(value)) for name, value in arguments.items()
+        )
+        url = entry.get("url")
+        kind = _kind_of(tool_name)
+
+        if tool_name not in ENTRY_SOURCE_TOOLS or kind is None:
+            admissibility = Admissibility.UNCLASSIFIED_TOOL
+        elif self._reads_tainted(arguments):
+            admissibility = Admissibility.DERIVED_FROM_TURN_WRITE
+        else:
+            admissible = strip_argument_echo(json.dumps(entry), arguments)
+            if isinstance(url, str) and url.strip() and admissible.strip():
+                source = self._register(
+                    kind=kind,
+                    label=tool_name,
+                    content=admissible,
+                    origin=tool_name,
+                    entitlement=_entitlement_for(tool_name, admissible),
+                    referent=url.strip(),
+                )
+                return ToolRegistration(
+                    source=source,
+                    admissibility=Admissibility.ADMISSIBLE,
+                    excluded_arguments=excluded,
+                )
+            admissibility = Admissibility.NO_CONTENT
+
+        self._record_refusal(tool_name, admissibility)
+        return ToolRegistration(
+            source=None,
+            admissibility=admissibility,
+            excluded_arguments=excluded,
+            reason=f"a {tool_name} entry is not admissible ({admissibility.value}, ADR-0138 D2)",
+        )
+
     def _finding_content(self, result: RetrievedToolResult, target: str) -> str | None:
         """Return the part of one worker result that returned ``target``, or None.
 
@@ -1421,7 +1526,8 @@ class SourceRegistry:
         it doesn't know. A tool whose parameters address a query rather than a referent
         (``web_search``) leaves it ``None``: its result is a set retrieved *this* turn,
         which under D2 is itself the durable artifact, so it has no external referent and
-        D3(b) reachability is not-applicable.
+        D3(b) reachability is not-applicable. Each of its entries registers apart, with the
+        entry's own ``url`` as referent (:meth:`register_result_entry`, FRE-1662).
 
         Args:
             tool_name: The tool that ran.

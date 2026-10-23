@@ -263,7 +263,7 @@ Typed **directional relation extraction** is a **separate study/arm** with its *
 - **Consolidator v0:** offline job — (1) two-stage canonicalize: **GDS Node Similarity/KNN** candidate generation (member overlap + name-embedding cosine) → LLM/rule typed decision, alias-merges only; (2) decay+prune (suppress derived edges below floor, retain evidence). v1+: Leiden proposer, schematize, semantic promotion, FastRP arm.
 - **Ledgers:** run categorizer N times at fixed seeds; store immutable assertion ledgers; run every τ_merge config on the same ledgers.
 - **Baseline harness:** reproduce **production multipath recall (ADR-0104)** on the same snapshot for head-to-head scoring (arm A).
-- **Metrics:** category-count-vs-conversation curve across τ_merge (per ordering); abstract-query Recall@20 + nDCG@20 (study vs baseline) on the pre-registered frozen abstract-cue set; membership-precision on a stratified human-rated sample; legibility spot-check of top-20 + tail sample.
+- **Metrics:** category-count-vs-conversation curve across τ_merge (per ordering); abstract-query Recall@20 + nDCG@20 (study vs baseline) on the pre-registered frozen abstract-cue set; membership-precision on a stratified human-rated sample (LLM-rated for v0 — Amendment A, A5); legibility spot-check of top-20 + tail sample.
 - **Decomposition (the D9 ladder):** substrate+snapshot → schema+writer (evidence layer + accretion) → production-multipath baseline harness (arm A) → canonicalization (arm B) → consolidator v0 + τ_merge sweep + categories (arm C) → v0 synthesis + continuation-gate readout → *(gated)* v1 arms D–G + separate relation study. Sequenced with dependencies in Linear (Step 5).
 
 ---
@@ -286,7 +286,7 @@ All numeric bars are **pre-registered** — fixed *before* the run and recorded 
 - **AC-6 — No precision overclaim (honest-scope guard, not delivery evidence).** The study report **separates** abstract-cue results (AC-4) from precise-answer-cue results, shows the precise-query numbers, and does **not** assert a precision improvement over ADR-0103's structural limit. · **Check:** both result sets present in the writeup. · *Note:* a guard, not counted as evidence the study worked. · *Fails if* the two are conflated or a precision win is claimed.
 - **AC-7 — Membership quality: the emitted memberships are ones a human would endorse (the evidence AC-1 cannot give).** On a **stratified random sample** of `MEMBER_OF` edges (strata by `membership_confidence` band and by concept frequency), 2 judges rate each membership *endorsed / dubious / wrong*. Pass = **membership precision ≥80% (both-judges-endorsed) at the operating τ_merge\***, **redundant-parent-pair rate ≤15%** (near-duplicate parents on the same concept), and **unsupported-membership rate ≤5%** (memberships whose backing assertions do not actually justify the category). · **Check:** the rated sample table + a Cypher scan for near-duplicate parents and for edges whose assertions fail a support test. · *Fails if* precision is below 80%, or redundant/unsupported rates exceed bounds — i.e. the "Health / Things discussed / Important subjects" failure mode that slips past AC-1. · **Amended 2026-10-23 (Amendment A, A5):** the "2 judges" are two blind LLM agents. For v0, AC-7 therefore measures LLM-judged membership quality, not human endorsement, and a judge disagreement counts against the bar.
 
-**Seam owner (decomposed-ADR seam):** the **v0-synthesis ticket** owns the assembled intent — **AC-4 holding at a single pre-registered τ_merge\*, end-to-end** (ingest → accretion → consolidator → production-multipath baseline), with **AC-3 and AC-7 as quality gates**, **AC-1/AC-2/AC-5 as mechanism/isolation gates**, and **AC-6 honored** — *plus* the **pre-registered continuation-gate readout** (does v0 warrant climbing to v1 arms D–G?). The ADR does **not** close because the last child (e.g. the consolidator) merged; it closes only when the synthesis ticket shows that **at one τ_merge\*** the whole loop plateaus-without-collapse, the memberships are human-endorsed, **and** recall beats the production-multipath baseline by the pre-registered significant, materially-sized margin within the nDCG non-inferiority band — or returns a clean, documented null.
+**Seam owner (decomposed-ADR seam):** the **v0-synthesis ticket** owns the assembled intent — **AC-4 holding at a single pre-registered τ_merge\*, end-to-end** (ingest → accretion → consolidator → production-multipath baseline), with **AC-3 and AC-7 as quality gates**, **AC-1/AC-2/AC-5 as mechanism/isolation gates**, and **AC-6 honored** — *plus* the **pre-registered continuation-gate readout** (does v0 warrant climbing to v1 arms D–G?). The ADR does **not** close because the last child (e.g. the consolidator) merged; it closes only when the synthesis ticket shows that **at one τ_merge\*** the whole loop plateaus-without-collapse, the memberships are human-endorsed (for v0: LLM-judged by the A5 rule — Amendment A), **and** recall beats the production-multipath baseline by the pre-registered significant, materially-sized margin within the nDCG non-inferiority band — or returns a clean, documented null.
 
 ---
 
@@ -340,7 +340,15 @@ The owner knows the AC-4 anchor cues (A7), and one anchor domain (music) is also
 - **Primary build (organic only):** only `organic` episodes and their `MembershipAssertion`s enter consolidation, the τ_merge sweep and the arm-C index. The AC-4 gold covers only entities with at least one `DISCUSSES` edge from an `organic` session. τ_merge\* selection, AC-3, AC-4, AC-7 and the D9 continuation gate are decided on this build.
 - **Secondary build (all sessions):** the same pipeline over every episode. Its results are reported next to the primary results. They do not change any verdict.
 
-The categorizer reads one session per call, so the organic ledger is a filter of the full ledger and adds no cost. The curated sessions serve the secondary build, the A8 hard-negative mining, and the owner's own learning. A future ADR that brings the method into production must cite the primary result.
+The categorizer reads one session per call, so the organic ledger is a filter of the full ledger and adds no cost.
+
+**Ledger and build isolation (required).** The v0 code keeps one evidence layer and one derived layer per sandbox. `run_ingest` skips a session that any earlier run wrote, whatever its seed. `apply_canonicalization_to_graph` aggregates every assertion with no stratum filter, and it writes unscoped `CANONICALIZED_AS` and `MEMBER_OF` edges. So the following rules hold:
+
+- **Per-seed ledgers:** the ingest idempotency key is (session, seed), not the session alone. After each seed's run, its `MembershipAssertion` ledger is exported to a content-hashed file. Each export lists the sessions it covers.
+- **Isolated derived layers:** each (seed, build) pair gets its derived layer in a graph that holds nothing else. This can be a sandbox instance of its own, loaded from the frozen snapshot and that seed's ledger file filtered by stratum. Or it can be build-scoped derived edges with a filtered write-back. The implementation ticket chooses. Either way, no derived edge in the primary build can trace to a `curated` episode, and no derived edge mixes seeds.
+- **Run manifest:** each paid ingest run gets a run id and writes a manifest. The manifest lists the run id, the seed, the pinned model, the start and end times, and the `trace_id` of every categorizer call. `api_costs` stores `trace_id` per row, so the manifest joins each cost row to its run exactly.
+
+The curated sessions serve the secondary build, the A8 hard-negative mining, and the owner's own learning. A future ADR that brings the method into production must cite the primary result.
 
 **A2 — A new snapshot (replaces the July corpus).** The snapshot is taken after the owner reports that the curated window is complete. The July manifest and its content hash stay as the v0 record. The July ledgers and the July sweep are evidence of the v0 limits above. They are not inputs to the verdict.
 
@@ -352,10 +360,15 @@ The categorizer reads one session per call, so the organic ledger is a filter of
 - **Over-merge guards, fixed now.** AC-3(a′) alone passes if everything merges into one category. Three guards close that path:
   - **AC-3(e) floor:** the final canonical-category count must be ≥20% of the no-consolidator control's final count, on the same ledger and ordering. The sweep's code default floor of 1 does not satisfy AC-3(e).
   - **AC-3(d) eligibility:** distinctness counts only when (e) passes. An empty overlap histogram below the floor is a fail, not a pass.
-  - **AC-3(g) category-alias merge precision (new):** take a random sample of the Stage-2 `alias` decisions at the τ_merge under test, at least 50 merges or all of them if fewer. Both A5 judges rate each merge `same category` or `not same`. A merge counts as correct only when both judges say `same category`. Pass = precision ≥0.90.
+  - **AC-3(g) category-alias merge precision (new):** this applies to each τ_merge that passes (a′), (d), (e) and (f). Take the Stage-2 `alias` decisions of the final canonicalization over the full ledger, which does not depend on the order of episodes. Sort them by (canonical name, absorbed name). If there are 50 or fewer, rate them all. Otherwise draw a uniform sample of 50 with a seeded generator, seed 1655. Both A5 judges rate each merge `same category` or `not same`. A merge counts as correct only when both judges say `same category`. Pass = precision ≥0.90. The sampled decision pairs are committed with the ratings.
 - **Fails if** no τ_merge meets AC-3(a′) together with (b)–(g).
 
-**A4 — A D5 run uses both Stage-1 signals (narrows D5).** A τ_merge sweep counts as a D5 run only if Stage 1 combines member-set Jaccard with name-embedding cosine. A member-overlap-only sweep is a diagnostic. The sweep report states which signals were on.
+**A4 — A D5 run uses both Stage-1 signals (narrows D5).** A τ_merge sweep counts as a D5 run only if both signals take part in Stage 1:
+- **Admission:** a category pair enters the candidate set if its member-set Jaccard reaches the Jaccard floor, *or* its name-embedding cosine reaches a cosine floor. Today `generate_candidates_pairwise` drops every pair below the Jaccard floor before it computes cosine, so cosine cannot admit a pair.
+- **Ranking and decision:** candidates are ranked by the combined score, with a configured Jaccard weight below 1. Stage 2 uses that combined score.
+- **Pre-registration:** the cosine floor and the weight are committed before the new snapshot exists.
+
+A member-overlap-only sweep is a diagnostic, not a D5 run.
 
 **A5 — The judges are defined (AC-3(b), AC-3(c), AC-7).** "2 judges" means two blind Claude agents. Claude is a different model family from the pinned categorizer (A6). Each judge:
 - sees only the items and the rubric, not the other judge's labels or the τ_merge value
@@ -386,7 +399,7 @@ The categorizer reads one session per call, so the organic ledger is a filter of
 The cost gate meters every paid call, and the FRE-839 README states that the study's cost goes through it. A metered row is the budget control working as designed. AC-5(2) is amended:
 - **Zero attributable writes** to the production memory substrate: Neo4j, Elasticsearch, and the Postgres session and memory tables.
 - **Expected rows:** cost rows in `api_costs`. The AC-5 check lists every study cost row, with its count and total.
-- **Attribution limit:** today, rows are attributed by model and run window, and the AC-5 report states that limit. A study-only budget role would make attribution exact. That is a budget change, so the owner decides it in the first implementation ticket.
+- **Attribution:** for new runs, the A1 run manifest lists the `trace_id` of every categorizer call. A join on `api_costs.trace_id` gives exact attribution. The July rows each carry a distinct `trace_id` (145 rows, 145 trace ids), so the column is populated. The July rows had no manifest, so they stay attributed by model and time. A study-only budget role is an optional addition. It is a budget change, so the owner decides it in the first implementation ticket.
 - **Inconclusive evidence fails:** the original AC-5 rule stays. If zero-delta or attribution evidence for the memory substrate is missing or inconclusive, AC-5 fails.
 
 FRE-1057 closes on two grounds. Its 285 rows are strongly attributable to FRE-994, and its policy question is decided here by the AC-5 amendment. If later evidence ties any of those rows to the study, the July run is recorded as an AC-5 failure. No production Neo4j or Elasticsearch write by the study is known. AC-5(1) and AC-5(2) still run in full on the new snapshot.
@@ -400,7 +413,16 @@ Projection from July: 145 calls cost $0.99, so about $0.007 per call, with a mea
 
 ### Order of work
 
-1. **No cost:** pin the categorizer (A6), turn on name-cosine in the sweep (A4), add AC-3(a′), the (e) floor, the (d) eligibility rule and the (g) sample (A3), add the organic-only primary build and the secondary build (A1), add the A8 mining query and its seeded unit test, and amend the AC-5 check (A9). The ticket also records the owner question on a study-only budget role.
+1. **No cost (code changes in the study scripts):**
+   - pin the categorizer (A6)
+   - make cosine admit and rank candidates in the sweep (A4)
+   - key ingest idempotency on (session, seed), export per-seed ledgers, and write the run manifest (A1)
+   - add the organic-only primary build and the secondary build, with isolated derived layers (A1)
+   - add AC-3(a′), the (e) floor, the (d) eligibility rule and the seeded (g) sample (A3)
+   - add the A8 mining query and its seeded unit test (A8)
+   - amend the AC-5 check (A9)
+
+   The ticket also records the owner question on a study-only budget role.
 2. **Blocked until the owner reports that the curated window is complete:** take the new snapshot with session strata (A1, A2).
 3. **Blocked by step 2:** mine V⁻ (A8), write the new cues blind, and rebuild the anchor gold (A7).
 4. **Blocked by steps 1 and 3, the FRE-1573 gate or an owner exception, and the preflight:** run the paid N-seed ingest and sweep (A10).
@@ -408,21 +430,23 @@ Projection from July: 145 calls cost $0.99, so about $0.007 per call, with a mea
 
 ### Verification of this amendment
 
-Each check uses an artifact that the study already writes, and each check can fail.
+Each check uses an artifact that the implementation tickets add to the study's outputs (see Order of work), and each check can fail.
 
 - **A1/A2:** every `Session` in the new snapshot manifest has `stratum ∈ {organic, curated}`, and the curated window dates are recorded. *Fails if* any session has no stratum, or the window is missing.
-- **A1 primary build:** every episode in the primary build's ledger has `stratum = organic`, and every primary gold entity has a `DISCUSSES` edge from an `organic` session. Both checks are one Cypher count each. *Fails if* either count of exceptions is above 0, or if τ_merge\*, AC-3, AC-4, AC-7 or the continuation gate is decided on the secondary build.
+- **A1 primary build:** every episode in the primary build's ledger has `stratum = organic`, and every primary gold entity has a `DISCUSSES` edge from an `organic` session. Both checks are one Cypher count each. In the primary build's graph or scope, no `MEMBER_OF` or `CANONICALIZED_AS` edge traces to a `curated` episode, and no derived edge draws on assertions from two seeds. *Fails if* any count of exceptions is above 0, or if τ_merge\*, AC-3, AC-4, AC-7 or the continuation gate is decided on the secondary build.
+- **A1 per-seed ledgers:** for each seed in the verdict, the exported ledger file covers every eligible session in the snapshot, apart from sessions listed with a recorded failure reason. *Fails if* a second seed's ledger is short because sessions were skipped as "already processed".
 - **A3 (instrument check):** the sweep report gives, for each τ_merge and ordering, the AC-3(a′) ratio, the "below control" flag, the (e) floor ratio, the (g) precision and the original AC-3(a) ratio. *Fails if* any of these is missing, or if τ_merge\* is selected by the original ratio. This check confirms the instrument. The AC-3 pass or fail is the A3 rule: AC-3(a′) together with (b)–(g).
-- **A4 (behaviour):** for each candidate pair, the sweep report records the Jaccard term and the name-cosine term separately. *Fails if* no candidate pair has a nonzero name-cosine term, or if the FRE-843 verdict cites a sweep that lacks the per-pair terms.
+- **A4 (behaviour):** for each candidate pair, the sweep report records the Jaccard term, the cosine term, the weight, the combined score and the Stage-2 decision. A unit test recomputes each combined score from its terms and the weight, and asserts that Stage 2 used that score. *Fails if* the test fails, if no candidate was admitted by cosine alone (Jaccard below its floor), or if the FRE-843 verdict cites a sweep without these records.
+- **AC-3(g) sample:** re-drawing the sample from the committed alias-decision list with seed 1655 gives the committed sample. *Fails if* the two differ.
 - **A5:** the judge prompts are committed with the results. Each prompt carries the run date, and none carries the other judge's labels or the τ_merge value. The rated tables give both judges' labels per item. *Fails if* a prompt breaks blindness, or if an item is counted as passing with a judge disagreement.
 - **A6 (dispatch, not only the stamp):** two checks.
   - **Provenance stamp:** `MATCH (a:MembershipAssertion) WHERE a.model <> $pinned RETURN count(a)` returns 0 on every ledger in the verdict.
-  - **Dispatch:** every production `api_costs` row in each ingest run window has `model` = the pinned model. The cost gate writes these rows from the actual dispatch, independent of the stamp.
+  - **Dispatch:** join the run manifest's `trace_id` list to `api_costs.trace_id`. Every joined row has `model` = the pinned model, and the number of joined rows equals the number of calls in the manifest. The cost gate writes these rows from the actual dispatch, independent of the stamp.
   - *Fails if* either count of exceptions is above 0.
 - **A7:** the anchor cue texts in the rebuilt gold equal the 35 July cue texts. The committed prompt of the cue agent contains no topic list. The AC-4 report has separate anchor and new-set tables, and the verdict uses the anchor set on the primary build. *Fails if* any of these does not hold.
 - **A8 (behaviour):** a unit test runs the mining query on a fixture graph with one seeded cross-domain same-surface pair and one same-domain pair. *Fails if* the query misses the seeded pair or returns the same-domain pair. The AC-2 report has one table for the mined V⁻ and one for the 12 hand-made pairs. An empty mined set is valid only when that test passes.
 - **A9:** the AC-5 report lists the study's `api_costs` rows with their count and total, and it gives zero-delta or audit evidence for the memory substrate. *Fails if* a memory-substrate write is attributable to the study, or if that evidence is missing or inconclusive.
-- **A10:** on the ticket for the paid run, the FRE-1573 gate state or the owner's exception is quoted before the first paid call. The preflight report is committed. *Fails if* the first `api_costs` row of the run is earlier than either the quoted go or the preflight report.
+- **A10:** on the ticket for the paid run, the FRE-1573 gate state or the owner's exception is quoted before the first paid call. The preflight report is committed. *Fails if* the earliest `api_costs` row that joins to the run manifest's `trace_id` list is earlier than either the quoted go or the preflight report.
 
 ---
 
@@ -477,7 +501,7 @@ Each check uses an artifact that the study already writes, and each check can fa
 **Changed By:** Project owner (adr session, Opus, FRE-1655)
 **Reason:** In the FRE-1650 backlog review, master recommended that the study stop. The owner kept it: "I do like the study", then "Don't cancel. Let's revise if necessary". Amendment A records the revision. The owner accepted all of its decisions on 2026-10-23, and decided to diversify the corpus on purpose ("We will purposely diversify the corpus").
 - **Corpus:** measured on 2026-10-23. The categorizer pool is 311 sessions, against ≤102 in July. The July sweep used 46 episodes.
-- **Corpus decisions:** a new snapshot after an owner-curated window, with `organic`/`curated` strata. An organic-only primary build decides every verdict, and the all-session build is secondary (A1–A2).
+- **Corpus decisions:** a new snapshot after an owner-curated window, with `organic`/`curated` strata. An organic-only primary build decides τ_merge\*, AC-3, AC-4, AC-7 and the continuation gate. The all-session build is secondary. Ledgers are per seed, and derived layers are isolated per build (A1–A2).
 - **AC-3:** AC-3(a′), relative to the no-consolidator control, replaces the plateau gate. The change is recorded openly as a revision after a seen result. A fixed (e) floor and a new (g) category-alias merge precision block the over-merge path (A3).
 - **Method:** both Stage-1 signals (A4), and defined judges with a strict disagreement rule, so AC-7 is LLM-judged for v0 (A5). The categorizer model is pinned (A6).
 - **AC-4:** the July cues are the primary anchor set (A7).

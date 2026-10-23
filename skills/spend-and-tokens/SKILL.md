@@ -2,7 +2,6 @@
 name: spend-and-tokens
 description: Reads the agent's own token totals, prompt-cache hit rate for each provider, spend by provider, role and day, and budget use. Starts with the search_logs tool and uses curl for the budget snapshot. Use when the task is about token totals, cache hit rate, cost, spend by provider or by day, or budget caps. Not for how long model calls took, which the `model-latency` skill gives, or for how interactions ended, which the `interaction-outcomes` skill gives.
 metadata:
-  requires-tools: bash
   provides-tools: search_logs
 ---
 
@@ -102,30 +101,7 @@ Several factory roles share one budget cap. `budget_counter_snapshot` already ho
 pattern uses curl. The role in this event is the budget role from `config/governance/budget.yaml`,
 not the factory role of Pattern 3.
 
-```bash
-curl -fsS -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "size": 0,
-    "query": {"bool": {"filter": [
-      {"term": {"event_type": "budget_counter_snapshot"}},
-      {"range": {"@timestamp": {"gte": "now-5m"}}}
-    ]}},
-    "aggs": {"by_window": {
-      "terms": {"field": "time_window", "size": 5},
-      "aggs": {"by_role": {
-        "terms": {"field": "role", "size": 20},
-        "aggs": {
-          "running_total": {"max": {"field": "running_total"}},
-          "cap_usd": {"max": {"field": "cap_usd"}},
-          "utilization_ratio": {"max": {"field": "utilization_ratio"}}
-        }
-      }}
-    }}
-  }' | jq '.aggregations.by_window.buckets'
-```
-
-If the reply has no buckets, the last 5 minutes hold no snapshot. Widen `gte` to `now-30m` once.
+Past the tool's limits, and only with the `bash` tool: read `references/budget-snapshot.md`.
 
 ## Pattern 3c — Total spend by provider (last 24 hours)
 

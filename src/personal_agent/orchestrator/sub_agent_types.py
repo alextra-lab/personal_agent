@@ -279,6 +279,10 @@ class SubAgentResult:
             (FRE-442). The parent turn admits a finding's ``source_url`` as a
             citable source only when one of these returned it (ADR-0138 D2).
             Empty on a killed worker, which carries no report.
+        skills_loaded: The skills whose body ``read_skill`` returned to this worker, in load
+            order (FRE-1607 B3). A file read, a refused read, a repeated read and a skill that
+            the parent already loaded (``SubAgentSpec.loaded_skills``) are not loads. A killed
+            worker keeps the loads that finished before the kill.
     """
 
     task_id: UUID
@@ -306,3 +310,4 @@ class SubAgentResult:
     report_schema: str | None = None
     findings_dropped_invalid_source: int = 0
     retrieved: tuple[RetrievedToolResult, ...] = ()
+    skills_loaded: tuple[str, ...] = ()

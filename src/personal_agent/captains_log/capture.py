@@ -160,6 +160,8 @@ class SubAgentCapture(BaseModel):
     # itself, not only a log line.
     tools_denied: list[str] = Field(default_factory=list)
     tools_used: list[str] = Field(default_factory=list)
+    # FRE-1607 B3: the skills whose body read_skill returned to this worker, in load order.
+    skills_loaded: list[str] = Field(default_factory=list)
     # FRE-1389: tool-loop activity. tool_iterations/tool_result_chars_absorbed
     # measure the loop's own bound and the context isolation it provides (AC-2/
     # AC-4). refused_tool_attempts/stated_tool_gap are the two signals the

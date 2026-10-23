@@ -2,7 +2,6 @@
 name: log-search
 description: Counts, breaks down or finds agent log events over a time window, lists indices and fields, and runs ES|QL. Starts with the search_logs tool and uses curl past its limits - more than 50 hits, over 30 days, an index family outside its three. Use when the task is a count, an error search, an index listing, an ES|QL query or a field lookup over agent-logs, agent-topology or the monitor indices. Not for model-call timing (`model-latency`), spend and token totals (`spend-and-tokens`) or the monitor of the local model server (`service-health`).
 metadata:
-  requires-tools: bash
   provides-tools: search_logs
 ---
 
@@ -12,7 +11,7 @@ metadata:
 
 - Answer only from a live query. Never answer from what the logs probably hold.
 - Start with the `search_logs` tool. It knows the fields, a refusal lists the allowed fields, and the result is bounded.
-- Use curl only for what the tool cannot do. The table below says which.
+- Use curl only for what the tool cannot do.
 - Use only the index families in this file. Never write a guessed index name.
 - A scheduled monitor index records what a monitor saw at its last run. Read its newest document before you say that a pipeline is healthy.
 - The monitor of the local model server (`agent-monitors-slm-health`) is in the `service-health` skill.
@@ -63,22 +62,12 @@ run the last call above and read the buckets.
 
 ## Step 2 — When the tool cannot do it, use curl
 
-| Need | Why the tool cannot | Use |
-|---|---|---|
-| A family that is not `agent-logs`, `agent-topology` or `agent-monitors-slm-health` (captures, reflections, insights, other monitors) | `index` is a fixed list | `_search` with curl: see `references/curl-recipes.md` |
-| A field that the tool refuses and that exists | The allowlist is closed | Check the field first (below). Fields that hold conversation text are left out on purpose |
-| More than 50 hits, oldest first, or a window over 30 days | The caps | `_search` with curl |
-| ES\|QL | Not offered | `references/esql.md` |
-| The list of indices, or the fields of an index | Not offered | The two commands below |
+The tool takes only the index families `agent-logs`, `agent-topology` and
+`agent-monitors-slm-health`. It reads only the fields in its allowlist, and it leaves out the
+fields that hold conversation text on purpose. It returns at most 50 hits, newest first, and
+reads at most 30 days. It does not run ES|QL, and it does not list indices or fields.
 
-**Check a field before a curl aggregation.** Elasticsearch gives empty buckets, not an
-error, for a field that does not exist. A field missing from `fields` in this reply does not
-exist:
-
-```bash
-curl -fsS 'http://elasticsearch:9200/agent-logs-*/_field_caps?fields=event_type,level'
-curl -fsS 'http://elasticsearch:9200/_cat/indices?format=json&h=index,docs.count'
-```
+Past the tool's limits, and only with the `bash` tool: read `references/curl-steps.md`.
 
 ## Index families
 
@@ -100,18 +89,9 @@ A time bound must use the date field of its own family. A range on the wrong fie
 nothing and no error.
 
 A family holds daily indices (`YYYY.MM.DD`), monthly indices (`YYYY-MM`), or both. Never cut a
-date off a name: a cut name such as `agent-logs-2026` looks real and is not. To classify a
-family, use the tested script:
+date off a name: a cut name such as `agent-logs-2026` looks real and is not.
 
-```bash
-curl -fsS 'http://elasticsearch:9200/_cat/indices?h=index' \
-  | grep '^agent-monitors-joinability-' \
-  | python3 skills/log-search/scripts/es_index_granularity.py agent-monitors-joinability
-```
-
-The script prints the daily and monthly counts, flags `MIXED`, and lists every name that it
-does not recognise. It exits 1 if its input is empty, so a failed `curl` is never read as
-"no indices".
+Past the tool's limits, and only with the `bash` tool: read `references/index-granularity.md`.
 
 ## Field notes
 

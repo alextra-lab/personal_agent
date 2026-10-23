@@ -37,9 +37,16 @@ The frontmatter holds `name`, `description` and `metadata` only. No other field 
   then for the rest of the session. Each name must be a registered tool marked
   `skill_provided`, and each skill-provided tool needs at least one providing skill
   (`provider_violations` in `orchestrator/skills.py`).
+  A worker also needs every provided tool before it sees the skill (FRE-1607).
 - The body: under 500 lines and under 5,000 tokens. Put more detail in `references/`.
 - Every file that the body names (`scripts/…`, `references/…`, `assets/…`, or a relative link)
   exists, one level below the skill folder.
+- A body that a worker without `bash` sees holds no `bash` command. Put the steps that need
+  `bash` in `references/<file>.md`, and leave one line in their place: "Past the tool's limits,
+  and only with the `bash` tool: read `references/<file>.md`." A test checks the bodies for a
+  shell fence and for the command words that the skills use (`COMMAND_WORDS` in
+  `tests/personal_agent/orchestrator/test_worker_visible_bodies.py`). A PR that adds a new
+  command word adds it to that list.
 - Every command in the body or in `scripts/` comes out allow under
   `config/governance/permissions.yaml`, or carries a `# ask: <reason>` line (D8.7).
 

@@ -67,6 +67,7 @@
         "assistant_response": { "type": "text" },
         "outcome": { "type": "keyword" },
         "tools_used": { "type": "keyword" },
+        "skills_loaded": { "type": "keyword" },
         "tool_iterations": { "type": "integer" },
         "tool_result_chars_absorbed": { "type": "long" },
         "refused_tool_attempts": { "type": "keyword" },

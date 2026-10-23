@@ -2,7 +2,6 @@
 name: model-latency
 description: Measures how slow model calls are over a time window - p50, p90 and max by role or by model, and the prefill and decode time of the local model server. Starts with the measure_model_latency tool and uses a curl recipe for a filter that the tool does not list. Use when the task asks for latency numbers over a window, by role or by model, or for prefill and decode time. Not for explaining one turn or reading the spans of one trace id. The `turn-explanation` skill does those.
 metadata:
-  requires-tools: bash
   provides-tools: measure_model_latency
 ---
 
@@ -42,7 +41,7 @@ model-call span matched in the window. It does not mean zero latency.
 
 ## Step 2 — A filter that the tool does not list
 
-Read `references/latency-recipe.md`. It holds a curl and `jq` recipe. Change the TraceQL
+Past the tool's limits, and only with the `bash` tool: read `references/latency-recipe.md`. It holds a curl and jq recipe. Change the TraceQL
 condition in `q`, and the recipe returns the same summary, with `complete` computed from the reply. Tempo answers on
 the compose network as `http://tempo:3200`. It is not reachable from the host shell.
 

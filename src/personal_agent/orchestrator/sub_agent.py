@@ -745,6 +745,7 @@ def _emit_sub_agent_capture(
         tools_granted=list(spec.tools),
         tools_denied=list(result.denied_tools),
         tools_used=result.tools_used,
+        skills_loaded=list(result.skills_loaded),
         tool_iterations=result.tool_iterations,
         tool_result_chars_absorbed=result.tool_result_chars_absorbed,
         refused_tool_attempts=list(result.refused_tool_attempts),
@@ -1070,6 +1071,7 @@ def _killed_result(
         stop_reason=stop_reason,
         report_kind="ledger",
         narrative_synthesized=True,
+        skills_loaded=tuple(state.skills_loaded),
     )
 
 
@@ -1146,6 +1148,8 @@ class _ToolLoopState:
     # history on every round.
     last_round_prompt_tokens: int | None = None
     last_round_message_count: int = 0
+    # FRE-1607 B3: the skills whose body read_skill returned to this worker, in load order.
+    skills_loaded: list[str] = field(default_factory=list)
 
     def mean_round_s(self, fallback: float) -> float:
         """Mean wall-clock of the rounds completed so far in this worker.
@@ -2399,6 +2403,7 @@ async def _run_tool_loop(
                     )
                     continue
 
+            loaded_before = frozenset(loaded_skills)
             dispatch_result = await dispatch_tool_call(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -2417,6 +2422,9 @@ async def _run_tool_loop(
                 read_grant=read_grant,
             )
             state.tools_used.append(tool_name)
+            # B3: dispatch_tool_call adds a name to `loaded_skills` only when a body was
+            # returned, and one call adds at most one name.
+            state.skills_loaded.extend(sorted(loaded_skills - loaded_before))
             _absorb(tool_call_id, tool_name, raw_arguments, str(dispatch_result["content"]))
             if dispatch_result.get("success") and isinstance(arguments, dict):
                 state.retrieved.append(
@@ -2649,6 +2657,7 @@ async def run_sub_agent(
             report_schema=outcome.report_schema,
             findings_dropped_invalid_source=outcome.findings_dropped_invalid_source,
             retrieved=tuple(state.retrieved),
+            skills_loaded=tuple(state.skills_loaded),
         )
 
     except asyncio.TimeoutError:

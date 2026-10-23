@@ -94,6 +94,17 @@ def test_tool_loop_fields_record_activity() -> None:
     assert cap.stated_tool_gap == "web_search"
 
 
+def test_skills_loaded_defaults_to_empty() -> None:
+    """FRE-1616 B3: a worker that loads no skill records an empty list."""
+    assert _capture().skills_loaded == []
+
+
+def test_skills_loaded_keeps_the_load_order() -> None:
+    """FRE-1616 AC-6: the order of the loads is the order in the record, not a sorted one."""
+    cap = _capture(skills_loaded=["turn-explanation", "log-search"])
+    assert cap.skills_loaded == ["turn-explanation", "log-search"]
+
+
 def test_thoroughness_defaults_to_quick() -> None:
     """FRE-1521 AC-4: a capture with no thoroughness keeps today's shape (default quick)."""
     cap = _capture()

@@ -67,8 +67,16 @@ def test_requires_tools_names_real_tools(name: str, skill: object) -> None:
         assert tool_name in registered, f"{name}: requires-tools names unknown tool {tool_name!r}"
 
 
-def test_the_telemetry_skills_require_bash() -> None:
-    """A positive control: the parser reads the field (a broken parser yields no names)."""
+def test_the_parser_reads_requires_tools_and_provides_tools() -> None:
+    """A positive control: the parser reads both fields (a broken parser yields no names).
+
+    FRE-1616 B2: the four skills that a worker without bash sees dropped ``requires-tools: bash``.
+    The skills that are the bash procedure keep it.
+    """
     skills = get_all_skills()
-    assert skills["log-search"].requires_tools == ("bash",)
+    assert skills["service-health"].requires_tools == ("bash",)
+    for name in ("log-search", "model-latency", "spend-and-tokens", "turn-explanation"):
+        assert skills[name].requires_tools == (), name
+    assert skills["log-search"].provides_tools == ("search_logs",)
+    assert skills["model-latency"].provides_tools == ("measure_model_latency",)
     assert skills["sequential-thinking"].requires_tools == ()

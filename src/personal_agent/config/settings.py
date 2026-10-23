@@ -238,10 +238,14 @@ class AppConfig(BaseSettings):
         default=1800,
         ge=1,
         description=(
-            "ADR-0142 D4a: absolute wall-clock cap on a turn, from turn_started_monotonic. "
-            "Never extended by anything — including a credited pause — unlike "
-            "orchestrator_task_timeout_seconds. A pause in flight when this cap is reached "
-            "resolves immediately to its safe default and the turn proceeds to synthesis."
+            "ADR-0142 D4a, ADR-0143 D4: absolute wall-clock cap on the orchestrator's work, "
+            "from turn_started_monotonic. Never extended by anything — including a credited "
+            "pause — unlike orchestrator_task_timeout_seconds. It binds four places: the "
+            "in-flight primary call, a constraint pause (which resolves immediately to its "
+            "safe default), the tool-iteration-limit gate, and the pre-step check before each "
+            "state-driver step except synthesis. Each routes the turn to synthesis. It does "
+            "not cancel a tool already in flight. The bound on the whole request task is "
+            "service_request_task_lifetime_seconds."
         ),
     )
     service_request_task_lifetime_seconds: int = Field(

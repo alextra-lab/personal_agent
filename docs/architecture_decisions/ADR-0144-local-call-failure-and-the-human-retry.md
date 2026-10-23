@@ -1,6 +1,6 @@
 # ADR-0144: A local model call fails honestly, and the human decides the retry
 
-**Status:** Proposed
+**Status:** Accepted — 2026-10-23 (owner, FRE-1650 backlog cull: the implementation chain was approved)
 **Date:** 2026-09-06
 **Deciders:** Owner (D1–D4 owner-directed, 2026-09-06) · adr session
 **Tags:** reliability, llm-client, observability, timeouts, retry, health

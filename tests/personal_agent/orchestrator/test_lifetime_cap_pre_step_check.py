@@ -287,7 +287,10 @@ class TestToolInFlightIsNotCancelled:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _Harness(monkeypatch)
-        # Real step_tool_execution, real clock: the cap expires 0.1 s into a 0.5 s tool.
+        # Real step_tool_execution, real clock. The cap is far away when the turn starts. The
+        # tool sets it to expire 0.1 s after the tool starts, so the cap lapses inside a 0.5 s
+        # tool and no setup time before the first loop pass can race the margin.
+        ctx = _ctx(TaskState.TOOL_EXECUTION, started=time.monotonic())
 
         async def recording_tool_step(
             ctx: ExecutionContext, sm: object, trace_ctx: TraceContext
@@ -313,6 +316,7 @@ class TestToolInFlightIsNotCancelled:
             **_kw: object,
         ) -> dict[str, object]:
             tool_events.append("started")
+            ctx.turn_started_monotonic = time.monotonic() - (_CAP_SECONDS - 0.1)
             try:
                 await asyncio.sleep(0.5)
             except asyncio.CancelledError:
@@ -335,7 +339,6 @@ class TestToolInFlightIsNotCancelled:
 
         monkeypatch.setattr(ex, "dispatch_tool_call", slow_dispatch)
 
-        ctx = _ctx(TaskState.TOOL_EXECUTION, started=time.monotonic() - (_CAP_SECONDS - 0.1))
         ctx.messages = [
             {
                 "role": "assistant",

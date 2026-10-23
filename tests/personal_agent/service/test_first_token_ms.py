@@ -20,8 +20,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from personal_agent.observability.route_trace.types import RouteTraceRow
-from personal_agent.service.app import _process_chat_stream_background, chat
+from personal_agent.service.app import chat
 from personal_agent.service.auth import RequestUser
+from tests._helpers.request_tasks import run_turn
 
 _DELAY_S = 0.2
 _TOLERANCE_MS = 50.0
@@ -135,7 +136,7 @@ async def _run_stream(rec: _Recorder, *, received: float | None) -> MagicMock:
         kwargs: dict[str, object] = {}
         rec.received = time.monotonic() if received is None else received  # type: ignore[attr-defined]
         kwargs["received_monotonic"] = rec.received  # type: ignore[attr-defined]
-        await _process_chat_stream_background(
+        await run_turn(
             session_id=str(session_id),
             message="hello",
             user_id=_USER_ID,
@@ -247,7 +248,7 @@ async def _run_stream_with_failing_gateway(rec: _Recorder) -> MagicMock:
             new=AsyncMock(side_effect=RuntimeError("pipeline down")),
         ),
     ):
-        await _process_chat_stream_background(
+        await run_turn(
             session_id=str(session_id), message="hello", user_id=_USER_ID, trace_id=rec.trace_id
         )
     return orchestrator

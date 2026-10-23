@@ -244,6 +244,25 @@ class AppConfig(BaseSettings):
             "resolves immediately to its safe default and the turn proceeds to synthesis."
         ),
     )
+    service_request_task_lifetime_seconds: int = Field(
+        default_factory=lambda data: data.get("orchestrator_turn_lifetime_seconds", 1800) + 300,
+        ge=1,
+        description=(
+            "ADR-0143 D2: stage-one wall-clock bound on a chat request task, from its insertion "
+            "in the request-task registry. Cooperative: it cancels the task body, so a body that "
+            "suppresses cancellation is not ended by it. Must exceed "
+            "orchestrator_turn_lifetime_seconds, so the orchestrator's cap fires first on a "
+            "long but live turn. Default: that cap plus 300 seconds."
+        ),
+    )
+    service_request_close_timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        description=(
+            "ADR-0143 D1/D3: the budget for one close step. Today only service shutdown reads it: "
+            "the wait for cancelled request tasks before survivors are marked leaked."
+        ),
+    )
     orchestrator_creditable_pause_limit: int = Field(
         default=3,
         ge=0,
@@ -3188,6 +3207,25 @@ class AppConfig(BaseSettings):
                 "orchestrator_spend_threshold "
                 f"({self.orchestrator_spend_threshold}) must be strictly below "
                 f"orchestrator_max_tool_iterations ({self.orchestrator_max_tool_iterations})."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_service_lifetime_exceeds_orchestrator_cap(self) -> "AppConfig":
+        """Refuse a service request bound that does not exceed the orchestrator cap (ADR-0143 D2).
+
+        The orchestrator's cap must fire first on a long but live turn. The service bound
+        is for the turn in which something below it did not return.
+
+        Raises:
+            ValueError: When ``service_request_task_lifetime_seconds`` is not strictly above
+                ``orchestrator_turn_lifetime_seconds``.
+        """
+        if self.service_request_task_lifetime_seconds <= self.orchestrator_turn_lifetime_seconds:
+            raise ValueError(
+                "service_request_task_lifetime_seconds "
+                f"({self.service_request_task_lifetime_seconds}) must exceed "
+                f"orchestrator_turn_lifetime_seconds ({self.orchestrator_turn_lifetime_seconds})."
             )
         return self
 

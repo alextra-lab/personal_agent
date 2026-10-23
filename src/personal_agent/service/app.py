@@ -62,6 +62,7 @@ from personal_agent.service.models import (
     SessionUpdate,
 )
 from personal_agent.service.repositories.session_repository import SessionRepository
+from personal_agent.service.request_tasks import current_request_task, get_request_task_registry
 from personal_agent.sysgraph import SysgraphRepository, set_default_sysgraph_repo
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
@@ -280,6 +281,41 @@ async def _record_first_token(trace_id: str, received_monotonic: float, *, deliv
         )
 
 
+async def _report_background_failure(
+    event: str, *, session_id: str, trace_id: str, error: Exception
+) -> None:
+    """Log a turn-level failure and push the generic error delta to the stream.
+
+    Called from inside an ``except`` block, so ``exc_info`` carries the traceback.
+
+    Args:
+        event: The structured log event name for this failure.
+        session_id: The session the turn belongs to.
+        trace_id: The turn's trace id.
+        error: The exception that ended the turn body.
+    """
+    bg_error_id = str(uuid4())[:8]
+    log.error(
+        event,
+        session_id=session_id,
+        error_id=bg_error_id,
+        error=sanitize_error_message(error),
+        trace_id=trace_id,
+        exc_info=True,
+    )
+    # Do not include exception details in the stream to avoid
+    # information exposure; full context is in the structured log.
+    from personal_agent.transport.agui.transport import _push_event  # noqa: E402
+
+    await _push_event(
+        TextDeltaEvent(
+            text=f"\n\n[An error occurred. Error ID: {bg_error_id}]",
+            session_id=session_id,
+        ),
+        session_id,
+    )
+
+
 async def _process_chat_stream_background(
     session_id: str,
     message: str,
@@ -295,8 +331,10 @@ async def _process_chat_stream_background(
 ) -> None:
     """Run the full orchestrator pipeline and push the result to the WS queue.
 
-    Runs as a fire-and-forget ``asyncio.Task``.  A DONE close signal is always
-    pushed to the WS queue, even on error, so the client stream closes cleanly.
+    Runs as an ``asyncio.Task`` that ``RequestTaskRegistry.spawn`` creates (ADR-0143 D1),
+    bounded by ``service_request_task_lifetime_seconds`` from the registry insertion.  A
+    DONE close signal is always pushed to the WS queue, even on error, so the client
+    stream closes cleanly.
 
     Args:
         session_id: Client-generated session UUID (used for WS queue key and DB).
@@ -322,7 +360,14 @@ async def _process_chat_stream_background(
         received_monotonic: ``time.monotonic()`` reading taken when the endpoint received
             the request (ADR-0154 D6). ``None`` starts the clock here, which omits the
             time spent before this task ran.
+
+    Raises:
+        RequestTaskEntryError: When the running task is not the one the request-task
+            registry created for ``trace_id``. Raised before any side effect.
     """
+    # ADR-0143 D1: refuse to run unless the request-task registry created this task. First,
+    # so a bypass raises before it has any side effect.
+    request_record = current_request_task(trace_id)
     # ADR-0154 D6: the first-token clock runs from request receipt, not from this task.
     received = start_first_token_clock(received_monotonic)
     # ADR-0107 D5: bind once for the whole live request instead of threading
@@ -335,337 +380,352 @@ async def _process_chat_stream_background(
     turn_after_seq: int | None = None
     turn_recorder = start_turn_recording()
 
+    deadline = asyncio.timeout_at(request_record.stage_one_deadline)
     try:
-        # ADR-0121 §4: pin the resolved primary selection for THIS turn. Set once
-        # here so the factory resolves `primary` against the server-authoritative
-        # store, and — because each asyncio.Task gets its own context copy — a
-        # selection change mid-turn (a PATCH from elsewhere) never mutates a turn
-        # already in flight (invariant 7 / AC-7b).
-        if primary_selection_key is not None:
-            from personal_agent.config.selection import set_current_selection
+        async with deadline:
+            # ADR-0121 §4: pin the resolved primary selection for THIS turn. Set once
+            # here so the factory resolves `primary` against the server-authoritative
+            # store, and — because each asyncio.Task gets its own context copy — a
+            # selection change mid-turn (a PATCH from elsewhere) never mutates a turn
+            # already in flight (invariant 7 / AC-7b).
+            if primary_selection_key is not None:
+                from personal_agent.config.selection import set_current_selection
 
-            set_current_selection({"primary": primary_selection_key})
-        # ADR-0157 D3: the level's spec, resolved once at launch, in this task's own context.
-        if seshat_effort is not None:
-            set_current_effort(effort_spec(seshat_effort))
+                set_current_selection({"primary": primary_selection_key})
+            # ADR-0157 D3: the level's spec, resolved once at launch, in this task's own context.
+            if seshat_effort is not None:
+                set_current_effort(effort_spec(seshat_effort))
 
-        # FRE-1033: resolve the bus once — determines both whether we wait for
-        # a prior turn's async consumer-append (below) and, at the end of this
-        # function, whether we publish request.completed (consumer appends)
-        # or append directly ourselves (no consumer is running).
-        from personal_agent.events.bus import get_event_bus
-        from personal_agent.events.redis_backend import RedisStreamBus
-        from personal_agent.events.session_write_waiter import (
-            await_previous_session_write,
-            register_session_write_waiter,
-            release_session_write_wait,
-        )
-
-        bus = get_event_bus()
-        using_redis_bus = isinstance(bus, RedisStreamBus)
-        if using_redis_bus:
-            # FRE-51: a prior turn on this session may still have an async
-            # cg:session-writer append in flight — wait for it to land before
-            # this turn hydrates history, same protocol _chat_impl uses.
-            await await_previous_session_write(session_id, trace_id=trace_id)
-
-        # ── Session ──────────────────────────────────────────────────────
-        session_uuid = UUID(session_id)
-        db_messages: list[dict[str, Any]] = []
-        prior_messages: list[dict[str, Any]] = []
-
-        async with AsyncSessionLocal() as db:
-            repo = SessionRepository(db)
-            session = await repo.get(session_uuid, user_id=user_id)
-            if not session:
-                # Create with client-provided UUID so history is addressable
-                # across turns without the client needing to track a separate DB ID.
-                from personal_agent.service.models import SessionModel
-
-                primary_model_id, config_path_str = _resolve_active_model_attribution(
-                    trace_id=trace_id,
-                )
-                now = datetime.now(timezone.utc)
-                session = SessionModel(
-                    session_id=session_uuid,
-                    user_id=user_id,
-                    created_at=now,
-                    last_active_at=now,
-                    mode="NORMAL",
-                    channel="CHAT",
-                    metadata_={},
-                    messages=[],
-                    primary_model_at_creation=primary_model_id,
-                    model_config_path=config_path_str,
-                    # ADR-0121 T5 (FRE-920): execution_profile is vestigial —
-                    # nothing reads it back; the selection store below is now
-                    # the source of truth. The DB column stays NOT NULL.
-                    execution_profile="local",
-                    # ADR-0157 D2: the level resolved at launch, written explicitly.
-                    seshat_effort=seshat_effort or effort_spec(None).level,
-                )
-                db.add(session)
-                await db.commit()
-                await db.refresh(session)
-                if seshat_effort is not None:
-                    from personal_agent.transport.agui.transport import emit_session_effort
-
-                    await emit_session_effort(session_id=session_id, seshat_effort=seshat_effort)
-
-                # ADR-0121 §4: persist the adopted primary selection on first
-                # turn (invariant 2 — an explicit stored value, never a silent
-                # param fallback), so the session row + this row are the source
-                # of truth from creation onward.
-                if primary_selection_key is not None:
-                    from personal_agent.service.repositories.session_model_selection_repository import (  # noqa: E501
-                        SessionModelSelectionRepository,
-                    )
-                    from personal_agent.transport.agui.transport import emit_session_selection
-
-                    await SessionModelSelectionRepository(db).upsert(
-                        session_id=session_uuid,
-                        role="primary",
-                        deployment_key=primary_selection_key,
-                    )
-                    # The client already connected its WS before sending this
-                    # message (see sendChatMessage ordering), so it can hydrate
-                    # the picker live instead of waiting for the next poll/reload.
-                    await emit_session_selection(
-                        session_id=session_id, role="primary", deployment_key=primary_selection_key
-                    )
-
-            db_messages = list(session.messages or [])
-            max_history = settings.conversation_max_history_messages
-            prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
-            await repo.append_message(
-                session_uuid,
-                {
-                    "role": "user",
-                    "content": message,
-                    "trace_id": trace_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "metadata": {"source": "service.app"},
-                },
+            # FRE-1033: resolve the bus once — determines both whether we wait for
+            # a prior turn's async consumer-append (below) and, at the end of this
+            # function, whether we publish request.completed (consumer appends)
+            # or append directly ourselves (no consumer is running).
+            from personal_agent.events.bus import get_event_bus
+            from personal_agent.events.redis_backend import RedisStreamBus
+            from personal_agent.events.session_write_waiter import (
+                await_previous_session_write,
+                register_session_write_waiter,
+                release_session_write_wait,
             )
 
-        # FRE-1543: register the turn as in flight before any of its events, so a page
-        # that reloads mid-turn replays it from here, and reset the stored tools lane.
-        from personal_agent.transport.agui.transport import open_turn  # noqa: E402
+            bus = get_event_bus()
+            using_redis_bus = isinstance(bus, RedisStreamBus)
+            if using_redis_bus:
+                # FRE-51: a prior turn on this session may still have an async
+                # cg:session-writer append in flight — wait for it to land before
+                # this turn hydrates history, same protocol _chat_impl uses.
+                await await_previous_session_write(session_id, trace_id=trace_id)
 
-        turn_after_seq = await open_turn(session_id, trace_id)
+            # ── Session ──────────────────────────────────────────────────────
+            session_uuid = UUID(session_id)
+            db_messages: list[dict[str, Any]] = []
+            prior_messages: list[dict[str, Any]] = []
 
-        # ── Gateway pipeline ─────────────────────────────────────────────
-        from personal_agent.brainstem.expansion import compute_expansion_budget
-        from personal_agent.brainstem.sensors import poll_system_metrics
+            async with AsyncSessionLocal() as db:
+                repo = SessionRepository(db)
+                session = await repo.get(session_uuid, user_id=user_id)
+                if not session:
+                    # Create with client-provided UUID so history is addressable
+                    # across turns without the client needing to track a separate DB ID.
+                    from personal_agent.service.models import SessionModel
 
-        try:
-            system_metrics = poll_system_metrics()
-            expansion_budget = compute_expansion_budget(
-                system_metrics, max_budget=settings.expansion_budget_max
-            )
-        except Exception:
-            log.warning("chat_stream.expansion_budget_failed", trace_id=trace_id, exc_info=True)
-            expansion_budget = 0
-
-        gateway_output = None
-        try:
-            from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
-
-            memory_adapter = (
-                MemoryServiceAdapter(service=memory_service)
-                if memory_service and memory_service.driver
-                else None
-            )
-            gateway_output = await run_gateway_pipeline(
-                user_message=message,
-                session_id=session_id,
-                session_messages=prior_messages,
-                trace_id=trace_id,
-                mode=get_current_mode(),
-                memory_adapter=memory_adapter,
-                expansion_budget=expansion_budget,
-                user_id=user_id,
-                authenticated=True,
-            )
-        except Exception as e:
-            log.warning(
-                "chat_stream.gateway_pipeline_failed",
-                trace_id=trace_id,
-                error=sanitize_error_message(e),
-            )
-
-        # ── Attachment carrier (FRE-661 / ADR-0101 §2) ────────────────────
-        # Validate ownership + completeness AFTER gateway classification, so that
-        # attachment metadata does NOT pollute TaskType routing. Passed to the
-        # orchestrator as a structured carrier, separate from `message`, which
-        # stays the clean original text (AC-5).
-        validated_attachments = await _validate_attachments(
-            attachments_json, user_id=user_id, trace_id=trace_id
-        )
-
-        # ── Orchestrator ─────────────────────────────────────────────────
-        response_content = ""
-        request_started = False
-        try:
-            from personal_agent.orchestrator import Orchestrator
-            from personal_agent.orchestrator.channels import Channel
-
-            orchestrator = Orchestrator()
-            session_mgr = orchestrator.session_manager
-
-            if not session_mgr.get_session(session_id):
-                session_mgr.create_session(get_current_mode(), Channel.CHAT, session_id=session_id)
-            if prior_messages:
-                session_mgr.update_session(session_id, messages=prior_messages)
-
-            if scheduler:
-                scheduler.notify_request_start()
-                request_started = True
-
-            result = await orchestrator.handle_user_request(
-                session_id=session_id,
-                user_message=message,
-                mode=None,
-                channel=None,
-                trace_id=trace_id,
-                gateway_output=gateway_output,
-                user_id=user_id,
-                user_email=user_email,
-                user_display_name=user_display_name,
-                authenticated=True,
-                attachments=validated_attachments,
-                expansion_budget=expansion_budget,
-            )
-            response_content = result.get("reply", "No response generated")
-
-        except Exception as e:
-            error_id = str(uuid4())[:8]
-            log.error(
-                "chat_stream.orchestrator_failed",
-                error_id=error_id,
-                trace_id=trace_id,
-                error=sanitize_error_message(e),
-                exc_info=True,
-            )
-            # Do not include exception details in the WS stream to avoid
-            # information exposure; full context is in the structured log.
-            response_content = f"An error occurred processing your request. (Error ID: {error_id})"
-        finally:
-            if scheduler and request_started:
-                scheduler.notify_request_end()
-
-        # Push full response via dual-write path (Postgres + WS queue).
-        from personal_agent.transport.agui.transport import _push_event  # noqa: E402
-
-        # ADR-0154 D6: this push is the first user-visible token (the reply goes out whole).
-        delivered = False
-        try:
-            delivered = bool(
-                await _push_event(
-                    TextDeltaEvent(text=response_content, session_id=session_id), session_id
-                )
-            )
-        finally:
-            await _record_first_token(trace_id, received, delivered=delivered)
-
-        # FRE-1543: the folded call history, built from the events this turn sent (every
-        # phase span has closed by now), stored with the assistant message.
-        turn_summary = build_turn_summary(turn_recorder.events, now=datetime.now(timezone.utc))
-
-        async def _append_assistant_directly() -> None:
-            """Append the assistant reply to Postgres directly (no consumer involved)."""
-            try:
-                primary_model_id, config_path_str = _resolve_active_model_attribution(
-                    trace_id=trace_id,
-                )
-                assistant_message: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": response_content,
-                    "trace_id": trace_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "metadata": {
-                        "source": "service.app",
-                        "model": primary_model_id,
-                        "model_role": "primary",
-                        "model_config_path": config_path_str,
-                    },
-                }
-                if turn_summary is not None:
-                    assistant_message["turn_summary"] = turn_summary.model_dump()
-                async with AsyncSessionLocal() as db:
-                    repo = SessionRepository(db)
-                    await repo.append_message(session_uuid, assistant_message)
-            except Exception as e:
-                log.error(
-                    "chat_stream.db_append_assistant_failed",
-                    trace_id=trace_id,
-                    error=sanitize_error_message(e),
-                )
-
-        # FRE-1033: durable side effects — Redis Streams (consumer appends +
-        # indexes) or direct writes (NoOp bus, no consumer running). Mirrors
-        # the pattern _chat_impl already uses (current lines ~2153-2189).
-        if using_redis_bus:
-            from personal_agent.events.models import STREAM_REQUEST_COMPLETED, RequestCompletedEvent
-
-            # cg:session-writer will append the assistant message — do NOT
-            # append directly here, or the turn is written twice (the
-            # handler appends unconditionally on every request.completed
-            # event; see events/request_completed_handlers.py).
-            register_session_write_waiter(session_id)
-            try:
-                await bus.publish(
-                    STREAM_REQUEST_COMPLETED,
-                    RequestCompletedEvent(
+                    primary_model_id, config_path_str = _resolve_active_model_attribution(
                         trace_id=trace_id,
-                        session_id=session_id,
-                        assistant_response=response_content,
-                        source_component="service.app",
+                    )
+                    now = datetime.now(timezone.utc)
+                    session = SessionModel(
+                        session_id=session_uuid,
                         user_id=user_id,
-                        turn_summary=turn_summary,
-                    ),
+                        created_at=now,
+                        last_active_at=now,
+                        mode="NORMAL",
+                        channel="CHAT",
+                        metadata_={},
+                        messages=[],
+                        primary_model_at_creation=primary_model_id,
+                        model_config_path=config_path_str,
+                        # ADR-0121 T5 (FRE-920): execution_profile is vestigial —
+                        # nothing reads it back; the selection store below is now
+                        # the source of truth. The DB column stays NOT NULL.
+                        execution_profile="local",
+                        # ADR-0157 D2: the level resolved at launch, written explicitly.
+                        seshat_effort=seshat_effort or effort_spec(None).level,
+                    )
+                    db.add(session)
+                    await db.commit()
+                    await db.refresh(session)
+                    if seshat_effort is not None:
+                        from personal_agent.transport.agui.transport import emit_session_effort
+
+                        await emit_session_effort(
+                            session_id=session_id, seshat_effort=seshat_effort
+                        )
+
+                    # ADR-0121 §4: persist the adopted primary selection on first
+                    # turn (invariant 2 — an explicit stored value, never a silent
+                    # param fallback), so the session row + this row are the source
+                    # of truth from creation onward.
+                    if primary_selection_key is not None:
+                        from personal_agent.service.repositories.session_model_selection_repository import (  # noqa: E501
+                            SessionModelSelectionRepository,
+                        )
+                        from personal_agent.transport.agui.transport import emit_session_selection
+
+                        await SessionModelSelectionRepository(db).upsert(
+                            session_id=session_uuid,
+                            role="primary",
+                            deployment_key=primary_selection_key,
+                        )
+                        # The client already connected its WS before sending this
+                        # message (see sendChatMessage ordering), so it can hydrate
+                        # the picker live instead of waiting for the next poll/reload.
+                        await emit_session_selection(
+                            session_id=session_id,
+                            role="primary",
+                            deployment_key=primary_selection_key,
+                        )
+
+                db_messages = list(session.messages or [])
+                max_history = settings.conversation_max_history_messages
+                prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
+                await repo.append_message(
+                    session_uuid,
+                    {
+                        "role": "user",
+                        "content": message,
+                        "trace_id": trace_id,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "metadata": {"source": "service.app"},
+                    },
                 )
-            except asyncio.CancelledError:
-                # Task cancellation is not a publish failure — no fallback
-                # append (the caller is tearing this turn down), but the
-                # waiter must still be released or it leaks until timeout.
-                release_session_write_wait(session_id)
-                raise
+
+            # FRE-1543: register the turn as in flight before any of its events, so a page
+            # that reloads mid-turn replays it from here, and reset the stored tools lane.
+            from personal_agent.transport.agui.transport import open_turn  # noqa: E402
+
+            turn_after_seq = await open_turn(session_id, trace_id)
+
+            # ── Gateway pipeline ─────────────────────────────────────────────
+            from personal_agent.brainstem.expansion import compute_expansion_budget
+            from personal_agent.brainstem.sensors import poll_system_metrics
+
+            try:
+                system_metrics = poll_system_metrics()
+                expansion_budget = compute_expansion_budget(
+                    system_metrics, max_budget=settings.expansion_budget_max
+                )
+            except Exception:
+                log.warning("chat_stream.expansion_budget_failed", trace_id=trace_id, exc_info=True)
+                expansion_budget = 0
+
+            gateway_output = None
+            try:
+                from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
+
+                memory_adapter = (
+                    MemoryServiceAdapter(service=memory_service)
+                    if memory_service and memory_service.driver
+                    else None
+                )
+                gateway_output = await run_gateway_pipeline(
+                    user_message=message,
+                    session_id=session_id,
+                    session_messages=prior_messages,
+                    trace_id=trace_id,
+                    mode=get_current_mode(),
+                    memory_adapter=memory_adapter,
+                    expansion_budget=expansion_budget,
+                    user_id=user_id,
+                    authenticated=True,
+                )
             except Exception as e:
-                # The client already has this answer (pushed above) —
-                # silently losing it from history/telemetry would be worse
-                # than a rare duplicate, so fall back to direct persistence
-                # instead of dropping the turn.
-                log.error(
-                    "chat_stream.request_completed_publish_failed",
+                log.warning(
+                    "chat_stream.gateway_pipeline_failed",
                     trace_id=trace_id,
                     error=sanitize_error_message(e),
                 )
-                release_session_write_wait(session_id)
+
+            # ── Attachment carrier (FRE-661 / ADR-0101 §2) ────────────────────
+            # Validate ownership + completeness AFTER gateway classification, so that
+            # attachment metadata does NOT pollute TaskType routing. Passed to the
+            # orchestrator as a structured carrier, separate from `message`, which
+            # stays the clean original text (AC-5).
+            validated_attachments = await _validate_attachments(
+                attachments_json, user_id=user_id, trace_id=trace_id
+            )
+
+            # ── Orchestrator ─────────────────────────────────────────────────
+            response_content = ""
+            request_started = False
+            try:
+                from personal_agent.orchestrator import Orchestrator
+                from personal_agent.orchestrator.channels import Channel
+
+                orchestrator = Orchestrator()
+                session_mgr = orchestrator.session_manager
+
+                if not session_mgr.get_session(session_id):
+                    session_mgr.create_session(
+                        get_current_mode(), Channel.CHAT, session_id=session_id
+                    )
+                if prior_messages:
+                    session_mgr.update_session(session_id, messages=prior_messages)
+
+                if scheduler:
+                    scheduler.notify_request_start()
+                    request_started = True
+
+                result = await orchestrator.handle_user_request(
+                    session_id=session_id,
+                    user_message=message,
+                    mode=None,
+                    channel=None,
+                    trace_id=trace_id,
+                    gateway_output=gateway_output,
+                    user_id=user_id,
+                    user_email=user_email,
+                    user_display_name=user_display_name,
+                    authenticated=True,
+                    attachments=validated_attachments,
+                    expansion_budget=expansion_budget,
+                )
+                response_content = result.get("reply", "No response generated")
+
+            except Exception as e:
+                request_record.stamp_failed()
+                error_id = str(uuid4())[:8]
+                log.error(
+                    "chat_stream.orchestrator_failed",
+                    error_id=error_id,
+                    trace_id=trace_id,
+                    error=sanitize_error_message(e),
+                    exc_info=True,
+                )
+                # Do not include exception details in the WS stream to avoid
+                # information exposure; full context is in the structured log.
+                response_content = (
+                    f"An error occurred processing your request. (Error ID: {error_id})"
+                )
+            finally:
+                if scheduler and request_started:
+                    scheduler.notify_request_end()
+
+            # Push full response via dual-write path (Postgres + WS queue).
+            from personal_agent.transport.agui.transport import _push_event  # noqa: E402
+
+            # ADR-0154 D6: this push is the first user-visible token (the reply goes out whole).
+            delivered = False
+            try:
+                delivered = bool(
+                    await _push_event(
+                        TextDeltaEvent(text=response_content, session_id=session_id), session_id
+                    )
+                )
+            finally:
+                await _record_first_token(trace_id, received, delivered=delivered)
+
+            # FRE-1543: the folded call history, built from the events this turn sent (every
+            # phase span has closed by now), stored with the assistant message.
+            turn_summary = build_turn_summary(turn_recorder.events, now=datetime.now(timezone.utc))
+
+            async def _append_assistant_directly() -> None:
+                """Append the assistant reply to Postgres directly (no consumer involved)."""
+                try:
+                    primary_model_id, config_path_str = _resolve_active_model_attribution(
+                        trace_id=trace_id,
+                    )
+                    assistant_message: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": response_content,
+                        "trace_id": trace_id,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "metadata": {
+                            "source": "service.app",
+                            "model": primary_model_id,
+                            "model_role": "primary",
+                            "model_config_path": config_path_str,
+                        },
+                    }
+                    if turn_summary is not None:
+                        assistant_message["turn_summary"] = turn_summary.model_dump()
+                    async with AsyncSessionLocal() as db:
+                        repo = SessionRepository(db)
+                        await repo.append_message(session_uuid, assistant_message)
+                except Exception as e:
+                    log.error(
+                        "chat_stream.db_append_assistant_failed",
+                        trace_id=trace_id,
+                        error=sanitize_error_message(e),
+                    )
+
+            # FRE-1033: durable side effects — Redis Streams (consumer appends +
+            # indexes) or direct writes (NoOp bus, no consumer running). Mirrors
+            # the pattern _chat_impl already uses (current lines ~2153-2189).
+            if using_redis_bus:
+                from personal_agent.events.models import (
+                    STREAM_REQUEST_COMPLETED,
+                    RequestCompletedEvent,
+                )
+
+                # cg:session-writer will append the assistant message — do NOT
+                # append directly here, or the turn is written twice (the
+                # handler appends unconditionally on every request.completed
+                # event; see events/request_completed_handlers.py).
+                register_session_write_waiter(session_id)
+                try:
+                    await bus.publish(
+                        STREAM_REQUEST_COMPLETED,
+                        RequestCompletedEvent(
+                            trace_id=trace_id,
+                            session_id=session_id,
+                            assistant_response=response_content,
+                            source_component="service.app",
+                            user_id=user_id,
+                            turn_summary=turn_summary,
+                        ),
+                    )
+                except asyncio.CancelledError:
+                    # Task cancellation is not a publish failure — no fallback
+                    # append (the caller is tearing this turn down), but the
+                    # waiter must still be released or it leaks until timeout.
+                    release_session_write_wait(session_id)
+                    raise
+                except Exception as e:
+                    # The client already has this answer (pushed above) —
+                    # silently losing it from history/telemetry would be worse
+                    # than a rare duplicate, so fall back to direct persistence
+                    # instead of dropping the turn.
+                    log.error(
+                        "chat_stream.request_completed_publish_failed",
+                        trace_id=trace_id,
+                        error=sanitize_error_message(e),
+                    )
+                    release_session_write_wait(session_id)
+                    await _append_assistant_directly()
+            else:
                 await _append_assistant_directly()
-        else:
-            await _append_assistant_directly()
 
-    except Exception as e:
-        bg_error_id = str(uuid4())[:8]
-        log.error(
-            "chat_stream.background_failed",
-            session_id=session_id,
-            error_id=bg_error_id,
-            error=sanitize_error_message(e),
-            trace_id=trace_id,
-            exc_info=True,
-        )
-        # Do not include exception details in the stream to avoid
-        # information exposure; full context is in the structured log.
-        from personal_agent.transport.agui.transport import _push_event  # noqa: E402
-
-        await _push_event(
-            TextDeltaEvent(
-                text=f"\n\n[An error occurred. Error ID: {bg_error_id}]",
+    except TimeoutError as e:
+        if deadline.expired():
+            # ADR-0143 D2: the service bound fired. Only now is the ending ``timed_out``.
+            request_record.stamp_timed_out()
+            await _report_background_failure(
+                "chat_stream.request_task_timed_out",
                 session_id=session_id,
-            ),
-            session_id,
+                trace_id=trace_id,
+                error=e,
+            )
+        else:
+            # A TimeoutError from a tool, provider or database before the deadline is a
+            # failure of that call, not the service bound firing.
+            request_record.stamp_failed()
+            await _report_background_failure(
+                "chat_stream.background_failed", session_id=session_id, trace_id=trace_id, error=e
+            )
+    except Exception as e:
+        request_record.stamp_failed()
+        await _report_background_failure(
+            "chat_stream.background_failed", session_id=session_id, trace_id=trace_id, error=e
         )
     finally:
         # Persist DONE to Postgres (so reconnect replay delivers it) then push
@@ -1620,6 +1680,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dedup_cleanup_task.cancel()
     upload_expiry_task.cancel()
     session_retention_task.cancel()
+
+    # ADR-0143 D1: end the chat request tasks before the substrate they use goes away.
+    await get_request_task_registry().shutdown()
 
     # Stop event bus consumers first (before scheduler)
     if consumer_runner is not None:
@@ -2810,7 +2873,8 @@ async def chat_stream_endpoint(
         session_id, seshat_effort, request_user.user_id
     )
 
-    asyncio.create_task(
+    # ADR-0143 D1: the registry creates the turn task and nowhere else does.
+    get_request_task_registry().spawn(
         _process_chat_stream_background(
             session_id=session_id,
             message=message,
@@ -2823,7 +2887,9 @@ async def chat_stream_endpoint(
             client_msg_id=client_msg_id,
             attachments_json=attachments,
             received_monotonic=received_monotonic,
-        )
+        ),
+        trace_id=trace_id,
+        session_id=session_id,
     )
 
     log.info(

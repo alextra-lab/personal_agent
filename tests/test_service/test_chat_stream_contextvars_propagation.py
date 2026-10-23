@@ -16,8 +16,7 @@ from uuid import uuid4
 import pytest
 import structlog.contextvars
 import structlog.testing
-
-from personal_agent.service.app import _process_chat_stream_background
+from tests._helpers.request_tasks import run_turn
 
 _TEST_USER_ID = uuid4()
 
@@ -75,7 +74,7 @@ async def test_stream_background_binds_user_id_reaching_gateway_pipeline_logs(
     with structlog.testing.capture_logs(
         processors=[structlog.contextvars.merge_contextvars]
     ) as captured:
-        await _process_chat_stream_background(
+        record = await run_turn(
             session_id=str(session_id),
             message="Tell me about Python",
             user_id=_TEST_USER_ID,
@@ -86,5 +85,7 @@ async def test_stream_background_binds_user_id_reaching_gateway_pipeline_logs(
     assert gateway_log["user_id"] == str(_TEST_USER_ID)
     assert gateway_log["session_id"] == str(session_id)
 
-    # Request teardown must clear the binding — nothing lingers between requests.
-    assert structlog.contextvars.get_contextvars() == {}
+    # Request teardown must clear the binding — nothing lingers between requests. The turn
+    # runs in its own task (ADR-0143 D1), so the binding lives in that task's context.
+    assert record.task is not None
+    assert record.task.get_context().run(structlog.contextvars.get_contextvars) == {}

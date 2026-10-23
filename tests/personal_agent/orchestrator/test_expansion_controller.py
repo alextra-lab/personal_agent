@@ -1450,6 +1450,7 @@ async def _dispatch_hermetic(
     config_error: Exception | None = None,
     result: Any = None,
     messages: list[dict[str, Any]] | None = None,
+    expansion_budget: int | None = None,
 ) -> list[SubAgentResult]:
     """Drive ``_run_dispatch`` with hermetic governance, registry and worker."""
     from personal_agent.orchestrator.expansion_controller import ExpansionResult
@@ -1483,6 +1484,7 @@ async def _dispatch_hermetic(
             trace_id="t-hermetic",
             messages=messages if messages is not None else [],
             result=result if result is not None else ExpansionResult(),
+            expansion_budget=expansion_budget,
         )
 
 
@@ -1872,6 +1874,174 @@ class TestSubAgentGapRedispatch:
         )
 
         assert sum(r.cost_usd for r in results) == pytest.approx(0.03)
+
+
+class TestGapRedispatchBoundedByExpansionBudget:
+    """FRE-1649 — plan plus gap redispatch never starts more workers than the turn's budget.
+
+    FRE-1382 caps the plan at ``expansion_budget``. The FRE-1389 redispatch runs after the
+    plan, so before this bound a gap could add a worker beyond the cap.
+    """
+
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @staticmethod
+    def _gap_on(*goals: str) -> Any:
+        """A worker that states a ``web_search`` gap on the named goals only."""
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            if spec.task in goals and spec.worker_type == WorkerType.GENERAL:
+                return _make_sub_agent_result(spec.task, stated_tool_gap="web_search")
+            return _make_sub_agent_result(spec.task)
+
+        return _run
+
+    @staticmethod
+    def _plan(count: int) -> ExpansionPlan:
+        return ExpansionPlan(
+            strategy="HYBRID",
+            tasks=[_task(f"task_{i}", f"Goal {i}") for i in range(count)],
+        )
+
+    async def _dispatch(
+        self,
+        controller: ExpansionController,
+        plan: ExpansionPlan,
+        *goals: str,
+        budget: int | None,
+    ) -> tuple[list[SubAgentResult], Any]:
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        expansion_result = ExpansionResult()
+        results = await _dispatch_hermetic(
+            controller,
+            plan,
+            self._gap_on(*goals),
+            granted=("web_search", "run_python"),
+            known=("web_search",),
+            result=expansion_result,
+            expansion_budget=budget,
+        )
+        return results, expansion_result
+
+    @pytest.mark.asyncio
+    async def test_budget_one_and_a_gap_skips_the_redispatch(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC-1: budget 1, one task, one gap → one worker and a logged skip."""
+        caplog.set_level("WARNING", logger="personal_agent.orchestrator.expansion_controller")
+
+        results, expansion_result = await self._dispatch(
+            controller, self._plan(1), "Goal 0", budget=1
+        )
+
+        assert len(results) == 1
+        assert expansion_result.dispatched_count == 1
+        assert "sub_agent_redispatch_skipped_expansion_budget" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_without_the_bound_the_same_turn_starts_two_workers(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC-2: the seeded negative — no budget, same plan and gap → the replacement runs."""
+        caplog.set_level("WARNING", logger="personal_agent.orchestrator.expansion_controller")
+
+        results, expansion_result = await self._dispatch(
+            controller, self._plan(1), "Goal 0", budget=None
+        )
+
+        assert len(results) == 2
+        assert expansion_result.dispatched_count == 2
+        assert "sub_agent_redispatch_skipped_expansion_budget" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_headroom_below_the_budget_still_redispatches(
+        self, controller: ExpansionController, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC-3: budget 3, two tasks, one gap → the replacement is the third worker and runs."""
+        caplog.set_level("WARNING", logger="personal_agent.orchestrator.expansion_controller")
+
+        results, expansion_result = await self._dispatch(
+            controller, self._plan(2), "Goal 0", budget=3
+        )
+
+        assert len(results) == 3
+        assert expansion_result.dispatched_count == 3
+        assert "sub_agent_redispatch_skipped_expansion_budget" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_full_plan_leaves_no_room_for_the_redispatch(
+        self, controller: ExpansionController
+    ) -> None:
+        """Budget 3, three tasks, one gap → a fourth worker would exceed the budget."""
+        results, expansion_result = await self._dispatch(
+            controller, self._plan(3), "Goal 0", budget=3
+        )
+
+        assert len(results) == 3
+        assert expansion_result.dispatched_count == 3
+
+    @pytest.mark.asyncio
+    async def test_two_gaps_share_the_one_free_slot(self, controller: ExpansionController) -> None:
+        """Budget 3, two tasks, both gap → the first gap takes the free slot, the second is skipped."""
+        results, expansion_result = await self._dispatch(
+            controller, self._plan(2), "Goal 0", "Goal 1", budget=3
+        )
+
+        assert len(results) == 3
+        assert expansion_result.dispatched_count == 3
+
+    @pytest.mark.asyncio
+    async def test_parallel_gaps_cannot_both_claim_the_one_free_slot(self) -> None:
+        """Cloud fan-out: two tasks gap in the same tick; budget 3 admits one replacement."""
+        from personal_agent.llm_client.models import Placement
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        expansion_result = ExpansionResult()
+
+        async def _run(**kwargs: Any) -> SubAgentResult:
+            spec = kwargs["spec"]
+            await asyncio.sleep(0.01)
+            if spec.worker_type == WorkerType.GENERAL:
+                return _make_sub_agent_result(spec.task, stated_tool_gap="web_search")
+            return _make_sub_agent_result(spec.task)
+
+        with (
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_current_mode",
+                return_value=Mode.NORMAL,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.load_governance_config",
+                return_value=_hermetic_config(("web_search", "run_python")),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_shared_tool_execution_layer",
+                return_value=_stub_registry_knowing("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+                side_effect=_run,
+            ),
+            patch(
+                "personal_agent.orchestrator.expansion_controller.get_inference_concurrency_controller",
+                return_value=_concurrency_controller(10),
+            ),
+        ):
+            results = await ExpansionController()._run_dispatch(
+                plan=self._plan(2),
+                llm_client=_helper_client(Placement.CLOUD),
+                trace_id="t-fre1649-parallel",
+                messages=[],
+                result=expansion_result,
+                expansion_budget=3,
+            )
+
+        assert len(results) == 3
+        assert expansion_result.dispatched_count == 3
 
 
 class TestSynthesisContextExcludesFullOutput:

@@ -934,6 +934,10 @@ class ExpansionResult:
             immediately before each call. Not ``len(sub_agent_results)``, which
             drops a worker that raised, and not ``len(dispatch_intervals)``, which
             also records a failed span entry and is assigned only after the loop.
+        redispatched_count: Gap replacements that the dispatch committed to start
+            (FRE-1649). Counted when the replacement claims its slot under the turn's
+            expansion budget, before it runs. A replacement that later raises still
+            holds its slot.
         planner_run: What the planner run decided and cost (ADR-0154 D6). Set by the
             planner phase on every run; ``None`` only before it ends.
     """
@@ -950,6 +954,7 @@ class ExpansionResult:
     skipped_tasks: list[str] = field(default_factory=list)
     skip_reason: SkipReason | None = None
     dispatched_count: int = 0
+    redispatched_count: int = 0
     planner_run: PlannerRunRecord | None = None
 
     @property
@@ -1999,6 +2004,8 @@ class ExpansionController:
                 turn_deadline_monotonic=turn_deadline_monotonic,
                 user_id=user_id,
                 authenticated=authenticated,
+                expansion_budget=expansion_budget,
+                planned_count=len(plan.tasks),
             )
             results: tuple[SubAgentResult, ...] = (sub_result,)
             if replacement is not None:
@@ -2147,6 +2154,8 @@ class ExpansionController:
         turn_deadline_monotonic: float | None = None,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        expansion_budget: int | None = None,
+        planned_count: int = 0,
     ) -> SubAgentResult | None:
         """Single-shot replacement dispatch when a sub-agent stated a tool gap (FRE-1389 AC-5).
 
@@ -2191,13 +2200,20 @@ class ExpansionController:
                 "the tool still does not work".
             authenticated: Whether the turn carries a verified identity, threaded
                 with ``user_id``.
+            expansion_budget: The turn's per-turn load-shed budget (FRE-1382,
+                FRE-1649). The plan plus every replacement must not start more
+                workers than this. ``None`` leaves the replacement unbounded by it.
+            planned_count: Tasks in the plan. Each one counts against
+                ``expansion_budget`` whether or not it has started, so a replacement
+                never takes the slot of a task that is still queued.
 
         Returns:
             The replacement SubAgentResult, or ``None`` when there was no gap,
             the gap named nothing actually registered, no other type (or more
             than one) declares it, governance does not grant it to that type
             (the original refusal already stands via ``denied_tools``/the
-            synthesis context), or the turn's budget is already exhausted.
+            synthesis context), the turn's time budget is already exhausted, or
+            the plan and earlier replacements already fill ``expansion_budget``.
         """
         from personal_agent.transport.agui.transport import phase_span  # noqa: PLC0415
         from personal_agent.transport.events import Phase  # noqa: PLC0415
@@ -2256,6 +2272,26 @@ class ExpansionController:
         # task without it.
         if not set(gap_names) & set(new_grant.granted):
             return None
+
+        # FRE-1649: the plan was capped at the budget (FRE-1382), so a replacement
+        # beyond it would exceed the load-shed signal at the moment it matters.
+        # Last gate before the launch: a skip here is a replacement that would
+        # otherwise have run. The check and the claim have no await between them, so
+        # two tasks that gap in the same tick on the cloud path cannot both take the
+        # last slot.
+        if expansion_budget is not None and planned_count + result.redispatched_count >= (
+            expansion_budget
+        ):
+            logger.warning(
+                "sub_agent_redispatch_skipped_expansion_budget",
+                task_name=task.name,
+                expansion_budget=expansion_budget,
+                planned_count=planned_count,
+                redispatched_count=result.redispatched_count,
+                trace_id=trace_id,
+            )
+            return None
+        result.redispatched_count += 1
 
         logger.info(
             "sub_agent_redispatched_with_expanded_grant",

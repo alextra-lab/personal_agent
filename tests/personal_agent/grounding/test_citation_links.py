@@ -143,3 +143,28 @@ def test_code_indentation_is_untouched() -> None:
     linked = link_citation_markers(f"{code}\n\nPopulation [{ident}].", registry)
 
     assert linked.startswith(code)
+
+
+def test_a_cited_primary_search_entry_renders_a_link_and_an_unminted_marker_is_stripped() -> None:
+    """FRE-1662 AC-4: a primary ``web_search`` entry is a source with its own url.
+
+    The positive control links the entry the reply cites. The seeded negative is a
+    well-formed marker this turn never minted, which stays stripped.
+    """
+    registry = SourceRegistry(turn_id=TURN)
+    registration = registry.register_result_entry(
+        tool_name="web_search",
+        arguments={"query": "paris population"},
+        entry={"title": "Paris", "url": PAGE, "snippet": "2.1 million residents."},
+    )
+    assert registration.source is not None
+    ident = registration.source.identifier
+    stale = "S9@0123456789abcdef"
+
+    linked = link_citation_markers(
+        f"Paris has 2.1 million residents [{ident}]. It is the capital [{stale}].", registry
+    )
+
+    assert linked == (
+        f"Paris has 2.1 million residents ([example.com](<{PAGE}>)). It is the capital."
+    )

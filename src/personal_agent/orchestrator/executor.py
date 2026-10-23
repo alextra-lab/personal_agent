@@ -51,7 +51,11 @@ from personal_agent.grounding.enforcement_selection import (
     EnforcementSelection,
     SelectionReason,
 )
-from personal_agent.grounding.source_registry import SourceRegistry
+from personal_agent.grounding.source_registry import (
+    ENTRY_SOURCE_TOOLS,
+    SourceRegistry,
+    url_entries,
+)
 from personal_agent.grounding.verification import (
     TurnEvidenceClass,
     TurnShape,
@@ -1912,6 +1916,75 @@ def _with_citation_marker(content: str, identifier: str) -> str:
     return f"{content}\n\n{marker}" if content else marker
 
 
+def _with_entry_sources(
+    ctx: ExecutionContext,
+    *,
+    tool_name: str,
+    arguments: Mapping[str, object],
+    content: str,
+    call_identifier: str,
+) -> str:
+    """Give each result entry its own source and marker, then place the call's (FRE-1662).
+
+    A ``web_search`` call registers as one source with no referent, so a citation of it
+    renders no link. Each entry with a ``url`` now registers too, and its marker goes inside
+    the entry, beside the snippet the model reads. When an entry carries a marker, the call's
+    marker goes only on the objects no entry covers (``answers``, ``infoboxes``). So a result
+    fact has one marker to copy: its entry's.
+
+    Each entry is marked as soon as it registers. A failure part way through keeps the
+    markers already written, because their sources are already admitted and a source the
+    model cannot see would still count as citable (ADR-0139 D1). Best-effort, like
+    :func:`_register_tool_source`.
+
+    Args:
+        ctx: Execution context.
+        tool_name: The tool that ran.
+        arguments: The model's own arguments to the call.
+        content: The tool result as recorded for the model.
+        call_identifier: The identifier the call itself registered under.
+
+    Returns:
+        The content with the markers spliced in. It is the result of
+        :func:`_with_citation_marker` when the tool registers no entries, the content is not
+        a JSON object, or no entry registered.
+    """
+    registry = ctx.source_registry
+    call_keys = ENTRY_SOURCE_TOOLS.get(tool_name)
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        parsed = None
+    if registry is None or call_keys is None or not isinstance(parsed, dict):
+        return _with_citation_marker(content, call_identifier)
+
+    marked = 0
+    try:
+        for entry in url_entries(parsed):
+            registration = registry.register_result_entry(
+                tool_name=tool_name, arguments=arguments, entry=entry
+            )
+            if registration.source is not None:
+                entry["_citation"] = f"[{registration.source.identifier}]"
+                marked += 1
+    except Exception:
+        log.exception(
+            "source_registry_entry_registration_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            tool_name=tool_name,
+        )
+    if not marked:
+        return _with_citation_marker(content, call_identifier)
+
+    for key in call_keys:
+        items = parsed.get(key)
+        for item in items if isinstance(items, list) else ():
+            if isinstance(item, dict):
+                item["_citation"] = f"[{call_identifier}]"
+    return json.dumps(parsed)
+
+
 def _entailment_judge() -> "ModelEntailmentJudge":
     """Build the D3(d) judge, bound to its own role and its own timeout.
 
@@ -2569,9 +2642,10 @@ def _strip_markers_from_turn(ctx: ExecutionContext) -> None:
 def _log_source_registry_snapshot(ctx: ExecutionContext) -> None:
     """Emit what this turn could have cited, once, at the end of the turn.
 
-    Identifiers, kinds and labels only — never content, which would put retrieved text and
-    any PII it carries into a text-indexed store. This is the surface that makes the
-    registry observable before anything consumes it (FRE-1280 AC-1).
+    Identifiers, kinds, labels and referents only — never content, which would put retrieved
+    text and any PII it carries into a text-indexed store. This is the surface that makes the
+    registry observable before anything consumes it (FRE-1280 AC-1). A referent is the URL a
+    citation links to (FRE-1662), an address and not retrieved text.
 
     Best-effort like its two siblings, and more load-bearing than either: this runs from
     the turn-scoped ``finally`` in :func:`execute_task`, so an exception escaping here
@@ -2599,6 +2673,8 @@ def _log_source_registry_snapshot(ctx: ExecutionContext) -> None:
                     "kind": s.kind.value,
                     "label": s.label,
                     "origin": s.origin,
+                    # FRE-1662: the url a citation of this source links to, or None.
+                    "referent": s.referent,
                 }
                 for s in sources
             ],
@@ -8299,9 +8375,15 @@ async def step_tool_execution(
         )
         # ADR-0138 D3(a) (FRE-1296): the identifier is only citable if the model can
         # see it. FRE-1280 minted it and stopped there — nothing rendered it into the
-        # content the model actually reads.
+        # content the model actually reads. FRE-1662: a web_search entry gets its own marker.
         if _citation_identifier:
-            content = _with_citation_marker(content, _citation_identifier)
+            content = _with_entry_sources(
+                ctx,
+                tool_name=dr["tool_name"],
+                arguments=plan["arguments"],
+                content=content,
+                call_identifier=_citation_identifier,
+            )
         ctx.steps.append(
             {
                 "type": "tool_call",

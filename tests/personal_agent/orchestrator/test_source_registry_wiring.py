@@ -21,6 +21,8 @@ from personal_agent.orchestrator.executor import (
     _log_source_registry_snapshot,
     _register_admitted_memory_sources,
     _register_tool_source,
+    _with_citation_marker,
+    _with_entry_sources,
 )
 from personal_agent.orchestrator.types import ExecutionContext
 
@@ -269,3 +271,174 @@ def test_snapshot_logs_identifiers_without_content(caplog: Any) -> None:
     rendered = snapshot.getMessage()
     assert "fetch_url" in rendered
     assert "Ortiz packs bonito del norte" not in rendered
+
+
+# ── FRE-1662: a primary web_search gives each entry its own marker ───────────────────────
+
+_SEARCH_ARGS = {"query": "best tinned tuna france"}
+_ORTIZ = "https://www.conservasortiz.com/en/"
+_BIARRITZ = "https://www.biarritz.example/epicerie"
+
+
+def _search_content() -> str:
+    """A ``web_search`` result as ``render_content`` hands it to the executor."""
+    return json.dumps(
+        {
+            "ok": True,
+            "answers": [{"engine": "wikidata", "answer": "Ortiz was founded in 1891."}],
+            "results": [
+                {"title": "Ortiz", "url": _ORTIZ, "snippet": "Bonito del norte in olive oil."},
+                {"title": "Epicerie", "url": _BIARRITZ, "snippet": "Ortiz is sold in Biarritz."},
+                {"title": "No link", "url": "", "snippet": "Tuna prices vary."},
+            ],
+            "result_count": 3,
+            "query": _SEARCH_ARGS["query"],
+        }
+    )
+
+
+def _cite_search(ctx: ExecutionContext, content: str, *, success: bool = True) -> str:
+    """Run the phase-3 citation steps the executor runs on one tool result."""
+    identifier = _register_tool_source(
+        ctx, tool_name="web_search", arguments=_SEARCH_ARGS, content=content, success=success
+    )
+    if identifier is None:
+        return content
+    return _with_entry_sources(
+        ctx,
+        tool_name="web_search",
+        arguments=_SEARCH_ARGS,
+        content=content,
+        call_identifier=identifier,
+    )
+
+
+def test_the_model_reads_one_marker_per_entry_in_valid_json() -> None:
+    """FRE-1662 AC-3: each url-bearing entry carries a marker that resolves to its url."""
+    ctx = _context()
+    assert ctx.source_registry is not None
+
+    content = _cite_search(ctx, _search_content())
+
+    parsed = json.loads(content)
+    results = parsed["results"]
+    for entry in results[:2]:
+        marker = entry["_citation"]
+        source = ctx.source_registry.resolve(marker.strip("[]"))
+        assert source is not None
+        assert source.referent == entry["url"]
+    assert "_citation" not in results[2]
+    # The call-level marker sits only beside the answers, so a result fact has one marker
+    # to copy: its entry's. The answers stay citable.
+    assert "_citation" not in parsed
+    call_level = ctx.source_registry.resolve(parsed["answers"][0]["_citation"].strip("[]"))
+    assert call_level is not None and call_level.referent is None
+
+
+def test_an_entry_source_holds_no_marker_text() -> None:
+    """Registering before marking keeps a marker out of any registered content."""
+    ctx = _context()
+    assert ctx.source_registry is not None
+
+    _cite_search(ctx, _search_content())
+
+    assert all("_citation" not in s.content for s in ctx.source_registry.sources())
+
+
+def test_a_failed_search_registers_no_entries() -> None:
+    ctx = _context()
+    assert ctx.source_registry is not None
+
+    content = _cite_search(ctx, _search_content(), success=False)
+
+    assert content == _search_content()
+    assert all(s.kind is SourceKind.USER for s in ctx.source_registry.sources())
+
+
+def test_a_non_search_tool_gets_no_entry_markers() -> None:
+    """A ``url`` field in fetched JSON is a link the page carries, not a retrieval."""
+    ctx = _context()
+    content = json.dumps({"ok": True, "items": [{"url": _ORTIZ, "text": "Ortiz"}]})
+    marked = _with_entry_sources(
+        ctx,
+        tool_name="fetch_url",
+        arguments={"url": _BIARRITZ},
+        content=content,
+        call_identifier="S2@0123456789abcdef",
+    )
+
+    assert marked == _with_citation_marker(content, "S2@0123456789abcdef")
+    assert "_citation" not in json.loads(marked)["items"][0]
+
+
+def test_an_entry_registration_error_keeps_the_entries_already_marked(monkeypatch: Any) -> None:
+    """A failure on the second entry must not hide the first entry's marker.
+
+    The first entry's source is already admitted. If its marker were dropped, the turn would
+    count a source the model never saw (ADR-0139 D1).
+    """
+    ctx = _context()
+    registry = ctx.source_registry
+    assert registry is not None
+    real = registry.register_result_entry
+    calls = 0
+
+    def _second_fails(**kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("registry failure")
+        return real(**kwargs)
+
+    monkeypatch.setattr(registry, "register_result_entry", _second_fails)
+
+    content = _with_entry_sources(
+        ctx,
+        tool_name="web_search",
+        arguments=_SEARCH_ARGS,
+        content=_search_content(),
+        call_identifier="S2@0123456789abcdef",
+    )
+
+    results = json.loads(content)["results"]
+    first = registry.resolve(results[0]["_citation"].strip("[]"))
+    assert first is not None and first.referent == _ORTIZ
+    assert "_citation" not in results[1]
+
+
+def test_an_entry_registration_error_on_the_first_entry_keeps_the_call_marker(
+    monkeypatch: Any,
+) -> None:
+    ctx = _context()
+    assert ctx.source_registry is not None
+
+    def _boom(**_: object) -> None:
+        raise RuntimeError("registry failure")
+
+    monkeypatch.setattr(ctx.source_registry, "register_result_entry", _boom)
+    content = _search_content()
+
+    assert _with_entry_sources(
+        ctx,
+        tool_name="web_search",
+        arguments=_SEARCH_ARGS,
+        content=content,
+        call_identifier="S2@0123456789abcdef",
+    ) == _with_citation_marker(content, "S2@0123456789abcdef")
+
+
+def test_snapshot_shows_each_entry_url(caplog: Any) -> None:
+    """FRE-1662 AC-5's live surface: the snapshot names each entry's url."""
+    ctx = _context()
+    _cite_search(ctx, _search_content())
+
+    with caplog.at_level("INFO"):
+        _log_source_registry_snapshot(ctx)
+
+    snapshot = next(
+        record for record in caplog.records if "source_registry_snapshot" in record.getMessage()
+    )
+    rendered = snapshot.getMessage()
+    assert _ORTIZ in rendered
+    assert _BIARRITZ in rendered
+    assert "Bonito del norte" not in rendered

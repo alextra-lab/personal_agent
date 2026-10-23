@@ -201,7 +201,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0111](ADR-0111-infrastructure-topology-and-data-custody.md) | Infrastructure Topology & Data-Custody Policy | Superseded by ADR-0112 |
 | [ADR-0112](ADR-0112-configurable-substrate-backends.md) | Configurable Substrate Backends — Owner-Controlled Storage by Default | Accepted |
 | [ADR-0113](ADR-0113-self-driving-delivery-loop.md) | Self-Driving Delivery Loop — Autonomous Actuation, Human-Gated Judgment | Superseded |
-| [ADR-0114](ADR-0114-heterarchical-associative-memory-study.md) | Heterarchical Associative Memory — Decoupled Research Study | Withdrawn (2026-10-23) |
+| [ADR-0114](ADR-0114-heterarchical-associative-memory-study.md) | Heterarchical Associative Memory — Decoupled Research Study | Proposed |
 | [ADR-0115](ADR-0115-knowledge-class-axis-emission-persistence-dispatch.md) | The Knowledge Class Axis — Two-Axis Emission, Persistence, Dispatch | Implemented |
 | [ADR-0116](ADR-0116-event-driven-dispatch-actuation.md) | Event-Driven Dispatch Actuation (capability-gateway + MCP Channels) | Accepted |
 | [ADR-0117](ADR-0117-pr-gate-signal-collector.md) | Deterministic Signal Collector for the PR Gate | Accepted |

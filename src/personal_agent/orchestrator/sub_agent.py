@@ -68,6 +68,7 @@ from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent
 from personal_agent.config import settings
 from personal_agent.config.seshat_effort import rounds_for_turn
 from personal_agent.governance.worker_read_grant import ReadGrant
+from personal_agent.grounding.source_registry import RetrievedToolResult
 from personal_agent.llm_client.models import (
     Dialect,
     landing_accepts_json_schema,
@@ -1133,6 +1134,9 @@ class _ToolLoopState:
     # ADR-0149 D3: the ledger's raw material, and the reserve's clock.
     tool_calls: list[_ToolCallRecord] = field(default_factory=list)
     round_wall_s: list[float] = field(default_factory=list)
+    # FRE-442: every successful dispatch, so the parent turn can admit a finding's
+    # source_url only when one of these returned it (ADR-0138 D2).
+    retrieved: list[RetrievedToolResult] = field(default_factory=list)
     # FRE-1522: the context reserve's own clock, mirroring round_wall_s's role for
     # the time reserve. `last_round_prompt_tokens` is the real, provider-reported
     # usage.prompt_tokens of the most recently completed round; `last_round_message_count`
@@ -2414,6 +2418,14 @@ async def _run_tool_loop(
             )
             state.tools_used.append(tool_name)
             _absorb(tool_call_id, tool_name, raw_arguments, str(dispatch_result["content"]))
+            if dispatch_result.get("success") and isinstance(arguments, dict):
+                state.retrieved.append(
+                    RetrievedToolResult(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        content=str(dispatch_result["content"]),
+                    )
+                )
 
         # The round is closed only here, after its tool execution — so the mean the
         # landing reserve reads is the real cost of a round, inference plus tools,
@@ -2636,6 +2648,7 @@ async def run_sub_agent(
             report=outcome.report,
             report_schema=outcome.report_schema,
             findings_dropped_invalid_source=outcome.findings_dropped_invalid_source,
+            retrieved=tuple(state.retrieved),
         )
 
     except asyncio.TimeoutError:

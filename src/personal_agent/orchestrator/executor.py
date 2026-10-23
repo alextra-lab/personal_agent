@@ -36,6 +36,7 @@ from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
 from personal_agent.grounding.citations import (
     count_near_miss_markers,
+    link_citation_markers,
     parse_citations,
     strip_citation_markers,
 )
@@ -2539,18 +2540,30 @@ def _strip_markers_from_turn(ctx: ExecutionContext) -> None:
     instructs the model to emit markers and FRE-1296 gives it real ones to copy, which is
     true whether or not anything verifies them.
 
+    FRE-442: a marker that resolves in this turn's registry to a source with a web URL
+    becomes a link to that URL instead of nothing (owner decision, 2026-10-23: the link
+    shows provenance, it does not certify the claim). Both surfaces get the same text, so
+    the persisted history equals the delivered reply.
+
     Args:
         ctx: Execution context.
     """
+    registry = ctx.source_registry
+
+    def _finish(text: str) -> str:
+        if registry is None:
+            return strip_citation_markers(text)
+        return link_citation_markers(text, registry)
+
     if ctx.final_reply:
-        ctx.final_reply = strip_citation_markers(ctx.final_reply)
+        ctx.final_reply = _finish(ctx.final_reply)
 
     for message in ctx.messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         content = message.get("content")
         if isinstance(content, str) and content:
-            message["content"] = strip_citation_markers(content)
+            message["content"] = _finish(content)
 
 
 def _log_source_registry_snapshot(ctx: ExecutionContext) -> None:
@@ -5757,6 +5770,9 @@ async def step_init(
                 # ADR-0154 D6: the record reaches the context as soon as the planner ends,
                 # so a later phase that raises cannot lose it.
                 on_planner_run=lambda run: record_planner_outcome(ctx, run),
+                # FRE-442: a worker finding's source registers in this turn's registry,
+                # so the primary can cite what a sub-agent read.
+                source_registry=ctx.source_registry,
             )
 
             ctx.expansion_plan = expansion_result.plan

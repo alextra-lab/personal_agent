@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
 
@@ -62,6 +63,11 @@ Taking the space with the marker is what lets ``residents [S1@…].`` become ``r
 without any global whitespace pass — see :func:`strip_citation_markers` for why a global
 pass is not an option.
 """
+
+_MARKER_WITH_LEADING_SPACE_CAPTURED = re.compile(
+    rf"[ \t]?\[(S\d+@[0-9a-f]{{{IDENTIFIER_DIGEST_CHARS}}})\]"
+)
+""":data:`_MARKER_WITH_LEADING_SPACE`, capturing the identifier for :func:`link_citation_markers`."""
 
 
 class CitationViolationKind(StrEnum):
@@ -277,6 +283,81 @@ def strip_citation_markers(text: str) -> str:
         :data:`CITATION_MARKER_PATTERN` does not match it.
     """
     return _MARKER_WITH_LEADING_SPACE.sub("", text)
+
+
+_LINKABLE_HOST = re.compile(r"[a-z0-9.-]+")
+"""The host characters a link label may hold — plain ASCII DNS names only.
+
+The host becomes Markdown link text, so a character outside this set (a ``[``, a ``]``, an
+IPv6 literal, a Unicode homoglyph) is refused rather than escaped.
+"""
+
+_UNSAFE_URL_CHARS = re.compile(r"[\s<>\x00-\x1f\x7f]")
+"""Characters that cannot sit inside a ``<…>`` CommonMark link destination."""
+
+
+def _markdown_link(url: str) -> str | None:
+    r"""Return ``[host](<url>)`` for a safe web URL, or None when ``url`` is not one.
+
+    Args:
+        url: A registered source's referent.
+
+    Returns:
+        The Markdown link, or None when the scheme is not ``http``/``https``, the host is not
+        a plain DNS name, the URL carries a user name or password, or the URL holds
+        whitespace, a control character, ``<`` or ``>``. An IPv6 literal or a Unicode host
+        is therefore stripped rather than linked.
+        ``|`` and ``\\`` are percent-encoded: GFM splits a table cell on ``|`` even inside a
+        link, and a backslash is an escape inside the destination.
+    """
+    if _UNSAFE_URL_CHARS.search(url):
+        return None
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not host or not _LINKABLE_HOST.fullmatch(host):
+        return None
+    if parts.username is not None or parts.password is not None:
+        # A credential in a URL is never put in front of the reader as a link.
+        return None
+    label = host.removeprefix("www.")
+    destination = url.replace("\\", "%5C").replace("|", "%7C")
+    return f"[{label}](<{destination}>)"
+
+
+def link_citation_markers(text: str, registry: SourceRegistry) -> str:
+    """Turn each marker that resolves to a real web source into a link, and strip the rest.
+
+    Owner decision, FRE-442 (2026-10-23): a marker becomes a link when it resolves in this
+    turn's registry (D3(a)) to a source that has a web URL as its referent. Registration
+    already applied D2 admissibility, so a resolved source is one the turn really retrieved.
+    The link shows where a claim came from. It does not certify the claim: verification
+    outcomes are recorded apart and are not consulted here.
+
+    Every other marker — one this turn never minted, or one whose source has no referent
+    (a memory node, the user's words, a ``web_search`` result set) — is removed exactly as
+    :func:`strip_citation_markers` removes it. The repair stays local to each marker for the
+    reason that function gives.
+
+    Args:
+        text: Model output, possibly carrying markers.
+        registry: This turn's registry.
+
+    Returns:
+        The text with each resolvable web marker replaced by `` ([host](<url>))`` and every
+        other marker removed.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        source = registry.resolve(match.group(1))
+        if source is None or source.referent is None:
+            return ""
+        link = _markdown_link(source.referent)
+        return f" ({link})" if link is not None else ""
+
+    return _MARKER_WITH_LEADING_SPACE_CAPTURED.sub(_replace, text)
 
 
 _NEAR_MISS_CANDIDATE_PATTERN = re.compile(r"\[[^\]]*@[^\]]*\]")

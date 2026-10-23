@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from personal_agent.grounding.source_registry import RetrievedToolResult
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.expansion_types import SubAgentMode
 from personal_agent.orchestrator.worker_types import Thoroughness, WorkerReport, WorkerType
@@ -274,6 +275,10 @@ class SubAgentResult:
             ``http://`` or ``https://`` (ADR-0150 D1) — an unusable source is
             not a finding, and the citation handle (FRE-1486) must be a URL.
             ``0`` when ``report`` is ``None`` or nothing was dropped.
+        retrieved: Every successful tool result the worker received, in order
+            (FRE-442). The parent turn admits a finding's ``source_url`` as a
+            citable source only when one of these returned it (ADR-0138 D2).
+            Empty on a killed worker, which carries no report.
     """
 
     task_id: UUID
@@ -300,3 +305,4 @@ class SubAgentResult:
     report: WorkerReport | None = None
     report_schema: str | None = None
     findings_dropped_invalid_source: int = 0
+    retrieved: tuple[RetrievedToolResult, ...] = ()

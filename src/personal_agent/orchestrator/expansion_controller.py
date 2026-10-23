@@ -48,6 +48,7 @@ from personal_agent.governance.sub_agent_tools import (
     SubAgentToolGrant,
     evaluate_sub_agent_tool_grant,
 )
+from personal_agent.grounding.source_registry import SourceRegistry
 from personal_agent.llm_client.concurrency import get_inference_concurrency_controller
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.llm_client.models import Placement
@@ -1085,6 +1086,51 @@ def _compute_sub_agent_grants(
     return grants
 
 
+def _register_findings(
+    result: SubAgentResult, registry: SourceRegistry | None, trace_id: str | None
+) -> dict[str, str]:
+    """Register one worker's finding sources in the parent turn's registry (FRE-442).
+
+    ADR-0150 D1 gives each finding exactly one ``source_url``. The registry admits it only
+    when the worker's own tool results returned it (ADR-0138 D2). Best-effort, like the
+    executor's own registration: an unregistered source costs a citation, an exception here
+    would cost the turn.
+
+    Args:
+        result: One worker's result, carrying a validated report.
+        registry: The parent turn's registry, or None.
+        trace_id: Request trace identifier.
+
+    Returns:
+        Citation identifiers by ``source_url``, for the findings that registered.
+    """
+    if registry is None or result.report is None or not result.report.findings:
+        return {}
+    markers: dict[str, str] = {}
+    try:
+        for finding in result.report.findings:
+            registration = registry.register_worker_finding(
+                source_url=finding.source_url, retrieved=result.retrieved
+            )
+            if registration.source is not None:
+                markers[finding.source_url] = registration.source.identifier
+    except Exception:
+        logger.exception(
+            "sub_agent_findings_registration_failed",
+            trace_id=trace_id,
+            task_id=str(result.task_id),
+        )
+        return markers
+    logger.info(
+        "sub_agent_findings_registered",
+        trace_id=trace_id,
+        task_id=str(result.task_id),
+        findings=len(result.report.findings),
+        registered_urls=len(markers),
+    )
+    return markers
+
+
 class ExpansionController:
     """Deterministic expansion enforcement.
 
@@ -1119,6 +1165,7 @@ class ExpansionController:
         memory_digest: PlannerMemoryDigest | None = None,
         planner_may_decline: bool = False,
         on_planner_run: Callable[[PlannerRunRecord], None] | None = None,
+        source_registry: SourceRegistry | None = None,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -1184,6 +1231,9 @@ class ExpansionController:
             on_planner_run: Called once with the run's record as soon as the planner phase
                 ends, before any dispatch, so the caller keeps the record even if a later
                 phase raises (ADR-0154 D6). ``None`` drops the record.
+            source_registry: The parent turn's source registry (FRE-442). Each worker
+                finding whose URL the worker's own tool results returned registers there,
+                and its finding line carries the marker. ``None`` registers nothing.
 
         Returns:
             ExpansionResult with plan, sub-agent results, and synthesis context. On a
@@ -1315,7 +1365,12 @@ class ExpansionController:
                 )
 
         # --- Build synthesis context ---
-        result.synthesis_context = self._build_synthesis_context(plan=plan, sub_results=sub_results)
+        result.synthesis_context = self._build_synthesis_context(
+            plan=plan,
+            sub_results=sub_results,
+            source_registry=source_registry,
+            trace_id=trace_id,
+        )
         result.synthesis_directives = self._build_synthesis_directives(
             sub_results=sub_results,
             skipped_tasks=result.skipped_tasks,
@@ -2362,6 +2417,8 @@ class ExpansionController:
         self,
         plan: ExpansionPlan,
         sub_results: list[SubAgentResult],
+        source_registry: SourceRegistry | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Build the rendered worker reports from sub-agent results.
 
@@ -2372,6 +2429,9 @@ class ExpansionController:
         Args:
             plan: The expansion plan used for this run.
             sub_results: Results from all dispatched sub-agents.
+            source_registry: The parent turn's registry (FRE-442). When set, each
+                finding's source registers there and its line carries the marker.
+            trace_id: Request trace identifier, for the registration log line.
 
         Returns:
             The rendered reports for the parent agent.
@@ -2388,7 +2448,9 @@ class ExpansionController:
                 # A schema-backed `synthesized` landing: render findings and
                 # notes from the validated report, not `r.summary` (which
                 # includes the gaps this loop pulls out separately).
-                body = render_worker_report_body(r.report)
+                body = render_worker_report_body(
+                    r.report, _register_findings(r, source_registry, trace_id)
+                )
                 all_gaps.extend((r.spec_task, g.looked_for, g.where) for g in r.report.gaps)
             else:
                 body = r.summary

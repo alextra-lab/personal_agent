@@ -121,3 +121,35 @@ describe('MarkdownContent — diagrams (client mermaid)', () => {
     expect(getByText('figure')).toBeInTheDocument();
   });
 });
+
+// FRE-442 AC-3, PWA half: the backend turns a cited source into
+// ` ([host](<url>))`, encoding `|` so a table cell survives. The reader must get
+// a real anchor that opens the page in a new tab.
+describe('MarkdownContent — source links (FRE-442)', () => {
+  const url = 'https://www.kayak.com/flights/PAR-NYC?sort=price_a';
+
+  it('renders a cited source as a clickable link in prose', () => {
+    const content = `Business class costs EUR 2,410 ([kayak.com](<${url}>)).`;
+    const { container } = render(<MarkdownContent content={content} />);
+    const link = container.querySelector('a');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toBe(url);
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(link?.getAttribute('rel')).toContain('noopener');
+    expect(link?.textContent).toBe('kayak.com');
+  });
+
+  it('renders a cited source inside a table Source column', () => {
+    const encoded = 'https://example.com/search?q=a%7Cb';
+    const content = [
+      '| Airline | Fare | Source |',
+      '|---|---|---|',
+      `| AF | EUR 2,410 | ([example.com](<${encoded}>)) |`,
+    ].join('\n');
+    const { container } = render(<MarkdownContent content={content} />);
+    const cells = container.querySelectorAll('tbody td');
+    expect(cells).toHaveLength(3);
+    const link = cells[2].querySelector('a');
+    expect(link?.getAttribute('href')).toBe(encoded);
+  });
+});

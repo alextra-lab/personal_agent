@@ -1,7 +1,7 @@
 # ADR-0114: Heterarchical Associative Memory — a Decoupled Research Study (learn-at-ingest, consolidate-offline, recall-from-store)
 
 **Status:** Proposed
-**Date:** 2026-07-07 (revised 2026-07-10)
+**Date:** 2026-07-07 (revised 2026-07-10; Amendment A 2026-10-23)
 **Deciders:** Project owner (adr session, Opus)
 **Tags:** memory, knowledge-graph, categorization, associative-memory, self-organizing, consolidation, research-study, neo4j, gds
 **Backing tickets:** FRE-837 (umbrella); implementation sub-issues sequenced in Linear (see Status Updates)
@@ -57,6 +57,8 @@ Both sides hit the *same wall* from opposite ends. Cognitive models motivate the
 
 ### D1 — Isolation & corpus (the study is a sandbox, not a prod change)
 
+> **Amended 2026-10-23 (Amendment A, A1–A2):** the corpus is a new snapshot, taken after an owner-curated diversification window, with each session marked `organic` or `curated`.
+
 A **separate Neo4j instance** (its own container/volume) + the Graph Data Science plugin + Neo4j's native vector index. The corpus is a **one-time frozen export** of the prod KG **and conversation traces** — frozen so results are reproducible and re-runnable across parameter sweeps. The study is **read-only against prod and writes only to its own store**; it must never touch prod Neo4j/ES/Postgres (the FRE-375 substrate-isolation line applies unchanged). No prod code path is modified.
 
 ### D2 — The representational primitive: an evidence layer beneath a derived multi-parent index
@@ -104,6 +106,8 @@ This gives the distributional richness of embeddings ("meaning = sum of contexts
 ### D5 — Consolidate offline: the anti-snowflake engine (and where GDS actually lives)
 
 A **slow, offline** process (runs on a cadence, **never in the recall path** — this is "sleep") keeps the fast, messy ingest output usable. This is also **the only place GDS integrates** — every GDS algorithm here is batch (project a subgraph, run, write back), so none of them sit in the online recall path. Full pipeline: (1) **canonicalize categories** — merge scattered parent nodes whose names are near-synonyms and/or whose member-sets overlap; (2) **detect emergent structure** — GDS community detection proposes categories bottom-up as a *check* on free-text names; (3) **prune the incoherent tail** — suppress derived memberships that are weak **and** stale **and** incoherent with the concept's dominant neighborhood (evidence retained); (4) **schematize** *(later)* — write a gist onto stable categories, promote a recurrent pattern to a durable semantic edge (ADR-0105 episodic→semantic); (5) **reinforce/decay** — the worn-in clock, on derived edges only.
+
+> **Amended 2026-10-23 (Amendment A, A4 and A6):** a τ_merge sweep counts as a D5 run only if Stage 1 uses both signals below. The categorizer model is pinned for the study.
 
 **Canonicalization is a two-stage decision, not one threshold (revised 2026-07-10).** A single merge threshold cannot tell a synonym from a broader/narrower pair. So:
 
@@ -275,14 +279,131 @@ Typed **directional relation extraction** is a **separate study/arm** with its *
 All numeric bars are **pre-registered** — fixed *before* the run and recorded in the study plan; they may be tuned only before results are seen, never after (this is what defeats cherry-picking). The frozen snapshot's own statistics set the eligible populations, so the bars are checkable without new infrastructure.
 
 - **AC-1 — Multi-parent accretion holds across the population (MECHANISM GATE — necessary, not evidence of success).** Define the **eligible set** E = concepts mentioned in ≥2 conversations whose contexts differ (computable from the snapshot). Pass = **median `MEMBER_OF` degree over all of E is ≥2**, *and* **≥60% of E carry ≥2 provenance-distinct memberships** (each derived edge is backed by `MembershipAssertion`s from a different source conversation). · **Check:** one Cypher aggregation over E. · *Explicitly not success evidence* — a broken categorizer emitting `["Health", "Things discussed", "Important subjects"]` would pass this; AC-7 is what catches that. · *Fails if* the median degree over E is 1, or the ≥60% bar is missed, or memberships lack backing assertions.
-- **AC-2 — Canonicalization is real entity resolution, not lowercasing (with hard negatives).** Build V⁺ = case-/near-variant surface pairs that *should* resolve to one hub, and **V⁻ = hard-negative pairs that must NOT merge** (homonyms/polysemes: `Python`(language)/`python`(animal), `Mercury`(planet/element/software), `Apple`(company/fruit)). Pass = **pairwise precision ≥0.95 and recall ≥0.90 over V⁺∪V⁻** — i.e. ≥90% of true variants share a hub **and** ≥95% of merges are correct (hard negatives stay separate). The two named trigger pairs are spot-checks, *not* the bar. · **Check:** enumerate V⁺ and V⁻ from the snapshot; measure pairwise precision/recall. · *Fails if* precision or recall misses — lowercasing every label would tank precision on V⁻ (catastrophic homonym merges), so it cannot pass.
-- **AC-3 — The consolidator plateaus without collapse, and the categories are coherent, distinct, and stable (supporting quality gate).** Conversations processed in **chronological snapshot order**, and the result must hold under **≥2 additional pre-registered permutations** (robustness to front-loading category-rich conversations). Sweep τ_merge. For each τ_merge: (a) **plateau** — marginal new-canonical-categories-per-100-conversations in the final tertile is **≤25% of the first-tertile rate**, and the whole curve sits strictly **below the no-consolidator control** (≈linear), under every ordering; (b) **head legibility** — the **top-20** categories by member count, rated by **2 independent judges** on a 3-point rubric; "coherent" only when **both judges agree**; pass = **≥70% of top-20 coherent AND Cohen's κ ≥ 0.4**; (c) **tail coherence** — a **random 20-category sample from below the top-20**, same rubric, pass = **≥50% coherent** (guards against a clean head over an unusable long tail); (d) **distinctness** — **<10% of category pairs exceed a pre-registered member-overlap ceiling** (guards against overlapping duplicate categories, not just incoherent ones); (e) **non-collapse** — total canonical-category count **≥ a pre-registered floor**; (f) **stochastic stability** — across the seeded ledgers (D5), category-count and top-20 membership are stable (pre-registered variance bound). Pass = **∃ τ_merge satisfying (a)∧(b)∧(c)∧(d)∧(e)∧(f)**. · **Check:** the τ_merge-sweep plots (per ordering/seed) + the rated top-20 and tail tables + the overlap-pair histogram. · *Fails if* every τ_merge is ≈linear (snowflake), order-/seed-dependent, collapses (floor), has an incoherent tail, or is riddled with duplicate categories.
-- **AC-4 — Abstract-query recall beats the PRODUCTION-MULTIPATH baseline by a pre-registered, significant, and materially-sized margin — at the same operating point as AC-3.** A **single τ_merge\*** is selected (by a pre-registered rule) from the τ_merge that pass AC-3 and **fixed before any AC-4 scoring** (the plateau point and the recall-win point must be the *same* config — no re-sweeping for recall). Cue set = **≥30 abstract cues** spanning ≥4 snapshot domains; **cues AND gold neighborhoods are pre-registered and frozen before any scoring**; annotation (one annotator + a second adjudicating disagreements) is **blind to both systems' outputs**. **v0 methodology (owner-accepted 2026-07-11, FRE-841):** the annotators are **two blind cross-family LLM agents (Claude)** with LLM adjudication of disagreements — *not* human. Since the study's categorizer is **GPT-5.4-mini**, annotator and categorizer are **different model families**, which bounds (does not eliminate) shared-bias circularity; candidate pools are drawn from two neutral sources (embedding + keyword), not embedding-kNN alone, so the gold is not pre-restricted to what production recall already finds. The FRE-843 verdict **must carry this caveat** (cross-family-LLM-annotated gold, not human-validated); human annotation/adjudication of the gold is a v1 rigor option. Systems: **study** (enter-through-membership, arm C) vs **baseline** (**production multipath recall, ADR-0104**, reproduced on the snapshot — *not* embedding-only). Metrics: **Recall@20 (primary)** and **nDCG@20 (ranking guardrail)**. Pass = **all three**: (i) **relative** — study Recall@20 ≥ **1.10 ×** baseline; (ii) **absolute** — study Recall@20 − baseline ≥ a **pre-registered floor (default 0.05, set by a power/utility analysis before the run)**; (iii) **significance** — a **pre-registered paired test (Wilcoxon signed-rank or a paired bootstrap CI over the ≥30 cues)** with the effect size and 95% CI reported, not just p<0.05. **AND** the nDCG guardrail is a **non-inferiority test**: the **lower 95% CI bound of ΔnDCG@20 (study − baseline) must exceed −δ**, for a pre-registered margin δ (a non-significant regression is *not* evidence of equivalence). · **Check:** the frozen cue+gold set, the scored table, the paired test with CI/effect size, and the ΔnDCG CI. · *Fails if* the win misses relative OR absolute OR significance, or the ΔnDCG lower bound falls below −δ. Also fails the study's **primary** claim (this is the falsifiable core, per D8).
-- **AC-5 — Isolation is actively verified, not just grepped.** Two-sided proof: (1) **the study env cannot reach prod** — prod credentials are absent from the study environment and a deliberate connection attempt to the prod bolt/ES/PG URIs from the study env **fails** (no route/creds); (2) **prod shows zero attributable writes** — either (i) the study runs against the frozen snapshot during a **quiesced prod window** (no live turns), so prod Neo4j node+relationship counts (and ES/PG equivalents) before/after show **exact zero deltas**; or (ii) if prod cannot be quiesced, prod's **write-audit log filtered by client identity** over the study window shows **zero writes from the study's client/credentials**. · **Check:** the failed-connection log + (i) exact-zero prod deltas over the quiesced window **or** (ii) the client-attributed write-audit. · *Fails if* prod creds are reachable from the study env, or any prod write is attributable to the study (or the noise cannot be attributed away).
+- **AC-2 — Canonicalization is real entity resolution, not lowercasing (with hard negatives).** Build V⁺ = case-/near-variant surface pairs that *should* resolve to one hub, and **V⁻ = hard-negative pairs that must NOT merge** (homonyms/polysemes: `Python`(language)/`python`(animal), `Mercury`(planet/element/software), `Apple`(company/fruit)). Pass = **pairwise precision ≥0.95 and recall ≥0.90 over V⁺∪V⁻** — i.e. ≥90% of true variants share a hub **and** ≥95% of merges are correct (hard negatives stay separate). The two named trigger pairs are spot-checks, *not* the bar. · **Check:** enumerate V⁺ and V⁻ from the snapshot; measure pairwise precision/recall. · *Fails if* precision or recall misses — lowercasing every label would tank precision on V⁻ (catastrophic homonym merges), so it cannot pass. · **Amended 2026-10-23 (Amendment A, A8):** V⁻ is also mined from the new snapshot, and the bar is reported for each V⁻ set.
+- **AC-3 — The consolidator plateaus without collapse, and the categories are coherent, distinct, and stable (supporting quality gate).** Conversations processed in **chronological snapshot order**, and the result must hold under **≥2 additional pre-registered permutations** (robustness to front-loading category-rich conversations). Sweep τ_merge. For each τ_merge: (a) **plateau** — marginal new-canonical-categories-per-100-conversations in the final tertile is **≤25% of the first-tertile rate**, and the whole curve sits strictly **below the no-consolidator control** (≈linear), under every ordering; (b) **head legibility** — the **top-20** categories by member count, rated by **2 independent judges** on a 3-point rubric; "coherent" only when **both judges agree**; pass = **≥70% of top-20 coherent AND Cohen's κ ≥ 0.4**; (c) **tail coherence** — a **random 20-category sample from below the top-20**, same rubric, pass = **≥50% coherent** (guards against a clean head over an unusable long tail); (d) **distinctness** — **<10% of category pairs exceed a pre-registered member-overlap ceiling** (guards against overlapping duplicate categories, not just incoherent ones); (e) **non-collapse** — total canonical-category count **≥ a pre-registered floor**; (f) **stochastic stability** — across the seeded ledgers (D5), category-count and top-20 membership are stable (pre-registered variance bound). Pass = **∃ τ_merge satisfying (a)∧(b)∧(c)∧(d)∧(e)∧(f)**. · **Check:** the τ_merge-sweep plots (per ordering/seed) + the rated top-20 and tail tables + the overlap-pair histogram. · *Fails if* every τ_merge is ≈linear (snowflake), order-/seed-dependent, collapses (floor), has an incoherent tail, or is riddled with duplicate categories. · **Amended 2026-10-23 (Amendment A, A3 and A5):** AC-3(a)'s plateau ratio is no longer a gate. AC-3(a′) replaces it, and the 25% ratio stays a reported figure. The "2 independent judges" of (b) and (c) are defined in A5.
+- **AC-4 — Abstract-query recall beats the PRODUCTION-MULTIPATH baseline by a pre-registered, significant, and materially-sized margin — at the same operating point as AC-3.** A **single τ_merge\*** is selected (by a pre-registered rule) from the τ_merge that pass AC-3 and **fixed before any AC-4 scoring** (the plateau point and the recall-win point must be the *same* config — no re-sweeping for recall). Cue set = **≥30 abstract cues** spanning ≥4 snapshot domains; **cues AND gold neighborhoods are pre-registered and frozen before any scoring**; annotation (one annotator + a second adjudicating disagreements) is **blind to both systems' outputs**. **v0 methodology (owner-accepted 2026-07-11, FRE-841):** the annotators are **two blind cross-family LLM agents (Claude)** with LLM adjudication of disagreements — *not* human. Since the study's categorizer is **GPT-5.4-mini**, annotator and categorizer are **different model families**, which bounds (does not eliminate) shared-bias circularity; candidate pools are drawn from two neutral sources (embedding + keyword), not embedding-kNN alone, so the gold is not pre-restricted to what production recall already finds. The FRE-843 verdict **must carry this caveat** (cross-family-LLM-annotated gold, not human-validated); human annotation/adjudication of the gold is a v1 rigor option. Systems: **study** (enter-through-membership, arm C) vs **baseline** (**production multipath recall, ADR-0104**, reproduced on the snapshot — *not* embedding-only). Metrics: **Recall@20 (primary)** and **nDCG@20 (ranking guardrail)**. Pass = **all three**: (i) **relative** — study Recall@20 ≥ **1.10 ×** baseline; (ii) **absolute** — study Recall@20 − baseline ≥ a **pre-registered floor (default 0.05, set by a power/utility analysis before the run)**; (iii) **significance** — a **pre-registered paired test (Wilcoxon signed-rank or a paired bootstrap CI over the ≥30 cues)** with the effect size and 95% CI reported, not just p<0.05. **AND** the nDCG guardrail is a **non-inferiority test**: the **lower 95% CI bound of ΔnDCG@20 (study − baseline) must exceed −δ**, for a pre-registered margin δ (a non-significant regression is *not* evidence of equivalence). · **Check:** the frozen cue+gold set, the scored table, the paired test with CI/effect size, and the ΔnDCG CI. · *Fails if* the win misses relative OR absolute OR significance, or the ΔnDCG lower bound falls below −δ. Also fails the study's **primary** claim (this is the falsifiable core, per D8). · **Amended 2026-10-23 (Amendment A, A7):** the verdict is scored on the 35 July cues (the anchor set), with gold rebuilt on the new snapshot. New cues are written by a blind agent and reported as a secondary set.
+- **AC-5 — Isolation is actively verified, not just grepped.** Two-sided proof: (1) **the study env cannot reach prod** — prod credentials are absent from the study environment and a deliberate connection attempt to the prod bolt/ES/PG URIs from the study env **fails** (no route/creds); (2) **prod shows zero attributable writes** — either (i) the study runs against the frozen snapshot during a **quiesced prod window** (no live turns), so prod Neo4j node+relationship counts (and ES/PG equivalents) before/after show **exact zero deltas**; or (ii) if prod cannot be quiesced, prod's **write-audit log filtered by client identity** over the study window shows **zero writes from the study's client/credentials**. · **Check:** the failed-connection log + (i) exact-zero prod deltas over the quiesced window **or** (ii) the client-attributed write-audit. · *Fails if* prod creds are reachable from the study env, or any prod write is attributable to the study (or the noise cannot be attributed away). · **Amended 2026-10-23 (Amendment A, A9):** clause (2) covers the memory substrate. Metered cost rows are expected and must be listed.
 - **AC-6 — No precision overclaim (honest-scope guard, not delivery evidence).** The study report **separates** abstract-cue results (AC-4) from precise-answer-cue results, shows the precise-query numbers, and does **not** assert a precision improvement over ADR-0103's structural limit. · **Check:** both result sets present in the writeup. · *Note:* a guard, not counted as evidence the study worked. · *Fails if* the two are conflated or a precision win is claimed.
-- **AC-7 — Membership quality: the emitted memberships are ones a human would endorse (the evidence AC-1 cannot give).** On a **stratified random sample** of `MEMBER_OF` edges (strata by `membership_confidence` band and by concept frequency), 2 judges rate each membership *endorsed / dubious / wrong*. Pass = **membership precision ≥80% (both-judges-endorsed) at the operating τ_merge\***, **redundant-parent-pair rate ≤15%** (near-duplicate parents on the same concept), and **unsupported-membership rate ≤5%** (memberships whose backing assertions do not actually justify the category). · **Check:** the rated sample table + a Cypher scan for near-duplicate parents and for edges whose assertions fail a support test. · *Fails if* precision is below 80%, or redundant/unsupported rates exceed bounds — i.e. the "Health / Things discussed / Important subjects" failure mode that slips past AC-1.
+- **AC-7 — Membership quality: the emitted memberships are ones a human would endorse (the evidence AC-1 cannot give).** On a **stratified random sample** of `MEMBER_OF` edges (strata by `membership_confidence` band and by concept frequency), 2 judges rate each membership *endorsed / dubious / wrong*. Pass = **membership precision ≥80% (both-judges-endorsed) at the operating τ_merge\***, **redundant-parent-pair rate ≤15%** (near-duplicate parents on the same concept), and **unsupported-membership rate ≤5%** (memberships whose backing assertions do not actually justify the category). · **Check:** the rated sample table + a Cypher scan for near-duplicate parents and for edges whose assertions fail a support test. · *Fails if* precision is below 80%, or redundant/unsupported rates exceed bounds — i.e. the "Health / Things discussed / Important subjects" failure mode that slips past AC-1. · **Amended 2026-10-23 (Amendment A, A5):** the "2 judges" are defined in A5.
 
 **Seam owner (decomposed-ADR seam):** the **v0-synthesis ticket** owns the assembled intent — **AC-4 holding at a single pre-registered τ_merge\*, end-to-end** (ingest → accretion → consolidator → production-multipath baseline), with **AC-3 and AC-7 as quality gates**, **AC-1/AC-2/AC-5 as mechanism/isolation gates**, and **AC-6 honored** — *plus* the **pre-registered continuation-gate readout** (does v0 warrant climbing to v1 arms D–G?). The ADR does **not** close because the last child (e.g. the consolidator) merged; it closes only when the synthesis ticket shows that **at one τ_merge\*** the whole loop plateaus-without-collapse, the memberships are human-endorsed, **and** recall beats the production-multipath baseline by the pre-registered significant, materially-sized margin within the nDCG non-inferiority band — or returns a clean, documented null.
+
+---
+
+## Amendment A — 2026-10-23: the v0 corpus-scale revision (FRE-1655)
+
+**Status of this amendment:** Accepted by the owner in the adr session on 2026-10-23. ADR-0114 itself stays **Proposed**. This amendment narrows D1 and D5 and changes AC-2, AC-3, AC-4, AC-5 and AC-7. D2–D4, D6–D9 and the ablation ladder do not change.
+
+### Why the study is revised and not stopped
+
+The study was dormant from 2026-07-11. In the FRE-1650 backlog review, master recommended that the study stop. The owner answered: "I do like the study", then "Don't cancel. Let's revise if necessary". FRE-1655 carries that decision.
+
+### What v0 measured, and what it did not prove
+
+FRE-842 ran the τ_merge sweep on 2026-07-11. The input was the seed-0 ledger of 46 episodes, with τ_merge ∈ {0.1, 0.15, 0.2, 0.3, 0.5, 0.7}, chronological order and 2 permutations. No τ_merge passed AC-3(a). At τ_merge = 0.5, the final-tertile rate of new canonical categories was about 68% of the first-tertile rate. The ceiling is 25%. AC-3(d) and AC-3(e) passed at every τ_merge. AC-3(f) had no verdict, because the seed-1 ledger held only 6 episodes.
+
+That result does not show that the design fails. It has three limits:
+
+1. **Partial input.** The sweep used 46 of the 102 snapshot sessions, at one seed.
+2. **Half of the D5 signal.** D5 makes Stage 1 combine member-set overlap with name-embedding cosine. The sweep turned name-cosine off by design (`scripts/study/sweep.py`, the `build_checkpoint_snapshots` docstring). With 1–3 members per category, member overlap alone finds few candidate pairs.
+3. **A criterion that measures topic novelty, not scatter.** A domain-general collaborator keeps meeting new subjects. The count of real topics can grow like vocabulary in text, which follows a power law in corpus size (Heaps 1978). If growth follows n^β, the final/first tertile ratio is about 5^(β−1) at any corpus size. A ratio ≤0.25 needs β ≤ 0.14, which is near-total saturation. The July ratio of 0.68 matches β ≈ 0.76. Under this model, a larger corpus does not move the ratio. The criterion also rewards over-merging: a lower τ_merge flattens the curve, and only the non-collapse floor (e) resists that. The "snowflake" that D5 exists to stop is duplicate categories. A new subject is not a snowflake.
+
+The power-law model is a hypothesis, not a measurement. AC-3(a′) below does not depend on it.
+
+### The corpus on 2026-10-23 (measured)
+
+**Method:** read-only Cypher on production Neo4j on 2026-10-23. Label counts use `MATCH (n) UNWIND labels(n) AS l RETURN l, count(*)`. Relationship counts use `MATCH ()-[r]->() RETURN type(r), count(*)`. These are the same counts that `scripts/study/snapshots/snapshot_manifest.json` records. The categorizer pool is the set of `Session` nodes with at least one `DISCUSSES` edge to an `Entity`, because `run_ingest.py` reads that edge. The pool is split by `started_at` against the snapshot time, 2026-07-10T18:13Z.
+
+| Measure | July snapshot (2026-07-10) | 2026-10-23 | Change |
+|---|---|---|---|
+| Nodes | 10,290 | 13,935 | +35% |
+| Relationships | 34,301 | 44,938 | +31% |
+| `Entity` | 7,925 | 9,987 | +26% |
+| `Turn` | 2,213 | 2,762 | +25% |
+| `DISCUSSES` edges | 20,810 | 27,125 | +30% |
+| `Session` nodes | 102 | 340 | 3.3× |
+| Categorizer pool (`Session` with `DISCUSSES`) | ≤102 | 311 (92 started before the snapshot, 219 after) | about 3.4× |
+| Episodes in the July sweep | 46 (seed 0), 6 (seed 1) | — | 15% of the current pool |
+
+The pool grew about 3.4×, but the content grew about 25–30%. The median session that started after the snapshot has 1 turn. The median before the snapshot is 2 turns.
+
+### Decisions
+
+**A1 — A curated corpus, with strata (narrows D1).** Owner decision, 2026-10-23: "We will purposely diversify the corpus." The owner holds learning sessions on ten topics across the sciences, human development, computers, music and philosophy. Each topic gets its own session or sessions. The owner reports the start and end dates of this window when it is complete. Every session in the new snapshot carries a stratum:
+- `curated`: the session started inside the owner-reported window
+- `organic`: all other sessions
+
+The window can also hold ordinary use and probe sessions, so `organic` is a conservative stratum. AC-3 and AC-4 are reported for all sessions and for `organic` only. A future ADR that brings the method into production must cite the `organic` result.
+
+**A2 — A new snapshot (replaces the July corpus).** The snapshot is taken after the owner reports that the curated window is complete. The July manifest and its content hash stay as the v0 record. The July ledgers and the July sweep are evidence of the v0 limits above. They are not inputs to the verdict.
+
+**A3 — AC-3(a′) replaces AC-3(a) as the plateau gate (narrows AC-3).** This change came after the July result was seen. The ADR's own rule says that bars "may be tuned only before results are seen, never after". So the change is recorded here in the open. It has two grounds: the three limits above, and the A1 design change, which adds new topics on purpose. AC-3(a′) is fixed now, before the new snapshot exists. No study run has seen that data.
+
+- **AC-3(a′):** take the same ledger and ordering. In the final tertile, the rate of new canonical categories must be ≤50% of the no-consolidator control's rate. The whole consolidated curve must also stay strictly below the control. Both conditions hold under every ordering (chronological plus ≥2 pre-registered permutations).
+- **What it measures:** the share of late raw categories that the consolidator absorbs. τ_merge controls that share.
+- **The original ratio:** AC-3(a)'s final/first ratio is still computed and reported, for each τ_merge and ordering. It is not a gate.
+- **The over-merge guard does not change:** AC-3(d), AC-3(e), the alias-merge precision check and AC-7 still apply.
+- **Fails if** no τ_merge meets AC-3(a′) together with (b)–(f).
+
+**A4 — A D5 run uses both Stage-1 signals (narrows D5).** A τ_merge sweep counts as a D5 run only if Stage 1 combines member-set Jaccard with name-embedding cosine. A member-overlap-only sweep is a diagnostic. The sweep report states which signals were on.
+
+**A5 — The judges are defined (AC-3(b), AC-3(c), AC-7).** "2 judges" means two blind Claude agents. Claude is a different model family from the pinned categorizer (A6). Each judge:
+- sees only the items and the rubric, not the other judge's labels or the τ_merge value
+- receives the run date
+
+Disagreements follow the AC-4 method, with an LLM adjudicator and a recorded rationale. Optional calibration: the owner rates 20 items from the same sample, and the report states owner–judge agreement. Every verdict that uses these judges carries the caveat "LLM-judged, not human-validated".
+
+**A6 — The categorizer model is pinned.** Before this amendment, `scripts/study/categorizer.py` followed the `entity_extraction` binding. A production binding change would then change the study's model without notice. For the study, the categorizer is pinned to `gpt-5.4-mini`. A change to the pin is an owner decision, and it invalidates every ledger made before the change. The `model` provenance on each `MembershipAssertion` still records the model.
+
+**A7 — The AC-4 cues are protected against the curated window (narrows AC-4).** The owner chose the A1 topics, so cues written after the window can match bridges the owner built on purpose.
+- **Anchor set (primary):** the 35 July cues, registered before A1, stay frozen. The AC-4 verdict is scored on this set. It meets the ≥30-cue, ≥4-domain bar alone.
+- **Gold rebuild:** the anchor gold is rebuilt on the new snapshot. It uses the same two-source candidate pools and the same blind annotation. This is valid because no AC-4 score exists yet.
+- **New set (secondary):** a blind agent writes cues for domains that are new in the snapshot. Its input is a random sample of snapshot entity names, without the owner's topic list. The agent's prompt is committed with the artifact. The new set is reported next to the anchor set. It does not change the verdict.
+
+**A8 — AC-2 hard negatives are mined (narrows AC-2).** In July, no homonym pair could be mined, so V⁻ was 12 hand-made pairs. The A1 topics create cross-domain surface forms, for example `memory`, `learning`, `scale`, `network` and `harmony`. A form like `entropy` is a hard case, because physics and information theory share the mathematics. The mining step lists same-surface entities that occur in two or more snapshot domains. The A5 judges label each pair `distinct sense` (must not merge) or `same concept`. The AC-2 bar does not change. It is reported for the mined set and for the 12 hand-made pairs.
+
+**A9 — AC-5 covers the memory substrate, and FRE-1057 names the wrong producer (narrows AC-5).** FRE-1057 counted 285 rows with `purpose='study'` in production `api_costs` on 2026-07-26/27. Those rows are not from this study. `purpose` is the budget role, and seven eval scripts share the `study` role.
+
+| Day | Rows | Model | Producer |
+|---|---|---|---|
+| 2026-07-10 | 145 | `gpt-5.4-mini` | ADR-0114 categorizer: $0.99, 20:54–21:11Z, after FRE-839 merged at 20:17Z |
+| 2026-07-26 | 96 | `claude-sonnet-5` | FRE-994 digest-compression eval (generation model = `session_summary` binding) |
+| 2026-07-27 | 108 + 81 | `claude-sonnet-5` + `gpt-5.4-mini` | FRE-994 (generation, and scoring with `SCORING_MODEL_KEY = "gpt-5.4-mini"`), same 04:26–04:45Z window |
+| 2026-08-05 | 12 | `claude-haiku-4-5` | not ADR-0114 (the categorizer does not use this model) |
+
+The cost gate meters every paid call, and the FRE-839 README states that the study's cost goes through it. A metered row is the budget control working as designed. AC-5(2) is amended:
+- **Zero attributable writes** to the production memory substrate: Neo4j, Elasticsearch, and the Postgres session and memory tables.
+- **Expected rows:** cost rows in `api_costs`. The AC-5 check lists every study cost row, with its count and total.
+- **Attribution limit:** today, rows are attributed by model and run window, and the AC-5 report states that limit. A study-only budget role would make attribution exact. That is a budget change, so the owner decides it in the first implementation ticket.
+
+FRE-1057 is closed with this evidence. No production Neo4j or Elasticsearch write by the study is known. AC-5(1) and AC-5(2) still run in full on the new snapshot.
+
+**A10 — The paid run waits for FRE-1573 and a preflight.** The ingest and sweep make paid LLM calls. The FRE-1573 owner directive stops model studies and evals until its gate passes. The paid run therefore waits for that gate or for an explicit owner exception. A preflight comes first:
+- run 1–2 sessions end to end
+- project the time and cost
+- check the vendor credit balance
+
+Projection from July: 145 calls cost $0.99, so about $0.007 per call, with a mean of about 2,600 input and 1,200 output tokens. `categorize_conversation` makes one call per session. With 311 sessions, one seed costs about $2–3, and more after the curated window. All study-role evals share the `study` budget cap, so seeds can be spread over several days. A cap change is an owner decision.
+
+### Order of work
+
+1. **No cost:** pin the categorizer (A6), turn on name-cosine in the sweep (A4), add AC-3(a′) and per-stratum reporting (A1, A3), and amend the AC-5 check (A9). The ticket also records the owner question on a study-only budget role.
+2. **Blocked until the owner reports that the curated window is complete:** take the new snapshot with session strata (A1, A2).
+3. **Blocked by step 2:** mine V⁻ (A8), write the new cues blind, and rebuild the anchor gold (A7).
+4. **Blocked by steps 1 and 3, the FRE-1573 gate or an owner exception, and the preflight:** run the paid N-seed ingest and sweep (A10).
+5. FRE-843 (the v0 verdict and continuation gate) runs after step 4. Its scope does not change, except that it applies this amendment.
+
+### Verification of this amendment
+
+Each check uses an artifact that the study already writes, and each check can fail.
+
+- **A1/A2:** every `Session` in the new snapshot manifest has `stratum ∈ {organic, curated}`, and the curated window dates are recorded. *Fails if* any session has no stratum, or the window is missing.
+- **A3:** the sweep report gives, for each τ_merge and ordering, the AC-3(a′) ratio, the "below control" flag, and the original AC-3(a) ratio. *Fails if* any of the three is missing, or if τ_merge\* is selected by the original ratio.
+- **A4:** the sweep report records that name-cosine was on. *Fails if* the FRE-843 verdict cites a sweep without it.
+- **A6:** `MATCH (a:MembershipAssertion) WHERE a.model <> $pinned RETURN count(a)` returns 0 on every ledger in the verdict. *Fails if* the count is above 0.
+- **A7:** the anchor cue texts in the rebuilt gold equal the 35 July cue texts. The committed prompt of the cue agent contains no topic list. The AC-4 report has separate anchor and new-set tables, and the verdict uses the anchor set. *Fails if* any of these does not hold.
+- **A8:** the AC-2 report has one table for the mined V⁻ and one for the 12 hand-made pairs. *Fails if* the mined set is missing. An empty mined set is a valid result only if the report shows the mining query that returned it.
+- **A9:** the AC-5 report lists the study's `api_costs` rows with their count and total, and it shows zero-delta or audit evidence for the memory substrate. *Fails if* a memory-substrate write is attributable to the study.
 
 ---
 
@@ -311,6 +432,13 @@ All numeric bars are **pre-registered** — fixed *before* the run and recorded 
 - Fine-grained entity typing as multi-label classification (Ling & Weld 2012; Choi et al. 2018) — kind-vs-category as separable axes with corpus- and context-level evidence
 - Non-inferiority testing (Piaggio et al., CONSORT 2012) — the ΔnDCG margin method (AC-4)
 - Neo4j Graph Data Science — **Node Similarity/KNN** (v0 canonicalization candidate generation), **Leiden** (v1 hierarchy proposer — communities are *not* a taxonomy), **FastRP** (speculative recall arm), **PageRank** (diagnostic, not salience)
+- Heaps, H. S. (1978), *Information Retrieval: Computational and Theoretical Aspects* — vocabulary growth as a power law of corpus size (the Amendment A argument against AC-3(a))
+- FRE-1655 — Amendment A: the owner decisions, the 2026-10-23 corpus measurement, and the implementation tickets
+- FRE-842 — the July τ_merge sweep and its result (`scripts/study/README.md`, "Offline consolidator v0 + τ_merge sweep")
+- FRE-1057 — the AC-5 breach report that Amendment A A9 attributes to FRE-994
+- FRE-994 and `docs/research/2026-07-27-fre994-digest-compression-curve.md` — the eval that produced the 2026-07-26/27 `study` cost rows
+- FRE-1573 — the owner's stop on model studies and evals, which gates the paid run (A10)
+- FRE-1650 — the backlog review in which the owner kept the study
 - Peer-review analysis of ADR-0114 (owner-provided, 2026-07-10) — the orthogonal-axes / evidence-layer / ablation-ladder / AC-rigor revision integrated here (session artifact)
 - `/tmp/.../adr-kickoff-memory-kg.md` — owner-directed kickoff framing (session artifact)
 
@@ -325,6 +453,18 @@ All numeric bars are **pre-registered** — fixed *before* the run and recorded 
 ### 2026-07-10 - Revised (still Proposed)
 **Changed By:** Project owner (adr session, Opus)
 **Reason:** Integrated an owner-provided peer-review analysis. Substantive revisions, all additive to the original decision: (1) **orthogonal axes** — root cause restated as "entity *kind* used as the sole retrieval index," not "single-typing is wrong"; ADR-0109 kind is *preserved as a control*, associative categories are a *third axis*; (2) **evidence layer** — immutable `Mention`/`MembershipAssertion` records beneath a *derived, recomputable* `MEMBER_OF`, resolving the accrete-vs-prune contradiction (evidence never decays; derived edges/activation may); (3) **production-multipath baseline** — AC-4 now benchmarks against ADR-0104 as reproduced on the snapshot, not an embedding-only strawman; (4) **staged ablation ladder + continuation gate (D9)** — arms A–G on one substrate/schema/harness so v1 continues with no migration (D/E are diagnostic decompositions, F/G additive rungs — infrastructure-additive, not a strict arm-ordering prefix); relation-typing split into a separate study; (5) **AC rigor** — AC-1 demoted to a mechanism gate; new **AC-7 membership quality**; AC-2 gains hard negatives + pairwise P/R; AC-3 gains tail coherence, distinctness, stochastic stability; AC-4 gains a named paired test + effect size/CI + a nDCG **non-inferiority** margin + an **absolute** recall floor; (6) **GDS made concrete** — Node Similarity/KNN as v0 canonicalization candidate generation, Leiden as a v1 *proposer* (not a taxonomy), FastRP/PageRank labelled speculative/diagnostic; (7) **epistemic vs recall-priority split** (D6) — `membership_confidence` separated from recall-time salience/recency/novelty; (8) **frozen seeded proposal ledgers** so the τ_merge sweep (renamed from θ to avoid the Leiden parameter clash) isolates the knob; (9) **tempered tone** — cognitive science framed as inspiration, not fidelity, per the exploratory-research posture. Status remains **Proposed**; the falsifiable core is now AC-4 (recall beat) with AC-3/AC-7 as quality gates.
+
+### 2026-10-23 - Amended (Amendment A, still Proposed)
+**Changed By:** Project owner (adr session, Opus, FRE-1655)
+**Reason:** In the FRE-1650 backlog review, master recommended that the study stop. The owner kept it: "I do like the study", then "Don't cancel. Let's revise if necessary". Amendment A records the revision. The owner accepted all of its decisions on 2026-10-23, and decided to diversify the corpus on purpose ("We will purposely diversify the corpus").
+- **Corpus:** measured on 2026-10-23. The categorizer pool is 311 sessions, against ≤102 in July. The July sweep used 46 episodes.
+- **Corpus decisions:** a new snapshot after an owner-curated window, with `organic`/`curated` strata (A1–A2).
+- **AC-3:** AC-3(a′), relative to the no-consolidator control, replaces the plateau gate. The change is recorded openly as a revision after a seen result (A3).
+- **Method:** both Stage-1 signals (A4), defined judges (A5), and a pinned categorizer (A6).
+- **AC-4:** the July cues are the primary anchor set (A7).
+- **AC-2:** V⁻ is mined from the new snapshot (A8).
+- **AC-5 and FRE-1057:** AC-5 covers the memory substrate. FRE-1057's 285 rows belong to FRE-994, so FRE-1057 closes (A9).
+- **Paid run:** gated on FRE-1573 or an owner exception, and on a preflight (A10).
 
 ---
 

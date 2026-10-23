@@ -163,7 +163,12 @@ def otlp_stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Stack]:
         assert "remote_ip 172.25.0.0/16" in block, (
             "committed block's remote_ip literal changed — update this substitution"
         )
-        test_block = block.replace("remote_ip 172.25.0.0/16", f"remote_ip {subnet}")
+        # The test client always arrives as the network's own gateway, which the committed block
+        # refuses (FRE-1240), so that literal is swapped for an address the client never has.
+        assert "not remote_ip 172.25.0.1/32" in block, "gateway refusal literal changed"
+        test_block = block.replace("remote_ip 172.25.0.0/16", f"remote_ip {subnet}").replace(
+            "not remote_ip 172.25.0.1/32", "not remote_ip 192.0.2.1/32"
+        )
         under_test_caddyfile = tmp_dir / "under-test-Caddyfile"
         under_test_caddyfile.write_text(test_block + "\n")
 

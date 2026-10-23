@@ -10,8 +10,12 @@ sends requests to each tunnel host name.
   - "deny" container: the guard subnet is replaced by one that excludes the client. Every route
     on every tunnel host must answer 403, including the ES `/_bulk` and `/slm-requests-*` paths
     that were reachable without a login before this change.
-  - "allow" container: the guard subnet is replaced by the throwaway network's own subnet. The
-    same requests must NOT answer 403. They reach `reverse_proxy` and fail there, because no
+  - "gateway" container: the guard keeps the throwaway network's real gateway address, and the
+    client arrives as that gateway. Every route must answer 403 although the peer is inside the
+    subnet. This models IPv6 on the VPS: Docker's userland proxy presents the bridge gateway
+    (172.25.0.1) as the peer, so a subnet check alone lets a direct IPv6 request through.
+  - "allow" container: the guard subnet is replaced by the throwaway network's own subnet, and
+    the gateway literal by an address the client never has. The same requests must NOT answer 403. They reach `reverse_proxy` and fail there, because no
     upstream exists. The status differs by block (the AGENT and API `handle_errors` turn a 502
     into a 500), so the assertion is "not 403".
 
@@ -53,6 +57,8 @@ pytestmark_integration = pytest.mark.skipif(
 )
 
 _COMMITTED_SUBNET = "172.25.0.0/16"
+_COMMITTED_GATEWAY = "172.25.0.1/32"
+_UNUSED_ADDRESS = "192.0.2.1/32"  # TEST-NET-1: a gateway literal that matches no peer
 _EXCLUDING_SUBNET = "203.0.113.0/24"  # TEST-NET-3: never contains the client or the gateway
 _READY_TIMEOUT_S = 20
 
@@ -73,6 +79,7 @@ _ROUTES: list[tuple[str, str, str, str, dict[str, str]]] = [
     ("es /slm-requests-x", "es.example.com", "GET", "/slm-requests-x/_search", {}),
     ("api /", "api.example.com", "GET", "/", {}),
     ("api /v1", "api.example.com", "POST", "/v1/x", {}),
+    ("otlp /v1/traces", "otlp.example.com", "POST", "/v1/traces", {}),
 ]
 _ROUTE_IDS = [route[0] for route in _ROUTES]
 
@@ -125,7 +132,7 @@ def stacks(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, _Stac
 
     run_id = uuid.uuid4().hex[:10]
     network = f"fre1240-{run_id}"
-    names = {"deny": f"fre1240-deny-{run_id}", "allow": f"fre1240-allow-{run_id}"}
+    names = {case: f"fre1240-{case}-{run_id}" for case in ("deny", "gateway", "allow")}
     tmp_dir = tmp_path_factory.mktemp("fre1240")
 
     _run("docker", "network", "create", network)
@@ -133,13 +140,29 @@ def stacks(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, _Stac
         own_subnet = _run(
             "docker", "network", "inspect", network, "--format", "{{(index .IPAM.Config 0).Subnet}}"
         )
+        own_gateway = _run(
+            "docker",
+            "network",
+            "inspect",
+            network,
+            "--format",
+            "{{(index .IPAM.Config 0).Gateway}}",
+        )
         text = CADDYFILE_PATH.read_text()
         assert _COMMITTED_SUBNET in text, "committed subnet literal changed — update this swap"
+        assert _COMMITTED_GATEWAY in text, "committed gateway literal changed — update this swap"
 
+        # (subnet the guard accepts, address the guard refuses as the bridge gateway)
+        cases = {
+            "deny": (_EXCLUDING_SUBNET, _UNUSED_ADDRESS),
+            "gateway": (own_subnet, f"{own_gateway}/32"),
+            "allow": (own_subnet, _UNUSED_ADDRESS),
+        }
         result: dict[str, _Stack] = {}
-        for case, subnet in (("deny", _EXCLUDING_SUBNET), ("allow", own_subnet)):
+        for case, (subnet, gateway) in cases.items():
             caddyfile = tmp_dir / f"Caddyfile.{case}"
-            caddyfile.write_text(text.replace(_COMMITTED_SUBNET, subnet))
+            swapped = text.replace(_COMMITTED_SUBNET, subnet).replace(_COMMITTED_GATEWAY, gateway)
+            caddyfile.write_text(swapped)
             result[case] = _Stack(_start_caddy(network, names[case], caddyfile))
         for stack in result.values():
             _wait_until_serving(stack.base_url)
@@ -173,6 +196,22 @@ def test_a_peer_outside_the_subnet_gets_403_on_every_tunnel_route(
     headers: dict[str, str],
 ) -> None:
     response = _send(stacks["deny"], host, method, path, headers)
+    assert response.status_code == 403, f"{label}: {response.status_code}"
+    assert response.text == "Forbidden"
+
+
+@pytestmark_integration
+@pytest.mark.parametrize(("label", "host", "method", "path", "headers"), _ROUTES, ids=_ROUTE_IDS)
+def test_the_bridge_gateway_gets_403_although_it_is_inside_the_subnet(
+    stacks: dict[str, _Stack],
+    label: str,
+    host: str,
+    method: str,
+    path: str,
+    headers: dict[str, str],
+) -> None:
+    # The client arrives as the network gateway, exactly as an IPv6 request does on the VPS.
+    response = _send(stacks["gateway"], host, method, path, headers)
     assert response.status_code == 403, f"{label}: {response.status_code}"
     assert response.text == "Forbidden"
 

@@ -47,10 +47,19 @@
 # address, which a header cannot forge; cloudflared reaches Caddy from the cloud-sim compose
 # network (docker-compose.cloud.yml, subnet 172.25.0.0/16). Import this as the FIRST line of a
 # tunnel block: `handle` blocks run in file order, so a later handle cannot answer first.
-# The OTLP block carries the same matcher inline (FRE-1239).
+# The OTLP block carries the same two checks inline (FRE-1239).
+#
+# 172.25.0.1 is the bridge gateway, which is the host, never cloudflared. It is refused too:
+# Docker serves IPv6 through its userland proxy, so a request to the VPS IPv6 address reaches
+# Caddy with the gateway as its peer address, inside the subnet (measured 2026-10-23: IPv4
+# shows the true source, IPv6 shows 172.25.0.1). Loopback requests also arrive as the gateway.
 (tunnel_only) {
 	@not_tunnel not remote_ip 172.25.0.0/16
+	@bridge_gateway remote_ip 172.25.0.1/32
 	handle @not_tunnel {
+		respond "Forbidden" 403
+	}
+	handle @bridge_gateway {
 		respond "Forbidden" 403
 	}
 }
@@ -164,6 +173,7 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 		path_regexp ^/v1/traces$
 		query ""
 		remote_ip 172.25.0.0/16
+		not remote_ip 172.25.0.1/32
 	}
 	handle @allowed {
 		request_body {

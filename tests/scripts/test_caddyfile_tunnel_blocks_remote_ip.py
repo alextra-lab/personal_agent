@@ -12,6 +12,7 @@ The behavioral proof (the 403 answer on every route) is in test_fre1240_tunnel_o
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from pathlib import Path
 
@@ -22,6 +23,7 @@ CADDYFILE_PATH = REPO_ROOT / "config" / "cloud-sim" / "Caddyfile"
 COMPOSE_PATH = REPO_ROOT / "docker-compose.cloud.yml"
 
 _SUBNET = "172.25.0.0/16"
+_GATEWAY = "172.25.0.1/32"
 _TUNNEL_ADDRESS = re.compile(r"\{\$[A-Z_]+_HOST[:}]")
 _IMPORT = re.compile(r"^\s*import\s+(\S+)\s*$")
 _EXPECTED_TUNNEL_HOSTS = {"AGENT_HOST", "GRAPH_HOST", "ES_HOST", "API_HOST", "OTLP_HOST"}
@@ -75,6 +77,14 @@ def _blocks_without_remote_ip(text: str) -> list[str]:
     ]
 
 
+def _blocks_without_gateway_refusal(text: str) -> list[str]:
+    return [
+        address
+        for address, body in _tunnel_blocks(text).items()
+        if not re.search(rf"\bremote_ip\s+{re.escape(_GATEWAY)}", body)
+    ]
+
+
 def test_the_five_tunnel_blocks_are_found() -> None:
     # Guards the parser: a parser that finds no block would make the checks below pass for nothing.
     addresses = _tunnel_blocks(CADDYFILE_PATH.read_text())
@@ -85,6 +95,30 @@ def test_the_five_tunnel_blocks_are_found() -> None:
 def test_every_tunnel_block_carries_the_remote_ip_restriction() -> None:
     missing = _blocks_without_remote_ip(CADDYFILE_PATH.read_text())
     assert missing == [], f"tunnel block(s) with no remote_ip {_SUBNET} matcher: {missing}"
+
+
+def test_every_tunnel_block_refuses_the_bridge_gateway() -> None:
+    # IPv6 reaches Caddy through Docker's userland proxy with the gateway as its peer address,
+    # which is inside the subnet. A subnet-only check lets that request through.
+    missing = _blocks_without_gateway_refusal(CADDYFILE_PATH.read_text())
+    assert missing == [], f"tunnel block(s) that do not refuse {_GATEWAY}: {missing}"
+
+
+def test_seeded_negative_a_subnet_only_block_is_reported_for_the_gateway() -> None:
+    fixture = (
+        "{$API_HOST:api.example.com}:80 {\n"
+        f"\t@ok remote_ip {_SUBNET}\n"
+        "\treverse_proxy seshat-gateway:9001\n"
+        "}\n"
+    )
+    assert _blocks_without_remote_ip(fixture) == []
+    assert _blocks_without_gateway_refusal(fixture) == ["{$API_HOST:api.example.com}:80"]
+
+
+def test_the_gateway_literal_is_the_first_address_of_the_subnet() -> None:
+    # Docker's default gateway for a compose network that sets no gateway of its own.
+    first = next(ipaddress.ip_network(_SUBNET).hosts())
+    assert _GATEWAY == f"{first}/32"
 
 
 def test_every_tunnel_block_answers_403_to_the_refused_peer() -> None:

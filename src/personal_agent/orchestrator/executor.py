@@ -271,7 +271,9 @@ def _turn_lifetime_remaining(ctx: "ExecutionContext") -> float:
     ``_turn_deadline_remaining`` bounds the work. A pause already waiting
     when this reaches zero is preempted to its safe default
     (``_maybe_pause_for_constraint``); an in-flight LLM call is bounded by
-    the lesser of the two (step_llm_call).
+    the lesser of the two (step_llm_call); the driver loop in
+    :func:`execute_task` checks it before dispatching every step except
+    ``SYNTHESIS`` (ADR-0143 D4).
     """
     return (
         ctx.turn_started_monotonic + settings.orchestrator_turn_lifetime_seconds
@@ -3411,7 +3413,8 @@ def _stop_turn_for_lifetime_cap(ctx: ExecutionContext) -> None:
     Called when ``settings.orchestrator_turn_lifetime_seconds`` — the absolute,
     unextendable wall-clock cap — is reached, whether between rounds or while a
     constraint pause is in flight (in which case the pause has already resolved
-    to its safe default; this only supplies the turn's final reply). Distinct
+    to its safe default; this only supplies the turn's final reply), or before
+    a step the driver loop is about to dispatch (ADR-0143 D4). Distinct
     from :func:`_stop_turn_for_deadline` so telemetry can tell a lifetime-cap
     stop apart from a work-budget stop — the two consumed different budgets.
     """
@@ -4685,6 +4688,22 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     async with observe_topology(ctx):
         try:
             while state not in {TaskState.COMPLETED, TaskState.FAILED}:
+                # ADR-0143 D4 (FRE-1409): the pre-step bind point of the lifetime cap. No
+                # step is dispatched past the cap; the turn goes to synthesis, which salvages
+                # what was gathered. SYNTHESIS is exempt, so an exhausted turn does not
+                # re-fail this check on the state it just chose. A tool already in flight is
+                # never cancelled here: the check bounds the next step, not the current one.
+                if state is not TaskState.SYNTHESIS and _turn_lifetime_remaining(ctx) <= 0:
+                    log.warning(
+                        "turn_lifetime_cap_exhausted_before_step",
+                        trace_id=ctx.trace_id,
+                        session_id=ctx.session_id,
+                        skipped_state=state.value,
+                        budget_seconds=settings.orchestrator_turn_lifetime_seconds,
+                    )
+                    _stop_turn_for_lifetime_cap(ctx)
+                    state = TaskState.SYNTHESIS
+
                 log.info(
                     STATE_TRANSITION,
                     trace_id=ctx.trace_id,

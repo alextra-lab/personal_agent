@@ -1,6 +1,6 @@
 # ADR-0114: Heterarchical Associative Memory — a Decoupled Research Study (learn-at-ingest, consolidate-offline, recall-from-store)
 
-**Status:** Proposed
+**Status:** Withdrawn — 2026-10-23 (owner, FRE-1655); the study stopped after a partial v0
 **Date:** 2026-07-07 (revised 2026-07-10)
 **Deciders:** Project owner (adr session, Opus)
 **Tags:** memory, knowledge-graph, categorization, associative-memory, self-organizing, consolidation, research-study, neo4j, gds
@@ -325,6 +325,11 @@ All numeric bars are **pre-registered** — fixed *before* the run and recorded 
 ### 2026-07-10 - Revised (still Proposed)
 **Changed By:** Project owner (adr session, Opus)
 **Reason:** Integrated an owner-provided peer-review analysis. Substantive revisions, all additive to the original decision: (1) **orthogonal axes** — root cause restated as "entity *kind* used as the sole retrieval index," not "single-typing is wrong"; ADR-0109 kind is *preserved as a control*, associative categories are a *third axis*; (2) **evidence layer** — immutable `Mention`/`MembershipAssertion` records beneath a *derived, recomputable* `MEMBER_OF`, resolving the accrete-vs-prune contradiction (evidence never decays; derived edges/activation may); (3) **production-multipath baseline** — AC-4 now benchmarks against ADR-0104 as reproduced on the snapshot, not an embedding-only strawman; (4) **staged ablation ladder + continuation gate (D9)** — arms A–G on one substrate/schema/harness so v1 continues with no migration (D/E are diagnostic decompositions, F/G additive rungs — infrastructure-additive, not a strict arm-ordering prefix); relation-typing split into a separate study; (5) **AC rigor** — AC-1 demoted to a mechanism gate; new **AC-7 membership quality**; AC-2 gains hard negatives + pairwise P/R; AC-3 gains tail coherence, distinctness, stochastic stability; AC-4 gains a named paired test + effect size/CI + a nDCG **non-inferiority** margin + an **absolute** recall floor; (6) **GDS made concrete** — Node Similarity/KNN as v0 canonicalization candidate generation, Leiden as a v1 *proposer* (not a taxonomy), FastRP/PageRank labelled speculative/diagnostic; (7) **epistemic vs recall-priority split** (D6) — `membership_confidence` separated from recall-time salience/recency/novelty; (8) **frozen seeded proposal ledgers** so the τ_merge sweep (renamed from θ to avoid the Leiden parameter clash) isolates the knob; (9) **tempered tone** — cognitive science framed as inspiration, not fidelity, per the exploratory-research posture. Status remains **Proposed**; the falsifiable core is now AC-4 (recall beat) with AC-3/AC-7 as quality gates.
+
+### 2026-10-23 - Withdrawn
+
+**Changed By:** master session, on the owner's decision (FRE-1655, under the FRE-1650 backlog review)
+**Reason:** The owner approved master's recommendation ("All recommendations approved"): stop the study. The v0 finding: the corpus is too small to test the idea. FRE-842 ran the AC-3(a) plateau sweep on 46 episodes, and the final-tertile canonical-category rate stayed near 68% of the first tertile, above the 25% ceiling. The next step was a paid full-corpus sweep, and the study was dormant from 2026-07-11. FRE-1057 (the study records cost through the production tracker) stays open as a small fix. If the corpus grows a lot, the question can return as a new study.
 
 ---
 

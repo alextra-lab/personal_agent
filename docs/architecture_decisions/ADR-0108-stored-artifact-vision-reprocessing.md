@@ -1,6 +1,6 @@
 # ADR-0108: Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool)
 
-**Status:** Proposed
+**Status:** Accepted — 2026-10-23 (owner, FRE-1654); the build waits for FRE-1573
 **Date:** 2026-07-02
 **Deciders:** lextra (owner), Seshat architecture
 **Tags:** uploads, vision, images, artifacts, sub-agent, r2, cost, joinability, tools
@@ -486,6 +486,11 @@ is owned by the **final live-smoke ticket**, run by master at the integration ga
 persists cheaply; the main model need not be vision-capable) with a secondary gated inline-block tool,
 and a **new ADR** (not an ADR-0101 amendment). Reuses ADR-0101's shipped foundation; folds the
 `artifact_read` binary-URL defect (problem 2) in as the honesty + redirect fix.
+
+### 2026-10-23 - Accepted
+
+**Changed By:** master session, on the owner's decision (FRE-1654, under the FRE-1650 backlog review)
+**Reason:** The owner approved master's recommendation ("All recommendations approved"): accept, and build after FRE-1573. The new tools must follow the ADR-0156 tool contract. At acceptance nothing was built, and `artifact_read` still points the model at `public_url` for a cut result (`tools/artifact_tools.py`). FRE-743 and FRE-744 stay Parked, blocked by FRE-1573.
 
 ---
 

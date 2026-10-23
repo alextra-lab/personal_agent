@@ -1,6 +1,6 @@
 # ADR-0127: The Harness Self-Analysis Pillar — Collectors Emit Facts, One Analyzer Judges, Findings Are Keyed by Evidence
 
-**Status:** Proposed — 2026-07-28
+**Status:** Rejected — 2026-10-23 (owner, FRE-1653); the self-analysis work moved to FRE-1608 to FRE-1612
 **Date:** 2026-07-28
 **Deciders:** project owner (FRE-991)
 **Tags:** self-improvement, observability, evidence, analysis, captains-log, insights
@@ -634,3 +634,8 @@ proceed on it.
 corpus, the four subsystems' emitted types and their fingerprint functions against the live
 cloud-sim stack. Three claims in the originating research notes were corrected by measurement:
 the corpus size, the existence of a labelled rating corpus, and the proposed dedup remedy.
+
+### 2026-10-23 - Rejected
+
+**Changed By:** master session, on the owner's decision (FRE-1653, under the FRE-1650 backlog review)
+**Reason:** The owner approved master's recommendation ("All recommendations approved"): reject. The criteria checker (FRE-1030) and the seam (FRE-1032) were canceled with the adjudication process on 2026-08-18. The self-analysis work moved to FRE-1608 to FRE-1611 and the FRE-1612 dashboards. D8 (capture retention) shipped under FRE-1036. The D2 defect (the proposal fingerprint hashes model-written text) stays open as a plain bug, FRE-1028.

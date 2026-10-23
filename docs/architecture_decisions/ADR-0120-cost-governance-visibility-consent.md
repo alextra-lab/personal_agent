@@ -1,6 +1,6 @@
 # ADR-0120: Cost governance — visibility + consent (supersedes ADR-0065)
 
-**Status:** Proposed
+**Status:** Accepted — 2026-10-23 (owner, FRE-1652), with Amendment A
 **Date:** 2026-07-16
 **Deciders:** Owner (architect), cc-adrs (Opus); design settled with the owner in cc-explore2
 **Tags:** cost, governance, observability, human-in-the-loop, alerting, config
@@ -353,3 +353,14 @@ Perplexity onboarding corrected (the executor *discards* the `usage`, `perplexit
 not free); currency made a concrete T0 requirement (`api_costs` is `cost_usd`-only). AC-6 tightened
 to ask-first + the tool-approval waiter (not the constraint-pause path); AC-1 now requires cost
 derived from real usage, not a constant.
+
+### 2026-10-23 - Accepted, with Amendment A
+
+**Changed By:** master session, on the owner's decision (FRE-1652, under the FRE-1650 backlog review)
+**Reason:** The owner approved master's recommendation ("All recommendations approved"): accept, with one amendment.
+
+**Amendment A.**
+1. The out-of-band channel in Decision 7 is the existing ntfy owner alert (FRE-1632, `AGENT_OWNER_NTFY_URL`, IPv4 forced), not Signal. Email stays the fallback.
+2. The hard dollar caps stay in force until the pause reflex and the owner alert ship (T1 FRE-900, T2 FRE-901, T3 FRE-902). Decision 1 takes effect only then. Until then, no cap is raised without the owner, and a cap that fires is a question to the owner about whether the spend is real.
+
+State at acceptance: OVH and Voyage costs are recorded (FRE-974). Perplexity is not (FRE-899). The `main_inference` caps read USD 5 per day and USD 7 per week, and the last 7 days cost USD 0.08 (FRE-1570).

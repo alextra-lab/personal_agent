@@ -190,7 +190,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0105](ADR-0105-convergent-self-improvement-pipeline-and-system-graph.md) | Convergent Self-Improvement Pipeline & Isolated System Graph | Accepted |
 | [ADR-0106](ADR-0106-system-user-knowledge-boundary-dispatch-observe-ground.md) | The System/User Knowledge Boundary — Dispatch by Output Kind, Observe, Ground | Superseded by ADR-0115 (2026-07-11) |
 | [ADR-0107](ADR-0107-user-identity-resolution-and-log-propagation.md) | User Identity Resolution for Claims + Trace/Log Identity Propagation | Accepted |
-| [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
+| [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Accepted (2026-10-23) |
 | [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
 ### Dispatch, Delivery Process & Substrate (ADR-0110 – ADR-0137)
@@ -207,14 +207,14 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0117](ADR-0117-pr-gate-signal-collector.md) | Deterministic Signal Collector for the PR Gate | Accepted |
 | [ADR-0118](ADR-0118-artifact-builder-model-selection.md) | Model-Selection Layer for Open Roles — User-Selectable Artifact Builder (Phase 1) | Superseded by ADR-0121 + ADR-0122 |
 | [ADR-0119](ADR-0119-config-management-interface.md) | Config-Management Interface (Phase 1) — Observe + Open-Role Model Selection | Superseded by ADR-0121 |
-| [ADR-0120](ADR-0120-cost-governance-visibility-consent.md) | Cost Governance — Visibility + Consent (supersedes ADR-0065) | Proposed |
+| [ADR-0120](ADR-0120-cost-governance-visibility-consent.md) | Cost Governance — Visibility + Consent (supersedes ADR-0065) | Accepted (2026-10-23, Amendment A) |
 | [ADR-0121](ADR-0121-model-catalog-and-selection-layer.md) | Model Catalog and Selection Layer — Providers, Deployments, Bindings; the User Selects the Model | Implemented — 2026-07-22; Addendum A (per-primary sub_agent mapping, FRE-964) Proposed |
 | [ADR-0122](ADR-0122-build-time-artifact-builder-selection.md) | Per-Build Artifact Builder Selection — Choose the Model Before the Plan Is Written | Implemented — 2026-07-22 (amended 2026-07-21 — card at turn start) |
 | [ADR-0123](ADR-0123-turn-progress-surface.md) | Turn Progress Surface — Make the Wait Legible, So the User Stays Attached | Accepted — 2026-07-24 |
 | [ADR-0124](ADR-0124-session-summary-producer-and-phased-consumption.md) | Session-Summary Producer Correction and Phased Consumption | Accepted (amended 2026-07-23 — Amendment A, conversation-scoped input; 2026-07-24 — Amendment B, conversation-only: `tool_evidence` + `status_contradiction` removed) |
 | [ADR-0125](ADR-0125-two-quality-dimensions-and-turn-evidence-contract.md) | The Two Quality Dimensions and the Turn Evidence Contract (supersedes ADR-0067 reflection surfacing; verification oracle deferred) | Accepted |
 | [ADR-0126](ADR-0126-reading-the-living-knowledge-substrate.md) | Reading the Living-Knowledge Substrate — Stance-First Push, Pull-Only Claims (supplies ADR-0098's read half) | Accepted |
-| [ADR-0127](ADR-0127-harness-self-analysis-pillar.md) | The Harness Self-Analysis Pillar — Collectors Emit Facts, One Analyzer Judges, Findings Are Keyed by Evidence | Proposed |
+| [ADR-0127](ADR-0127-harness-self-analysis-pillar.md) | The Harness Self-Analysis Pillar — Collectors Emit Facts, One Analyzer Judges, Findings Are Keyed by Evidence | Rejected (2026-10-23) |
 | [ADR-0128](ADR-0128-telemetry-naming-and-structure-convention.md) | One Telemetry Naming and Structure Convention Across Every Substrate — Enforced at Emit and at the Substrate Boundary (closes ADR-0090's deferred field registry; adopts ADR-0093's OTel choice) | Superseded |
 | [ADR-0129](ADR-0129-opentelemetry-instrumentation-and-trace-visibility.md) | OpenTelemetry Instrumentation, with Trace Visibility as the Acceptance Bar — SDK context propagation, Collector, Tempo (un-parks ADR-0093 D3 and supersedes FRE-588's Elastic route; supersedes ADR-0128's enforcement mechanisms) | Accepted |
 | [ADR-0130](ADR-0130-two-tiers-of-acceptance-criteria.md) | Two Tiers of Acceptance Criteria — A Sub-Ticket Proves Its Own Work, One Seam Ticket Proves the ADR (severs criterion inheritance across the four contract documents) | Superseded |

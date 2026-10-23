@@ -48,6 +48,8 @@ from personal_agent.orchestrator.executor import (
 from personal_agent.orchestrator.types import ExecutionContext, TaskState
 
 CLAIM = "Paris has 2.1 million residents"
+# FRE-442: a marker resolving to a fetched page is delivered as a link to that page.
+LINKED_CLAIM = f"{CLAIM} ([example.com](<https://example.com/paris>))."
 
 
 def _ctx(reply: str, registry: SourceRegistry) -> ExecutionContext:
@@ -197,10 +199,12 @@ def test_markers_are_stripped_from_the_reply_and_from_session_history() -> None:
     what ``step_synthesis`` persists. A marker left there returns next turn as context,
     where a turn-scoped identifier resolves to nothing and would manufacture a refusal.
     """
+    # A web_search source is a result set with no single URL, so its marker is stripped.
+    # A fetch_url source now becomes a link instead (FRE-442, the test below).
     registry = SourceRegistry(turn_id="trace-strip")
     registration = registry.register_tool_result(
-        tool_name="fetch_url",
-        arguments={"url": "https://example.com/paris"},
+        tool_name="web_search",
+        arguments={"query": "paris population"},
         content="Paris counts 2,100,000 residents.",
     )
     assert registration.source is not None
@@ -211,6 +215,28 @@ def test_markers_are_stripped_from_the_reply_and_from_session_history() -> None:
 
     assert ctx.final_reply == f"{CLAIM}."
     assert ctx.messages[1]["content"] == f"{CLAIM}."
+
+
+def test_a_marker_resolving_to_a_web_source_becomes_a_link_on_both_surfaces() -> None:
+    """FRE-442 AC-3, backend half: the reader gets a link, and history matches the reply.
+
+    The unresolved marker beside it is stripped, so no raw marker reaches either surface.
+    """
+    registry = SourceRegistry(turn_id="trace-link")
+    registration = registry.register_tool_result(
+        tool_name="fetch_url",
+        arguments={"url": "https://example.com/paris"},
+        content="Paris counts 2,100,000 residents.",
+    )
+    assert registration.source is not None
+    reply = f"{CLAIM} [{registration.source.identifier}]. Lyon is smaller [S7@0123456789abcdef]."
+    ctx = _ctx(reply, registry)
+
+    _strip_markers_from_turn(ctx)
+
+    expected = f"{CLAIM} ([example.com](<https://example.com/paris>)). Lyon is smaller."
+    assert ctx.final_reply == expected
+    assert ctx.messages[1]["content"] == expected
 
 
 # ── observe — records everything, blocks nothing ────────────────────────────────────
@@ -384,7 +410,7 @@ async def test_observe_a_fully_cited_turn_carries_no_note() -> None:
     assert ctx.grounding_record is not None
     assert ctx.grounding_record.first_generation_compliant is True
     assert ctx.grounding_disclosure is None
-    assert await _deliver(ctx) == f"{CLAIM}."
+    assert await _deliver(ctx) == LINKED_CLAIM
 
 
 @pytest.mark.asyncio
@@ -493,7 +519,8 @@ async def test_off_mode_runs_nothing_but_still_strips_markers() -> None:
 
     assert state is TaskState.COMPLETED
     assert ctx.grounding_record is None
-    assert ctx.final_reply == f"{CLAIM}."
+    # No raw marker: the resolved one is a link (FRE-442), in every mode.
+    assert ctx.final_reply == LINKED_CLAIM
 
 
 # ── enforce — one cite-only retry on shape B, then deliver (ADR-0151 D3, D4) ─────────
@@ -643,7 +670,7 @@ async def test_enforce_delivers_a_turn_that_verified() -> None:
         state = await _synthesize(ctx, reply)
 
     assert state is TaskState.COMPLETED
-    assert ctx.final_reply == f"{CLAIM}."
+    assert ctx.final_reply == LINKED_CLAIM
     assert ctx.grounding_record is not None
     assert ctx.grounding_record.first_generation_compliant is True
 

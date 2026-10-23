@@ -363,9 +363,10 @@ def classify_turn_shape(
 
     Kept beside :func:`classify_turn_evidence` so the two classifications change together.
     The registry counts alone cannot define shape C: a malformed tool call never reaches
-    ``register_tool_result``, and a worker's report never enters the primary registry, so
-    both leave ``tool_results_offered`` at 0. ``tool_rounds`` and ``sub_agents_dispatched``
-    cover those paths.
+    ``register_tool_result``, and a worker report without findings (a text report, or a
+    failed landing) registers nothing, so both leave ``tool_results_offered`` at 0.
+    ``tool_rounds`` and ``sub_agents_dispatched`` cover those paths. A finding whose URL the
+    worker retrieved does register (FRE-442), so a sub-agent turn holding one is shape B.
 
     Args:
         verification: What the inline checks decided.

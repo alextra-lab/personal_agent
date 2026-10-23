@@ -201,11 +201,16 @@ def render_report_instruction(worker_type: "WorkerType") -> str:
     return _WORKER_REPORT_INSTRUCTION
 
 
-def render_worker_report_findings(report: WorkerReport) -> list[str]:
+def render_worker_report_findings(
+    report: WorkerReport, markers: Mapping[str, str] | None = None
+) -> list[str]:
     """Render every finding as one line: ``claim — why_it_matters [source_url] (date)``.
 
     Args:
         report: A validated worker report.
+        markers: Citation identifiers by ``source_url`` (FRE-442). A finding whose URL has
+            one ends with its ``[S{n}@{digest}]`` marker, so the primary can cite it. A
+            finding with none renders as before.
 
     Returns:
         One rendered line per finding, in the report's own order.
@@ -213,11 +218,15 @@ def render_worker_report_findings(report: WorkerReport) -> list[str]:
     lines = []
     for f in report.findings:
         date_suffix = f" ({f.date_or_period})" if f.date_or_period else ""
-        lines.append(f"{f.claim} — {f.why_it_matters} [{f.source_url}]{date_suffix}")
+        identifier = (markers or {}).get(f.source_url)
+        marker_suffix = f" [{identifier}]" if identifier else ""
+        lines.append(f"{f.claim} — {f.why_it_matters} [{f.source_url}]{date_suffix}{marker_suffix}")
     return lines
 
 
-def render_worker_report_body(report: WorkerReport) -> str:
+def render_worker_report_body(
+    report: WorkerReport, markers: Mapping[str, str] | None = None
+) -> str:
     """Render a report's findings and notes — no gaps section (ADR-0150 D4).
 
     ``_build_synthesis_context`` uses this: every worker's gaps are combined
@@ -226,11 +235,13 @@ def render_worker_report_body(report: WorkerReport) -> str:
 
     Args:
         report: A validated worker report.
+        markers: Citation identifiers by ``source_url`` (FRE-442), passed to
+            :func:`render_worker_report_findings`.
 
     Returns:
         The rendered findings, then the notes if any.
     """
-    lines = render_worker_report_findings(report)
+    lines = render_worker_report_findings(report, markers)
     if report.working_notes:
         lines.append("")
         lines.append(report.working_notes)

@@ -111,6 +111,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
 
@@ -183,6 +184,8 @@ class Admissibility(StrEnum):
     DERIVED_FROM_TURN_WRITE = "derived_from_turn_write"
     UNCLASSIFIED_TOOL = "unclassified_tool"
     NO_CONTENT = "no_content"
+    NOT_RETRIEVED = "not_retrieved"
+    """A sub-agent finding whose URL no tool result of that worker returned (FRE-442)."""
 
 
 class Entitlement(StrEnum):
@@ -309,6 +312,26 @@ class ToolRegistration(BaseModel):
     admissibility: Admissibility
     excluded_arguments: tuple[ExcludedArgument, ...] = ()
     reason: str = ""
+
+
+class RetrievedToolResult(BaseModel):
+    """One successful tool result a sub-agent worker received (FRE-442).
+
+    The worker's own record of what it retrieved, carried back to the parent turn so a
+    finding's ``source_url`` can be checked against it (ADR-0138 D2): a URL counts only if
+    one of these returned it.
+
+    Attributes:
+        tool_name: The tool the worker ran.
+        arguments: The worker model's own arguments to the call. Never admissible content.
+        content: The result as the worker read it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tool_name: str
+    arguments: Mapping[str, object]
+    content: str
 
 
 # ── The policy table ────────────────────────────────────────────────────────────────
@@ -878,6 +901,105 @@ made it.
 """
 
 
+def _kind_of(tool_name: str) -> SourceKind | None:
+    """Return the D2 source kind a tool's result can register as, or None when none.
+
+    Args:
+        tool_name: The tool that ran.
+
+    Returns:
+        ``DOCUMENTATION`` or ``TOOL`` from the policy table, or None for a tool on neither
+        list — default-deny.
+    """
+    if tool_name in DOCUMENTATION_TOOLS:
+        return SourceKind.DOCUMENTATION
+    if tool_name in TYPED_RETRIEVAL_TOOLS:
+        return SourceKind.TOOL
+    return None
+
+
+def _entitlement_for(tool_name: str, admissible: str) -> Entitlement:
+    """Return the entitlement one admissible tool result earns (FRE-1303).
+
+    FRE-1303: EXTERNAL is what a retrieval earns when it is independent of the model on
+    *both* of D2's axes — the arguments did not compose the result (the parameter schema,
+    settled by the policy table) *and* the agent did not author what the store hands back.
+    FRE-1302 shipped this branch treating search_memory as the sole exception; that was
+    wrong, and recall_personal_history is why — it returns assistant_response verbatim and
+    so held the most-trusted tier on the model's own prior words. A new typed retrieval
+    belongs in one of the two sets below unless neither axis touches it; the module
+    docstring and AGENT_WRITABLE_STORE_TOOLS carry the audit and the reasoning.
+
+    Args:
+        tool_name: The tool that ran.
+        admissible: The result after argument-echo stripping.
+
+    Returns:
+        The entitlement.
+    """
+    rule = _CONTENT_AWARE_ENTITLEMENT.get(tool_name)
+    if rule is not None:
+        return rule(admissible)
+    if tool_name in AGENT_WRITABLE_STORE_TOOLS:
+        return Entitlement.AGENT_DERIVED
+    return Entitlement.EXTERNAL
+
+
+def _normalised_url(url: str) -> str:
+    """Return the comparison form of ``url``: whitespace trimmed, and a bare ``/`` path dropped.
+
+    Only the site root is normalised (``https://a.com/`` equals ``https://a.com``), because
+    there the two forms are one resource by definition. ``/path`` and ``/path/`` can be two
+    resources, and a redirect target is not the URL that was fetched, so neither is folded:
+    a looser match would let a worker cite a page it never read because the address merely
+    resembles one it did (codex plan review).
+
+    Args:
+        url: A URL as a worker or a tool wrote it.
+
+    Returns:
+        The comparison form.
+    """
+    stripped = url.strip()
+    try:
+        parts = urlsplit(stripped)
+    except ValueError:
+        return stripped
+    if parts.netloc and parts.path == "/" and not parts.query and not parts.fragment:
+        return stripped[:-1]
+    return stripped
+
+
+def _object_with_url(node: object, target: str) -> Mapping[str, object] | None:
+    """Return the innermost JSON object whose ``url`` field equals ``target``.
+
+    Innermost, so a ``web_search`` result narrows to the one entry that returned the URL
+    rather than the whole result set, and two findings from one search become two sources.
+
+    Args:
+        node: A parsed JSON value.
+        target: The normalised URL to find.
+
+    Returns:
+        The object, or None when no object's ``url`` field equals ``target``.
+    """
+    if isinstance(node, Mapping):
+        for value in node.values():
+            found = _object_with_url(value, target)
+            if found is not None:
+                return found
+        url = node.get("url")
+        if isinstance(url, str) and _normalised_url(url) == target:
+            return node
+        return None
+    if isinstance(node, list):
+        for value in node:
+            found = _object_with_url(value, target)
+            if found is not None:
+                return found
+    return None
+
+
 class SourceRegistry:
     """The sources one turn retrieved, and the identifiers citations resolve against.
 
@@ -908,7 +1030,7 @@ class SourceRegistry:
         self._tool_registry = tool_registry
         self._sources: list[RegisteredSource] = []
         self._by_identifier: dict[str, RegisteredSource] = {}
-        self._by_dedupe_key: dict[tuple[SourceKind, str, str], RegisteredSource] = {}
+        self._by_dedupe_key: dict[tuple[SourceKind, str, str, str | None], RegisteredSource] = {}
         self._tainted: set[str] = set()
         self._tool_results_offered = 0
         # Insertion-ordered sets (ADR-0139 D8, FRE-1359). A dict keyed by the recorded
@@ -929,12 +1051,21 @@ class SourceRegistry:
         Every call counts, including a D4 retry that resubmits the same tool call: each
         call is a genuine offer even when :meth:`_register` later dedupes its content
         against an earlier source (ADR-0139 D1).
+
+        The unit is one offer to the registry: one per primary tool result, and since
+        FRE-442 one per sub-agent finding offered through :meth:`register_worker_finding`.
+        Counting each finding keeps :attr:`tool_results_admitted` at or below this number.
+        A turn whose workers offered findings and had none admitted is therefore
+        ``uncitable`` (ADR-0139 D1): the system offered nothing that could be cited.
         """
         return self._tool_results_offered
 
     @property
     def tool_results_admitted(self) -> int:
         """Sources this turn's tool and documentation calls actually registered.
+
+        Includes the sources that sub-agent findings registered (FRE-442), which are
+        ``TOOL`` or ``DOCUMENTATION`` sources like the primary's own.
 
         Computed from :meth:`sources` rather than a counter incremented on every
         ``ADMISSIBLE`` return: :meth:`_register` reuses an existing source's identifier
@@ -1109,11 +1240,8 @@ class SourceRegistry:
                 ),
             )
 
-        if tool_name in DOCUMENTATION_TOOLS:
-            kind = SourceKind.DOCUMENTATION
-        elif tool_name in TYPED_RETRIEVAL_TOOLS:
-            kind = SourceKind.TOOL
-        else:
+        kind = _kind_of(tool_name)
+        if kind is None:
             self._taint(arguments)
             self._record_refusal(tool_name, Admissibility.UNCLASSIFIED_TOOL)
             return ToolRegistration(
@@ -1148,27 +1276,12 @@ class SourceRegistry:
                 reason=f"{tool_name} returned no content to cite",
             )
 
-        # FRE-1303: EXTERNAL is what a retrieval earns when it is independent of the model on
-        # *both* of D2's axes — the arguments did not compose the result (the parameter schema,
-        # settled above by the policy table) *and* the agent did not author what the store hands
-        # back. FRE-1302 shipped this branch treating search_memory as the sole exception; that
-        # was wrong, and recall_personal_history is why — it returns assistant_response verbatim
-        # and so held the most-trusted tier on the model's own prior words. A new typed retrieval
-        # belongs in one of the two sets below unless neither axis touches it; the module
-        # docstring and AGENT_WRITABLE_STORE_TOOLS carry the audit and the reasoning.
-        rule = _CONTENT_AWARE_ENTITLEMENT.get(tool_name)
-        if rule is not None:
-            entitlement = rule(admissible)
-        elif tool_name in AGENT_WRITABLE_STORE_TOOLS:
-            entitlement = Entitlement.AGENT_DERIVED
-        else:
-            entitlement = Entitlement.EXTERNAL
         source = self._register(
             kind=kind,
             label=tool_name,
             content=admissible,
             origin=tool_name,
-            entitlement=entitlement,
+            entitlement=_entitlement_for(tool_name, admissible),
             referent=self._referent_of(tool_name, arguments),
         )
         return ToolRegistration(
@@ -1177,6 +1290,123 @@ class SourceRegistry:
             excluded_arguments=excluded,
             reason="",
         )
+
+    def register_worker_finding(
+        self, *, source_url: str, retrieved: Sequence[RetrievedToolResult]
+    ) -> ToolRegistration:
+        """Offer one sub-agent finding's source to this turn's registry (FRE-442).
+
+        ADR-0150 D1 gives every worker finding exactly one ``source_url``. Under ADR-0138 D2
+        the URL counts only if the worker's own tool results returned it, so the URL is
+        matched against what the worker retrieved, and the **retrieval** is what registers:
+
+        - a tool whose ``referent_parameter`` argument is the URL (``fetch_url``) registers
+          its whole result;
+        - a result holding a JSON object whose ``url`` field is the URL (a ``web_search``
+          entry) registers that innermost object only, so the source is the entry the
+          worker saw and not the whole result set.
+
+        The matched result then passes the same D2 rules as :meth:`register_tool_result` —
+        the policy table, the turn's taint, the argument-echo strip, the entitlement. A URL
+        that appears only inside page text is not matched: a page that links to another did
+        not retrieve it. A truncated result matches only through its referent argument,
+        because its body is a JSON prefix held in a string.
+
+        Each call is one offer, so ``tool_results_admitted`` never exceeds
+        ``tool_results_offered`` (ADR-0139 D1). A refused worker result does not taint the
+        turn: the taint set guards the primary's own write-then-read pair.
+
+        Args:
+            source_url: The finding's ``source_url``.
+            retrieved: The worker's successful tool results, in the order it received them.
+
+        Returns:
+            The outcome. The registered source's ``referent`` is ``source_url``, so a citation
+            of it can render as a link to the page the worker read.
+        """
+        self._tool_results_offered += 1
+        target = _normalised_url(source_url)
+        refused: ToolRegistration | None = None
+        refused_tool = ""
+
+        for result in retrieved:
+            content = self._finding_content(result, target)
+            if content is None:
+                continue
+            excluded = tuple(
+                ExcludedArgument(name=name, value=str(value))
+                for name, value in result.arguments.items()
+            )
+            kind = _kind_of(result.tool_name)
+            if result.tool_name in ARBITRARY_CODE_TOOLS or kind is None:
+                admissibility = (
+                    Admissibility.MODEL_AUTHORED_INVOCATION
+                    if result.tool_name in ARBITRARY_CODE_TOOLS
+                    else Admissibility.UNCLASSIFIED_TOOL
+                )
+            elif self._reads_tainted(result.arguments):
+                admissibility = Admissibility.DERIVED_FROM_TURN_WRITE
+            else:
+                admissible = strip_argument_echo(content, result.arguments)
+                if admissible.strip():
+                    source = self._register(
+                        kind=kind,
+                        label=f"sub_agent:{result.tool_name}",
+                        content=admissible,
+                        origin=result.tool_name,
+                        entitlement=_entitlement_for(result.tool_name, admissible),
+                        referent=source_url.strip(),
+                    )
+                    return ToolRegistration(
+                        source=source,
+                        admissibility=Admissibility.ADMISSIBLE,
+                        excluded_arguments=excluded,
+                    )
+                admissibility = Admissibility.NO_CONTENT
+            if refused is None:
+                refused_tool = result.tool_name
+                refused = ToolRegistration(
+                    source=None,
+                    admissibility=admissibility,
+                    excluded_arguments=excluded,
+                    reason=(
+                        f"{result.tool_name} returned {source_url}, but its result is not "
+                        f"admissible ({admissibility.value}, ADR-0138 D2)"
+                    ),
+                )
+
+        if refused is not None:
+            self._record_refusal(refused_tool, refused.admissibility)
+            return refused
+
+        self._record_refusal("sub_agent_finding", Admissibility.NOT_RETRIEVED)
+        return ToolRegistration(
+            source=None,
+            admissibility=Admissibility.NOT_RETRIEVED,
+            reason=f"no tool result of the worker returned {source_url} (ADR-0138 D2)",
+        )
+
+    def _finding_content(self, result: RetrievedToolResult, target: str) -> str | None:
+        """Return the part of one worker result that returned ``target``, or None.
+
+        Args:
+            result: One of the worker's successful tool results.
+            target: The normalised finding URL.
+
+        Returns:
+            The whole result when the tool's referent argument is the URL, the innermost
+            JSON object whose ``url`` field is the URL, or None when this result did not
+            return it.
+        """
+        referent = self._referent_of(result.tool_name, result.arguments)
+        if referent is not None and _normalised_url(referent) == target:
+            return result.content
+        try:
+            parsed = json.loads(result.content)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        found = _object_with_url(parsed, target)
+        return json.dumps(found) if found is not None else None
 
     def _referent_of(self, tool_name: str, arguments: Mapping[str, object]) -> str | None:
         """Return the single external thing this call retrieved, if it had one.
@@ -1263,7 +1493,7 @@ class SourceRegistry:
     ) -> RegisteredSource:
         """Mint or reuse the identifier for one source.
 
-        Reuse is keyed on ``(kind, origin, content)`` so re-registering the same item —
+        Reuse is keyed on ``(kind, origin, content, referent)`` so re-registering the same item —
         which the D4 retry loop does by construction — returns the existing entry rather
         than minting a second ordinal for the same thing.
 
@@ -1279,7 +1509,10 @@ class SourceRegistry:
             The registered source, new or existing.
         """
         bounded = mark_truncated(content, MAX_SOURCE_CONTENT_CHARS)
-        dedupe_key = (kind, origin, bounded)
+        # FRE-442: the referent is part of the identity. Two fetches of different URLs can
+        # return identical bodies once the argument-echo strip removes the URL field, and
+        # reusing the first source would link a citation of the second page to the first.
+        dedupe_key = (kind, origin, bounded, referent)
         existing = self._by_dedupe_key.get(dedupe_key)
         if existing is not None:
             return existing

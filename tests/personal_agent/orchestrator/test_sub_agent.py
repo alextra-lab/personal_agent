@@ -535,6 +535,80 @@ class TestSubAgentToolLoop:
         assert result.summary == "final answer"
 
     @pytest.mark.asyncio
+    async def test_a_successful_dispatch_is_recorded_as_retrieved(self) -> None:
+        """FRE-442: the parent admits a finding's URL only from what the worker retrieved."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "",
+                    tool_calls=[
+                        {"id": "c0", "name": "web_search", "arguments": '{"query": "fares"}'}
+                    ],
+                ),
+                _llm_response("final answer"),
+            ]
+        )
+        content = '{"ok": true, "results": [{"url": "https://example.com/a"}]}'
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=_dispatch_result("c0", "web_search", content)),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert len(result.retrieved) == 1
+        assert result.retrieved[0].tool_name == "web_search"
+        assert result.retrieved[0].arguments == {"query": "fares"}
+        assert result.retrieved[0].content == content
+
+    @pytest.mark.asyncio
+    async def test_failed_and_refused_calls_are_not_recorded_as_retrieved(self) -> None:
+        """The seeded negative: a failed dispatch and an out-of-grant call retrieved nothing."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response(
+                    "",
+                    tool_calls=[
+                        {"id": "c0", "name": "web_search", "arguments": '{"query": "fares"}'},
+                        {"id": "c1", "name": "fetch_url", "arguments": '{"url": "https://x.io"}'},
+                    ],
+                ),
+                _llm_response("final answer"),
+            ]
+        )
+        failed = {
+            **_dispatch_result("c0", "web_search", '{"ok": false}'),
+            "success": False,
+        }
+
+        with (
+            patch(
+                "personal_agent.orchestrator.sub_agent.get_shared_tool_execution_layer",
+                return_value=_stub_tool_layer("web_search"),
+            ),
+            patch(
+                "personal_agent.orchestrator.sub_agent.dispatch_tool_call",
+                AsyncMock(return_value=failed),
+            ),
+        ):
+            result = await run_sub_agent(
+                spec=_spec_with_tools(["web_search"]), llm_client=mock_client, trace_id="t"
+            )
+
+        assert result.refused_tool_attempts == ("fetch_url",)
+        assert result.retrieved == ()
+
+    @pytest.mark.asyncio
     async def test_empty_grant_never_passes_tools_to_respond(self) -> None:
         """Regression: a grant-less sub-agent must behave exactly as before the loop."""
         mock_client = AsyncMock()

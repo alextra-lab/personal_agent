@@ -1,6 +1,6 @@
 # ADR-0143: The Request Task Is the Unit That Must End — Bound the Service Task, Not the Turn
 
-**Status:** Proposed
+**Status:** Accepted — 2026-10-23 (owner, FRE-1650 backlog cull: the implementation chain was approved)
 **Date:** 2026-09-05
 **Deciders:** Owner (architect); adr seat (Fable 5.1, on the owner's instruction)
 **Tags:** service, transport, orchestrator, reliability, observability

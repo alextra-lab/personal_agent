@@ -24,11 +24,11 @@ from uuid import uuid4
 import orjson
 import pytest
 import redis.asyncio as aioredis
+from tests._helpers.request_tasks import run_turn, spawn_turn
 
 from personal_agent.events import session_write_waiter as sww
 from personal_agent.events.bus import NoOpBus, get_event_bus, set_global_event_bus
 from personal_agent.events.redis_backend import RedisStreamBus
-from personal_agent.service.app import _process_chat_stream_background
 
 _TEST_USER_ID = uuid4()
 
@@ -113,7 +113,7 @@ async def test_redis_branch_publishes_instead_of_double_appending(
 
     set_global_event_bus(RedisStreamBus(mock_redis))
 
-    await _process_chat_stream_background(
+    await run_turn(
         session_id=str(session_id),
         message="Tell me about Python",
         user_id=_TEST_USER_ID,
@@ -173,7 +173,7 @@ async def test_noop_branch_still_appends_directly(
 
     set_global_event_bus(NoOpBus())
 
-    await _process_chat_stream_background(
+    await run_turn(
         session_id=str(session_id),
         message="Tell me about Python",
         user_id=_TEST_USER_ID,
@@ -219,7 +219,7 @@ async def test_publish_failure_falls_back_to_direct_append_and_releases_waiter(
     mock_redis.xadd = AsyncMock(side_effect=ConnectionError("redis down"))
     set_global_event_bus(RedisStreamBus(mock_redis))
 
-    await _process_chat_stream_background(
+    await run_turn(
         session_id=str(session_id),
         message="Tell me about Python",
         user_id=_TEST_USER_ID,
@@ -274,14 +274,13 @@ async def test_cancellation_after_waiter_registered_releases_it(
     bus.publish = AsyncMock(side_effect=_hanging_publish)  # type: ignore[method-assign]
     set_global_event_bus(bus)
 
-    task = asyncio.create_task(
-        _process_chat_stream_background(
-            session_id=str(session_id),
-            message="Tell me about Python",
-            user_id=_TEST_USER_ID,
-            trace_id="trace-1",
-        )
-    )
+    task = spawn_turn(
+        session_id=str(session_id),
+        message="Tell me about Python",
+        user_id=_TEST_USER_ID,
+        trace_id="trace-1",
+    ).task
+    assert task is not None
     await asyncio.wait_for(publish_started.wait(), timeout=1.0)
     assert sww._session_write_waiters, "waiter must be registered before publish resolves"
     task.cancel()
@@ -372,7 +371,7 @@ async def test_fre1543_turn_summary_is_published_and_the_turn_is_opened_and_clos
     mock_open_turn.return_value = 41
     set_global_event_bus(RedisStreamBus(mock_redis))
 
-    await _process_chat_stream_background(
+    await run_turn(
         session_id=str(session_id), message="hi", user_id=_TEST_USER_ID, trace_id="trace-1"
     )
 
@@ -414,7 +413,7 @@ async def test_fre1543_direct_append_stores_turn_summary_and_unopened_turn_is_no
     mock_open_turn.return_value = None  # the registry could not be written
     set_global_event_bus(NoOpBus())
 
-    await _process_chat_stream_background(
+    await run_turn(
         session_id=str(session_id), message="hi", user_id=_TEST_USER_ID, trace_id="trace-1"
     )
 

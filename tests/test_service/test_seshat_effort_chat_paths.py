@@ -19,10 +19,10 @@ from uuid import uuid4
 
 import pytest
 import structlog.testing
+from tests._helpers.request_tasks import run_turn
 
 from personal_agent.config.seshat_effort import get_current_effort
 from personal_agent.service.app import (
-    _process_chat_stream_background,
     _resolve_session_effort,
     chat,
     chat_stream_endpoint,
@@ -85,10 +85,13 @@ class TestStreamEndpoint:
     async def test_the_launch_hands_the_resolved_level_to_the_turn_and_logs_it(self) -> None:
         launched: dict[str, Any] = {}
 
-        def _capture_task(coro: Any) -> MagicMock:
+        def _capture_task(coro: Any, **_kwargs: Any) -> MagicMock:
             launched.update(coro.cr_frame.f_locals)
             coro.close()
             return MagicMock()
+
+        registry = MagicMock()
+        registry.spawn.side_effect = _capture_task
 
         dedup = MagicMock()
         dedup.check_and_record.return_value = DeduplicationResult(is_duplicate=False)
@@ -101,7 +104,7 @@ class TestStreamEndpoint:
             patch(
                 "personal_agent.service.app.AsyncSessionLocal", _session_local(_OneColumnDb(None))
             ),
-            patch.object(asyncio, "create_task", side_effect=_capture_task),
+            patch("personal_agent.service.app.get_request_task_registry", return_value=registry),
             structlog.testing.capture_logs() as logs,
         ):
             body = await chat_stream_endpoint(
@@ -174,7 +177,7 @@ class TestStreamTurn:
                 new_callable=AsyncMock,
             ) as emit,
         ):
-            await _process_chat_stream_background(
+            await run_turn(
                 session_id=str(uuid4()),
                 message="hello",
                 user_id=_USER.user_id,

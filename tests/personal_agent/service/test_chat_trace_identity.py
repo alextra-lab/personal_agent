@@ -20,7 +20,6 @@ production would ship to Elasticsearch. No live Postgres/ES/Neo4j is needed.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterator, MutableMapping
 from contextlib import contextmanager
 from decimal import Decimal
@@ -132,10 +131,13 @@ async def _call_chat_stream() -> tuple[str, list[MutableMapping[str, Any]]]:
 
     threaded: dict[str, str] = {}
 
-    def _capture_task(coro: Any) -> MagicMock:
+    def _capture_task(coro: Any, **_kwargs: Any) -> MagicMock:
         threaded["trace_id"] = coro.cr_frame.f_locals["trace_id"]
         coro.close()  # never awaited — avoid an "unawaited coroutine" warning
         return MagicMock()
+
+    registry = MagicMock()
+    registry.spawn.side_effect = _capture_task
 
     dedup = MagicMock()
     dedup.check_and_record.return_value = DeduplicationResult(is_duplicate=False)
@@ -150,7 +152,7 @@ async def _call_chat_stream() -> tuple[str, list[MutableMapping[str, Any]]]:
             "personal_agent.service.app._resolve_session_effort",
             new=AsyncMock(return_value=("standard", "default")),
         ),
-        patch.object(asyncio, "create_task", side_effect=_capture_task),
+        patch("personal_agent.service.app.get_request_task_registry", return_value=registry),
         _capture() as captured,
     ):
         await chat_stream_endpoint(

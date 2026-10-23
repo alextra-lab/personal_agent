@@ -430,6 +430,16 @@ def test_subagents_pins_report_schema() -> None:
     assert props["findings_dropped_invalid_source"]["type"] == "integer"
 
 
+def test_subagents_pins_skills_loaded() -> None:
+    """FRE-1616 B3 / AC-6: the skills a worker loaded are a searchable keyword field.
+
+    An additive field on this template: it is the reversible deploy class only when it is
+    pinned here and not left to dynamic mapping.
+    """
+    props = _props(_load("captains-subagents-index-template.json"))
+    assert props["skills_loaded"]["type"] == "keyword"
+
+
 # --------------------------------------------------------------------------- #
 # Self-improvement funnel (ADR-0105 D6, FRE-719).
 # --------------------------------------------------------------------------- #

@@ -233,19 +233,24 @@ _CATALOG_HEADER = (
 
 
 def skills_for_tools(held: Collection[str]) -> dict[str, SkillDoc]:
-    """Return the skills whose ``metadata.requires-tools`` an agent holds (ADR-0156 D9.1).
+    """Return the skills that a worker holding ``held`` sees (ADR-0156 D9.1, FRE-1607 B1).
 
-    A skill that requires no tool is held by every agent.
+    A worker sees a skill when it holds every tool in the skill's ``metadata.requires-tools``
+    and every tool in its ``metadata.provides-tools``: a skill whose tool the worker cannot
+    hold teaches it a method that it cannot use. A skill that names neither field is seen by
+    every worker.
 
     Args:
-        held: The tool names the agent holds.
+        held: The tool names the worker holds.
 
     Returns:
         Mapping of skill name to SkillDoc, for the visible skills only.
     """
     tools = set(held)
     return {
-        name: doc for name, doc in _get_cache().docs.items() if set(doc.requires_tools) <= tools
+        name: doc
+        for name, doc in _get_cache().docs.items()
+        if {*doc.requires_tools, *doc.provides_tools} <= tools
     }
 
 
@@ -276,9 +281,12 @@ def tools_revealed_by(skill_name: str, held: Collection[str] | None = None) -> f
     Returns:
         The revealed tool names; empty for an unknown or a hidden skill.
     """
-    visible = _get_cache().docs if held is None else skills_for_tools(held)
-    doc = visible.get(skill_name)
-    return frozenset(doc.provides_tools) if doc is not None else frozenset()
+    doc = _get_cache().docs.get(skill_name)
+    # The skill reveals tools that the principal does not hold yet, so B1's provides-tools
+    # condition does not apply here: only the requires-tools subset rule (D9.1) does.
+    if doc is None or (held is not None and not set(doc.requires_tools) <= set(held)):
+        return frozenset()
+    return frozenset(doc.provides_tools)
 
 
 def provider_violations(

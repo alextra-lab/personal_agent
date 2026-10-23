@@ -24,12 +24,23 @@ from personal_agent.governance.permissions import evaluate_permission, load_perm
 from personal_agent.orchestrator.skills import get_all_skills
 
 _SKILLS = Path(__file__).resolve().parents[3] / "skills"
-_ELASTICSEARCH = (_SKILLS / "log-search" / "SKILL.md").read_text(encoding="utf-8")
+# FRE-1616: the curl steps of log-search moved to references/, so the check reads them too.
+_ELASTICSEARCH = "\n".join(
+    (_SKILLS / "log-search" / name).read_text(encoding="utf-8")
+    for name in (
+        "SKILL.md",
+        "references/curl-steps.md",
+        "references/index-granularity.md",
+    )
+)
 _TEMPO = (_SKILLS / "model-latency" / "SKILL.md").read_text(encoding="utf-8")
 # FRE-1578: the Pattern 5 recipe moved from SKILL.md to references/ (progressive disclosure).
 _RECIPE = (_SKILLS / "model-latency" / "references" / "latency-recipe.md").read_text(encoding="utf-8")
 # FRE-1596: the spans-of-one-trace and trace-search recipes moved to turn-explanation (A4).
-_TURN = (_SKILLS / "turn-explanation" / "SKILL.md").read_text(encoding="utf-8")
+# FRE-1616: Steps 1b to 4 moved from SKILL.md to references/ (a worker without bash sees no curl).
+_TURN = (_SKILLS / "turn-explanation" / "references" / "other-substrates.md").read_text(
+    encoding="utf-8"
+)
 _TURN_TEMPO = _TURN[_TURN.index("### Step 1c") : _TURN.index("## Step 2")]
 _TEMPO_FILES = f"{_TEMPO}\n{_RECIPE}\n{_TURN_TEMPO}"
 _RULES = load_permission_rules()

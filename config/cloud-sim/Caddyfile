@@ -41,6 +41,20 @@
 	}
 }
 
+# Direct-origin guard for every inbound Cloudflare-Tunnel block (FRE-1240). Caddy publishes
+# 80/443 on all host interfaces, so a request straight to the VPS IP with a forged Host header
+# would reach these blocks without passing Cloudflare Access. remote_ip tests the TCP peer
+# address, which a header cannot forge; cloudflared reaches Caddy from the cloud-sim compose
+# network (docker-compose.cloud.yml, subnet 172.25.0.0/16). Import this as the FIRST line of a
+# tunnel block: `handle` blocks run in file order, so a later handle cannot answer first.
+# The OTLP block carries the same matcher inline (FRE-1239).
+(tunnel_only) {
+	@not_tunnel not remote_ip 172.25.0.0/16
+	handle @not_tunnel {
+		respond "Forbidden" 403
+	}
+}
+
 # HTTPS — SSH tunnel dev access (curl -k https://localhost/...)
 localhost {
 	import routing
@@ -53,6 +67,7 @@ localhost {
 # WARP-enrolled devices reach this same hostname block (FRE-1244) — no separate private-network
 # IP route; a publicly tunneled hostname needs no raw-CIDR routing to be reachable from WARP.
 {$AGENT_HOST:agent.example.com}:80 {
+	import tunnel_only
 	@ws path /ws/*
 	handle @ws {
 		reverse_proxy seshat-gateway:9001
@@ -71,6 +86,7 @@ localhost {
 #   WebSocket upgrade  →  neo4j:7687  (Bolt)
 #   Regular HTTP       →  neo4j:7474  (Browser UI + REST API)
 {$GRAPH_HOST:graph.example.com}:80 {
+	import tunnel_only
 	@websocket {
 		header Connection *Upgrade*
 		header Upgrade websocket
@@ -116,6 +132,7 @@ localhost {
 # security improvement and a config change needing a deploy, so it is left in place and
 # flagged rather than deleted here — owner's call.
 http://{$ES_HOST:es.example.com}:80 {
+	import tunnel_only
 	@allowed path_regexp ^/(slm-requests-[^/]+|_bulk)(/.*)?$
 	handle @allowed {
 		reverse_proxy elasticsearch:9200
@@ -174,6 +191,7 @@ http://{$OTLP_HOST:otlp.example.com}:80 {
 # TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.
 # :80 port suffix disables Caddy auto-HTTPS.
 {$API_HOST:api.example.com}:80 {
+	import tunnel_only
 	reverse_proxy seshat-gateway:9001 {
 		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
 		header_up X-Forwarded-Proto https

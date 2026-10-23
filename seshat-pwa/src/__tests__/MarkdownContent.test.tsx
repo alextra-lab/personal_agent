@@ -58,6 +58,17 @@ describe('MarkdownContent — math (KaTeX)', () => {
     expect(table!.parentElement!.className).toContain('overflow-x-auto');
   });
 
+  // The span override must pass every prop through: KaTeX lays out fractions
+  // and scripts with inline styles, and hides its visual copy from screen
+  // readers with aria-hidden.
+  it('keeps the inline styles and aria-hidden that KaTeX sets on its spans', () => {
+    const { container } = render(
+      <MarkdownContent content={'$$\n\\frac{a}{b}\n$$'} />,
+    );
+    expect(container.querySelector('.katex-html span[style]')).not.toBeNull();
+    expect(container.querySelector('.katex-html')).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('gives display math its own horizontal scroll box', () => {
     const { container } = render(
       <MarkdownContent content={'$$\nx^2 + y^2\n$$'} />,

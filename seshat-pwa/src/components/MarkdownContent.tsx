@@ -149,15 +149,17 @@ const markdownComponents: Components = {
     );
   },
   // FRE-1651: same for display math, which KaTeX sets on one unwrappable line.
-  span({ className, children }) {
-    if (className?.split(' ').includes('katex-display')) {
+  // Every prop passes through: KaTeX lays out its output with inline styles
+  // and hides the visual copy from screen readers with aria-hidden.
+  span({ node: _node, ...props }) {
+    if (props.className?.split(' ').includes('katex-display')) {
       return (
         <div className="overflow-x-auto overflow-y-hidden">
-          <span className={className}>{children}</span>
+          <span {...props} />
         </div>
       );
     }
-    return <span className={className}>{children}</span>;
+    return <span {...props} />;
   },
   a({ href, children }) {
     // Tier 3 (ADR-0070): intercept artifact URLs and render an inline card.

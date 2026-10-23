@@ -57,6 +57,7 @@ class RequestTask:
         state: ``leaked`` once a task outlived shutdown. A leaked record stays enumerable.
         outcome: How the task ended, once known. ``None`` until stamped or derived.
         close_won: Whether the close-once arbiter has been won (FRE-1410). Unused today.
+        deadline_timer: The timer that stamps ``timed_out`` at the stage-one deadline.
     """
 
     trace_id: str
@@ -68,7 +69,7 @@ class RequestTask:
     state: RequestTaskState = "live"
     outcome: RequestOutcome | None = None
     close_won: bool = False
-    _timer: asyncio.TimerHandle | None = field(default=None, repr=False)
+    deadline_timer: asyncio.TimerHandle | None = field(default=None, repr=False)
 
     def stamp_timed_out(self) -> None:
         """Record that stage one fired. This wins over an earlier ``failed`` stamp."""
@@ -123,21 +124,36 @@ class RequestTaskRegistry:
             _entry_trace_id.reset(token)
         record.task = task
         self._records[trace_id] = record
-        record._timer = loop.call_at(stage_one, self._on_stage_one_deadline, record)
+        record.deadline_timer = loop.call_at(stage_one, self._on_stage_one_deadline, record)
         task.add_done_callback(partial(self._on_done, record))
         self._log_gauge()
         return record
 
     def get(self, trace_id: str) -> RequestTask | None:
-        """Return the record for a trace, or ``None``."""
+        """Return the record for a trace.
+
+        Args:
+            trace_id: The turn's trace id.
+
+        Returns:
+            The record, or ``None`` when no task is registered for the trace.
+        """
         return self._records.get(trace_id)
 
     def records(self) -> tuple[RequestTask, ...]:
-        """Return every record, live and leaked."""
+        """Return every record.
+
+        Returns:
+            The live and the leaked records, in insertion order.
+        """
         return tuple(self._records.values())
 
     def counts(self) -> tuple[int, int]:
-        """Return the number of ``(live, leaked)`` records."""
+        """Count the records by state.
+
+        Returns:
+            The number of live records and the number of leaked records.
+        """
         leaked = sum(1 for r in self._records.values() if r.state == "leaked")
         return len(self._records) - leaked, leaked
 
@@ -191,28 +207,29 @@ class RequestTaskRegistry:
 
     def _on_done(self, record: RequestTask, task: asyncio.Task[None]) -> None:
         """Log how the task ended and drop its record. The one done callback."""
-        if record._timer is not None:
-            record._timer.cancel()
+        if record.deadline_timer is not None:
+            record.deadline_timer.cancel()
         self._records.pop(record.trace_id, None)
-        error_type: str | None = None
+        # Retrieve the exception of every task that was not cancelled, so a stamped outcome
+        # cannot hide an escaped exception from this log or from asyncio's GC warning.
+        exc = None if task.cancelled() else task.exception()
         outcome = record.outcome
         if outcome is None:
             if task.cancelled():
                 outcome = "cancelled"
-            elif (exc := task.exception()) is not None:
+            elif exc is not None:
                 outcome = "failed"
-                error_type = type(exc).__name__
             else:
                 outcome = "completed"
-        fields: dict[str, Any] = {
+        fields: dict[str, str | float | bool] = {
             "trace_id": record.trace_id,
             "session_id": record.session_id,
             "elapsed_seconds": self._elapsed(record),
             "outcome": outcome,
             "was_leaked": record.state == "leaked",
         }
-        if error_type is not None:
-            fields["error_type"] = error_type
+        if exc is not None:
+            fields["error_type"] = type(exc).__name__
         if outcome == "completed":
             log.info("chat_stream.task_ended", **fields)
         else:

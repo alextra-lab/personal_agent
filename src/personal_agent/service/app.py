@@ -331,8 +331,10 @@ async def _process_chat_stream_background(
 ) -> None:
     """Run the full orchestrator pipeline and push the result to the WS queue.
 
-    Runs as a fire-and-forget ``asyncio.Task``.  A DONE close signal is always
-    pushed to the WS queue, even on error, so the client stream closes cleanly.
+    Runs as an ``asyncio.Task`` that ``RequestTaskRegistry.spawn`` creates (ADR-0143 D1),
+    bounded by ``service_request_task_lifetime_seconds`` from the registry insertion.  A
+    DONE close signal is always pushed to the WS queue, even on error, so the client
+    stream closes cleanly.
 
     Args:
         session_id: Client-generated session UUID (used for WS queue key and DB).
@@ -358,6 +360,10 @@ async def _process_chat_stream_background(
         received_monotonic: ``time.monotonic()`` reading taken when the endpoint received
             the request (ADR-0154 D6). ``None`` starts the clock here, which omits the
             time spent before this task ran.
+
+    Raises:
+        RequestTaskEntryError: When the running task is not the one the request-task
+            registry created for ``trace_id``. Raised before any side effect.
     """
     # ADR-0143 D1: refuse to run unless the request-task registry created this task. First,
     # so a bypass raises before it has any side effect.

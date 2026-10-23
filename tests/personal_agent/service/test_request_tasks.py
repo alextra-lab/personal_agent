@@ -62,11 +62,12 @@ def _live_records() -> list[Any]:
 
 
 def _set_setting(monkeypatch: pytest.MonkeyPatch, name: str, value: int) -> None:
-    """Set a setting; skip silently when the tree has no such field (``main``)."""
+    """Set a setting; skip it only on a tree that has no registry (``main``)."""
     try:
         monkeypatch.setattr(settings, name, value)
     except AttributeError:
-        pass
+        if _registry_or_none() is not None:
+            raise  # the registry exists, so a missing setting is a typo and not a baseline tree
 
 
 def _ended(records: Records, trace_id: str) -> MutableMapping[str, Any] | None:
@@ -100,6 +101,7 @@ class _BodyMocks:
 
     session_local: MagicMock
     push_event: AsyncMock
+    emit_done: AsyncMock
     open_turn: AsyncMock
     orchestrator: MagicMock
     release: asyncio.Event = field(default_factory=asyncio.Event)
@@ -138,7 +140,7 @@ def body_mocks(monkeypatch: pytest.MonkeyPatch) -> Iterator[_BodyMocks]:
         patch("personal_agent.service.app._record_first_token", new=AsyncMock()),
         patch("personal_agent.orchestrator.Orchestrator", return_value=orchestrator),
         patch("personal_agent.transport.agui.transport._push_event", new=AsyncMock()) as push,
-        patch("personal_agent.transport.agui.transport.emit_done", new=AsyncMock()),
+        patch("personal_agent.transport.agui.transport.emit_done", new=AsyncMock()) as emit_done,
         patch("personal_agent.transport.agui.transport.open_turn", new=AsyncMock()) as open_turn,
     ):
         session_local.side_effect = lambda: _fake_db_session()
@@ -146,6 +148,7 @@ def body_mocks(monkeypatch: pytest.MonkeyPatch) -> Iterator[_BodyMocks]:
         mocks = _BodyMocks(
             session_local=session_local,
             push_event=push,
+            emit_done=emit_done,
             open_turn=open_turn,
             orchestrator=orchestrator,
         )
@@ -354,6 +357,8 @@ async def test_stage_one_times_out_a_cooperative_block_after_the_executor(
     assert ended["outcome"] == "timed_out"
     assert 1.9 <= ended["elapsed_seconds"] <= 3.0
     assert _live_records() == []
+    # Cancellation runs the body's `finally`: the stream still gets its DONE.
+    body_mocks.emit_done.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -539,10 +544,10 @@ async def test_a_second_record_with_the_same_trace_id_is_refused(registry: Any) 
 
 
 @pytest.mark.asyncio
-async def test_the_timer_stamps_timed_out_even_when_the_task_swallows_cancellation(
+async def test_the_timer_stamps_timed_out_on_a_task_still_running_at_the_deadline(
     registry: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A task whose cancellation is swallowed and which ends later still reports ``timed_out``."""
+    """The timer alone stamps ``timed_out``; a task that ends later still reports it."""
     monkeypatch.setattr(settings, "service_request_task_lifetime_seconds", 1)
     release = asyncio.Event()
 
@@ -559,3 +564,24 @@ async def test_the_timer_stamps_timed_out_even_when_the_task_swallows_cancellati
 
     ended = _ended(records, "stamp-1")
     assert ended is not None and ended["outcome"] == "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_an_exception_that_escapes_a_stamped_task_is_still_logged(registry: Any) -> None:
+    """A stamped outcome does not hide the exception: its type is logged and it is retrieved."""
+
+    async def boom() -> None:
+        raise ValueError("escaped the body")
+
+    with capture_log_records() as records:
+        record = registry.spawn(boom(), trace_id="esc-1", session_id=_SESSION_ID)
+        record.stamp_failed()
+        assert record.task is not None
+        with pytest.raises(ValueError, match="escaped the body"):
+            await record.task
+        await asyncio.sleep(0)
+
+    ended = _ended(records, "esc-1")
+    assert ended is not None
+    assert ended["outcome"] == "failed"
+    assert ended["error_type"] == "ValueError"

@@ -199,3 +199,18 @@ Output lands in `telemetry/evaluation/fre1668-artifact-builder-ab/` (gitignored)
   is the catalog default mode today. The report states the confound and does not tune either arm.
 - **Stale docstring.** `artifact_draft_executor` says "thinking disabled". The catalog now gives these
   models adaptive thinking. Not fixed here (no `src/` change). The handoff mentions it.
+
+## Changes during the build (after the Codex plan review and the preflight)
+
+- The first attempt of a build is the scored one. `--retry-failed` adds later attempts, and the report
+  lists them and the total spend. A rerun never replaces a result (best-of-N would favour an arm).
+- `bundle` runs the completeness check first and refuses to relabel after `scores.json` exists.
+- AC-6 proof by trace id: every paid call's trace id is read back from `budget_reservations` and
+  `api_costs` on production (expect 0) and on the eval database (expect one reservation per call).
+  Production row counts alone drift, because production is live.
+- The artifacts origin is behind an access login. The render check answers `/lib/` from the pinned
+  public copies in `config/artifact_lib_substitution_map.json`. Fonts have no public copy and are
+  listed as `lib_unavailable`. The rating pack rewrites script and style references the same way.
+- `--usd-per-build` and `--usd-per-plan` feed the budget check. The default is the worst case. The
+  daily `artifact_builder` cap of $1 binds the full run, so the run is split over days or the owner
+  raises the cap. The harness never changes `config/`.

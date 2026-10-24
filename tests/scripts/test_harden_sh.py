@@ -82,9 +82,19 @@ def test_ssh_dropin_sorts_before_cloud_init() -> None:
     assert "rm -f /etc/ssh/sshd_config.d/99-hardening.conf" in text
 
 
-def test_script_confirms_password_auth_off_with_sshd_t() -> None:
-    text = HARDEN_SH.read_text()
-    assert re.search(r"sshd -T.*passwordauthentication no", text, re.DOTALL)
+def test_script_confirms_password_auth_off_with_sshd_t_before_the_reload() -> None:
+    lines = HARDEN_SH.read_text().splitlines()
+
+    def first(pattern: str) -> int:
+        hits = [i for i, ln in enumerate(lines) if re.match(pattern, ln)]
+        assert hits, f"no code line matches {pattern!r}"
+        return hits[0]
+
+    capture = first(r'SSHD_EFFECTIVE="\$\(sshd -T\)"$')
+    check = first(r"if ! grep -qi '\^passwordauthentication no\$' <<< \"\$SSHD_EFFECTIVE\"; then$")
+    reload_ssh = first(r"systemctl reload ssh$")
+    assert capture < check < reload_ssh, "the sshd -T check must run before the reload"
+    assert lines[check + 2].strip() == "exit 1", "a failed check must stop the script"
 
 
 def test_fail2ban_template_pins_ipv6_capable_banaction() -> None:

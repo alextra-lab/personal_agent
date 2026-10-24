@@ -104,13 +104,16 @@ SSHEOF
 
 # Validate config before reloading
 sshd -t
-systemctl reload ssh
 
-# Confirm the hardening won: another drop-in may set the same option earlier.
-if ! sshd -T | grep -qi '^passwordauthentication no$'; then
+# Confirm the hardening won before the reload: another drop-in may set the same option earlier.
+# Capture first: under pipefail, grep -q can end the pipe early and make sshd report a false failure.
+SSHD_EFFECTIVE="$(sshd -T)"
+if ! grep -qi '^passwordauthentication no$' <<< "$SSHD_EFFECTIVE"; then
     echo "Error: sshd -T does not report 'passwordauthentication no'. Check /etc/ssh/sshd_config.d/ for an earlier file." >&2
     exit 1
 fi
+
+systemctl reload ssh
 echo "    SSH daemon reloaded."
 
 # ── 3. iptables rules ─────────────────────────────────────────────────────────

@@ -1,8 +1,9 @@
 # ruff: noqa: D103
 """FRE-1240 — every inbound Cloudflare-Tunnel site block refuses a peer outside the compose network.
 
-Caddy publishes 80/443 on all host interfaces, so a request to the VPS IP with a forged Host
-header reaches a tunnel block without passing Cloudflare Access. `remote_ip` tests the TCP peer
+Caddy published 80/443 on all host interfaces until FRE-1664 (now 127.0.0.1 only), so a request
+to the VPS IP with a forged Host header reached a tunnel block without passing Cloudflare Access.
+The guard stays as defense in depth. `remote_ip` tests the TCP peer
 address, which a header cannot forge. This test reads the committed Caddyfile and fails if a
 block that serves a tunnel host name has no `remote_ip` matcher, after `import <snippet>` lines
 are expanded.

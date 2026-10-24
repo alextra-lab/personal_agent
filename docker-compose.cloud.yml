@@ -491,8 +491,12 @@ services:
       SLM_HOST: ${SLM_HOST:-slm.example.com}
       ARTIFACTS_HOST: ${ARTIFACTS_HOST:-artifacts.example.com}
     ports:
-      - "80:80"
-      - "443:443"
+      # Inbound listeners, bound to LOOPBACK ONLY (FRE-1664). cloudflared reaches Caddy
+      # over the cloud-sim network (http://caddy:80), never through a host port. A bare
+      # "80:80" binds 0.0.0.0 and [::], which exposed the Caddyfile "localhost" site
+      # (PWA + gateway API) to the internet. Dev access: ssh -L to 127.0.0.1:443.
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
       # Outbound egress listeners (ADR-0132 D1), bound to LOOPBACK ONLY.
       # Not exposed off-box: this exists so host-side tooling (eval scripts,
       # `uv run agent`) keeps a route to the SLM. Before this change those

@@ -951,27 +951,75 @@ def _numbers(rows: Sequence[Mapping[str, object]], column: str) -> list[float]:
     return [float(cast(float, r[column])) for r in rows if r.get(column) is not None]
 
 
+PAIRED = ", prompts every arm built"
+
+
+def paired_prompts(rows: Sequence[Mapping[str, object]]) -> set[str]:
+    """Return the prompts for which every arm produced a page.
+
+    Latency, tokens, cost and widget counts depend on the prompt. They are only comparable between
+    arms on prompts that every arm built.
+
+    Args:
+        rows: Build rows.
+
+    Returns:
+        Prompt ids.
+    """
+    built: defaultdict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        if r.get("ok"):
+            built[str(r["prompt_id"])].add(str(r["arm"]))
+    return {pid for pid, arms in built.items() if set(ARMS) <= arms}
+
+
+def blind_prompts(rows: Sequence[Mapping[str, object]]) -> set[str]:
+    """Return the prompts whose pages the owner could compare blind: two or more arms made a page.
+
+    Args:
+        rows: Build rows.
+
+    Returns:
+        Prompt ids. A prompt with one page is not blind, because the arm is the only one that built.
+    """
+    built: defaultdict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        if r.get("ok"):
+            built[str(r["prompt_id"])].add(str(r["arm"]))
+    return {pid for pid, arms in built.items() if len(arms) >= 2}
+
+
 def _measure(rows: Sequence[Mapping[str, object]], arm: str, measure: str) -> float | None:
+    if measure.endswith(PAIRED):
+        keep = paired_prompts(rows)
+        rows = [r for r in rows if r["prompt_id"] in keep]
+        measure = measure[: -len(PAIRED)] + " [paired]"
     mine = [r for r in rows if r["arm"] == arm]
     ok = [r for r in mine if r.get("ok")]
     if measure == "success rate":
         return sum(1 for r in mine if r.get("ok")) / len(mine) if mine else None
     if measure == "render pass rate":
         return sum(1 for r in mine if r.get("render_ok")) / len(mine) if mine else None
-    if measure == "controls worked share":
+    if measure == "controls worked share [paired]":
         found = sum(_numbers(ok, "controls_found"))
         return sum(_numbers(ok, "controls_worked")) / found if found else None
-    if measure == "widget errors (sum)":
+    if measure == "widget errors (sum) [paired]":
         return sum(_numbers(ok, "widget_errors")) if ok else None
     column = {
-        "median latency (s)": "latency_s",
-        "median output tokens": "output_tokens",
-        "mean cost (usd)": "cost_usd",
-        "controls found (mean)": "controls_found",
+        "median latency (s), all builds": "latency_s",
+        "median output tokens, all builds": "output_tokens",
+        "mean cost (usd), all builds": "cost_usd",
+        "median latency (s) [paired]": "latency_s",
+        "median output tokens [paired]": "output_tokens",
+        "mean cost (usd) [paired]": "cost_usd",
+        "controls found (mean) [paired]": "controls_found",
         "owner: mean of five": "score",
         **{f"owner: {text}": f"score_{key}" for key, text in QUESTIONS.items()},
     }[measure]
-    values = _numbers(mine if column.startswith("score") else ok, column)
+    # Failed builds cost money and time, and they count in the owner's scores (as 1). Widget counts
+    # exist only for pages.
+    pool = ok if column.startswith("controls") else mine
+    values = _numbers(pool, column)
     if not values:
         return None
     return statistics.median(values) if measure.startswith("median") else statistics.fmean(values)
@@ -980,12 +1028,15 @@ def _measure(rows: Sequence[Mapping[str, object]], arm: str, measure: str) -> fl
 MEASURES = (
     "success rate",
     "render pass rate",
-    "median latency (s)",
-    "median output tokens",
-    "mean cost (usd)",
-    "controls found (mean)",
-    "controls worked share",
-    "widget errors (sum)",
+    "median latency (s), all builds",
+    "median output tokens, all builds",
+    "mean cost (usd), all builds",
+    "median latency (s)" + PAIRED,
+    "median output tokens" + PAIRED,
+    "mean cost (usd)" + PAIRED,
+    "controls found (mean)" + PAIRED,
+    "controls worked share" + PAIRED,
+    "widget errors (sum)" + PAIRED,
     *(f"owner: {text}" for text in QUESTIONS.values()),
     "owner: mean of five",
 )
@@ -1025,17 +1076,19 @@ def decision_table(rows: Sequence[Mapping[str, object]]) -> list[JSONDict]:
 def pilot_verdict(table: Sequence[Mapping[str, object]]) -> str:
     """Return the pilot go or no-go line (owner comment on FRE-1668, 2026-10-24 12:27).
 
-    Go: B or C beats A by more than the A to A' difference on the owner's blind rating (the mean of
-    the five questions), or is cheaper or faster by more than that difference at an equal rating.
-    An arm that loses on success rate or render pass rate cannot qualify. No-go: no arm does.
+    Go: B or C beats A by more than the A to A' difference on the owner's rating (the mean of the
+    five questions, a failed build scoring 1), or is cheaper or faster by more than that difference
+    at an equal rating. An arm that loses on success rate or render pass rate cannot qualify.
+    No-go: no arm qualifies.
 
     Args:
         table: The output of ``decision_table``.
 
     Returns:
-        One line that starts with ``Pilot verdict: GO`` or ``Pilot verdict: NO-GO``.
+        One line that starts with ``Pilot verdict: GO`` or ``Pilot verdict: NO-GO``. A go line names
+        every arm that qualifies, the strongest first.
     """
-    best: tuple[int, float, str, str] | None = None
+    found: list[tuple[int, float, str, str]] = []
     for arm in ("B", "C"):
         mine = {str(r["measure"]): r for r in table if r["arm"] == arm}
         if any(
@@ -1046,31 +1099,52 @@ def pilot_verdict(table: Sequence[Mapping[str, object]]) -> str:
         if rating is None:
             continue
         if rating["verdict"] == "higher":
-            why, rank = "beats A on the owner's blind rating by more than the noise band", 1
+            why, rank = (
+                "beats A on the owner's rating (mean of five, a failed build scoring 1) "
+                "by more than the noise band",
+                1,
+            )
         elif rating["verdict"] == "no decision" and any(
             mine.get(m, {}).get("verdict") == "lower"
-            for m in ("mean cost (usd)", "median latency (s)")
+            for m in ("mean cost (usd), all builds", "median latency (s), all builds")
         ):
             why, rank = "equals A on rating and is cheaper or faster by more than the noise band", 0
         else:
             continue
-        cand = (rank, cast(float, rating["diff"]), arm, why)
-        if best is None or cand[:2] > best[:2]:
-            best = cand
-    if best is None:
+        found.append((rank, cast(float, rating["diff"]), arm, why))
+    if not found:
         return (
             "Pilot verdict: NO-GO. No arm beats A by more than the A to A' difference on the "
-            "owner's blind rating, or on cost per build or latency at an equal rating. Stop. "
+            "owner's rating, or on cost per build or latency at an equal rating. Stop. "
             "The binding stays on Sonnet 5."
         )
-    return (
-        f"Pilot verdict: GO. Arm {best[2]} ({ARMS[best[2]]}) {best[3]}. Propose a full run with "
-        "a larger prompt set and its own preflight. The owner decides any swap."
+    found.sort(reverse=True)
+    first, rest = found[0], found[1:]
+    line = f"Pilot verdict: GO. Arm {first[2]} ({ARMS[first[2]]}) {first[3]}."
+    line += "".join(f" Arm {c[2]} ({ARMS[c[2]]}) also {c[3]}." for c in rest)
+    return line + (
+        " Propose a full run with a larger prompt set and its own preflight. "
+        "The owner decides any swap."
     )
 
 
 def _fmt(value: object) -> str:
     return f"{value:.3f}" if isinstance(value, float) else "" if value is None else str(value)
+
+
+def _controls(r: Mapping[str, object]) -> str:
+    if not r.get("ok"):
+        return "no page"
+    return " / ".join(
+        str(r.get(k, ""))
+        for k in (
+            "controls_found",
+            "controls_worked",
+            "controls_no_reaction",
+            "controls_unverifiable",
+            "widget_errors",
+        )
+    )
 
 
 def attach_scores(
@@ -1137,13 +1211,13 @@ def _report(
         lines += [
             f"## Arm {ARM_LABEL[arm]} — {ARMS[arm]}",
             "",
-            "| prompt | ok | reason | render | controls found / worked / errors | latency s | in tok | out tok "
+            "| prompt | ok | reason | render | controls found / worked / no reaction / unverifiable / errors | latency s | in tok | out tok "
             "| cost usd | " + " | ".join(f"Q{i}" for i in range(1, len(QUESTIONS) + 1)) + " |",
             "|---|---|---|---|---|---|---|---|---|" + "---|" * len(QUESTIONS),
         ]
         lines += [
             f"| {r['prompt_id']} | {r['ok']} | {r['failure_reason']} | {r['render_ok']} "
-            f"| {r.get('controls_found', '')} / {r.get('controls_worked', '')} / {r.get('widget_errors', '')} "
+            f"| {_controls(r)} "
             f"| {r['latency_s']} | {r['input_tokens']} | {r['output_tokens']} | {r['cost_usd']:.4f} | "
             + " | ".join(str(r.get(f"score_{q}", "")) for q in QUESTIONS)
             + " |"
@@ -1178,8 +1252,97 @@ def _report(
         f"| {_fmt(r['diff'])} | {_fmt(r['noise_band'])} | {r['verdict']} |"
         for r in table
     ]
+    lines += _blind_section(rows, key, scores)
+    lines += _reasoning_section(rows)
+    every = _read_jsonl(OUT_DIR / "builds.jsonl")
+    retries = [r for r in every if int(cast(int, r.get("attempt", 1))) > 1]
+    spend = sum(float(cast(float, r["cost_usd"])) for r in every)
+    lines += [
+        f"Total build spend over all attempts: {spend:.4f} usd. Retried attempts: {len(retries)}.",
+        "",
+    ]
+    lines += [
+        f"- retry {r['arm']}/{r['prompt_id']} attempt {r['attempt']}: ok={r['ok']} {r['failure_reason']}"
+        for r in retries
+    ]
     lines += ["", pilot_verdict(table), ""]
     return "\n".join(lines)
+
+
+def _blind_section(
+    rows: Sequence[Mapping[str, object]],
+    key: Mapping[str, JSONDict],
+    scores: Mapping[str, Mapping[str, int]],
+) -> list[str]:
+    """Say which ratings were blind and show the blind-only comparison."""
+    blind = blind_prompts(rows)
+    lines = [
+        "## Which ratings were blind",
+        "",
+        "The owner rated each page without its arm. A prompt is a blind comparison only when two or more "
+        "arms built a page for it. Where one arm built the only page, the arm is known from the build "
+        "results, so that rating is not blind in effect.",
+        "",
+        "| label | prompt | arm (unblinded) | blind comparison | "
+        + " | ".join(f"Q{i}" for i in range(1, 6))
+        + " |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for label in sorted(key):
+        meta = key[label]
+        lines.append(
+            f"| {label} | {meta['prompt_id']} | {ARM_LABEL[str(meta['arm'])]} "
+            f"| {'yes' if meta['prompt_id'] in blind else 'no, the only page'} | "
+            + " | ".join(str(scores[label][q]) for q in QUESTIONS)
+            + " |"
+        )
+    blind_rows = [r for r in rows if r["prompt_id"] in blind]
+    table = [r for r in decision_table(blind_rows) if str(r["measure"]).startswith("owner:")]
+    lines += [
+        "",
+        f"Blind-only comparison (prompts {', '.join(sorted(blind))}, where every page was rated blind). "
+        "The noise band is the gap between A and A' on these pages.",
+        "",
+        "| question | arm | A | A' | arm value | diff | noise band | verdict |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    lines += [
+        f"| {str(r['measure']).removeprefix('owner: ')} | {r['arm']} | {_fmt(r['a'])} | {_fmt(r['a_prime'])} "
+        f"| {_fmt(r['value'])} | {_fmt(r['diff'])} | {_fmt(r['noise_band'])} | {r['verdict']} |"
+        for r in table
+    ]
+    return lines + [""]
+
+
+def _reasoning_section(rows: Sequence[Mapping[str, object]]) -> list[str]:
+    """Show the thinking tokens of each build against the output ceiling."""
+    ceiling = int(settings.artifact_draft_max_tokens)
+    lines = [
+        f"## Thinking tokens against the output ceiling ({ceiling:,} tokens)",
+        "",
+        "The output ceiling counts thinking tokens and the page together. A build stops at the ceiling "
+        "when the thinking and the page need more than it holds. A blank means the trial row did not log "
+        "the number (the p9 trial ran before the harness logged it).",
+        "",
+        "| prompt | arm | outcome | thinking tokens | output tokens | thinking share of output |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in sorted(rows, key=lambda r: (str(r["prompt_id"]), str(r["arm"]))):
+        think, out = r.get("reasoning_tokens"), r.get("output_tokens")
+        share = (
+            f"{float(cast(float, think)) / float(cast(float, out)):.0%}" if think and out else ""
+        )
+        outcome = (
+            "page built"
+            if r.get("ok")
+            else "stopped at the ceiling"
+            if r.get("output_cap_hit")
+            else "failed"
+        )
+        lines.append(
+            f"| {r['prompt_id']} | {ARM_LABEL[str(r['arm'])]} | {outcome} | {think if think is not None else ''} | {out} | {share} |"
+        )
+    return lines + [""]
 
 
 # ── commands ──────────────────────────────────────────────────────────────────
@@ -1380,14 +1543,6 @@ def _cmd_report() -> int:
     scores = json.loads((OUT_DIR / "scores.json").read_text(encoding="utf-8"))
     check_complete(rows, key, scores, n_prompts=len(load_prompts()))
     text = _report(rows, key, scores)
-    every = _read_jsonl(OUT_DIR / "builds.jsonl")
-    retries = [r for r in every if int(cast(int, r.get("attempt", 1))) > 1]
-    spend = sum(float(cast(float, r["cost_usd"])) for r in every)
-    text += f"\nTotal spend over all attempts: {spend:.4f} usd. Retried attempts: {len(retries)}.\n"
-    text += "".join(
-        f"- retry {r['arm']}/{r['prompt_id']} attempt {r['attempt']}: ok={r['ok']} {r['failure_reason']}\n"
-        for r in retries
-    )
     (OUT_DIR / "report.md").write_text(text, encoding="utf-8")
     print(text)  # noqa: T201
     return 0

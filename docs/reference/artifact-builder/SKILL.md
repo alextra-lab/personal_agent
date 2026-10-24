@@ -189,6 +189,22 @@ a plain file. Inline only the content the artifact is meant to display.
 
 ---
 
+## Quality
+
+The reader judges every page on five questions (owner, FRE-1668). Build for all five:
+
+- **Every widget works.** Each visible control does something visible when used. No dead or
+  placeholder controls.
+- **It is creative.** The page has its own visual identity that fits its subject, not a generic
+  template.
+- **It is easy to learn from.** Explain as the reader goes, show cause and effect, and give
+  feedback on every action.
+- **It is attractive and enticing.** Colour, typography, spacing and motion are deliberate.
+- **It encourages learning or continued use.** Give the reader a reason to keep exploring, such
+  as a challenge, a goal, progress, or something to discover.
+
+---
+
 ## Success
 
 Check the artifact before the answer is final:

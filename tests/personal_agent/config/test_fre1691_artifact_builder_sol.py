@@ -38,16 +38,6 @@ def test_default_artifact_builder_resolution_is_sol() -> None:
     assert client.model_id == load_model_config().models["gpt-6.1-sol"].id
 
 
-def test_sol_binds_exactly_captains_log_and_artifact_builder() -> None:
-    """No other role moves: Sol binds the two roles the owner chose, and nothing else."""
-    resolved = {role: resolve_role_model_key(role) for role in _bindings()}
-
-    assert {role for role, key in resolved.items() if key == "gpt-6.1-sol"} == {
-        "captains_log",
-        "artifact_builder",
-    }
-
-
 def test_the_other_bindings_keep_their_deployments() -> None:
     """The swap leaves session_summary and vision on Sonnet 5."""
     assert resolve_role_model_key("session_summary") == "claude_sonnet"

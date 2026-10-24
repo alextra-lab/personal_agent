@@ -46,6 +46,7 @@ _BEHAVIOUR_KEYS = frozenset(
         "AGENT_MANAGED_EMBEDDING_TOKEN",
         "AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL",
         "AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS",
+        "AGENT_CAPTAINS_LOG_REFLECTION_ENABLED",
         # FRE-1517: the orchestrator limits. Missing, eval ran 900/1800 against
         # production's 3600/3600 and no eval worker could research.
         "AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS",
@@ -106,7 +107,9 @@ class TestBehaviourSettingsParity:
                 doc = yaml.safe_load(f)
             env = doc["services"][service_name]["environment"]
             for key in _BEHAVIOUR_KEYS:
-                assert env[key] == f"${{{key}}}", (
+                # `${KEY:-default}` is interpolation too: FRE-990's flag may be absent
+                # from `.env`, and an empty value would fail its bool parse.
+                assert env[key] == f"${{{key}}}" or env[key].startswith(f"${{{key}:-"), (
                     f"{service_name}.{key} is {env[key]!r}, expected interpolation "
                     f"from `.env` via ${{{key}}}"
                 )

@@ -386,6 +386,9 @@ services:
       AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
       AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
       AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
+      # FRE-990: the reflection master switch. `:-true` because the flag may be absent from
+      # `.env` (its default is true) and an empty value would fail the bool parse at startup.
+      AGENT_CAPTAINS_LOG_REFLECTION_ENABLED: ${AGENT_CAPTAINS_LOG_REFLECTION_ENABLED:-true}
       # FRE-1517 (2026-09-14): the turn and task limits. Without them eval falls to the
       # settings.py defaults (900 s task, 1800 s lifetime) while production runs 3600/3600,
       # so a worker reserved its landing at round 0 (remaining_s 888, mean_round_s 600)
@@ -538,6 +541,9 @@ services:
       AGENT_MANAGED_EMBEDDING_TOKEN: ${AGENT_MANAGED_EMBEDDING_TOKEN}
       AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL: ${AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL}
       AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS: ${AGENT_CAPTAINS_LOG_REFLECTION_MIN_INTERVAL_SECONDS}
+      # FRE-990: the reflection master switch. `:-true` because the flag may be absent from
+      # `.env` (its default is true) and an empty value would fail the bool parse at startup.
+      AGENT_CAPTAINS_LOG_REFLECTION_ENABLED: ${AGENT_CAPTAINS_LOG_REFLECTION_ENABLED:-true}
       # FRE-1517 (2026-09-14): the turn and task limits. Without them eval falls to the
       # settings.py defaults (900 s task, 1800 s lifetime) while production runs 3600/3600,
       # so a worker reserved its landing at round 0 (remaining_s 888, mean_round_s 600)

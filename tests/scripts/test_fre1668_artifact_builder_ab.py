@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, cast
 
@@ -504,3 +505,81 @@ def test_rating_pack_shows_the_five_questions_and_no_arm(tmp_path: pathlib.Path)
     index = (tmp_path / "r" / "index.html").read_text(encoding="utf-8")
     assert all(text in index for text in harness.QUESTIONS.values())
     assert "claude_sonnet_5_5" not in index and ">B<" not in index
+
+
+@pytest.mark.asyncio
+async def test_a_plan_call_without_a_tool_call_keeps_its_evidence(
+    builder_env: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Cut:
+        async def respond(self, **_: Any) -> dict[str, Any]:
+            return {
+                "content": "partial text",
+                "tool_calls": [],
+                "finish_reason": "length",
+                "usage": {"completion_tokens": 24000},
+                "cost_usd": 0.24,
+            }
+
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client_for_key", lambda *_a, **_k: _Cut()
+    )
+    with pytest.raises(RuntimeError, match="finish_reason=length"):
+        await harness.make_plan(harness.load_prompts()[0])
+    rows = harness._read_jsonl(builder_env / "plan-failures.jsonl")
+    assert rows[0]["finish_reason"] == "length" and rows[0]["prompt_id"] == "p3"
+
+
+def test_a_failed_plan_call_is_not_repeated_without_the_flag() -> None:
+    prompts = harness.load_prompts()
+    with pytest.raises(harness.IncompleteRunError, match="failed before"):
+        harness.plans_to_run(prompts, done=set(), failed={"p9"}, retry_failed=False)
+    todo = harness.plans_to_run(prompts, done={"p3"}, failed={"p9"}, retry_failed=True)
+    assert [p.id for p in todo] == ["p9", "p8"]
+
+
+def test_own_spend_counts_a_build_that_the_gate_did_not_record() -> None:
+    now = datetime(2026, 10, 24, 18, 0, tzinfo=timezone.utc)
+    builds: list[dict[str, Any]] = [
+        {"at": "2026-10-24T16:30:00+00:00", "cost_usd": 0.34},
+        {"at": "2026-10-24T16:35:00+00:00", "cost_usd": 0.34},
+        {"at": "2026-10-23T10:00:00+00:00", "cost_usd": 0.50},  # yesterday: same week, not same day
+        {"cost_usd": 9.0},  # no timestamp: ignored
+    ]
+    plans = [{"at": "2026-10-24T16:20:00+00:00", "cost_usd": 0.10}]
+    spent = harness.own_spend(builds, plans, now)
+    assert spent[("daily", "artifact_builder")] == Decimal("0.68")
+    assert spent[("weekly", "artifact_builder")] == Decimal("1.18")
+    assert spent[("daily", "study")] == Decimal("0.10")
+    assert spent[("daily", "_total")] == Decimal("0.78")
+
+
+@pytest.mark.parametrize(
+    ("reason", "stop"),
+    [
+        ("ArtifactDraftError: BudgetDenied: daily cap", True),
+        ("Your credit balance is too low to access the Anthropic API", True),
+        ("output ceiling reached (32768 of 32768 tokens): HTML was empty", False),
+        ("generation_timeout", False),
+    ],
+)
+def test_budget_and_credit_stops_are_not_scored_failures(reason: str, stop: bool) -> None:
+    assert harness.is_infrastructure_stop(reason) is stop
+
+
+def test_a_failed_build_scores_one_on_every_question() -> None:
+    rows: list[dict[str, Any]] = [
+        {"arm": "A", "prompt_id": "p9", "ok": False, "failure_reason": "output ceiling reached"},
+        {"arm": "C", "prompt_id": "p9", "ok": True, "render_ok": True},
+    ]
+    key: dict[str, dict[str, object]] = {"P01": {"arm": "C", "prompt_id": "p9"}}
+    scores = {"P01": {q: 4 for q in harness.QUESTIONS}}
+    harness.attach_scores(rows, key, scores)
+    assert rows[0]["score"] == 1.0 and rows[0]["score_widgets"] == 1
+    assert rows[1]["score"] == 4.0
+    rows += [
+        {**rows[0], "arm": "A2"},
+        {**rows[1], "arm": "B"},
+    ]
+    assert harness._measure(rows, "A", "owner: mean of five") == 1.0
+    assert harness._measure(rows, "C", "owner: mean of five") == 4.0

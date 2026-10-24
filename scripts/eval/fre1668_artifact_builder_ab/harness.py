@@ -43,8 +43,10 @@ import subprocess  # nosec B404 — fixed argv, no shell
 import sys
 import time
 import uuid
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
@@ -89,7 +91,7 @@ EVAL_DB = (
 DB_BINDINGS = ("settings", "cost_tracker", "engine")
 PROD_PG_CONTAINER = "cloud-sim-postgres"
 EVAL_PG_CONTAINER = "cloud-sim-postgres-eval"
-PLAN_MAX_TOKENS = 10000
+PLAN_MAX_TOKENS = 24000  # room for adaptive thinking plus a plan of at most 16,000 characters
 WORST_CASE_USD_PER_BUILD = Decimal("0.40")  # 32,768 output tokens at $10/MTok, plus input
 WORST_CASE_USD_PER_PLAN = Decimal("0.15")
 
@@ -131,6 +133,18 @@ def is_vendor_credit_error(text: str) -> bool:
     return bool(_CREDIT_RE.search(text))
 
 
+def is_infrastructure_stop(reason: str) -> bool:
+    """Tell a stop that has no model output (credit, quota, budget) from a model failure.
+
+    Args:
+        reason: A failure reason.
+
+    Returns:
+        True for a vendor credit or quota error, or a denial by the cost gate.
+    """
+    return is_vendor_credit_error(reason) or "BudgetDenied" in reason
+
+
 @dataclass(frozen=True)
 class Prompt:
     """One artifact request.
@@ -159,6 +173,7 @@ class Plan:
     plan: str
     cost_usd: float = 0.0
     trace_id: str = ""
+    at: str = ""
 
 
 @dataclass(frozen=True)
@@ -387,6 +402,45 @@ def check_headroom(
         raise BudgetShortfallError("; ".join(short))
 
 
+def own_spend(
+    builds: Sequence[Mapping[str, object]],
+    plans: Sequence[Mapping[str, object]],
+    now: datetime,
+) -> dict[tuple[str, str], Decimal]:
+    """Sum the harness's own recorded costs per budget window and role.
+
+    The cost gate reserves a call for a short time, and a reservation that expires before the call
+    ends records $0. A build that runs longer than about three minutes therefore never reaches the
+    gate's counters, although the vendor charged it. The model log gives the true cost, so the
+    budget check takes the larger of the gate's counter and this sum.
+
+    Args:
+        builds: Build rows. A row without ``at`` is ignored.
+        plans: Plan rows. A row without ``at`` is ignored.
+        now: The current time.
+
+    Returns:
+        ``(window, role)`` to spend. Builds count to ``artifact_builder``, plans to ``study``, and
+        both to ``_total``.
+    """
+    out: defaultdict[tuple[str, str], Decimal] = defaultdict(Decimal)
+    for role, rows in (("artifact_builder", builds), ("study", plans)):
+        for row in rows:
+            if not row.get("at"):
+                continue
+            when = datetime.fromisoformat(str(row["at"]))
+            cost = Decimal(str(row.get("cost_usd") or 0))
+            windows = []
+            if when.date() == now.date():
+                windows.append("daily")
+            if when.isocalendar()[:2] == now.isocalendar()[:2]:
+                windows.append("weekly")
+            for window in windows:
+                out[(window, role)] += cost
+                out[(window, "_total")] += cost
+    return dict(out)
+
+
 async def _gate_and_headroom(
     n_plans: int,
     n_builds: int,
@@ -407,8 +461,6 @@ async def _gate_and_headroom(
     set_default_gate(gate)
     caps = [Cap(c.time_window, c.role, c.cap_usd) for c in config.caps]
     spent: dict[tuple[str, str], Decimal] = {}
-    from datetime import datetime, timezone  # noqa: PLC0415
-
     now = datetime.now(timezone.utc)
     async with gate.pool.acquire() as conn:  # type: ignore[union-attr]
         for cap in caps:
@@ -420,6 +472,11 @@ async def _gate_and_headroom(
             spent[(cap.time_window, cap.role)] = (
                 Decimal(str(row["running_total"])) if row else Decimal(0)
             )
+    own = own_spend(
+        _read_jsonl(OUT_DIR / "builds.jsonl"), _read_jsonl(OUT_DIR / "plans.jsonl"), now
+    )
+    for key, value in own.items():
+        spent[key] = max(spent.get(key, Decimal(0)), value)
     projected = {
         "artifact_builder": per_build * n_builds,
         "study": per_plan * n_plans,
@@ -438,7 +495,9 @@ async def _gate_and_headroom(
 _PLAN_SYSTEM = (
     "You are the planning model of a personal assistant. The user asked for a web page. Call the "
     "artifact_draft tool once. Give it a slug, a title, a one-sentence summary and a structured plan "
-    "(sections, all data and content, style guidance). Do not write HTML."
+    "(sections, all data and content, style guidance). Do not write HTML. The plan limit is 16,000 "
+    "characters, so keep the plan under 12,000: for a large table, describe the fields and the "
+    "ranges and let the builder write the data, instead of listing every number."
 )
 
 
@@ -498,7 +557,21 @@ async def make_plan(prompt: Prompt) -> Plan:
     )
     calls = [c for c in resp.get("tool_calls") or [] if c["name"] == "artifact_draft"]
     if not calls:
-        raise RuntimeError(f"{prompt.id}: the planning model did not call artifact_draft")
+        evidence: JSONDict = {
+            "prompt_id": prompt.id,
+            "finish_reason": resp.get("finish_reason"),
+            "usage": resp.get("usage"),
+            "cost_usd": resp.get("cost_usd"),
+            "tool_calls": len(resp.get("tool_calls") or []),
+            "content_head": str(resp.get("content") or "")[:1500],
+            "trace_id": ctx.trace_id,
+        }
+        _append_jsonl(OUT_DIR / "plan-failures.jsonl", evidence)
+        raise RuntimeError(
+            f"{prompt.id}: the planning model did not call artifact_draft "
+            f"(finish_reason={evidence['finish_reason']}, usage={evidence['usage']}, "
+            f"cost={evidence['cost_usd']}); evidence is in plan-failures.jsonl"
+        )
     args = json.loads(calls[0]["arguments"])
     plan = str(args["plan"])
     if existing:
@@ -511,6 +584,7 @@ async def make_plan(prompt: Prompt) -> Plan:
         plan=plan,
         cost_usd=float(resp.get("cost_usd") or 0.0),
         trace_id=ctx.trace_id,
+        at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -665,6 +739,7 @@ async def build_one(
         "served_model": served,
         "effort": str(done[0].get("mode", "")) if done else "",
         "attempt": attempt,
+        "at": datetime.now(timezone.utc).isoformat(),
         "trace_id": ctx.trace_id,
         "ok": ok,
         "failure_reason": failure,
@@ -672,6 +747,8 @@ async def build_one(
         "latency_s": round(latency, 2),
         "input_tokens": done[0].get("input_tokens") if done else None,
         "output_tokens": done[0].get("output_tokens") if done else None,
+        "reasoning_tokens": done[0].get("reasoning_tokens") if done else None,
+        "thinking_present": done[0].get("anthropic_thinking_present") if done else None,
         "cost_usd": float(cast(float, done[0].get("cost_usd") or 0.0)) if done else 0.0,
         "html_bytes": saved.get("bytes", 0),
         "output_cap_hit": any(e.get("event") == "artifact_draft_output_cap_hit" for e in logs),
@@ -841,7 +918,7 @@ def _measure(rows: Sequence[Mapping[str, object]], arm: str, measure: str) -> fl
         "owner: mean of five": "score",
         **{f"owner: {text}": f"score_{key}" for key, text in QUESTIONS.items()},
     }[measure]
-    values = _numbers(ok, column)
+    values = _numbers(mine if column.startswith("score") else ok, column)
     if not values:
         return None
     return statistics.median(values) if measure.startswith("median") else statistics.fmean(values)
@@ -943,15 +1020,38 @@ def _fmt(value: object) -> str:
     return f"{value:.3f}" if isinstance(value, float) else "" if value is None else str(value)
 
 
-def _report(
-    rows: list[JSONDict], key: Mapping[str, JSONDict], scores: Mapping[str, Mapping[str, int]]
-) -> str:
+def attach_scores(
+    rows: list[JSONDict],
+    key: Mapping[str, JSONDict],
+    scores: Mapping[str, Mapping[str, int]],
+) -> None:
+    """Put the owner's scores on the build rows. A failed build scores 1 on every question.
+
+    A failed build has no page to rate. Counting it as the lowest score keeps an arm from winning
+    by being judged only on the pages it managed to build.
+
+    Args:
+        rows: Build rows. Changed in place.
+        key: Label to ``{"arm", "prompt_id"}``.
+        scores: Label to the five scores.
+    """
     for label, meta in key.items():
         for r in rows:
             if (r["arm"], r["prompt_id"]) == (meta["arm"], meta["prompt_id"]):
                 for q in QUESTIONS:
                     r[f"score_{q}"] = scores[label][q]
                 r["score"] = statistics.fmean(scores[label][q] for q in QUESTIONS)
+    for r in rows:
+        if not r.get("ok"):
+            for q in QUESTIONS:
+                r[f"score_{q}"] = 1
+            r["score"] = 1.0
+
+
+def _report(
+    rows: list[JSONDict], key: Mapping[str, JSONDict], scores: Mapping[str, Mapping[str, int]]
+) -> str:
+    attach_scores(rows, key, scores)
     table = decision_table(rows)
     lines = [
         "# FRE-1668 artifact builder pilot",
@@ -961,6 +1061,9 @@ def _report(
         "",
         "Confound: the arms differ in mode as well as in model. Sonnet 5 and Sonnet 5.5 run adaptive "
         "effort `high`. Sol runs reasoning effort `medium`. Each is its catalog default today.",
+        "",
+        "A failed build has no page to rate. It scores 1 on every question, so an arm is not judged only "
+        "on the pages that it managed to build.",
         "",
         "Widget check: a control that shows no reaction may act only on a later step, for example a "
         "name field or a drag switch that applies to the next launch. Read it with the owner's score "
@@ -1034,10 +1137,41 @@ def _select(ids: str | None) -> list[Prompt]:
     return [p for p in load_prompts() if wanted is None or p.id in wanted]
 
 
-async def _cmd_plans(ids: str | None, per_plan: Decimal) -> int:
+def plans_to_run(
+    prompts: Sequence[Prompt],
+    done: set[str],
+    failed: set[str],
+    retry_failed: bool,
+) -> list[Prompt]:
+    """Pick the prompts that still need a plan, and refuse to repeat a failed paid call.
+
+    Args:
+        prompts: The selected prompts.
+        done: Prompt ids that have a plan.
+        failed: Prompt ids whose last plan call failed (the evidence is in ``plan-failures.jsonl``).
+        retry_failed: Allow a new call for a prompt in ``failed``.
+
+    Returns:
+        The prompts to plan.
+
+    Raises:
+        IncompleteRunError: A selected prompt failed before and ``retry_failed`` is off.
+    """
+    todo = [p for p in prompts if p.id not in done]
+    again = sorted(p.id for p in todo if p.id in failed)
+    if again and not retry_failed:
+        raise IncompleteRunError(
+            f"the plan call failed before for {again}: read plan-failures.jsonl, fix the cause, "
+            "then pass --retry-failed. A repeat call costs money."
+        )
+    return todo
+
+
+async def _cmd_plans(ids: str | None, per_plan: Decimal, retry_failed: bool = False) -> int:
     assert_isolated()
     done = {str(r["prompt_id"]) for r in _read_jsonl(OUT_DIR / "plans.jsonl")}
-    todo = [p for p in _select(ids) if p.id not in done]
+    failed = {str(r["prompt_id"]) for r in _read_jsonl(OUT_DIR / "plan-failures.jsonl")}
+    todo = plans_to_run(_select(ids), done, failed, retry_failed)
     gate = await _gate_and_headroom(len(todo), 0, per_plan=per_plan)
     try:
         for prompt in todo:
@@ -1091,17 +1225,19 @@ async def _cmd_build(ids: str | None, per_build: Decimal, retry_failed: bool = F
     try:
         for plan, arm, attempt in jobs:
             row = await build_one(plan, arm, attempt=attempt)
+            if not row["ok"] and is_infrastructure_stop(str(row["failure_reason"])):
+                # No model output exists, so this is not a scored failure. Keep the evidence.
+                _append_jsonl(OUT_DIR / "stops.jsonl", row)
+                print(  # noqa: T201
+                    "STOP: a vendor credit, quota or budget error. No retry. Not scored. "
+                    "Report it to master and the owner."
+                )
+                return 3
             _append_jsonl(OUT_DIR / "builds.jsonl", row)
             print(  # noqa: T201
                 f"{plan.prompt_id} {ARM_LABEL[arm]} ok={row['ok']} render={row['render_ok']} "
                 f"{row['latency_s']}s {row['cost_usd']:.4f} usd {row['failure_reason']}"
             )
-            reason = str(row["failure_reason"])
-            if not row["ok"] and (is_vendor_credit_error(reason) or "BudgetDenied" in reason):
-                print(  # noqa: T201
-                    "STOP: a vendor credit, quota or budget error. No retry. Report it to master and the owner."
-                )
-                return 3
     finally:
         await gate.disconnect()  # type: ignore[attr-defined]
     return 0
@@ -1227,6 +1363,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name in ("plans", "build"):
         sub.add_parser(name).add_argument("--ids", help="comma-separated prompt ids (default: all)")
     sub.choices["plans"].add_argument(
+        "--retry-failed", action="store_true", help="plan again a prompt whose plan call failed"
+    )
+    sub.choices["plans"].add_argument(
         "--usd-per-plan", type=Decimal, default=WORST_CASE_USD_PER_PLAN,
         help="projected cost of one plan call for the budget check (default: worst case)",
     )  # fmt: skip
@@ -1245,7 +1384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("prod-count").add_argument("--label", choices=("before", "after"), required=True)
     args = parser.parse_args(argv)
     if args.cmd == "plans":
-        return asyncio.run(_cmd_plans(args.ids, args.usd_per_plan))
+        return asyncio.run(_cmd_plans(args.ids, args.usd_per_plan, args.retry_failed))
     if args.cmd == "build":
         return asyncio.run(_cmd_build(args.ids, args.usd_per_build, args.retry_failed))
     if args.cmd == "rerender":

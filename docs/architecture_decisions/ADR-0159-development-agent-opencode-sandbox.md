@@ -98,14 +98,16 @@ This ADR gives Seshat a development agent. Seshat hands it a build or a fix. The
 ### D5 — Model access through a metering route that Seshat owns
 
 1. The agent holds **no model vendor key**. Its only model endpoint is the broker's OpenAI-compatible route. The route supports streaming.
-2. The broker holds the Scaleway key. Each request carries a **job token**: a random token that the broker issues when a job starts and revokes when the job ends.
-3. The broker reserves each call on the cost gate under a new budget role, `dev_agent`. Before each call it refuses the request if one of these holds:
-   - the job's committed spend plus this call's worst-case reservation exceeds **€2**;
-   - the `dev_agent` spend this calendar month plus this call's worst-case reservation exceeds **€30**.
-4. These two limits are the owner's numbers (FRE-1679, 2026-10-24). They are configured as their equivalents in the ledger currency (USD), with the conversion factor stated in config.
-5. The cost gate gains a `monthly` time window for the €30 cap. This amends ADR-0065 by one window value. The per-job limit uses the reservation's `task_id`, set to the job id.
-6. Each call is written to `api_costs` with the job's `trace_id` and `session_id` and `purpose="dev_agent"`.
-7. Vendor and models (owner's choice): **Scaleway Generative APIs**, Paris. The default model is `deepseek-v4.1-flash`, which has vision and a cached-input price. The alternatives are `glm-5.3` and `qwen3.8-27b`. The model is a configuration value, not a tool argument. Scaleway marks all three as preview models, so the job record stores the model id.
+2. The broker is not a byte-level pass-through. It dispatches each call through `LiteLLMClient` with the egress guard, as ADR-0141 D1 and D2 require for every LLM call. Scaleway gets a catalog entry and a guard allowlist entry like any other provider.
+3. The broker holds the Scaleway key. The key is an application credential under ADR-0132 D2, so it stays in a Seshat service and never moves to the environment layer or to the agent.
+4. Each request carries a **job token**: a random token that the broker issues when a job starts and revokes when the job ends.
+5. The broker reserves each call on the cost gate under a new budget role, `dev_agent`. Before each call it refuses the request if one of these holds:
+   - the job's committed and still-reserved spend plus this call's worst-case reservation exceeds **€2**;
+   - the `dev_agent` committed and still-reserved spend this calendar month plus this call's worst-case reservation exceeds **€30**.
+6. These two limits are the owner's numbers (FRE-1679, 2026-10-24). They are configured as their equivalents in the ledger currency (USD), with the conversion factor stated in config.
+7. The cost gate gains a `monthly` time window for the €30 cap. This amends ADR-0065 by one window value. The per-job limit uses the reservation's `task_id`, set to the job id.
+8. Each call is written to `api_costs` with the job's `trace_id` and `session_id` and `purpose="dev_agent"`.
+9. Vendor and models (owner's choice): **Scaleway Generative APIs**, Paris. The default model is `deepseek-v4.1-flash`, which has vision and a cached-input price. The alternatives are `glm-5.3` and `qwen3.8-27b`. The model is a configuration value, not a tool argument. Scaleway marks all three as preview models, so the job record stores the model id.
 
 ### D6 — Secrets in the agent container
 
@@ -256,7 +258,7 @@ The container holds no Scaleway key, no Anthropic key, no R2 credential, no data
 | Container escape on the production host | High | Non-root, `--cap-drop ALL`, `no-new-privileges`, no Docker socket, internal network. D3.4 keeps the move to a separate VPS cheap. |
 | The model leaks the GitHub token or the job token | Medium | Each token is scoped to one repo or one job and expires at the end of the job (D6). |
 | A job uses up memory with no swap | Medium | 3 GB memory cap, one job at a time (D3). |
-| A preview model changes or disappears at Scaleway | Medium | The model is configuration (D5.7). The job record stores the model id. |
+| A preview model changes or disappears at Scaleway | Medium | The model is configuration (D5.9). The job record stores the model id. |
 | The CSP mirror drifts from the Worker | Medium | The existing `verify-envelope` probe catches drift. The publish check uses the same mirror (D7.3). |
 | Disk fills with repos and packages | Low | The workspace is deleted after the push (D3.1). The repos live at GitHub. |
 | The approval card times out after 60 seconds | Low | A timeout refuses, and nothing starts (D10.2). |
@@ -302,10 +304,12 @@ These criteria are adjudicated on the umbrella ticket FRE-1679, after the implem
 - FRE-1679 — the owner's request and the decision log (comments of 2026-10-24)
 - [ADR-0050](ADR-0050-remote-agent-harness-integration.md) — Remote Agent Harness Integration (Accepted). D4 and D6 superseded by this ADR.
 - [ADR-0063](ADR-0063-primitive-tools-action-boundary-governance.md) — Primitive tools and action-boundary governance, Amendment A (approval fails closed)
-- [ADR-0065](ADR-0065-cost-check-gate.md) — Cost check gate. Amended by D5.5 (monthly window).
+- [ADR-0065](ADR-0065-cost-check-gate.md) — Cost check gate. Amended by D5.7 (monthly window).
 - [ADR-0069](ADR-0069-r2-backed-artifact-substrate.md) — R2-backed artifact substrate
 - [ADR-0077](ADR-0077-artifact-draft-subagent-generation.md) — Artifact draft (Implemented). Not changed. Its edit mode is not built.
 - [ADR-0089](ADR-0089-artifact-execution-security-model.md) — Artifact execution security model (the sealed box, the curated toolkit)
+- [ADR-0132](ADR-0132-outbound-authenticated-egress.md) — Outbound authenticated egress, D2 (credential custody: a provider key stays in the application)
+- [ADR-0141](ADR-0141-one-llm-dispatch-path.md) — One LLM dispatch path, D1 and D2 (every call rides `LiteLLMClient` with the egress guard)
 - [ADR-0156](ADR-0156-skills-and-tools-follow-the-industry-standard.md) — Skills and tools follow the industry standard, D8 (deny/ask/allow)
 - `docs/research/2026-10-24-fre-1667-opencode-context-and-prompts.md` — OpenCode study (compaction, prompts, skills)
 - OpenCode docs at upstream commit `5e4aa55c` (2026-10-24): `cli/commands.mdx` (`serve`, `run`), `cli/web.mdx` (server password), `permissions.mdx` (unmatched rule asks), `providers.mdx` (OpenAI-compatible `baseURL`), `network.mdx` (`HTTPS_PROXY`), `instructions.mdx` (`AGENTS.md`), `build/client/effect.mdx` (event stream)

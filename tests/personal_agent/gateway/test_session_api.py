@@ -799,7 +799,10 @@ def test_get_session_config_basic_shape() -> None:
     ):
         assert role in body["roles"], role
     provider_keys = {p["key"] for p in body["providers"]}
-    assert provider_keys == set(_ALL_PROVIDERS_UP)
+    # FRE-1680: `scaleway` is declared in the catalog but absent from the mocked availability
+    # map, so it lists as unavailable. Adding it to _ALL_PROVIDERS_UP would change every
+    # other test's expected candidate set.
+    assert provider_keys == set(_ALL_PROVIDERS_UP) | {"scaleway"}
 
 
 def test_get_session_config_ac5_candidates_exclude_down_provider_both_directions() -> None:

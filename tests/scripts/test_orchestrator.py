@@ -38,6 +38,7 @@ from scripts.dispatch.orchestrator import (
     DispatchRecord,
     HeadStallState,
     WedgeState,
+    _open_pr_exists,
     _record_for_result,
     _trigger_ledger_notifier,
     check_preconditions,
@@ -76,6 +77,10 @@ def _issue(
 
 _B1 = "stream:build1"
 _OPUS = frozenset({_B1, "Tier-1:Opus"})
+
+# What ``gh pr list`` returns for FRE-786 (the default ``_launched_record`` ticket). The branch
+# name is part of the fixture: ``_open_pr_exists`` matches on it (FRE-1054).
+_OPEN_PR_786 = '[{"number": 385, "headRefName": "fre-786-slug"}]'
 
 
 class _FakeRunResult:
@@ -359,6 +364,221 @@ def test_decide_never_completes_on_silence() -> None:
     assert d.kind not in {"run_complete", "clear"}
 
 
+# --- decide: launched record carries the facts it read (FRE-1054) ----------
+
+
+def test_decide_stall_names_the_open_pr_when_the_ticket_left_review() -> None:
+    # The FRE-1015 state: Approved (parked, off the stream board) with PR #738 open.
+    # The decision used to say "no-pr-past-timeout" and drop the PR fact.
+    rec = _launched_record(ticket="FRE-1015", now=0.0)
+    d = decide(
+        "build2",
+        [],
+        rec,
+        now=40_000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=True,
+        tracked_state="Approved",
+    )
+    assert d.kind == "stall"
+    assert d.reason == "pr-open-ticket-not-in-review"
+    assert d.facts is not None
+    assert d.facts.pr_open is True
+    assert d.facts.ticket_state == "Approved"
+    assert d.facts.on_stream_board is False
+    assert d.facts.age_s == 40_000.0
+
+
+def test_decide_stall_keeps_no_pr_reason_only_when_no_pr_was_found() -> None:
+    rec = _launched_record(now=0.0)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=1000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="Approved",
+    )
+    assert d.reason == "no-pr-past-timeout"
+    assert d.facts is not None
+    assert d.facts.pr_open is False
+
+
+def test_decide_stall_says_the_pr_check_was_undetermined() -> None:
+    # "gh could not answer" is not "no PR exists": the reason must not claim the latter.
+    rec = _launched_record(now=0.0)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=1000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=None,
+        tracked_state="Approved",
+    )
+    assert d.kind == "stall"
+    assert d.reason == "pr-check-undetermined-past-timeout"
+    assert d.facts is not None
+    assert d.facts.pr_open is None
+
+
+@pytest.mark.parametrize(
+    ("tracked_state", "pr_open"),
+    [
+        ("Done", False),
+        ("In Review", True),
+        ("In Review", False),
+        ("In Review", None),
+        ("In Progress", False),
+        ("Approved", False),
+        (None, None),
+    ],
+)
+@pytest.mark.parametrize("run_confirmed", [False, True])
+def test_decide_carries_facts_on_every_launched_branch(
+    tracked_state: str | None, pr_open: bool | None, run_confirmed: bool
+) -> None:
+    d = decide(
+        "build1",
+        [],
+        _launched_record(now=0.0, run_confirmed=run_confirmed),
+        now=10.0,
+        stall_timeout_s=60,
+        tracked_pr_open=pr_open,
+        tracked_state=tracked_state,
+    )
+    assert d.facts is not None
+    assert d.facts.ticket_state == tracked_state
+    assert d.facts.pr_open is pr_open
+    assert d.facts.run_confirmed is run_confirmed
+    assert d.facts.age_s == 10.0
+
+
+def test_decide_in_review_with_an_undetermined_pr_check_holds() -> None:
+    # An undetermined check must not complete the run (that needs a PR FOUND), and must not
+    # release the slot: it holds exactly as a "no PR" answer does.
+    d = decide(
+        "build1",
+        [],
+        _launched_record(now=0.0),
+        now=10.0,
+        stall_timeout_s=60,
+        tracked_pr_open=None,
+        tracked_state="In Review",
+    )
+    assert d.kind == "await"
+    assert d.facts is not None
+    assert d.facts.pr_open is None
+
+
+def test_decide_does_not_release_a_ticket_that_left_the_stream_board() -> None:
+    # Only a terminal state releases the slot (FRE-976). A ticket that left the stream while
+    # still non-terminal is held and SURFACED: the stall carries on_stream_board=False.
+    rec = _launched_record(now=0.0)
+    d = decide(
+        "build1",
+        [],
+        rec,
+        now=1000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="Approved",
+    )
+    assert d.kind == "stall"
+    assert d.kind not in {"clear", "launch"}
+    assert d.facts is not None
+    assert d.facts.on_stream_board is False
+
+
+def test_decide_facts_say_the_ticket_is_on_the_stream_board() -> None:
+    board = [_issue("FRE-786", "Approved", _OPUS)]
+    d = decide(
+        "build1",
+        board,
+        _launched_record(now=0.0),
+        now=1000.0,
+        stall_timeout_s=60,
+        tracked_pr_open=False,
+        tracked_state="Approved",
+    )
+    assert d.facts is not None
+    assert d.facts.on_stream_board is True
+
+
+# --- _open_pr_exists: a fact that could not be determined is not False (FRE-1054) --------
+
+
+def _gh(returncode: int = 0, stdout: str = "") -> _RecordingRunner:
+    return _RecordingRunner({"pr": _FakeRunResult(returncode=returncode, stdout=stdout)})
+
+
+def test_open_pr_exists_is_none_when_gh_exits_non_zero() -> None:
+    assert _open_pr_exists("FRE-786", _gh(returncode=1)) is None
+
+
+def test_open_pr_exists_is_none_on_invalid_json() -> None:
+    assert _open_pr_exists("FRE-786", _gh(stdout="not json")) is None
+
+
+def test_open_pr_exists_is_none_when_gh_returns_a_non_list() -> None:
+    assert _open_pr_exists("FRE-786", _gh(stdout='{"number": 1}')) is None
+
+
+def test_open_pr_exists_is_false_for_an_empty_search() -> None:
+    assert _open_pr_exists("FRE-786", _gh(stdout="[]")) is False
+
+
+def test_open_pr_exists_ignores_an_open_pr_on_another_ticket_branch() -> None:
+    # The search is free text, so it can return PRs that only MENTION the ticket. Before
+    # FRE-1054 a trailing ``or bool(raw)`` made any such PR count and the branch match dead.
+    out = '[{"number": 1, "headRefName": "fre-999-other"}]'
+    assert _open_pr_exists("FRE-786", _gh(stdout=out)) is False
+
+
+def test_open_pr_exists_is_true_for_the_ticket_branch() -> None:
+    assert _open_pr_exists("FRE-786", _gh(stdout=_OPEN_PR_786)) is True
+
+
+def test_open_pr_exists_finds_an_adr_stream_pr_by_its_body() -> None:
+    # The ``adr`` stream is dispatched too, and its branches are ``adr-NNNN-...``: the ticket
+    # id is only in the PR text. A branch-only match would stop ``run_complete`` there.
+    out = json.dumps(
+        [
+            {
+                "number": 1361,
+                "headRefName": "adr-0144-park-remaining-chain",
+                "title": "docs(ADR-0144): partly implemented",
+                "body": "Closes the ADR request in FRE-786.",
+            }
+        ]
+    )
+    assert _open_pr_exists("FRE-786", _gh(stdout=out)) is True
+
+
+def test_open_pr_exists_ignores_a_body_that_names_only_a_longer_ticket_number() -> None:
+    out = json.dumps(
+        [{"number": 1, "headRefName": "adr-0144-x", "title": "t", "body": "See FRE-7860."}]
+    )
+    assert _open_pr_exists("FRE-786", _gh(stdout=out)) is False
+
+
+@pytest.mark.parametrize(
+    ("branch", "expected"),
+    [
+        ("fre-786-slug", True),
+        ("worktree-fre-786", True),
+        ("starry-plaza-1s/fre-786-slug", True),
+        ("FRE-786-Upper", True),
+        ("fre-7860-slug", False),
+        ("fre-78-slug", False),
+    ],
+)
+def test_open_pr_exists_matches_the_whole_ticket_number(branch: str, expected: bool) -> None:
+    out = json.dumps([{"number": 1, "headRefName": branch}])
+    assert _open_pr_exists("FRE-786", _gh(stdout=out)) is expected
+
+
 # --- decide: launched record, FRE-976 reconciliation boundary --------------
 
 
@@ -526,6 +746,7 @@ def _run(
     head_stall_state=None,
     seat_turn_reader=None,
     owner_notifier=None,
+    logger=None,
 ):
     # Default reconcile reads the tracked ticket's state from the board — a
     # stand-in for "the direct Linear lookup agrees with the board". Tests that
@@ -545,7 +766,7 @@ def _run(
         runner=runner,
         notifier=notifier or _Notifier(),
         persist=lambda st: persisted.append(dict(st)),
-        logger=_NullLogger(),
+        logger=logger or _NullLogger(),
         execute=execute,
         rc_alive=rc_alive,
         kill_switch_engaged=kill_switch_engaged or (lambda: False),
@@ -672,11 +893,106 @@ def test_run_once_reconcile_failure_is_inconclusive_not_a_release() -> None:
 
 
 def test_run_once_run_complete_keeps_record_sets_confirmed() -> None:
-    runner = _RecordingRunner({"pr": _FakeRunResult(stdout='[{"number": 385}]')})
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout=_OPEN_PR_786)})
     board = [_issue("FRE-786", "In Review", _OPUS)]
     state, _ = _run({"build1": _launched_record()}, runner, board, now=5.0)
     assert state["build1"].phase == "launched"
     assert state["build1"].run_confirmed is True
+
+
+class _DecisionLogger:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, object]]] = []
+
+    def info(self, event: str, **kwargs: object) -> None:
+        self.records.append((event, kwargs))
+
+    def warning(self, event: str, **kwargs: object) -> None:
+        self.records.append((event, kwargs))
+
+
+def test_run_once_logs_the_pr_fact_with_the_stall_decision() -> None:
+    # FRE-1054, the exact state: FRE-1015 is Approved and parked off the stream board, and PR
+    # #738 is open on its branch. The daemon found the PR, then logged only its negation.
+    logger = _DecisionLogger()
+    notifier = _Notifier()
+    runner = _RecordingRunner(
+        {"pr": _FakeRunResult(stdout='[{"number": 738, "headRefName": "fre-1015-stance"}]')}
+    )
+    state, _ = _run(
+        {"build1": _launched_record(ticket="FRE-1015")},
+        runner,
+        [],  # parked: no stream label, so absent from the label-filtered board
+        now=40_000.0,
+        notifier=notifier,
+        stall=60,
+        reconcile=lambda t: "Approved",
+        logger=logger,
+    )
+    assert "build1" in state  # held, never released on a non-terminal state
+    decisions = [kw for event, kw in logger.records if event == "dispatch_decision"]
+    assert len(decisions) == 1
+    assert decisions[0]["kind"] == "stall"
+    assert decisions[0]["reason"] != "no-pr-past-timeout"
+    assert decisions[0]["pr_open"] is True
+    assert decisions[0]["ticket_state"] == "Approved"
+    assert decisions[0]["on_stream_board"] is False
+    assert decisions[0]["age_s"] == 40_000.0
+    assert decisions[0]["run_confirmed"] is False
+    ((event, fields),) = notifier.events
+    assert event == "dispatch_stall"
+    for key in ("pr_open", "ticket_state", "on_stream_board", "age_s", "run_confirmed"):
+        assert fields[key] == decisions[0][key], key
+    assert fields["reason"] == decisions[0]["reason"]
+
+
+def test_run_once_facts_after_the_stall_notice_are_logged_not_renotified() -> None:
+    # The stall notice is latched once per record (``stall_notified``). Facts that change after
+    # it (here: the ticket is parked off the board and a PR appears) reach the per-tick
+    # ``dispatch_decision`` log, not a second notice. Recorded so the limit is explicit.
+    logger = _DecisionLogger()
+    notifier = _Notifier()
+    on_board = [_issue("FRE-786", "Approved", _OPUS)]
+    state, _ = _run(
+        {"build1": _launched_record()},
+        _RecordingRunner({"pr": _FakeRunResult(stdout="[]")}),
+        on_board,
+        now=10_000.0,
+        notifier=notifier,
+        stall=60,
+        logger=logger,
+    )
+    assert state["build1"].stall_notified is True
+    state, _ = _run(
+        state,
+        _RecordingRunner({"pr": _FakeRunResult(stdout=_OPEN_PR_786)}),
+        [],
+        now=10_300.0,
+        notifier=notifier,
+        stall=60,
+        reconcile=lambda t: "Approved",
+        logger=logger,
+    )
+    first, second = [kw for event, kw in logger.records if event == "dispatch_decision"]
+    assert (first["pr_open"], first["on_stream_board"]) == (False, True)
+    assert (second["pr_open"], second["on_stream_board"]) == (True, False)
+    assert len(notifier.events) == 1
+
+
+def test_run_once_logs_an_undetermined_pr_check_as_none_not_false() -> None:
+    logger = _DecisionLogger()
+    runner = _RecordingRunner({"pr": _FakeRunResult(returncode=1)})  # gh could not answer
+    _run(
+        {"build1": _launched_record()},
+        runner,
+        [_issue("FRE-786", "Approved", _OPUS)],
+        now=10_000.0,
+        stall=60,
+        logger=logger,
+    )
+    (decision,) = [kw for event, kw in logger.records if event == "dispatch_decision"]
+    assert decision["pr_open"] is None
+    assert decision["reason"] == "pr-check-undetermined-past-timeout"
 
 
 def test_run_once_stall_notifies_once() -> None:
@@ -746,7 +1062,7 @@ def test_run_once_confirmed_run_never_stall_notifies_via_the_real_transition() -
     assert state["build1"].run_confirmed is False
 
     # The run confirms: ticket reaches In Review with an open PR.
-    review_runner = _RecordingRunner({"pr": _FakeRunResult(stdout='[{"number": 385}]')})
+    review_runner = _RecordingRunner({"pr": _FakeRunResult(stdout=_OPEN_PR_786)})
     review_board = [_issue("FRE-786", "In Review", _OPUS)]
     state, _ = _run(state, review_runner, review_board, now=150.0, stall=60, in_progress_stall=60)
     assert state["build1"].run_confirmed is True
@@ -2750,7 +3066,7 @@ def test_stall_notify_consumed_on_run_complete(tmp_path: Path) -> None:
     path = tmp_path / "notify.json"
     _seed_notify(path, "dispatch_stall")
     board = [_issue("FRE-786", "In Review", _OPUS)]
-    runner = _RecordingRunner({"pr": _FakeRunResult(stdout='[{"number": 385}]')})
+    runner = _RecordingRunner({"pr": _FakeRunResult(stdout=_OPEN_PR_786)})
     _run({"build1": _launched_record()}, runner, board, now=5.0, notify_ledger_path=path)
     reloaded = trigger_ledger.load_ledger(path, _NullLogger())
     assert trigger_ledger.snapshot_unconsumed(reloaded) == ()

@@ -119,15 +119,14 @@ class TestAc2StaleWriteCannotOverwrite:
 
     @pytest.mark.asyncio
     async def test_slow_probe_write_does_not_replace_call_down(self, monkeypatch) -> None:
+        """The slow probe generates, so its evidence alone would clear the ``down``.
+
+        Only the observation-time ordering can reject it: the probe's stamp is its start,
+        which is older than the call's failure.
+        """
         in_flight = asyncio.Event()
         release = asyncio.Event()
-
-        async def slow_origin(request: httpx.Request) -> httpx.Response:
-            in_flight.set()
-            await release.wait()
-            return httpx.Response(200, json={})
-
-        monkeypatch.setattr(_PROBE_HTTP, _client_factory(slow_origin))
+        _recovered_generating_origin(monkeypatch, in_flight=in_flight, release=release)
         probe_task = asyncio.create_task(run_scheduled_slm_health_probe(es_client=None))
         await in_flight.wait()
 
@@ -136,9 +135,10 @@ class TestAc2StaleWriteCannotOverwrite:
         release.set()
         probe_snapshot = await probe_task
 
-        assert probe_snapshot is not None and probe_snapshot.status == "up"
+        assert probe_snapshot is not None and probe_snapshot.generation_ok is True
+        assert probe_snapshot.observed_monotonic < call_down.observed_monotonic
         stored = get_cached_snapshot(ttl=_TTL_S)
-        assert stored is call_down
+        assert stored is call_down and stored.trace_id == "failing-call"
 
     @pytest.mark.asyncio
     async def test_probe_write_lands_without_a_newer_call(self, monkeypatch) -> None:
@@ -267,17 +267,40 @@ class TestAc4PositiveEvidenceClearsDown:
         assert set_cached_snapshot(failed) is False
         assert get_cached_snapshot(ttl=_TTL_S) is down
 
+    @pytest.mark.asyncio
+    async def test_probe_down_does_not_erase_call_provenance(self, monkeypatch) -> None:
+        """A ``/health`` blip after a call failed must not let a later liveness ``up`` clear it."""
+        call_down = _snap("down", writer="call", observed=time.monotonic() - 2)
+        set_cached_snapshot(call_down)
+
+        assert set_cached_snapshot(_snap("down", writer="probe", observed=time.monotonic() - 1)) is False
+        assert set_cached_snapshot(_snap("up", writer="probe")) is False
+        assert get_cached_snapshot(ttl=_TTL_S) is call_down
+
     def test_down_interval_never_exceeds_normal(self) -> None:
         set_cached_snapshot(_snap("down"))
 
         assert slm_health_probe_interval_s(normal_s=30.0, down_s=60.0) == 30.0
 
 
-def _recovered_generating_origin(monkeypatch) -> None:
-    """Point the probe at an origin that answers ``/health``, ``/models`` and a completion."""
+def _recovered_generating_origin(
+    monkeypatch,
+    *,
+    in_flight: asyncio.Event | None = None,
+    release: asyncio.Event | None = None,
+) -> None:
+    """Point the probe at an origin that answers ``/health``, ``/models`` and a completion.
+
+    With *in_flight* and *release*, the ``/health`` answer waits: *in_flight* is set when the
+    request arrives, and the answer goes out after *release* is set.
+    """
     from personal_agent.config import settings
 
     async def origin(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/health") and release is not None:
+            if in_flight is not None:
+                in_flight.set()
+            await release.wait()
         if request.url.path.endswith("/models"):
             return httpx.Response(200, json={"data": [{"id": "m-primary"}]})
         if request.url.path.endswith("/chat/completions"):
@@ -316,7 +339,13 @@ class TestRule4SchedulerGate:
         sched.slm_health_probe_down_interval_seconds = _DOWN_INTERVAL_S
         sched._backfill_es_logger = None
         now = datetime.now(timezone.utc)
+        # Skip every other conditional job this tick (FRE-1611 gate test's pinning).
         sched._last_disk_check = now
+        sched._last_embedding_backfill_run = now
+        sched._last_domain_guard_warm_run = now
+        sched._last_freshness_review_week = now.isocalendar()[:2]
+        sched._last_kg_stats_projection_date = now.date()
+        sched._linear_client = None
         sched._last_slm_health_probe_run = now - timedelta(seconds=last_run_age_s)
         sched.running = True
 
@@ -333,6 +362,8 @@ class TestRule4SchedulerGate:
             mock_settings.data_lifecycle_enabled = False
             mock_settings.insights_enabled = False
             mock_settings.freshness_enabled = False
+            mock_settings.sysgraph_maintenance_enabled = False
+            mock_settings.feedback_polling_enabled = False
             await sched._lifecycle_loop()
         return tick
 

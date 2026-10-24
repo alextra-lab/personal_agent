@@ -84,6 +84,10 @@ def _clears_down(snapshot: SlmHealthSnapshot, stored_down: SlmHealthSnapshot) ->
     a call-written ``down``: a ``/health`` that answers says nothing about a wedged generation
     slot (FRE-1436's nine ``up`` events).
 
+    A probe's ``down`` does not replace a call's ``down`` either. The verdict is ``down``
+    already, and the replacement would drop the call's provenance: the next liveness ``up``
+    would then clear a wedged slot that nothing showed recovered.
+
     Args:
         snapshot: The newer verdict.
         stored_down: The stored ``down``.
@@ -92,7 +96,7 @@ def _clears_down(snapshot: SlmHealthSnapshot, stored_down: SlmHealthSnapshot) ->
         ``True`` when *snapshot* may replace *stored_down*.
     """
     if snapshot.status == "down":
-        return True
+        return snapshot.writer == "call" or stored_down.writer == "probe"
     if snapshot.writer == "call" or snapshot.generation_ok is True:
         return True
     if snapshot.generation_ok is False:

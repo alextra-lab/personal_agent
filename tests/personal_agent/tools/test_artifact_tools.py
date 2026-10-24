@@ -1840,6 +1840,28 @@ async def test_artifact_draft_logs_output_cap_hit_when_cap_binds(
 
 
 @pytest.mark.asyncio
+async def test_artifact_draft_start_log_names_the_default_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1691 AC-3: the sub-agent start event names the deployment that builds the page.
+
+    No turn-scoped resolution is installed, so the build renders on the configured
+    default, which the log must name so the swap can be read from the logs.
+    """
+    _store, _client = _install_draft_fakes(monkeypatch)
+    events: list[tuple[str, dict[str, Any]]] = []
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="start-log", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    starts = [kw for ev, kw in events if ev == "artifact_draft_sub_agent_start"]
+    assert len(starts) == 1
+    assert starts[0]["deployment"] == "gpt-6.1-sol"
+
+
+@pytest.mark.asyncio
 async def test_artifact_draft_no_cap_hit_log_under_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

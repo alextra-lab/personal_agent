@@ -1764,6 +1764,7 @@ async def artifact_draft_executor(
         span_id=span_id,
         task_id=task_id,
         model_role=ModelRole.ARTIFACT_BUILDER.value,
+        deployment=resolved_deployment_key,
         max_tokens=draft_max_tokens,
         timeout_s=draft_timeout,
     )

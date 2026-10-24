@@ -27,6 +27,9 @@ backend = systemd
 enabled  = true
 port     = SSH_PORT_PLACEHOLDER
 filter   = sshd
+# iptables-multiport bans IPv4 with iptables and IPv6 with ip6tables. Debian's
+# jail.d/defaults-debian.conf sets nftables, so pin the action here.
+banaction = iptables-multiport
 # Aggressive mode catches more attack patterns
 mode     = aggressive
 maxretry = 3

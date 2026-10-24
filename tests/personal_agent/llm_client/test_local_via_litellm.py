@@ -21,6 +21,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,13 @@ import httpx
 import litellm
 import pytest
 
+from personal_agent.llm_client import adapters as adapters_module
 from personal_agent.llm_client import litellm_client as litellm_client_module
+from personal_agent.llm_client.inflight import (
+    InflightCall,
+    get_inflight_registry,
+    reset_inflight_registry,
+)
 from personal_agent.llm_client.models import (
     Dialect,
     ModelConfig,
@@ -253,6 +260,8 @@ class Captured:
         self.urls: list[str] = []
         self.timeouts: list[Any] = []
         self.response: LLMResponse | None = None
+        # One entry per concurrent call (FRE-1433): its response, or the exception it ended in.
+        self.outcomes: list[Any] = []
         self.gate: MagicMock | None = None
         self.tracker: AsyncMock | None = None
         self.events: list[tuple[str, dict[str, Any]]] = []
@@ -281,12 +290,14 @@ async def _dispatch(
     *,
     model_key: str = BUDGET_KEY,
     stream: bytes | AsyncIterator[bytes] | None = None,
-    streams: list[bytes | AsyncIterator[bytes]] | None = None,
+    streams: list[bytes | AsyncIterator[bytes] | Exception] | None = None,
     transport_error: Exception | None = None,
     status: int | None = None,
     session_id: str | None = "11111111-1111-4111-8111-111111111111",
     capture: Captured | None = None,
     guard: DomainGuard | None = None,
+    concurrent_calls: int = 1,
+    tracer: Any = None,
     **respond_kwargs: Any,
 ) -> Captured:
     """Run a local-placement call through the factory and real litellm dispatch.
@@ -299,11 +310,17 @@ async def _dispatch(
         streams: One body per request, in order (FRE-1602). The last entry
             answers any request past the end of the list. An async iterator is
             single-use, so a test that sends the same request twice needs one
-            entry per attempt. Takes precedence over ``stream``.
+            entry per attempt. An exception entry is raised by the transport
+            instead of answering (FRE-1433). Takes precedence over ``stream``.
         transport_error: Raised by the transport instead of returning a response.
         status: HTTP status to return instead of a 200 SSE stream.
         session_id: Session id on the trace context (``None`` omits it).
         guard: DomainGuard to inject; defaults to one that refuses nothing.
+        concurrent_calls: How many ``respond()`` calls to run at once on one client
+            and one trace context (FRE-1433). Give ``streams`` one entry per call. A
+            call that raises does not end the others, and every outcome is kept in
+            ``Captured.outcomes``.
+        tracer: Replaces the real SDK tracer, for a test of the non-recording span.
         capture: A caller-owned :class:`Captured` to fill in, so a test that
             expects the dispatch to raise can still read what the transport saw.
         **respond_kwargs: Passed through to ``respond()``.
@@ -331,6 +348,8 @@ async def _dispatch(
             body_for_request = streams[min(len(captured.bodies), len(streams)) - 1]
         else:
             body_for_request = stream if stream is not None else _plain_stream()
+        if isinstance(body_for_request, Exception):
+            raise body_for_request
         return httpx.Response(
             200,
             content=body_for_request,
@@ -384,17 +403,30 @@ async def _dispatch(
         stack.enter_context(patch.object(litellm_client_module.log, "warning", _record_warning))
         stack.enter_context(patch.object(litellm_client_module.log, "error", _record_error))
         stack.enter_context(
-            patch("personal_agent.telemetry.spans.get_tracer", return_value=_real_tracer())
+            patch(
+                "personal_agent.telemetry.spans.get_tracer",
+                return_value=tracer if tracer is not None else _real_tracer(),
+            )
         )
         stack.enter_context(patch.object(httpx.AsyncHTTPTransport, "handle_async_request", _handle))
         client = get_llm_client_for_key(model_key, budget_role="main_inference")
         client._egress_guard = guard if guard is not None else _permissive_guard()
-        captured.response = await client.respond(
-            role=ModelRole.PRIMARY,
-            messages=[{"role": "user", "content": "hello"}],
-            trace_ctx=SystemTraceContext.new("fre1365", session_id=session_id),
-            **respond_kwargs,
+        trace_ctx = SystemTraceContext.new("fre1365", session_id=session_id)
+        responses = await asyncio.gather(
+            *(
+                client.respond(
+                    role=ModelRole.PRIMARY,
+                    messages=[{"role": "user", "content": "hello"}],
+                    trace_ctx=trace_ctx,
+                    **respond_kwargs,
+                )
+                for _ in range(concurrent_calls)
+            ),
+            return_exceptions=concurrent_calls > 1,
         )
+        captured.outcomes = list(responses)
+        if not isinstance(responses[0], BaseException):
+            captured.response = responses[0]
     return captured
 
 
@@ -1640,3 +1672,363 @@ class TestPromptDebugCapture:
         await _dispatch()
 
         assert held_at_capture == [0]
+
+
+# ── FRE-1433 — the in-flight registry sees a live call, however it ends ───
+#
+# ADR-0144 D4, AC-6 and AC-7. Each test drives the real dispatch and reads the
+# process registry from a second task while the call is live, because the
+# registry is the one view a health check has of a call it does not own.
+
+
+@pytest.fixture
+def _clean_inflight_registry() -> Iterator[None]:
+    reset_inflight_registry()
+    yield
+    reset_inflight_registry()
+
+
+@dataclass
+class _Watch:
+    """What a poller saw in the registry while one dispatch ran, and how it ended."""
+
+    samples: list[tuple[float, tuple[InflightCall, ...]]]
+    error: BaseException | None
+    captured: Captured | None
+
+    def live(self) -> list[tuple[float, tuple[InflightCall, ...]]]:
+        return [(now, calls) for now, calls in self.samples if calls]
+
+
+async def _watched_dispatch(*, cancel_when_live: bool = False, **dispatch_kwargs: Any) -> _Watch:
+    """Run ``_dispatch`` as a task and sample the registry every 10 ms until it ends."""
+    task = asyncio.create_task(_dispatch(**dispatch_kwargs))
+    samples: list[tuple[float, tuple[InflightCall, ...]]] = []
+    cancelled = False
+    while not task.done():
+        calls = get_inflight_registry().snapshot()
+        samples.append((time.monotonic(), calls))
+        if cancel_when_live and calls and not cancelled:
+            cancelled = True
+            task.cancel()
+        await asyncio.sleep(0.01)
+    error: BaseException | None = None
+    captured: Captured | None = None
+    try:
+        captured = await task
+    except (Exception, asyncio.CancelledError) as exc:
+        error = exc
+    return _Watch(samples=samples, error=error, captured=captured)
+
+
+async def _paced_sse(
+    *chunks: dict[str, Any],
+    first_delay: float = 0.0,
+    delay: float = 0.0,
+    error: BaseException | None = None,
+) -> AsyncIterator[bytes]:
+    """An SSE body that holds its first byte for ``first_delay`` and paces the rest.
+
+    Ends with ``error`` when one is given, as a dropped connection does, and with ``[DONE]`` if not.
+    """
+    await asyncio.sleep(first_delay)
+    for chunk in chunks:
+        yield b"data: " + json.dumps(chunk).encode() + b"\n\n"
+        await asyncio.sleep(delay)
+    if error is not None:
+        raise error
+    yield b"data: [DONE]\n\n"
+
+
+def _reasoning_then_answer(*, steps: int = 4) -> list[dict[str, Any]]:
+    """A thinking phase with reasoning deltas and no content, then the answer."""
+    return [
+        *(
+            _chunk(delta={"role": "assistant", "reasoning_content": f"step {n} "})
+            for n in range(steps)
+        ),
+        _chunk(delta={"content": "the answer"}),
+        _chunk(delta={}, finish_reason="stop"),
+        _chunk(usage=USAGE_BLOCK),
+    ]
+
+
+def _distinct_last_byte_stamps(watch: _Watch) -> list[float]:
+    stamps: list[float] = []
+    for _, calls in watch.live():
+        stamp = calls[0].last_byte_monotonic
+        if not stamps or stamp != stamps[-1]:
+            stamps.append(stamp)
+    return stamps
+
+
+@pytest.mark.usefixtures("_clean_inflight_registry")
+class TestInflightRegistry:
+    @pytest.mark.asyncio
+    async def test_a_call_with_no_chunk_yet_has_an_age_from_dispatch(self) -> None:
+        """AC-1 — a dispatched call that received nothing reports a growing age."""
+        await _dispatch()  # warm-up, for the reason given in TestGenerationWallClockBudget
+        reset_inflight_registry()
+        silent = _paced_sse(_chunk(delta={"content": "late"}), first_delay=0.4)
+
+        watch = await _watched_dispatch(stream=silent)
+
+        assert watch.error is None
+        chunkless = [
+            (now, calls[0])
+            for now, calls in watch.live()
+            if calls[0].last_byte_monotonic == calls[0].dispatched_monotonic
+        ]
+        assert len(chunkless) >= 3, "the call was never observed before its first byte"
+        ages = [call.age_s(now) for now, call in chunkless]
+        assert all(age > 0 for age in ages)
+        assert ages[-1] > ages[0] + 0.1, "the age did not grow while the call stayed silent"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_deltas_advance_the_last_byte_stamp(self) -> None:
+        """AC-2 — a thinking phase with no content deltas is not silence."""
+        watch = await _watched_dispatch(stream=_paced_sse(*_reasoning_then_answer(), delay=0.1))
+
+        assert watch.error is None
+        stamps = _distinct_last_byte_stamps(watch)
+        assert len(stamps) >= 4, "the stamp did not advance across the reasoning phase"
+        assert stamps == sorted(stamps)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("shape", _REPORT_SHAPES)
+    async def test_prefill_reports_advance_the_last_byte_stamp(self, shape: str) -> None:
+        """AC-2 — a long prefill that reports progress is alive, not stalled."""
+        reports = [_progress_report(step * 1024, shape=shape) for step in range(4)]
+        answer = [
+            _chunk(delta={"role": "assistant", "content": "the answer"}),
+            _chunk(delta={}, finish_reason="stop"),
+            _chunk(usage=USAGE_BLOCK),
+        ]
+
+        watch = await _watched_dispatch(stream=_paced_sse(*reports, *answer, delay=0.1))
+
+        assert watch.error is None
+        assert len(_distinct_last_byte_stamps(watch)) >= 4
+
+    @pytest.mark.asyncio
+    async def test_reasoning_text_never_reaches_generation_progress(self) -> None:
+        """AC-5 — the registry rule is separate: the partial-content fold is unchanged."""
+        progress = GenerationProgress()
+
+        captured = await _dispatch(
+            stream=_sse(*_reasoning_then_answer()), progress_sink=progress, max_retries=0
+        )
+
+        assert captured.response is not None
+        assert progress.content == "the answer"
+        assert "step" not in progress.content
+
+    @pytest.mark.asyncio
+    async def test_two_calls_under_one_trace_at_attempt_one_are_distinct(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-3 — one trace, two model calls, both at attempt 1, both separately readable."""
+        catalog = _local_catalog()
+        catalog.models[BUDGET_KEY] = catalog.models[BUDGET_KEY].model_copy(
+            update={"max_concurrency": 2}
+        )
+        monkeypatch.setattr(sys.modules[__name__], "_local_catalog", lambda: catalog)
+        streams: list[bytes | AsyncIterator[bytes]] = [
+            _paced_sse(*_reasoning_then_answer(), delay=0.1) for _ in range(2)
+        ]
+
+        watch = await _watched_dispatch(streams=streams, concurrent_calls=2)
+
+        assert watch.error is None
+        both = [calls for _, calls in watch.live() if len(calls) == 2]
+        assert both, "the two calls were never registered at the same time"
+        first, second = both[0]
+        assert (first.attempt, second.attempt) == (1, 1)
+        assert first.span_id != second.span_id
+        assert len({c.span_id for _, calls in watch.live() for c in calls}) == 2
+        assert get_inflight_registry().snapshot() == ()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("exit_name", "dispatch_kwargs", "expected"),
+        [
+            ("success", lambda: {"stream": _paced_sse(*_reasoning_then_answer(), delay=0.05)}, None),
+            (
+                "gap_timeout",
+                lambda: {
+                    "stream": _paced_sse(
+                        _PARTIAL_CHUNK, first_delay=0.1, error=httpx.ReadTimeout("stalled")
+                    ),
+                    "max_retries": 0,
+                },
+                LLMTimeout,
+            ),
+            (
+                "wall_clock_timeout",
+                lambda: {
+                    "stream": _paced_sse(*_reasoning_then_answer(steps=8), delay=0.08),
+                    "timeout_s": 0.15,
+                    "max_retries": 0,
+                },
+                LLMTimeout,
+            ),
+            (
+                "user_cancel",
+                lambda: {
+                    "stream": _paced_sse(*_reasoning_then_answer(), delay=0.3),
+                    "cancel_when_live": True,
+                },
+                asyncio.CancelledError,
+            ),
+            (
+                "connection_failure_before_the_stream_opens",
+                lambda: {"transport_error": httpx.ConnectError("refused"), "max_retries": 0},
+                LLMConnectionError,
+            ),
+            (
+                "aggregation_failure_after_the_stream_closes",
+                lambda: {"stream": _paced_sse(*_reasoning_then_answer(), delay=0.02)},
+                LLMClientError,
+            ),
+        ],
+    )
+    async def test_the_registry_is_empty_after_every_exit(
+        self,
+        exit_name: str,
+        dispatch_kwargs: Any,
+        expected: type[BaseException] | None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AC-4 — a dead record would read as a live stall, so no exit may leave one."""
+        await _dispatch()  # warm-up, for the reason given in TestGenerationWallClockBudget
+        reset_inflight_registry()
+        if exit_name.startswith("aggregation_failure"):
+
+            def _explode(_chunks: list[dict[str, Any]]) -> Any:
+                raise ValueError("aggregation failed")
+
+            monkeypatch.setattr(adapters_module, "_aggregate_streaming_chunks", _explode)
+
+        watch = await _watched_dispatch(**dispatch_kwargs())
+
+        if expected is None:
+            assert watch.error is None
+        else:
+            assert isinstance(watch.error, expected), repr(watch.error)
+        if exit_name != "connection_failure_before_the_stream_opens":
+            assert watch.live(), f"{exit_name}: the call was never seen live, so the test proves nothing"
+        assert get_inflight_registry().snapshot() == ()
+
+    @pytest.mark.asyncio
+    async def test_a_retried_attempt_is_a_new_record_under_the_same_span(self) -> None:
+        """AC-4 — a reset ends attempt 1 and dispatches attempt 2 with its own stamp."""
+        streams: list[bytes | AsyncIterator[bytes]] = [
+            _paced_sse(
+                _PARTIAL_CHUNK,
+                first_delay=0.1,
+                delay=0.1,
+                error=httpx.RemoteProtocolError(_RESET_BODY),
+            ),
+            _paced_sse(*_reasoning_then_answer(), first_delay=0.1, delay=0.05),
+        ]
+
+        watch = await _watched_dispatch(streams=streams, max_retries=1)
+
+        assert watch.error is None
+        seen = {c.attempt: c for _, calls in watch.live() for c in calls}
+        assert sorted(seen) == [1, 2]
+        assert seen[1].span_id == seen[2].span_id
+        assert seen[2].dispatched_monotonic > seen[1].dispatched_monotonic
+        assert all(len(calls) == 1 for _, calls in watch.live()), "attempts overlapped"
+        assert get_inflight_registry().snapshot() == ()
+
+    @pytest.mark.asyncio
+    async def test_two_calls_with_a_non_recording_span_are_still_distinct(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-3 — with no SDK tracer every span id is sixteen zeroes; the key must not be."""
+        from opentelemetry.trace import NoOpTracer
+
+        catalog = _local_catalog()
+        catalog.models[BUDGET_KEY] = catalog.models[BUDGET_KEY].model_copy(
+            update={"max_concurrency": 2}
+        )
+        monkeypatch.setattr(sys.modules[__name__], "_local_catalog", lambda: catalog)
+        streams: list[bytes | AsyncIterator[bytes] | Exception] = [
+            _paced_sse(*_reasoning_then_answer(), delay=0.1) for _ in range(2)
+        ]
+
+        watch = await _watched_dispatch(streams=streams, concurrent_calls=2, tracer=NoOpTracer())
+
+        assert watch.captured is not None
+        assert not any(isinstance(o, BaseException) for o in watch.captured.outcomes)
+        assert {h["x-span-id"] for h in watch.captured.headers} == {"0" * 16}, (
+            "precondition: the harness really ran with a non-recording span"
+        )
+        both = [calls for _, calls in watch.live() if len(calls) == 2]
+        assert both, "the two calls were never registered at the same time"
+        assert both[0][0].span_id != both[0][1].span_id
+        assert get_inflight_registry().snapshot() == ()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_calls_ending_six_ways_leave_the_registry_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-4 — success, both timeouts, a cancel, a connect failure and an aggregation failure.
+
+        The six run at once, so one call's removal must leave the others' records alone. The
+        transport answers requests in arrival order, so which call gets which ending is not
+        fixed. The set of endings is.
+        """
+        catalog = _local_catalog()
+        catalog.providers["slm_local"] = catalog.providers["slm_local"].model_copy(
+            update={"max_concurrency": 6}
+        )
+        catalog.models[BUDGET_KEY] = catalog.models[BUDGET_KEY].model_copy(
+            update={"max_concurrency": 6}
+        )
+        monkeypatch.setattr(sys.modules[__name__], "_local_catalog", lambda: catalog)
+        real_aggregate = adapters_module._aggregate_streaming_chunks
+
+        def _aggregate(chunks: list[dict[str, Any]]) -> dict[str, Any]:
+            if any("AGG-FAILS" in str(c) for c in chunks):
+                raise ValueError("aggregation failed")
+            return real_aggregate(chunks)
+
+        monkeypatch.setattr(adapters_module, "_aggregate_streaming_chunks", _aggregate)
+        await _dispatch()  # warm-up, for the reason given in TestGenerationWallClockBudget
+        reset_inflight_registry()
+        streams: list[bytes | AsyncIterator[bytes] | Exception] = [
+            _paced_sse(*_reasoning_then_answer(), first_delay=0.1, delay=0.05),  # success
+            _paced_sse(_PARTIAL_CHUNK, first_delay=0.15, error=httpx.ReadTimeout("stalled")),
+            _paced_sse(*_reasoning_then_answer(steps=20), delay=0.1),  # wall clock
+            _paced_sse(_PARTIAL_CHUNK, first_delay=0.15, error=asyncio.CancelledError()),
+            httpx.ConnectError("refused"),  # before the stream opens
+            _paced_sse(
+                _chunk(delta={"role": "assistant", "content": "AGG-FAILS"}),
+                _chunk(delta={}, finish_reason="stop"),
+                _chunk(usage=USAGE_BLOCK),
+                first_delay=0.1,
+            ),
+        ]
+
+        watch = await _watched_dispatch(
+            streams=streams, concurrent_calls=6, timeout_s=1.0, max_retries=0
+        )
+
+        assert watch.captured is not None
+        endings = sorted(
+            "response" if isinstance(o, dict) else type(o).__name__ for o in watch.captured.outcomes
+        )
+        assert endings == sorted(
+            [
+                "response",
+                "LLMTimeout",
+                "LLMTimeout",
+                "CancelledError",
+                "LLMConnectionError",
+                "LLMClientError",
+            ]
+        )
+        assert max(len(calls) for _, calls in watch.live()) >= 4, "the calls did not overlap"
+        assert get_inflight_registry().snapshot() == ()

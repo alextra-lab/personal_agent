@@ -1913,6 +1913,16 @@ class AppConfig(BaseSettings):
         ge=30.0,
         description="Seconds between SLM-health probe runs in the brainstem scheduler",
     )
+    slm_health_probe_down_interval_seconds: float = Field(
+        default=60.0,
+        ge=60.0,
+        description=(
+            "Seconds between SLM-health probe runs while the published verdict is 'down' "
+            "(ADR-0144 D4 rule 4, FRE-1435). A 'down' clears only on positive evidence, so "
+            "the probe runs more often until it does. The brainstem lifecycle loop ticks "
+            "every 60 s, so a smaller value cannot take effect."
+        ),
+    )
     slm_health_index_prefix: str = Field(
         default="agent-monitors-slm-health",
         description="Elasticsearch index prefix for SLM-health snapshot docs",
@@ -1921,9 +1931,10 @@ class AppConfig(BaseSettings):
         default=45.0,
         ge=5.0,
         description=(
-            "Seconds a cached SLM-health snapshot stays fresh. Used by "
-            "/api/inference/status and the executor error-reason hint to read "
-            "the last known state without making a new network call."
+            "Seconds a cached 'up' or 'degraded' SLM-health verdict stays fresh, "
+            "measured from its observation. A 'down' does not expire (ADR-0144 D4 "
+            "rule 3). Used by the executor error-reason hint to read the last known "
+            "state without making a new network call."
         ),
     )
     slm_gpu_util_degraded_pct: float = Field(

@@ -14,10 +14,11 @@ ships and operates correctly today without waiting for that child ticket.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SlmHealthSnapshot(BaseModel):
@@ -62,6 +63,12 @@ class SlmHealthSnapshot(BaseModel):
             trace ID — the probe is itself joinable.
         error: Error string when the probe failed. ``None`` on success.
         kind: Fixed sentinel ``"system:slm_health_probe"`` for index routing.
+        observed_monotonic: ``time.monotonic()`` when the evidence was gathered, not when the
+            snapshot was written (ADR-0144 D4 rule 2, FRE-1435). The cache orders writes on it
+            and measures the TTL from it. A probe sets its start time. Process-local: it has no
+            meaning across processes.
+        writer: Who gathered the evidence: the scheduled ``"probe"``, or a real local
+            ``"call"`` (ADR-0144 D4, FRE-1436). ``trace_id`` identifies the instance.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -83,6 +90,8 @@ class SlmHealthSnapshot(BaseModel):
     trace_id: str
     error: str | None = None
     kind: str = "system:slm_health_probe"
+    observed_monotonic: float = Field(default_factory=time.monotonic)
+    writer: Literal["probe", "call"] = "probe"
 
     def degrade_reason(self) -> str | None:
         """Return a human-readable reason string when status is degraded/down.

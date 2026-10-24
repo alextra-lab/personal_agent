@@ -350,9 +350,7 @@ class TestProbeSlmHealthGeneration:
 
     @pytest.mark.asyncio
     async def test_no_base_url_skips_generation_check(self) -> None:
-        """Without base_url (the default), no generation check is attempted —
-        provider_health.is_provider_available's call path is unaffected.
-        """
+        """Without base_url (the default), no generation check is attempted."""
         from personal_agent.observability.slm_health.probe import probe_slm_health
 
         with patch("httpx.AsyncClient") as mock_client_cls:

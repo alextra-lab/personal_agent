@@ -17,6 +17,7 @@ def _make_snapshot(status: str, degrade_reason: str | None = None):
     snap = MagicMock()
     snap.status = status
     snap.degrade_reason.return_value = degrade_reason
+    snap.observed_monotonic = __import__("time").monotonic()  # the TTL ages from observation
     return snap
 
 
@@ -50,12 +51,7 @@ class TestErrorReasonHint:
         import personal_agent.observability.slm_health.cache as cache_mod
 
         # Prime the cache
-        if snap is not None:
-            cache_mod._cached_snapshot = snap
-            cache_mod._cached_at = __import__("time").monotonic()
-        else:
-            cache_mod._cached_snapshot = None
-            cache_mod._cached_at = 0.0
+        cache_mod._cached_snapshot = snap
 
         from personal_agent.config import settings as _s
         from personal_agent.llm_client.types import LLMClientError, LLMRateLimit

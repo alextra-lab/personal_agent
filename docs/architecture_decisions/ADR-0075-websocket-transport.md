@@ -274,3 +274,19 @@ This ensures `last_seq` survives process termination. The `localStorage` write i
 | Postgres event TTL | `session_events` rows older than 24h are purged by cleanup task |
 | iOS screen-switch | Switch screens during a 30s agent run; return; full response rendered |
 | Inbound rate limit | >20 msg/s closes socket with 1008 |
+
+## Amendment A — approval waiters are session-scoped (FRE-1677, 2026-10-24)
+
+This amendment replaces the "Cancellation on disconnect" rule and the "Waiter cleanup on disconnect" verification row for **tool-approval** waiters. FRE-928 made the same change for constraint waiters.
+
+A mobile socket drops and returns all the time. On 2026-10-24 a bash approval was refused with `connection_lost` after 1 ms, because the PWA socket had dropped seven minutes earlier. The card was persisted but the call was already refused.
+
+- An approval waiter belongs to the session (`_session_approval_waiters`), not to a connection. A disconnect or a supersede does not resolve it.
+- A session that connected before waits for its client to return. The card is persisted and replayed on reconnect. `AGENT_APPROVAL_TIMEOUT_SECONDS` bounds the wait, and a timeout still denies.
+- A session that never opened a socket in this process (eval, `/chat`) is refused at once with `connection_lost`.
+- After one approval times out with no socket, later approvals for that session are refused at once until a client connects.
+- A user Stop still resolves a pending approval.
+
+| Verification | Expected |
+|---|---|
+| Waiter survives a socket gap | WS drops with an approval pending, or before it is asked; the client reconnects within the timeout; the replayed card is answered; the executor receives the answer |

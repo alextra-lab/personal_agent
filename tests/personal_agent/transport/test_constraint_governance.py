@@ -17,7 +17,6 @@ from personal_agent.transport.agui.adapter import to_agui_event
 from personal_agent.transport.agui.ws_endpoint import (
     WaiterMetadata,
     _active_connections,
-    _cancel_all_waiters,
     _ConnectionState,
     _resolve_all_waiters_user_cancel,
     _resolve_constraint_decision,
@@ -210,7 +209,6 @@ class TestConstraintWaiter:
             async def reconnect() -> None:
                 await asyncio.sleep(0.05)
                 # Fresh handshake evicts the old registration.
-                _cancel_all_waiters(old_conn)
                 new_conn = _make_conn(sid)
                 _active_connections[sid] = new_conn
                 await asyncio.sleep(0.05)
@@ -327,8 +325,8 @@ class TestConstraintWaiter:
 
         Rewritten from ``test_disconnect_resolves_with_metadata_default``, which encoded
         the defect as the contract. A momentary drop is the normal condition for a mobile
-        client — it must not be treated as a permanent one. ``_cancel_all_waiters`` now
-        covers approval waiters only.
+        client — it must not be treated as a permanent one. Approval waiters follow the
+        same rule since FRE-1677.
         """
         sid = f"disc-{uuid4()}"
         conn = _make_conn(sid)
@@ -337,7 +335,6 @@ class TestConstraintWaiter:
 
             async def disconnector() -> None:
                 await asyncio.sleep(0.05)
-                _cancel_all_waiters(conn)
                 _active_connections.pop(sid, None)
 
             task = asyncio.create_task(disconnector())

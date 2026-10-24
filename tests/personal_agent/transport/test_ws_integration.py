@@ -358,6 +358,168 @@ class TestUserCancel:
             )
 
 
+# ── Tool approval across a socket gap (FRE-1677) ──────────────────────────────
+
+
+def _wait_for_connection(session_id: str, *, timeout_s: float = 2.0) -> None:
+    """Poll until the server has registered the session's socket (cross-thread timing)."""
+    from personal_agent.transport.agui import ws_endpoint as wsep
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if wsep.get_active_connection(session_id) is not None:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"session {session_id!r} has no connection after {timeout_s}s")
+
+
+def _wait_for_no_connection(session_id: str, *, timeout_s: float = 2.0) -> None:
+    """Poll until the server has torn the session's socket down (cross-thread timing)."""
+    from personal_agent.transport.agui import ws_endpoint as wsep
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if wsep.get_active_connection(session_id) is None:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"session {session_id!r} still has a connection after {timeout_s}s")
+
+
+def _approval_decision(client: TestClient, request_id: str, *, timeout_s: float = 0.0) -> Any:
+    """Return the decision of an approval round-trip, polling up to ``timeout_s``."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        decision = client.get("/__test/approval_result", params={"request_id": request_id}).json()[
+            "decision"
+        ]
+        if decision is not None or time.monotonic() >= deadline:
+            return decision
+        time.sleep(0.01)
+
+
+def _receive_until(ws: Any, frame_type: str, max_msgs: int = 10) -> dict[str, Any]:
+    """Receive frames until one of ``frame_type`` arrives."""
+    for _ in range(max_msgs):
+        msg = ws.receive_json()
+        if msg["type"] == frame_type:
+            return msg
+    raise AssertionError(f"no {frame_type} frame within {max_msgs} messages")
+
+
+class TestApprovalAcrossSocketGap:
+    """A mobile socket drops and returns constantly; an approval must outlive the gap."""
+
+    def test_card_asked_with_no_socket_reaches_the_reconnected_client(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """FRE-1677 AC-2: the 12:49:26 incident.
+
+        The PWA socket was gone (dropped 12:42:47) when the bash approval was asked.
+        The request was refused with ``connection_lost`` 1 ms later. It must instead
+        wait, be replayed to the client that reconnects, and take that client's answer.
+        """
+        client, _ = harness
+        session_id = str(uuid4())
+        request_id = str(uuid4())
+
+        with ws_connect(client, session_id) as ws:
+            client.post("/__test/text_delta", params={"session_id": session_id, "text": "hi"})
+            last_seq = ws.receive_json()["seq"]
+        _wait_for_no_connection(session_id)
+
+        client.post("/__test/approval", params={"session_id": session_id, "request_id": request_id})
+        time.sleep(0.2)
+        assert _approval_decision(client, request_id) is None, (
+            "approval was refused while the client was away instead of waiting"
+        )
+
+        with ws_connect(client, session_id, last_seq=last_seq) as ws:
+            card = _receive_until(ws, "tool_approval_request")
+            assert card["request_id"] == request_id
+            ws.send_json(
+                {"type": "APPROVAL_DECISION", "request_id": request_id, "decision": "approve"}
+            )
+            assert _approval_decision(client, request_id, timeout_s=3.0) == "approve"
+
+    def test_a_socket_drop_after_the_card_is_shown_does_not_refuse_it(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """A drop or a reconnect while the card is open must not resolve it as connection_lost."""
+        client, _ = harness
+        session_id = str(uuid4())
+        request_id = str(uuid4())
+
+        with ws_connect(client, session_id) as ws:
+            _wait_for_connection(session_id)
+            client.post(
+                "/__test/approval", params={"session_id": session_id, "request_id": request_id}
+            )
+            card = _receive_until(ws, "tool_approval_request")
+        _wait_for_no_connection(session_id)
+        time.sleep(0.1)
+        assert _approval_decision(client, request_id) is None, (
+            "the socket drop resolved the open approval"
+        )
+
+        with ws_connect(client, session_id, last_seq=card["seq"]) as ws:
+            ws.send_json(
+                {"type": "APPROVAL_DECISION", "request_id": request_id, "decision": "deny"}
+            )
+            assert _approval_decision(client, request_id, timeout_s=3.0) == "deny"
+
+    def test_a_superseding_connection_does_not_refuse_the_open_card(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """A second connection evicts the first (code 4001); the card stays answerable."""
+        client, _ = harness
+        session_id = str(uuid4())
+        request_id = str(uuid4())
+
+        with ws_connect(client, session_id) as ws1:
+            _wait_for_connection(session_id)
+            client.post(
+                "/__test/approval", params={"session_id": session_id, "request_id": request_id}
+            )
+            card = _receive_until(ws1, "tool_approval_request")
+            with ws_connect(client, session_id, last_seq=card["seq"]) as ws2:
+                time.sleep(0.2)
+                assert _approval_decision(client, request_id) is None, (
+                    "the superseding connection resolved the open approval"
+                )
+                ws2.send_json(
+                    {"type": "APPROVAL_DECISION", "request_id": request_id, "decision": "approve"}
+                )
+                assert _approval_decision(client, request_id, timeout_s=3.0) == "approve"
+
+    def test_a_connect_ends_the_fast_refusal_after_a_gap_timeout(
+        self, harness: tuple[TestClient, FakeSessionEventBuffer]
+    ) -> None:
+        """One approval times out in a gap, the next fails fast, a reconnect restores waiting."""
+        client, _ = harness
+        session_id = str(uuid4())
+        first, second, third = (str(uuid4()) for _ in range(3))
+
+        with ws_connect(client, session_id) as ws:
+            client.post("/__test/text_delta", params={"session_id": session_id, "text": "hi"})
+            last_seq = ws.receive_json()["seq"]
+        _wait_for_no_connection(session_id)
+
+        client.post(
+            "/__test/approval",
+            params={"session_id": session_id, "request_id": first, "timeout_s": 0.2},
+        )
+        assert _approval_decision(client, first, timeout_s=3.0) == "timeout"
+        client.post("/__test/approval", params={"session_id": session_id, "request_id": second})
+        assert _approval_decision(client, second, timeout_s=1.0) == "connection_lost"
+
+        with ws_connect(client, session_id, last_seq=last_seq) as ws:
+            _wait_for_connection(session_id)
+            client.post("/__test/approval", params={"session_id": session_id, "request_id": third})
+            _receive_until(ws, "tool_approval_request")
+            ws.send_json({"type": "APPROVAL_DECISION", "request_id": third, "decision": "approve"})
+            assert _approval_decision(client, third, timeout_s=3.0) == "approve"
+
+
 # ── STATE_DELTA — turn_status ─────────────────────────────────────────────────
 
 

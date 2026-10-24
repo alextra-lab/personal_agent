@@ -100,7 +100,11 @@ litellm.suppress_debug_info = True
 # dispatches as litellm's OpenAI-compatible provider (`openai/{model_id}`),
 # so it rides the same `openai_chat_completions` handler and takes the guard
 # as an AsyncOpenAI built over a guarded http_client.
-_OPENAI_SDK_ROUTE_PROVIDERS = frozenset({"openai", "slm_local"})
+#
+# FRE-1680: `scaleway` joins this set. It is a JSON-declared openai_like provider
+# in litellm 1.106.0, and a passed-in AsyncHTTPHandler fails there with
+# "'AsyncHTTPHandler' object has no attribute 'api_key'" — it wants the SDK client.
+_OPENAI_SDK_ROUTE_PROVIDERS = frozenset({"openai", "slm_local", "scaleway"})
 # ovhcloud's OVHCloudChatConfig rides litellm's generic base_llm_http_handler,
 # which is AsyncHTTPHandler-based like Anthropic's own dedicated handler — not
 # a third mechanism.
@@ -321,6 +325,15 @@ def _dialect_params(dialect: Dialect, mode: ModeSpec) -> dict[str, Any]:
             _set_if_declared(params, "temperature", mode.temperature)
             _set_if_declared(params, "top_p", mode.top_p)
             _set_if_declared(params, "frequency_penalty", mode.frequency_penalty)
+            _set_if_declared(params, "seed", mode.seed)
+            _set_if_declared(params, "reasoning_effort", mode.reasoning_effort)
+        case Dialect.SCALEWAY:
+            # FRE-1680: reasoning_effort is the only thinking lever the probe found.
+            # litellm's map reports no reasoning support for these models, so the
+            # caller attaches `allowed_openai_params` (see _forwards_effort_natively).
+            _set_if_declared(params, "temperature", mode.temperature)
+            _set_if_declared(params, "top_p", mode.top_p)
+            _set_if_declared(params, "presence_penalty", mode.presence_penalty)
             _set_if_declared(params, "seed", mode.seed)
             _set_if_declared(params, "reasoning_effort", mode.reasoning_effort)
         case Dialect.ANTHROPIC_ADAPTIVE:

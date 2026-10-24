@@ -1648,6 +1648,14 @@ class AppConfig(BaseSettings):
         ),
         json_schema_extra={"secret": True},
     )
+    scaleway_secret_key: str | None = Field(
+        default=None,
+        description=(
+            "Scaleway Generative APIs IAM secret key, sent as a Bearer token (FRE-1680). "
+            "Unset by default: the scaleway models then do not list in the picker."
+        ),
+        json_schema_extra={"secret": True},
+    )
     eur_usd_rate: float = Field(
         default=1.14,
         gt=0,

@@ -384,6 +384,7 @@ What each compose file declares is `AGENT_DEPLOYMENT_PROFILE` (`local` | `cloud`
 | `voyage` | https://api.voyageai.com/v1 | Voyage AI — managed reranking service | `voyage_api_key` |
 | `anthropic` | (cloud) | Anthropic Claude models | `anthropic_api_key` |
 | `openai` | (cloud) | OpenAI models for extraction/compression | `openai_api_key` |
+| `scaleway` | https://api.scaleway.ai/v1 | Scaleway Generative APIs — `glm-5.3-scaleway` and `deepseek-v4.1-flash-scaleway`, picker-only (FRE-1680) | `scaleway_secret_key` |
 
 ### Layer 2 — Live model assignments (embeddings and reranker)
 

@@ -44,6 +44,7 @@ import argparse
 import dataclasses
 import json
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -517,6 +518,39 @@ class HeadStallState:
 
 
 @dataclasses.dataclass(frozen=True)
+class TrackedFacts:
+    """The facts a decision about a ``launched`` record was made from (FRE-1054).
+
+    A reason string names the branch that fired, not the state observed. These are the
+    observed values, logged next to the decision so a reader never has to infer them from it.
+
+    Attributes:
+        ticket_state: The ticket's true Linear state from the by-identifier lookup, or
+            ``None`` when the lookup was inconclusive.
+        pr_open: ``True``/``False`` when the open-PR check answered, ``None`` when it could
+            not be determined. ``None`` is not ``False``: "could not ask" is not "no PR".
+        on_stream_board: Whether the ticket is on the stream's label-filtered board. A
+            parked ticket has left it while the daemon still holds its slot.
+        age_s: Seconds since the record was launched.
+        run_confirmed: Whether the run is confirmed (PR delivered).
+    """
+
+    ticket_state: str | None
+    pr_open: bool | None
+    on_stream_board: bool
+    age_s: float
+    run_confirmed: bool
+
+    def as_log_fields(self) -> dict[str, object]:
+        """Return the facts as structured-log / notifier keyword fields.
+
+        Returns:
+            The five fact names mapped to their values.
+        """
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass(frozen=True)
 class StreamDecision:
     """A pure, side-effect-free decision for one stream in one tick.
 
@@ -527,6 +561,8 @@ class StreamDecision:
         model: The resolved model tier for a ``launch``.
         context_keep: Whether the ticket carries ``context:keep`` (``launch``).
         reason: A short human/log reason.
+        facts: The observed state behind a decision about a ``launched`` record
+            (FRE-1054); ``None`` for every other phase.
     """
 
     stream: str
@@ -535,6 +571,7 @@ class StreamDecision:
     model: str | None = None
     context_keep: bool = False
     reason: str = ""
+    facts: TrackedFacts | None = None
 
 
 def model_for_labels(labels: frozenset[str]) -> str | None:
@@ -568,7 +605,7 @@ def decide(
     *,
     now: float,
     stall_timeout_s: float,
-    tracked_pr_open: bool,
+    tracked_pr_open: bool | None,
     tracked_state: str | None = None,
     in_progress_stall_timeout_s: float = DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
 ) -> StreamDecision:
@@ -582,7 +619,7 @@ def decide(
         stall_timeout_s: Seconds after which a launched run with no PR stalls.
         tracked_pr_open: Whether an open PR exists for a launched record's
             ticket (resolved by the caller; irrelevant without a launched
-            record).
+            record). ``None`` means the check could not be determined (FRE-1054).
         tracked_state: The launched ticket's TRUE current state from a direct
             by-identifier Linear lookup (FRE-976), or ``None`` when the lookup
             was inconclusive (no such issue / failure). Only meaningful for a
@@ -601,6 +638,7 @@ def decide(
         return _decide_surfaced(stream, issues, record)
     return _decide_launched(
         stream,
+        issues,
         record,
         now=now,
         stall_timeout_s=stall_timeout_s,
@@ -642,11 +680,12 @@ def _decide_no_record(stream: str, issues: Sequence[IssueSnapshot]) -> StreamDec
 
 def _decide_launched(
     stream: str,
+    issues: Sequence[IssueSnapshot],
     record: DispatchRecord,
     *,
     now: float,
     stall_timeout_s: float,
-    tracked_pr_open: bool,
+    tracked_pr_open: bool | None,
     tracked_state: str | None,
     in_progress_stall_timeout_s: float = DEFAULT_IN_PROGRESS_STALL_TIMEOUT_S,
 ) -> StreamDecision:
@@ -668,15 +707,30 @@ def _decide_launched(
       inconclusive — the slot is HELD, never released; a genuinely stuck launch
       is surfaced by the stall timer, not by a premature release (which would
       risk double-dispatch onto a still-busy seat).
+
+    A ticket that left the stream without reaching a terminal state (parked, bounced,
+    reverted to Approved) is held the same way (FRE-1054). Every decision carries the
+    ``TrackedFacts`` it was made from, including ``on_stream_board``, so a held slot for a
+    ticket the stream no longer owns is visible in the log and in the first stall notice.
+    The reason of a stall is a function of those facts, not a label for the branch taken.
     """
     normalized = tracked_state.strip().lower() if tracked_state else None
+    facts = TrackedFacts(
+        ticket_state=tracked_state,
+        pr_open=tracked_pr_open,
+        on_stream_board=_state_of(issues, record.ticket) is not None,
+        age_s=now - record.launched_at,
+        run_confirmed=record.run_confirmed,
+    )
 
     if normalized in _TERMINAL_STATES:
-        return StreamDecision(stream, "clear", ticket=record.ticket, reason="reconciled-terminal")
-
-    if normalized == "in review" and tracked_pr_open and not record.run_confirmed:
         return StreamDecision(
-            stream, "run_complete", ticket=record.ticket, reason="pr-open-in-review"
+            stream, "clear", ticket=record.ticket, reason="reconciled-terminal", facts=facts
+        )
+
+    if normalized == "in review" and tracked_pr_open is True and not record.run_confirmed:
+        return StreamDecision(
+            stream, "run_complete", ticket=record.ticket, reason="pr-open-in-review", facts=facts
         )
 
     # At the gate — hold unconditionally (a bounce keeps it In Review; never
@@ -684,7 +738,9 @@ def _decide_launched(
     # below (FRE-1245 scope: rejected for the "in review" half — master already
     # gates that stage).
     if normalized == "in review":
-        return StreamDecision(stream, "await", ticket=record.ticket, reason="in-flight")
+        return StreamDecision(
+            stream, "await", ticket=record.ticket, reason="in-flight", facts=facts
+        )
 
     # In Progress: the board reflects pickup, not progress, so this is NOT an
     # unconditional hold (FRE-1245 — the prior unconditional-await here is what
@@ -695,15 +751,46 @@ def _decide_launched(
     if normalized == "in progress":
         if not record.run_confirmed and now - record.launched_at > in_progress_stall_timeout_s:
             return StreamDecision(
-                stream, "stall", ticket=record.ticket, reason="in-progress-past-timeout"
+                stream,
+                "stall",
+                ticket=record.ticket,
+                reason="in-progress-past-timeout",
+                facts=facts,
             )
-        return StreamDecision(stream, "await", ticket=record.ticket, reason="in-flight")
+        return StreamDecision(
+            stream, "await", ticket=record.ticket, reason="in-flight", facts=facts
+        )
 
     # Not progressing (still Approved / not-found / inconclusive): the slot is
     # HELD, never released on this basis. Stall-notify only past the timeout.
     if not record.run_confirmed and now - record.launched_at > stall_timeout_s:
-        return StreamDecision(stream, "stall", ticket=record.ticket, reason="no-pr-past-timeout")
-    return StreamDecision(stream, "await", ticket=record.ticket, reason="starting")
+        return StreamDecision(
+            stream,
+            "stall",
+            ticket=record.ticket,
+            reason=_pre_pickup_stall_reason(tracked_pr_open),
+            facts=facts,
+        )
+    return StreamDecision(stream, "await", ticket=record.ticket, reason="starting", facts=facts)
+
+
+def _pre_pickup_stall_reason(pr_open: bool | None) -> str:
+    """Name a pre-pickup stall by what the open-PR check answered (FRE-1054).
+
+    ``no-pr-past-timeout`` used to be the only reason, so it was emitted even when an open
+    PR had been found. It is now said only when a PR was checked for and none exists.
+
+    Args:
+        pr_open: The open-PR check result; ``None`` when it could not be determined.
+
+    Returns:
+        The stall reason.
+    """
+    if pr_open is None:
+        return "pr-check-undetermined-past-timeout"
+    if pr_open:
+        return "pr-open-ticket-not-in-review"
+    return "no-pr-past-timeout"
 
 
 def _decide_delivering(
@@ -790,31 +877,61 @@ def _clear_reason(normalized_state: str | None) -> str:
     return "board-churn" if normalized_state == "approved" else "owner-acted"
 
 
-def _open_pr_exists(ticket: str, runner: CommandRunner) -> bool:
-    """Return True if an open PR whose branch maps to ``ticket`` exists.
+def _open_pr_exists(ticket: str, runner: CommandRunner) -> bool | None:
+    """Return whether an open PR belongs to ``ticket``, or ``None`` if that cannot be told.
+
+    A PR belongs to the ticket when the ticket id is a whole token in its branch name. A
+    branch that names a different ``fre-NNN`` ticket never belongs, even if the PR text quotes
+    this ticket. A branch that names no ticket (the ``adr`` stream's ``adr-NNNN-...``) is
+    matched on the PR title and body instead. ``gh --search`` is a text search, so its raw
+    result is never counted without this match (FRE-1054).
 
     Args:
         ticket: The ticket identifier (e.g. ``FRE-786``).
         runner: The command runner seam (shells ``gh``).
 
     Returns:
-        Whether ``gh`` reports at least one open PR matching the ticket.
+        ``True`` or ``False`` when ``gh`` answered. ``None`` when it did not (non-zero exit,
+        or output that is not a JSON list), which is not the same as "no PR".
     """
     result = runner(
-        ["gh", "pr", "list", "--search", ticket, "--state", "open", "--json", "number,headRefName"]
+        [
+            "gh",
+            "pr",
+            "list",
+            "--search",
+            ticket,
+            "--state",
+            "open",
+            "--json",
+            "number,headRefName,title,body",
+        ]
     )
     if result.returncode != 0:
-        return False
+        return None
     try:
         raw: object = json.loads(result.stdout or "[]")
     except json.JSONDecodeError:
-        return False
+        return None
     if not isinstance(raw, list):
-        return False
-    token = ticket.lower()
-    return any(
-        isinstance(pr, dict) and token in str(pr.get("headRefName", "")).lower() for pr in raw
-    ) or bool(raw)
+        return None
+    # Whole-token match: ``fre-786`` must not match ``fre-7860``.
+    token = re.compile(rf"(?<![a-z0-9]){re.escape(ticket)}(?![0-9])", re.IGNORECASE)
+    any_ticket = re.compile(r"(?<![a-z0-9])fre-[0-9]+", re.IGNORECASE)
+
+    def belongs(pr: object) -> bool:
+        if not isinstance(pr, dict):
+            return False
+        branch = str(pr.get("headRefName") or "")
+        # A branch that names a ticket decides alone: a PR for another ticket can quote this
+        # one in its text ("split out of FRE-786") without being its PR.
+        if any_ticket.search(branch):
+            return token.search(branch) is not None
+        return any(
+            token.search(str(pr.get(field) or "")) for field in ("headRefName", "title", "body")
+        )
+
+    return any(belongs(pr) for pr in raw)
 
 
 def _record_for_result(
@@ -1015,7 +1132,7 @@ def run_once(
         # / paginated out), so its absence there is not a completion signal. A
         # lookup failure is inconclusive, NOT terminal: fall back to ``None`` so
         # the slot is held rather than falsely released.
-        tracked_pr_open = False
+        tracked_pr_open: bool | None = False
         tracked_state: str | None = None
         if record is not None and record.phase == "launched":
             tracked_pr_open = _open_pr_exists(record.ticket, runner)
@@ -1072,6 +1189,7 @@ def run_once(
             kind=decision.kind,
             ticket=decision.ticket,
             reason=decision.reason,
+            **(decision.facts.as_log_fields() if decision.facts is not None else {}),
         )
         _apply(
             decision,
@@ -1561,6 +1679,7 @@ def _apply(
                     reason=decision.reason,
                     session_id=record.session_id,
                     seat_turn=seat_turn.state if seat_turn is not None else None,
+                    **(decision.facts.as_log_fields() if decision.facts is not None else {}),
                 )
                 if in_progress:
                     _resolve_dispatch_notify(

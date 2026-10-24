@@ -275,6 +275,15 @@ concurrency cell (50), the model concurrency cells for ``glm-5.3-scaleway`` and
 ``scaleway/deepseek-v4.1-flash``. **No resolution cell moved: no role binds either model.**
 ``test_fre1680_scaleway.py`` asserts that and the prices.
 
+**Rebaselined a seventeenth time, deliberately, for FRE-1691.** Hand-edited, not regenerated, for the
+same reasons as the fourteenth. One explicit delta: **the ``definition`` of the
+``binding|artifact_builder`` cell moves from ``claude_sonnet`` to ``gpt-6.1-sol``** (id, provider,
+context length, dialect, modes, vision and PDF support; timeout, concurrency and price are equal on
+both). The cell's ``key`` stays ``artifact_builder`` because that cell is keyed by role. The owner
+chose the swap after the FRE-1668 pilot: Sol built all 3 rich pages, Sonnet 5 and Sonnet 5.5 built 1
+of 3 each. **No other role binding, concurrency cell or price changed.**
+``test_fre1691_artifact_builder_sol.py`` asserts the binding.
+
 Regenerate deliberately — never to make a red test green:
 
     python -m tests.personal_agent.config.test_catalog_snapshot --write

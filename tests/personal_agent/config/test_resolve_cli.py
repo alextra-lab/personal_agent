@@ -39,9 +39,12 @@ class TestResolve:
         """
         assert resolve("sub_agent") == "qwen3.8-flash-next"
 
-    def test_resolve_artifact_builder_returns_claude_sonnet(self) -> None:
-        """FRE-926 AC-1 — artifact_builder was never declared in the legacy matrix."""
-        assert resolve("artifact_builder") == "claude_sonnet"
+    def test_resolve_artifact_builder_returns_gpt_6_1_sol(self) -> None:
+        """FRE-926 AC-1 — artifact_builder was never declared in the legacy matrix.
+
+        FRE-1691 moved the binding from claude_sonnet to gpt-6.1-sol.
+        """
+        assert resolve("artifact_builder") == "gpt-6.1-sol"
 
     def test_resolve_vision_returns_claude_sonnet(self) -> None:
         """FRE-926 AC-1 — vision was never declared in the legacy matrix."""

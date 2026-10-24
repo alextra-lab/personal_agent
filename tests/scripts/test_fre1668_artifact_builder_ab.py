@@ -122,10 +122,11 @@ def test_all_arms_resolve_when_providers_are_available() -> None:
     assert harness.resolve_arms(catalog, is_provider_available=lambda _p: True) == harness.ARMS
 
 
-def test_sonnet_arm_resolves_like_the_role_path() -> None:
+def test_sol_arm_resolves_like_the_role_path() -> None:
+    """FRE-1691 moved the role default from Sonnet 5 (arm A) to Sol (arm C)."""
     from personal_agent.config.model_loader import resolve_role_model_key
 
-    assert resolve_role_model_key("artifact_builder") == harness.ARMS["A"]
+    assert resolve_role_model_key("artifact_builder") == harness.ARMS["C"]
 
 
 @pytest.mark.parametrize(

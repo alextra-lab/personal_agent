@@ -1650,8 +1650,8 @@ async def test_artifact_draft_calls_respond_with_correct_max_tokens(
     """respond() receives the effective (deployment-floored) max_tokens (ADR-0122 §5).
 
     No turn-scoped resolution is installed, so the build renders on the configured
-    default (``claude_sonnet``, declared ``max_tokens`` 32768) — which happens to
-    equal the operator ceiling, matching the pre-T6 assertion.
+    default (``gpt-6.1-sol``, declared ``max_tokens`` 128000) — which the 32768
+    operator ceiling clamps to the same value, matching the pre-T6 assertion.
     """
     _store, client = _install_draft_fakes(monkeypatch)
 
@@ -1799,7 +1799,7 @@ async def test_artifact_draft_no_decision_sizes_to_configured_default(
     """A no-answer resolution also sizes to the configured default's declared cap.
 
     The role-name path ignores the carried (unconfirmed) action_id and always renders
-    on the configured default (``claude_sonnet``, 32768) — floored here by a 2048
+    on the configured default (``gpt-6.1-sol``, 128000) — floored here by a 2048
     ceiling — never the pre-T6 flat constant regardless of deployment.
     """
     monkeypatch.setattr(artifact_tools.settings, "artifact_draft_max_tokens", 2048)
@@ -1837,6 +1837,28 @@ async def test_artifact_draft_logs_output_cap_hit_when_cap_binds(
     assert len(cap_hits) == 1
     assert cap_hits[0][1]["output_tokens"] == 500
     assert cap_hits[0][1]["max_tokens"] == 500
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_start_log_names_the_default_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-1691 AC-3: the sub-agent start event names the deployment that builds the page.
+
+    No turn-scoped resolution is installed, so the build renders on the configured
+    default, which the log must name so the swap can be read from the logs.
+    """
+    _store, _client = _install_draft_fakes(monkeypatch)
+    events: list[tuple[str, dict[str, Any]]] = []
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="start-log", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    starts = [kw for ev, kw in events if ev == "artifact_draft_sub_agent_start"]
+    assert len(starts) == 1
+    assert starts[0]["deployment"] == "gpt-6.1-sol"
 
 
 @pytest.mark.asyncio
@@ -2232,6 +2254,36 @@ def test_system_prompt_allows_scripts() -> None:
     # Portability steering: mermaid/SVG travels with the file; JS is view-on-origin.
     assert "PORTABILITY" in prompt
     assert "travel" in prompt
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Every widget works",
+        "It is creative",
+        "It is easy to learn from",
+        "It is attractive and enticing",
+        "It encourages learning or continued use",
+    ],
+)
+def test_system_prompt_names_each_owner_quality_question(question: str) -> None:
+    """FRE-1691 AC-2: the builder prompt names each of the owner's five rating questions.
+
+    The owner rates every page on these five questions (FRE-1668 pilot). A missing
+    question fails its own case, so a later edit cannot drop one unnoticed.
+    """
+    prompt = artifact_tools._html_generation_system_prompt()
+    assert question in prompt
+
+
+def test_system_prompt_quality_item_sits_between_interactivity_and_toolkit() -> None:
+    """FRE-1691: the QUALITY item follows INTERACTIVITY and precedes the curated toolkit."""
+    prompt = artifact_tools._html_generation_system_prompt()
+    assert (
+        prompt.index("- INTERACTIVITY:")
+        < prompt.index("- QUALITY:")
+        < prompt.index("- CURATED TOOLKIT:")
+    )
 
 
 def test_system_prompt_instructs_mermaid_markup() -> None:

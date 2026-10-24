@@ -6,7 +6,8 @@ artifact_builder's model. ADR-0121 T5 (FRE-920) removed Path: artifact_builder i
 now a single Layer-3 binding (``config/model_roles.yaml``) with no profile
 involvement at all — pinned to ``claude_sonnet`` (owner-directed 2026-07-20 at the
 master gate on FRE-920's PR; neither the removed ``local`` nor ``cloud`` profile's
-prior value carries forward as-is). The regression this guards against is
+prior value carries forward as-is) until FRE-1691 (owner, 2026-10-24) moved it to
+``gpt-6.1-sol``. The regression this guards against is
 unchanged in spirit: artifact_builder must never silently resolve to the wrong model.
 """
 
@@ -19,8 +20,8 @@ from personal_agent.llm_client.litellm_client import LiteLLMClient
 class TestArtifactBuilderResolution:
     """artifact_builder resolves to its pinned binding, with no profile involved."""
 
-    def test_resolves_to_claude_sonnet_cloud_client(self) -> None:
-        """artifact_builder dispatches to LiteLLMClient(Sonnet) — the binding default."""
+    def test_resolves_to_gpt_6_1_sol_cloud_client(self) -> None:
+        """artifact_builder dispatches to LiteLLMClient(Sol) — the binding default."""
         client = get_llm_client(role_name="artifact_builder")
 
         assert isinstance(client, LiteLLMClient)
@@ -28,5 +29,5 @@ class TestArtifactBuilderResolution:
 
         from personal_agent.config import load_model_config
 
-        expected_model_id = load_model_config().models["claude_sonnet"].id
+        expected_model_id = load_model_config().models["gpt-6.1-sol"].id
         assert client.model_id == expected_model_id

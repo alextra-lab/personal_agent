@@ -36,11 +36,14 @@ def test_the_binding_is_declared_in_model_roles_yaml() -> None:
     assert bindings["session_summary"] == {"deployment": "claude_sonnet"}
 
 
-def test_only_captains_log_binds_sol() -> None:
-    """Sol binds the one role it passed, and no other role resolves to it."""
+def test_only_captains_log_and_artifact_builder_bind_sol() -> None:
+    """Sol binds the two roles the owner chose (FRE-1646, FRE-1691), and no other role."""
     resolved = {role: resolve_role_model_key(role) for role in _bindings()}
 
-    assert {role for role, key in resolved.items() if key == "gpt-6.1-sol"} == {"captains_log"}
+    assert {role for role, key in resolved.items() if key == "gpt-6.1-sol"} == {
+        "captains_log",
+        "artifact_builder",
+    }
 
 
 def test_reflection_dspy_path_sends_no_temperature_to_sol() -> None:

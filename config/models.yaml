@@ -858,7 +858,8 @@ models:
   gpt-6.1-sol:
     # OpenAI GPT-6.1 Sol (FRE-1625, owner 2026-10-20: "I want gpt-6-# sol added to the model
     # catalog"). The newest Sol on developers.openai.com/api/docs/models, 2026-10-20. Pickable
-    # primary; binds captains_log only (FRE-1646, owner 2026-10-21, config/model_roles.yaml).
+    # primary; binds captains_log (FRE-1646, owner 2026-10-21) and artifact_builder (FRE-1691,
+    # owner 2026-10-24), both in config/model_roles.yaml.
     # Reasoning cannot be off (no 'none'), so no mode may set a
     # temperature or top_p. Tool calls work only on the Responses API, and litellm 1.106.0's
     # async bridge to it drops the egress-guarded client (FRE-1625). LiteLLMClient therefore

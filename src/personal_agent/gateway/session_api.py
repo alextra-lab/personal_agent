@@ -1,8 +1,8 @@
 """Session REST endpoints for the Seshat API Gateway.
 
 Exposes PostgreSQL session data over HTTP under ``/sessions/*``.  All
-endpoints require the ``sessions:read`` scope **and** a verified
-``Cf-Access-Authenticated-User-Email`` header. Session rows are scoped to
+endpoints require the ``sessions:read`` scope **and** a verified Cloudflare
+Access identity (ADR-0153 D11). Session rows are scoped to
 the resolved user_id so a holder of the bearer token cannot read another
 user's data — closes the cross-user data leak fixed in this hotfix.
 """
@@ -28,7 +28,7 @@ from personal_agent.gateway.rate_limiting import get_rate_limiter
 from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition, ProviderDefinition
 from personal_agent.memory.session_digest import SessionDigestView
-from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
+from personal_agent.service.auth import _get_user_with_display_name, resolve_request_email
 from personal_agent.service.models import SessionEffortUpdate, SessionSelectionUpdate
 from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
@@ -73,7 +73,7 @@ async def _get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
 
 
 async def _require_request_user_id(request: Request, db: AsyncSession) -> UUID:
-    """Resolve the authenticated user's UUID from CF Access headers.
+    """Resolve the authenticated user's UUID from the verified CF Access identity.
 
     The gateway router's bearer token authorizes *access* to the endpoint
     family; this helper additionally pins each request to one user so the
@@ -90,16 +90,12 @@ async def _require_request_user_id(request: Request, db: AsyncSession) -> UUID:
         Stable ``user_id`` UUID for the requester.
 
     Raises:
-        HTTPException(401): When the ``Cf-Access-Authenticated-User-Email``
-            header is absent. The gateway never falls back to a default
-            owner — token-only callers are rejected outright.
+        HTTPException(401): When no verified identity is present. The gateway
+            never falls back to a default owner — token-only callers are
+            rejected outright.
+        HTTPException(503): When production JWT verification is not configured.
     """
-    email = request.headers.get(_CF_EMAIL_HEADER)
-    if not email:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required (missing CF Access user header)",
-        )
+    email = await resolve_request_email(request, owner_fallback=False)
     user_id, _ = await _get_user_with_display_name(db, email)
     return UUID(str(user_id))
 

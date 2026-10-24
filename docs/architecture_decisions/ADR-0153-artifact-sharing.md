@@ -295,6 +295,12 @@ If the implementation shows that Cloudflare Access always strips and re-injects 
 ticket records that proof and still adds the JWT check. This ADR does not rely on a defense that
 depends on edge configuration.
 
+**Implementation note (FRE-1531, 2026-10-23).** The JWT reaches the gateway on the main app's primary
+domain: real owner requests carry `Cf-Access-Jwt-Assertion` through Caddy. The live `aud` claim is a
+one-element list, and it differs from the Worker's audience. D11 also covers `gateway/session_api.py`,
+`gateway/feedback_api.py` and `gateway/knowledge_api.py`, which read the plaintext header directly. All
+four paths use `service/auth.py:resolve_request_email`.
+
 ### Out of scope (owner-confirmed 2026-10-01)
 
 - **Expiry.** Manual revoke covers it. An `expires_at` column can come later without rework.

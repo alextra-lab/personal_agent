@@ -12,7 +12,7 @@ from personal_agent.service.auth import (
     get_request_user,
     upsert_display_name_for_email,
 )
-
+from personal_agent.service.cf_access_jwt import reset_verifier_for_testing
 
 # ---------------------------------------------------------------------------
 # RequestUser dataclass
@@ -143,14 +143,22 @@ async def test_dev_mode_fallback_when_no_cf_header(monkeypatch: pytest.MonkeyPat
 async def test_raises_401_when_no_cf_header_and_auth_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No CF header + gateway_auth_enabled=True → 401."""
+    """No credentials + gateway_auth_enabled=True + verifier configured → 401."""
     monkeypatch.setattr("personal_agent.service.auth.settings.gateway_auth_enabled", True)
     monkeypatch.setattr("personal_agent.service.auth.settings.agent_owner_email", None)
+    monkeypatch.setattr(
+        "personal_agent.service.auth.settings.cf_access_team_domain", "team.cloudflareaccess.com"
+    )
+    monkeypatch.setattr("personal_agent.service.auth.settings.cf_access_main_aud", "main-aud")
+    reset_verifier_for_testing()
 
     request = _make_request({})
 
-    with pytest.raises(HTTPException) as exc_info:
-        await get_request_user(request)
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_request_user(request)
+    finally:
+        reset_verifier_for_testing()
 
     assert exc_info.value.status_code == 401
 

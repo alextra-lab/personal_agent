@@ -48,7 +48,7 @@ from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.feedback_models import UserTurnRating
-from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
+from personal_agent.service.auth import _get_user_with_display_name, resolve_request_email
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry.trace import SystemTraceContext
 
@@ -150,7 +150,8 @@ async def submit_turn_rating(
 
     Raises:
         HTTPException(400): When rating is outside 0–3.
-        HTTPException(401): When CF Access header is absent.
+        HTTPException(401): When no verified CF Access identity is present.
+        HTTPException(503): When production JWT verification is not configured.
         HTTPException(404): When ``session_id`` is not owned by the caller
             or the ``trace_id`` is not associated with that session.
     """
@@ -173,12 +174,7 @@ async def submit_turn_rating(
     ctx = SystemTraceContext.new("feedback_api")
 
     # --- Resolve caller identity ---
-    email = request.headers.get(_CF_EMAIL_HEADER)
-    if not email:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required (missing CF Access user header)",
-        )
+    email = await resolve_request_email(request, owner_fallback=False)
     user_id, _ = await _get_user_with_display_name(db, email)
     user_uuid = UUID(str(user_id))
 

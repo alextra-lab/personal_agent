@@ -2,7 +2,7 @@
 
 Exposes the Neo4j knowledge graph over HTTP under ``/knowledge/*``.  All
 endpoints require the ``knowledge:read`` or ``knowledge:write`` scope **and**
-a verified ``Cf-Access-Authenticated-User-Email`` header (FRE-379). User
+a verified Cloudflare Access identity (FRE-379, ADR-0153 D11). User
 identity flows into the ``TraceContext`` passed to the KG backend, where
 the FRE-229 visibility filter scopes per-user private entries while public
 KG entries (the shared substrate) flow freely.
@@ -17,7 +17,7 @@ from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +25,7 @@ from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
 from personal_agent.memory.models import Entity, EntityNode, Relationship
-from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
+from personal_agent.service.auth import _get_user_with_display_name, resolve_request_email
 from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
@@ -106,7 +106,7 @@ async def _get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
 
 
 async def _require_request_user_id(request: Request, db: AsyncSession) -> Any:
-    """Resolve the authenticated user's UUID from the CF Access header.
+    """Resolve the authenticated user's UUID from the verified CF Access identity.
 
     Mirrors the same-named helper in :mod:`personal_agent.gateway.session_api`
     (which can't be imported here without creating a cross-module cycle).
@@ -122,15 +122,10 @@ async def _require_request_user_id(request: Request, db: AsyncSession) -> Any:
         Stable ``user_id`` UUID for the requester.
 
     Raises:
-        HTTPException(401): When the ``Cf-Access-Authenticated-User-Email``
-            header is absent.
+        HTTPException(401): When no verified identity is present.
+        HTTPException(503): When production JWT verification is not configured.
     """
-    email = request.headers.get(_CF_EMAIL_HEADER)
-    if not email:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required (missing CF Access user header)",
-        )
+    email = await resolve_request_email(request, owner_fallback=False)
     user_id, _ = await _get_user_with_display_name(db, email)
     return user_id
 

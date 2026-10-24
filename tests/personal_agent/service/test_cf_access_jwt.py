@@ -14,6 +14,7 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -602,3 +603,51 @@ async def test_parallel_requests_with_rotated_kid_all_verify(
     results = await asyncio.gather(first, second, return_exceptions=True)
     assert [type(r) for r in results] == [CFAccessClaims, CFAccessClaims]
     assert server.count == 2  # warm-up + one forced fetch shared by both
+
+
+# ---------------------------------------------------------------------------
+# FRE-1531: the verifier is on the hot path of every user route, so a failed
+# TTL refresh must not turn cached keys into a 500 for every request.
+# ---------------------------------------------------------------------------
+
+
+class _FailingClient:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> _FailingClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def get(self, url: str) -> Any:
+        raise httpx.ConnectError("certs endpoint down")
+
+
+@pytest.mark.asyncio
+async def test_failed_ttl_refresh_serves_the_cached_keys(
+    rsa_key: RSAPrivateKey,
+    verifier_with_jwks: CFAccessVerifier,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _sign(rsa_key)
+    await verifier_with_jwks.verify(token)  # warm the cache
+    verifier_with_jwks._cached_at -= cf_access_jwt._JWKS_TTL_SECONDS + 1  # TTL lapsed
+    monkeypatch.setattr(cf_access_jwt, "create_guarded_http_client", _FailingClient)
+
+    claims = await verifier_with_jwks.verify(token)
+
+    assert claims.email == "alex@example.com"
+
+
+@pytest.mark.asyncio
+async def test_failed_first_fetch_still_raises(
+    rsa_key: RSAPrivateKey, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no cached keys there is nothing to serve, so the failure surfaces."""
+    monkeypatch.setattr(cf_access_jwt, "create_guarded_http_client", _FailingClient)
+    verifier = CFAccessVerifier(team_domain=_TEAM, audience=_AUD)
+
+    with pytest.raises(httpx.ConnectError):
+        await verifier.verify(_sign(rsa_key))

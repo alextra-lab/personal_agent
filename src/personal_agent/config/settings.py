@@ -2733,6 +2733,18 @@ class AppConfig(BaseSettings):
             "Required when cf_access_team_domain is set."
         ),
     )
+    cf_access_main_aud: str | None = Field(
+        default=None,
+        alias="CF_ACCESS_MAIN_AUD",
+        description=(
+            "Audience tag (AUD) of the main app's Cloudflare Access application. "
+            "cf_access_aud holds the artifact Worker's audience, which is a separate "
+            "application (ADR-0069 Dev-2). With gateway_auth_enabled=True, "
+            "Cf-Access-Jwt-Assertion is verified against this audience to resolve "
+            "the request user (ADR-0153 D11). When unset in that mode, the user "
+            "routes return 503."
+        ),
+    )
     agent_owner_email: str | None = Field(
         default=None,
         alias="AGENT_OWNER_EMAIL",

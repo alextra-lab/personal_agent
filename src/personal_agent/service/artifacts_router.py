@@ -256,9 +256,8 @@ async def list_artifacts(
 ) -> ArtifactListResponse:
     """List the authenticated user's artifacts, newest first.
 
-    Authentication: same as the rest of the gateway — CF Access injects the
-    ``Cf-Access-Authenticated-User-Email`` header which ``get_request_user``
-    reads. This matches the ``agent.example.com`` CF Access app; the
+    Authentication: same as the rest of the gateway — ``get_request_user``
+    verifies the CF Access JWT (ADR-0153 D11). This matches the ``agent.example.com`` CF Access app; the
     internal Worker endpoint uses JWT (different AUD) and is unaffected.
     """
     user_id = request_user.user_id

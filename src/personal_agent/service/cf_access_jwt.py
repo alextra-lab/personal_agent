@@ -14,6 +14,10 @@ end-to-end. The Worker cannot be trusted to filter — only to forward.
 Configuration: set ``cf_access_team_domain`` and ``cf_access_aud`` in
 ``personal_agent.config.settings``. When either is unset,
 ``get_verifier()`` returns ``None`` and call sites must fail closed.
+
+The main app is a second Access application with its own audience
+(``cf_access_main_aud``). ``get_main_app_verifier()`` serves it, under the same
+fail-closed rule. The two verifiers never accept each other's tokens.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import jwt
 import structlog
 
@@ -38,6 +43,8 @@ _JWKS_TTL_SECONDS = 3600
 # caller that sends random ``kid`` values makes every request fetch from Cloudflare.
 _JWKS_FORCE_REFRESH_COOLDOWN_SECONDS = 60
 _JWKS_FETCH_TIMEOUT_SECONDS = 10.0
+# After a failed TTL refresh with keys cached, retry the fetch after this many seconds.
+_JWKS_STALE_RETRY_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -164,11 +171,27 @@ class CFAccessVerifier:
                 return
             if force:
                 self._last_forced_at = time.monotonic()
-            async with create_guarded_http_client(timeout=_JWKS_FETCH_TIMEOUT_SECONDS) as client:
-                resp = await client.get(self._certs_url)
-                resp.raise_for_status()
-                self._jwks = resp.json()
-                self._cached_at = time.monotonic()
+            try:
+                async with create_guarded_http_client(
+                    timeout=_JWKS_FETCH_TIMEOUT_SECONDS
+                ) as client:
+                    resp = await client.get(self._certs_url)
+                    resp.raise_for_status()
+                    self._jwks = resp.json()
+                    self._cached_at = time.monotonic()
+            except (httpx.HTTPError, ValueError) as exc:
+                if force or not self._jwks:
+                    raise
+                # TTL refresh failed and keys are cached: keep serving them, so a
+                # Cloudflare certs outage does not fail every request. Token expiry is
+                # still enforced. Retry after the stale-retry delay, not on each request.
+                self._cached_at = time.monotonic() - _JWKS_TTL_SECONDS + _JWKS_STALE_RETRY_SECONDS
+                log.warning(
+                    "cf_access_jwks_refresh_failed_serving_cached",
+                    certs_url=self._certs_url,
+                    error_class=type(exc).__name__,
+                )
+                return
             keys = self._jwks.get("keys", [])
             log.info(
                 "cf_access_jwks_refreshed",
@@ -211,7 +234,36 @@ def get_verifier() -> CFAccessVerifier | None:
     return _singleton
 
 
+_main_app_singleton: CFAccessVerifier | None = None
+
+
+def get_main_app_verifier() -> CFAccessVerifier | None:
+    """Return the verifier for the main app's Access audience, or None if unconfigured.
+
+    The main app and the artifact Worker are separate Access applications with
+    different audiences, so a token for one fails on the other (ADR-0153 D11).
+    Callers must fail closed when this returns ``None``.
+    """
+    global _main_app_singleton
+    if _main_app_singleton is not None:
+        return _main_app_singleton
+
+    domain = settings.cf_access_team_domain
+    aud = settings.cf_access_main_aud
+    if not domain or not aud:
+        return None
+
+    _main_app_singleton = CFAccessVerifier(team_domain=domain, audience=aud)
+    log.info(
+        "cf_access_main_app_verifier_initialized",
+        team_domain=domain,
+        aud_prefix=aud[:12] + "…" if len(aud) > 12 else aud,
+    )
+    return _main_app_singleton
+
+
 def reset_verifier_for_testing() -> None:
-    """Test-only hook to drop the singleton between scenarios."""
-    global _singleton
+    """Test-only hook to drop both singletons between scenarios."""
+    global _singleton, _main_app_singleton
     _singleton = None
+    _main_app_singleton = None

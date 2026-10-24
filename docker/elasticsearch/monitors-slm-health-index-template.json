@@ -48,6 +48,11 @@
         "generation_ok":   { "type": "boolean" },
         "generation_skip_reason": { "type": "text" },
         "generation_probe_latency_ms": { "type": "float" },
+        "thinking_canary_ok": { "type": "boolean" },
+        "thinking_canary_skip_reason": { "type": "text" },
+        "thinking_canary_error": { "type": "text" },
+        "thinking_canary_on_reasoning_chars": { "type": "integer" },
+        "thinking_canary_off_reasoning_chars": { "type": "integer" },
         "probed_at":       { "type": "date" },
         "trace_id":        { "type": "keyword" },
         "error":           { "type": "text" },
@@ -58,7 +63,7 @@
     }
   },
   "_meta": {
-    "description": "SLM health probe snapshots (ADR-0083 / FRE-399). One doc per probe, monthly index agent-monitors-slm-health-YYYY-MM (FRE-543 cutover to monthly; FRE-1036 normalized the separator from YYYY.MM to YYYY-MM). Mapping covers the full 19-field SlmHealthSnapshot model (FRE-534/A2, widened by FRE-1474's generation_ok/generation_skip_reason/generation_probe_latency_ms and FRE-1435's observed_monotonic/writer; observed_monotonic is process-local monotonic seconds, an ordering key inside one process, not a timestamp): the live data only ever populated a handful of fields because the rest arrive null and never triggered a dynamic mapping. trace_id is keyword (was text under ES-default) so exact-term joins to slm-requests/agent-logs work — the join-key fix that the joinability story depends on.",
+    "description": "SLM health probe snapshots (ADR-0083 / FRE-399). One doc per probe, monthly index agent-monitors-slm-health-YYYY-MM (FRE-543 cutover to monthly; FRE-1036 normalized the separator from YYYY.MM to YYYY-MM). Mapping covers the full 24-field SlmHealthSnapshot model (FRE-534/A2, widened by FRE-1474's generation_ok/generation_skip_reason/generation_probe_latency_ms, FRE-1435's observed_monotonic/writer and FRE-1368's five thinking_canary_* fields, which are null unless the thinking canary ran on that tick and are never part of the cached verdict; observed_monotonic is process-local monotonic seconds, an ordering key inside one process, not a timestamp): the live data only ever populated a handful of fields because the rest arrive null and never triggered a dynamic mapping. trace_id is keyword (was text under ES-default) so exact-term joins to slm-requests/agent-logs work — the join-key fix that the joinability story depends on.",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

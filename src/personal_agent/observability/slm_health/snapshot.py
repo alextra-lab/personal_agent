@@ -58,6 +58,20 @@ class SlmHealthSnapshot(BaseModel):
             check (served-model lookup + completion), when it actually ran.
             ``None`` when skipped or not requested — a skip measures nothing
             worth reporting under this field's name.
+        thinking_canary_ok: Whether the FRE-1368 thinking canary passed — the thinking-on
+            arm read reasoning, and the thinking-off arm read none (ADR-0141 D6.1). ``False``
+            is red. ``None`` when the canary was not enabled, was skipped, or could not
+            measure (see the two fields below). It never changes ``status``, and it is never
+            in the cached verdict: the scheduler adds it to the Elasticsearch copy only.
+        thinking_canary_skip_reason: Why the canary did not run this tick — a busy or
+            unserved backend, or a catalog whose modes cannot test the control. A skip is
+            not a verdict. ``None`` when it ran or was not enabled.
+        thinking_canary_error: What failed. Set with ``thinking_canary_ok=False`` to name
+            the red arm. Set with ``None`` when a dispatch error stopped a measurement.
+        thinking_canary_on_reasoning_chars: Reasoning characters read on the thinking-on arm
+            (the positive control). ``None`` when that arm was not measured.
+        thinking_canary_off_reasoning_chars: Reasoning characters read on the thinking-off
+            arm. ``None`` when that arm was not measured.
         probed_at: UTC timestamp when the probe was initiated.
         trace_id: Probe's own :class:`~personal_agent.telemetry.trace.SystemTraceContext`
             trace ID — the probe is itself joinable.
@@ -86,6 +100,11 @@ class SlmHealthSnapshot(BaseModel):
     generation_ok: bool | None = None
     generation_skip_reason: str | None = None
     generation_probe_latency_ms: float | None = None
+    thinking_canary_ok: bool | None = None
+    thinking_canary_skip_reason: str | None = None
+    thinking_canary_error: str | None = None
+    thinking_canary_on_reasoning_chars: int | None = None
+    thinking_canary_off_reasoning_chars: int | None = None
     probed_at: datetime
     trace_id: str
     error: str | None = None

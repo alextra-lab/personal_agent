@@ -173,7 +173,7 @@ def _rows(arm_values: Mapping[str, float]) -> list[dict[str, Any]]:
 
 def test_decision_is_no_decision_inside_the_noise_band() -> None:
     table = harness.decision_table(_rows({"A": 100.0, "A2": 110.0, "B": 105.0, "C": 150.0}))
-    lat = {r["arm"]: r for r in table if r["measure"] == "median latency (s)"}
+    lat = {r["arm"]: r for r in table if r["measure"] == "median latency (s), all builds"}
     assert lat["B"]["verdict"] == "no decision"  # |5| <= noise band 10
     assert lat["C"]["verdict"] != "no decision"  # |50| > 10
     assert lat["B"]["noise_band"] == pytest.approx(10.0)
@@ -299,14 +299,14 @@ def test_pilot_is_go_when_an_arm_beats_a_on_the_rating() -> None:
 
 
 def test_pilot_is_go_on_cost_at_an_equal_rating() -> None:
-    table = _table(C={"owner: mean of five": "no decision", "mean cost (usd)": "lower"})
+    table = _table(C={"owner: mean of five": "no decision", "mean cost (usd), all builds": "lower"})
     assert harness.pilot_verdict(table).startswith("Pilot verdict: GO")
 
 
 def test_pilot_is_no_go_when_nothing_clears_the_noise_band() -> None:
     table = _table(
-        B={"owner: mean of five": "no decision", "mean cost (usd)": "no decision"},
-        C={"owner: mean of five": "lower", "mean cost (usd)": "lower"},
+        B={"owner: mean of five": "no decision", "mean cost (usd), all builds": "no decision"},
+        C={"owner: mean of five": "lower", "mean cost (usd), all builds": "lower"},
     )
     line = harness.pilot_verdict(table)
     assert line.startswith("Pilot verdict: NO-GO") and "Sonnet 5" in line
@@ -594,3 +594,69 @@ def test_running_spend_adds_this_commands_builds_to_the_start() -> None:
     now = harness.running_spend(start, own_start, own_now)
     assert now[("daily", "artifact_builder")] == Decimal("0.73")
     assert now[("daily", "_total")] == Decimal("1.53")
+
+
+def _pilot_rows() -> list[dict[str, Any]]:
+    """12 rows shaped like the pilot: p3 and p9 built only by C, p8 built by every arm."""
+    rows: list[dict[str, Any]] = []
+    for pid in ("p3", "p8", "p9"):
+        for arm in harness.ARMS:
+            ok = pid == "p8" or arm == "C"
+            rows.append(
+                {
+                    "arm": arm, "prompt_id": pid, "ok": ok, "render_ok": True if ok else None,
+                    "failure_reason": "" if ok else "output ceiling reached (32768 of 32768 tokens)",
+                    "output_cap_hit": not ok, "latency_s": 100.0 if ok else 280.0,
+                    "input_tokens": 5000, "output_tokens": 9000 if ok else 32768,
+                    "reasoning_tokens": 3000 if arm != "C" else 150,
+                    "cost_usd": 0.10 if ok else 0.34,
+                    "controls_found": 16 if ok else None, "controls_worked": 14 if ok else None,
+                    "controls_no_reaction": 2 if ok else None, "controls_unverifiable": 0 if ok else None,
+                    "widget_errors": 0 if ok else None,
+                }
+            )  # fmt: skip
+    return rows
+
+
+def test_cost_and_latency_count_failed_builds_and_widgets_use_shared_prompts_only() -> None:
+    rows = _pilot_rows()
+    # A built one page of three and failed two at $0.34. C built all three at $0.10.
+    assert harness._measure(rows, "A", "mean cost (usd), all builds") == pytest.approx(0.78 / 3)
+    assert harness._measure(rows, "C", "mean cost (usd), all builds") == pytest.approx(0.10)
+    assert harness.paired_prompts(rows) == {"p8"}
+    assert harness._measure(rows, "A", "controls found (mean)" + harness.PAIRED) == 16
+    assert harness._measure(rows, "C", "controls worked share" + harness.PAIRED) == pytest.approx(
+        14 / 16
+    )
+
+
+def test_only_a_prompt_with_two_pages_is_a_blind_comparison() -> None:
+    assert harness.blind_prompts(_pilot_rows()) == {"p8"}
+
+
+def test_the_report_names_the_blind_ratings_shows_thinking_tokens_and_ends_with_the_verdict(
+    builder_env: pathlib.Path,
+) -> None:
+    rows = _pilot_rows()
+    ok = [r for r in rows if r["ok"]]
+    key: dict[str, dict[str, object]] = {
+        f"P{n:02d}": {"arm": r["arm"], "prompt_id": r["prompt_id"]} for n, r in enumerate(ok, 1)
+    }
+    scores = {k: {q: 4 for q in harness.QUESTIONS} for k in key}
+    text = harness._report(rows, key, scores)
+    assert "## Which ratings were blind" in text and "no, the only page" in text
+    assert "Blind-only comparison (prompts p8" in text
+    assert (
+        "## Thinking tokens against the output ceiling" in text and "stopped at the ceiling" in text
+    )
+    assert text.rstrip().splitlines()[-1].startswith("Pilot verdict: ")
+
+
+def test_a_go_line_names_every_qualifying_arm_strongest_first() -> None:
+    table = _table(
+        B={"owner: mean of five": "higher"},
+        C={"owner: mean of five": "higher"},
+    )
+    table[1]["diff"] = 3.0  # C is stronger than B (0.5)
+    line = harness.pilot_verdict(table)
+    assert line.index("Arm C") < line.index("Arm B") and "Arm B (claude_sonnet_5_5) also" in line
